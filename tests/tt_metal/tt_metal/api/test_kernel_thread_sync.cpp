@@ -118,13 +118,17 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
 
     ProgramSpec spec;
     spec.name = "kernel_thread_barrier";
-    for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
+    for (const auto& cfg : kernel_configs) {
+        spec.kernels.push_back(cfg.spec);
+    }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
     Program program = MakeProgramFromSpec(this->device(), spec);
 
     uint32_t total_zeros = 0;
-    for (const auto& cfg : kernel_configs) { total_zeros += cfg.layout.total_words; }
+    for (const auto& cfg : kernel_configs) {
+        total_zeros += cfg.layout.total_words;
+    }
     std::vector<uint32_t> zeros(total_zeros, 0);
     slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
 
@@ -151,9 +155,12 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
             ASSERT_EQ(arrivals.size(), kRounds);
             ASSERT_EQ(post.size(), kRounds);
             for (uint32_t r = 0; r < kRounds; r++) {
-                EXPECT_EQ(arrivals[r], expected_num_threads) << cfg.name << " round " << r << ": not all threads arrived before barrier release";
-                EXPECT_EQ(observed[r], expected_num_threads) << cfg.name << " round " << r << ": thread 0 observed wrong count after barrier";
-                EXPECT_EQ(post[r], expected_num_threads) << cfg.name << " round " << r << ": not all threads completed post-barrier phase";
+                EXPECT_EQ(arrivals[r], expected_num_threads)
+                    << cfg.name << " round " << r << ": not all threads arrived before barrier release";
+                EXPECT_EQ(observed[r], expected_num_threads)
+                    << cfg.name << " round " << r << ": thread 0 observed wrong count after barrier";
+                EXPECT_EQ(post[r], expected_num_threads)
+                    << cfg.name << " round " << r << ": not all threads completed post-barrier phase";
             }
         }
     }
@@ -235,6 +242,95 @@ TEST_F(KernelThreadSyncTest, ComputeBarrierSynchronizesAllTriscs) {
         EXPECT_EQ(observed[r], kNumParticipants)
             << "round " << r << ": observer counted wrong number of TRISCs after barrier";
         EXPECT_EQ(posted, kNumParticipants) << "round " << r << ": not all TRISCs completed post-barrier phase";
+    }
+}
+
+TEST_F(KernelThreadSyncTest, AllCoresBarrierSynchronizesDmAndTriscs) {
+    if (this->arch_ != tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "sync_all_cores across DMs and TRISCs is Quasar-only";
+    }
+
+    NodeCoord node{0, 0};
+    constexpr uint32_t kNumDmThreads = 6;
+    constexpr uint32_t kNumNeos = 4;
+    constexpr uint32_t kTriscCoresPerNeo = 4;
+    constexpr uint32_t kNumParticipants = kNumDmThreads + kNumNeos * kTriscCoresPerNeo;
+    constexpr uint32_t kAllCoresArgsCount = 7;
+    constexpr const char* kDmKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_all_cores_barrier.cpp";
+    constexpr const char* kComputeKernelPath =
+        "tests/tt_metal/tt_metal/test_kernels/compute/kernel_all_cores_barrier.cpp";
+
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t arrivals_words = kRounds * kNumParticipants;
+    const uint32_t observed_words = kRounds + 1;
+    const uint32_t post_words = kRounds * kNumParticipants;
+    const uint32_t arrivals_addr = l1_base;
+    const uint32_t observed_addr = arrivals_addr + arrivals_words * sizeof(uint32_t);
+    const uint32_t post_addr = observed_addr + observed_words * sizeof(uint32_t);
+    const uint32_t total_words = arrivals_words + observed_words + post_words;
+
+    auto dm_spec = MakeMinimalGen2DMKernel("dm_all_cores_kernel", kNumDmThreads);
+    dm_spec.source = kDmKernelPath;
+    dm_spec.advanced_options.num_runtime_varargs_per_node = {{node, kAllCoresArgsCount}};
+
+    auto compute_spec = MakeMinimalGen2ComputeKernel("compute_all_cores_kernel", kNumNeos);
+    compute_spec.source = kComputeKernelPath;
+    compute_spec.advanced_options.num_runtime_varargs_per_node = {{node, kAllCoresArgsCount}};
+
+    ProgramSpec spec;
+    spec.name = "all_cores_kernel_thread_barrier";
+    spec.kernels = {dm_spec, compute_spec};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, {"dm_all_cores_kernel", "compute_all_cores_kernel"})};
+
+    Program program = MakeProgramFromSpec(this->device(), spec);
+
+    std::vector<uint32_t> zeros(total_words, 0);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
+
+    const std::vector<uint32_t> runtime_args = {
+        arrivals_addr,
+        observed_addr,
+        post_addr,
+        kRounds,
+        kSkewIters,
+        kNumParticipants,
+        kNumDmThreads,
+    };
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_all_cores_kernel"},
+        .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"compute_all_cores_kernel"},
+        .advanced_options = AdvancedKernelRunArgs{.runtime_varargs = {{node, runtime_args}}},
+    });
+    SetProgramRunArgs(program, params);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+
+    std::vector<uint32_t> observed;
+    slow_dispatch::ReadFromL1(this->device(), kCore, observed_addr, observed_words * sizeof(uint32_t), observed);
+    ASSERT_EQ(observed.size(), observed_words);
+    EXPECT_EQ(observed[kRounds], kNumParticipants) << "observer participant count mismatch";
+
+    std::vector<uint32_t> arrivals, post;
+    slow_dispatch::ReadFromL1(this->device(), kCore, arrivals_addr, arrivals_words * sizeof(uint32_t), arrivals);
+    slow_dispatch::ReadFromL1(this->device(), kCore, post_addr, post_words * sizeof(uint32_t), post);
+    ASSERT_EQ(arrivals.size(), arrivals_words);
+    ASSERT_EQ(post.size(), post_words);
+
+    for (uint32_t r = 0; r < kRounds; r++) {
+        uint32_t arrived = 0;
+        uint32_t posted = 0;
+        for (uint32_t p = 0; p < kNumParticipants; p++) {
+            arrived += arrivals[r * kNumParticipants + p];
+            posted += post[r * kNumParticipants + p];
+        }
+        EXPECT_EQ(arrived, kNumParticipants) << "round " << r << ": not all DMs and TRISCs arrived before release";
+        EXPECT_EQ(observed[r], kNumParticipants)
+            << "round " << r << ": observer counted wrong number of cores after barrier";
+        EXPECT_EQ(posted, kNumParticipants) << "round " << r << ": not all DMs and TRISCs completed post-barrier phase";
     }
 }
 

@@ -42,11 +42,13 @@ extern volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS];
 
 #endif  // !COMPILE_FOR_TRISC
 
-// Semaphores 29/30 reserved for compute sync_threads; 31 is the watcher ring buffer.
+// Semaphores 27–30: thread barriers; 31: watcher ring buffer.
 constexpr uintptr_t TENSIX_GLOBAL_SEM_BASE = 0x01840000;
 constexpr uint32_t TENSIX_GLOBAL_SEM_STRIDE = 0x40;
 constexpr uint32_t COMPUTE_BARRIER_ARRIVED_SEM_IDX = 30;
 constexpr uint32_t COMPUTE_BARRIER_GENERATION_SEM_IDX = 29;
+constexpr uint32_t ALL_CORES_BARRIER_ARRIVED_SEM_IDX = 28;
+constexpr uint32_t ALL_CORES_BARRIER_GENERATION_SEM_IDX = 27;
 constexpr uint32_t TENSIX_GLOBAL_SEM_VALUE_MASK = 0xFFFFu;
 
 inline volatile uint32_t* tensix_global_sem(uint32_t idx) {
@@ -108,9 +110,34 @@ inline void thread_sync_init() {
     }
     tensix_global_sem_init(COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
     tensix_global_sem_init(COMPUTE_BARRIER_GENERATION_SEM_IDX, 0);
+    tensix_global_sem_init(ALL_CORES_BARRIER_ARRIVED_SEM_IDX, 0);
+    tensix_global_sem_init(ALL_CORES_BARRIER_GENERATION_SEM_IDX, 0);
 #endif
 }
 #endif  // !COMPILE_FOR_TRISC
+
+inline void tensix_global_sem_barrier(uint32_t arrived_idx, uint32_t generation_idx, uint32_t participants) {
+#if defined(ARCH_QUASAR)
+    if (participants <= 1) {
+        return;
+    }
+    asm volatile("fence rw, rw" ::: "memory");
+    uint32_t next_generation = (tensix_global_sem_read(generation_idx) + 1) & TENSIX_GLOBAL_SEM_VALUE_MASK;
+    uint32_t arrived = tensix_global_sem_fetch_add(arrived_idx, 1) + 1;
+    if (arrived == participants) {
+        tensix_global_sem_init(arrived_idx, 0);
+        tensix_global_sem_init(generation_idx, next_generation);
+    } else {
+        while ((tensix_global_sem_read(generation_idx) & TENSIX_GLOBAL_SEM_VALUE_MASK) != next_generation) {
+        }
+    }
+    asm volatile("fence rw, rw" ::: "memory");
+#else
+    (void)arrived_idx;
+    (void)generation_idx;
+    (void)participants;
+#endif
+}
 
 // barrier_idx selects an independent barrier so co-resident kernels with different
 // participant counts (e.g. a DFB's producer vs consumer kernel) don't share a counter.
@@ -122,19 +149,7 @@ inline void wait_threads(uint32_t participants, uint32_t barrier_idx = 0) {
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_TRISC)
     (void)barrier_idx;
-    asm volatile("fence rw, rw" ::: "memory");
-    uint32_t next_generation =
-        (tensix_global_sem_read(COMPUTE_BARRIER_GENERATION_SEM_IDX) + 1) & TENSIX_GLOBAL_SEM_VALUE_MASK;
-    uint32_t arrived = tensix_global_sem_fetch_add(COMPUTE_BARRIER_ARRIVED_SEM_IDX, 1) + 1;
-    if (arrived == participants) {
-        tensix_global_sem_init(COMPUTE_BARRIER_ARRIVED_SEM_IDX, 0);
-        tensix_global_sem_init(COMPUTE_BARRIER_GENERATION_SEM_IDX, next_generation);
-    } else {
-        while ((tensix_global_sem_read(COMPUTE_BARRIER_GENERATION_SEM_IDX) & TENSIX_GLOBAL_SEM_VALUE_MASK) !=
-               next_generation) {
-        }
-    }
-    asm volatile("fence rw, rw" ::: "memory");
+    tensix_global_sem_barrier(COMPUTE_BARRIER_ARRIVED_SEM_IDX, COMPUTE_BARRIER_GENERATION_SEM_IDX, participants);
 #else
     volatile KernelBarrier& barrier = g_kernel_barrier[barrier_idx];
     uint32_t next_generation = __atomic_load_n(&barrier.generation, __ATOMIC_ACQUIRE) + 1;
@@ -155,5 +170,13 @@ inline void sync_threads(uint32_t barrier_idx = 0) {
     wait_threads(get_num_threads() * kTriscCoresPerNeo, barrier_idx);
 #else
     wait_threads(get_num_threads(), barrier_idx);
+#endif
+}
+
+inline void sync_all_cores(uint32_t participants) {
+#if defined(ARCH_QUASAR)
+    tensix_global_sem_barrier(ALL_CORES_BARRIER_ARRIVED_SEM_IDX, ALL_CORES_BARRIER_GENERATION_SEM_IDX, participants);
+#else
+    (void)participants;
 #endif
 }
