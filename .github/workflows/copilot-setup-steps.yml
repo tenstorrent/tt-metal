@@ -1,14 +1,7 @@
 name: "Copilot Setup Steps"
 
-# Environment for the GitHub Copilot cloud agent.
-#
-# Goal: the agent should be able to make a change and verify that it compiles.
-# That needs three things, all configured here or documented below:
-#   1. the tt-metal toolchain      -> the CI build image, via `container:`
-#   2. a warm shared ccache        -> Garage, reachable in-cluster
-#   3. instructions to use them    -> AGENTS.md at the repo root
-#
-# Authoring guidance for the agent itself lives in AGENTS.md, not here.
+# TEMPORARY PROBE - validating the docker-run design for PR #54520.
+# Replaced by the final version once these results are in.
 on:
   workflow_dispatch:
   push:
@@ -16,26 +9,10 @@ on:
       - .github/workflows/copilot-setup-steps.yml
 
 jobs:
-  # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
   copilot-setup-steps:
     runs-on: tt-ubuntu-2204-large-stable
-    # NOTE: `container:` is NOT in Copilot's documented allowlist of honoured job
-    # keys (steps/permissions/runs-on/services/snapshot/timeout-minutes), and
-    # community reports say it is applied but then breaks Copilot's injected
-    # helper scripts (exit 127, and `set -o pipefail` under a non-bash /bin/sh).
-    # See the PR description. If that turns out to still be true, the toolchain
-    # has to move into a dedicated ARC runner image instead.
-    #
-    # `latest` rather than a pinned digest: the tag-latest job in
-    # build-docker-artifact.yaml only moves it on pushes to main, so it tracks
-    # the current main-branch CI build image and needs no maintenance here.
-    container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
-    # Copilot caps this at 59.
-    timeout-minutes: 30
-
-    # Set minimal permissions for setup steps
-    # Copilot Agent receives its own token with appropriate permissions
+    # NO container: - Copilot's runtime must stay on the host (git-proxy path bug).
+    timeout-minutes: 40
     permissions:
       contents: read
 
@@ -43,89 +20,68 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # Probes run before anything that can fail, so they always report.
-      # Read the step output, not just the job's red/green.
-      - name: Probe toolchain
+      - name: Host environment
         run: |
-          echo "::group::toolchain"
-          for t in clang++-20 cmake ninja ccache python3; do
-            if command -v "$t" >/dev/null 2>&1; then
-              printf '%-12s OK  %s\n' "$t" "$("$t" --version 2>&1 | head -1)"
-            else
-              printf '%-12s MISSING\n' "$t"
-            fi
-          done
+          echo "::group::host"
+          echo "whoami      : $(whoami) ($(id -u):$(id -g))"
+          echo "groups      : $(id -Gn)"
+          echo "workspace   : ${GITHUB_WORKSPACE}"
+          echo "docker      : $(command -v docker || echo ABSENT) $(docker --version 2>/dev/null)"
+          echo "clang++-20  : $(command -v clang++-20 || echo 'ABSENT (expected - toolchain lives in the image)')"
+          echo "ccache      : $(command -v ccache || echo ABSENT)"
+          echo "shell       : $0"
+          echo "df /opt     : $(df -h /opt | tail -1)"
           echo "::endgroup::"
-          command -v clang++-20 >/dev/null 2>&1 || {
-            echo "::error::clang++-20 absent - image does not carry the build toolchain"
-            exit 1
-          }
+          docker info >/dev/null 2>&1 && echo "docker daemon reachable" || echo "::error::docker daemon NOT reachable"
 
-      - name: Configure remote ccache
-        # Copilot has NO access to Actions, Codespaces or Dependabot secrets -
-        # only to "Agents" secrets, which arrive as plain environment variables.
-        # Normal validation runs of this workflow instead get Actions secrets via
-        # the `secrets.` context. Support both so the same file works either way.
-        #
-        # Secrets are referenced at STEP level deliberately: job-level `env:` is
-        # known to resolve empty during agent-triggered runs.
+      - name: Pull CI build image
+        run: |
+          IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin >/dev/null 2>&1 || \
+            echo "::warning::ghcr login failed; relying on cached image"
+          START=$(date +%s)
+          docker pull "$IMG"
+          echo "pull took $(( $(date +%s) - START ))s"
+          docker image inspect "$IMG" --format 'size: {{.Size}} bytes / created {{.Created}}'
+
+      - name: Compile test inside the image as the host user
         env:
           ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
           ACTIONS_GARAGE_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
-          ACCESS_KEY="${GARAGE_S3_ACCESS_KEY:-$ACTIONS_GARAGE_ACCESS_KEY}"
-          SECRET_KEY="${GARAGE_S3_SECRET_KEY:-$ACTIONS_GARAGE_SECRET_KEY}"
+          IMG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
           ENDPOINT="http://garage.garage.svc.cluster.local:3900"
           REMOTE="s3://ccache|region=garage|prefix=tt-metal|endpoint_url=${ENDPOINT}"
-
-          if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
-            echo "::warning::Garage credentials absent. The agent will build with a COLD cache,"
-            echo "::warning::which will not complete within a session. Add GARAGE_S3_ACCESS_KEY and"
-            echo "::warning::GARAGE_S3_SECRET_KEY as repository *Agents* secrets (Settings ->"
-            echo "::warning::Secrets and variables -> Agents). Actions secrets are not visible to Copilot."
-            exit 0
-          fi
-
-          # Written to ccache's own config file rather than relying on environment
-          # propagation from this job into the agent's later session.
-          mkdir -p "${HOME}/.ccache"
-          umask 077
-          {
-            echo "remote_storage = ${REMOTE}"
-            echo "compression = true"
-            echo "compression_level = 3"
-          } > "${HOME}/.ccache/ccache.conf"
-
-          # Belt and braces for anything reading the environment instead.
-          {
-            echo "AWS_ACCESS_KEY_ID=${ACCESS_KEY}"
-            echo "AWS_SECRET_ACCESS_KEY=${SECRET_KEY}"
-            echo "AWS_DEFAULT_REGION=garage"
-            echo "AWS_ENDPOINT_URL_S3=${ENDPOINT}"
-            echo "CCACHE_REMOTE_STORAGE=${REMOTE}"
-          } >> "$GITHUB_ENV"
-
-          echo "Configured remote ccache -> ${REMOTE}"
-
-      - name: Verify ccache can reach Garage
-        # Non-fatal: ccache degrades remote misses to local, so a hiccup here must
-        # not stop the agent from starting. It is loud because a cold cache means
-        # the agent almost certainly cannot finish a build.
-        run: |
-          ENDPOINT="http://garage.garage.svc.cluster.local:3900"
-          if command -v curl >/dev/null 2>&1 &&
-             curl -sS -m 10 -o /dev/null -w 'endpoint responded HTTP %{http_code} in %{time_total}s\n' "$ENDPOINT"; then
-            echo "Garage endpoint is reachable."
-          else
-            echo "::warning::Garage endpoint NOT reachable - the agent would build with a cold cache."
-          fi
-          if [ -f "${HOME}/.ccache/ccache.conf" ]; then
-            echo "::group::ccache configuration"
-            ccache --show-config 2>&1 | grep -iE 'remote_storage|compression' || true
-            echo "::endgroup::"
-          fi
-
-      - name: Install gh-aw extension
-        uses: github/gh-aw-actions/setup-cli@4f46189e0dfaf63988118c40003c30652d562906 # v0.84.4
-        with:
-          version: v0.84.4
+          mkdir -p "${GITHUB_WORKSPACE}/.probe"
+          cat > "${GITHUB_WORKSPACE}/.probe/t.cpp" <<'CPP'
+          #include <string>
+          #include <cstdio>
+          int main() { std::string s = "probe"; printf("%s\n", s.c_str()); return 0; }
+          CPP
+          echo "::group::docker run (--user $(id -u):$(id -g))"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "${GITHUB_WORKSPACE}:/work" -w /work \
+            -e HOME=/tmp \
+            -e CCACHE_DIR=/tmp/ccache \
+            -e CCACHE_REMOTE_STORAGE="${REMOTE}" \
+            -e AWS_ACCESS_KEY_ID="${ACTIONS_GARAGE_ACCESS_KEY}" \
+            -e AWS_SECRET_ACCESS_KEY="${ACTIONS_GARAGE_SECRET_KEY}" \
+            -e AWS_DEFAULT_REGION=garage \
+            -e AWS_ENDPOINT_URL_S3="${ENDPOINT}" \
+            "$IMG" \
+            bash -lc '
+              set -e
+              echo "in-container user: $(id -u):$(id -g)  HOME=$HOME"
+              clang++-20 --version | head -1
+              ccache --version | head -1
+              ccache --show-config 2>/dev/null | grep -iE "remote_storage" || echo "no remote_storage visible"
+              ccache clang++-20 -std=c++20 -c .probe/t.cpp -o .probe/t.o
+              echo "compile OK"
+              ccache -s 2>/dev/null | grep -iE "remote|cache size|hits" | head -6 || true
+            '
+          echo "::endgroup::"
+          echo "::group::host-side artifact ownership"
+          ls -ln "${GITHUB_WORKSPACE}/.probe/"
+          echo "::endgroup::"
+          rm -rf "${GITHUB_WORKSPACE}/.probe"
