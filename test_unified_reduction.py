@@ -30,7 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import dfb_input, dfb_intermed, dfb_output, run_unified_spec, unified_program_spec
+from unified_harness import dfb, dfb_output, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/reduction_tree.cpp"
 
@@ -77,11 +77,13 @@ def run(device, ht=4, wt=4, grid_h=2, grid_w=2, num_blocks=1, op="sum", single_s
     #           unconditionally before.
     #   out     compute stores it, DM thread 1 drains it
     dfbs = [
-        dfb_input("in0", thread=0, num_pages=ht * wt),
+        dfb("in0", ht * wt),
+        # tmp0's drain differs by shape -- the gather takes it on thread 0, the single-stage
+        # store on thread 1 -- and both spellings live in the source, so it is stated.
         dfb_output("tmp0", thread=1 if single_stage else 0, num_pages=wt),
-        dfb_input("tmp1", thread=0, num_pages=wt * grid_h),
-        dfb_input("scaler", thread=1, num_pages=1),
-        dfb_output("out", thread=1, num_pages=wt),
+        dfb("tmp1", wt * grid_h),
+        dfb("scaler", 1),
+        dfb("out", wt),
     ]
 
     logger.info(

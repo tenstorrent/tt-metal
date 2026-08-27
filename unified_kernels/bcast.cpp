@@ -10,15 +10,11 @@
 // filled 0-column" and "C[h,w] = A[h,w] + B[w]"), so the mapping is established by
 // numbers rather than by reading.
 //
-// Compile-time args:
-//   0        block height in tiles
-//   1        block width in tiles
-//   2..      TensorAccessorArgs for block, then vec, then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   block height in tiles
+//   block width in tiles
 //
-// Runtime args (identical on all three kernels):
-//   0        block base address
-//   1        vec base address
-//   2        out base address
+// No runtime args: the tensors are bound, so their addresses ride with the accessors.
 //
 // Defines: one of BC_AXIS_ROWS / BC_AXIS_COLS / BC_AXIS_BOTH, and one of
 //          BC_OP_ADD / BC_OP_SUB / BC_OP_MUL.
@@ -26,11 +22,6 @@
 #include <tt/unified/core>
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbBlock = 0;
-constexpr uint32_t kCbVec = 1;
-constexpr uint32_t kCbOut = 16;
-constexpr uint32_t kCbTmp = 2;  // BC_THEN_SFPU only
 
 #if defined(BC_AXIS_ROWS)
 constexpr auto kAxis = u::Axis::Rows;
@@ -52,14 +43,10 @@ void kernel_main() {
     constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
     constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
 
-    constexpr auto block_args = TensorAccessorArgs<0>();
-    constexpr auto vec_args = TensorAccessorArgs<block_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<vec_args.next_compile_time_args_offset()>();
-
-    const uint32_t block_addr = get_arg_val<uint32_t>(0);
-    const uint32_t vec_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    u::check_runtime_args<3>();
+    constexpr uint32_t kCbBlock = TT_U_CB(block);
+    constexpr uint32_t kCbVec = TT_U_CB(vec);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbTmp = TT_U_CB(tmp);
 
     u::compute_init(kCbBlock, kCbOut);
 
@@ -72,9 +59,9 @@ void kernel_main() {
     u::Storage<Vec> vec_storage(kCbVec);
     u::Storage<In> out_storage(kCbOut);
 
-    const auto block_acc = TensorAccessor(block_args, block_addr);
-    const auto vec_acc = TensorAccessor(vec_args, vec_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto block_acc = TensorAccessor(tensor::block);
+    const auto vec_acc = TensorAccessor(tensor::vec);
+    const auto out = TensorAccessor(tensor::out);
 
     u::ComputeBlock b = u::noc_load<0>(block_storage, block_acc, 0).wait();
     u::ComputeBlock v = u::noc_load<0>(vec_storage, vec_acc, 0).wait();

@@ -19,7 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import dfb_input, dfb_output, run_unified_spec, unified_program_spec
+from unified_harness import dfb, run_unified_spec, unified_program_spec
 
 KERNEL = "unified_kernels/mcast_bcast.cpp"
 TILE = 32
@@ -55,8 +55,8 @@ def run(device, row=2, tiles=2, dm_thread=0, barrier=False, seed=0):
         kernel_source=KERNEL,
         nodes=core_ranges,
         dfbs=[
-            dfb_input("in", thread=dm_thread, num_pages=tiles),
-            dfb_output("out", thread=0, num_pages=tiles),
+            dfb("in", tiles),
+            dfb("out", tiles),
         ],
         tensors={"in": ta, "out": tout},
         named_compile_time_args=named_ct_args,

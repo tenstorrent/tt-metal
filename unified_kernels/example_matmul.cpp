@@ -8,28 +8,22 @@ constexpr uint32_t kGridHeight = 2;
 constexpr uint32_t kGridWidth = 2;
 constexpr uint32_t kKBlocks = 2;
 
-constexpr uint32_t kCbA = 0;
-constexpr uint32_t kCbB = 1;
-constexpr uint32_t kCbBias = 2;
-constexpr uint32_t kCbOut = 16;
-constexpr uint32_t kCbPartials = 24;
-
 using A = u::Shape<2, 2>;
 using B = u::Shape<2, 2>;
 using Out = u::Shape<2, 2>;
 using Bias = u::Shape<1, 2>;
 
 void kernel_main() {
-    constexpr auto a_args = TensorAccessorArgs<0>();
-    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    constexpr auto bias_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
+    constexpr uint32_t kCbA = TT_U_CB(a);
+    constexpr uint32_t kCbB = TT_U_CB(b);
+    constexpr uint32_t kCbBias = TT_U_CB(bias);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbPartials = TT_U_CB(partials);
 
-    const auto a = TensorAccessor(a_args, get_arg_val<uint32_t>(0));
-    const auto b = TensorAccessor(b_args, get_arg_val<uint32_t>(1));
-    const auto bias = TensorAccessor(bias_args, get_arg_val<uint32_t>(2));
-    const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(3));
-    u::check_runtime_args<4>();
+    const auto a = TensorAccessor(tensor::a));
+    const auto b = TensorAccessor(tensor::b));
+    const auto bias = TensorAccessor(tensor::bias));
+    const auto out = TensorAccessor(tensor::out));
 
     u::matmul_init<A, B>(kCbA, kCbB, kCbOut);
 

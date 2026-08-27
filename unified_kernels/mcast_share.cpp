@@ -26,9 +26,8 @@
 //   grid_h     the rectangle, which is the whole core grid
 //   grid_w
 //
-// Runtime args:
-//   0..2       in, out0, out1 base addresses
-//   3          the sentinel
+// Runtime args, named and identical on all three kernels:
+//   the sentinel
 //
 // Defines:
 //   MS_SHARE_PAIR   put both collectives on pair 0. Without it they take 0 and 1, which
@@ -40,25 +39,20 @@
 
 namespace u = tt::unified;
 
-constexpr uint32_t kCbA = 0;
-constexpr uint32_t kCbB = 1;
-constexpr uint32_t kCbOut0 = 16;
-constexpr uint32_t kCbOut1 = 17;
-
 void kernel_main() {
     constexpr uint32_t tiles = get_named_compile_time_arg_val("tiles");
     constexpr uint32_t rounds = get_named_compile_time_arg_val("rounds");
     constexpr uint32_t grid_h = get_named_compile_time_arg_val("grid_h");
     constexpr uint32_t grid_w = get_named_compile_time_arg_val("grid_w");
 
-    constexpr auto in_args = TensorAccessorArgs<0>();
-    constexpr auto out0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    constexpr auto out1_args = TensorAccessorArgs<out0_args.next_compile_time_args_offset()>();
+    constexpr uint32_t kCbA = TT_U_CB(a);
+    constexpr uint32_t kCbB = TT_U_CB(b);
+    constexpr uint32_t kCbOut0 = TT_U_CB(out0);
+    constexpr uint32_t kCbOut1 = TT_U_CB(out1);
 
-    const auto in = TensorAccessor(in_args, get_arg_val<uint32_t>(0));
-    const auto out0 = TensorAccessor(out0_args, get_arg_val<uint32_t>(1));
-    const auto out1 = TensorAccessor(out1_args, get_arg_val<uint32_t>(2));
-    u::check_runtime_args<3>();
+    const auto in = TensorAccessor(tensor::in));
+    const auto out0 = TensorAccessor(tensor::out0));
+    const auto out1 = TensorAccessor(tensor::out1));
 
     using Blk = u::Shape<1, tiles>;
 

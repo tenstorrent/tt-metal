@@ -7,23 +7,19 @@ namespace u = tt::unified;
 constexpr uint32_t kNumCores = 4;
 constexpr auto kAxis = u::ReduceAxis::Rows;
 
-constexpr uint32_t kCbIn = 0;
-constexpr uint32_t kCbScaler = 1;
-constexpr uint32_t kCbPartial = 2;
-constexpr uint32_t kCbGathered = 3;
-constexpr uint32_t kCbOut = 16;
-
 using In = u::Shape<4, 2>;
 using Partial = u::reduce_shape<In, kAxis>;
 using Gathered = u::Shape<kNumCores * Partial::rows, Partial::cols>;
 
 void kernel_main() {
-    constexpr auto in_args = TensorAccessorArgs<0>();
-    constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    constexpr uint32_t kCbIn = TT_U_CB(in);
+    constexpr uint32_t kCbScaler = TT_U_CB(scaler);
+    constexpr uint32_t kCbPartial = TT_U_CB(partial);
+    constexpr uint32_t kCbGathered = TT_U_CB(gathered);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
-    const auto in = TensorAccessor(in_args, get_arg_val<uint32_t>(0));
-    const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(1));
-    u::check_runtime_args<2>();
+    const auto in = TensorAccessor(tensor::in));
+    const auto out = TensorAccessor(tensor::out));
 
     u::compute_init(kCbIn, kCbOut);
 
