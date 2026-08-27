@@ -88,6 +88,7 @@ DB_SCHEMA = [
     Column("fast_mode", "string", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
+    Column("fused_sort", "string", True, "configuration"),
     Column("in0_c_dim", "int64", True, "configuration"),
     Column("in0_r_dim", "int64", True, "configuration"),
     Column("in1_c_dim", "int64", True, "configuration"),
