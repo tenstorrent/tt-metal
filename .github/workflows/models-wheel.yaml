@@ -139,3 +139,62 @@ jobs:
             dist/*.deb
             dist/*.rpm
           if-no-files-found: error
+
+  # The job above skips every entry point whose first import is `vllm` -- six of eleven
+  # at last count, including models.tt_transformers.tt.generator_vllm, the package's main
+  # reason to exist. A missing packaged module or data file *behind* that first import is
+  # invisible to it. This job supplies the consumer: the Tenstorrent vLLM fork built with
+  # the `empty` device target (no CUDA, no device -- the same recipe tt-model-manager's
+  # installer uses), plus its TT plugin, and requires the skipped entry points to import
+  # via --strict.
+  #
+  # The fork's `dev` branch is a moving target, so this leg can fail on fork-side churn
+  # with no change in this repository. That is accepted deliberately: these entry points
+  # exist to be loaded by that fork, so "the fork can no longer import our models" is
+  # release-blocking information, not noise. The failure log states which side broke.
+  import-matrix-strict:
+    name: "🐍 Import matrix vs vLLM fork (--strict)"
+    runs-on: ${{ inputs.runs-on || 'ubuntu-22.04' }}
+    timeout-minutes: 45
+    needs: build-models-wheel
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          # Only packaging/ is needed (import_matrix.py, build_wheel.py for
+          # --print-requirements); the wheel under test comes from the artifact.
+          sparse-checkout: packaging/tt-metal-models
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.10"
+
+      - name: Download the built wheel
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build-models-wheel.outputs.artifact_name }}
+          path: dist
+
+      - name: Install the wheel and the Tenstorrent vLLM fork
+        run: |
+          python packaging/tt-metal-models/build_wheel.py --print-requirements > /tmp/models-requirements.txt
+          python -m venv /tmp/strictvenv
+          /tmp/strictvenv/bin/pip install --quiet --upgrade pip
+          /tmp/strictvenv/bin/pip install --quiet \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r /tmp/models-requirements.txt
+          /tmp/strictvenv/bin/pip install --quiet ttnn
+          /tmp/strictvenv/bin/pip install --quiet --no-deps dist/tt_metal_models-*.whl
+
+          git clone --depth 1 -b dev https://github.com/tenstorrent/vllm /tmp/vllm
+          echo "vLLM fork at $(git -C /tmp/vllm rev-parse HEAD)"
+          # Tenstorrent has no CUDA: build vLLM with the `empty` device target and CPU
+          # torch; all compute runs through the TT out-of-tree platform. A plain install
+          # would default to VLLM_TARGET_DEVICE=cuda and fail on this runner.
+          VLLM_TARGET_DEVICE=empty /tmp/strictvenv/bin/pip install --quiet /tmp/vllm \
+            --extra-index-url https://download.pytorch.org/whl/cpu
+          /tmp/strictvenv/bin/pip install --quiet /tmp/vllm/plugins/vllm-tt-plugin
+
+      - name: Import matrix (--strict)
+        run: |
+          python packaging/tt-metal-models/import_matrix.py --python /tmp/strictvenv/bin/python --strict
