@@ -2046,7 +2046,7 @@ TEST(MatmulConfigRegistry, SyntheticHitIsExactAndMaterializesOnlyInOn) {
     ASSERT_TRUE(on_parameters.has_value());
     ASSERT_TRUE(on_parameters->program_config.has_value());
     EXPECT_TRUE(std::holds_alternative<MatmulMultiCoreProgramConfig>(*on_parameters->program_config));
-    EXPECT_EQ(on_parameters->compute_kernel_config, legacy.compute_kernel_config);
+    EXPECT_FALSE(on_parameters->compute_kernel_config.has_value());
     EXPECT_EQ(on_parameters->untilize_out, legacy.untilize_out);
     EXPECT_EQ(on_parameters->output_dtype, legacy.output_dtype);
     EXPECT_EQ(on_parameters->transpose_a, legacy.transpose_a);
