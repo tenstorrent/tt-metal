@@ -79,7 +79,8 @@
 #      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
 #      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
 #  CANDIDATE 29. 45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79 (UNRATIFIED SUPERSEDED; never a baseline anchor) — proposed pin 29 (2026-08-25)
-#  36. 86fcd08e1babc0878bafb9f6eb33d4d8abac9b0a41d9c3fc744d285e148b136c (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 36 = pin 35 + morning flip pair HZ/IA (2026-08-27)
+#  37. ec1ceaa776dd9195e680806fc1320b902587eeddb9d3af42bbe4a564f91d2579 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 37 = pin 36 + IC tanh 2-datum window (2026-08-27)
+#  36. 86fcd08e1babc0878bafb9f6eb33d4d8abac9b0a41d9c3fc744d285e148b136c (superseded by 37; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 36 = pin 35 + morning flip pair HZ/IA (2026-08-27)
 #  35. 133619cf6b77005e275a6a551ed4e39ddb0e174746dab37210f051a5f91f8f0c (superseded by 36; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 35 = pin 34 + HY park-ordering keep gates (2026-08-27)
 #  34. e6cf49e9bd832fab780236d681bcbf60a51f87740a71c1e68b230f20f65521ca (superseded by 35; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 34 = pin 33 + unlock pair HT/HS (2026-08-26)
 #  33. 1f0f5a44a00104522b978f56bf7372ea76a225255dfc040c7f18c55a76027926 (superseded by 34; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 33 = pin 32 + HR crossloop-cc-peel (2026-08-26)
