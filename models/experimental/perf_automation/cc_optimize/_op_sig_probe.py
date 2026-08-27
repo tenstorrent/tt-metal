@@ -14,6 +14,15 @@ representative sample. Homogeneous models saturate at 1-2 layers; heterogeneous 
 
 from __future__ import annotations
 
+# The seam names live in ONE module -- see stage_seams. This file sits in cc_optimize, so the
+# relative form escapes the top-level package when the tool puts perf_automation itself on
+# sys.path (perf_test_mcp.py:21) and `cc_optimize` IS the root. Both spellings are tried, which
+# is what every other cross-package import in this tree does.
+try:
+    from ..agent import stage_seams as _seams
+except ImportError:  # perf_automation itself is the sys.path root
+    from agent import stage_seams as _seams
+
 import json
 import sys
 from collections import Counter
@@ -730,7 +739,7 @@ def _install_block_signposts():
         except Exception:  # noqa: BLE001
             stages = []
         for st in stages:
-            for attr in ("%s_trace_step" % st, "%s_trace_setup" % st, st):
+            for attr in (_seams.hook(st, _seams.STEP), _seams.hook(st, _seams.SETUP), st):
                 fn = getattr(obj, attr, None)
                 if fn is None or not callable(fn) or getattr(fn, "_perf_stage_wrapped", False):
                     continue

@@ -93,4 +93,7 @@ def test_the_probe_emits_the_boundaries_from_the_models_own_stages():
     i = src.index("def _mark_stage_boundaries(")
     body = src[i : i + 3000]
     assert "PIPELINE_STAGES" in body, "the stage names are invented rather than read from the model"
-    assert "_trace_step" in body, "the per-stage hooks are not used"
+    # The hook NAME now comes from the seam registry rather than being spelled here. Asserting the
+    # literal "_trace_step" pinned the spelling, which is the duplication stage_seams exists to end;
+    # what the test is actually about is that the per-stage hooks are what gets bound.
+    assert "_seams.STEP" in body and "_seams.hook(" in body, "the per-stage hooks are not used"

@@ -10,6 +10,14 @@ demo (the reliable input), not something we require to pre-exist. Idempotent.
 
 from __future__ import annotations
 
+# The seam names live in ONE module -- see stage_seams. This file is also loaded BY FILE LOCATION
+# (spec_from_file_location, no parent package) by the generator tests, where the relative form
+# cannot resolve; those loaders put perf_automation on sys.path, so the flat spelling answers.
+try:
+    from . import stage_seams as _seams
+except ImportError:  # loaded as a bare module, with perf_automation on sys.path
+    from agent import stage_seams as _seams
+
 import json
 import os
 import re
@@ -402,7 +410,9 @@ def _is_device_disruption(rc, out: str) -> bool:
 _CAPTURE_DRIVER = re.compile(
     r"\.(run_[a-z0-9_]+|generate|synthesize|infer|forward)\s*\(|\b(run_[a-z0-9_]+|generate)\s*\("
 )
-_CAPTURE_HOSTFREE = re.compile(r"\b\w*(?:_trace_step|decode_step)\s*\(")
+# The seam suffix is interpolated from stage_seams rather than spelled again; `decode_step` beside
+# it is the LEGACY contract name, which is a different thing and not a per-stage seam.
+_CAPTURE_HOSTFREE = re.compile(r"\b\w*(?:%s|decode_step)\s*\(" % re.escape(_seams.STEP))
 
 
 def _handrolled_capture_violation(src: str) -> str | None:

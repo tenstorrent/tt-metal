@@ -32,6 +32,10 @@ refine() already slices on, so the main report sees exactly what it saw before.
 """
 from __future__ import annotations
 
+# The seam names live in ONE module -- see stage_seams. A RELATIVE import resolves under both
+# names this package is imported by, so neither spelling has to be guarded.
+from . import stage_seams as _seams
+
 import ast
 import sys
 
@@ -148,7 +152,7 @@ def _looks_like_a_pipeline(obj) -> bool:
     names = getattr(mod, "PIPELINE_STAGES", None) if mod else None
     if not isinstance(names, (list, tuple)) or not names:
         return False
-    return any(callable(getattr(obj, "%s_trace_step" % n, None)) for n in names)
+    return any(callable(getattr(obj, _seams.hook(n, _seams.STEP), None)) for n in names)
 
 
 def find_pipeline_in_scope(scope: dict):
@@ -178,7 +182,7 @@ def find_pipeline_in_scope(scope: dict):
 # The seam perf_adapter drives a stage through. Named once here because the injector recognises the
 # test's input preparer BY IT -- a function that assigns these is preparing stages, whatever it is
 # called -- and nothing else in this file may name a generated identifier.
-_STAGE_INPUT_HOOK = "_trace_inputs"
+_STAGE_INPUT_HOOK = _seams.INPUTS  # named once, in stage_seams
 
 
 def find_input_preparer(text: str, at_line: int = 0) -> str:
