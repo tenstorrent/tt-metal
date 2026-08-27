@@ -483,8 +483,8 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x, sfpi::
             GELU_DERIV_H4,
             GELU_DERIV_H5,
             k_h6,
-            sfpi::vConstFloatPrgm2,
-            sfpi::vConstFloatPrgm1);
+            GELU_DERIV_H7,
+            GELU_DERIV_H8);
         result = 0.5f + x * h;
     }
     // Tail region (-13.375, -3): asymptotic formula with fused x*exp(t)
@@ -628,12 +628,13 @@ inline void gelu_derivative_polynomial_init() {
         // The approximate path returns above, before reaching here.
         sfpu_reciprocal_init<false>();
     }
-    // Park the three highest-order h() coefficients in registers that survive the kernel,
-    // so the eight unrolled copies stop re-materialising them with a pair of SFPLOADI each.
-    // vConstFloatPrgm0 is spoken for by sfpu_reciprocal_init above, and one LReg is all the
-    // allocator can spare here -- two fails codegen with a register spill.
-    sfpi::vConstFloatPrgm1 = GELU_DERIV_H8;
-    sfpi::vConstFloatPrgm2 = GELU_DERIV_H7;
+    // Park the highest-order h() coefficient in a register that survives the kernel, so the
+    // eight unrolled copies stop re-materialising it with a pair of SFPLOADI each. Unlike
+    // Blackhole, no constant register is available here: this path calls sfpu_reciprocal_iter
+    // in its deep tail, and Wormhole's sfpu_reciprocal_init seeds all three of
+    // vConstFloatPrgm0/1/2 with the Sollya coefficients of its 1/x estimate. Writing any of
+    // them corrupts that tail. One LReg is also all the allocator can spare -- two fails
+    // codegen with a register spill.
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(GELU_DERIV_H6));
 }
 
