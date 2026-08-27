@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import copy
 import hashlib
 import json
 import os
@@ -8180,6 +8181,87 @@ def _persist_graduated_demos(session_path, dest_root) -> list:
     return synced
 
 
+_COMPOSITE_FANOUT_DEPTH_CAP = 3
+
+
+def _fan_out_composite(args) -> Optional[int]:
+    """Bring up a composite repo by running the normal pipeline once per component.
+
+    A composite (a diffusers pipeline, or any repo whose parts each carry their own
+    config) has no single root model to load, so the single-root pipeline has
+    nothing to work on and scaffold refuses it. Its parts, however, ARE ordinary
+    single-root models. This walks the parts the probe discovered and re-enters
+    ``cmd_up`` for each one, so every stage -- scaffold, capture, classify,
+    graduate -- is the same code that brings up any other model. There is no
+    second pipeline to keep in sync.
+
+    Returns ``None`` when this is not a composite (caller proceeds normally), or an
+    exit code once every component has been attempted. Component names come from
+    the repo itself; nothing here assumes what they are called.
+    """
+    model_id = getattr(args, "model_id", "") or ""
+    if not model_id:
+        return None
+    depth = int(getattr(args, "_composite_depth", 0) or 0)
+    if depth >= _COMPOSITE_FANOUT_DEPTH_CAP:
+        return None
+
+    # Cheap listing-based check: probe_model() may consult an agent to classify
+    # the model, which must not run on every `up` just to answer "is this a
+    # container?". Same rule, no cost.
+    from .probe import component_targets, detect_composite_repo
+
+    is_composite, submodels = detect_composite_repo(model_id)
+    if not is_composite:
+        return None
+
+    targets = component_targets(model_id, submodels)
+    if not targets:
+        # Nothing resolvable -- let the normal path run and report why, rather
+        # than inventing a reason here.
+        return None
+
+    print("", file=sys.stderr)
+    print("=" * 78, file=sys.stderr)
+    print(f"  COMPOSITE FAN-OUT: {model_id}", file=sys.stderr)
+    print(
+        f"  {len(targets)} component(s) [{', '.join(n for n, _ in targets)}] — each is brought up "
+        f"as its own model through the standard pipeline.",
+        file=sys.stderr,
+    )
+    print("=" * 78, file=sys.stderr)
+
+    results: List[Tuple[str, int]] = []
+    for index, (name, path) in enumerate(targets, start=1):
+        print("", file=sys.stderr)
+        print(f"  [composite {index}/{len(targets)}] {model_id} :: {name}", file=sys.stderr)
+        # Materialise THIS part's weights now -- enumeration deliberately fetched
+        # configs only, so nothing was downloaded for parts that never run.
+        materialised = component_targets(model_id, [name], with_weights=True)
+        if materialised:
+            path = materialised[0][1]
+        child = copy.copy(args)
+        child.model_id = path
+        child._composite_depth = depth + 1
+        try:
+            rc = cmd_up(child)
+        except SystemExit as exc:
+            rc = int(exc.code) if exc.code not in (0, None) else 0
+        except Exception as exc:  # one bad component must not hide the others
+            print(f"  [composite] {name}: {type(exc).__name__}: {exc}", file=sys.stderr)
+            rc = 2
+        results.append((name, int(rc or 0)))
+
+    print("", file=sys.stderr)
+    print("=" * 78, file=sys.stderr)
+    print(f"  COMPOSITE SUMMARY: {model_id}", file=sys.stderr)
+    for name, rc in results:
+        print(f"    {'OK  ' if rc == 0 else f'rc={rc}'}  {name}", file=sys.stderr)
+    print("=" * 78, file=sys.stderr)
+    failed = [rc for _, rc in results if rc != 0]
+    return max(failed) if failed else 0
+
+
 def cmd_up(args) -> int:
     _quiet_framework_logging()
     _warn_on_registry_drift(args)
@@ -8197,6 +8279,11 @@ def cmd_up(args) -> int:
         # diagnostic has records to compare against if e2e PCC fails.
         # Idempotent; sets a deterministic per-model path.
         _auto_enable_tt_probe(_model_id)
+    # A composite has no single root model to bring up; fan out over its parts and
+    # run this same pipeline for each. Returns None for ordinary models.
+    _fanned = _fan_out_composite(args)
+    if _fanned is not None:
+        return _fanned
     if not getattr(args, "isolation", "none") == "worktree":
         return _cmd_up_core(args)
     return _cmd_up_isolated(args)

@@ -5,7 +5,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Sequence
 
 _HF_ID_PART = r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}"
 _HF_ID_PATTERN = re.compile(rf"^{_HF_ID_PART}(/{_HF_ID_PART})?$")
@@ -771,11 +771,17 @@ def _maybe_fetch_config(model_id: str) -> Optional[dict]:
     try:
         from huggingface_hub import hf_hub_download
 
-        path = hf_hub_download(safe_id, "config.json")
+        path = hf_hub_download(safe_id, ROOT_CONFIG_FILE)
         with open(path) as f:
             return json.load(f)
     except Exception:
-        return None
+        pass
+
+    # Last resort: read the config document directly. AutoConfig only understands
+    # transformers-style configs (keyed by ``model_type``); a component of a
+    # composite describes itself with ``_class_name`` instead, and a local model
+    # directory is not downloadable at all. Both are still perfectly good configs.
+    return fetch_repo_json(safe_id, ROOT_CONFIG_FILE)
 
 
 COMPOSITE_INDEX_FILE = "model_index.json"
@@ -786,11 +792,14 @@ def fetch_repo_json(model_id: str, filename: str) -> Optional[dict]:
     """Download and parse one JSON file from a model repo (or read it from a local
     model dir). Returns ``None`` on any failure -- missing file, no access, bad
     JSON. Shared by every caller that needs a raw repo-side JSON document."""
-    try:
-        safe_id = _validate_hf_id(model_id)
-    except Exception:
-        return None
-    if _is_local_model_dir(safe_id):
+    if isinstance(model_id, str) and os.path.isdir(model_id):
+        safe_id = model_id
+    else:
+        try:
+            safe_id = _validate_hf_id(model_id)
+        except Exception:
+            return None
+    if os.path.isdir(safe_id):
         path = os.path.join(safe_id, filename)
         try:
             with open(path) as f:
@@ -851,6 +860,117 @@ def _repo_access_status(model_id: str, filename: str) -> str:
         if absent and isinstance(exc, absent):
             return "absent"
         return "unknown"
+
+
+class _FileEntry:
+    """Minimal stand-in for a hub sibling so a local directory can be fed to the
+    same composite rule the hub path uses."""
+
+    __slots__ = ("rfilename",)
+
+    def __init__(self, rfilename: str) -> None:
+        self.rfilename = rfilename
+
+
+def _local_siblings(model_dir: str, max_depth: int = 2) -> List[_FileEntry]:
+    """Repo-relative file list for a local directory, shaped like hub siblings."""
+    out: List[_FileEntry] = []
+    base = os.path.abspath(model_dir)
+    for root, dirs, files in os.walk(base):
+        rel_root = os.path.relpath(root, base)
+        depth = 0 if rel_root == "." else rel_root.count(os.sep) + 1
+        if depth >= max_depth:
+            dirs[:] = []
+        for fname in files:
+            rel = fname if rel_root == "." else f"{rel_root}/{fname}"
+            out.append(_FileEntry(rel.replace(os.sep, "/")))
+    return out
+
+
+def detect_composite_repo(model_id: str) -> Tuple[bool, List[str]]:
+    """``(is_composite, component_names)`` from the file listing alone.
+
+    :func:`probe_model` is expensive -- it may consult an agent to classify the
+    model -- so callers that only need to know whether a target is a container of
+    models use this instead. It applies the SAME rule as the full probe
+    (:func:`_detect_composite`), so the two can never disagree, and reads only the
+    file list plus the root config document. Never raises."""
+    if not isinstance(model_id, str) or not model_id:
+        return (False, [])
+    # A composite directory has no root config.json, which is exactly what
+    # _is_local_model_dir() requires -- so "is it on disk" is the local test here.
+    local = os.path.isdir(model_id)
+    if not local:
+        try:
+            model_id = _validate_hf_id(model_id)
+        except Exception:
+            return (False, [])
+    cfg = fetch_repo_json(model_id, ROOT_CONFIG_FILE)
+    try:
+        if local:
+            siblings: List[_FileEntry] = _local_siblings(model_id)
+        else:
+            from huggingface_hub import HfApi
+
+            siblings = HfApi().model_info(model_id).siblings or []
+    except Exception:
+        return (False, [])
+    try:
+        return _detect_composite(siblings, cfg)
+    except Exception:
+        return (False, [])
+
+
+def _surrogate_pipeline_class(cfg: Optional[dict]) -> Optional[str]:
+    """Routing surrogate for a config that has no ``model_type``.
+
+    A composite's component describes itself with ``_class_name`` instead. That is
+    the only architecture identity it publishes, so routing uses it the same way
+    the composite root uses ``model_index.json``'s. Whatever the class is called is
+    read from the document -- never assumed."""
+    if not isinstance(cfg, dict) or cfg.get("model_type"):
+        return None
+    cls = cfg.get("_class_name")
+    return cls if isinstance(cls, str) and cls else None
+
+
+def component_targets(model_id: str, submodels: Sequence[str], *, with_weights: bool = False) -> List[Tuple[str, str]]:
+    """``[(component_name, local_path)]`` for a composite's parts.
+
+    Each part of a composite repo is an ordinary single-root model: its own
+    directory with its own config and weights. Materialising nothing, this returns
+    paths the rest of the tool can treat like any local model directory, so a
+    composite is brought up by running the existing per-model pipeline once per
+    part instead of needing a parallel implementation.
+
+    Names come from the caller (discovered from the repo listing); none are
+    assumed here. Parts without a readable config are skipped rather than guessed
+    at. Returns ``[]`` when nothing can be resolved.
+
+    ``with_weights=False`` (the default) fetches only each part's config, which is
+    all that is needed to enumerate and route -- enumerating must not drag down
+    tens of GB of weights. Pass ``with_weights=True`` for the part about to be
+    brought up, so its tensors are materialised just before they are needed."""
+    names = [n for n in (submodels or []) if n and not n.startswith((".", "/"))]
+    if not names:
+        return []
+
+    root: Optional[str] = model_id if os.path.isdir(model_id) else None
+    if root is None:
+        try:
+            from huggingface_hub import snapshot_download
+
+            patterns = [f"{n}/*" for n in names] if with_weights else [f"{n}/{ROOT_CONFIG_FILE}" for n in names]
+            root = snapshot_download(_validate_hf_id(model_id), allow_patterns=patterns)
+        except Exception:
+            return []
+
+    out: List[Tuple[str, str]] = []
+    for name in names:
+        path = os.path.join(root, name)
+        if _is_local_model_dir(path):
+            out.append((name, path))
+    return out
 
 
 def missing_config_reason(probe: "ModelProbe", model_id: str) -> str:
@@ -1057,6 +1177,7 @@ def _probe_local_model(model_id: str) -> ModelProbe:
         bytes_per_param_on_disk=bytes_per_param,
         raw_config=cfg,
     )
+    probe.pipeline_class = _surrogate_pipeline_class(cfg)
     if _is_low_confidence_category(pipeline_tag, model_type_category):
         probe.flags.append(
             f"LOW-CONFIDENCE category {category!r}: inferred from the AMBIGUOUS pipeline_tag "
@@ -1151,6 +1272,8 @@ def probe_model(model_id: str) -> ModelProbe:
     probe.is_composite, probe.submodels = _detect_composite(info.siblings, cfg)
     if probe.is_composite:
         probe.pipeline_class = _maybe_fetch_pipeline_class(model_id)
+    else:
+        probe.pipeline_class = _surrogate_pipeline_class(cfg)
     if cfg is None:
         probe.config_status = "failed"
         return probe
