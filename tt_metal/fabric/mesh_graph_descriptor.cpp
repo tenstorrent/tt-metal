@@ -163,9 +163,6 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
-    MeshGraphDescriptor(text_proto, backwards_compatible, /*source_path=*/{}) {}
-
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::string& text_proto, const bool backwards_compatible, std::string_view source_path) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
