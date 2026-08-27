@@ -75,6 +75,21 @@ void py_module(nb::module_& mod) {
             &ttnn::Config::get<I>,
             &ttnn::Config::set<I>);
     });
+    // Registry modes use process-global storage instead of Config::attributes_t
+    // so adding these controls does not change the public Config object layout.
+    py_config
+        .def_prop_rw(
+            "matmul_registry_mode",
+            [](const ttnn::Config& config) { return config.get<"matmul_registry_mode">(); },
+            [](ttnn::Config& config, const ttnn::MatmulRegistryMode mode) {
+                config.set<"matmul_registry_mode">(mode);
+            })
+        .def_prop_rw(
+            "agmm_registry_mode",
+            [](const ttnn::Config& config) { return config.get<"agmm_registry_mode">(); },
+            [](ttnn::Config& config, const ttnn::MatmulRegistryMode mode) {
+                config.set<"agmm_registry_mode">(mode);
+            });
     py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
 
     nb::class_<lightmetal::LightMetalBinary>(mod, "LightMetalBinary")

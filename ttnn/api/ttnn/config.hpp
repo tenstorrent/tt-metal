@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <filesystem>
 #include <cstdint>
+#include <filesystem>
 #include <iosfwd>
 #include <optional>
 #include <reflect>
@@ -14,7 +14,7 @@
 #include <tuple>
 #include <vector>
 
-#include <fmt/base.h>
+#include <fmt/format.h>
 
 namespace ttnn {
 
@@ -31,6 +31,14 @@ constexpr std::string_view to_string(const MatmulRegistryMode mode) {
 
 namespace core {
 
+// Process-global controls intentionally live outside Config::attributes_t so
+// adding the registries does not alter the public Config object layout/ABI.
+// Each registry snapshots its value on first dispatch.
+MatmulRegistryMode get_matmul_registry_mode() noexcept;
+void set_matmul_registry_mode(MatmulRegistryMode mode) noexcept;
+MatmulRegistryMode get_agmm_registry_mode() noexcept;
+void set_agmm_registry_mode(MatmulRegistryMode mode) noexcept;
+
 struct Config {
     struct attributes_t {
         std::filesystem::path cache_path = std::filesystem::path{std::getenv("HOME")} / ".cache/ttnn";
@@ -38,12 +46,6 @@ struct Config {
         std::filesystem::path tmp_dir = "/tmp/ttnn";
         bool enable_model_cache = false;
         bool enable_fast_runtime_mode = true;
-        // Snapshotted on the first public matmul dispatch and immutable after
-        // that point.  Mutating CONFIG later does not alter registry behavior.
-        MatmulRegistryMode matmul_registry_mode = MatmulRegistryMode::Off;
-        // Independently snapshotted on the first AGMM dispatch. The collective
-        // registry has a disjoint key/table and remains disabled by default.
-        MatmulRegistryMode agmm_registry_mode = MatmulRegistryMode::Off;
         // Re-validate Metal 2.0 program args on the cache-hit fast path (Update{Tensor,ProgramRun}Args).
         // The cache-miss build path always validates. Off by default; CI turns it on.
         bool validate_program_args = false;
@@ -83,6 +85,16 @@ public:
     }
 
     template <reflect::fixed_string name>
+        requires(std::string_view{name} == "matmul_registry_mode" || std::string_view{name} == "agmm_registry_mode")
+    MatmulRegistryMode get() const noexcept {
+        if constexpr (std::string_view{name} == "matmul_registry_mode") {
+            return get_matmul_registry_mode();
+        } else {
+            return get_agmm_registry_mode();
+        }
+    }
+
+    template <reflect::fixed_string name>
         requires(name == reflect::fixed_string{"report_path"})
     std::optional<std::filesystem::path> get() const {
         return get_report_path_impl();
@@ -100,6 +112,16 @@ public:
     void set(const T& value) {
         reflect::get<index>(this->attributes) = value;
         this->validate(reflect::member_name<index>(this->attributes));
+    }
+
+    template <reflect::fixed_string name>
+        requires(std::string_view{name} == "matmul_registry_mode" || std::string_view{name} == "agmm_registry_mode")
+    void set(const MatmulRegistryMode mode) noexcept {
+        if constexpr (std::string_view{name} == "matmul_registry_mode") {
+            set_matmul_registry_mode(mode);
+        } else {
+            set_agmm_registry_mode(mode);
+        }
     }
 
     // Defined in config.cpp (uses tt-logger).

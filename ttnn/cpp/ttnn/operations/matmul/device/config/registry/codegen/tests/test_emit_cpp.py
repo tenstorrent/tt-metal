@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -477,24 +478,42 @@ int main() {
 """,
         encoding="utf-8",
     )
-    executable = tmp_path / "unseen_shape_contract"
-    repository_root = Path(__file__).resolve().parents[10]
+    registry_include_dir = tmp_path / "ttnn" / "operations" / "matmul" / "device" / "config" / "registry"
+    registry_include_dir.mkdir(parents=True)
+    shutil.copyfile(
+        REGISTRY_DIR / "matmul_program_config_model.hpp",
+        registry_include_dir / "matmul_program_config_model.hpp",
+    )
+    shutil.copyfile(
+        REGISTRY_DIR / "matmul_registry_descriptor.hpp",
+        registry_include_dir / "matmul_registry_descriptor.hpp",
+    )
+
+    # Compile and run only fixed filenames inside pytest's private temporary
+    # directory. None of the filesystem paths are interpolated into an OS
+    # command, and subprocess never invokes a shell.
     subprocess.run(
         [
             "c++",
             "-std=c++20",
-            f"-I{repository_root / 'ttnn' / 'cpp'}",
-            f"-I{tmp_path}",
-            str(generated_source),
-            str(test_source),
+            "-I.",
+            "matmul_registry_data.cpp",
+            "unseen_shape_contract.cpp",
             "-o",
-            str(executable),
+            "unseen_shape_contract",
         ],
         check=True,
         capture_output=True,
         text=True,
+        cwd=tmp_path,
     )
-    subprocess.run([str(executable)], check=True, capture_output=True, text=True)
+    subprocess.run(
+        ["./unseen_shape_contract"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
 
 
 def test_absent_and_explicit_empty_online_models_emit_disabled_cpp() -> None:
