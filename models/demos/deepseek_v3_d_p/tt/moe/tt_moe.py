@@ -208,6 +208,7 @@ class TtMoe(LightweightModule):
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
+        routed_expert_hybrid_token_threshold=None,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -287,6 +288,15 @@ class TtMoe(LightweightModule):
             routed_expert_activation: GLU activation the fused routed-expert kernel runs.
                 Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only --
                 the shared expert takes shared_expert_activation, which is a separate knob.
+            routed_expert_hybrid_token_threshold: split the routed experts across BOTH
+                routed-expert ops by load. None (default) keeps the single-op path. An int T
+                sends experts with <= T active tokens to moe_fused_swiglu and the rest to
+                unified_routed_expert_moe; each op reads the same device-resident counts and
+                drops the experts outside its band, so the split needs no extra tensor and no
+                host sync. The crossover is per model and per shape, not a constant -- measure
+                before choosing T with
+                tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/
+                test_moe_fused_swiglu_vs_unified.py, which times both ops in one harness.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -503,6 +513,7 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=routed_expert_activation,
+            hybrid_token_threshold=routed_expert_hybrid_token_threshold,
         )
 
         # Initialize shared expert (col axis: axis 1)

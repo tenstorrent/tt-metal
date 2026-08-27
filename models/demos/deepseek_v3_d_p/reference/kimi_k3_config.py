@@ -49,6 +49,12 @@ class KimiK3Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
+    # Routed-expert hybrid split: experts with <= this many active tokens go to
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. Measured crossover on the
+    # 3584x3072 routed-expert shape (1.11x at 768, 0.97x at 896); it is the last full M_BLOCK
+    # boundary before the fused op opens another block while the composite's chunk
+    # schedule stays flat, so the two costs cross just above it.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 768
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by
