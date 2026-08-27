@@ -988,6 +988,48 @@ def _block_stack_gate(demo_dir: Path, model_id: str, timeout_s: int):
     return None
 
 
+def _stage_items_gate(demo_dir: Path):
+    """Return a failure reason (or None): every stage the model declares must state what one call
+    of it retires, via the <stage>_trace_items() seam the perf engine binds.
+
+    That count is the only input to the stage's arithmetic ceiling (2 x params x items). A stage
+    that states nothing is priced at ONE item, which is right for a recurring step and ~1500x wrong
+    for an encoder over 1500 frames -- and the two are indistinguishable downstream, so the ceiling
+    reads as a finding rather than a placeholder. The seam was added to every consumer in August and
+    to no producer, so this ran for months with no model emitting it and nothing failing.
+
+    Instructing the writer is not enough on its own: a prompt is a request, and nothing failed when
+    it was ignored. This is the enforcement.
+
+    Stage names come from the model's own PIPELINE_STAGES and the seam suffixes from the engine's
+    own definition; nothing here names a stage.
+    """
+    try:
+        from models.experimental.perf_automation.agent.model_contract import declared_stage_names
+        from models.experimental.perf_automation.agent.stage_seams import ITEMS, hook
+    except Exception:  # noqa: BLE001 -- the engine is not importable here; do not fail emission for it
+        return None
+    stages = declared_stage_names(demo_dir)
+    if not stages:
+        return None
+    src = "\n".join(p.read_text(errors="ignore") for p in sorted((demo_dir / "tt").rglob("*.py")) if p.is_file())
+    missing = [st for st in stages if ("def %s(" % hook(st, ITEMS)) not in src]
+    if not missing:
+        return None
+    return (
+        "G6 stage-items: %s state no item count (%s missing). The stage's compute ceiling is "
+        "2 x params x items, so a stage that states nothing is priced at ONE item and its roofline "
+        "silently becomes a placeholder. Expose it ZERO-ARG per stage, returning the TOTAL one "
+        "%s call retires, batch included -- count what the stage's repeated blocks process, not "
+        "what it returns. A stage that genuinely retires one item must return 1 explicitly."
+        % (
+            "stage(s) %s" % ", ".join(repr(m) for m in missing),
+            ", ".join(hook(m, ITEMS) for m in missing),
+            "_trace_step",
+        )
+    )
+
+
 def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     """Model-agnostic gate runner: G1 native, G2/G3 (run tests/e2e), G4 demo/ structure. Returns (ok, reasons)."""
     reasons = []
@@ -1012,6 +1054,10 @@ def _run_deterministic_gates(demo_dir: Path, pcc: float, timeout_s: int):
     _scope_reason = _scope_grounding_gate(demo_dir)
     if _scope_reason:
         reasons.append(_scope_reason)
+
+    _items_reason = _stage_items_gate(demo_dir)
+    if _items_reason:
+        reasons.append(_items_reason)
 
     _self_opens = _pipeline_self_opens_device(demo_dir)
     if _self_opens:
