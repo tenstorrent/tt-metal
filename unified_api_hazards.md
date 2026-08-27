@@ -106,6 +106,32 @@ without a marker are mechanisms the headers document as the caller's responsibil
     `example_matmul.cpp` (now dropped) is the small evidence that the parameter invites
     noise even from someone who knows what it does.
 
+    **And the justification is weaker than the comment claims. NOT REPRODUCED.** Asked
+    whether a shared pair actually breaks on hardware, the sequential case was settled by
+    reading: the handshake is entirely synchronous inside `noc_load` -- sender waits ready,
+    barriers, broadcasts, sets and clears the flag; receiver increments, waits, clears --
+    and BOTH semaphores are deliberately left at 0 on every core when it returns, which the
+    two flushes exist to guarantee. `.wait()` carries no handshake state. So two loads on
+    one core sharing a pair, even waited out of order, have nothing to cross: the second
+    handshake cannot begin until the first returned.
+
+    The documented hazard is a different one -- cross-core role interference, core (1,0)
+    incrementing (0,0)'s ready counter for the COLUMN collective while (0,0) waits on its
+    ROW one, since per-core sequential is not grid-wide sequential. The mechanism is sound
+    on paper. **It did not fire in twelve trials**: both collectives on thread 0 sharing
+    pair 0, across 2x2, 8x8 and 2x8 grids (the last deliberately asymmetric, so the two
+    rectangles have 7 and 1 destinations and a stray increment could satisfy the wrong
+    `wait`), at 8 k-blocks, at prefetch depth 1 and 2 -- every one correct to the same pcc
+    as the distinct-pair build, none hung.
+
+    Twelve trials do not prove a race absent, and the failure would be a silent wrong
+    answer or a hang depending on timing, so this is NOT grounds for deleting the
+    parameter. But it is grounds for not treating the comment as established: the
+    protocol's own dependency structure -- a sender cannot advance until its receivers are
+    ready, and those receivers cannot advance past their own sends -- may already serialise
+    the grid enough to prevent it. Worth an adversarial test with injected skew before
+    either the comment or the parameter is trusted further.
+
 14. **Mismatched multicast rectangle** computed differently on sender and receiver.
 
 15. **`noc_core_write` reused across rounds without an intervening barrier.** The documented
