@@ -134,7 +134,7 @@ FactoryParameters get_factory_parameters(
     bool split_reader = true;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
     // SPMD compute threads per cluster for the Gen2/Quasar pool factory (see FactoryParameters).
-    uint32_t num_threads_per_cluster = 2;
+    uint32_t num_threads_per_cluster = 4;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)
@@ -242,7 +242,8 @@ PoolCBSizes calculate_pool_cb_sizes(
 
     // Scalar CB (coefficient of reduce)
     sizes.scalar_cb_pagesize = tt::tile_size(params.data_format);
-    sizes.scalar_cb_npages = params.multi_buffering_factor;
+    sizes.scalar_cb_npages = std::max(params.multi_buffering_factor, params.num_threads_per_cluster);
+    ;
     sizes.has_second_scalar_cb = params.is_avg_pool && params.split_reader && !one_scalar_per_core;
 
     // Clear value CB (-inf for maxpool, 0 for avgpool)
@@ -259,7 +260,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     sizes.in_cb_raw_size = in_cb_sz;
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
     sizes.in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    sizes.in_cb_npages = params.multi_buffering_factor;
+    sizes.in_cb_npages = params.multi_buffering_factor * params.num_threads_per_cluster;
     sizes.has_split_reader = params.split_reader;
 
     // MPWI CBs (return_indices temporaries)
