@@ -85,46 +85,46 @@ class _MoEPerfCase:
 
 # K2.6: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Measured 2026-08-27 on a high-power 8x4 BH galaxy (nominal DDR), warm forward, 24 programs:
-#   6,961,326 ns  run 33061606608 / job 98487445213
-#   7,139,200 ns  run 33061626833 / job 98485843416
-# The value below is the MEAN of those two, not a single run.
+# Measured 2026-08-27 on a high-power 8x4 BH galaxy (nominal DDR), warm forward, 24 programs.
+# Five samples: 6,961,326 / 7,139,200 / 6,728,662 / 6,702,126 / 7,196,637 ns
+# (runs 33061606608, 33061626833, 33071049272, 33071067800, 33071086048).
+# The value below is their MEAN. Note the 7.12% peak-to-peak spread, against K3's 0.44% on the same
+# box and in the same jobs -- K2.6 runs FIRST in the merged job, so it absorbs the warm-up
+# variability that K3, running second on an already-warm device, does not. That asymmetry is why
+# this case needs a wider margin than K3 despite being the smaller shape.
 _K2_6 = _MoEPerfCase(
     label="kimi-k2.6",
     config=KimiK26Config,
-    expected_ns=7_050_263,
-    # Two samples spanned 2.52% peak to peak (each +/-1.26% of the mean), so 3% would leave only
-    # 1.74pp beyond the spread already observed -- and two samples almost certainly understate the
-    # true spread. 4% keeps ~2.7pp of headroom; sub-nominal DDR doubles it to 8% via
-    # adjust_margin_for_ddr_speed. Tighten to 3% once there are >=3 clean samples to centre on:
-    # a third run was dispatched but died on an mpirun/PRTE daemon loss before measuring.
+    expected_ns=6_945_590,
+    # 4%, not 3%: the five samples span 7.12% peak to peak, so a 3% band holds only 3 of them while
+    # 4% holds all five. Do NOT tighten this to match K3 -- the spread is real and measured, not a
+    # stand-in for missing data. Sub-nominal DDR doubles it to 8% via adjust_margin_for_ddr_speed.
     margin=0.04,
     shape_note="384 experts / top-8, 7168 emb",
 )
 
 # K3: 896 experts / top-16, 3584 latent.
 #
-# Re-centered 2026-08-25 (issue #54280): the forward got ~4.6% FASTER and fell out the bottom of the
-# band, so the baseline was stale rather than the margin too tight. Likely source is #53968
-# (active-ERISC __global_pointer$ link fix, 2026-08-21 16:19 UTC) -- same suspect and direction as
-# #54220 on the Kimi-K2.6 traced chunked gate; the previous 12,210,765 was measured 2026-08-21,
-# plausibly just before it landed.
+# Re-centred 2026-08-27: the previous 11,646,483 +/-3% held ZERO of four fresh high-power samples --
+# every one landed ~5% below its floor. Same shape of staleness as the 2026-08-25 re-centre (#54280),
+# where the forward got ~4.6% faster and fell out the bottom; per the repo's rule this is fixed by
+# lowering the midpoint, never by widening the margin.
 #
-# Measured on an 8x4 BH galaxy (nominal DDR, high power), warm forward, routed experts folded into
-# one program: run 32811686276/job 97720001496 (main). Run 32728173507 independently measured
-# 11,555,528 ns at the same 31-program shape, 0.8% under this value and well inside the band.
+# Two things had drifted since that value was cut. It predates the shared expert moving off SiLU (it
+# now measures the checkpoint's SiTU-GLU on every FFN site), and its "31-program shape" no longer
+# holds: every run here reports 35 programs, on this branch AND on unmodified main, so the graph
+# changed under it.
 #
-# One carried-over limit: this value was cut before the shared expert moved off SiLU. It now measures
-# the checkpoint's SiTU-GLU on every FFN site, where the shared expert's single fused multiply
-# becomes a softcap/sigmoid/multiply chain, so the baseline is stale until re-cut.
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, 35 programs.
+# Four samples: 11,089,054 / 11,040,504 / 11,067,107 / 11,058,204 ns
+# (runs 33065088619, 33071049272, 33071067800, 33071086048). The value below is their MEAN.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=11_646_483,
-    # Repeated warm measurements on that box spanned 0.63% stdev / 1.89% peak to peak, so 3% holds
-    # the observed run-to-run noise; sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.
-    # The baseline above is a single run, not the centre of a spread -- recentre it if a regression
-    # this shallow ever needs catching.
+    expected_ns=11_063_717,
+    # 3% retained: the four samples span just 0.44% peak to peak, so 3% is already generous and the
+    # margin was never the problem -- the midpoint was. Sub-nominal DDR doubles it to 6% via
+    # adjust_margin_for_ddr_speed.
     margin=0.03,
     shape_note="896 experts / top-16, 3584 latent",
     extra=dict(
