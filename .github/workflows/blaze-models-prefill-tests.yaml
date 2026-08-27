@@ -17,7 +17,7 @@ on:
           kimi_k3_moe, kimi_k3_moe_perf, kimi_moe, kimi_moe_perf, kv_cache_table,
           minimax_prefill_kv_pcc, minimax_prefill_perf, mla_chunked, moe_gate,
           prefill_runner, prefill_runner_kv_pcc, ring_joint_sdpa_perf.
-          Tags (each runs every matching stage): block, ccl, dflash, dsv4_flash, gate, glm_5_2, hca, kimi_k2_6, kimi_k2_7, kimi_k3, kv_cache, minimax_m3, mla, moe, runner, sdpa, transformer.
+          Tags (each runs every matching stage): block, ccl, determinism, dflash, dsv4_flash, gate, glm_5_2, hca, kimi_k2_6, kimi_k2_7, kimi_k3, kv_cache, minimax_m3, mla, moe, runner, sdpa, transformer.
         required: false
         type: string
         default: "all"
