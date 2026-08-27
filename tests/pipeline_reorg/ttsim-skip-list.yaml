@@ -31,7 +31,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
   # Mixed dtype operation failures
-  - tests/ttnn/unit_tests/operations/eltwise/test_ttsim_skipped.py::test_add_accurate_mode_for_mixed_dtype
+  - tests/ttnn/unit_tests/operations/eltwise/test_ttsim_errors.py::test_add_accurate_mode_for_mixed_dtype
 
 blackhole:
   # Job-level timeouts
@@ -62,4 +62,4 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
 
   # Mixed dtype operation failures
-  - tests/ttnn/unit_tests/operations/eltwise/test_ttsim_skipped.py::test_add_accurate_mode_for_mixed_dtype
+  - tests/ttnn/unit_tests/operations/eltwise/test_ttsim_errors.py::test_add_accurate_mode_for_mixed_dtype
