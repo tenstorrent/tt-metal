@@ -150,8 +150,9 @@ class MiniMaxH3TransformerBlock(Module):
             packer_l1_acc=True,
         )
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
+        # ff1's block depends on per_core_M (hence M), so it's chosen per-forward; stash (K, N) here.
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
-        self.ff1_block_size = agmm_block_size(hidden_size, 2 * ffn_dim // self.tp_factor)
+        self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
 
     # ------------------------------------------------------------------ weights
 
@@ -317,6 +318,8 @@ class MiniMaxH3TransformerBlock(Module):
         # Async only supports Ring topology"), so a line-cabled mesh has to take the unfused path
         # below. Gated here rather than left to fail, because the assert fires on the first denoise
         # step of the first request -- long after warmup reports the model loaded.
+        # ff1's block depends on per_core_M (hence M = the packed sequence length), only known here.
+        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
         ff2_shape = (normed.shape[2], self.ffn_dim // self.tp_factor, self.hidden_size)
         if self.tp_factor > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and has_mmrs_config(*ff2_shape):
             # M is only known here (it tracks the packed sequence length), so the blocking is
@@ -328,12 +331,14 @@ class MiniMaxH3TransformerBlock(Module):
                 modulation(_GATE_MLP),
                 compute_kernel_config=self.mm_compute_kernel_config,
                 parallel_config=self.parallel_config if self.use_fused_agmm else None,
-                default_block_size=self.ff1_block_size,
+                default_block_size=ff1_block_size,
+                force_transpose=False,  # M<N -> non-transposed via the op's M>N decision
             )
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
             parallel_config=self.parallel_config if self.use_fused_agmm else None,
-            default_block_size=self.ff1_block_size,
+            default_block_size=ff1_block_size,
+            force_transpose=False,  # M<N -> non-transposed via the op's M>N decision
         )
         return ttnn.addcmul(residual, ff_out, modulation(_GATE_MLP))
