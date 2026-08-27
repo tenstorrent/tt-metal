@@ -1677,7 +1677,7 @@ void kernel_main() {
             noc_async_full_barrier(my_noc_index);
             noc_clear_packet_tags(my_noc_index);
             if constexpr (my_noc_index != upstream_noc_index) {
-                noc_async_full_barrier(upstream_noc_index);
+                noc_async_atomic_barrier(upstream_noc_index);
                 noc_clear_packet_tags(upstream_noc_index);
             }
             set_l1_data_cache<false>();
@@ -1714,7 +1714,7 @@ void kernel_main() {
     noc_async_full_barrier(my_noc_index);
     noc_clear_packet_tags(my_noc_index);
     if constexpr (my_noc_index != upstream_noc_index) {
-        noc_async_full_barrier(upstream_noc_index);
+        noc_async_atomic_barrier(upstream_noc_index);
         noc_clear_packet_tags(upstream_noc_index);
     }
     // DPRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
