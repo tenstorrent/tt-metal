@@ -30,18 +30,27 @@ reported for that reason.
 
 ## Results
 
-| # | change | kernel | gap | wall | Δ wall |
-|--:|---|---:|---:|---:|---:|
-| 0 | [**baseline**](perf_reports/00-baseline.md) | 655.6 ms | 2416.5 ms | **3072.1 ms** | — |
-| 1 | [SCA rebatch and scatter-back on device](perf_reports/01-sca-rebatch-on-device.md) | 682.0 ms | 218.3 ms | **900.2 ms** | **−2171.9 ms** |
+| # | change | build | kernel | gap | wall | Δ wall |
+|--:|---|---|---:|---:|---:|---:|
+| 0 | [**baseline**](perf_reports/00-baseline.md) | Debug | 655.6 ms | 2416.5 ms | **3072.1 ms** | — |
+| 1 | [SCA rebatch and scatter-back on device](perf_reports/01-sca-rebatch-on-device.md) | Debug | 682.0 ms | 218.3 ms | **900.2 ms** | **−2171.9 ms** |
+| — | *stage 1 code, re-measured on Release* | Release | 748.8 ms | 40.8 ms | **789.6 ms** | — |
+| 2 | [MSDA through the fused ttnn op](perf_reports/02-fused-msda.md) | Release | 557.6 ms | 37.9 ms | **595.5 ms** | **−194.1 ms** |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. the time the
-device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer. Every
-stage re-measured through the same harness with the same signposts, so the deltas sum.
+device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
 
-**−70.7% of wall clock, at an unchanged PCC of 0.999608.** Stage 1 traded +26.4 ms of kernel for
-−2198.2 ms of host gap. The balance has flipped: kernel is now 76% of wall clock, and 623 ms of that
-is the two deformable-attention calls.
+**Stages 0–1 and stage 2 are not on the same build, so their deltas do not sum across that line.**
+Op-to-op latency is host dispatch cost, and a Debug build inflates it ~5×: the same stage-1 code
+measures 218.3 ms of gap on Debug and 40.8 ms on Release, at an identical device-op count of 146.
+Each stage's Δ is against a re-measurement of the previous stage on its own build; the un-numbered
+row above is that re-measurement for stage 1.
+
+**Stage 1: −70.7% of wall clock**, trading +26.4 ms of kernel for −2198.2 ms of host gap.
+
+**Stage 2: −24.6% of wall clock**, all of it kernel — 191.2 ms out of the two deformable-attention
+calls, at a PCC of 0.999611 against 0.999608. Kernel is now **94%** of wall clock, so the remaining
+host-round-trip work is bounded by 40.8 ms.
 
 ## Where the baseline time is
 

@@ -17,9 +17,9 @@ Numbers quoted below as *cost* come from the baseline profile
 | [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | the last readback + trace capture | M | high | investigation |
 | [1c](#1c-hoist-index-computation-above-the-layer-loop) | index computation once per frame, not per layer | gap | ÷6 at encoder level | S | low | todo |
 | [1d](#1d-per-call-constant-uploads) | move to `__init__` what is frame-invariant | gap | small, every layer | S | none | todo |
-| [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | todo |
-| [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel | ~60 ms | M | low | todo |
-| [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | todo |
+| [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | **landed — [02](perf_reports/02-fused-msda.md)** |
+| [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel, DRAM | ~80 ms, and unblocks 200×200 | M | low | **next** |
+| [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | closed — deleted by 2 |
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
 
 Ordering rationale is at the [bottom](#ordering).
@@ -261,18 +261,23 @@ lifts.
 ## Ordering
 
 1. ~~**1a**~~ — landed, −2171.9 ms.
-2. **1b** — the `max_len` investigation. Documented as a study with a compute curve and a safety
-   argument, not as a change to land blind.
-3. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
+2. ~~**2**~~ — landed, −191.2 ms kernel. It deleted candidate 4 as a side effect.
+3. ~~**4**~~ — closed. The concat only existed to hold the per-level results the fused op now
+   reduces itself; 115.5 ms → 0.01 ms with no work of its own.
+4. **3** — the live lever, and the same defect as the 200×200 OOM. Fixing the layout recovers kernel
+   time and unblocks that config in one change.
+5. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
    refactor, no op risk.
-4. **1d** — move to `__init__` what is genuinely frame-invariant.
-5. **4** — one op, 113 ms, cheap to try.
-6. **2** — the big kernel lever; 613 ms of kernel is the two MSDA calls. Measure the fused op at TSA
-   shapes before committing to the rewrite.
-7. **3** — ~60 ms, but candidate 2 may delete some of the sites. Sequence after 2.
+6. **1d** — move to `__init__` what is genuinely frame-invariant.
+7. **1b** — the `max_len` investigation. Documented as a study with a compute curve and a safety
+   argument, not as a change to land blind.
 8. **5** — needs 1b.
 
 The baseline settled what was previously a guess: host round-trips dominated wall clock 4:1 over
 kernel time, and within kernel time it is layout churn, not arithmetic — matmul is 0.7%. Nothing in
-the matmul-tuning playbook applies here. After stage 01 the ratio has inverted — kernel is 77% of
-wall clock — so 4 and 2 are the live levers and the rest of candidate 1 is cleanup.
+the matmul-tuning playbook applies here.
+
+Stage 02 settled the rest. Measured on Release, kernel is **94%** of wall clock and total gap is
+40.8 ms — so 1b, 1c and 1d together cannot recover more than that, and they drop below candidate 3.
+Stage 01's 218.3 ms gap was a Debug-build artifact; see [02](perf_reports/02-fused-msda.md)
+§ *Baseline this is measured against*.
