@@ -172,11 +172,9 @@ pre-agent-steps:
         --jq '[.[] | select(.state=="APPROVED") | .user.login]' 2>/dev/null \
         | jq -rs 'add // [] | unique | join(",")' 2>/dev/null || echo "")
 
-      # Prefix the author with '@'. codeowners_map.py keys an owner token by
-      # lowercasing it only when it starts with '@', so a bare login never
-      # matches the '@login' in CODEOWNERS: --exclude silently does nothing
-      # while still reporting the name as excluded. (--approved normalises,
-      # --exclude does not.)
+      # Spell the author the way CODEOWNERS does. blozano-tt/skills#6 made
+      # --exclude accept a bare login too, so this is belt and braces rather
+      # than load-bearing -- but it costs nothing and matches SKILL.md.
       AUTHOR=$(jq -r '.author.login // empty' "$OUT/pr-meta.json")
       [ -n "$AUTHOR" ] && AUTHOR="@$AUTHOR"
       REQUESTED=$(jq -c '[.reviewRequests[]? | (.name // .login)]' "$OUT/pr-meta.json" 2>/dev/null || echo '[]')
@@ -236,21 +234,21 @@ safe-outputs:
     footer: "> 🔷 *Reviewed using [Tenstorrent domain skills](https://github.com/blozano-tt/skills) by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
     run-failure: 🔷 [{workflow_name}]({run_url}) {status} during the Tenstorrent skills review.
 skills:
-- blozano-tt/skills/tt-review-core@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-review-router@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/ttnn-op-kernel-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-l1-memory-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-model-bringup-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-multichip-ccl-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-trace-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-precision-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-test-coverage-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/llk-race-audit-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/llk-perf-audit-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-vllm-serving-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-perf-claim-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-comment-hygiene-review@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
-- blozano-tt/skills/tt-split-pr-by-codeowners@e7ae4935e0bd1ab249cf1cd9eeda26232a4bdfe8
+- blozano-tt/skills/tt-review-core@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-review-router@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/ttnn-op-kernel-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-l1-memory-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-model-bringup-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-multichip-ccl-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-trace-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-precision-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-test-coverage-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/llk-race-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/llk-perf-audit-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-vllm-serving-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-perf-claim-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-comment-hygiene-review@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
+- blozano-tt/skills/tt-split-pr-by-codeowners@eac5d7b99bdd2e5e22494785d19b3eba3ccd2207
 timeout-minutes: 15
 ---
 
@@ -380,7 +378,7 @@ python3 .github/skills/tt-split-pr-by-codeowners/scripts/codeowners_map.py \
   --json
 ```
 
-Pass `author` **exactly as the context file spells it, `@` included** — the matcher keys an owner token by lowercasing it only when it starts with `@`, so a bare login never matches the `@login` in CODEOWNERS and `--exclude` silently does nothing while still listing the name under `excluded_from_cover`. Do not strip the `@`. The exclusion is not optional: GitHub never accepts an author as a reviewer of their own PR, so leaving them in the pool can report a minimum that cannot occur.
+Pass `author` exactly as the context file spells it, `@` included. The exclusion is not optional: GitHub never accepts an author as a reviewer of their own PR, so leaving them in the candidate pool can report a minimum approval count that cannot occur.
 
 Omit `--approved` when `already_approved` is empty; otherwise it is what makes `approvals_outstanding` the number a reader can act on.
 
