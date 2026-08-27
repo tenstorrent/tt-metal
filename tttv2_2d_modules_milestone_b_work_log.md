@@ -1020,4 +1020,28 @@ decode 128 cache K / V  (users 0,8,16,24) 0.9998896420783983 / 0.999893966263909
 per-head Q/K norm, all 32 devices        prefill 0.99998 / decode 0.99999
 ```
 
-Full account: `tttv2_milestone_b_evidence/qwen/REPORT.md`.
+Steps 5 and 6 complete, three fresh processes per gate, every one
+bit-identical:
+
+```text
+prefill 2048 logits                      0.9990203192392576
+64 layers, prefill 128 + first decode    passed (10 min cold, 2 min warm)
+teacher-forced batch 1, 512/511   top-1 498/511 = 97.46%, top-5 511/511 = 100.00%
+demo batch 1 / batch 32                  fluent, character-identical
+every decode boundary vs Hugging Face    >= 0.9992
+```
+
+The bisection's residual stream and final norm had read 0.918 and 0.766;
+that was its own reference, not the model. `out.hidden_states[-1]` is the
+output of the model's *final norm*, not of the last decoder layer. The
+same mislabelling is live in the Llama bisection and in the narrative of
+`tttv2_milestone_b_evidence/llama/REPORT.md`, which explains its 0.979 and
+0.990 as a bfloat16 floor; that explanation is wrong. Out of scope here.
+
+Two shared files changed (`rmsnorm_2d.py`, `recipes.py`), so Llama's six
+device gates were re-run at this commit: all green and bit-identical to
+`mb-llama` attempt 3, including top-1 501/511 and top-5 511/511. Host
+gates: 570 passed (Llama selection), 50 passed (Qwen), no skips.
+
+Full account: `tttv2_milestone_b_evidence/qwen/REPORT.md` §A2; handoff at
+`tttv2_milestone_b_briefs/job2_completion_handoff_attempt2.md`.
