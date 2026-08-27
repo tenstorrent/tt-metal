@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-26",
+  "last_scan_date": "2026-08-27",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -29,7 +29,8 @@
     "32749061648",
     32926104552,
     32936855493,
-    32926101915
+    32926101915,
+    "33040738562"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -55,7 +56,8 @@
     "models-t1-e2e-tests.yaml",
     "t3000-integration-tests.yaml",
     "runtime-sanity-tests.yaml",
-    "galaxy-integration-tests.yaml"
+    "galaxy-integration-tests.yaml",
+    "models-t2-e2e-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -194,8 +196,8 @@
         "97504096239"
       ],
       "workflow": "t3000-integration-tests.yaml",
-      "status": "resolved-partial",
-      "note": "PR #54224 validation run 32777011156 (t3000-integration-tests, model=tteager) job t3k_tteager_tests (97592803922) completed/success. Re-grepped test-execution logs: 'Fabric config changed' fired once, DISABLED->FABRIC_1D (genuine transition, correctly still logs at info per fix). No no-op reinit (same-value) case observed in this sample to directly confirm the demotion path itself. Outcome commented (/codeowners ping) 2026-08-26; mark-ready-for-review tool limit (max:1/run) already used on PR #54405 this run, so #54224 remains draft - needs marking ready next run."
+      "status": "resolved",
+      "note": "PR #54224 validation run 32777011156 (t3000-integration-tests, model=tteager) job t3k_tteager_tests (97592803922) completed/success. Re-grepped test-execution logs: 'Fabric config changed' fired once, DISABLED->FABRIC_1D (genuine transition, correctly still logs at info per fix). No no-op reinit (same-value) case observed in this sample to directly confirm the demotion path itself. Outcome commented (/codeowners ping) 2026-08-26. Marked ready for review 2026-08-27 (deferred prior run due to max:1/run tool limit). No further Silencer action needed."
     },
     {
       "branch": "silencer/demote-d2h-hugepage-fallback-log",
@@ -210,7 +212,20 @@
       "validation_workflow_dispatched": "t3000-unit-tests.yaml",
       "status": "resolved",
       "note": "PR #54405 validation run 32951394047 (t3000-unit-tests) job t3k_ttmetal_tests (98125240578) completed/success (other jobs in run failed for unrelated reasons - dits/ttnn regressions). Re-grepped test-execution logs: 0 occurrences of 'hugepage fallback' in sampled tail (last 5000 lines of 815KB log) - partial sample, early-startup lines may be outside window. Outcome commented (/codeowners ping) and marked ready for review (2026-08-26)."
+    },
+    {
+      "branch": "silencer/dedupe-fabric-packet-size-warning",
+      "title": "Deduplicate repeated 'Fabric packet size is suboptimal' warning in CCL ops",
+      "pattern": "ccl_common.cpp validate_packet_size() log_warning fires once per worker/core iteration with identical (packet_size,page_size,ideal_packet_size) values (232x across 3 combinations in 5000-line sample of one job)",
+      "source_run_id": "33040738562",
+      "source_job_id": "98417153001",
+      "source_workflow": "models-t2-e2e-tests.yaml",
+      "category": "5-log-spam-dedupe",
+      "validation_workflow_dispatched": "models-t2-e2e-tests",
+      "dispatch_model": "llama3.1-8b",
+      "status": "open-pr",
+      "note": "New PR opened this run. Deduplicated warning using std::set<tuple> log-once pattern matching physical_system_discovery.cpp's warned_mobo_names. models-t2-e2e-tests (llama3.1-8b) dispatched on branch for validation. Awaiting outcome next run."
     }
   ],
-  "backlog_cursor": "t3000-unit-tests.yaml scanned (run 32936855493); galaxy-integration-tests.yaml run 32926101915 also scanned (device-hang related noise, not fixed - real bug symptom, not pure spam); next: continue rotation to next untracked workflow"
+  "backlog_cursor": "models-t2-e2e-tests.yaml scanned (run 33040738562) - opened PR for fabric packet-size warning dedupe; next: continue rotation to next untracked workflow (e.g. models-t3-e2e-tests.yaml, perf-device-models.yaml)"
 }
