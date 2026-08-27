@@ -3,7 +3,7 @@
 This file is for agents **writing** changes to tt-metal (GitHub Copilot cloud
 agent and equivalents).
 
-It is deliberately separate from the review instructions:
+Related instruction files:
 
 | File | Audience | Purpose |
 | --- | --- | --- |
@@ -11,8 +11,8 @@ It is deliberately separate from the review instructions:
 | `.github/copilot-instructions.md` | code review | cross-cutting review criteria |
 | `.github/instructions/*.instructions.md` | code review | path-scoped review criteria (all carry `excludeAgent: "cloud-agent"`) |
 
-The review files describe how to critique someone else's PR. Do not treat them
-as a specification for your own work.
+The review files describe how to critique a PR. They are not a specification
+for your own work.
 
 ## Your environment
 
@@ -25,8 +25,6 @@ What the host does have: `docker`, a checkout with submodules already
 initialised, and a shared remote ccache.
 
 ## Match the check to the change
-
-Not every change needs a build. Building a docs-only change wastes your session.
 
 | You changed | What to run |
 | --- | --- |
@@ -45,9 +43,7 @@ treat their absence in your environment as a reason to skip the table above.
 
 ## Building
 
-**If you changed C++ or CMake, a change that has not been compiled is not
-finished.** Historically, changes authored here were opened without ever being
-built, and validation was left entirely to post-hoc CI. Do not do that.
+If you changed C++ or CMake, compile before opening the PR.
 
 From the repository root:
 
@@ -85,9 +81,8 @@ rather than burning the session on it.
 - **Did not need a build** (see the table above) — say which check you ran
   instead, e.g. that it is a docs-only change.
 - **Genuinely cannot build** (cold cache, docker unavailable, environment
-  problem) — open the PR anyway, but state plainly in the description that the
-  change is **unverified** and why. An honest "not compiled" is far more useful
-  to a reviewer than silence.
+  problem) — open the PR anyway, and state in the description that the change
+  is **unverified**, and why.
 
 Do not claim you ran anything you did not run.
 
@@ -98,11 +93,9 @@ silicon — device tests, performance measurements, hardware-dependent
 behaviour — cannot be checked in your environment. Compilation and host-side
 unit tests are in scope; on-device results are not.
 
-If a change's correctness depends on device behaviour, say so rather than
-implying it was validated.
+If a change's correctness depends on device behaviour, say so.
 
-Never state a performance improvement without measurements. A PR claiming a
-speedup with no before/after numbers will be flagged in review.
+Never state a performance improvement without measurements.
 
 ## Scope discipline
 
