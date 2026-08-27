@@ -38,7 +38,7 @@ void UpdateGoldenOutput(
     const std::string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine. CoreCoord::str() formats as "x-y".
-    const std::string& device_core_risc = std::to_string(mesh_device->get_devices()[0]->id()) + ":?-?:" + risc + ": ";
+    const std::string& device_core_risc = std::to_string(mesh_device->get_device_ids()[0]) + ":?-?:" + risc + ": ";
 
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);
@@ -181,10 +181,8 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
         if (mesh_device->get_devices()[0]->get_active_ethernet_cores(true).empty()) {
-            log_info(
-                tt::LogTest,
-                "Skipping device {} due to no active ethernet cores...",
-                mesh_device->get_devices()[0]->id());
+            const auto device_id = mesh_device->get_device_ids()[0];
+            log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device_id);
             continue;
         }
         this->RunTestOnDevice(
