@@ -71,6 +71,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>   // FabricNodeId, MeshId, FabricConfig
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>     // RoutingDirection
+#include "fabric/fabric_context.hpp"                          // FabricContext::routing_directions
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/kernel_patcher.hpp"  // tt::emule::patch_kernel_source (the extracted JIT patch pass)
@@ -2230,6 +2231,39 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 static std::mutex g_fabric_route_mutex;
 // (src_chip << 3 | dir) -> ordered chips at distance 1,2,... in that direction (cached; topology is static).
 static std::unordered_map<uint32_t, std::vector<uint32_t>> g_fabric_walk_cache;
+// (src_chip << 32 | ethernet_channel) -> RoutingDirection (cached; topology is static).
+static std::unordered_map<uint64_t, uint32_t> g_fabric_channel_dir_cache;
+
+static uint32_t __emule_fabric_channel_direction(
+    tt::tt_fabric::ControlPlane& cp, uint32_t src_chip, uint32_t eth_channel) {
+    std::lock_guard<std::mutex> lock(g_fabric_route_mutex);
+    const uint64_t key = (static_cast<uint64_t>(src_chip) << 32) | eth_channel;
+    if (auto it = g_fabric_channel_dir_cache.find(key); it != g_fabric_channel_dir_cache.end()) {
+        return it->second;
+    }
+
+    const auto src_node = cp.get_fabric_node_id_from_physical_chip_id(static_cast<ChipId>(src_chip));
+    std::optional<uint32_t> matched_direction;
+    for (const auto direction : tt::tt_fabric::FabricContext::routing_directions) {
+        const auto channels = cp.get_active_fabric_eth_channels_in_direction(src_node, direction);
+        if (std::find(channels.begin(), channels.end(), eth_channel) == channels.end()) {
+            continue;
+        }
+        TT_FATAL(
+            !matched_direction.has_value(),
+            "Ethernet channel {} on chip {} maps to multiple active fabric directions",
+            eth_channel,
+            src_chip);
+        matched_direction = static_cast<uint32_t>(direction);
+    }
+    TT_FATAL(
+        matched_direction.has_value(),
+        "Ethernet channel {} on chip {} has no active fabric direction",
+        eth_channel,
+        src_chip);
+    g_fabric_channel_dir_cache[key] = *matched_direction;
+    return *matched_direction;
+}
 
 // Immediate same-mesh neighbor physical chip of `chip` in `dir`, or -1 if none.
 static int __emule_fabric_dir_neighbor(
@@ -2455,10 +2489,6 @@ static std::unordered_map<uint32_t, std::vector<ConnRoute>> g_conn_route;
 // payloads to the wrong chip. Per-worker keying also removes the cross-thread append race, since one
 // worker's connections are recorded by one thread in order.
 static std::unordered_map<uint64_t, std::vector<ConnRoute>> g_worker_conns;
-// VC0 TENSIX senders receive the fabric Ethernet channel in their runtime args. Unlike a connection-slot
-// index, the channel identifies the actual host-selected forwarding link even when separate programs each
-// own one slot-0 connection on the same worker core. Keyed by (src chip, Ethernet channel).
-static std::unordered_map<uint64_t, ConnRoute> g_channel_conns;
 // Per-op UNDIRECTED ring adjacency. Each program captures and restores its own topology.
 static std::unordered_map<uint32_t, std::set<uint32_t>> g_ring_adj;
 // Per-op reset flag: cleared at each new op's first connection-record so a later op's different line
@@ -2476,16 +2506,11 @@ static std::unordered_map<uint64_t, uint32_t> g_mux_dir;
 static inline uint64_t __emule_worker_key(uint32_t src, uint32_t wx, uint32_t wy) {
     return (static_cast<uint64_t>(src) << 32) | (static_cast<uint64_t>(wx & 0xFFFF) << 16) | (wy & 0xFFFF);
 }
-static inline uint64_t __emule_channel_key(uint32_t src, uint32_t eth_channel) {
-    return (static_cast<uint64_t>(src) << 32) | eth_channel;
-}
-extern "C" void __emule_fabric_record_conn(
-    uint32_t src, uint32_t wx, uint32_t wy, uint32_t eth_channel, uint32_t dir, uint32_t neighbor) {
+extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t wy, uint32_t dir, uint32_t neighbor) {
     std::lock_guard<std::mutex> lk(g_conn_route_mu);
     if (g_conn_route_dirty.exchange(false)) {
         g_conn_route.clear();
         g_worker_conns.clear();
-        g_channel_conns.clear();
         g_worker_dir.clear();
         g_mux_dir.clear();
         g_ring_adj.clear();
@@ -2493,7 +2518,6 @@ extern "C" void __emule_fabric_record_conn(
     // Record the connection-owner core's (the mux core, on the MUX path) direction, keyed by its LOGICAL
     // coords — before the per-direction dedup below, which is for the src-keyed g_conn_route only.
     g_mux_dir[__emule_worker_key(src, wx, wy)] = dir;
-    g_channel_conns[__emule_channel_key(src, eth_channel)] = ConnRoute{dir, neighbor};
     // Accumulate the undirected ring edge for this op.
     g_ring_adj[src].insert(neighbor);
     g_ring_adj[neighbor].insert(src);
@@ -2684,14 +2708,11 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
         // fallback for senders whose connections were recorded under another core (MUX).
         const std::vector<ConnRoute>& idx_conns = wconns.empty() ? conns : wconns;
         int dir = -1;
-        // (1) VC0 channel identity: this is the exact host-selected forwarding link and remains unambiguous
-        // when separate programs each expose their sole connection as slot 0 on the same worker core.
+        // (1) VC0 channel identity: silicon indexes its connection table with this channel. Derive the same
+        // direction from the control plane rather than duplicating the binding in fabric.cpp.
         if (r.eth_channel != 0xFFFFFFFF) {
-            std::lock_guard<std::mutex> lk(g_conn_route_mu);
-            auto cit = g_channel_conns.find(__emule_channel_key(src_chip, r.eth_channel));
-            if (cit != g_channel_conns.end()) {
-                dir = static_cast<int>(cit->second.dir);
-            }
+            auto& cp = MetalContext::instance().get_control_plane();
+            dir = static_cast<int>(__emule_fabric_channel_direction(cp, src_chip, r.eth_channel));
         }
         // (2) Mux-core direction: translate the worker's mux NOC coords to the mux's LOGICAL core and look up
         // the direction the mux→EDM append recorded. Resolves ring, where the range-match below cannot.
@@ -3586,7 +3607,6 @@ static constexpr size_t kMaxResolvedPrograms = 256;
 struct ProgramRoutes {
     std::unordered_map<uint32_t, std::vector<ConnRoute>> conn_route;
     std::unordered_map<uint64_t, std::vector<ConnRoute>> worker_conns;
-    std::unordered_map<uint64_t, ConnRoute> channel_conns;
     std::unordered_map<uint64_t, uint32_t> mux_dir;
     std::unordered_map<uint32_t, std::set<uint32_t>> ring_adj;
 };
@@ -3894,7 +3914,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
     {
         std::lock_guard<std::mutex> lk(g_conn_route_mu);
         if (g_program_routes.find(pid) == g_program_routes.end()) {
-            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_worker_conns, g_channel_conns, g_mux_dir, g_ring_adj};
+            g_program_routes[pid] = ProgramRoutes{g_conn_route, g_worker_conns, g_mux_dir, g_ring_adj};
         }
     }
 
@@ -3963,7 +3983,6 @@ void execute_program_emulated(IDevice* device, Program& program) {
         if (auto rit = g_program_routes.find(pid); rit != g_program_routes.end()) {
             g_conn_route = rit->second.conn_route;
             g_worker_conns = rit->second.worker_conns;
-            g_channel_conns = rit->second.channel_conns;
             g_mux_dir = rit->second.mux_dir;
             g_ring_adj = rit->second.ring_adj;
         }
