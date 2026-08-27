@@ -1,133 +1,128 @@
-# `mb-qwen` environment
+# `mb-qwen` attempt 2 — environment
 
-Recorded 2026-08-27 by the `mb-qwen` job, unattended.
+Written 2026-08-27 during the run. Every fact here was read off this machine on
+the day, not carried forward from a previous attempt's document.
 
-## Tree
+## Mesh
 
-| Item | Value |
-| --- | --- |
-| Repository | `/proj_sw/user_dev/ctr-apbernal/tt-metal` |
-| Branch | `apbernal/tttv2_wh_glx_2d_modules_milestone_b` |
-| Commit at job start | `309d3481a68e7979d7d3cc4241dcd6c2a5f872f0` |
-| Host | `wh-glx6u-05-special-ctr-apbernal-for-reservation-117587` |
-| Kernel | `6.8.0-83-generic` |
+```text
+ls /sys/class/tenstorrent | wc -l     32      <- the authoritative count
+ls /dev/tenstorrent      | wc -l      32
+tt-smi -ls                            32 Wormhole boards, tt-galaxy-*
+host                                  wh-glx6u-06-special-ctr-apbernal-for-reservation-118042
+kernel                                Linux 6.8.0-83-generic #83~22.04.1-Ubuntu
+```
+
+**The mesh is healthy.** `mb-qwen` attempt 1 reported eleven boards off the PCIe
+bus and spent its night on host work; that was true when it was written and is
+not true now. `mb-llama` attempt 3 ran a full night of device work on this mesh
+and met its finish condition, and this attempt opened a `(8, 4)` cluster on its
+first try:
+
+```text
+models/common/tests/models/galaxy/test_partition_wh_galaxy.py   5 passed in 12.93s
+    tttv2_milestone_b_evidence/qwen/logs2/a2_01_partition.log
+```
+
+Read the count from `sysfs`, never from `/dev/tenstorrent`: the device nodes
+persist after a board falls off the bus, which is what misled two earlier jobs.
+
+## Checkpoints
+
+```text
+HF_HOME=/localdev/ctr-apbernal/hf_data
+  hub/models--Qwen--Qwen3-32B                    17/17 shards, revision 9216db5781bf…
+  hub/models--meta-llama--Llama-3.3-70B-Instruct symlink farm into /proj_sw
+```
+
+**The `HF_HOME` this job inherited from its environment was wrong.** The driver
+runs with
+
+```text
+HF_HOME=/localdev/ctr-apbernal/hf_data/hub/          <- inherited, WRONG
+```
+
+which makes the Hugging Face cache `/localdev/ctr-apbernal/hf_data/hub/hub`, a
+directory holding only `models--mistralai--Mistral-7B-Instruct-v0.3`. Under it
+`AutoConfig.from_pretrained("Qwen/Qwen3-32B")` raises and `hf_config_or_skip`
+**skips**, so a run would look green having measured nothing. Every script under
+this directory exports the correct value explicitly:
+
+```sh
+export HF_HOME=/localdev/ctr-apbernal/hf_data      # note: no trailing /hub
+```
+
+Verified by resolution, offline:
+
+```text
+HF_HOME=/localdev/ctr-apbernal/hf_data   Qwen/Qwen3-32B -> qwen3, hidden 5120,
+                                         64 heads, 8 kv heads, head_dim 128,
+                                         64 layers, vocab 151936, inter 25600,
+                                         attention_bias False
+```
+
+`/proj_sw/user_dev/hf_data` — the path every Llama harness script hardcodes —
+reaches Llama only. The Llama `ENVIRONMENT.md` sentence "either path reaches the
+same shards" is true for Llama and false for Qwen.
 
 ## Python
 
-| Item | Value |
-| --- | --- |
-| Interpreter | `/proj_sw/user_dev/ctr-apbernal/tt-metal/python_env/bin/python` |
-| Python | 3.10.21 |
-| torch | 2.11.0+cpu |
-| transformers | 5.12.1 |
-| tt-smi | 5.2.0 |
-
-The venv and `build/` were reused, never rebuilt, as the brief required.
-
-`transformers` 5.12.1 ships the full Qwen3 stack — `Qwen3Config`,
-`Qwen3ForCausalLM`, `Qwen3Attention`, `Qwen3RMSNorm`, `Qwen3RotaryEmbedding` —
-so an independent HF reference for every host claim in this job was available
-**without the checkpoint weights**. That is what made the host qualification
-possible on a night when neither the mesh nor the weights were.
-
-## Mesh: DOWN for the whole job
-
-**No device work was possible. Not one device test ran.**
-
 ```text
-ls /dev/tenstorrent | wc -l        32     <- stale nodes, misleading
-ls /sys/class/tenstorrent | wc -l  21     <- the real count
+python_env/bin/activate       (pre-built; not rebuilt or recreated by this job)
+Python                        3.10.21
+torch                         2.11.0+cpu
+transformers                  5.12.1
+build                         build_Release, reused
 ```
 
-Eleven boards are absent from `sysfs` entirely and are not on the PCIe bus:
+## Repository
 
 ```text
-missing: 0 1 2 3 4 5 6 7 10 11 14
-present: 8 9 12 13 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+/proj_sw/user_dev/ctr-apbernal/tt-metal
+branch   apbernal/tttv2_wh_glx_2d_modules_milestone_b
+base     690737450a8  (mb-llama attempt 3's final commit)
 ```
 
-A WH Galaxy `(8, 4)` mesh needs all 32. `tt-smi -ls` aborts inside `tt_umd`
-during topology discovery:
+## Geometry, read off the mesh rather than assumed
+
+`logs2/a2_01_geometry.log`, `test_..._geometry_is_decoupled_8x4_qwen3_32b`:
 
 ```text
-Error in detecting devices!
-Read 0xffffffff over PCIe ID 17: the board should be reset.
-Location: /project/device/tt_device/tt_device.cpp:242
-  tt::umd::TTDevice::init_tt_device(...)
-  tt::umd::TopologyDiscovery::get_connected_devices()
+dim=5120  n_heads=64  head_dim=128  attention_dim=8192   (1.60 x dim)
+local_dim=1280  local_attention_dim=1024  local_qkv_size=1280  local_hidden_dim=3200
+wo is [8192, 5120]; per mesh row [1024, 1280]
+wo DRAM shard  (local_attention_dim) : 12 cores, shape [1024, 128]
+wo DRAM shard  if dim were used      : 12 cores, shape [1280, 128]
+padded vocabulary 153600 (19200/device)
 ```
 
-**`ls /dev/tenstorrent | wc -l` is not a mesh health check on this host.** It
-returned the expected 32 while eleven of those nodes were stale. The house-rules
-run procedure opens with that check; `ls /sys/class/tenstorrent | wc -l` is the
-one that tells the truth. This is worth fixing in the procedure.
+`local_qkv_size == local_dim == 1280` for this model. A confusion between the
+fused-QKV width and the residual width is therefore **shape-invisible** here;
+`local_attention_dim` (1024) is the only one of the three that differs, and it is
+the one `wo`'s placement must be built from.
 
-### Both recovery attempts were spent, and both failed
+## Harness
 
-The house rules allow two. Logs: `logs/01_…`, `logs/02_…`.
-
-1. **`tt-smi -glx_reset`** — fails immediately:
-   `[Errno 6] No such device or address: '/dev/tenstorrent/7'`. The reset issues
-   `USER_RESET` on all 32 devices before the IPMI step, so it must open the very
-   nodes that are gone. This is the same failure `mb-llama` recorded.
-2. **`tt-smi -r`** (the Galaxy 6U path tt-smi itself suggests) — ran ~4.5 min,
-   reset only the 21 enumerated devices, then failed re-initialising:
-   `Read 0xffffffff over PCIe ID 17`. It also warns that CPLD FW ≥ v1.16 is
-   required for `-r` on Galaxy and to use `-glx_reset` otherwise.
-
-Neither path can recover a board that is not on the PCIe bus. This needs an
-**IPMI power cycle of the tray or a host reboot** — outside what an unattended
-job may do. Recorded as `BLOCKED (infra)`.
-
-Note the failing board ID moved between jobs — `mb-llama` reported board 7,
-this job sees PCIe ID 17 — and eleven boards are now missing rather than one, so
-the fault has **widened since the previous night**, not stayed put.
-
-## Checkpoint: Qwen3-32B weights are NOT on this machine
-
-A second, independent blocker, exactly as `mb-llama`'s handoff warned:
+Copied from `tttv2_milestone_b_evidence/llama/` with `HF_HOME` corrected and the
+log directory renamed:
 
 ```text
-~/.cache/huggingface/hub/models--Qwen--Qwen3-32B     12K   config.json only
-/proj_sw/user_dev/hf_data/hub/                       no models--Qwen--Qwen3-32B
-                                                     (only an empty .locks entry)
+run3_sequence.sh <manifest>   serial: one pytest on the mesh at a time
+run3.sh <name> <node> [args]  one cycle: run, reap, tt-smi -glx_reset
+device_run.sh                 never pipes pytest; reaps only the PID it started
+after_device_run.sh           reset after any non-clean run
+ensure_mesh_free.sh           only signals a python holding /dev/tenstorrent
+host_gate.sh                  the Llama host selection (host only)
 ```
 
-`HF_HOME` is **unset** in this job's environment. The shared cache
-`/proj_sw/user_dev/hf_data` holds `Llama-3.3-70B-Instruct` and `gpt-oss-120b`
-but **no Qwen3-32B**. So even with a healthy mesh, the full-model and
-teacher-forced-accuracy steps could not have run tonight without first
-downloading ~65 GB.
+`MB_DEADLINE` bounds the whole cycle; `MB_PYTEST_TIMEOUT` bounds pytest.
 
-The `config.json` **is** present, and it is authoritative — this job used it to
-settle the checkpoint contract and the QKV-bias question (see `REPORT.md`).
+### One harness limitation this attempt measured
 
-## What this environment did allow
-
-Host-only work, which is where all of this job's evidence comes from:
-
-* 13 new host tests in
-  `models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py`,
-  run in **three fresh processes**, 13 passed each time;
-* the pure-host regression gate;
-* static verification of the 64-head geometry, the ring widths, the residual
-  dtype and the `wo` placement pairing.
-
-`import ttnn` and importing `models.common.models.galaxy.recipes` do **not**
-open a device and are safe with the mesh down — that is what let the geometry be
-derived from production code rather than restated.
-
-### The "host" regression gate is not host-only
-
-The brief's regression command includes `models/common/tests/modules`, which
-collects **device** suites. With the mesh down they error rather than skip:
-
-```text
-397 passed, 2054 skipped, 3273 deselected, 289 errors
-```
-
-All 289 errors are device-open failures (`Read 0xffffffff`, at
-`conftest.py:452` and `ttnn/distributed/distributed.py:631`) in
-`*_wh_galaxy*.py` plus the three `moe/` device suites. **Zero `FAILED`.**
-`logs/20_…` is that run; `logs/21_…` is the same gate with the device suites
-excluded.
+`device_run.sh` arms its teardown grace timer on the first `PASSED|FAILED|ERROR`
+in the log. A decode-mode `TT_FATAL` in `run a2_03_qknorm` produced **no such
+line at all**: pytest holds the `-v` verdict until the test's teardown phase
+completes, and teardown is exactly what hangs. The log's last write was at
+15:36 and the process still held all 64 `/dev/tenstorrent` fds seven minutes
+later. Only the wrapper's full `MB_DEADLINE` would have reaped it. Budget for
+that, or watch the log's mtime rather than its contents.

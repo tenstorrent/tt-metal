@@ -387,9 +387,14 @@ def test_qk_norms_resolve_to_head_local_geometry():
     )
     layer = lazy.layers[0]
 
+    decode = resolve_galaxy_decode_placements(params.geometry(), mesh)
     for weight in (layer.q_norm, layer.k_norm):
         config = galaxy_model._head_local_norm_config(
-            weight, mesh_device=mesh, precision=QWEN3_32B_GALAXY_ACCURACY, eps=params.rms_norm_eps
+            weight,
+            mesh_device=mesh,
+            precision=QWEN3_32B_GALAXY_ACCURACY,
+            decode_placements=decode,
+            eps=params.rms_norm_eps,
         )
 
         # Attention2D rejects any other geometry, and RMSNorm2D derives the
@@ -400,8 +405,14 @@ def test_qk_norms_resolve_to_head_local_geometry():
         assert config.eps == params.rms_norm_eps
         # Head-local normalization issues no collective, so it borrows no CCL.
         assert config.tt_ccl is None
-        assert config.decode_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
-        assert config.decode_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
+        # Decode names the created heads' own placement. Interleaved DRAM here
+        # aborts on `(8, 4)` before producing any number: an interleaved
+        # `ttnn.rms_norm` splits its rows over the whole compute grid, which the
+        # loaded decode manager does not own (D-B26). Prefill is not partitioned
+        # that way and stays in DRAM.
+        assert config.decode_input_memcfg == decode.attention_heads_memcfg
+        assert config.decode_output_memcfg == decode.attention_heads_memcfg
+        assert config.decode_input_memcfg.is_sharded()
         assert config.prefill_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
         assert config.prefill_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
 
@@ -529,23 +540,34 @@ def test_head_local_qk_norm_agrees_with_the_module_default_by_contract(monkeypat
     mesh = _mesh()
     params = Qwen3_32BGalaxyModelParameters(n_layers=1)
 
+    decode = resolve_galaxy_decode_placements(params.geometry(), mesh)
     explicit = galaxy_model._head_local_norm_config(
         LazyWeight(source=torch.zeros(params.head_dim, dtype=torch.bfloat16), device=mesh),
         mesh_device=mesh,
         precision=QWEN3_32B_GALAXY_ACCURACY,
+        decode_placements=decode,
         eps=params.rms_norm_eps,
     )
     assert explicit.geometry is RMSNorm2DGeometry.HEAD_LOCAL
     resolved = _resolve_2d_config(explicit)
 
-    # What the model asks for.
-    assert resolved.decode_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
-    assert resolved.decode_output_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    # What the model asks for. Prefill agrees with the module's post-D2 default;
+    # decode deliberately does **not**, and the earlier revision of this test
+    # asserted the agreement in both modes as if that made decode safe. Hardware
+    # refuted it: the default is interleaved DRAM, an interleaved `ttnn.rms_norm`
+    # resolves `LayerNormDefaultProgramConfig`, and that splits its rows over
+    # `device->compute_with_storage_grid_size()` - the whole compute grid,
+    # including the prefetch sender columns the decode manager does not own.
+    #     TT_FATAL: Kernel group cores do not match sub device cores ... TENSIX
+    # This is D2's unresolved half, named D-B26 here, and agreeing with the
+    # default is what carried it.
     assert resolved.prefill_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert resolved.decode_input_memcfg == decode.attention_heads_memcfg
+    assert resolved.decode_output_memcfg == decode.attention_heads_memcfg
 
-    # What the module resolves for a head-local norm that asks for nothing. If
-    # D2's default ever moves off interleaved DRAM again, this diverges here on
-    # host instead of aborting in op validation on device.
+    # What the module resolves for a head-local norm that asks for nothing. The
+    # point of pinning it is no longer "we agree" but "we know what we are
+    # departing from": if D2's default ever moves, this diverges here on host.
     default = _resolve_2d_config(
         RMSNorm2DConfig(
             weight=LazyWeight(source=torch.zeros(params.head_dim, dtype=torch.bfloat16), device=mesh),
@@ -554,8 +576,16 @@ def test_head_local_qk_norm_agrees_with_the_module_default_by_contract(monkeypat
             geometry=RMSNorm2DGeometry.HEAD_LOCAL,
         )
     )
-    assert default.decode_input_memcfg == resolved.decode_input_memcfg
+    assert default.decode_input_memcfg == ttnn.DRAM_MEMORY_CONFIG
+    assert default.decode_input_memcfg != resolved.decode_input_memcfg
     assert default.decode_progcfg is None and default.decode_stats_memcfg is None
+    # And the module needs no program config for the sharded case: `ttnn.rms_norm`
+    # derives a `LayerNormShardedMultiCoreProgramConfig` from the tensor's own
+    # shard spec when the input is sharded and none is given
+    # (`create_layernorm_program_config`), and the sharded factory takes its core
+    # ranges from that shard spec rather than from the device grid. That is why
+    # this fix needs no change to the shared module.
+    assert resolved.decode_progcfg is None
 
 
 def test_distributed_norm_resolves_its_statistics_onto_the_decode_input_origin(monkeypatch):

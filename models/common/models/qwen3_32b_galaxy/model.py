@@ -769,14 +769,46 @@ def _head_local_norm_config(
     *,
     mesh_device: Any,
     precision: Qwen3_32BGalaxyPrecision,
+    decode_placements: GalaxyDecodePlacements,
     eps: float,
 ) -> RMSNorm2DConfig:
     """Return the per-head Q/K norm config `Attention2D` requires.
 
     Qwen3 normalizes each ``head_dim``-wide head independently, so there is no
-    column reduction and no collective: the norm runs on one core over the
-    created heads in DRAM. ``Attention2D`` rejects any other geometry, and it
-    also rejects a weight whose width is not ``head_dim``.
+    column reduction and no collective. ``Attention2D`` rejects any other
+    geometry, and it also rejects a weight whose width is not ``head_dim``.
+
+    **Decode must name the created heads' own placement, not interleaved DRAM.**
+    Measured on `(8, 4)` (defect D-B26, this job's run `a2_03_qknorm`): with
+    ``ttnn.DRAM_MEMORY_CONFIG`` the prefill norm is correct at PCC 0.99998 on all
+    32 devices and the *decode* norm aborts before producing any number at all -
+
+        TT_FATAL: Kernel group cores do not match sub device cores for
+                  programmable core type TENSIX
+        program.cpp:2205: num_intersections == num_cores
+
+    - because an interleaved ``ttnn.rms_norm`` resolves
+    ``LayerNormDefaultProgramConfig``, which splits its rows over
+    ``device->compute_with_storage_grid_size()``: the whole compute grid,
+    including the prefetch sender columns the loaded decode manager does not
+    own. This is the unresolved half of Milestone A's D2, whose own defect was
+    that head-local decode aborted in op validation before producing a
+    numerical result; the module's D2 fix made interleaved DRAM the *default*
+    for this geometry, which is right for prefill and unplaceable for decode.
+
+    Naming ``attention_heads_memcfg`` fixes it without any change to the shared
+    module. A sharded input makes ``ttnn.rms_norm`` derive a
+    ``LayerNormShardedMultiCoreProgramConfig`` from the tensor's own shard spec
+    (``create_layernorm_program_config``), and the sharded factory takes its core
+    ranges from that shard spec rather than from the device grid - and those
+    cores are the 32 head cores, which are worker cores. It also removes two
+    relocations per layer: ``nlp_create_qkv_heads_decode`` already produces Q and
+    K in exactly this placement, and the rotary that follows wants them back in
+    it, so the norm now runs in place instead of round-tripping through DRAM.
+
+    Prefill keeps interleaved DRAM: its mode plan is a single sub-device over the
+    full grid, its heads are ``[1, local_heads, sequence, head_dim]`` in DRAM
+    already, and it is qualified there at PCC >= 0.9999.
     """
 
     return RMSNorm2DConfig(
@@ -785,9 +817,9 @@ def _head_local_norm_config(
         eps=eps,
         geometry=RMSNorm2DGeometry.HEAD_LOCAL,
         mesh_device=mesh_device,
-        decode_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        decode_input_memcfg=decode_placements.attention_heads_memcfg,
         prefill_input_memcfg=ttnn.DRAM_MEMORY_CONFIG,
-        decode_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        decode_output_memcfg=decode_placements.attention_heads_memcfg,
         prefill_output_memcfg=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config_prefill=precision.norm_kernel_config,
     )
@@ -893,8 +925,12 @@ def _build_block_config(
         # Qwen3 has no QKV bias, and normalizes Q and K per head.
         prefill_wqkv=lazy.prefill_wqkv,
         prefill_wo=lazy.prefill_wo,
-        q_norm_config=_head_local_norm_config(lazy.q_norm, mesh_device=mesh_device, precision=precision, eps=norm_eps),
-        k_norm_config=_head_local_norm_config(lazy.k_norm, mesh_device=mesh_device, precision=precision, eps=norm_eps),
+        q_norm_config=_head_local_norm_config(
+            lazy.q_norm, mesh_device=mesh_device, precision=precision, decode_placements=decode, eps=norm_eps
+        ),
+        k_norm_config=_head_local_norm_config(
+            lazy.k_norm, mesh_device=mesh_device, precision=precision, decode_placements=decode, eps=norm_eps
+        ),
         mesh_device=mesh_device,
         architecture=mesh_device.arch(),
         dim=geometry.dim,

@@ -466,29 +466,48 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
     del weights
     gc.collect()
 
-    # `[1, rows, heads, head_dim]` is the shape `nlp_create_qkv_heads_decode`
-    # hands the norm: eight local Q heads and one local K head per mesh row.
+    # Decode and prefill present the created heads differently, and the norm has
+    # to be exercised as each mode actually hands it over:
+    #
+    #  * decode: `nlp_create_qkv_heads_decode` writes `[1, batch, 32, head_dim]`
+    #    height-sharded over the 32 head cores, heads padded to a tile. That
+    #    placement is `decode.attention_heads_memcfg`, and naming it is what
+    #    keeps the norm's program inside the decode partition (D-B26).
+    #  * prefill: `[1, local_heads, sequence, head_dim]`, interleaved DRAM.
     local_q_heads = params.n_heads // _MESH_ROWS
     local_k_heads = params.n_kv_heads // _MESH_ROWS
     try:
         attention = model.layers[0].attention
         assert attention._q_norm is not None and attention._k_norm is not None
+        heads_memcfg = model.config.decode_placements.attention_heads_memcfg
+        print(f"[qk-norm] decode heads placement: {heads_memcfg}", flush=True)
+        assert attention._q_norm.config.decode_input_memcfg == heads_memcfg
+        assert attention._k_norm.config.decode_input_memcfg == heads_memcfg
 
         for mode in ("prefill", "decode"):
             model.activate(mode)
             forward = "decode_forward" if mode == "decode" else "prefill_forward"
-            rows = _PHYSICAL_BATCH if mode == "decode" else _PREFILL_LENGTH
             for name, norm, reference, heads in (
                 ("q_norm", attention._q_norm, reference_q_norm, local_q_heads),
                 ("k_norm", attention._k_norm, reference_k_norm, local_k_heads),
             ):
-                source_hf = torch.randn(1, rows, heads, params.head_dim, dtype=torch.float32)
+                if mode == "decode":
+                    # Every row of the sharded tile, not only the `heads` live
+                    # ones: the padded rows go through the same kernel and a
+                    # norm that only touched the live rows would still pass a
+                    # comparison restricted to them.
+                    shape = (1, _PHYSICAL_BATCH, ttnn.TILE_SIZE, params.head_dim)
+                    memcfg = heads_memcfg
+                else:
+                    shape = (1, heads, _PREFILL_LENGTH, params.head_dim)
+                    memcfg = ttnn.DRAM_MEMORY_CONFIG
+                source_hf = torch.randn(*shape, dtype=torch.float32)
                 with torch.no_grad():
                     expected_hf = reference(source_hf.to(torch.bfloat16)).float()
-                expected = qwen_reverse_permute_1d(expected_hf)
+                expected = qwen_reverse_permute_1d(expected_hf).reshape(-1, params.head_dim)
                 source = qwen_reverse_permute_1d(source_hf).to(torch.bfloat16)
                 staged = out = None
-                print(f"[stage] {mode} {name} rows={rows} heads={heads} enter", flush=True)
+                print(f"[stage] {mode} {name} shape={shape} enter", flush=True)
                 try:
                     staged = ttnn.from_torch(
                         source,
@@ -496,15 +515,14 @@ def test_qwen3_32b_galaxy_qk_norm_head_local_8x4_qwen3_32b_decode_and_prefill(me
                         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                         dtype=precision.norm_dtype,
                         layout=ttnn.TILE_LAYOUT,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        memory_config=memcfg,
                     )
                     out = getattr(norm, forward)(staged)
                     print(f"[stage] {mode} {name} returned {tuple(out.shape)} {out.memory_config()}", flush=True)
-                    copies = _compose_head_local(out, mesh_device, rows=rows)
-                    flat_expected = expected.reshape(-1, params.head_dim)
+                    copies = _compose_head_local(out, mesh_device, rows=shape[1])
                     for index, copy in enumerate(copies):
                         _assert_pcc(
-                            flat_expected,
+                            expected,
                             copy.reshape(-1, params.head_dim),
                             f"{mode} {name} device {index // _MESH_COLUMNS},{index % _MESH_COLUMNS}",
                         )
