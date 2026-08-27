@@ -574,40 +574,72 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-// 4x8 benchmark: 32 unique programs on 32 devices (1:1 mapping)
-// Expects parallel dispatch with thread pool.
-// This replicates the deepseek blitz case of 32 independent programs dispatched across 32 devices on a GLX
+// Compare model-like and RTA-heavy command streams on a full Galaxy-sized mesh. This test reports
+// distributions rather than enforcing a machine-specific golden; CI experiment runs select the fanout
+// through TT_METAL_PROGRAM_DISPATCH_FANOUT.
 TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
-    constexpr uint32_t num_programs = 32;
     constexpr uint32_t num_devices = 32;
+    constexpr uint32_t num_model_programs = 8;
+    constexpr uint32_t timed_iterations = 200;
+    constexpr uint32_t target_runtime_arg_bytes = 8 * 1024;
+    constexpr uint32_t kernels_per_program = 3;
 
-    auto programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(
-        num_programs, mesh_device_->compute_with_storage_grid_size(), true);
+    const CoreCoord worker_grid = mesh_device_->compute_with_storage_grid_size();
+    const uint32_t num_worker_cores = worker_grid.x * worker_grid.y;
+    const uint32_t runtime_arg_bytes_per_value = num_worker_cores * kernels_per_program * sizeof(uint32_t);
+    const uint32_t model_runtime_args =
+        std::max(1U, (target_runtime_arg_bytes + runtime_arg_bytes_per_value - 1) / runtime_arg_bytes_per_value);
 
-    std::vector<MeshCoordinateRange> devices;
-    devices.reserve(num_devices);
-    for (uint32_t d = 0; d < num_devices; d++) {
-        devices.emplace_back(MeshCoordinate{d / 8, d % 8});
+    auto model_programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(
+        num_model_programs, worker_grid, false, model_runtime_args);
+    MeshWorkload model_workload;
+    for (uint32_t column = 0; column < num_model_programs; column++) {
+        model_workload.add_program(
+            MeshCoordinateRange(MeshCoordinate{0, column}, MeshCoordinate{3, column}),
+            std::move(*model_programs[column]));
     }
 
-    MeshWorkload workload;
-    for (uint32_t d = 0; d < num_devices; d++) {
-        workload.add_program(devices[d], std::move(*programs[d]));
-    }
+    auto heavy_programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(1, worker_grid, false);
+    MeshWorkload heavy_workload;
+    heavy_workload.add_program(MeshCoordinateRange(mesh_device_->shape()), std::move(*heavy_programs.front()));
 
-    auto t0 = std::chrono::steady_clock::now();
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
-    auto t1 = std::chrono::steady_clock::now();
-    Finish(mesh_device_->mesh_command_queue());
-    auto t2 = std::chrono::steady_clock::now();
+    const char* fanout_env = std::getenv("TT_METAL_PROGRAM_DISPATCH_FANOUT");
+    const char* min_bytes_env = std::getenv("TT_METAL_PROGRAM_DISPATCH_MIN_BYTES_PER_DEVICE");
+    log_info(
+        tt::LogTest,
+        "ParallelizationBenchmark configuration: fanout={}, min_bytes_per_device={}",
+        fanout_env == nullptr ? "default" : fanout_env,
+        min_bytes_env == nullptr ? "default" : min_bytes_env);
 
-    auto enqueue_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    auto finish_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+    auto run_benchmark = [&](const char* shape, MeshWorkload& workload) {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+        Finish(mesh_device_->mesh_command_queue());
 
-    log_info(tt::LogTest, "ParallelizationBenchmark: {} programs on {} devices", num_programs, num_devices);
-    log_info(tt::LogTest, "Enqueue time: {} ms", enqueue_ms);
-    log_info(tt::LogTest, "Finish time: {} ms", finish_ms);
-    log_info(tt::LogTest, "Total time: {} ms", enqueue_ms + finish_ms);
+        std::vector<double> enqueue_us;
+        enqueue_us.reserve(timed_iterations);
+        for (uint32_t iteration = 0; iteration < timed_iterations; iteration++) {
+            const auto start = std::chrono::steady_clock::now();
+            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+            const auto done = std::chrono::steady_clock::now();
+            enqueue_us.push_back(std::chrono::duration<double, std::micro>(done - start).count());
+        }
+        Finish(mesh_device_->mesh_command_queue());
+
+        std::sort(enqueue_us.begin(), enqueue_us.end());
+        const double p50_us = enqueue_us[enqueue_us.size() / 2];
+        const double p90_us = enqueue_us[(enqueue_us.size() * 9) / 10];
+        log_info(
+            tt::LogTest,
+            "ParallelizationBenchmark shape={} devices={} iterations={} enqueue_p50_us={:.2f} enqueue_p90_us={:.2f}",
+            shape,
+            num_devices,
+            timed_iterations,
+            p50_us,
+            p90_us);
+    };
+
+    run_benchmark("model_like", model_workload);
+    run_benchmark("bytes_heavy", heavy_workload);
 }
 
 TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {

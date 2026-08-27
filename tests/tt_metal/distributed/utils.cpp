@@ -412,7 +412,10 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
 }
 
 std::vector<std::unique_ptr<Program>> create_benchmark_programs(
-    uint32_t num_programs, CoreCoord worker_grid_size, bool unique_per_program) {
+    uint32_t num_programs,
+    CoreCoord worker_grid_size,
+    bool unique_per_program,
+    std::optional<uint32_t> num_unique_runtime_args) {
     uint32_t MAX_LOOP = 100;
 
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -431,8 +434,9 @@ std::vector<std::unique_ptr<Program>> create_benchmark_programs(
     uint32_t NUM_CBS = max_cbs;
     uint32_t NUM_SEMS = NUM_SEMAPHORES;
 
-    // Deterministic rt args: use max_runtime_args for unique, 0 for common
-    auto [unique_rtargs, common_rtargs] = create_runtime_args(max_runtime_args, 0, 0, 0);
+    // Deterministic rt args: use max_runtime_args by default, or a smaller payload for model-like benchmarks.
+    auto [unique_rtargs, common_rtargs] =
+        create_runtime_args(num_unique_runtime_args.value_or(max_runtime_args), 0, 0, 0);
     uint32_t num_unique_rtargs = unique_rtargs.size();
     uint32_t num_common_rtargs = common_rtargs.size();
 

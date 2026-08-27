@@ -15,7 +15,12 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <exception>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <type_traits>
@@ -83,6 +88,109 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
+constexpr size_t k_program_dispatch_fanout_limit = 64;
+
+size_t parse_size_env(const char* name, size_t default_value) {
+    const char* value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return default_value;
+    }
+    char* end = nullptr;
+    const auto parsed = std::strtoull(value, &end, 10);
+    return end != value && *end == '\0' ? static_cast<size_t>(parsed) : default_value;
+}
+
+struct ProgramDispatchExperimentConfig {
+    size_t fanout = 1;
+    size_t min_bytes_per_device = 0;
+    bool prepare_on_caller = true;
+    bool collect_stats = false;
+};
+
+const ProgramDispatchExperimentConfig& program_dispatch_experiment_config() {
+    static const ProgramDispatchExperimentConfig config = [] {
+        ProgramDispatchExperimentConfig result;
+        result.fanout = std::clamp(
+            parse_size_env("TT_METAL_PROGRAM_DISPATCH_FANOUT", result.fanout),
+            size_t{1},
+            k_program_dispatch_fanout_limit);
+        result.min_bytes_per_device =
+            parse_size_env("TT_METAL_PROGRAM_DISPATCH_MIN_BYTES_PER_DEVICE", result.min_bytes_per_device);
+        result.prepare_on_caller = parse_size_env("TT_METAL_PROGRAM_DISPATCH_PREPARE_ON_CALLER", 1) != 0;
+        result.collect_stats = parse_size_env("TT_METAL_PROGRAM_DISPATCH_STATS", 0) != 0;
+        return result;
+    }();
+    return config;
+}
+
+struct ProgramDispatchStats {
+    std::atomic<uint64_t> samples = 0;
+    std::atomic<uint64_t> total_ns = 0;
+    std::atomic<uint64_t> setup_ns = 0;
+    std::atomic<uint64_t> handoff_ns = 0;
+    std::atomic<uint64_t> caller_ns = 0;
+    std::atomic<uint64_t> wait_ns = 0;
+    std::atomic<uint64_t> write_skew_ns = 0;
+    std::atomic<uint64_t> tasks = 0;
+    std::atomic<uint64_t> programs = 0;
+    std::atomic<uint64_t> chunks = 0;
+    std::atomic<uint64_t> bytes = 0;
+};
+
+void record_program_dispatch_stats(
+    std::chrono::steady_clock::time_point start,
+    std::chrono::steady_clock::time_point setup_done,
+    std::chrono::steady_clock::time_point handoff_done,
+    std::chrono::steady_clock::time_point caller_done,
+    std::chrono::steady_clock::time_point wait_done,
+    uint64_t write_skew_ns,
+    size_t num_tasks,
+    size_t num_programs,
+    size_t num_chunks,
+    size_t total_bytes) {
+    static ProgramDispatchStats stats;
+    auto to_ns = [](auto begin, auto end) {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
+    };
+
+    stats.total_ns.fetch_add(to_ns(start, wait_done), std::memory_order_relaxed);
+    stats.setup_ns.fetch_add(to_ns(start, setup_done), std::memory_order_relaxed);
+    stats.handoff_ns.fetch_add(to_ns(setup_done, handoff_done), std::memory_order_relaxed);
+    stats.caller_ns.fetch_add(to_ns(handoff_done, caller_done), std::memory_order_relaxed);
+    stats.wait_ns.fetch_add(to_ns(caller_done, wait_done), std::memory_order_relaxed);
+    stats.write_skew_ns.fetch_add(write_skew_ns, std::memory_order_relaxed);
+    stats.tasks.fetch_add(num_tasks, std::memory_order_relaxed);
+    stats.programs.fetch_add(num_programs, std::memory_order_relaxed);
+    stats.chunks.fetch_add(num_chunks, std::memory_order_relaxed);
+    stats.bytes.fetch_add(total_bytes, std::memory_order_relaxed);
+
+    constexpr uint64_t stats_window = 2000;
+    const uint64_t samples = stats.samples.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (samples % stats_window != 0) {
+        return;
+    }
+
+    const double count = static_cast<double>(samples);
+    log_info(
+        tt::LogMetal,
+        "PROGRAM_DISPATCH_STATS samples={} total_us={:.2f} setup_us={:.2f} handoff_us={:.2f} "
+        "caller_us={:.2f} wait_us={:.2f} write_skew_us={:.2f} tasks={:.2f} programs={:.2f} chunks={:.2f} "
+        "bytes={:.0f} bytes_per_task={:.0f}",
+        samples,
+        stats.total_ns.load(std::memory_order_relaxed) / count / 1000.0,
+        stats.setup_ns.load(std::memory_order_relaxed) / count / 1000.0,
+        stats.handoff_ns.load(std::memory_order_relaxed) / count / 1000.0,
+        stats.caller_ns.load(std::memory_order_relaxed) / count / 1000.0,
+        stats.wait_ns.load(std::memory_order_relaxed) / count / 1000.0,
+        stats.write_skew_ns.load(std::memory_order_relaxed) / count / 1000.0,
+        stats.tasks.load(std::memory_order_relaxed) / count,
+        stats.programs.load(std::memory_order_relaxed) / count,
+        stats.chunks.load(std::memory_order_relaxed) / count,
+        stats.bytes.load(std::memory_order_relaxed) / count,
+        stats.bytes.load(std::memory_order_relaxed) /
+            static_cast<double>(std::max<uint64_t>(stats.tasks.load(std::memory_order_relaxed), 1)));
+}
+
 void record_program_sub_device_for_range(
     MeshDevice* mesh_device, const MeshCoordinateRange& device_range, uint64_t runtime_id, SubDeviceId sub_device_id) {
     // Skip programs that didn't opt into a user-defined sub-device manager.
@@ -102,6 +210,25 @@ void record_program_sub_device_for_range(
             num_available_worker_cores);
     });
 }
+
+// Per-program state shared by the per-device dispatch tasks targeting that program. A program's
+// cached dispatch commands are common to every device it runs on, so they are updated exactly once
+// per workload: the first task to reach the program takes ownership through `prepared` and the rest
+// block there until the update lands. If the owner throws, the flag stays clear and the next waiter
+// retries, so a waiter can never block forever.
+struct ProgramDispatchEntry {
+    Program* program = nullptr;
+    ProgramCommandSequence* cmd_seq = nullptr;
+    size_t cmd_bytes = 0;
+    std::once_flag prepared;
+};
+
+// One local device and the program it runs. A MeshWorkload's programs cover disjoint device ranges,
+// so a device appears in at most one of these; devices in none of them are sent a go signal instead.
+struct DeviceDispatchTask {
+    IDevice* device = nullptr;
+    ProgramDispatchEntry* program_entry = nullptr;
+};
 
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
@@ -384,6 +511,9 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
+    const auto& experiment_config = program_dispatch_experiment_config();
+    const auto stats_start =
+        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -488,8 +618,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         program_ordering_sync_count,
         dispatch_metadata);
 
-    std::unordered_set<uint32_t> chip_ids_in_workload = {};
-
     auto max_program_kernels_sizeB = mesh_workload.impl().max_program_kernels_sizeB_;
     bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
     if (use_prefetcher_cache) {
@@ -510,40 +638,83 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // prefetcher cache will be overwritten, reset for next workload
         this->reset_prefetcher_cache_manager();
     }
-    // Iterate over all programs. Update dispatch commands per program to reflect
-    // current device state. Write the finalized program command sequence to each
-    // physical device tied to the program.
-    for (auto& [device_range, program] : mesh_workload.get_programs()) {
-        auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
+    // Values that are constant across the whole workload, hoisted so that the per-device tasks below
+    // never have to reach back into this command queue or into cq_shared_state_.
+    const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
+    const uint32_t mcast_launch_msg_wptr =
+        cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
+    const uint32_t unicast_launch_msg_wptr =
+        cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr();
+    const ProgramBinaryStatus program_binary_status = mesh_workload.impl().get_program_binary_status(mesh_device_id);
+    // Same guards record_program_sub_device_for_range() applies, evaluated once: sub_device_id is
+    // fixed for the whole workload, so whether to record and how many worker cores to record are
+    // workload constants rather than per-device queries.
+    const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
+    const bool record_sub_device = active_sub_device_manager_id != *mesh_device_->get_default_sub_device_manager_id();
+    const uint32_t num_available_worker_cores =
+        record_sub_device ? mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) : 0;
+
+    // Update a program's dispatch commands to reflect current device state. This mutates state that
+    // every device running the program shares, so it must happen exactly once per program.
+    auto prepare_program = [&](ProgramDispatchEntry& entry) {
+        std::call_once(entry.prepared, [&]() {
+            program_dispatch::update_program_dispatch_commands(
+                entry.program->impl(),
+                *entry.cmd_seq,
+                mcast_launch_msg_wptr,
+                unicast_launch_msg_wptr,
+                expected_num_workers_completed,
+                dispatch_core,
+                sub_device_id,
+                dispatch_metadata,
+                program_binary_status,
+                std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
+                static_cast<uint8_t>(this->id()));
+        });
+    };
+
+    // Build the work list before dispatching any of it. Everything that can throw runs here, on the
+    // calling thread: once the first task is enqueued the tasks hold references into this frame, so
+    // an exception escaping before the join would leave them pointing at destroyed objects.
+    auto& programs = mesh_workload.get_programs();
+    std::vector<ProgramDispatchEntry> program_entries(programs.size());
+    std::vector<DeviceDispatchTask> program_tasks;
+    program_tasks.reserve(mesh_device_->shape().mesh_size());
+    std::unordered_set<uint32_t> chip_ids_in_workload = {};
+    size_t total_command_bytes = 0;
+
+    uint32_t program_idx = 0;
+    for (auto& [device_range, program] : programs) {
+        auto& entry = program_entries[program_idx++];
+        entry.program = &program;
+        entry.cmd_seq = &mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
-            use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
+            use_prefetcher_cache == entry.cmd_seq->prefetcher_cache_used,
             "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
             use_prefetcher_cache,
-            program_cmd_seq.prefetcher_cache_used);
-        program_dispatch::update_program_dispatch_commands(
-            program.impl(),
-            program_cmd_seq,
-            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
-            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
-            expected_num_workers_completed,
-            this->virtual_program_dispatch_core(),
-            sub_device_id,
-            dispatch_metadata,
-            mesh_workload.impl().get_program_binary_status(mesh_device_id),
-            std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
-            static_cast<uint8_t>(this->id()));
+            entry.cmd_seq->prefetcher_cache_used);
 
-        record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
-
-        this->write_program_cmds_to_subgrid(
-            device_range,
-            program_cmd_seq,
-            dispatch_metadata.stall_first,
-            dispatch_metadata.stall_before_program,
-            chip_ids_in_workload);
+        const size_t tasks_before_program = program_tasks.size();
+        for_each_local(mesh_device_, device_range, [&](const auto& coord) {
+            auto* device = mesh_device_->impl().get_device(coord);
+            program_tasks.push_back(DeviceDispatchTask{device, &entry});
+            chip_ids_in_workload.insert(device->id());
+        });
+        entry.cmd_bytes = entry.cmd_seq->get_one_shot_fetch_size(
+            dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
+        total_command_bytes += entry.cmd_bytes * (program_tasks.size() - tasks_before_program);
+        if (experiment_config.prepare_on_caller) {
+            prepare_program(entry);
+        }
+        if (program_tasks.size() == tasks_before_program) {
+            // The program runs entirely on devices owned by another host, so no task will claim it.
+            // Still update its dispatch commands here, to match what a single-host mesh would do.
+            prepare_program(entry);
+        }
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
-        // with the device-side zones emitted by the real-time profiler.
+        // with the device-side zones emitted by the real-time profiler. Emitted from the calling
+        // thread, so that it lands inside this function's zone rather than on a worker's timeline.
         if (!tt::tt_metal::getDeviceProfilerState()) {
             std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
             TracyMessage(msg.c_str(), msg.size());
@@ -560,14 +731,148 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         }
     }
 
-    // Send go signals to devices not running a program to ensure consistent global state
-    this->write_go_signal_sequences_to_unused_sub_grids(
-        chip_ids_in_workload,
-        sub_device_id,
-        expected_num_workers_completed,
-        mcast_go_signals,
-        unicast_go_signals,
-        dispatch_metadata);
+    std::atomic<uint64_t> first_write_done_ns = std::numeric_limits<uint64_t>::max();
+    std::atomic<uint64_t> last_write_done_ns = 0;
+    auto write_program_for_device = [&](const DeviceDispatchTask& task) {
+        auto& entry = *task.program_entry;
+        if (!experiment_config.prepare_on_caller) {
+            prepare_program(entry);
+        }
+        if (record_sub_device) {
+            tt::RecordProgramSubDevice(
+                extract_context_id(mesh_device_),
+                task.device->id(),
+                active_sub_device_manager_id,
+                entry.program->get_runtime_id(),
+                sub_device_id,
+                num_available_worker_cores);
+        }
+        program_dispatch::write_program_command_sequence(
+            *entry.cmd_seq,
+            task.device->sysmem_manager(),
+            id_,
+            dispatch_metadata.stall_first,
+            dispatch_metadata.stall_before_program);
+        if (experiment_config.collect_stats) {
+            const uint64_t write_done_ns = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - stats_start)
+                    .count());
+            uint64_t first = first_write_done_ns.load(std::memory_order_relaxed);
+            while (write_done_ns < first &&
+                   !first_write_done_ns.compare_exchange_weak(first, write_done_ns, std::memory_order_relaxed)) {
+            }
+            uint64_t last = last_write_done_ns.load(std::memory_order_relaxed);
+            while (write_done_ns > last &&
+                   !last_write_done_ns.compare_exchange_weak(last, write_done_ns, std::memory_order_relaxed)) {
+            }
+        }
+    };
+
+    const auto stats_setup_done =
+        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+
+    // Each device has its own sysmem manager, so the program writes are independent and can go out in
+    // parallel on the pool, which has a thread pinned near each device. The pool is quiescent here:
+    // every other user of it joins before releasing the MeshDevice API lock this function holds.
+    //
+    // Use a bounded number of byte-balanced chunks rather than one task per device. The caller writes
+    // the first chunk, so serial dispatch is represented by fanout=1 and never touches the pool.
+    auto write_chunk = [&](size_t begin, size_t end) {
+        for (size_t task_idx = begin; task_idx < end; task_idx++) {
+            write_program_for_device(program_tasks[task_idx]);
+        }
+    };
+
+    const size_t num_tasks = program_tasks.size();
+    size_t requested_chunks = std::min(num_tasks, experiment_config.fanout);
+    const size_t average_bytes_per_device = num_tasks == 0 ? 0 : total_command_bytes / num_tasks;
+    if (average_bytes_per_device < experiment_config.min_bytes_per_device) {
+        requested_chunks = std::min(num_tasks, size_t{1});
+    }
+
+    std::array<size_t, k_program_dispatch_fanout_limit + 1> chunk_bounds{};
+    size_t num_chunks = 0;
+    if (requested_chunks > 0) {
+        chunk_bounds[num_chunks++] = 0;
+        const size_t target_bytes = (total_command_bytes + requested_chunks - 1) / requested_chunks;
+        size_t bytes_this_chunk = 0;
+        for (size_t task_idx = 0; task_idx < num_tasks; task_idx++) {
+            bytes_this_chunk += program_tasks[task_idx].program_entry->cmd_bytes;
+            const bool can_add_chunk = num_chunks < requested_chunks && task_idx + 1 < num_tasks;
+            if (can_add_chunk && bytes_this_chunk >= target_bytes) {
+                chunk_bounds[num_chunks++] = task_idx + 1;
+                bytes_this_chunk = 0;
+            }
+        }
+        chunk_bounds[num_chunks] = num_tasks;
+    }
+
+    for (size_t chunk = 1; chunk < num_chunks; chunk++) {
+        const size_t begin = chunk_bounds[chunk];
+        const size_t end = chunk_bounds[chunk + 1];
+        dispatch_thread_pool_->enqueue(
+            [&write_chunk, begin, end]() { write_chunk(begin, end); }, program_tasks[begin].device->id());
+    }
+    const auto stats_handoff_done =
+        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+
+    // The work below can throw - a device timeout surfaces as an exception out of the fetch queue -
+    // and the tasks enqueued above hold references into this frame. Join the pool on every path out
+    // of here, including the throwing one, or a worker is left reading destroyed objects. The
+    // original exception wins over anything a worker reports.
+    std::exception_ptr dispatch_exception;
+    try {
+        // A workload waits for its last participating device. Write this thread's part first; unused
+        // devices only need their go signal before the next barrier.
+        if (num_chunks > 0) {
+            write_chunk(chunk_bounds[0], chunk_bounds[1]);
+        }
+        // A go signal is a few hundred bytes, far less work than waking a worker to hand one over,
+        // so the calling thread issues them itself here, overlapping them with the workers above.
+        this->write_go_signal_sequences_to_unused_sub_grids(
+            chip_ids_in_workload,
+            sub_device_id,
+            expected_num_workers_completed,
+            mcast_go_signals,
+            unicast_go_signals,
+            dispatch_metadata);
+    } catch (...) {
+        dispatch_exception = std::current_exception();
+    }
+    const auto stats_caller_done =
+        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (num_chunks > 1) {
+        try {
+            dispatch_thread_pool_->wait();
+        } catch (...) {
+            if (!dispatch_exception) {
+                dispatch_exception = std::current_exception();
+            }
+        }
+    }
+    if (dispatch_exception) {
+        std::rethrow_exception(dispatch_exception);
+    }
+    const auto stats_wait_done =
+        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    if (experiment_config.collect_stats) {
+        const uint64_t first_write_ns = first_write_done_ns.load(std::memory_order_relaxed);
+        const uint64_t last_write_ns = last_write_done_ns.load(std::memory_order_relaxed);
+        const uint64_t write_skew_ns =
+            first_write_ns == std::numeric_limits<uint64_t>::max() ? 0 : last_write_ns - first_write_ns;
+        record_program_dispatch_stats(
+            stats_start,
+            stats_setup_done,
+            stats_handoff_done,
+            stats_caller_done,
+            stats_wait_done,
+            write_skew_ns,
+            num_tasks,
+            programs.size(),
+            num_chunks,
+            total_command_bytes);
+    }
+
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_mcast_wptr(1);
@@ -1208,20 +1513,6 @@ void FDMeshCommandQueue::reset_worker_state(
             this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
             std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
-}
-
-void FDMeshCommandQueue::write_program_cmds_to_subgrid(
-    const MeshCoordinateRange& sub_grid,
-    ProgramCommandSequence& program_cmd_seq,
-    bool stall_first,
-    bool stall_before_program,
-    std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
-        auto device = mesh_device_->impl().get_device(coord);
-        program_dispatch::write_program_command_sequence(
-            program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
-        chip_ids_in_workload.insert(device->id());
-    });
 }
 
 void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
