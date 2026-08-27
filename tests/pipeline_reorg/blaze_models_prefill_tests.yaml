@@ -372,7 +372,7 @@
   team: models
   sp_config: sc1
 
-- name: "Kimi-K2.6-1T & Kimi-K3-2.8T MoE perf 5k (384e/top-8, 896e/top-16)"
+- name: "Kimi-K2.6-1T & Kimi-K3-2.8T MoE perf 5k"
   fabric_profile: torus_xy
   cmd: |
 
