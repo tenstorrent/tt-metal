@@ -1193,6 +1193,7 @@ class MiniMaxH3Pipeline:
         if self._audio_decoder is None:
             config = self.audio_config
             logger.info("building the audio decoder")
+            split_mode = os.environ.get("MINIMAX_H3_PIPELINE_SPLIT_MODE")
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1203,6 +1204,7 @@ class MiniMaxH3Pipeline:
                 resblock_dilation_sizes=tuple(tuple(d) for d in config["resblock_dilation_sizes"]),
                 mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
+                **({"split_mode": split_mode} if split_mode is not None else {}),
             )
 
             def read_state() -> dict[str, torch.Tensor]:
