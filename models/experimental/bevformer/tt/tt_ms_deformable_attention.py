@@ -74,7 +74,18 @@ def multi_scale_deformable_attn_ttnn(
     sampling_grids = ttnn.mul(sampling_locations, 2.0)
     sampling_grids = ttnn.sub(sampling_grids, 1.0)
 
-    sampling_value_list = []
+    # The fused op takes all three inputs ROW_MAJOR, so the head-major permute runs there rather
+    # than on a tiled tensor.
+    attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
+    attention_weights = ttnn.permute(
+        attention_weights, (0, 2, 1, 3, 4)
+    )  # [bs, num_heads, num_queries, num_levels, num_points]
+
+    # ``ttnn.experimental.multi_scale_deformable_attn`` implements the num_levels == 1 case, so the
+    # levels are summed here. The split is exact rather than an approximation: attention_weights is
+    # already softmaxed over num_levels * num_points, so the reduction over (level, point) is the
+    # plain sum of the per-level reductions.
+    output = None
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         # [bs, H_*W_, num_heads, head_dim] -> [bs*num_heads, H_, W_, head_dim]
         value_l_ = ttnn.to_layout(value_list[level], layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -90,38 +101,18 @@ def multi_scale_deformable_attn_ttnn(
             sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2)
         )  # [N, H_out, W_out, 2] = [bs*num_heads, num_queries*num_points, 1, 2]
 
-        # Input: (bs*num_heads, H_, W_, head_dim), Grid: (bs*num_heads, num_queries*num_points, 1, 2)
-        # Output: (bs*num_heads, num_queries*num_points, 1, head_dim)
-        sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
+        attn_l_ = ttnn.reshape(attention_weights[:, :, :, level, :], (bs * num_heads, num_queries, num_points))
 
-        # (bs*num_heads, num_queries*num_points, 1, head_dim) -> (bs*num_heads, head_dim, num_queries, num_points)
-        sampling_value_l_ = ttnn.squeeze(
-            sampling_value_l_, 2
-        )  # Remove the 1 dimension: (bs*num_heads, num_queries*num_points, head_dim)
-        sampling_value_l_ = ttnn.reshape(sampling_value_l_, (bs * num_heads, num_queries, num_points, head_dim))
-        sampling_value_l_ = ttnn.permute(
-            sampling_value_l_, (0, 3, 1, 2)
-        )  # (bs*num_heads, head_dim, num_queries, num_points)
+        # value (N, H_, W_, head_dim), grid (N, num_queries*num_points, 1, 2), attn (N, num_queries,
+        # num_points) -> (N, num_queries, head_dim), with N = bs * num_heads.
+        output_l_ = ttnn.experimental.multi_scale_deformable_attn(value_l_, sampling_grid_l_, attn_l_)
+        output = output_l_ if output is None else ttnn.add(output, output_l_)
 
-        sampling_value_list.append(sampling_value_l_)
-
-    # [bs, num_queries, num_heads, num_levels, num_points] -> [bs*num_heads, 1, num_queries, num_levels*num_points]
-    attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))  # Move heads to dim 1
-    attention_weights = ttnn.reshape(attention_weights, (bs * num_heads, 1, num_queries, num_levels * num_points))
-
-    # Stack sampled values from all pyramid levels
-    stacked_values = ttnn.stack(
-        sampling_value_list, dim=-2
-    )  # (bs*num_heads, head_dim, num_queries, num_levels, num_points)
-    # Flatten level and point dimensions
-    stacked_values = ttnn.reshape(stacked_values, (bs * num_heads, head_dim, num_queries, num_levels * num_points))
-
-    output = ttnn.mul(stacked_values, attention_weights)
-    # Aggregate across all sampling points and levels
-    output = ttnn.sum(output, dim=-1)  # Final shape: (bs*num_heads, head_dim, num_queries)
-
-    output = ttnn.reshape(output, (bs, num_heads * head_dim, num_queries))
-    output = ttnn.permute(output, (0, 2, 1))  # [bs, num_queries, num_heads * head_dim]
+    # [bs*num_heads, num_queries, head_dim] -> [bs, num_queries, num_heads*head_dim]. Channels stay
+    # head-major, matching the split value was reshaped with.
+    output = ttnn.reshape(output, (bs, num_heads, num_queries, head_dim))
+    output = ttnn.permute(output, (0, 2, 1, 3))
+    output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
 
     if ENABLE_LOGGING:
         logger.info("MSDA End")
@@ -324,9 +315,12 @@ class TTMSDeformableAttention:
         if ENABLE_LOGGING:
             logger.info("MSDA Core Attention Complete")
 
+        # The core attention returns ROW_MAJOR, and the residual below is tiled, so the conversion
+        # belongs outside the projection guard.
+        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
+
         # Apply output projection
         if hasattr(self.params, "output_proj"):
-            output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
             output = ttnn.linear(output, self.params.output_proj.weight, bias=self.params.output_proj.bias)
 
         if ENABLE_LOGGING:
