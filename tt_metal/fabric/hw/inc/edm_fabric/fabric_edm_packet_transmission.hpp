@@ -130,9 +130,9 @@ FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encoding
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
 // when the caller has already loaded these (e.g. via a packed 4B load).
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+// #ifndef FABRIC_2D
 FORCE_INLINE
-#endif
+    // #endif
     void
     execute_chip_unicast_to_local_chip_impl(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
@@ -333,9 +333,9 @@ FORCE_INLINE
 // The caller-provided payload_size_bytes is still used (not the packed copy) to preserve
 // existing call-site semantics.
 __attribute__((optimize("jump-tables")))
-#ifndef FABRIC_2D
+// #ifndef FABRIC_2D
 FORCE_INLINE
-#endif
+    // #endif
     void
     execute_chip_unicast_to_local_chip(
         tt_l1_ptr PACKET_HEADER_TYPE* const packet_start,
