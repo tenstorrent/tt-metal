@@ -12,9 +12,8 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.common.sampling.tt_sampling import TTSampling
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -176,15 +175,16 @@ def test_llama_model_inference(
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
-        tokenizer = Tokenizer(model_args.tokenizer_path)
+        tokenizer = model_args.create_tokenizer()
         # if instruct:
         #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
         # else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+        encoded_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in prompts]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+        ref_dtype = get_ref_model_dype(reference_model, model_args.model_name)
 
     # Embedding on host
     embd = HostEmbedding(model_args)
@@ -336,7 +336,7 @@ def test_llama_model_inference(
 
             if run_ref_pt:  # Run reference model
                 # In this test all users have the same position
-                ref_output = reference_model(pt_decode_input, current_pos[0])
+                ref_output = reference_model(pt_decode_input.to(ref_dtype), current_pos[0])
 
             # Increment position
             current_pos = torch.full((batch,), generation_start_pos + i)
@@ -408,11 +408,11 @@ def test_llama_model_inference(
                 if cache_pcc:
                     for l in range(model_args.n_layers):
                         pytorch_layer_present = [
-                            reference_model.layers[l]
-                            .attention.cache_k.clone()
+                            reference_model.cache_k[l]
+                            .clone()
                             .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
-                            reference_model.layers[l]
-                            .attention.cache_v.clone()
+                            reference_model.cache_v[l]
+                            .clone()
                             .permute(0, 2, 1, 3),  # [batch, n_kv_heads, seq, head_dim]
                         ]
                         tt_layer_present = []

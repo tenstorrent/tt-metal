@@ -23,20 +23,11 @@ Read more about this model at the huggingface page for [Llama-3.3-70B-Instruct](
 
 ## How to Run
 ### Download Llama-3.3-70B weights
-#### Option 1: From Meta or Huggingface-cli
-You can download llama models [directly from Meta](https://www.llama.com/llama-downloads/), or through the `huggingface-cli` via:
-```
-huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3.3-70B-Instruct
-```
-- **The downloaded weights directories** include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
+This model runs on HuggingFace-format weights (`.safetensors`). Meta-format checkpoints / `LLAMA_DIR`
+are no longer supported (see Issue #42139).
 
-Then set the following environment variable:
-```
-export LLAMA_DIR=<path_to_Llama-3.3-70B-instruct>
-```
-
-#### Option 2: Straight from Huggingface
-If you get the weights [directly from huggingface](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct) they will be `.safetensors` files instead. These are supported by setting one of the following environment variables:
+Get the weights [directly from huggingface](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct)
+and set one of the following environment variables:
 ```
 # For automatic download
 export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct

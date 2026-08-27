@@ -167,6 +167,144 @@ def test_slot_remap_identity_is_a_noop():
     assert seed_manager._seed_active is True
 
 
+def test_duplicate_request_seeds_get_distinct_device_streams():
+    """Concurrent slots sharing one request seed must not draw identical streams.
+
+    Regression test for #53077: n>1 completions of one prompt with a fixed seed
+    land in different slots with the same request seed, and the device seed was
+    derived from (seed, position) only, so every completion came out identical.
+    """
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([1234, 1234, 1234, 1234], [0, 1, 2, 3])
+
+    assert sorted(seed_manager.seed_salts) == [0, 1, 2, 3]
+    first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
+    assert len(set(first_draws)) == 4, f"duplicate-seed slots drew identical device seeds: {first_draws}"
+
+
+def test_unique_seed_stream_is_unchanged_and_slot_independent():
+    """A request whose seed is unique among active slots keeps salt 0, so its
+    stream matches the pre-salt derivation and does not depend on the slot."""
+    manager_a = _make_host_only_seed_manager(max_batch_size=4)
+    manager_a.reset_seed([777], [0])
+    manager_b = _make_host_only_seed_manager(max_batch_size=4)
+    manager_b.reset_seed([777], [3])
+
+    draws_a = [manager_a._next_device_seed_for_slot(0) for _ in range(4)]
+    draws_b = [manager_b._next_device_seed_for_slot(3) for _ in range(4)]
+
+    assert manager_a.seed_salts[0] == 0
+    assert draws_a == draws_b
+
+
+def test_seed_salt_travels_with_slot_remap():
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([55, 55], [0, 3])  # duplicates: slot0 salt 0, slot3 salt 1
+    assert seed_manager.seed_salts[3] == 1
+
+    # Condense: slot3's request moves into empty slot1.
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
+
+    assert seed_manager.seed_salts[1] == 1  # stream identity survives the move
+    assert seed_manager.seed_salts[3] == 0  # vacated slot cleared
+
+
+def test_seed_salt_does_not_recollide_with_surviving_duplicate():
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([55, 55], [0, 1])  # slot0 salt 0, slot1 salt 1
+    # Slot 0 finishes and is vacated; a new request with the same seed arrives.
+    seed_manager.apply_slot_remap(torch.tensor([1, 1, 2, 3], dtype=torch.int32))
+    assert seed_manager.seeds == [55, None, None, None]
+
+    seed_manager.reset_seed([55], [2])
+
+    # The newcomer must not reuse the surviving request's salt.
+    survivor_slot = 0
+    assert seed_manager.seed_salts[2] != seed_manager.seed_salts[survivor_slot]
+
+
+def test_seed_salt_survives_decode_re_registration_after_sibling_finishes():
+    """The unconditional decode-path re-registration (first decode after any
+    admission) must not recompute a running request's salt: after its same-seed
+    sibling finishes, the recomputed salt would drop to the sibling's and the
+    survivor's remaining tokens would replay the finished stream."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 42], [0, 1])  # A salt 0, B salt 1
+    assert seed_manager.seed_salts[1] == 1
+
+    # A finishes; condense moves B down into slot 0 (salt travels).
+    seed_manager.apply_slot_remap(torch.tensor([1, 1, 2, 3], dtype=torch.int32))
+    assert seed_manager.seed_salts[0] == 1
+
+    # An unrelated admission triggers reset_batch: every active slot re-registers.
+    seed_manager.reset_seed([7], [2])
+    seed_manager.reset_seed_from_slots([42, None, 7, None], [0, 2])
+
+    assert seed_manager.seed_salts[0] == 1  # B keeps its stream mid-generation
+
+
+def test_finished_tail_request_ghost_seed_is_cleared():
+    """A request finishing at the batch tail is never vacated by condense; the
+    decode-path deactivate must drop it so a later unique-seed request still
+    gets salt 0 (seeded reproducibility)."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42], [3])
+    # Tail completion: identity remap makes no moves, the ghost stays.
+    seed_manager.apply_slot_remap(torch.tensor([0, 1, 2, 3], dtype=torch.int32))
+    assert seed_manager.seeds[3] == 42
+
+    seed_manager.deactivate_slots_except([0])
+    assert seed_manager.seeds[3] is None
+
+    # A fresh unique seed-42 request must land on salt 0.
+    seed_manager.reset_seed([42], [1])
+    assert seed_manager.seed_salts[1] == 0
+
+
+def test_deactivating_last_seeded_slot_rearms_the_unseeded_push():
+    """When the last seeded request finishes, the device still holds non-SKIP
+    reinit values; unless _reseted is set, get_new_values early-returns forever
+    and every surviving user's PRNG reinitializes to the same stale seed each
+    token (frozen sampling)."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42], [3])
+    seed_manager._reseted = False  # simulate the post-push steady state
+
+    seed_manager.deactivate_slots_except([0])
+
+    assert seed_manager._seed_active is False
+    assert seed_manager._reseted is True
+
+
+def test_remap_overwriting_last_seeded_slot_rearms_the_unseeded_push():
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42], [0])
+    seed_manager._reseted = False
+
+    # Condense moves the (unseeded) request from slot 1 over the seeded slot 0.
+    seed_manager.apply_slot_remap(torch.tensor([1, 1, 2, 3], dtype=torch.int32))
+
+    assert seed_manager._seed_active is False
+    assert seed_manager._reseted is True
+
+
+def test_prefill_admission_into_same_slot_fully_resets_seed_state():
+    """reset_seed registers a NEW request: even when the slot already holds the
+    same seed value, the counter must restart and the salt must be recomputed
+    (its old salt may reflect siblings that no longer exist)."""
+    seed_manager = _make_host_only_seed_manager(max_batch_size=4)
+    seed_manager.reset_seed([42, 42], [0, 1])
+    assert seed_manager.seed_salts[1] == 1
+    seed_manager._next_device_seed_for_slot(1)
+    assert seed_manager.seed_counters[1] == 1
+
+    seed_manager.deactivate_slots_except([1])  # slot 0's request finished
+    seed_manager.reset_seed([42], [1])  # new same-seed request admitted into slot 1
+
+    assert seed_manager.seed_salts[1] == 0
+    assert seed_manager.seed_counters[1] == 0
+
+
 def test_broadcast_sampling_params_preserves_none_list_fields():
     params = SamplingParams(temperature=[1.0, 1.0], top_k=[1, 1], top_p=[1.0, 1.0], seed=[None, 42])
 
@@ -789,6 +927,79 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
 # ===========================================================================
 
 
+@pytest.mark.parametrize(
+    "padded_vocab_size, expected_splits",
+    [
+        (32768, 2),  # Mistral: two 16384-wide halves
+        (151936, 4),  # Qwen3: four 37984-wide chunks
+        (256000, 4),  # Gemma-2: four 64000-wide chunks
+        (131072, 2),  # exactly 2x TOPK_MAX_WIDTH still splits in two
+        (131104, None),  # four 32776-wide chunks are not tile-aligned -> host-sampling fallback
+    ],
+)
+def test_num_single_device_vocab_splits(padded_vocab_size, expected_splits):
+    assert TTSampling.num_single_device_vocab_splits(padded_vocab_size) == expected_splits
+
+
+@pytest.mark.parametrize(
+    "width, expected",
+    [
+        (32768, 1),
+        (131072, 1),  # exactly 2*TOPK_MAX_WIDTH: full-row untilize known good (Galaxy padded vocab)
+        (151936, 4),  # Qwen3
+        (256000, 4),  # Gemma-2
+        (262144, 4),  # 4*TOPK_MAX_WIDTH exactly
+    ],
+)
+def test_untilize_chunk_count(width, expected):
+    assert TTSampling._untilize_chunk_count(width) == expected
+
+
+@pytest.mark.parametrize(
+    "vocab_size",
+    [
+        # Qwen3: 4-way split, chunked untilize in the argmax fast path.
+        pytest.param(151936, id="v151936_chunked_untilize"),
+        # Gemma-2-2B: a single full-row untilize threw a circular-buffer/L1 clash at
+        # program compile; the chunked untilize must keep the fast path working.
+        pytest.param(256000, id="v256000_chunked_untilize_gemma"),
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_force_argmax_matches_row_max_on_wide_vocab(vocab_size, mesh_device):
+    """Greedy params through the force-argmax fast path must pick the row maximum."""
+    torch.manual_seed(42)
+    batch_size = 32
+
+    args = _single_device_sampling_args(mesh_device, vocab_size)
+    args.model_config = {"SAMPLING_AG_CONFIG": {"allow_force_argmax": True, "num_links": 1, "topology": None}}
+    sampler = TTSampling(
+        args=args,
+        mesh_device=mesh_device,
+        tt_ccl=None,
+        k=torch.ones(batch_size),
+        p=torch.zeros(batch_size),
+        temp=torch.ones(batch_size),
+    )
+    assert sampler.force_argmax_sampling, "greedy params must take the argmax fast path"
+
+    logits_host = torch.randn(1, 1, batch_size, vocab_size)
+    logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    logits_bf16 = ttnn.to_torch(logits_tt).float().reshape(batch_size, vocab_size)
+
+    tokens_tt, _log_probs = sampler(logits_tt)
+    tokens = ttnn.to_torch(tokens_tt).flatten()[:batch_size].long()
+
+    row_max = logits_bf16.max(dim=-1).values
+    for user in range(batch_size):
+        token = int(tokens[user])
+        assert 0 <= token < vocab_size, f"user {user}: token {token} outside [0, {vocab_size})"
+        assert logits_bf16[user, token].item() == row_max[user].item(), (
+            f"user {user}: token {token} has logit {logits_bf16[user, token].item():.6f}, "
+            f"but the row maximum is {row_max[user].item():.6f}"
+        )
+
+
 def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batch_size=32):
     """Minimal args for TTSampling on a 1x1 mesh: no vocab padding, no force-argmax."""
     grid = mesh_device.compute_with_storage_grid_size()
@@ -813,6 +1024,12 @@ def _single_device_sampling_args(mesh_device, vocab_size, max_top_k=32, max_batc
         pytest.param(32768, id="v32768_multicore_halves"),
         # Half the vocab is not a power of two, so each half falls back to the single-core factory.
         pytest.param(32000, id="v32000_single_core_halves"),
+        # Half the vocab exceeds ttnn.topk's 64K width limit, so TTSampling must cut the vocab
+        # into four same-device chunks. Qwen3 has exactly this vocab size (#53064).
+        pytest.param(151936, id="v151936_four_way_split"),
+        # Four 64000-wide tile-aligned chunks, none a power of two. Gemma-2-2B has exactly
+        # this vocab size and is the largest vocab any tiered model runs on one device.
+        pytest.param(256000, id="v256000_four_way_split_gemma"),
     ],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
@@ -864,3 +1081,86 @@ def test_ttsampling_topk_matches_argmax_on_single_device(vocab_size, mesh_device
 
     header = f"{len(failures)}/{batch_size} users did not sample the row maximum (vocab_size={vocab_size})"
     assert not failures, header + ":\n" + "\n".join(failures)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_duplicate_request_seeds_sample_diverse_tokens(mesh_device):
+    """A batch of users sharing one request seed must not all sample the same token.
+
+    Device-level regression test for #53077: every user gets identical logits (a flat-ish
+    top-32 so the multinomial draw is what differentiates them) and the identical request
+    seed. Before per-slot seed salting, every slot derived the same device seed at the same
+    position and the whole batch sampled the same token. The draw must also be reproducible:
+    a fresh manager with the same seed produces the same tokens.
+    """
+    torch.manual_seed(7)
+    batch_size = 32
+    vocab_size = 32768
+
+    def _sample_once():
+        sampler = TTSampling(
+            args=_single_device_sampling_args(mesh_device, vocab_size),
+            mesh_device=mesh_device,
+            tt_ccl=None,
+            k=torch.full((batch_size,), 32),
+            p=torch.ones(batch_size),
+            temp=torch.ones(batch_size),
+        )
+        assert not sampler.force_argmax_sampling
+        seed_manager = SeedManager(sampler, max_batch_size=batch_size)
+        seed_manager.reset_seed([1234] * batch_size, list(range(batch_size)))
+        seed_manager.get_new_values(list(range(batch_size)))
+
+        # One logits row replicated across the batch: only the RNG stream can differ.
+        row = torch.zeros(1, 1, 1, vocab_size)
+        row[..., :32] = 5.0  # 32 equally-likely candidates, everything else improbable
+        logits_host = row.expand(1, 1, batch_size, vocab_size).contiguous()
+        logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        tokens_tt, _ = sampler(logits_tt)
+        return ttnn.to_torch(tokens_tt).flatten()[:batch_size].long().tolist()
+
+    tokens_first = _sample_once()
+    tokens_second = _sample_once()
+
+    assert all(0 <= t < vocab_size for t in tokens_first)
+    assert len(set(tokens_first)) > 1, (
+        f"all {batch_size} users with the same request seed sampled token {tokens_first[0]} -- "
+        "duplicate-seed slots are drawing from identical RNG streams (#53077)"
+    )
+    assert tokens_first == tokens_second, "same request seed must reproduce the same tokens across runs"
+
+
+@pytest.mark.parametrize(
+    "shape, k, expected",
+    [
+        # Routed production shape: wide non-pow2 vocab chunk, small k -> True.
+        ((1, 1, 32, 64128), 32, True),
+        # Ex-MoE-gate region: merged topk.cpp has NO gate arm -> must be False.
+        # (A stale mirror with the pre-merge gate arm returns True here.)
+        ((1, 1, 32, 128), 16, False),
+        ((1, 1, 32, 512), 16, False),
+        # k_multiple drift detector: k=100 rounds to 112 with the merged
+        # multiple of 16 (fits width 112 -> True); the pre-merge multiple of
+        # 32 rounds to 128 (does not fit -> a stale mirror returns False).
+        ((1, 1, 32, 112), 100, True),
+        # Width ceiling: merged large_k_route_max_width is 1<<19; a padded
+        # width of 1<<20 must NOT route (stale mirror ceiling was 1<<20).
+        ((1, 1, 32, 1 << 20), 96, False),
+    ],
+)
+def test_topk_route_mirror_parity(mesh_device, shape, k, expected):
+    """The _utils.py routing-predicate mirror must track the MERGED topk.cpp
+    predicate (#53464: k_multiple=16, max_width=1<<19, no MoE-gate arm), not
+    any in-flight revision of it. Each cell distinguishes a merged constant
+    from a known stale value, so any re-drift flips at least one assertion."""
+    from models.common.sampling._utils import topk_would_route_to_large_indices
+
+    x = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
+    )
+    # Routing is Blackhole-only: off-BH the predicate short-circuits to False,
+    # so every cell's expectation collapses to False there (still asserted --
+    # this doubles as off-BH never-routes coverage).
+    expected_here = expected and ttnn.device.is_blackhole(mesh_device)
+    assert topk_would_route_to_large_indices(x, k, mesh_device) is expected_here
+    ttnn.deallocate(x)

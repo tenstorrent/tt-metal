@@ -24,9 +24,15 @@ ttnn::Tensor fast_reduce_nc_wrapper(
     const ttsl::SmallVector<int32_t>& dims,
     const std::optional<const ttnn::Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     return ttnn::experimental::reduction::fast_reduce_nc(
-        input, ttsl::Span<const int32_t>(dims.data(), dims.size()), output, memory_config, compute_kernel_config);
+        input,
+        ttsl::Span<const int32_t>(dims.data(), dims.size()),
+        output,
+        memory_config,
+        compute_kernel_config,
+        sub_core_grids);
 }
 
 }  // namespace
@@ -43,7 +49,8 @@ void bind_fast_reduce_nc(nb::module_& mod) {
         nb::arg("dims").noconvert() = ttsl::SmallVector<int32_t>(),
         nb::arg("output").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        nb::arg("sub_core_grids").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

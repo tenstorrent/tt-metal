@@ -148,6 +148,10 @@ class Model:
         self.cos_matrix = self.rope_setup.cos_matrix
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
+        # Prefill rope slices, keyed by sequence length. See prepare_inputs_prefill: the slice is a device
+        # op, so recomputing it per call allocates -- and on a traced prefill it allocates with the trace
+        # live, then throws the result away (the replay uses the matrices bound at capture time).
+        self._prefill_rope_slices = {}
 
         if state_dict:
             embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
@@ -712,6 +716,12 @@ class Model:
     ):
         """Row-parallel batched prefill: 1 user per row per iteration.
 
+
+        Allocation only -- do not compile from here. Compiling a decode program at this point makes the
+        capture below deadlock in the MoE dispatch, and compiling one before any prefill has run deadlocks
+        in the MoE combine's global-semaphore setup instead. That is why the rest of decode trace setup
+        still happens later, in the decode loop, with this trace already live.
+
         ``empty_slots``: optional list of decoder slot ids, one per input user.
         If supplied, users are first reordered so that array-index ``i`` lands
         on the same row that ``empty_slots[i]`` will decode on
@@ -1096,12 +1106,18 @@ class Model:
             if len(tokens_embd.shape) == 3:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
+        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159).
+        # Cached per sequence length: the slice runs on device, so recomputing it allocates. On a traced
+        # prefill that allocation happens with the trace live -- and is then discarded, since the replay
+        # uses the matrices that were bound when the trace was captured.
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = [
-            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-        ]
+        rot_mats_global = self._prefill_rope_slices.get(seq_len)
+        if rot_mats_global is None:
+            rot_mats_global = [
+                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+            ]
+            self._prefill_rope_slices[seq_len] = rot_mats_global
         rot_mats_local = None
 
         # Prepare page tables if provided
