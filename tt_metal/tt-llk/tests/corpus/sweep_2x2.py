@@ -941,7 +941,18 @@ KNOBS = {
     # sim 1d162f0adf67): anchors reproduce EXACT (sem 83640 / hand 67378
     # both rows), knob sem 75834 both rows -> vs_hand +24.14 -> +12.55,
     # causal vs same-session off (118841) = -36.19; hand arm byte- AND
-    # cycle-inert under the knob (67378 x3).
+    # cycle-inert under the knob (67378 x3).  CORPUS (corpus-legs-laneIC,
+    # own farm): base-vs-fix OFF/TD/ON-36 = 3300/3300 .text-IDENTICAL
+    # each; knob-vs-ON delta = EXACTLY 12 TUs, all build.h-attributed
+    # (fill/exp2/relu_max/hardmish/hardtanh prod + sigmoid_appx fresh
+    # [GP's edges TU] + binopscalar mode0 + sdpa_exp_unclamped impl1 x4
+    # + ternary addcmul fresh) and ALL adjudicated: 8 corr nodes
+    # PASS/PASS paired (device AND pinned sim), hardmish/hardtanh/
+    # sigmoid-appx via their fresh-harness corr nodes PASS/PASS on
+    # device, the sdpa scale-16128 impl1 TU = symmetric harness skip
+    # (same kernel body as the 3 passing sdpa TUs; named).  The 71-leg
+    # loss+WIN screen and the 9-leg seed-composed screen are 0 CHANGED
+    # at plain ON-36 (fix cc1plus byte-inert knobs-off).
     "crossrow-2datum": "-mtt-tensix-optimize-hoisted-prgm-reuse "
     "-mtt-tensix-optimize-crossrow-pairing-stall-words",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
