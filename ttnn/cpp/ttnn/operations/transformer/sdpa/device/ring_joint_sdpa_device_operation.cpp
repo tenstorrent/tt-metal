@@ -119,7 +119,8 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncInputs& tensor_args,
     // Single-slot gather writes one cache slot to gathered slot 0, so allow a batch-1 output.
     bool allow_single_slot_output,
-    std::optional<uint32_t> compact_gather_dim_minimum) {
+    std::optional<uint32_t> compact_gather_dim_minimum,
+    std::optional<uint32_t> paged_local_seq_len = std::nullopt) {
     const auto& input_tensors = tensor_args.input_tensor;
     TT_FATAL(
         !input_tensors.empty(), "Error, Input tensor size should be greater than 0 but has {}", input_tensors.size());
@@ -184,6 +185,13 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
             auto output_shape = output_tensor.logical_shape();
             auto expected_output_shape = input_tensors[i].logical_shape();
+            if (paged_local_seq_len.has_value()) {
+                expected_output_shape[0] = 1;
+                // Physical paged storage flattens heads into dim 0.  Preserve the
+                // logical head count declared by the persistent gather target.
+                expected_output_shape[1] = output_shape[1];
+                expected_output_shape[2] = *paged_local_seq_len;
+            }
             expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
             for (int d = 0; d < static_cast<int>(output_shape.rank()); ++d) {
                 if (d == operation_attributes.dim) {
@@ -353,6 +361,108 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const bool has_latent_v = tensor_args.has_latent_v();
     const bool has_joint_tensors =
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
+
+    if (tensor_args.has_metadata() || tensor_args.has_paged_kv_cache()) {
+        TT_FATAL(args.kv_cache_num_layers > 0, "kv_cache_num_layers must be positive");
+        TT_FATAL(
+            args.kv_cache_layer_idx < args.kv_cache_num_layers,
+            "kv_cache_layer_idx={} is outside num_layers={}",
+            args.kv_cache_layer_idx,
+            args.kv_cache_num_layers);
+    }
+
+    if (tensor_args.has_paged_kv_cache()) {
+        const auto& bundles = tensor_args.page_bundle_indices.value();
+        TT_FATAL(!args.has_indexed_kv_cache(), "Paged KV cache is incompatible with kv_cache_batch_idx");
+        TT_FATAL(!tensor_args.has_metadata(), "Paged KV cache is incompatible with slot metadata");
+        TT_FATAL(!has_joint_tensors, "Paged KV cache does not support joint attention tensors");
+        TT_FATAL(!args.has_sliding_window(), "Paged KV cache does not support sliding-window attention");
+        TT_FATAL(
+            args.kv_cache_page_size >= tt::constants::TILE_HEIGHT &&
+                args.kv_cache_page_size % tt::constants::TILE_HEIGHT == 0,
+            "kv_cache_page_size must be a positive multiple of {}, got {}",
+            tt::constants::TILE_HEIGHT,
+            args.kv_cache_page_size);
+        const auto validate_paged_cache = [&](const Tensor& cache, const Tensor& gathered, const char* cache_name) {
+            const auto& cache_shape = cache.logical_shape();
+            TT_FATAL(
+                cache_shape.rank() == 4 && cache_shape[1] == 1 && cache_shape[2] == args.kv_cache_page_size,
+                "Paged {} cache must have shape [bundles*layers*heads, 1, kv_cache_page_size, dim], got {}",
+                cache_name,
+                cache_shape);
+
+            const auto nd_shard_spec = cache.nd_shard_spec();
+            TT_FATAL(nd_shard_spec.has_value(), "Paged {} cache must use an ND-sharded memory config", cache_name);
+            const auto& shard_shape = nd_shard_spec->shard_shape;
+            TT_FATAL(
+                shard_shape.rank() == 4 && shard_shape[0] == 1 && shard_shape[1] == 1 &&
+                    shard_shape[2] == args.kv_cache_page_size && shard_shape[3] == cache_shape[3],
+                "Each paged {} cache ND shard must contain exactly one physical page with shape [1, 1, {}, {}], "
+                "got {}",
+                cache_name,
+                args.kv_cache_page_size,
+                cache_shape[3],
+                shard_shape);
+
+            const uint32_t num_heads = gathered.logical_shape()[1];
+            const uint32_t pages_per_bundle = num_heads * args.kv_cache_num_layers;
+            TT_FATAL(num_heads > 0, "Paged attention requires at least one {} head", cache_name);
+            TT_FATAL(
+                cache_shape[0] % pages_per_bundle == 0,
+                "Paged {} cache flat page count {} must be divisible by num_heads {} * num_layers {}",
+                cache_name,
+                cache_shape[0],
+                num_heads,
+                args.kv_cache_num_layers);
+
+            const uint32_t tiles_per_page =
+                shard_shape.volume() / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+            const uint32_t local_tile_count =
+                cache.mesh_buffer().device_local_size() / cache.buffer()->aligned_page_size();
+            TT_FATAL(
+                tiles_per_page > 0 && local_tile_count % (tiles_per_page * pages_per_bundle) == 0,
+                "Paged {} cache's local tile count {} must contain complete physical bundles of {} heads x {} layers",
+                cache_name,
+                local_tile_count,
+                num_heads,
+                args.kv_cache_num_layers);
+            TT_FATAL(
+                gathered.logical_shape()[0] == 1,
+                "Paged gathered {} buffer must have batch 1, got {}",
+                cache_name,
+                gathered.logical_shape());
+            return local_tile_count / (tiles_per_page * pages_per_bundle);
+        };
+        TT_FATAL(bundles.storage_type() == StorageType::DEVICE, "page_bundle_indices must be on device");
+        TT_FATAL(bundles.buffer() != nullptr, "page_bundle_indices must have an allocated device buffer");
+        TT_FATAL(
+            input_tensor_q.device() == bundles.device(),
+            "page_bundle_indices must be on the same mesh device as Q/K/V");
+        TT_FATAL(bundles.layout() == Layout::ROW_MAJOR, "page_bundle_indices must use ROW_MAJOR layout");
+        TT_FATAL(bundles.dtype() == DataType::UINT16, "page_bundle_indices must have uint16 dtype");
+        const auto& bundle_shape = bundles.logical_shape();
+        TT_FATAL(
+            bundle_shape.rank() == 4 && bundle_shape[0] == 1 && bundle_shape[1] == 1 && bundle_shape[2] == 1,
+            "page_bundle_indices must have shape [1, 1, 1, num_logical_bundles], got {}",
+            bundle_shape);
+        TT_FATAL(
+            bundles.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "page_bundle_indices must be in DRAM");
+        TT_FATAL(bundles.logical_volume() > 0, "page_bundle_indices must contain at least one bundle id");
+        const uint32_t physical_bundle_count = validate_paged_cache(tensor_args.input_k, tensor_args.gathered_k, "K");
+        TT_FATAL(
+            physical_bundle_count <= (1u << 16),
+            "uint16 page_bundle_indices support at most 65536 physical bundles, got {}",
+            physical_bundle_count);
+        if (has_input_v) {
+            const uint32_t v_physical_bundle_count =
+                validate_paged_cache(tensor_args.input_v.value(), tensor_args.gathered_v.value(), "V");
+            TT_FATAL(
+                v_physical_bundle_count == physical_bundle_count,
+                "Paged K and V caches must have the same physical bundle count, got K={} and V={}",
+                physical_bundle_count,
+                v_physical_bundle_count);
+        }
+    }
     TT_FATAL(
         tensor_args.joint_q.has_value() == has_joint_tensors && tensor_args.joint_k.has_value() == has_joint_tensors &&
             tensor_args.joint_v.has_value() == has_joint_tensors,
@@ -410,8 +520,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     validate_ring_joint_all_gather_on_program_cache_miss(
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
-        args.has_indexed_kv_cache() || tensor_args.has_metadata(),
-        compact_gather_dim_minimum);
+        args.has_indexed_kv_cache() || tensor_args.has_metadata() || tensor_args.has_paged_kv_cache(),
+        compact_gather_dim_minimum,
+        tensor_args.has_paged_kv_cache() ? std::optional<uint32_t>(tensor_args.local_kv_seq_len()) : std::nullopt);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
@@ -480,8 +591,9 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto N_global = args.has_sliding_window() ? N_local_kv * args.ring_size : gathered_buffer_n;
     const auto L = has_joint_tensors ? joint_q_shape[2] : 0;
     const auto DH = q_shape[3];
-    const uint32_t v_local_seq =
-        has_input_v ? static_cast<uint32_t>(tensor_args.input_v->logical_shape()[2]) : N_local_kv;
+    const uint32_t v_local_seq = has_input_v && !tensor_args.has_paged_kv_cache()
+                                     ? static_cast<uint32_t>(tensor_args.input_v->logical_shape()[2])
+                                     : N_local_kv;
 
     auto q_chunk_size = args.get_q_chunk_size();
     auto k_chunk_size = args.get_k_chunk_size();
@@ -960,6 +1072,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     if (tensor_args.attention_sink.has_value()) {
         input_tensors.emplace_back(tensor_args.attention_sink.value());
     }
+    if (tensor_args.page_bundle_indices.has_value()) {
+        input_tensors.emplace_back(tensor_args.page_bundle_indices.value());
+    }
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
@@ -978,6 +1093,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.kv_cache_batch_idx.has_value(),
         kv_pad_rotation_enabled,
         tensor_args.has_metadata(),
+        tensor_args.has_paged_kv_cache(),
         args.kv_cache_num_layers,
         args.kv_cache_layer_idx,
         tensor_args.has_latent_v(),
@@ -1007,6 +1123,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     }
     if (tensor_args.attention_sink.has_value()) {
         input_tensors.emplace_back(tensor_args.attention_sink.value());
+    }
+    if (tensor_args.page_bundle_indices.has_value()) {
+        input_tensors.emplace_back(tensor_args.page_bundle_indices.value());
     }
 
     auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
@@ -1114,6 +1233,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     const uint32_t kv_cache_num_layers,
     const uint32_t kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& page_bundle_indices,
+    const uint32_t kv_cache_page_size,
     const std::optional<uint32_t> sliding_window_size) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
@@ -1300,6 +1421,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         latent_v_head_dim.value_or(0),
         kv_cache_num_layers,
         kv_cache_layer_idx,
+        kv_cache_page_size,
         sliding_window_size);
 
     auto tensor_args = OperationType::tensor_args_t{
@@ -1317,7 +1439,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .gathered_joint_k = resolved_gathered_joint_k,
         .gathered_joint_v = resolved_gathered_joint_v,
         .slot_id = slot_id,
-        .kv_actual_isl = kv_actual_isl_tensor};
+        .kv_actual_isl = kv_actual_isl_tensor,
+        .page_bundle_indices = page_bundle_indices};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

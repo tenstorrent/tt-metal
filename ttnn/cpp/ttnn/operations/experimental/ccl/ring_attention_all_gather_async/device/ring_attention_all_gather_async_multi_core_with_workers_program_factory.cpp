@@ -402,7 +402,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_num_layers,
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    std::optional<Tensor> page_bundle_indices,
+    uint32_t kv_cache_page_size) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -620,6 +622,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // The host value is a structural placeholder for the indexed gather. On the
     // trace-safe path the reader derives the actual cache slot from slot_id.
     const bool has_metadata = slot_id.has_value();
+    const bool has_page_bundles = page_bundle_indices.has_value();
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {
         constexpr uint32_t meta_cb_page_size_bytes = 32;
@@ -631,6 +634,22 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                     .buffer_index = static_cast<uint8_t>(meta_cb_index),
                     .data_format = tt::DataFormat::RawUInt32,
                     .page_size = meta_cb_page_size_bytes,
+                }}},
+            });
+        }
+    }
+    const uint32_t page_bundle_cb_index = tt::CB::c_in4;
+    if (has_page_bundles) {
+        const uint32_t table_bytes = static_cast<uint32_t>(page_bundle_indices->logical_volume() * sizeof(uint16_t));
+        const uint32_t page_bundle_cb_page_size_bytes = round_up_to_mul32(table_bytes);
+        for (const auto& core_ranges : {sender_forward_core_ranges, sender_backward_core_ranges}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = page_bundle_cb_page_size_bytes,
+                .core_ranges = core_ranges,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(page_bundle_cb_index),
+                    .data_format = tt::DataFormat::RawUInt16,
+                    .page_size = page_bundle_cb_page_size_bytes,
                 }}},
             });
         }
@@ -677,6 +696,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
+        static_cast<uint32_t>(has_page_bundles),
+        page_bundle_cb_index,
     };
     TT_FATAL(
         sender_reader_forward_kernel.compile_time_args.size() ==
@@ -696,6 +717,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     if (has_metadata) {
         tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(sender_reader_forward_kernel.compile_time_args);
         tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
+            .append_to(sender_reader_forward_kernel.compile_time_args);
+    }
+    if (has_page_bundles) {
+        tt::tt_metal::TensorAccessorArgs(page_bundle_indices->buffer())
             .append_to(sender_reader_forward_kernel.compile_time_args);
     }
 
@@ -776,6 +801,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
+        static_cast<uint32_t>(has_page_bundles),
+        page_bundle_cb_index,
     };
     TT_FATAL(
         sender_reader_backward_kernel.compile_time_args.size() ==
@@ -795,6 +822,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     if (has_metadata) {
         tt::tt_metal::TensorAccessorArgs(slot_id->buffer()).append_to(sender_reader_backward_kernel.compile_time_args);
         tt::tt_metal::TensorAccessorArgs(kv_actual_isl->buffer())
+            .append_to(sender_reader_backward_kernel.compile_time_args);
+    }
+    if (has_page_bundles) {
+        tt::tt_metal::TensorAccessorArgs(page_bundle_indices->buffer())
             .append_to(sender_reader_backward_kernel.compile_time_args);
     }
 
@@ -892,12 +923,20 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             for (uint32_t i = 0; i < num_inputs; i++) {
                 const auto input_tensor_shape = input_tensor[i].padded_shape();
                 const auto output_tensor_shape = output_tensor[i].padded_shape();
-                const uint32_t num_heads = input_tensor_shape[1];
+                // A paged cache flattens bundle, head, and layer into physical dim 0, so its
+                // [flat_pages, 1, page_size, dim] storage shape does not expose the logical head
+                // count.  The persistent gather target does: [batch, heads, sequence, dim].
+                const uint32_t num_heads = has_page_bundles ? output_tensor_shape[1] : input_tensor_shape[1];
                 // single_batch_head_num_pages is always pages-per-(batch,head); independent of slicing.
-                const uint32_t full_batch_head_size = input_tensor_shape[0] * num_heads;
+                const uint32_t full_batch_head_size =
+                    has_page_bundles ? output_tensor_shape[0] * num_heads : input_tensor_shape[0] * num_heads;
 
                 const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-                const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
+                const uint32_t input_tensor_Ht =
+                    has_page_bundles
+                        ? static_cast<uint32_t>(
+                              page_bundle_indices->logical_volume() * (kv_cache_page_size / tt::constants::TILE_HEIGHT))
+                        : input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
                 const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
                 const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_HEIGHT;
                 TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
@@ -972,6 +1011,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_forward_rt_args.push_back(kv_cache_num_layers);
             reader_forward_rt_args.push_back(kv_cache_layer_idx);
         }
+        if (has_page_bundles) {
+            reader_forward_rt_args.push_back(page_bundle_indices->buffer());
+            reader_forward_rt_args.push_back(kv_cache_num_layers);
+            reader_forward_rt_args.push_back(kv_cache_layer_idx);
+            reader_forward_rt_args.push_back(kv_cache_page_size / tt::constants::TILE_HEIGHT);
+        }
         if (fuse_op) {
             std::vector<uint32_t> reader_forward_signaler_args;
             fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
@@ -999,6 +1044,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_backward_rt_args.push_back(chunk_local_tiles);
             reader_backward_rt_args.push_back(kv_cache_num_layers);
             reader_backward_rt_args.push_back(kv_cache_layer_idx);
+        }
+        if (has_page_bundles) {
+            reader_backward_rt_args.push_back(page_bundle_indices->buffer());
+            reader_backward_rt_args.push_back(kv_cache_num_layers);
+            reader_backward_rt_args.push_back(kv_cache_layer_idx);
+            reader_backward_rt_args.push_back(kv_cache_page_size / tt::constants::TILE_HEIGHT);
         }
         if (fuse_op) {
             std::vector<uint32_t> reader_backward_signaler_args;

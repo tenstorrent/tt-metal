@@ -3925,6 +3925,197 @@ def test_ring_mla_full_mesh_rejects_invalid_topology_and_placements(expect_error
         close_ring_joint_sdpa_runtime(runtime)
 
 
+@pytest.mark.parametrize(
+    "num_logical_pages,is_chunked,page_size",
+    [(4, False, 32), (2, False, 64), (4, True, 32), (2, True, 64), (20, True, 32)],
+    ids=[
+        "full_prefill_page32",
+        "full_prefill_page64",
+        "chunked_page32",
+        "chunked_page64",
+        "chunked_prefill_20_page32",
+    ],
+)
+def test_ring_mla_nd_sharded_paged_kv_cache_noncontiguous_accuracy_and_replay(num_logical_pages, is_chunked, page_size):
+    """Read full or chunked prefill from noncontiguous bundles in each SP device's private MLA cache pool."""
+    mesh_config = MESH_CONFIG
+    if mesh_config.sp_size < 2:
+        pytest.skip("paged ring_mla requires at least two SP devices")
+
+    torch.manual_seed(20260826)
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp, tp = mesh_config.sp_size, mesh_config.tp_size
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    num_bundles, num_layers = 2 * num_logical_pages, 2
+    local_kv_seq = num_logical_pages * page_size
+    local_q_seq = local_kv_seq // 2 if is_chunked else local_kv_seq
+    global_kv_seq = local_kv_seq * sp
+    global_q_seq = local_q_seq * sp
+    local_q_heads = 4
+    global_q_heads = local_q_heads * tp
+    d_qk, d_v = 64, 32
+
+    try:
+        q_full = fa_rand(1, global_q_heads, global_kv_seq, d_qk)
+        q_start = global_kv_seq - global_q_seq
+        q = q_full[:, :, q_start:, :].contiguous()
+        natural_kv = [fa_rand(1, 1, global_kv_seq, d_qk) for _ in range(num_layers)]
+        physical_order_kv = (
+            [to_balanced_growing_cache_layout(kv, sp, global_q_seq, last_uploaded_chunk=1) for kv in natural_kv]
+            if is_chunked
+            else natural_kv
+        )
+        # Payload is indexed by private SP pool, layer, then physical bundle. The device cache stores each
+        # bundle as contiguous [layer, head] groups. Two disjoint,
+        # noncontiguous bundle sets alias the same logical pages, so replay can change both the
+        # table allocation and its values while preserving a single numerical reference.
+        payload = fa_rand(sp, num_layers, num_bundles, page_size, d_qk) * 3
+        # Odd/even pools are disjoint; coprime strides permute each pool so logical adjacency
+        # never implies physical adjacency. This scales to the production 20-bundle prefix.
+        primary_order = [2 * ((7 * i) % num_logical_pages) + 1 for i in range(num_logical_pages)]
+        replay_order = [2 * ((3 * i + 1) % num_logical_pages) for i in range(num_logical_pages)]
+        for rank in range(sp):
+            rank_start = rank * local_kv_seq
+            for layer in range(num_layers):
+                local_kv = physical_order_kv[layer][0, 0, rank_start : rank_start + local_kv_seq]
+                for logical_page, (primary_bundle, replay_bundle) in enumerate(zip(primary_order, replay_order)):
+                    page = local_kv[logical_page * page_size : (logical_page + 1) * page_size]
+                    payload[rank, layer, primary_bundle] = page
+                    payload[rank, layer, replay_bundle] = page
+        paged_kv_cache = torch.empty(sp * num_bundles * num_layers, 1, page_size, d_qk)
+        for rank in range(sp):
+            for bundle in range(num_bundles):
+                for layer in range(num_layers):
+                    flat = rank * num_bundles * num_layers + bundle * num_layers + layer
+                    paged_kv_cache[flat, 0] = payload[rank, layer, bundle]
+
+        q_dims = [None, None]
+        q_dims[sp_axis], q_dims[tp_axis] = 2, 1
+        cache_dims = [None, None]
+        cache_dims[sp_axis] = 0
+        tt_q = ttnn.from_torch(
+            q,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_dims),
+        )
+        tt_paged_kv_cache = ttnn.from_torch(
+            paged_kv_cache,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=nd_sharded_dram_memory_config(mesh_device, d_qk, page_size),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=cache_dims),
+        )
+        persistent = ttnn.from_torch(
+            torch.zeros(1, 1, global_kv_seq, d_qk),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=32,
+            k_chunk_size=32,
+            exp_approx_mode=False,
+        )
+
+        def upload_table(bundle_order):
+            table = torch.tensor(bundle_order, dtype=torch.int64).reshape(1, 1, 1, -1)
+            return ttnn.from_torch(
+                table,
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        # Keep both tensors live so the allocator cannot recycle the first address before replay.
+        tt_primary_table = upload_table(primary_order)
+        tt_replay_table = upload_table(replay_order)
+
+        def run_one(tt_table, bundle_order, layer_idx, profile=False):
+            def invoke():
+                page_size_kwargs = {} if page_size == 32 else {"kv_cache_page_size": page_size}
+                return ttnn.transformer.ring_mla(
+                    tt_q,
+                    tt_paged_kv_cache,
+                    persistent_output_buffer_kv=persistent,
+                    head_dim_v=d_v,
+                    logical_n=global_kv_seq,
+                    is_balanced=False,
+                    program_config=program_config,
+                    compute_kernel_config=runtime.compute_kernel_config,
+                    dim=2,
+                    multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                    num_links=runtime.num_links,
+                    cluster_axis=sp_axis,
+                    mesh_device=mesh_device,
+                    topology=runtime.topology,
+                    subdevice_id=runtime.worker_sub_device_id,
+                    ccl_core_grid_offset=(runtime.ccl_column, 0),
+                    use_column_major_ccl=True,
+                    kv_cache_num_layers=num_layers,
+                    kv_cache_layer_idx=layer_idx,
+                    page_bundle_indices=tt_table,
+                    **page_size_kwargs,
+                )
+
+            duration_ns = None
+            if profile:
+                durations_ns = []
+                for _ in range(5):
+                    (tt_out, _), records = profile_realtime_program(mesh_device, invoke, collect_all=True)
+                    runtime_id = records[0]["runtime_id"]
+                    durations_ns.append(
+                        int(max(record["duration_ns"] for record in records if record["runtime_id"] == runtime_id))
+                    )
+                duration_ns = sorted(durations_ns)[len(durations_ns) // 2]
+            else:
+                tt_out, _ = invoke()
+            out = ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(q_dims[0], q_dims[1])),
+            )[:, :, :global_q_seq, :d_v]
+            ref = torch_sdpa_reference(
+                q_full,
+                natural_kv[layer_idx],
+                natural_kv[layer_idx][:, :, :, :d_v],
+                is_causal=True,
+            )[:, :, q_start:, :]
+            passing, pcc = comp_pcc(ref, out, DEFAULT_PCC_THRESHOLD)
+            rmse = torch.sqrt(((ref - out) ** 2).mean()).item()
+            logger.info(f"paged ring_mla bundles={bundle_order}, layer={layer_idx}: PCC={pcc}, RMSE={rmse:.6f}")
+            assert passing, f"paged ring_mla PCC {pcc} below {DEFAULT_PCC_THRESHOLD}"
+            assert rmse < DEFAULT_RMSE_THRESHOLD, f"paged ring_mla RMSE {rmse:.6f} too high"
+            return duration_ns
+
+        profile_page_maps = (
+            num_logical_pages == 20 and is_chunked and page_size == 32 and ttnn.device.IsProgramRealtimeProfilerActive()
+        )
+        primary_duration_ns = run_one(tt_primary_table, primary_order, layer_idx=1, profile=profile_page_maps)
+        cache_entries = mesh_device.num_program_cache_entries()
+        # Same shapes and layer, but a different table allocation and values: must reuse the program
+        # while proving table-buffer patching.
+        replay_duration_ns = run_one(tt_replay_table, replay_order, layer_idx=1, profile=profile_page_maps)
+        assert mesh_device.num_program_cache_entries() == cache_entries
+        if profile_page_maps:
+            delta = abs(primary_duration_ns - replay_duration_ns) / max(primary_duration_ns, replay_duration_ns)
+            logger.info(
+                f"paged ring_mla 20-bundle device perf: primary={primary_duration_ns / 1e6:.3f} ms, "
+                f"replay={replay_duration_ns / 1e6:.3f} ms, delta={delta * 100:.2f}%"
+            )
+            assert delta < 0.10, f"paged table-map replay changed device duration by {delta * 100:.2f}%"
+        # Layer remains structural (one cached program per layer), matching the existing cache API.
+        run_one(tt_replay_table, replay_order, layer_idx=0)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 # ============================================================================
 # TRACE-SAFE METADATA PATH: metadata-path == scalar-path (bit-exact)
 # ============================================================================

@@ -14,6 +14,7 @@
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
@@ -655,11 +656,7 @@ void generate_lightweight_mask_tiles(Noc noc) {
 
 template <uint32_t tile_bytes>
 inline void fill_custom_diagonal_tile_bfp4(
-    Noc noc,
-    uint32_t cb_id,
-    uint32_t tile_id,
-    int32_t leading_diagonal_offset,
-    int32_t trailing_diagonal_offset) {
+    Noc noc, uint32_t cb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
     // Assert that we're not in a case where the entire tile should be fully masked or fully allowed
     // Those cases should be handled before calling this function
     ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
@@ -1445,12 +1442,8 @@ struct PaddedAddrGenerator {
     }
 
     void issue_writes_no_padding(
-        Noc noc,
-        const Slice& slice,
-        uint32_t src_addr,
-        uint32_t outer_stride,
-        uint32_t inner_stride,
-        uint32_t trid = 0) const {
+        Noc noc, const Slice& slice, uint32_t src_addr, uint32_t outer_stride, uint32_t inner_stride, uint32_t trid = 0)
+        const {
         issue_block_writes(
             noc,
             reader,
@@ -1468,6 +1461,83 @@ struct PaddedAddrGenerator {
 
 template <typename ReaderType, typename TensorShapeType>
 PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
+
+// Address generator for a physical page-bundle KV cache. Logical sequence tile row r selects
+// page_bundle_indices[r / page_size_tiles], then retains r % page_size_tiles within that bundle.
+// Within each bundle, the active layer's heads are contiguous, flattened as
+// (bundle * num_layers + layer) * num_heads + head. This keeps the heads read by one op on
+// consecutive round-robin DRAM banks.
+template <typename ReaderType, bool use_shard_addressing>
+struct PagedKVAddrGenerator {
+    ReaderType reader;
+    uint32_t logical_seq_len_tiles;
+    uint32_t num_heads;
+    uint32_t num_layers;
+    uint32_t layer_idx;
+    uint32_t page_size_tiles;
+    uint32_t head_dim_tiles;
+    uint32_t bundle_ids_l1_addr;
+
+    void issue_reads(
+        const Slice& slice,
+        uint32_t end_seq_tile,
+        uint32_t dst_cb_id,
+        uint32_t dst_addr,
+        uint32_t outer_stride,
+        uint32_t inner_stride,
+        uint32_t barrier_threshold) const {
+        const uint32_t bound = logical_seq_len_tiles < end_seq_tile ? logical_seq_len_tiles : end_seq_tile;
+        const uint32_t rows = slice.get_d2_size();
+        const uint32_t cols = slice.get_d3_size();
+        const uint32_t valid_rows = slice.d2_start >= bound ? 0 : std::min(rows, bound - slice.d2_start);
+        uint32_t barrier_count = 0;
+        PagedKVBundleCursor bundle_cursor;
+        bundle_cursor.reset(bundle_ids_l1_addr, slice.d2_start, page_size_tiles);
+        const uint32_t bundle_stride = num_layers * num_heads;
+        const uint32_t layer_head_offset = layer_idx * num_heads + slice.d1;
+        if constexpr (use_shard_addressing) {
+            const uint32_t tile_bytes = reader.get_aligned_page_size();
+            Noc noc;
+            for (uint32_t row = 0; row < valid_rows; ++row) {
+                const uint32_t bundle_id = bundle_cursor.physical_bundle();
+                const uint32_t flat_page = bundle_id * bundle_stride + layer_head_offset;
+                const uint64_t shard_row_noc_addr = reader.get_shard_noc_addr(
+                    flat_page, (bundle_cursor.row_in_bundle * head_dim_tiles + slice.d3_start) * tile_bytes);
+                uint32_t dst = dst_addr + row * outer_stride;
+                for (uint32_t col = 0; col < cols; ++col) {
+                    noc_async_read(shard_row_noc_addr + col * tile_bytes, dst, tile_bytes);
+                    dst += inner_stride;
+                    if (barrier_threshold > 0 && ++barrier_count == barrier_threshold) {
+                        noc.async_read_barrier();
+                        barrier_count = 0;
+                    }
+                }
+                bundle_cursor.advance_row();
+            }
+        } else {
+            // This specialization keeps non-paged programs valid when their interleaved accessor lacks
+            // get_shard_noc_addr(). Runtime dispatch never selects it unless paging is enabled.
+            for (uint32_t row = 0; row < valid_rows; ++row) {
+                const uint32_t bundle_id = bundle_cursor.physical_bundle();
+                const uint32_t flat_page = bundle_id * bundle_stride + layer_head_offset;
+                issue_block_reads(
+                    reader,
+                    (flat_page * page_size_tiles + bundle_cursor.row_in_bundle) * head_dim_tiles + slice.d3_start,
+                    head_dim_tiles,
+                    1,
+                    cols,
+                    row,
+                    dst_addr,
+                    outer_stride,
+                    inner_stride,
+                    barrier_threshold,
+                    barrier_count);
+                bundle_cursor.advance_row();
+            }
+        }
+        zero_fill_block(reader, rows - valid_rows, cols, valid_rows, dst_cb_id, dst_addr, outer_stride, inner_stride);
+    }
+};
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
 // the reserve/push sequence on the destination CB. Used by forwarding paths that mcast before pushing.

@@ -167,7 +167,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // The helper still applies the legacy even-ring topology/size gate on top, so standalone
     // callers retain their prior behavior with the default.
     bool split_forwarding_enabled = true,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    std::optional<Tensor> page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,

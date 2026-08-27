@@ -536,6 +536,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
+    const uint32_t paged_buffer_args = tensor_args.has_paged_kv_cache() ? 1 : 0;
     const bool enable_kv_chains = !args.has_sliding_window();
     const bool use_head_chain = enable_kv_chains && !gqa_grouped_kv;
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
@@ -543,9 +544,11 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
+    layout.reader_kv_cache_batch_idx =
+        kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + paged_buffer_args + 2;
     layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+                               paged_buffer_args + kReaderQWorkArgCount + head_chain_args + batch_chain_args +
+                               gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
@@ -675,7 +678,11 @@ void apply_ring_joint_scalar_runtime_args(
                 for (auto& core_args : col_args) {
                     for (uint32_t in = 0; in < num_ag_inputs; ++in) {
                         const auto& shape = ag_inputs[in]->padded_shape();
-                        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+                        const uint32_t Ht = tensor_args.has_paged_kv_cache()
+                                                ? static_cast<uint32_t>(
+                                                      tensor_args.page_bundle_indices->logical_volume() *
+                                                      (args.kv_cache_page_size / tt::constants::TILE_HEIGHT))
+                                                : shape[2] / tt::constants::TILE_HEIGHT;
                         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
                         const uint32_t valid_Ht = std::min(gather_valid_Ht, Ht);
                         const uint32_t valid_pages = valid_Ht * Wt;
@@ -1489,12 +1496,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(joint_is_sharded),
         // Slot 39: true (unpadded) joint length in tiles (twins spatial logical_nt). The reader uses it
         // to skip joint K chunks that lie entirely beyond the real joint tail (padding).
-        // Slots 40-43: transport-to-tensor rank mapping. Tensor accessors start at slot 44.
+        // Slots 40-43: transport-to-tensor rank mapping.
         logical_lt,
         static_cast<uint32_t>(rank_mapping.full_mesh),
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
+        // Slots 44-47: paged flag, layer count, layer index, and physical page height in tiles.
+        // Tensor accessors start at slot 48.
+        static_cast<uint32_t>(tensor_args.has_paged_kv_cache()),
+        args.kv_cache_num_layers,
+        args.kv_cache_layer_idx,
+        args.kv_cache_page_size / tt::constants::TILE_HEIGHT,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1529,6 +1542,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         if (kv_pad_from_metadata) {
             TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
         }
+    }
+    if (tensor_args.has_paged_kv_cache()) {
+        TensorAccessorArgs(tensor_args.page_bundle_indices->buffer()).append_to(reader_compile_time_args);
     }
 
     /**
@@ -1882,6 +1898,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    const uint32_t page_bundle_table_bytes_unaligned =
+        tensor_args.has_paged_kv_cache()
+            ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume() * sizeof(uint16_t))
+            : 32u;
+    const uint32_t page_bundle_table_bytes = round_up_to_mul32(page_bundle_table_bytes_unaligned);
+    const uint32_t cb_page_bundle_id = tensor_args.has_paged_kv_cache()
+                                           ? allocate_cb(page_bundle_table_bytes, 1, tt::DataFormat::UInt16)
+                                           : cb_kv_pad_derived;
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -1889,7 +1913,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
         cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
     const std::vector<uint32_t> reader_cb_compile_time_args = {
-        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived};
+        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived, cb_page_bundle_id};
     reader_compile_time_args.insert(
         reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
     writer_compile_time_args.insert(
@@ -2690,6 +2714,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_args.push_back(gathered_joint_tensor_k->buffer());
             reader_args.push_back(gathered_joint_tensor_v->buffer());
         }
+        if (tensor_args.has_paged_kv_cache()) {
+            reader_args.push_back(tensor_args.page_bundle_indices->buffer());
+        }
         reader_args.push_back(global_q_start);
         reader_args.push_back(global_q_end);
         reader_args.push_checked(
@@ -2926,7 +2953,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Share the split-forwarding decision derived above so the all-gather only splits when this
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
-            rank_mapping);
+            rank_mapping,
+            tensor_args.page_bundle_indices,
+            args.kv_cache_page_size);
     }
 
     return desc;

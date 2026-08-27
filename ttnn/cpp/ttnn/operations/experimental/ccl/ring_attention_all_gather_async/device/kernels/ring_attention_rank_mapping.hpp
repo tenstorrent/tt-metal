@@ -10,7 +10,7 @@
 
 namespace ttnn::ring_attention_all_gather {
 
-constexpr uint32_t kReaderFixedCompileTimeArgCount = 19;
+constexpr uint32_t kReaderFixedCompileTimeArgCount = 21;
 constexpr uint32_t kWriterFixedCompileTimeArgCount = 24;
 
 template <bool FullMesh>

@@ -38,6 +38,7 @@ struct RingJointSDPAParams {
     uint32_t latent_v_head_dim = 0;
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
+    uint32_t kv_cache_page_size = 32;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
@@ -61,6 +62,7 @@ struct RingJointSDPAParams {
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
+        uint32_t kv_cache_page_size = 32,
         std::optional<uint32_t> sliding_window_size = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
@@ -81,6 +83,7 @@ struct RingJointSDPAParams {
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
+        kv_cache_page_size(kv_cache_page_size),
         sliding_window_size(sliding_window_size) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
@@ -108,6 +111,9 @@ struct RingJointSDPAParams {
         "has_kv_cache_batch_idx",
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
+        "kv_cache_num_layers",
+        "kv_cache_layer_idx",
+        "kv_cache_page_size",
         "sliding_window_size",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
@@ -127,6 +133,9 @@ struct RingJointSDPAParams {
             kv_cache_batch_idx.has_value(),
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
+            std::cref(kv_cache_num_layers),
+            std::cref(kv_cache_layer_idx),
+            std::cref(kv_cache_page_size),
             std::cref(sliding_window_size),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
@@ -159,11 +168,23 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
+    // Paged KV path. A replicated ROW_MAJOR uint16 tensor containing the ordered
+    // physical bundle id for every logical local page. Every SP device receives
+    // the same ids but resolves them in its own cache buffer. IDs are trusted device
+    // metadata and must be smaller than the physical bundle count.
+    std::optional<Tensor> page_bundle_indices;
+
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+
+    bool has_paged_kv_cache() const { return page_bundle_indices.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
-    uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
+    uint32_t local_kv_seq_len() const {
+        return has_paged_kv_cache()
+                   ? static_cast<uint32_t>(page_bundle_indices->logical_volume() * input_k.logical_shape()[2])
+                   : static_cast<uint32_t>(input_k.logical_shape()[2]);
+    }
 
     bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
 
@@ -172,6 +193,10 @@ struct RingJointSDPAInputs {
     bool has_latent_v() const { return !input_v.has_value(); }
 
     uint32_t v_num_heads() const {
+        if (has_paged_kv_cache()) {
+            return gathered_v.has_value() ? static_cast<uint32_t>(gathered_v->logical_shape()[1])
+                                          : static_cast<uint32_t>(gathered_k.logical_shape()[1]);
+        }
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[1])
                                    : static_cast<uint32_t>(input_k.logical_shape()[1]);
     }
