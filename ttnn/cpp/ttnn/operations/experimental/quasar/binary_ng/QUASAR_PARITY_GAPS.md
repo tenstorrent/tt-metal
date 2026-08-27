@@ -259,6 +259,28 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
     counterparts (§1): the `is_scalar` branch's own row-major / `is_where_op` / `is_quant_op` checks send
     them to the descriptor.
 
+## 8. Scalar as the left operand (`add(5.0, t)`) — not ported  [PORT]
+
+Production `binary_ng` carries a `scalar_is_lhs` attribute that lets the compute kernel evaluate
+`op(scalar, tensor)` while the tensor keeps operand slot `a`. It is in the program hash (it selects a
+different compiled kernel, unlike the scalar value, which is a patchable runtime arg) and it emits a
+`SCALAR_IS_LHS` define that both scalar compute kernels read. This fork has neither the attribute nor the
+define.
+
+- **Reachability:** none today. `ttnn.experimental.quasar.<op>` exposes no scalar-first overload, so the
+  configuration cannot be requested and there is no silent-wrong path.
+- **Risk on sync:** a mechanical rebase of this fork onto the production kernels would pick up the
+  `SCALAR_IS_LHS` branches while the fork's device op never sets the attribute. The define would compile to
+  `0` and any scalar-first call arriving later would run unmirrored — `5.0 - t` returning `t - 5.0`. Silent
+  and dtype-independent, since operand order is not a numerical property.
+- **What porting needs:** the attribute plus its hash entry, the define, the activation-span inversion in
+  the program factory (the caller's spans and the op-derived `process_lhs`/`process_rhs` are both stated
+  against the mathematical operands, so both invert onto the physical DFBs), and the operand swap in both
+  scalar compute kernels. The FPU kernel needs it at the format setup and LLK init too, not just the op
+  call, because its operands are unpacked straight into srcA/srcB.
+- **Disposition:** do not sync the scalar compute kernels from production without porting the attribute in
+  the same change. Class (C) — no LLK work implied.
+
 ## Priorities
 
 1. **Fix the int32 DFB-compute bug** (§2, §7) — int32 `add`/`mul` are silent-wrong on the DFB compute path;
@@ -271,7 +293,9 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
    unary clamp path (`UnaryOpType::MAXIMUM`/`MINIMUM`), not `invoke_binary_ng`, so they never reach this
    factory and hard-throw on Quasar (`DataMovementKernel` not supported); reroute to
    `invoke_binary_ng(BinaryOpType::MAXIMUM/MINIMUM)`.
-4. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
+4. **Port `scalar_is_lhs`** (§8) — required before the scalar compute kernels are next synced from
+   production, or a scalar-first call silently returns the unmirrored result. No LLK work.
+5. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
    applies under broadcast too, not just the no-broadcast slice.
 
 ## Systemic lesson
