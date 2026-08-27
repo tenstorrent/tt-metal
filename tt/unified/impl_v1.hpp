@@ -934,6 +934,43 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, LogicalMcast mcast
     return noc_load<thread, pair>(storage, mcast.to_physical(), fn);
 }
 
+// --- custom_compute ---
+
+namespace detail {
+
+// The routine is the LAST argument, which is where it reads best, so the leading pack has
+// to be split off it. A pack cannot precede a named parameter and be deduced, so the whole
+// thing arrives as one pack and the split happens here.
+template <typename Tuple, std::size_t... I>
+constexpr bool leading_all_compute_blocks(std::index_sequence<I...>) {
+    return (is_compute_block<std::decay_t<std::tuple_element_t<I, Tuple>>>::value && ...);
+}
+
+template <typename Tuple, typename Fn, std::size_t... I>
+void custom_compute_invoke(Tuple& packed, Fn& fn, std::index_sequence<I...>) {
+    fn(std::get<I>(packed).get_cb_id()...);
+}
+
+}  // namespace detail
+
+template <typename... Ts>
+void custom_compute(Ts&&... ts) {
+    static_assert(sizeof...(Ts) >= 1, "custom_compute takes the blocks and then the routine");
+    constexpr std::size_t kBlocks = sizeof...(Ts) - 1;
+    static_assert(
+        detail::leading_all_compute_blocks<std::tuple<Ts...>>(std::make_index_sequence<kBlocks>{}),
+        "custom_compute takes ComputeBlocks first and the routine LAST -- a Storage or a Block in a "
+        "block position will not do, since only a ComputeBlock proves the buffer was waited on");
+
+    auto packed = std::forward_as_tuple(ts...);
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+    detail::custom_compute_invoke(packed, std::get<kBlocks>(packed), std::make_index_sequence<kBlocks>{});
+#else
+    // Compiled here, never called. See the contract in api.h.
+    (void)packed;
+#endif
+}
+
 // --- Runtime-argument sentinel ---
 
 template <uint32_t Count>

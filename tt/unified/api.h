@@ -21,6 +21,7 @@
 #pragma once
 
 #include <cstdint>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -613,6 +614,57 @@ ReduceNode<SB, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler);
+
+// ---------------------------------------------------------------------------
+// custom_compute -- the escape hatch
+//
+// The compute-side counterpart of noc_load's and noc_store's Fn forms: for a pass
+// this model does not express, call the LLK directly.
+//
+//     custom_compute(a, b, [&](uint32_t a_cb, uint32_t b_cb) {
+//     #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+//         // any llk / compute api, on those two buffers
+//     #endif
+//     });
+//
+// Takes any number of ComputeBlocks and a routine taking that many circular-buffer
+// ids, in the same order. Anything else in a block position is a compile error.
+//
+// WHY THE GUARD IS YOURS. The routine is only CALLED on the compute projection --
+// this does nothing on the three data-movement ones -- but its body is COMPILED on
+// all five, because a lambda's body is compiled where it is written. So every name
+// it mentions has to resolve on a data-movement build too, and most LLK entry
+// points do not. Hence the `#if` inside. Exactly the contract noc_load's Fn form
+// has, from the other side.
+//
+// WHAT THE HARNESS DOES: waits the blocks (each ComputeBlock's constructor did) and
+// pops them at the end of the enclosing scope (its destructor). That is all.
+//
+// WHAT IT DOES NOT DO, and each of these is yours:
+//
+//   * DST registers. No tile_regs_acquire/commit/wait/release around the routine --
+//     unlike Storage::store, whose strategies bracket every pass. If the routine
+//     uses DST it must bracket itself.
+//   * The output. The routine gets INPUT buffers. To produce a block, reach the
+//     destination's `Storage::cb_id`, do the reserve/pack/push by hand, and then
+//     `Block<Out>{out_storage}` is the handle a data-movement thread can drain --
+//     that constructor only records the buffer, it does not push.
+//   * PUTTING THE UNITS BACK. This is the one that bites. Unpacker, math and packer
+//     configuration is per-kernel state, and whatever the routine leaves set, the
+//     next unified op inherits. The library's own passes already live with this --
+//     every matmul re-runs matmul_block_init because a broadcast or a reduction
+//     before it reconfigured the units. A routine that reconfigures anything should
+//     leave it as it found it, or the next op returns garbage with nothing to say so.
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct is_compute_block : std::false_type {};
+
+template <typename S>
+struct is_compute_block<ComputeBlock<S>> : std::true_type {};
+
+template <typename... Ts>
+void custom_compute(Ts&&... ts);
 
 // ---------------------------------------------------------------------------
 // Reserved multicast semaphores
