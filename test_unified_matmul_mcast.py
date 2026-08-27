@@ -24,7 +24,6 @@ import ttnn
 from unified_harness import make_cb, unified_program
 
 KERNEL = "unified_kernels/matmul_mcast.cpp"
-CB_IN0, CB_IN1, CB_ACC, CB_OUT = 0, 1, 24, 16
 TILE = 32
 
 
@@ -46,17 +45,11 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
     core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_w - 1, grid_h - 1))])
     cores = [ttnn.CoreCoord(x, y) for y in range(grid_h) for x in range(grid_w)]
 
-    ct_args = []
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
     # Same args on every core: each one works out its own row/column on device.
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
+        nodes=core_ranges,
         cbs=[
             make_cb(CB_IN0, core_ranges, num_pages=rt * kt),
             make_cb(CB_IN1, core_ranges, num_pages=kt * ct),
@@ -64,8 +57,7 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
             make_cb(CB_ACC, core_ranges, num_pages=rt * ct),
             make_cb(CB_OUT, core_ranges, num_pages=rt * ct),
         ],
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
+        tensors={"in0": ta, "in1": tb, "out": tout},
         defines=[
             ("MM_RT", str(rt)),
             ("MM_CT", str(ct)),
@@ -83,7 +75,8 @@ def run(device, grid_h=2, grid_w=2, rt=2, ct=2, kt=2, k_blocks=1, mode="dst", in
         f"running unified matmul mcast: grid={grid_h}x{grid_w} rt={rt} ct={ct} kt={kt} "
         f"k_blocks={k_blocks} mode={mode}"
     )
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(device, spec, {"in0": ta, "in1": tb, "out": tout})
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)
     blocks = []

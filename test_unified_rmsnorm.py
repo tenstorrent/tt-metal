@@ -29,11 +29,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import core_block, make_cb, single_core, split_evenly, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, single_core, split_evenly, unified_program_spec
 
 KERNEL = "unified_kernels/rmsnorm.cpp"
 TILE = 32
-CB = dict(x=0, w=1, eps=2, inv_n=3, sq=4, mean=5, rsqrt=6, normed=7, out=16)
 EPS = 1.0e-2  # large enough to be representable in bfloat16 and to matter
 
 
@@ -76,35 +75,40 @@ def run(device, ht, wt, unit_weight=False, seed=0, chunk=None, cores=1):
     ncores = min(cores, nchunks)
     core_ranges, cores = core_block(ncores)
     shares = split_evenly(nchunks, ncores)
-    ct_args = []
     named_ct_args = [("ht", hc), ("wt", wt)]
-    for t in (tx, tw, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    addrs = [tx.buffer_address(), tw.buffer_address(), tout.buffer_address(), bf16_pair(EPS)]
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(cores, shares)}
 
-    cbs = [
-        make_cb(CB["x"], core_ranges, num_pages=hc * wt),
-        make_cb(CB["w"], core_ranges, num_pages=wt),
-        make_cb(CB["eps"], core_ranges, num_pages=1),
-        make_cb(CB["inv_n"], core_ranges, num_pages=1),
-        make_cb(CB["sq"], core_ranges, num_pages=hc * wt),
-        make_cb(CB["mean"], core_ranges, num_pages=hc),
-        make_cb(CB["rsqrt"], core_ranges, num_pages=hc),
-        make_cb(CB["normed"], core_ranges, num_pages=hc * wt),
-        make_cb(CB["out"], core_ranges, num_pages=hc * wt),
+    dfbs = [
+        dfb("x", hc * wt),
+        dfb("w", wt),
+        dfb("eps", 1),
+        dfb("inv_n", 1),
+        dfb("sq", hc * wt),
+        dfb("mean", hc),
+        dfb("rsqrt", hc),
+        dfb("normed", hc * wt),
+        dfb("out", hc * wt),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"x": tx, "w": tw, "out": tout},
+        runtime_arg_names=["eps_bits", "chunk_begin", "chunk_count"],
     )
-    out = ttnn.generic_op([tx, tw, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"x": tx, "w": tw, "out": tout},
+        runtime_args={
+            "eps_bits": bf16_pair(EPS),
+            "chunk_begin": {c: b for c, (b, _) in zip(cores, shares)},
+            "chunk_count": {c: n for c, (_, n) in zip(cores, shares)},
+        },
+        nodes=cores,
+    )
+    out = tout
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     xf = x.to(torch.float32)

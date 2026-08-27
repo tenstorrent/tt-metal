@@ -35,7 +35,6 @@ import ttnn
 from unified_harness import make_cb, single_core, unified_program
 
 KERNEL = "unified_kernels/bcast.cpp"
-CB_BLOCK, CB_VEC, CB_TMP, CB_OUT = 0, 1, 2, 16
 TILE = 32
 
 OPS = {"add": lambda a, b: a + b, "sub": lambda a, b: a - b, "mul": lambda a, b: a * b}
@@ -84,11 +83,7 @@ def run(device, op, axis, ht=2, wt=3, then_sfpu=False, seed=0):
     )
 
     core_ranges, cores = single_core()
-    ct_args = []
     named_ct_args = [("ht", ht), ("wt", wt)]
-    for t in (ta, tv, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [ta.buffer_address(), tv.buffer_address(), tout.buffer_address()]
 
     vec_pages = {"Rows": wt, "Cols": ht, "Both": 1}[axis]
     cbs = [
@@ -97,18 +92,17 @@ def run(device, op, axis, ht=2, wt=3, then_sfpu=False, seed=0):
         make_cb(CB_OUT, core_ranges, num_pages=ht * wt),
     ] + ([make_cb(CB_TMP, core_ranges, num_pages=ht * wt)] if then_sfpu else [])
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"block": ta, "vec": tv, "out": tout},
         defines=[(f"BC_AXIS_{axis.upper()}", "1"), (f"BC_OP_{op.upper()}", "1")]
         + ([("BC_THEN_SFPU", "1")] if then_sfpu else []),
     )
-    out = ttnn.generic_op([ta, tv, tout], program)
+    run_unified_spec(device, spec, {"block": ta, "vec": tv, "out": tout})
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
     want = reference(op, axis, a.to(torch.float32)[0, 0], vals.to(torch.float32))

@@ -36,14 +36,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/attention.cpp"
 TILE = 32
 
-CB = dict(
-    q=0, k=1, v=2, mask=3, one=4, scale=5, scores=6, scaled=7, masked=8, rowmax=9, exp=10, recip=11, prob=12, out=16
-)
 
 # A MODEST negative additive mask. -inf and -1e4 are both wrong here: the SFPU's exp has a
 # finite input domain and exp(-1e4 - rowmax) leaves it rather than underflowing to zero.
@@ -85,43 +82,46 @@ def run(device, sq, sk, dt, causal=True, seed=0):
     tout = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, S_q, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, dram)
 
     core_ranges, cores = single_core()
-    ct_args = []
     named_ct_args = [("sq", sq), ("sk", sk), ("dt", dt)]
-    for t in (tq, tk, tv, tmask, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
     # 1/sqrt(head dim) as a packed bfloat16 pair -- the kernel toolchain has no sqrtf, and
     # fill_reduce_scaler writes raw 32-bit words, so bfloat16 means two values per word.
     scale = 1.0 / (D**0.5)
     bits = int(torch.tensor([scale], dtype=torch.bfloat16).view(torch.uint16)[0])
     rt_args = [x.buffer_address() for x in (tq, tk, tv, tmask, tout)] + [(bits << 16) | bits]
 
-    cbs = [
-        make_cb(CB["q"], core_ranges, num_pages=sq * dt),
-        make_cb(CB["k"], core_ranges, num_pages=dt * sk),
-        make_cb(CB["v"], core_ranges, num_pages=sk * dt),
-        make_cb(CB["mask"], core_ranges, num_pages=sq * sk),
-        make_cb(CB["one"], core_ranges, num_pages=1),
-        make_cb(CB["scale"], core_ranges, num_pages=1),
-        make_cb(CB["scores"], core_ranges, num_pages=sq * sk),
-        make_cb(CB["scaled"], core_ranges, num_pages=sq * sk),
-        make_cb(CB["masked"], core_ranges, num_pages=sq * sk),
-        make_cb(CB["rowmax"], core_ranges, num_pages=sq),
-        make_cb(CB["exp"], core_ranges, num_pages=sq * sk),
-        make_cb(CB["recip"], core_ranges, num_pages=sq),
-        make_cb(CB["prob"], core_ranges, num_pages=sq * sk),
-        make_cb(CB["out"], core_ranges, num_pages=sq * dt),
+    dfbs = [
+        dfb("q", sq * dt),
+        dfb("k", dt * sk),
+        dfb("v", sk * dt),
+        dfb("mask", sq * sk),
+        dfb("one", 1),
+        dfb("scale", 1),
+        dfb("scores", sq * sk),
+        dfb("scaled", sq * sk),
+        dfb("masked", sq * sk),
+        dfb("row_max", sq),
+        dfb("exp", sq * sk),
+        dfb("recip", sq),
+        dfb("prob", sq * sk),
+        dfb("out", sq * dt),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"q": tq, "k": tk, "v": tv, "mask": tmask, "out": tout},
+        runtime_arg_names=["scale_bits"],
     )
-    out = ttnn.generic_op([tq, tk, tv, tmask, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        {"q": tq, "k": tk, "v": tv, "mask": tmask, "out": tout},
+        runtime_args={"scale_bits": (bits << 16) | bits},
+        nodes=cores,
+    )
+    out = tout
     got = ttnn.to_torch(out).to(torch.float32)[0, 0]
 
     # Reference, in fp32 from the same bfloat16 inputs the device saw.
