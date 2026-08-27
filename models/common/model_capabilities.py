@@ -17,6 +17,33 @@ class ModelCapabilitiesMixin:
     NOTE: The default values here and per-model overrides will eventually be
     unified with the corresponding vLLM scheduler configuration so that both
     paths derive from the same source of truth.
+
+    Generator classes also carry a class-level ``model_capabilities`` dict that
+    the vLLM TT plugin reads off the resolved bridge class at config time. A
+    subclass dict replaces the inherited one rather than merging into it, so an
+    absent key means "not supported" and no reader assumes otherwise. Recognized
+    keys:
+
+    ``supports_prefix_caching`` (bool)
+        The generator accepts a nonzero ``start_pos`` for a prompt whose prefix
+        is already in the KV cache.
+    ``supports_async_decode`` (bool)
+        ``decode_forward(..., read_from_device=False)`` followed by
+        ``read_decode_output(..., async_read=True)`` is implemented, so the
+        engine may overlap scheduling with device execution.
+    ``supports_sample_on_device`` (bool)
+        The full on-device sampling pipeline is implemented.
+    ``supports_chunked_prefill`` (bool)
+        One prompt may be prefilled across several engine steps. Independent of
+        ``supports_prefix_caching``: both make the scheduler hand the generator a
+        nonzero ``start_pos``, and either one is enough to need the resume
+        plumbing, but they gate on different validation.
+    ``resumed_prefill_token_alignment`` (positive int)
+        The ``q_chunk_size`` the model's chunked-SDPA program is built with.
+        Required only of a model whose ``model_args`` exposes no
+        ``get_attn_sdpa_program_config`` for the generator to read it from, and
+        read only by the generator: the plugin never needs it, because the
+        generator floors every resume offset itself.
     """
 
     @classmethod
