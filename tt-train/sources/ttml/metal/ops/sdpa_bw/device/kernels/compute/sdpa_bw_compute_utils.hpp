@@ -287,8 +287,10 @@ void compute_grad_scores(
 // cb_attention_weights, which mul_binary_tile leaves intact), and dS is produced in DST —
 // so both are transposed in place with the 32-bit transpose_dest and packed directly.
 // This removes the former pack->CB->unpack roundtrip per transpose (transpose_tile_fpu)
-// from the inner loop; the transposes are lossless permutations of FP32 DST values, so
-// results are bit-identical to the roundtrip path.
+// from the inner loop. The transposes are lossless permutations of FP32 DST values, so
+// results are bit-identical to the UnpackToDestFp32 roundtrip path this replaces — that
+// path was already exact; the precision gain over the original TF32-SrcA transposes came
+// from the earlier UnpackToDestFp32 change, not from this restructuring.
 //
 // transpose_dest_init records math replay-buffer slots [16,32) and reprograms the math
 // MOP/addr-mods. That is safe here: every MOP-driven op of this region (bcast sub,
