@@ -955,6 +955,33 @@ KNOBS = {
     # at plain ON-36 (fix cc1plus byte-inert knobs-off).
     "crossrow-2datum": "-mtt-tensix-optimize-hoisted-prgm-reuse "
     "-mtt-tensix-optimize-crossrow-pairing-stall-words",
+    # ID (loop-prgm-reclaim, lane ID 2026-08-27): the trigonometry
+    # loadi-gap attack (HW row A7; GV's named PRGM/LREG capacity
+    # ceiling).  -mtt-tensix-optimize-loop-prgm-reclaim Init(0) offers
+    # lane IC's DEAD-claim reclaim placement tier to the const-residency
+    # walk's own IN-LOOP candidate classes (LOOP / CC-canonical peel /
+    # pressure-park post-CC admission): a claimed PRGM slot no statement
+    # in the TU ever reads (typed sfpreadlreg census; raw words closed
+    # by the audited table) is reprogrammed with the loop's own constant
+    # at the established loop programming point.  Window proof: the loop
+    # admission already excludes calls/asm from the body
+    # (opaque-hoist-region); a crossloop- or cc-lifted entry refuses by
+    # name (loop-reclaim-call-window) since its wider window is unproven
+    # here; a same-value candidate landing on a reclaimed slot re-proves
+    # its own window and always reprograms (the dead claim's foreign
+    # writer makes cross-window persistence unprovable).  Under the flag
+    # the loop-class selection prices same-value candidates jointly
+    # (rank key = the value's total saved issue words).  The trig
+    # anatomy: the fresh body keeps every constant local (storm
+    # contract) while the shared production init_inverse_hyperbolic
+    # claims PRGM 12-14 with log1p_init constants NOTHING in the sem TU
+    # reads; 10 in-loop candidates refused prgm-exhausted at 8/8
+    # pressure.  Under the knob: L12 TU value-identical reuse
+    # (ln2*2^-23), L13 reclaims 0x3f000000 (both 16128 loadis), L14
+    # reclaims the 2-word fp32 ln2 -> row 79 -> 76 words, 13 -> 11
+    # in-loop loadi (hand 77/12: word parity flipped).  Hand arm and
+    # flag-off bytes identical; measured note follows the silicon legs.
+    "loop-prgm-reclaim": "-mtt-tensix-optimize-loop-prgm-reclaim",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1295,6 +1322,7 @@ KNOB_MODES = {
     # ceremony.
     "crossrow-pairing-seed": "on-plus",
     "crossrow-2datum": "on-plus",
+    "loop-prgm-reclaim": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
