@@ -1710,3 +1710,59 @@ diagnostics that earned a fix.
 | Sub-module bisection of one decode step | `..._decode_bisection` | 1 | **PASS**. embedding 1.0, attn norm 0.99999, attn out 0.99975, MLP 0.99980, logits 0.99975 |
 | Runner + paged KV, one layer | `demo.py::..._direct_demo_batch1` (1 layer) | 1 | **PASS**. Real text emitted; paged decode works |
 | Mesh partition health | `test_partition_wh_galaxy.py` | (attempt 2) | 5 passed; re-verified by every mesh open here |
+
+## A3.12 Final verdict, with the log behind every line
+
+Verified by re-reading the logs, not from memory, at 16:53 UTC.
+
+| `job1_llama.md` finish condition | Evidence | Result |
+| --- | --- | --- |
+| One Llama block, **decode**, PCC >= 0.99 | `logs3/a3_32,33,34` — 0.9997463458407887, three fresh processes, identical | **MET** |
+| One Llama block, **prefill**, PCC >= 0.99 | `logs3/a3_32,33,34` — 0.999584002863212 at 128; `a3_35,36,37` — 0.9996201066107949 at 2048; three fresh processes each | **MET** |
+| **KV-cache** PCC >= 0.99 | `logs3/a3_32..34` — after prefill K 0.9999347766610057 / V 0.9997498179150203; after decode K 0.9999342257320987 / V 0.9997493345003990; all four column-local users | **MET** |
+| 80-layer model producing **coherent demo output** | `logs3/a3_45,49,50` — identical fluent English, three fresh processes; `a3_51` — 32 slots, 8 distinct coherent continuations | **MET** |
+| **Teacher-forced accuracy** measured and recorded | `logs3/a3_44,47,48` — top-1 501/511 = 0.9804 (gate 0.91), top-5 511/511 = 1.0000 (gate 0.99), three fresh processes, identical counts | **MET**, and both gates **pass** |
+| Handoff written | `tttv2_milestone_b_briefs/job1_completion_handoff_attempt3.md` | **MET** |
+
+Regression gates, as the brief requires, before finishing:
+
+```text
+host        565 passed, exit 0                     logs3/a3_61_host_gate.log
+_1d.py      git diff 45efb7c10e8..HEAD -> EMPTY
+llm_runtime git diff 45efb7c10e8..HEAD -> EMPTY
+qwen        git diff 45efb7c10e8..HEAD -> EMPTY    (the brief forbids touching Qwen)
+```
+
+Mesh left clean: 32 `/dev/tenstorrent` nodes, no pytest holding a device, no
+`tt-smi` running, last reset `Re-initialized 32 boards after reset`. Working tree
+has no uncommitted tracked changes; 17 commits on
+`apbernal/tttv2_wh_glx_2d_modules_milestone_b`.
+
+**One item of step 3's scope is not met and is reported rather than worked around:**
+two runners in one process (`test_llama33_70b_galaxy_batch32_slots_are_isolated`),
+which is limitation L1's remaining half. Its obvious fix is implemented, default
+off, and **refuted on hardware** — §A3.6. Batch 32 itself is met through a single
+runner.
+
+### What this milestone should take from the shape of attempt 3
+
+Three nights, three very different failure modes, one pattern. Attempt 1 found
+placement faults and lost the mesh. Attempt 2 found sub-device faults and a hang.
+Attempt 3 found that **the measurement apparatus was broken in two places that
+produced no error at all** — logits composed along the wrong mesh axis and then
+silently narrowed, and an MLP confidently reading another op's weights — on top of
+the reference loader attempt 2 caught returning a length-1 sequence so the accuracy
+gate could only skip.
+
+Every one of those would have survived a green test run. Two of them would have
+produced a *plausible* number. The gate that this job exists to produce is
+`top-1 >= 91%`, and a broken composition would have produced something in the
+sixties — low enough to look like a real precision problem and send the next
+session after norm epsilons and RoPE scaling factors, which is exactly what the
+brief lists as the "usual causes" to check when the gate misses.
+
+The transferable rule is the one in the handoff: **make the thing that produces a
+number prove itself before you believe the number.** The three cheapest diagnostics
+of the night were all of that kind and none needed a device run to design — apply
+the reference's own module to the device's own intermediate; compare a tensor at
+more than one window; report every user, not user 0.

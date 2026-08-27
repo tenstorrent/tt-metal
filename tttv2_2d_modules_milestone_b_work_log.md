@@ -963,3 +963,25 @@ Evidence: `tttv2_milestone_b_evidence/llama/REPORT.md` §"Attempt 3", run-by-run
   `*_1d.py`, no `llm_runtime`; both greps empty. No test deleted, `xfail`ed or
   weakened — three host assertions were *corrected*, each with the device abort
   that refuted it quoted against it.
+- **Step 3 is met too, and measured three times each.** The full 80-layer model
+  prefills 128 real reference tokens and decodes one more, both predictions inside
+  the reference model's top-5; the **Milestone B teacher-forced accuracy gate for
+  Llama passes at top-1 501/511 = 98.04% (gate 91%) and top-5 511/511 = 100.00%
+  (gate 99%)**, identical counts across three fresh processes; and the 80-layer
+  demo produces fluent English at batch 1 and on all 32 slots of the physical batch
+  ("A tensor is a multi-dimensional array of numerical values, similar to a
+  matrix,"), with slot 0 character-identical served alone or alongside 31 others.
+  Host regression gate 565 passed, exit 0.
+- **One step-3 item is not met and is reported, not worked around.** Two runners in
+  one process fails: the second prefills after the first decoded, and the
+  prefetcher's global circular buffer is resident again — limitation L1's remaining
+  half, which `defer_global_cb` narrowed rather than removed. Its obvious fix
+  (release on prefill, recreate on decode) is implemented behind a default-off flag
+  and **refuted on hardware**: the release runs and the L1 is not returned, because
+  a `global_circular_buffer` has no `deallocate`. The better hypothesis — confine
+  the prefill mode plan to the worker cores so a full-grid prefill program never
+  needs the sender columns — is written down for the next session, along with the
+  re-validation it implies.
+- **Paged decode works on this partition**, which closes the step-3/step-7
+  dependency attempt 2 recorded: `from_pretrained` has no contiguous option, so
+  every 80-layer path is paged whether step 3 wants it or not.
