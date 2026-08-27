@@ -44,8 +44,9 @@ void kernel_main() {
         return;
     }
 
-    overlay::FdsDispatch::fds_config_auto_dispatch(
-        /*enable=*/true, auto_dispatch_cycles, TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
+    overlay::FdsDispatch::fds_config_auto_dispatch_pacing(auto_dispatch_cycles);
+    overlay::FdsDispatch::fds_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
+    overlay::FdsDispatch::fds_enable_auto_dispatch();
 
     for (uint32_t i = 0; i < burst_length; i++) {
         if (i == burst_length - 1) {
@@ -57,8 +58,10 @@ void kernel_main() {
     const bool recorded = fds_kernel::wait_group_count_nonzero(kTokenRecorded, poll_iterations);
 
     // Back to the direct path: the wire falls back to the output register, which still holds the
-    // session go, so clear it once the direct path is active again.
-    overlay::FdsDispatch::fds_config_auto_dispatch(/*enable=*/false, 0, 0);
+    // session go, so clear it once the direct path is active again. The pacing is left alone: the
+    // counter is mid-interval after the burst, and a cycle count it has already passed would
+    // strand the queue until a 32 bit wrap.
+    overlay::FdsDispatch::fds_disable_auto_dispatch();
     overlay::FdsDispatch::fds_clear_go();
 
     fds_kernel::finish(status, l1_address, kNumSlots, recorded ? kComplete : kTimeoutRecorded);

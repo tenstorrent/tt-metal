@@ -53,8 +53,9 @@ void kernel_main() {
     if (result == kComplete) {
         // The outbox holds the OFFSET-form address; the write below goes to the ADDR form. The
         // trigger comparison must miss, so nothing may reach the wire.
-        overlay::FdsDispatch::fds_config_auto_dispatch(
-            /*enable=*/true, auto_dispatch_cycles, TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_OFFSET);
+        overlay::FdsDispatch::fds_config_auto_dispatch_pacing(auto_dispatch_cycles);
+        overlay::FdsDispatch::fds_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_OFFSET);
+        overlay::FdsDispatch::fds_enable_auto_dispatch();
         overlay::FdsDispatch::fds_go(/*ad_enable=*/true, kMismatchedGo);
 
         if (!fds_kernel::wait_group_count_nonzero(kTokenSilenceChecked, poll_iterations)) {
@@ -64,9 +65,9 @@ void kernel_main() {
 
     if (result == kComplete) {
         // The same write with the outbox holding the ADDR form: now the trigger matches and the
-        // value must be delivered.
-        overlay::FdsDispatch::fds_config_auto_dispatch(
-            /*enable=*/true, auto_dispatch_cycles, TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
+        // value must be delivered. Only the outbox moves; the feature stays enabled and the
+        // pacing is not rewritten.
+        overlay::FdsDispatch::fds_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
         overlay::FdsDispatch::fds_go(/*ad_enable=*/true, kMatchedGo);
 
         if (!fds_kernel::wait_group_count_nonzero(kTokenDelivered, poll_iterations)) {
@@ -75,8 +76,9 @@ void kernel_main() {
     }
 
     // Back to the direct path; the output register collected the mismatched write, so clear it
-    // once the direct path is active again.
-    overlay::FdsDispatch::fds_config_auto_dispatch(/*enable=*/false, 0, 0);
+    // once the direct path is active again. The outbox stays on the output bus and the pacing is
+    // left alone: the counter is mid-interval after the delivered go.
+    overlay::FdsDispatch::fds_disable_auto_dispatch();
     overlay::FdsDispatch::fds_clear_go();
 
     fds_kernel::finish(status, l1_address, kNumSlots, result);

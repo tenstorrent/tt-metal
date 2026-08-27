@@ -30,8 +30,9 @@ void kernel_main() {
     // Zero the output register before switching modes: it is the value the wire falls back to when
     // the queue is disabled again, and the stale-readback check below needs a known value in it.
     overlay::FdsNeo::fds_clear_done();
-    overlay::FdsNeo::fds_config_auto_dispatch(
-        /*enable=*/true, auto_dispatch_cycles, TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
+    overlay::FdsNeo::fds_config_auto_dispatch_pacing(auto_dispatch_cycles);
+    overlay::FdsNeo::fds_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
+    overlay::FdsNeo::fds_enable_auto_dispatch();
 
     overlay::FdsNeo::fds_done(/*ad_enable=*/true, group_id);
 
@@ -53,11 +54,10 @@ void kernel_main() {
         }
     }
 
-    // Leave the outbox on the output bus rather than zeroing it: zero is the address of input
-    // register 0, so a later enable that ran before reprogramming the outbox would divert a
-    // go-clearing write into the queue and emit it as an outgoing done.
-    overlay::FdsNeo::fds_config_auto_dispatch(
-        /*enable=*/false, 0, TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
+    // Back to the direct path. The outbox stays parked on the output bus, and the pacing is left
+    // alone: the counter is mid-interval after the release above, and a cycle count it has
+    // already passed would strand the queue until a 32 bit wrap.
+    overlay::FdsNeo::fds_disable_auto_dispatch();
 
     fds_kernel::finish(status, l1_address, kNumSlots, result);
 }

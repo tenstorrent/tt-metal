@@ -56,18 +56,26 @@ inline status_ptr begin_dispatch(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
     // Auto dispatch is disabled defensively: a kernel that died between enabling it and its
     // teardown would leave the output multiplexer on the queue path, turning every later direct
-    // write on this engine into silence far from the fault.
-    overlay::FdsDispatch::fds_config_auto_dispatch(/*enable=*/false, 0, 0);
+    // write on this engine into silence far from the fault. The outbox parks on the output bus,
+    // so that even a mistimed enable diverts only writes that were headed for the wire anyway.
+    // This is everything software can reset. The pacing counter is unreachable and keeps running
+    // across kernels, and one test process shares one device, so pacing state from an earlier
+    // test is still live here. The pacing register is therefore left alone: writing it while the
+    // counter is mid-interval strands the queue until a 32 bit wrap.
+    overlay::FdsDispatch::fds_disable_auto_dispatch();
+    overlay::FdsDispatch::fds_config_auto_dispatch_outbox(TT_FDS_DISPATCH_DISPATCH_TO_TENSIX_REG_ADDR);
     overlay::FdsDispatch::fds_config_filter_length(kNoDeglitchFilter);
     return status;
 }
 
 inline status_ptr begin_worker(uint32_t l1_address, uint32_t num_slots) {
     status_ptr status = begin(l1_address, num_slots);
-    // Same defensive disable as begin_dispatch. The outbox parks on the output bus rather than
-    // zero: on this map zero is input register 0, and a stale zero outbox under a mistimed enable
-    // would divert a status-clearing write into the queue and emit it as an outgoing done.
-    overlay::FdsNeo::fds_config_auto_dispatch(/*enable=*/false, 0, TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
+    // Same defensive disable as begin_dispatch, and the same limit on what it can reset. The
+    // outbox park matters more on this map: zero is input register 0, and a stale zero outbox
+    // under a mistimed enable would divert a status-clearing write into the queue and emit it as
+    // an outgoing done.
+    overlay::FdsNeo::fds_disable_auto_dispatch();
+    overlay::FdsNeo::fds_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
     overlay::FdsNeo::fds_config_filter_length(kNoDeglitchFilter);
     return status;
 }
