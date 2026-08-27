@@ -93,7 +93,7 @@ export OUTPUT_PATH="${OUTPUT_PATH:-$HOME/ltx25_diffvae_1080p.mp4}"
 export DIFFVAE_GNA=${DIFFVAE_GNA:-1}
 # 73 OOMs on the W-SP path: band 0 spans 78 frames -> the full-W K/V gather is 651.8 MB/bank against
 # a 582.2 MB largest free block. 48 -> band 53 -> 442.9 MB/bank. (~8.36 MB/bank per band frame.)
-export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-73} # changing to 48 fixes the issue!!
+export DIFFVAE_SLAB_FRAMES=${DIFFVAE_SLAB_FRAMES:-78} # changing to 48 fixes the issue!!
 export DIFFVAE_BLOCK=${DIFFVAE_BLOCK:-1}
 export DIFFVAE_SP_FUSED=${DIFFVAE_SP_FUSED:-1}
 export DIFFVAE_STAGES_WSP=${DIFFVAE_STAGES_WSP:-1}

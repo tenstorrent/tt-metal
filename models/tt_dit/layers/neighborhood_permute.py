@@ -44,6 +44,8 @@ extents (2, 4, 4) on the tiled axes and each pads out to 32.
 
 from __future__ import annotations
 
+import math
+
 import ttnn
 
 #: Sites in one brick, i.e. rows in one hardware tile.
@@ -71,10 +73,22 @@ def padded_volume(volume: tuple[int, int, int], brick: tuple[int, int, int]) -> 
     )
 
 
+def brick_grid(volume: tuple[int, int, int], brick: tuple[int, int, int]) -> tuple[int, int, int]:
+    """``(T_br, H_br, W_br)`` -- how many bricks along each axis, after ghost padding."""
+    padded_time, padded_height, padded_width = padded_volume(volume, brick)
+    return padded_time // brick[0], padded_height // brick[1], padded_width // brick[2]
+
+
 def brick_count(volume: tuple[int, int, int], brick: tuple[int, int, int]) -> int:
     """How many bricks -- and therefore how many tiles of sites -- the volume occupies."""
-    time_extent, height_extent, width_extent = padded_volume(volume, brick)
-    return (time_extent // brick[0]) * (height_extent // brick[1]) * (width_extent // brick[2])
+    return math.prod(brick_grid(volume, brick))
+
+
+def sites_per_t_brick(volume: tuple[int, int, int], brick: tuple[int, int, int]) -> int:
+    """Sites in one T-brick slab: ``H_br * W_br * 32``. A T-range is a contiguous slice
+    of a bricked tensor iff its bounds are multiples of ``brick[0]``."""
+    _, bricks_height, bricks_width = brick_grid(volume, brick)
+    return bricks_height * bricks_width * SITES_PER_BRICK
 
 
 def _require_row_major(tensor: ttnn.Tensor, function_name: str) -> None:
@@ -85,21 +99,21 @@ def _require_row_major(tensor: ttnn.Tensor, function_name: str) -> None:
         )
 
 
-def to_bricked(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tuple[int, int, int]) -> ttnn.Tensor:
-    """``[batch, time, height, width, channels]`` -> ``[batch, sites_bricked, channels]``.
+def to_bricked_grid(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tuple[int, int, int]) -> ttnn.Tensor:
+    """``[batch, time, height, width, channels]`` -> ``[batch, T_br, H_br, W_br, 32*channels]``.
 
-    ``sites_bricked`` is ``brick_count(volume, brick) * SITES_PER_BRICK``, which exceeds
-    ``time * height * width`` when the volume does not divide into whole bricks. Those ghost
-    sites are zero. They are never inside any context window -- window placement uses the
-    true ``volume`` -- but they do sit inside edge bricks, so a whole-brick read will pull
-    them and the kernel must mask them out.
+    Brick index is outermost, row-major -- the same order as the flattened form, but with
+    ``T_br`` and ``W_br`` still as axes. That is what lets a W halo exchange be ``neighbor_pad``
+    on dim 3 (whole bricks, no permute) and a T-band slice be a contiguous cut on dim 1,
+    provided the band bounds are multiples of ``brick[0]``.
     """
-    _require_row_major(tensor, "to_bricked")
+    _require_row_major(tensor, "to_bricked_grid")
 
     batch_count = tensor.shape[0]
     channel_count = tensor.shape[-1]
     brick_time, brick_height, brick_width = brick
     padded_time, padded_height, padded_width = padded_volume(volume, brick)
+    bricks_t, bricks_h, bricks_w = brick_grid(volume, brick)
 
     # Ghost sites are appended by concatenating zeros rather than with ttnn.pad: pad only
     # reaches the lowest 3 dimensions of a rank>4 tensor, and the time axis (dim 1 here) is
@@ -118,11 +132,11 @@ def to_bricked(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tupl
         tensor,
         (
             batch_count,
-            padded_time // brick_time,
+            bricks_t,
             brick_time,
-            padded_height // brick_height,
+            bricks_h,
             brick_height,
-            padded_width // brick_width,
+            bricks_w,
             brick_width,
             channel_count,
         ),
@@ -130,29 +144,45 @@ def to_bricked(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tupl
     bricks_outermost = ttnn.permute(split_into_bricks, _TO_BRICKED_ORDER)
     return ttnn.reshape(
         bricks_outermost,
-        (batch_count, brick_count(volume, brick) * SITES_PER_BRICK, channel_count),
+        (batch_count, bricks_t, bricks_h, bricks_w, SITES_PER_BRICK * channel_count),
     )
 
 
-def to_natural(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tuple[int, int, int]) -> ttnn.Tensor:
-    """``[batch, sites_bricked, channels]`` -> ``[batch, time, height, width, channels]``.
+def to_bricked(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tuple[int, int, int]) -> ttnn.Tensor:
+    """``[batch, time, height, width, channels]`` -> ``[batch, sites_bricked, channels]``.
 
-    Exact inverse of :func:`to_bricked`, ghost sites cropped back off.
+    ``sites_bricked`` is ``brick_count(volume, brick) * SITES_PER_BRICK``, which exceeds
+    ``time * height * width`` when the volume does not divide into whole bricks. Those ghost
+    sites are zero. They are never inside any context window -- window placement uses the
+    true ``volume`` -- but they do sit inside edge bricks, so a whole-brick read will pull
+    them and the kernel must mask them out.
     """
-    _require_row_major(tensor, "to_natural")
+    grid = to_bricked_grid(tensor, volume=volume, brick=brick)
+    batch_count = grid.shape[0]
+    channel_count = grid.shape[-1] // SITES_PER_BRICK
+    return ttnn.reshape(grid, (batch_count, brick_count(volume, brick) * SITES_PER_BRICK, channel_count))
+
+
+def from_bricked_grid(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tuple[int, int, int]) -> ttnn.Tensor:
+    """``[batch, T_br, H_br, W_br, 32*channels]`` -> ``[batch, time, height, width, channels]``.
+
+    Exact inverse of :func:`to_bricked_grid`, ghost sites cropped back off.
+    """
+    _require_row_major(tensor, "from_bricked_grid")
 
     batch_count = tensor.shape[0]
-    channel_count = tensor.shape[-1]
+    channel_count = tensor.shape[-1] // SITES_PER_BRICK
     brick_time, brick_height, brick_width = brick
     padded_time, padded_height, padded_width = padded_volume(volume, brick)
+    bricks_t, bricks_h, bricks_w = brick_grid(volume, brick)
 
     split_into_bricks = ttnn.reshape(
         tensor,
         (
             batch_count,
-            padded_time // brick_time,
-            padded_height // brick_height,
-            padded_width // brick_width,
+            bricks_t,
+            bricks_h,
+            bricks_w,
             brick_time,
             brick_height,
             brick_width,
@@ -165,3 +195,20 @@ def to_natural(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tupl
     if (padded_time, padded_height, padded_width) != tuple(volume):
         natural = natural[:, : volume[0], : volume[1], : volume[2], :]
     return natural
+
+
+def to_natural(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick: tuple[int, int, int]) -> ttnn.Tensor:
+    """``[batch, sites_bricked, channels]`` -> ``[batch, time, height, width, channels]``.
+
+    Exact inverse of :func:`to_bricked`, ghost sites cropped back off.
+    """
+    _require_row_major(tensor, "to_natural")
+
+    batch_count = tensor.shape[0]
+    channel_count = tensor.shape[-1]
+    bricks_t, bricks_h, bricks_w = brick_grid(volume, brick)
+    grid = ttnn.reshape(
+        tensor,
+        (batch_count, bricks_t, bricks_h, bricks_w, SITES_PER_BRICK * channel_count),
+    )
+    return from_bricked_grid(grid, volume=volume, brick=brick)

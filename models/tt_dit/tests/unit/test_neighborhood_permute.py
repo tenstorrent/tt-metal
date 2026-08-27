@@ -10,15 +10,20 @@ together, so if they ever disagree the kernel reads the wrong keys and still pro
 plausible-looking video. That test is the pin.
 """
 
+import math
+
 import pytest
 import torch
 
 import ttnn
 from models.tt_dit.layers.neighborhood_permute import (
+    _TO_BRICKED_ORDER,
     SITES_PER_BRICK,
     brick_count,
+    brick_grid,
     padded_volume,
     to_bricked,
+    to_bricked_grid,
     to_natural,
 )
 
@@ -73,6 +78,91 @@ def test_brick_count_matches_padded_volume():
     assert brick_count((8, 12, 12), CUBIC_BRICK) == (8 // 2) * (12 // 4) * (12 // 4)
     assert brick_count(LTX_STAGE5_VOLUME, CUBIC_BRICK) == 13 * 68 * 120
     assert brick_count(LTX_STAGE5_VOLUME, FLAT_TIME_BRICK) == 25 * 68 * 60
+    assert brick_grid((8, 12, 12), CUBIC_BRICK) == (4, 3, 3)
+    assert brick_grid(LTX_STAGE5_VOLUME, CUBIC_BRICK) == (13, 68, 120)
+
+
+def torch_to_bricked_grid(natural: torch.Tensor, brick: tuple[int, int, int]) -> torch.Tensor:
+    """Host twin of ``to_bricked_grid`` for volumes that already divide into whole bricks."""
+    batch, time_extent, height_extent, width_extent, channels = natural.shape
+    brick_time, brick_height, brick_width = brick
+    bricks_t, bricks_h, bricks_w = brick_grid((time_extent, height_extent, width_extent), brick)
+    split = natural.reshape(batch, bricks_t, brick_time, bricks_h, brick_height, bricks_w, brick_width, channels)
+    return split.permute(*_TO_BRICKED_ORDER).reshape(batch, bricks_t, bricks_h, bricks_w, SITES_PER_BRICK * channels)
+
+
+def test_grid_form_is_a_reshape_of_the_flat_form():
+    """``(b, T_br, H_br, W_br, 32*C)`` is the same memory as ``(b, sites, C)``.
+
+    That reshape is the whole enabler: T_br and W_br stay genuine axes, so a halo exchange
+    and a T-band slice do not need another permute.
+    """
+    brick = (8, 2, 2)
+    volume = (16, 8, 8)
+    channels = 4
+    natural = torch.arange(math.prod(volume) * channels, dtype=torch.float32).reshape(1, *volume, channels)
+    grid = torch_to_bricked_grid(natural, brick)
+    flat = grid.reshape(1, brick_count(volume, brick) * SITES_PER_BRICK, channels)
+    expected = natural.reshape(1, math.prod(volume), channels)[:, reference_bricked_index_table(volume, brick)]
+    assert torch.equal(flat, expected)
+
+
+def test_pad_w_br_matches_pad_natural_then_brick():
+    """Halo on W_br after bricking is the same sites as padding W then bricking.
+
+    Two W-shards of 8 columns, brick width 2, halo of 2 sites = 1 brick. The left shard
+    plus the right shard's first W-brick equals the widened-then-bricked left region.
+    """
+    brick = (8, 2, 2)
+    time_extent, height_extent, width_local = 8, 8, 8
+    channels = 2
+    width_full = width_local * 2
+    natural = torch.arange(time_extent * height_extent * width_full * channels, dtype=torch.float32).reshape(
+        1, time_extent, height_extent, width_full, channels
+    )
+    halo_sites = 2
+    halo_bricks = halo_sites // brick[2]
+
+    left = natural[:, :, :, :width_local, :]
+    widened = natural[:, :, :, : width_local + halo_sites, :]
+    bricked_widened = torch_to_bricked_grid(widened, brick)
+
+    left_grid = torch_to_bricked_grid(left, brick)
+    right = natural[:, :, :, width_local:, :]
+    right_grid = torch_to_bricked_grid(right, brick)
+    bricked_then_padded = torch.cat([left_grid, right_grid[:, :, :, :halo_bricks, :]], dim=3)
+
+    assert torch.equal(bricked_then_padded, bricked_widened)
+
+
+def test_t_br_slice_matches_slice_then_brick():
+    """A T-range is a contiguous T_br slice iff its bounds are multiples of brick-T."""
+    brick = (8, 2, 2)
+    volume = (24, 8, 8)
+    channels = 2
+    natural = torch.arange(math.prod(volume) * channels, dtype=torch.float32).reshape(1, *volume, channels)
+    lo, hi = 8, 16  # one T-brick
+    sliced_then_bricked = torch_to_bricked_grid(natural[:, lo:hi], brick)
+    bricked = torch_to_bricked_grid(natural, brick)
+    t_br_lo, t_br_hi = lo // brick[0], hi // brick[0]
+    bricked_then_sliced = bricked[:, t_br_lo:t_br_hi]
+    assert torch.equal(bricked_then_sliced, sliced_then_bricked)
+
+
+def test_bands_align_to_brick_t():
+    """Pad and layout bounds are multiples of brick-T; last interior may keep the true T."""
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import _bands
+
+    bands = _bands(78, frames=73, kernel=11, align=8)
+    assert bands[0].lo % 8 == 0
+    for band in bands:
+        assert band.pad_lo % 8 == 0
+        assert band.pad_hi % 8 == 0
+        assert band.layout_hi % 8 == 0
+    assert bands[-1].hi == 78
+    assert bands[-1].layout_hi == 80
+    # Radius 5 rounds up to 8, so the first band's pad is a whole extra brick, not 5 frames.
+    assert bands[0].pad_lo == 0
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +226,21 @@ def test_round_trip_is_identity(mesh_device, volume, brick):
     assert tuple(recovered.shape) == (1, *volume, channel_count)
     # Pure data movement: bfloat16 round-trips exactly, so this is equality not allclose.
     assert torch.equal(recovered, natural.bfloat16().float())
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+def test_bricked_grid_flattens_to_to_bricked(mesh_device):
+    """The 5-D grid form is a view of the same sites ``to_bricked`` produces."""
+    volume, brick = (8, 12, 12), CUBIC_BRICK
+    channel_count = 32
+    natural = torch.randn(1, *volume, channel_count)
+    on_device = ttnn.from_torch(natural, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    grid = to_bricked_grid(on_device, volume=volume, brick=brick)
+    bricks_t, bricks_h, bricks_w = brick_grid(volume, brick)
+    assert tuple(grid.shape) == (1, bricks_t, bricks_h, bricks_w, SITES_PER_BRICK * channel_count)
+    flat = ttnn.reshape(grid, (1, brick_count(volume, brick) * SITES_PER_BRICK, channel_count))
+    expected = ttnn.to_torch(to_bricked(on_device, volume=volume, brick=brick)).float()
+    assert torch.equal(ttnn.to_torch(flat).float(), expected)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])

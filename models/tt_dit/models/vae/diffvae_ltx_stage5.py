@@ -138,6 +138,14 @@ from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.na3d import neighborhood_attention_3d_op_sp_w_sharded, window_bounds
+from ...layers.neighborhood_permute import (
+    SITES_PER_BRICK,
+    brick_count,
+    brick_grid,
+    from_bricked_grid,
+    sites_per_t_brick,
+    to_bricked_grid,
+)
 from ...layers.normalization import RMSNorm
 from ...utils.tensor import fast_device_to_host
 from ...utils.tensor import from_torch as sharded_from_torch
@@ -345,9 +353,30 @@ class _RopeTables:
     frame: _RopeParts
     time: _RopeParts
     rows_per_frame: int
+    fused: _RopeParts | None = None
+    brick: tuple[int, int, int] | None = None
+    sites_per_t_br: int = 0
 
     def frames(self, lo: int, hi: int) -> _RopeTables:
         """The same tables restricted to frames ``[lo, hi)``, for a slab of the volume."""
+        if self.fused is not None:
+            assert self.brick is not None
+            t_br_lo = lo // self.brick[0]
+            t_br_hi = _align_up(hi, self.brick[0]) // self.brick[0]
+            row_lo = t_br_lo * self.sites_per_t_br
+            row_hi = t_br_hi * self.sites_per_t_br
+            if (row_lo, row_hi) == (0, self.fused.cos.shape[-2]):
+                return self
+            return _RopeTables(
+                frame=self.frame,
+                time=self.time,
+                rows_per_frame=self.rows_per_frame,
+                fused=_RopeParts(
+                    *(ttnn.slice(part, [0, 0, row_lo, 0], [1, 1, row_hi, part.shape[-1]]) for part in self.fused)
+                ),
+                brick=self.brick,
+                sites_per_t_br=self.sites_per_t_br,
+            )
         if (lo, hi) == (0, self.time.cos.shape[1]):
             return self
         return _RopeTables(
@@ -462,6 +491,109 @@ def _build_rope_tables(
     )
 
 
+def _build_bricked_rope_tables(
+    grid: Grid,
+    brick: tuple[int, int, int],
+    *,
+    dim_split: tuple[int, int, int],
+    base: float,
+    num_heads: int,
+    mesh_device: ttnn.MeshDevice,
+    dtype: ttnn.DataType,
+    w_shard: tuple[int, int] | None = None,
+) -> _RopeTables:
+    """Fused RoPE in bricked site order, one row per (site, head).
+
+    The factored frame/time form does not survive bricking: T, H and W are interleaved inside
+    each 32-site brick. Built once per stage, sliced per band on ``T_br``.
+    """
+    d_t, d_h, d_w = dim_split
+    head_dim = d_t + d_h + d_w
+    offsets = (0, d_t, d_t + d_h)
+    brick_time, brick_height, brick_width = brick
+
+    def table_for_shard(volume: tuple[int, int, int], w_offset: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """``(sites * heads, head_dim)`` cos and sin for one W-shard, ghosts zero."""
+        t_br, h_br, w_br = brick_grid(volume, brick)
+        site = torch.arange(SITES_PER_BRICK)
+        dt = torch.div(site, brick_height * brick_width, rounding_mode="floor")
+        dh = torch.div(site % (brick_height * brick_width), brick_width, rounding_mode="floor")
+        dw = site % brick_width
+        t = (torch.arange(t_br).view(t_br, 1, 1, 1) * brick_time + dt).expand(t_br, h_br, w_br, SITES_PER_BRICK)
+        h = (torch.arange(h_br).view(1, h_br, 1, 1) * brick_height + dh).expand(t_br, h_br, w_br, SITES_PER_BRICK)
+        w = (torch.arange(w_br).view(1, 1, w_br, 1) * brick_width + dw).expand(t_br, h_br, w_br, SITES_PER_BRICK)
+        ghost = (t >= volume[0]) | (h >= volume[1]) | (w >= volume[2])
+        w = w + w_offset
+        t, h, w, ghost = t.reshape(-1), h.reshape(-1), w.reshape(-1), ghost.reshape(-1)
+
+        def lanes(fn, axis: int, positions: torch.Tensor) -> torch.Tensor:
+            width = dim_split[axis]
+            angles = positions.reshape(-1, 1).to(torch.float32) * _rope_inv_freqs(width, base).reshape(1, -1)
+            out = torch.zeros(positions.numel(), head_dim, dtype=torch.float32)
+            out[:, offsets[axis] : offsets[axis] + width] = fn(angles).repeat_interleave(2, dim=-1)
+            out[ghost] = 0
+            return out
+
+        cos = lanes(torch.cos, 0, t) + lanes(torch.cos, 1, h) + lanes(torch.cos, 2, w)
+        sin = lanes(torch.sin, 0, t) + lanes(torch.sin, 1, h) + lanes(torch.sin, 2, w)
+        return (
+            cos.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim),
+            sin.unsqueeze(1).expand(-1, num_heads, -1).reshape(-1, head_dim),
+        )
+
+    if w_shard is not None:
+        sp, sp_axis = w_shard
+        assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
+        w_local = grid.w // sp
+        local_volume = (grid.t, grid.h, w_local)
+        cos_parts, sin_parts = zip(*(table_for_shard(local_volume, p * w_local) for p in range(sp)))
+        fused = _RopeParts(
+            cos=sharded_from_torch(
+                torch.stack(cos_parts).reshape(1, 1, -1, head_dim).contiguous(),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                mesh_axes=[None, None, sp_axis, None],
+            ),
+            sin=sharded_from_torch(
+                torch.stack(sin_parts).reshape(1, 1, -1, head_dim).contiguous(),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                mesh_axes=[None, None, sp_axis, None],
+            ),
+        )
+        volume = local_volume
+    else:
+        cos, sin = table_for_shard((grid.t, grid.h, grid.w), 0)
+        fused = _RopeParts(
+            cos=ttnn.from_torch(
+                cos.reshape(1, 1, -1, head_dim).contiguous(),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+            ),
+            sin=ttnn.from_torch(
+                sin.reshape(1, 1, -1, head_dim).contiguous(),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+            ),
+        )
+        volume = (grid.t, grid.h, grid.w)
+
+    dummy = ttnn.from_torch(torch.zeros(1, 1, 1, head_dim), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    sites_per_t_br = sites_per_t_brick(volume, brick) * num_heads
+    return _RopeTables(
+        frame=fused,
+        time=_RopeParts(cos=dummy, sin=dummy),
+        rows_per_frame=sites_per_t_br,
+        fused=fused,
+        brick=brick,
+        sites_per_t_br=sites_per_t_br,
+    )
+
+
 def _apply_rope(
     x: ttnn.Tensor,
     tables: _RopeTables,
@@ -475,8 +607,17 @@ def _apply_rope(
     the frame axis and the row axis respectively. That is two extra multiplies against not
     materialising a table the size of the activation, and it holds no more live tensors than the
     fused form did.
+
+    Bricked-order tables are fused (site order permutes T/H/W together, so the factoring does
+    not survive). ``tables.fused`` is then the whole rotation, same shape as ``x``.
     """
     swapped = ttnn.matmul(x, pair_swap, compute_kernel_config=compute_kernel_config)
+    if tables.fused is not None:
+        aligned = ttnn.multiply(x, tables.fused.cos)
+        ttnn.deallocate(x)
+        rotated = ttnn.multiply(swapped, tables.fused.sin)
+        ttnn.deallocate(swapped)
+        return _add_consuming(aligned, rotated)
     aligned = _add_consuming(ttnn.multiply(x, tables.frame.cos), ttnn.multiply(x, tables.time.cos))
     ttnn.deallocate(x)
     rotated = _add_consuming(ttnn.multiply(swapped, tables.frame.sin), ttnn.multiply(swapped, tables.time.sin))
@@ -540,12 +681,18 @@ def _reshape_row_major(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
 
 @dataclass(frozen=True)
 class _Band:
-    """A frame band of the volume: interior ``[lo, hi)`` plus the halo attention reaches into."""
+    """A frame band of the volume: interior ``[lo, hi)`` plus the halo attention reaches into.
+
+    ``layout_hi`` is ``hi`` rounded up to a brick-T multiple so a bricked residual stays a
+    contiguous ``T_br`` slice. Ghost frames between ``hi`` and ``layout_hi`` are zeros, masked
+    by the op (window placement uses the true ``hi``), and cropped at stage exit.
+    """
 
     lo: int
     hi: int
     pad_lo: int
     pad_hi: int
+    layout_hi: int
 
     @property
     def frames(self) -> int:
@@ -555,8 +702,20 @@ class _Band:
     def pad_frames(self) -> int:
         return self.pad_hi - self.pad_lo
 
+    @property
+    def layout_frames(self) -> int:
+        return self.layout_hi - self.lo
 
-def _bands(t: int, *, frames: int | None, kernel: int) -> tuple[_Band, ...]:
+
+def _align_up(value: int, step: int) -> int:
+    return value if step <= 1 else (value + step - 1) // step * step
+
+
+def _align_down(value: int, step: int) -> int:
+    return value if step <= 1 else value - (value % step)
+
+
+def _bands(t: int, *, frames: int | None, kernel: int, align: int = 1) -> tuple[_Band, ...]:
     """Split ``t`` frames into bands of ``frames``, each with the halo its windows reach into.
 
     ``frames=None``, or a band long enough to cover everything, gives one band whose halo is
@@ -568,14 +727,28 @@ def _bands(t: int, *, frames: int | None, kernel: int) -> tuple[_Band, ...]:
     shifted inward instead of truncated, so it reaches as far as ``kernel - 1`` frames the other
     way. Taking the bound from the shared function also means a band's local windows are the global
     ones shifted by ``pad_lo``, so the attention masks a band builds are the volume's own.
+
+    ``align`` rounds lo / pad_lo down and pad_hi / layout_hi up to a multiple of the brick's T
+    extent, so those cuts stay contiguous in bricked order. The cheap extra cost is at most
+    ``align - 1`` frames of halo per band edge (3 at brick ``(8, 2, 2)`` with window radius 5).
     """
+    t_layout = _align_up(t, align)
     if frames is None or frames >= t:
-        return (_Band(0, t, 0, t),)
+        return (_Band(0, t, 0, t_layout, t_layout),)
+    if align > 1:
+        frames = max(align, _align_down(frames, align))
+        if frames >= t:
+            return (_Band(0, t, 0, t_layout, t_layout),)
     starts, ends = window_bounds(t, kernel)
     bands = []
     for lo in range(0, t, frames):
         hi = min(lo + frames, t)
-        bands.append(_Band(lo, hi, starts[lo], ends[hi - 1]))
+        pad_lo, pad_hi = starts[lo], ends[hi - 1]
+        if align > 1:
+            pad_lo = _align_down(pad_lo, align)
+            pad_hi = min(_align_up(pad_hi, align), t_layout)
+        layout_hi = min(_align_up(hi, align), t_layout)
+        bands.append(_Band(lo, hi, pad_lo, pad_hi, layout_hi))
     return tuple(bands)
 
 
@@ -803,13 +976,18 @@ class _NeighborhoodAttention3D(Module):
             return scaled
         return out
 
-    def forward(self, y: ttnn.Tensor, grid: Grid, tables: _RopeTables) -> ttnn.Tensor:
+    def forward(
+        self, y: ttnn.Tensor, grid: Grid, tables: _RopeTables, brick: tuple[int, int, int] | None = None
+    ) -> ttnn.Tensor:
         """``y``: ``(1, batch, sites, dim)``. Returns the same shape.
 
         ``grid`` is always the FULL ``(T, H, W)``. Under spatial-W SP (``op_sp_w_sharded``) ``y`` is
         this chip's W-shard, so the local W extent is ``W/sp``; the shapes below use that while the
         attention is still told the full W (its executor gathers the missing columns). ``tables``
         must be W-sharded to match ``y`` in that mode (frame piece over this chip's H×(W/sp) rows).
+
+        ``brick`` set means ``y`` is already in bricked site order (stage-5 hoist): Q/K/V stay
+        bricked, RoPE uses the fused bricked table, and the op is told ``already_bricked``.
         """
         cfg = self.config
         assert grid.batch == 1, f"batched stage 5 is not implemented; got batch={grid.batch}"
@@ -820,13 +998,22 @@ class _NeighborhoodAttention3D(Module):
             w_local = grid.w // sp
         else:
             w_local = grid.w
-        sites_local = grid.t * grid.h * w_local
+        sites_local = (
+            brick_count((grid.t, grid.h, w_local), brick) * SITES_PER_BRICK
+            if brick is not None
+            else grid.t * grid.h * w_local
+        )
         # Frames are a separate axis rather than folded into the rows, which is what lets the RoPE
         # pieces broadcast: the H/W piece over frames, the T piece over the rows within one. Under
         # column-parallel qkv (tp_proj) the projections already emit only this chip's heads, so the
         # per-head shapes use the local head count and the attention is told the heads are presharded.
+        # Bricked RoPE is fused -- one row per (site, head) -- so the T axis collapses.
         heads = self.heads_local
-        heads_shape = (1, grid.t, grid.h * w_local * heads, cfg.head_dim)
+        heads_shape = (
+            (1, 1, sites_local * heads, cfg.head_dim)
+            if brick is not None
+            else (1, grid.t, grid.h * w_local * heads, cfg.head_dim)
+        )
         volume_shape = (grid.batch, grid.t, grid.h, w_local, heads, cfg.head_dim)
 
         def to_volume(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -852,7 +1039,23 @@ class _NeighborhoodAttention3D(Module):
         # a source edit. Only reachable under tp_proj with one head left, i.e. TP_HEADS=1.
         if flat_seq and self.na3d_backend == "bricked_sp_w_sharded":
             flat_seq = os.environ.get("DIFFVAE_BRICKED_FLAT") == "1"
-        prep = to_flat if flat_seq else to_volume
+        if brick is not None:
+            # Already bricked: RoPE output is (1, 1, sites*heads, hd); fold back to (B, heads, sites, hd).
+            # Under TP (one head) those shapes already match, and ttnn.reshape of a matching TILE
+            # tensor is a new wrapper over the same buffer -- deallocating the input then hands
+            # attention a tensor whose device is None (the crash on the first hoisted run).
+            def to_bricked_seq(x: ttnn.Tensor) -> ttnn.Tensor:
+                target = (grid.batch, heads, sites_local, cfg.head_dim)
+                if tuple(x.shape) == target:
+                    return x
+                out = ttnn.reshape(x, target)
+                if out is not x:
+                    ttnn.deallocate(x)
+                return out
+
+            prep = to_bricked_seq
+        else:
+            prep = to_flat if flat_seq else to_volume
 
         # Built and consumed one at a time. Holding q, k and v plus each one's untilized copy
         # and RoPE temporaries is what exhausts DRAM at full resolution -- which is also why the
@@ -911,6 +1114,8 @@ class _NeighborhoodAttention3D(Module):
                 scale=1.0,
                 tp_axis=self.tp_axis,
                 heads_presharded=self.tp_proj,
+                already_bricked=brick is not None,
+                brick=brick,
             )
         elif sharded:
             out = neighborhood_attention_3d_op_sp_w_sharded(
@@ -1021,6 +1226,7 @@ class DiffusionNABlock(Module):
         grid: Grid,
         bands: tuple[_Band, ...],
         tables: tuple[_RopeTables, ...],
+        brick: tuple[int, int, int] | None = None,
     ) -> list[ttnn.Tensor]:
         """``x``: the volume as one ``(1, batch, band rows, dim)`` tensor per band, and the return
         is the updated volume in the same form. **Consumes** ``x``; ``context`` is read by every
@@ -1049,11 +1255,14 @@ class DiffusionNABlock(Module):
 
         # Rows per frame on THIS chip. Under spatial-W SP the sequence is W-sharded, so a frame holds
         # only H*(W/sp) rows here; the frame-granular band slicing below must use that local count.
+        # Bricked order groups sites by T_br, so the slice unit is one T-brick of sites instead.
         if _is_w_sharded(self.na3d_backend):
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
-            rows = grid.h * (grid.w // sp)
+            w_local = grid.w // sp
+            rows = sites_per_t_brick((grid.t, grid.h, w_local), brick) if brick is not None else grid.h * w_local
         else:
-            rows = grid.h * grid.w
+            rows = sites_per_t_brick((grid.t, grid.h, grid.w), brick) if brick is not None else grid.h * grid.w
+        frame_step = brick[0] if brick is not None else 1
         # A local view of the volume so the caller's list is left alone; entries become None as
         # this loop releases them.
         live: list[ttnn.Tensor | None] = list(x)
@@ -1062,11 +1271,14 @@ class DiffusionNABlock(Module):
             # Bands own nothing they were handed: ``live`` is freed by this loop's own bookkeeping
             # below, so anything derived from it is released here the moment it stops being read.
             with deep_prof(self.mesh_device, "halo assemble (padded rows)", category=decode_tree.RESHAPE):
-                padded = self._padded_rows(live, index, bands, rows)
-            interior = ((band.lo - band.pad_lo) * rows, (band.hi - band.pad_lo) * rows)
+                padded = self._padded_rows(live, index, bands, rows, frame_step=frame_step)
+            interior = (
+                (band.lo - band.pad_lo) // frame_step * rows,
+                (band.layout_hi - band.pad_lo) // frame_step * rows,
+            )
 
             with block_prof(self.mesh_device, "context-inject", category=decode_tree.CONTEXT_INJECT):
-                context_rows = _slice_rows(context, band.pad_lo * rows, band.pad_hi * rows)
+                context_rows = _slice_rows(context, band.pad_lo // frame_step * rows, band.pad_hi // frame_step * rows)
                 injected = self.context_proj(context_rows)
                 if context_rows is not context:
                     ttnn.deallocate(context_rows)
@@ -1080,8 +1292,9 @@ class DiffusionNABlock(Module):
             with block_prof(self.mesh_device, "attention", category=decode_tree.ATTENTION):
                 attended = self.attn(
                     modulated,
-                    Grid(grid.batch, band.pad_frames, grid.h, grid.w),
+                    Grid(grid.batch, min(band.pad_hi, grid.t) - band.pad_lo, grid.h, grid.w),
                     tables[index],
+                    brick=brick,
                 )
             ttnn.deallocate(modulated)
 
@@ -1119,16 +1332,23 @@ class DiffusionNABlock(Module):
         index: int,
         bands: tuple[_Band, ...],
         rows: int,
+        frame_step: int = 1,
     ) -> ttnn.Tensor:
         """Band ``index``'s rows plus its halo, read out of whichever bands the halo spans."""
         band = bands[index]
         parts = []
         for other, source in enumerate(bands):
             lo = max(band.pad_lo, source.lo)
-            hi = min(band.pad_hi, source.hi)
+            hi = min(band.pad_hi, source.layout_hi)
             if lo < hi:
                 assert live[other] is not None, f"band {other} was released before band {index} read it"
-                parts.append(_slice_rows(live[other], (lo - source.lo) * rows, (hi - source.lo) * rows))
+                parts.append(
+                    _slice_rows(
+                        live[other],
+                        (lo - source.lo) // frame_step * rows,
+                        (hi - source.lo) // frame_step * rows,
+                    )
+                )
         if len(parts) == 1:
             return parts[0]
         joined = ttnn.concat(parts, dim=-2)
@@ -1211,6 +1431,13 @@ class DiffVAEStage5(Module):
         # W-shard above -- the two use orthogonal mesh axes.
         self.tp_axis = tp_axis
         self._w_sharded = _is_w_sharded(self.na3d_backend)
+        # Hoist brick conversion to stage entry/exit. Off with DIFFVAE_S5_KEEP_BRICKED=0 to race
+        # the per-call permute. Default on for the bricked W-sharded backend: that is the path
+        # whose 7-D permute was 735 ms of the decode.
+        self._keep_bricked = (
+            self.na3d_backend == "bricked_sp_w_sharded" and os.environ.get("DIFFVAE_S5_KEEP_BRICKED", "1") != "0"
+        )
+        self._brick: tuple[int, int, int] | None = None
         # Under column-parallel qkv (DIFFVAE_TP_PROJ) the q/k carry only heads/tp per chip, so the
         # shared RoPE tables (which repeat each row per head) must be built for the local head count.
         _tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
@@ -1264,20 +1491,92 @@ class DiffVAEStage5(Module):
             bias = state["conv_out.bias"]
             state["conv_out.bias"] = torch.nn.functional.pad(bias, (0, self.padded_patch_channels - bias.shape[0]))
 
+    def _stage5_brick(self, grid: Grid) -> tuple[int, int, int]:
+        """The brick the whole stage converts with -- same choice the attention op would make."""
+        if self._brick is not None:
+            return self._brick
+        from ...layers.neighborhood_attention import _choose_sharded_brick, configured_stride
+
+        sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
+        w_local = grid.w // sp
+        volume = (grid.t, grid.h, grid.w)
+        context_window = tuple(min(window, extent) for window, extent in zip(self.config.kernel_size, volume))
+        brick_env = os.environ.get("DIFFVAE_NA_BRICK")
+        self._brick = (
+            tuple(int(part) for part in brick_env.split(","))
+            if brick_env
+            else _choose_sharded_brick(volume, context_window, configured_stride(), w_local, sp)
+        )
+        return self._brick
+
+    def _local_volume(self, grid: Grid, t: int | None = None) -> tuple[int, int, int]:
+        sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
+        return (grid.t if t is None else t, grid.h, grid.w // sp)
+
+    def _brick_activation(
+        self, x: ttnn.Tensor, volume: tuple[int, int, int], brick: tuple[int, int, int]
+    ) -> ttnn.Tensor:
+        """``(1, batch, T*H*W, C)`` TILE natural -> ``(1, batch, bricked_sites, C)`` TILE."""
+        channels = int(x.shape[-1])
+        batch = int(x.shape[1])
+        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        if rm is not x:
+            ttnn.deallocate(x)
+        vol = ttnn.reshape(rm, (batch, volume[0], volume[1], volume[2], channels))
+        if vol is not rm:
+            ttnn.deallocate(rm)
+        grid5 = to_bricked_grid(vol, volume=volume, brick=brick)
+        if grid5 is not vol:
+            ttnn.deallocate(vol)
+        flat = ttnn.reshape(grid5, (1, batch, brick_count(volume, brick) * SITES_PER_BRICK, channels))
+        out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+        if out is not flat:
+            ttnn.deallocate(flat)
+        if flat is not grid5 and grid5 is not out:
+            ttnn.deallocate(grid5)
+        return out
+
+    def _unbrick_activation(
+        self, x: ttnn.Tensor, volume: tuple[int, int, int], brick: tuple[int, int, int]
+    ) -> ttnn.Tensor:
+        """Inverse of :meth:`_brick_activation`, ghosts cropped."""
+        channels = int(x.shape[-1])
+        batch = int(x.shape[1])
+        rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        bricks_t, bricks_h, bricks_w = brick_grid(volume, brick)
+        grid5 = ttnn.reshape(rm, (batch, bricks_t, bricks_h, bricks_w, SITES_PER_BRICK * channels))
+        natural = from_bricked_grid(grid5, volume=volume, brick=brick)
+        flat = ttnn.reshape(natural, (1, batch, volume[0] * volume[1] * volume[2], channels))
+        return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+
     def rope_tables(self, grid: Grid) -> _RopeTables:
-        tables = self._rope_cache.get(grid)
+        brick = self._stage5_brick(grid) if self._keep_bricked else None
+        key = (grid, brick)
+        tables = self._rope_cache.get(key)
         if tables is None:
             w_shard = (int(list(self.mesh_device.shape)[self.sp_axis]), self.sp_axis) if self._w_sharded else None
-            tables = _build_rope_tables(
-                grid,
-                dim_split=self.config.resolved_rope_dim_split,
-                base=self.config.rope_base,
-                num_heads=self._rope_num_heads,
-                mesh_device=self.mesh_device,
-                dtype=self.dtype,
-                w_shard=w_shard,
-            )
-            self._rope_cache[grid] = tables
+            if brick is not None:
+                tables = _build_bricked_rope_tables(
+                    grid,
+                    brick,
+                    dim_split=self.config.resolved_rope_dim_split,
+                    base=self.config.rope_base,
+                    num_heads=self._rope_num_heads,
+                    mesh_device=self.mesh_device,
+                    dtype=self.dtype,
+                    w_shard=w_shard,
+                )
+            else:
+                tables = _build_rope_tables(
+                    grid,
+                    dim_split=self.config.resolved_rope_dim_split,
+                    base=self.config.rope_base,
+                    num_heads=self._rope_num_heads,
+                    mesh_device=self.mesh_device,
+                    dtype=self.dtype,
+                    w_shard=w_shard,
+                )
+            self._rope_cache[key] = tables
         return tables
 
     def bands(self, grid: Grid) -> tuple[_Band, ...]:
@@ -1295,7 +1594,8 @@ class DiffVAEStage5(Module):
                 "so a frame boundary is not a tile boundary"
             )
             frames = None
-        return _bands(grid.t, frames=int(frames) if frames else None, kernel=kernel)
+        align = self._stage5_brick(grid)[0] if self._keep_bricked else 1
+        return _bands(grid.t, frames=int(frames) if frames else None, kernel=kernel, align=align)
 
     def device_x_t(self, grid: Grid, bands: tuple[_Band, ...], *, seed: int = 0) -> list[ttnn.Tensor]:
         """x_t noise drawn on device, already in the patchified layout. One tensor per band.
@@ -1379,6 +1679,7 @@ class DiffVAEStage5(Module):
         timestep: ttnn.Tensor,
         grid: Grid,
         bands: tuple[_Band, ...],
+        brick: tuple[int, int, int] | None = None,
     ) -> ttnn.Tensor:
         """One stage-5 step. Returns padded patch channels at ``(1, batch, sites, ·)``.
 
@@ -1402,15 +1703,18 @@ class DiffVAEStage5(Module):
         SP_W_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
             _bt0 = stage_time_start(self.mesh_device, f"  stage5 block {index}")
-            x = block(x, context, modulation, grid, bands, band_tables)
+            x = block(x, context, modulation, grid, bands, band_tables, brick=brick)
             stage_time_end(self.mesh_device, _bt0)
             log_dram(self.mesh_device, f"stage5 block {index}")
         # The tail runs per band too: its output is a quarter the width of the volume it comes
         # from, so joining after the projection rather than before is the cheap order.
         tail = []
-        for band in x:
-            tail.append(self.conv_out(self.norm_out(band)))
-            ttnn.deallocate(band)
+        for tensor, band in zip(x, bands):
+            projected = self.conv_out(self.norm_out(tensor))
+            ttnn.deallocate(tensor)
+            if brick is not None:
+                projected = self._unbrick_activation(projected, self._local_volume(grid, t=band.hi - band.lo), brick)
+            tail.append(projected)
         if len(tail) == 1:
             return tail[0]
         joined = ttnn.concat(tail, dim=-2)
@@ -1481,8 +1785,18 @@ class DiffVAEStage5(Module):
         x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
         stage_time_end(self.mesh_device, _t0)
 
+        brick = self._stage5_brick(grid) if self._keep_bricked else None
+        if brick is not None:
+            _t0 = stage_time_start(self.mesh_device, "stage5: brick x+context", category=decode_tree.RESHAPE)
+            context = self._brick_activation(context, self._local_volume(grid), brick)
+            x_bands = [
+                self._brick_activation(band_x, self._local_volume(grid, t=band.hi - band.lo), brick)
+                for band_x, band in zip(x_bands, bands)
+            ]
+            stage_time_end(self.mesh_device, _t0)
+
         with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
-            out = self.forward_diff_step(context, x_bands, timestep, grid, bands)
+            out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
 
         return self._to_pixels(out, grid, device_out=device_out, output_type=output_type)
 
