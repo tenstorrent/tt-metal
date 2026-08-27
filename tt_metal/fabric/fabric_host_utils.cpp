@@ -102,8 +102,8 @@ tt::tt_fabric::FabricConfig coerce_fabric_config_to_realized_ring_extents(
     auto downgrade = [&](tt::tt_fabric::FabricConfig to) {
         log_warning(
             tt::LogFabric,
-            "FabricConfig {} requests a ring/torus along a dimension where no mesh has more than 2 devices; a ring "
-            "needs at least 3, using {} instead",
+            "FabricConfig {} requests a ring/torus along a dimension where no mesh has more than 2 devices (a ring "
+            "needs at least 3) — the fabric config has been overridden to {}",
             enchantum::to_string(fabric_config),
             enchantum::to_string(to));
         return to;

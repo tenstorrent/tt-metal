@@ -180,7 +180,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(
         source_path);
 
     // Set defaults for missing fields
-    set_defaults(temp_proto);
+    set_defaults(temp_proto, source_path);
 
     // Validate the proto
     const auto errors = static_validate(temp_proto, backwards_compatible);
@@ -233,6 +233,17 @@ std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
     std::vector<std::string> out(names.begin(), names.end());
     std::sort(out.begin(), out.end());
     return out;
+}
+
+std::vector<tt::tt_metal::distributed::MeshShape> MeshGraphDescriptor::get_all_mesh_shapes() const {
+    std::vector<tt::tt_metal::distributed::MeshShape> shapes;
+    shapes.reserve(mesh_instances_.size());
+    for (GlobalNodeId id : mesh_instances_) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(get_instance(id).desc);
+        TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", id);
+        shapes.emplace_back(mesh_desc->device_topology().dims(0), mesh_desc->device_topology().dims(1));
+    }
+    return shapes;
 }
 
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
@@ -324,7 +335,7 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Sw
     return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
-void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
+void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto, std::string_view source_path) {
     // Set the default for channel policy to strict if not specified
     for (auto& mesh : *proto.mutable_mesh_descriptors()) {
         if (mesh.has_channels() && !mesh.channels().has_policy()) {
@@ -376,14 +387,16 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     // deadlock-avoidance selection) treats the axis as a torus. See issue #54650: a declared-but-
     // degenerate torus axis enables bubble-flow/first-level-ACK on links that a rotated neighbor
     // mesh labels differently, hanging inter-mesh traffic.
-    auto coerce_degenerate_rings = [](proto::TorusTopology& device_topology, const std::string& name) {
+    auto coerce_degenerate_rings = [source_path](proto::TorusTopology& device_topology, const std::string& name) {
         for (int i = 0; i < device_topology.dim_types_size() && i < device_topology.dims_size(); i++) {
             if (device_topology.dim_types(i) == proto::TorusTopology::RING && device_topology.dims(i) <= 2) {
                 log_warning(
                     tt::LogFabric,
-                    "MeshGraphDescriptor: '{}' declares RING on dimension {} of extent {}; a ring needs more than 2 "
-                    "devices, treating this dimension as LINE",
+                    "MeshGraphDescriptor: '{}'{}{} declares RING on dimension {} of extent {}; a ring needs more "
+                    "than 2 devices — the mesh graph descriptor has been modified to treat this dimension as LINE",
                     name,
+                    source_path.empty() ? "" : " in ",
+                    source_path,
                     i,
                     device_topology.dims(i));
                 device_topology.set_dim_types(i, proto::TorusTopology::LINE);

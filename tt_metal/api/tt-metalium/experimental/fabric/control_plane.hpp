@@ -557,10 +557,12 @@ private:
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
     std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
 
-    // Downgrades ring/torus fabric configs whose wrapped dimension no mesh realizes (extent <= 2) to
-    // their line/mesh equivalents, so deadlock avoidance is never derived from an unrealized torus
-    // axis (#54650). Must run after mesh_graph_ is created and before anything consumes fabric_config_.
-    void coerce_fabric_config_to_mesh_graph_extents();
+    // Consolidates fabric_config_ with the mesh shapes: ring/torus configs whose wrapped dimension
+    // no mesh realizes (extent <= 2) are downgraded to their line/mesh equivalents, so deadlock
+    // avoidance is never derived from an unrealized torus axis (#54650). Must run before the mesh
+    // graph and adjacency graphs are built from fabric_config_ (the MGD path consolidates from the
+    // parsed descriptor's shapes; auto-discovery from the generated mesh graph).
+    void consolidate_fabric_config_with_mesh_graph_shapes(const std::vector<MeshShape>& mesh_shapes);
 };
 
 }  // namespace tt::tt_fabric

@@ -422,16 +422,21 @@ void ControlPlane::init_control_plane(
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
-    auto fabric_config = this->get_fabric_config();
-
     // Number of hosts
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
-    // Create mesh_graph first
-    this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
+    // Parse the descriptor and consolidate the fabric config with the mesh shapes up front, so the
+    // mesh graph and every adjacency graph derived from it are built from the effective config.
+    {
+        const MeshGraphDescriptor mesh_graph_descriptor(
+            std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
+        this->consolidate_fabric_config_with_mesh_graph_shapes(mesh_graph_descriptor.get_all_mesh_shapes());
+    }
 
-    this->coerce_fabric_config_to_mesh_graph_extents();
+    // Create mesh_graph with the consolidated fabric config
+    this->mesh_graph_ =
+        std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, this->get_fabric_config());
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd =
@@ -575,7 +580,13 @@ void ControlPlane::init_control_plane_auto_discovery() {
             this->fabric_config_,
             this->fabric_reliability_mode_));
 
-    this->coerce_fabric_config_to_mesh_graph_extents();
+    {
+        std::vector<MeshShape> mesh_shapes;
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            mesh_shapes.push_back(this->mesh_graph_->get_mesh_shape(mesh_id));
+        }
+        this->consolidate_fabric_config_with_mesh_graph_shapes(mesh_shapes);
+    }
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -738,11 +749,7 @@ ControlPlane::ControlPlane(
     initialize_fabric_context();
 }
 
-void ControlPlane::coerce_fabric_config_to_mesh_graph_extents() {
-    std::vector<MeshShape> mesh_shapes;
-    for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
-        mesh_shapes.push_back(this->mesh_graph_->get_mesh_shape(mesh_id));
-    }
+void ControlPlane::consolidate_fabric_config_with_mesh_graph_shapes(const std::vector<MeshShape>& mesh_shapes) {
     this->fabric_config_ = coerce_fabric_config_to_realized_ring_extents(this->fabric_config_, mesh_shapes);
 }
 

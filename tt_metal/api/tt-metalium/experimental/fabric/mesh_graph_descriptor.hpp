@@ -17,6 +17,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -173,6 +174,9 @@ public:
     // Unique mesh descriptor names from mesh instances (e.g. "M0", "Decode32x4"), sorted lexicographically.
     std::vector<std::string> get_all_mesh_names() const;
 
+    // Device-topology shape of every mesh instance, in mesh-instance order.
+    std::vector<tt::tt_metal::distributed::MeshShape> get_all_mesh_shapes() const;
+
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
         auto it = instances_by_name_.find(name);
@@ -271,7 +275,7 @@ private:
 
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
 
-    static void set_defaults(proto::MeshGraphDescriptor& proto);
+    static void set_defaults(proto::MeshGraphDescriptor& proto, std::string_view source_path = {});
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
 
