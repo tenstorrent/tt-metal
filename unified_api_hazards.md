@@ -179,10 +179,25 @@ without a marker are mechanisms the headers document as the caller's responsibil
 
     - **Distinct pairs**: two counters. Step 4 increments the COL counter, which (0,0)'s row
       wait never reads, so step 5 blocks until (0,1) genuinely frees.
-    - **Same rectangle on one pair is safe**, which is the k-loop every iteration: a receiver
-      increments and IMMEDIATELY blocks on `data_sent.wait(1)` for that same round, so it can
-      never be more than one round ahead, and every increment on that counter comes from a
-      core the sender is genuinely waiting for.
+    - **Same rectangle on one pair is safe. TESTED, not assumed** -- the question was raised
+      directly, on the grounds that two transactions on one semaphore might be unsafe
+      regardless of rectangle. `test_unified_mcast_share.py` broadcasts one operand TWICE
+      over the same 8x8 rectangle into two buffers on one pair: same sender, same receivers,
+      same extent, no arithmetic to confuse a wrong answer with. Under the same conditions
+      that break the differing-rectangle case -- 8 and 16 rounds, prefetch depth 1, skew
+      holding half the receivers' buffers live at 5k, 50k and 200k iterations, repeated --
+      **every run is bit-exact.**
+
+      And there is a structural reason, which is why the result is believable rather than
+      lucky. Same rectangle means the SAME SENDER, so every receiver is gated by that one
+      core's flag: a receiver cannot reach collective B's increment until it has consumed
+      A's flag, which the sender only sends after A's wait completed. Every increment is
+      therefore in turn. The differing-rectangle case breaks precisely because a core can be
+      a SENDER in one collective -- gated by nobody's flag -- while being a RECEIVER in the
+      other, so its increment escapes that ordering.
+
+      This is what makes the RECTANGLE the right thing to claim. The invariant is not "one
+      transaction per semaphore"; it is "one rectangle per semaphore".
 
     And one more in the family: because the wait is for EQUALITY, the same sharing can also
     produce a HANG rather than corruption if increments overshoot the target. Ours balanced,

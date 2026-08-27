@@ -73,7 +73,7 @@ fi
 SUITES=(
     unary binary bcast reduction add_exp mixed_format
     matmul matmul_bias matmul_mcast matmul_transpose matmul_blocked
-    custom_compute rmsnorm rope attention attention_proj flash
+    custom_compute mcast_share rmsnorm rope attention attention_proj flash
     layer negative
 )
 [ $# -gt 0 ] && SUITES=("$@")
