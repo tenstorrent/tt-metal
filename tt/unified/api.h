@@ -687,6 +687,30 @@ inline constexpr bool kMcastSemsReserved = false;
 inline constexpr uint32_t kMcastSemBase = 0;
 #endif
 
+// Under Metal 2.0 the base is a PREDICTION, and this is where it gets checked.
+//
+// Semaphores reach a 2.0 kernel as `sem::<name>` ids the host assigned, and the harness has
+// to predict them because everything below derives its ids from one base by arithmetic --
+// which needs the reserved run to be contiguous and to start where the harness thinks it
+// does. The host is the only party that knows either fact, and a token is the only thing
+// that reports it back, so the harness passes the FIRST and LAST reserved names as token
+// expressions and the arithmetic is checked against them here.
+//
+// Checking both ends is what makes it airtight rather than indicative: metal cannot issue a
+// duplicate id, so six distinct ids whose smallest is `base` and whose largest is `base + 5`
+// can only be the contiguous run.
+//
+// Nothing to check on the legacy path, where the harness allocates the ids itself.
+#if defined(TT_UNIFIED_MCAST_SEM_FIRST) && defined(TT_UNIFIED_MCAST_SEM_LAST)
+static_assert(
+    kMcastSemBase == static_cast<uint32_t>(TT_UNIFIED_MCAST_SEM_FIRST),
+    "the harness's predicted multicast semaphore base does not match the id the host assigned");
+static_assert(
+    kMcastSemBase + 2 * 2 + 2 - 1 == static_cast<uint32_t>(TT_UNIFIED_MCAST_SEM_LAST),
+    "the reserved multicast semaphores are not contiguous -- every id below is derived from "
+    "kMcastSemBase by arithmetic, so a gap in the run silently retargets a handshake");
+#endif
+
 // Ids of the pair belonging to `thread`.
 template <int thread>
 inline constexpr uint32_t kMcastReadySem = kMcastSemBase + 2 * thread;

@@ -478,6 +478,47 @@ on both paths -- `named_ct_arg_map_generated.h` is emitted unconditionally
 guarded lines, both paths green. That is what makes the remaining suites a sweep rather than a
 fork.
 
+### 7.3 The second suite: semaphores, collectives, per-core named runtime args
+
+`test_unified_mcast.py --metal2` passes on **8/8 configurations** -- rows of 2, 4 and 8, one
+and two tiles, with and without `--barrier` -- with numbers identical to the legacy path on
+every one, and `max |slice_i - slice_0| = 0` throughout, meaning the broadcast really reached
+every core rather than the test agreeing with itself.
+
+That covers three of §9's open items at once.
+
+**§9.4 is answered: `sem::` bindings work, and the derived-id arithmetic is now CHECKED.**
+`api.h` builds six semaphore ids from one base, which needs the reserved run to be contiguous
+and to start where the harness predicted -- two facts only the host knows. The harness passes
+the FIRST and LAST reserved names as `sem::` token *expressions* and `api.h` static_asserts
+the arithmetic against them. Both ends together pin the whole run, since metal cannot issue a
+duplicate id. Verified non-vacuous twice: perturbing the base and splitting the run each fail
+the build, and each trips both assertions.
+
+**Metal 2.0 refuses semaphore bindings on a compute kernel** (`program_spec.cpp:1088), which
+was not anticipated anywhere in this document. It turns out to agree with the model rather
+than fight it: `api.h` already says a `Semaphore` is projected onto one DM thread and is a
+no-op elsewhere, and `impl_v1.hpp` keeps metal's `Semaphore` behind an `IS_DM_THREAD` guard,
+so compute has never touched one. **The rule the model documented is now the rule the host
+enforces** -- the same shape of win as the DFB endpoint roles, and again one the port
+discovers rather than imports.
+
+It does have a mechanical consequence: `sem::` tokens exist only on the two data-movement
+kernels, so the check tokens are defined only there. Fine, because between them the two DM
+projections check every reserved id, and all five projections see the same base.
+
+**D17 is closed for this kernel, and that is the whole point of the exercise.** `mcast_bcast`
+has a genuinely per-core runtime argument -- each core's output block index -- so it is the
+first port to exercise the named runtime-arg path rather than just the compile-time one. The
+legacy spelling is `get_arg_val<uint32_t>(2)` plus the sentinel; the 2.0 spelling is
+`get_arg(args::out_block)`, and the two base addresses vanish entirely into the tensor
+bindings. A name that is not in the schema, or one in the schema and not supplied, is an
+error from metal rather than a garbage loop bound. The sentinel has nothing left to guard.
+
+**`synchronize_cores()` survives the port untouched.** The `--barrier` configuration runs it
+twice back to back on the reserved pair, which is the case that fails if the barrier clears
+its arrival count in the wrong order, and it is bit-identical on both paths.
+
 ## 8. What this buys, against the hazard ledger
 
 | hazard | today | after |
