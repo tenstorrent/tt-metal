@@ -169,7 +169,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="STT",
         name="hf_eager universal (STT)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic STT/audio backend; CPU eager runner. Use as fallback when no exact template + auto-onboard match exists.",
@@ -177,7 +177,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="TTS",
         name="hf_eager universal (TTS)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic TTS backend; CPU eager runner. There is no template-routing TTS backend today, so this is the only path.",
@@ -185,7 +185,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="AudioGen",
         name="hf_eager universal (AudioGen / music)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic music / non-speech audio generation backend; CPU eager runner. Architecture is all-NEW (no template-routing AudioGen demo on tt-metal today), so this is the only path.",
@@ -193,7 +193,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="Image",
         name="hf_eager universal (Image / diffusion)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic image-generation backend; CPU eager runner. Falls back here when neither SD template nor a drafted backend matches.",
@@ -201,7 +201,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="CNN",
         name="hf_eager universal (vision)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic vision backend; CPU eager runner. Falls back here when none of ViT/ResNet/SegFormer/OWL-ViT templates match exactly and auto-onboard didn't draft one.",
@@ -209,7 +209,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="Embed",
         name="hf_eager universal (embeddings)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic embeddings backend; CPU eager runner. Falls back here when Sentence-BERT template doesn't apply.",
@@ -217,7 +217,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="NLP",
         name="hf_eager universal (NLP)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic NLP backend; CPU eager runner. Falls back here when BERT-Large template doesn't apply.",
@@ -225,7 +225,7 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="Video",
         name="hf_eager universal (Video)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Generic video backend; CPU eager runner. There is no template-routing Video backend today, so this is the only path.",
@@ -233,34 +233,10 @@ _BACKENDS: List[FamilyBackend] = [
     FamilyBackend(
         category="Unknown",
         name="hf_eager universal (catch-all)",
-        demo_path="models/demos/hf_eager/demo.py",
+        demo_path="models/demos/hf_eager",
         routing_mode="generic",
         canonical_hf_id=None,
         notes="Last-resort catch-all when the probe can't classify the category. Runs `AutoModel.from_pretrained` + a synthetic forward on CPU.",
-    ),
-    FamilyBackend(
-        category="Embed",
-        name="Qwen3-Embedding (qwen3 decoder)",
-        demo_path="models/demos/qwen3_embedding/",
-        routing_mode="template",
-        canonical_hf_id="Qwen/Qwen3-Embedding-8B",
-        notes="Decoder-only transformer (Qwen3 arch) repurposed for dense text embeddings via last-token pooling. Uses RMSNorm, GQA with q_norm/k_norm, SwiGLU MLP, RoPE. Routed to embedding_demo.py which encodes texts via the HF reference and last-token-pools; the tt_transformers components (Attention, MLP, RMSNorm, RoPE) are resolved via reuse_registry derived from BUILDING_BLOCKS.",
-        model_type_keys=["qwen3"],
-        pipeline_tags=["feature-extraction", "sentence-similarity"],
-        smoke_test_entry=None,
-        use_module_tree=True,
-    ),
-    FamilyBackend(
-        category="Embed",
-        name="Qwen3-Embedding-8B (qwen3 decoder, 8B)",
-        demo_path="models/demos/qwen3_embedding_8b",
-        routing_mode="template",
-        canonical_hf_id="Qwen/Qwen3-Embedding-8B",
-        notes="Qwen3-Embedding-8B is a large dense retrieval/embedding model from the Qwen3 family. It uses the standard Qwen3 decoder-only transformer architecture (RMSNorm, GQA, RoPE, SwiGLU MLP) with a mean-pooling head for sentence/document embeddings. Pipeline tag is feature-extraction; suited for semantic search and RAG use cases.",
-        model_type_keys=["qwen3"],
-        pipeline_tags=["feature-extraction", "sentence-similarity"],
-        smoke_test_entry=None,
-        use_module_tree=True,
     ),
     FamilyBackend(
         category="VLM",
@@ -391,13 +367,66 @@ def composite_type_candidates(pipeline_class: Optional[str]) -> List[str]:
     return out
 
 
+def demo_path_exists(backend: FamilyBackend) -> bool:
+    """Is this backend's demo actually present in the checkout?
+
+    A registry entry names a folder; folders get renamed, land on another branch,
+    or are planned and never written. An entry pointing at a folder that is not
+    here cannot template anything, and routing to it fails several steps later
+    with an error about the model rather than about the missing folder."""
+    import os
+
+    path = (backend.demo_path or "").split()[0] if backend.demo_path else ""
+    return bool(path) and os.path.exists(path)
+
+
 def pick_backend_with_quality(
     *,
     category: str,
     model_type: Optional[str] = None,
     pipeline_tag: Optional[str] = None,
 ) -> Tuple[Optional[FamilyBackend], str]:
-    """Pick a backend AND report how confident the match is.
+    """Pick the best backend whose demo is actually present, and report confidence.
+
+    Entries whose demo folder is missing are skipped so matching falls through to
+    the next usable one -- a model routed to an absent folder produces nothing at
+    all, which is worse than a slightly less specific backend that works. If NO
+    candidate exists on disk, the unfiltered answer is returned unchanged, so
+    behaviour is never worse than before and callers that construct backends with
+    synthetic paths are unaffected.
+    """
+    backend, quality = _pick_backend_impl(
+        category=category, model_type=model_type, pipeline_tag=pipeline_tag, require_demo=False
+    )
+    if backend is None or demo_path_exists(backend):
+        return backend, quality
+    # Today's answer names a folder that is not here. A GENERIC backend is the
+    # deliberate catch-all for unknown architectures, so it is kept even when its
+    # demo is missing -- substituting a template would drop an unknown model onto
+    # a wrong-architecture skeleton, which is the failure that rule exists to
+    # prevent (the real fix there is writing that demo). A TEMPLATE backend with
+    # no folder can only produce nothing, so prefer any backend that does exist.
+    if (getattr(backend, "routing_mode", "") or "") == "generic":
+        return backend, quality
+    alt, alt_quality = _pick_backend_impl(
+        category=category, model_type=model_type, pipeline_tag=pipeline_tag, require_demo=True
+    )
+    if alt is not None:
+        return alt, alt_quality
+    return backend, quality
+
+
+def _pick_backend_impl(
+    *,
+    category: str,
+    model_type: Optional[str] = None,
+    pipeline_tag: Optional[str] = None,
+    require_demo: bool = False,
+) -> Tuple[Optional[FamilyBackend], str]:
+    """Tiered match. ``require_demo`` restricts every tier to backends whose demo
+    folder is present.
+
+    Returns ``(backend, quality)`` where ``quality`` is one of:
 
     Returns ``(backend, quality)`` where ``quality`` is one of:
       - ``"exact"``            -- model_type matched a backend's
@@ -420,13 +449,15 @@ def pick_backend_with_quality(
     """
     nmt = _norm_mt(model_type)
     pt = (pipeline_tag or "").lower()
-    candidates = backends_for_category(category)
+    _ok = demo_path_exists if require_demo else (lambda _b: True)
+    candidates = [b for b in backends_for_category(category) if _ok(b)]
+    everything = [b for b in all_backends() if _ok(b)]
 
     for b in candidates:
         if nmt and nmt in {_norm_mt(k) for k in b.model_type_keys}:
             return (b, "exact")
     if nmt:
-        for b in all_backends():
+        for b in everything:
             if nmt in {_norm_mt(k) for k in b.model_type_keys}:
                 return (b, "exact")
 
@@ -434,7 +465,7 @@ def pick_backend_with_quality(
         if pt and pt in {t.lower() for t in b.pipeline_tags}:
             return (b, "pipeline")
     if pt and (not candidates or category == "Unknown"):
-        for b in all_backends():
+        for b in everything:
             if pt in {t.lower() for t in b.pipeline_tags}:
                 return (b, "pipeline")
 

@@ -8148,6 +8148,20 @@ def _warn_on_registry_drift(args=None) -> None:
             )
             if os.environ.get("TT_HW_PLANNER_VERBOSE"):
                 print(format_drift(issues))
+        # Dead template entries are a different problem from path drift: routing
+        # skips them, but they stay in the registry until a human decides whether
+        # to delete, repoint, or land the demo. Report them once, plainly.
+        try:
+            from .registry_sync import format_prunable, prune_registry
+
+            _dead, _applied = prune_registry()
+            _prune_report = format_prunable(_dead)
+            if _prune_report:
+                print(_prune_report, file=sys.stderr)
+            if _applied:
+                print("  registry: pruned the entries above.", file=sys.stderr)
+        except Exception:
+            pass
     except Exception:
         pass
 
