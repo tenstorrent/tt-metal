@@ -1,0 +1,19 @@
+[91m Error in detecting devices!
+Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /project/device/tt_device/tt_device.cpp:242
+ 1. /tmp/_MEIyijti6/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0xedeb5) [0x7bd96d0e5eb5]
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 3. tt::umd::TopologyDiscovery::get_connected_devices()
+ 4. tt::umd::TopologyDiscovery::create_ethernet_map()
+ 5. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&, tt::umd::IODeviceType, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 6. /tmp/_MEIyijti6/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0x186951) [0x7bd96d17e951]
+ 7. /tmp/_MEIyijti6/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0x1a0833) [0x7bd96d198833]
+ 8. _PyEval_EvalFrameDefault
+ 9. /tmp/_MEIyijti6/libpython3.10.so.1.0(+0x1b2026) [0x7bd96ed14026]
+10. _PyEval_EvalFrameDefault
+11. /tmp/_MEIyijti6/libpython3.10.so.1.0(+0x1b2026) [0x7bd96ed14026]
+12. PyEval_EvalCode
+13. /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7bd96ef3ad90]
+14. __libc_start_main
+
+ Exiting... [0m

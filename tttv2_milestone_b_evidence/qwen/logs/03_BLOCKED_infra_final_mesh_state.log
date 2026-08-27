@@ -1,0 +1,17 @@
+=== FINAL MESH STATE 2026-08-27T01:00:41+00:00 ===
+-- /dev/tenstorrent nodes --
+32
+-- /sys/class/tenstorrent (real, enumerated) --
+tenstorrent!8 tenstorrent!9 tenstorrent!12 tenstorrent!13 tenstorrent!15 tenstorrent!16 tenstorrent!17 tenstorrent!18 tenstorrent!19 tenstorrent!20 tenstorrent!21 tenstorrent!22 tenstorrent!23 tenstorrent!24 tenstorrent!25 tenstorrent!26 tenstorrent!27 tenstorrent!28 tenstorrent!29 tenstorrent!30 tenstorrent!31
+-- count --
+21
+-- missing (stale /dev node, no sysfs) --
+0 1 2 3 4 5 6 7 10 11 14
+-- tt-smi -ls after both recovery attempts --
+[91m Error in detecting devices!
+Read 0xffffffff over PCIe ID 17: the board should be reset.
+Location: /project/device/tt_device/tt_device.cpp:242
+ 1. /tmp/_MEIrklJKt/tt_umd/tt_umd.cpython-310-x86_64-linux-gnu.so(+0xedeb5) [0x7102f88a2eb5]
+ 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration<long, std::ratio<1l, 1000l> >, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ 3. tt::umd::TopologyDiscovery::get_connected_devices()
+exit=0

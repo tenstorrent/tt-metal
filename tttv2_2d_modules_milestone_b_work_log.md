@@ -676,3 +676,59 @@ Plan steps 1-3 for Llama-3.3-70B on WH Galaxy `(8, 4)`. Full account:
   - it was **398 passed** one code change earlier on a working mesh. `test_plans.py` is recorded as
   NOT RUN at the final state, by infrastructure failure. Boundary greps for `_1d.py`, `llm_runtime`
   and `qwen` are all empty. No test was deleted, `xfail`ed, skipped or relaxed.
+
+## 2026-08-27 — `mb-qwen` (plan steps 4–6, Qwen3-32B): BLOCKED (infra), host work delivered
+
+- **`BLOCKED (infra)`. Not one device test ran.** The mesh is worse than `mb-llama` left it:
+  **eleven** of 32 boards are off the PCIe bus (`0–7, 10, 11, 14`), not one. Both permitted recovery
+  attempts were spent and both failed — `tt-smi -glx_reset` cannot start (it must open the missing
+  `/dev/tenstorrent/7`), and `tt-smi -r` reset the 21 visible devices then failed re-initialising
+  with `Read 0xffffffff over PCIe ID 17`. Neither path can recover a board that is not on the bus.
+  Needs an IPMI tray power cycle or a host reboot.
+- **`ls /dev/tenstorrent | wc -l` is not a mesh health check on this host.** It returned 32
+  throughout while eleven nodes were stale. `ls /sys/class/tenstorrent | wc -l` returned the true 21.
+  The house-rules run procedure opens with the misleading one; worth correcting.
+- **Second, independent blocker: Qwen3-32B's weights are not on this machine.** The HF cache entry is
+  config-only (12 KB). `/proj_sw/user_dev/hf_data` has Llama-3.3-70B but no Qwen. So the full model,
+  the demo and the accuracy gate were unreachable even setting the mesh aside.
+- **No Qwen PCC, no accuracy number, no demo output exists.** The finish condition was not met.
+- **The 64-head decoupled geometry is now qualified on host — it previously had no evidence of any
+  kind.** Attention rebuilt from the converted tensors alone (`wqkv`, `wo`, `q_norm`, `k_norm`, Meta
+  RoPE tables) reproduces unmodified HF `Qwen3Attention` at PCC ≥ 0.9999, on a fixture with the real
+  decoupled ratio rather than Milestone A's square 40-head one. The `wo` pairing
+  `(local_attention_dim 1024, local_dim 1280)` is correct and pinned. **Still unqualified on
+  silicon**; job 0's O4 stands for the device half.
+- **The trap this model hides:** `local_qkv_size == local_dim == 1280` for Qwen3-32B, so a
+  fused-QKV-vs-residual width confusion is **shape-invisible**. `local_attention_dim` (1024) is the
+  width that differs.
+- **Q/K norm, host half done.** `reverse_permute_1d` is proved to be the same permutation
+  `reverse_permute` applies to the projection rows, and head-local RMSNorm reproduces HF's
+  `Qwen3RMSNorm` at PCC ≥ 0.9999 for both norms. The first version of that test derived its
+  permutation from the function under test and was therefore a tautology; it was rewritten to state
+  the permutation independently. **No Qwen Q/K-norm number from silicon exists anywhere** — D2's
+  defect was that the path aborted before producing one, and it still has not run.
+- **Ring widths: the brief was right, and the reason is exact divisibility.** Ring shard is 160;
+  Qwen's `local_hidden_dim` 3200 is a multiple of it so the logical width scatters (**key 800**,
+  placement 960), Llama's 3584 is not so the padded width scatters (key 960). Arithmetic, not a
+  defect. Device-unverified.
+- **Risk 4 resolved:** the real `config.json` declares `attention_bias: false`. No contract change
+  needed, and a test now asserts it plus every contract field (it runs, since the config is cached
+  even though the weights are not).
+- **Two placement defects ported from Llama, both UNVERIFIED on device:** Qwen's `_relocate` was
+  still the full-grid three-argument `to_memory_config`, and its embedding decode output was
+  interleaved `L1_MEMORY_CONFIG`. Both were what job 1 found on silicon for Llama; this package had
+  carried them unchanged. Pinned by three new tests — the embedding one was confirmed to fail
+  against the unfixed code.
+- **`test_model_host.py` never built the transformer config**, so module-to-module placement wiring
+  had zero host coverage. It builds fine against the existing `MagicMock(spec=ttnn.MeshDevice)` and
+  the decode placements resolve to real `MemoryConfig`s — cheap coverage for the class of defect
+  that produced two of this milestone's nine.
+- **No shared Galaxy code was touched**, so Llama's evidence is not invalidated and its device gates
+  did not need re-running (they could not have been).
+- Host gates: **410 passed, 0 failed** driver-free. The brief's gate as written is *not* host-only —
+  `models/common/tests/modules` collects device suites, giving 289 device-open errors with the mesh
+  down (0 failed). Boundary greps for `_1d.py`, `llm_runtime` and the Llama import are all empty.
+- **Deliberate omission:** no new device test files were written, though deliverable 2 asked for
+  them. Unrun device code would invite `mb-coverage` to trust it. Recorded as a decision, not an
+  oversight.
+- No test was deleted, `xfail`ed, skipped or relaxed. No threshold was tuned.
