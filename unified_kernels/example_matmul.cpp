@@ -51,8 +51,8 @@ void kernel_main() {
     for (uint32_t k = 0; k < kKBlocks; ++k) {
         const bool last = (k == kKBlocks - 1);
 
-        u::ComputeBlock a_block = u::noc_load<0, 0>(a_storage, my_row, a, me.y * kKBlocks + k).wait();
-        u::ComputeBlock b_block = u::noc_load<1, 1>(b_storage, my_column, b, me.x * kKBlocks + k).wait();
+        u::ComputeBlock a_block = u::noc_load<0>(a_storage, my_row, a, me.y * kKBlocks + k).wait();
+        u::ComputeBlock b_block = u::noc_load<1>(b_storage, my_column, b, me.x * kKBlocks + k).wait();
 
         u::Block result =
             total.accumulate(u::matmul(a_block, b_block), last, [&](auto sum) { return sum.bias(bias_row).relu(); });

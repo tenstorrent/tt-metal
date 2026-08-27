@@ -74,6 +74,38 @@ without a marker are mechanisms the headers document as the caller's responsibil
     this form. The harness comment ("Bounding box, not num_cores: a barrier addresses a
     rectangle") acknowledges the mechanism without closing it.
 
+13b. **`noc_load`'s `pair` template parameter.** Needed, but awkwardly shaped, and the
+    combination is worth naming. It selects which handshake semaphore pair a collective
+    uses, and it defaults to `thread` -- which is right when two collectives run on
+    different threads and silently WRONG when they share one, because both then get the
+    same pair and the ready counter interleaves (hazard 12). Four things compound:
+
+    - `thread` and `pair` are adjacent small ints at the call site, so `noc_load<0, 1>` and
+      `noc_load<1, 0>` are a transposition apart and both compile.
+    - Getting it wrong is a HANG, not an error.
+    - The invariant is whole-kernel -- "two concurrent collectives on one thread must
+      differ" -- but is expressed at individual call sites, which in `matmul_blocked` sit
+      inside a loop dozens of lines from each other.
+    - The default is the bad kind: correct in the common case, hanging in the other.
+
+    **The capability is load-bearing**, so this is not an argument for deleting it:
+    `matmul_mcast.cpp` runs BOTH broadcasts on thread 0 whenever `MM_IN1_THREAD=0`, which
+    is `test_unified_matmul_mcast.py`'s DEFAULT and exists because ttsim cannot multicast
+    on NOC 1. With `pair = thread` those two would share a pair and hang.
+
+    **Partly closed:** the index is bounded at 2 now. It never was, and pair 2 computed
+    `base + 4`, which IS `kCopyArrivedSem<0>` -- a kernel asking for it would have shared
+    semaphores with the `noc_core_write` arrival flag and hung. Verified by sabotage: it is
+    a build error now.
+
+    **Still open:** the shape. Moving the identity onto the region object -- so the two
+    `LogicalMcast` declarations carry `Handshake::First` / `Handshake::Second` and sit side
+    by side at the top of the kernel -- would put both halves of a whole-kernel invariant
+    in one place, remove the adjacent-ints transposition, and close the range by
+    construction. The redundant `noc_load<0, 0>` / `noc_load<1, 1>` in
+    `example_matmul.cpp` (now dropped) is the small evidence that the parameter invites
+    noise even from someone who knows what it does.
+
 14. **Mismatched multicast rectangle** computed differently on sender and receiver.
 
 15. **`noc_core_write` reused across rounds without an intervening barrier.** The documented
