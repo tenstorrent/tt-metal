@@ -898,6 +898,46 @@ KNOBS = {
     # -12.91%); sqrt-fresh byte/cycle-inert control.
     "crossrow-pairing-seed": "-mtt-tensix-optimize-crossrow-pairing "
     "-mtt-tensix-optimize-crossrow-pairing-seed",
+    # IC (crossrow-2datum, lane IC 2026-08-27): the tanh window-density
+    # attack named by lane IB's accuracy-license refusal — the
+    # tanh-fresh/tanh-fitted +24.14 was a pure formation gap (hand =
+    # 2-datum pipelined replay body, sem = 17-word single-datum window +
+    # interlock SFPNOP over BIT-IDENTICAL arithmetic).  Two composed
+    # Init(0) widenings, each refusing by name alone on this class:
+    # (1) -mtt-tensix-optimize-crossrow-pairing-stall-words admits
+    # next-slot acceptance-stall words (SFPSWAP family) into the
+    # cross-row pairing vocabulary, PRICED at two issue slots in the
+    # steady-state II model (both arms; recorded-word count stays one),
+    # gives the copy half's webs first claim on free LREGs, selects
+    # ready items critical-path-first so the two rows' tails interleave
+    # (the SFPMAD->SFPSWAP erratum shadows fill with real words), and
+    # refuses by name (crossrow-pairing-capture-overflow) any pairing
+    # whose row words plus surviving pad sites exceed the 32-slot replay
+    # buffer — at 2n == 32 one pad silently trades record+launch for a
+    # rolled stream (the adjudicated round-cc-modulo defect; observed
+    # live during bring-up and belted).  audited_latency() untouched:
+    # fill passes keep refusing stall words (lane BM).
+    # (2) -mtt-tensix-optimize-hoisted-prgm-reuse adds the HOISTED-REUSE
+    # const-residency class: preheader-hoisted loop-invariant constants
+    # re-claim PRGM registers through the established place() machinery
+    # — free slot, TU value-identical reuse (the fresh TU: the shared op
+    # init claims L12..L14 with BIT-IDENTICAL Sollya coefficients), or
+    # the new DEAD-claim reclaim (the fitted TU: no statement in the TU
+    # reads the claimed slot — typed sfpreadlreg census, raw words
+    # closed by the audited table — so reprogramming it with the
+    # fitter's own coefficients inside a call-free
+    # programming-to-readers window is unobservable).  Releases the 3
+    # LREGs the pair renames need (the 8/8-pressure wall).
+    # Composed at ON-36 both tanh sem TUs deliver the hand form: ONE
+    # 32-word 2-datum record + 15 launches, trips 32->16, ZERO SFPNOP,
+    # C6/C5/C4 on CRegs, modeled II 42 -> 34 per pair.  Hand arms
+    # byte-inert under the knob.  Residual vs hand: 4 duplicated
+    # in-loop coefficient loadi words per pair (hand shares one reload
+    # register sequentially across rows — inexpressible in the
+    # position-blind hard-reg web vocabulary without value-aware
+    # re-rooting; named successor), modeled 34 vs hand's 30 slots/pair.
+    "crossrow-2datum": "-mtt-tensix-optimize-hoisted-prgm-reuse "
+    "-mtt-tensix-optimize-crossrow-pairing-stall-words",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1237,6 +1277,7 @@ KNOB_MODES = {
     # knob; promotion requires an R9 witness and ON-vs-ON attribution
     # ceremony.
     "crossrow-pairing-seed": "on-plus",
+    "crossrow-2datum": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
