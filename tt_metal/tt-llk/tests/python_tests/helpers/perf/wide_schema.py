@@ -21,7 +21,14 @@ Imports no device libraries, so it loads without hardware.
 
 from dataclasses import dataclass
 
-from .schema import MEAN, STD, stat_column
+from .schema import (
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 
 
 @dataclass(frozen=True)
@@ -54,9 +61,8 @@ _TIMING_COLUMNS = [
 # ── The one published table: every column, headers + provenance ─────────────
 # This IS the table handed to the data team; the Parquet is written with it. Each
 # column's `origin` says who fills it — "test" (default) or "ci".
-# TODO(counters, deferred — see #51249): counter/metric columns join here as
-# nullable once a counter run captures their exact names. Quasar has its own
-# published table in wide_schema_quasar.py — do not mix Quasar columns in here.
+# Counter metrics are deliberately not here, see DROPPED_COLUMNS below. Quasar has
+# its own published table in wide_schema_quasar.py — do not mix Quasar columns in.
 DB_SCHEMA = [
     Column("marker", "string", False, "identity"),
     # formats
@@ -148,11 +154,20 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 # Columns a test emits but the published table intentionally drops. The converter
 # removes them instead of failing on an unknown column.
 #   TEXT_SIZE(...)  — per-stage ELF code size; not used by the gate
+#   <RUN_TYPE>_<metric>  — counter-derived metrics, only produced under
+#   --enable-perf-counters, which no pipeline passes. They stay in the main CSV;
+#   publishing them would widen the table by 306 columns that are NULL in every
+#   row the gate ever sees. See DATA-1769.
 DROPPED_COLUMNS = {
     "TEXT_SIZE(L1_TO_L1)",
     "TEXT_SIZE(MATH_ISOLATE)",
     "TEXT_SIZE(PACK_ISOLATE)",
     "TEXT_SIZE(UNPACK_ISOLATE)",
+} | {
+    metric_column(run_type, base)
+    for run_type in RUN_TYPE_NAMES
+    for metric in METRIC_BASES
+    for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
 }
 
 # Row identity: one test config in one run. The sweep-parameter columns (which
