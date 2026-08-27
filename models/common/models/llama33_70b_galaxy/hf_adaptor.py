@@ -283,6 +283,7 @@ def from_pretrained(
     use_qk_fused_rotary: bool = True,
     cache_dir: Path | str | None = None,
     load_hf_model: Any = None,
+    release_global_cb_on_prefill: bool = False,
 ) -> Llama33_70BGalaxyForCausalLM:
     """Load `meta-llama/Llama-3.3-70B-Instruct` onto one WH Galaxy `(8, 4)` mesh.
 
@@ -332,6 +333,7 @@ def from_pretrained(
         enable_device_sampling=enable_device_sampling,
         use_qk_fused_rotary=use_qk_fused_rotary,
         cache_path=cache_path,
+        release_global_cb_on_prefill=release_global_cb_on_prefill,
     )
     tokenizer = load_tokenizer(hf_model)
     if stop_token_ids:

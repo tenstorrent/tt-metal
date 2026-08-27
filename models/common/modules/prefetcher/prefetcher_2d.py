@@ -95,6 +95,29 @@ class Prefetcher2DConfig:
     #: Defaults to ``False`` so the Milestone A qualification of this module is
     #: bit-for-bit unchanged unless a caller asks for the deferral.
     defer_global_cb: bool = False
+    #: Release the global circular buffer again on ``activate("prefill")``.
+    #:
+    #: ``defer_global_cb`` only helps the *first* prefill. Once decode has been
+    #: activated the buffer is resident again, so a **prefill after a decode** is
+    #: back to being unplaceable — which is what a second `GalaxyDirectRunner` in
+    #: one process does, and it aborts exactly as D-B20 did:
+    #:
+    #:     TT_THROW ... Statically allocated circular buffers in program 100
+    #:     clash with L1 buffers on core range [0-0 - 0-3]
+    #:
+    #: This releases it on the way into prefill and lets ``_ensure_global_cb``
+    #: recreate it on the way back into decode. There is no `deallocate` on a
+    #: `global_circular_buffer`, so releasing means dropping **every** reference
+    #: and letting the C++ destructor free the L1 — attempt 1 found that
+    #: ``cleanup()`` alone does not, because the mode contexts still hold handles.
+    #:
+    #: **Defaults to False, and the default is the qualified path.** Two risks the
+    #: flag exists to keep away from it: the recreated buffer must land at the same
+    #: L1 address, or decode programs already in the ttnn program cache hold stale
+    #: addresses (a silent corruption, not an error); and it changes the
+    #: mode-switching of the one module every qualified decode path depends on.
+    #: Requires ``defer_global_cb``, since both describe the same lifetime.
+    release_global_cb_on_prefill: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -119,6 +142,8 @@ class Prefetcher2DConfig:
             raise ValueError("address tensor placement must be fully resolved")
         if self.prefetch_num_layers <= 0:
             raise ValueError("prefetch_num_layers must be positive")
+        if self.release_global_cb_on_prefill and not self.defer_global_cb:
+            raise ValueError("release_global_cb_on_prefill requires defer_global_cb")
         if self.expected_weight_count % self.prefetch_num_layers != 0:
             raise ValueError("expected_weight_count must be divisible by prefetch_num_layers")
 
@@ -399,6 +424,8 @@ class Prefetcher2D:
             self._stop_prefetch()
 
         try:
+            if mode == "prefill":
+                self._release_global_cb()
             self._configure_mode(context)
             if mode == "decode":
                 self._ensure_global_cb(context)
@@ -442,6 +469,8 @@ class Prefetcher2D:
 
         if not self.config.defer_global_cb or self._global_cb is not None:
             return
+        # Reached either after sealing (never created) or after
+        # `_release_global_cb` freed it on the way into prefill.
         if self._resolved_global_cb_size is None:
             raise RuntimeError("global CB size was not resolved during sealing")
         global_cb = self._create_global_cb(
@@ -451,6 +480,27 @@ class Prefetcher2D:
         )
         self._global_cb = global_cb
         object.__setattr__(context, "global_cb", global_cb)
+
+    def _release_global_cb(self) -> None:
+        """Drop every reference to the global CB so its L1 is freed.
+
+        Only when `release_global_cb_on_prefill` is set. Called before the prefill
+        sub-device manager is loaded, and after any prefetch program has been
+        stopped by `activate`, so nothing is reading the buffer.
+
+        There is no `deallocate` on a `global_circular_buffer`; the L1 is held by
+        the C++ object and freed by its destructor, so *both* references have to
+        go - this owner's and the sealed decode context's. `gc.collect()` is not
+        called: CPython frees the object as soon as the last reference is cleared,
+        and a collect here would be a much bigger hammer than this needs.
+        """
+
+        if not self.config.release_global_cb_on_prefill or self._global_cb is None:
+            return
+        decode_context = self._contexts.get("decode")
+        if decode_context is not None:
+            object.__setattr__(decode_context, "global_cb", None)
+        self._global_cb = None
 
     def cleanup(self) -> None:
         if self._cleaned:

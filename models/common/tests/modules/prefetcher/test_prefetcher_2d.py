@@ -125,7 +125,13 @@ def resources():
     return ResourceHarness()
 
 
-def make_config(mesh=None, expected_weight_count=2, global_cb_size=4096, defer_global_cb=False):
+def make_config(
+    mesh=None,
+    expected_weight_count=2,
+    global_cb_size=4096,
+    defer_global_cb=False,
+    release_global_cb_on_prefill=False,
+):
     mesh = FakeMesh() if mesh is None else mesh
     return Prefetcher2DConfig(
         mesh_device=mesh,
@@ -149,6 +155,7 @@ def make_config(mesh=None, expected_weight_count=2, global_cb_size=4096, defer_g
         address_memory_config="address-memcfg",
         address_mesh_mapper="address-mapper",
         defer_global_cb=defer_global_cb,
+        release_global_cb_on_prefill=release_global_cb_on_prefill,
     )
 
 
@@ -489,3 +496,46 @@ def test_context_manager_cleans_up_on_failure(resources):
             raise RuntimeError("body failure")
     assert ("remove", "manager-1") in owner.config.mesh_device.events
     assert ("remove", "manager-0") in owner.config.mesh_device.events
+
+
+def test_releasing_the_global_cb_on_prefill_recreates_it_on_the_next_decode(resources):
+    """`release_global_cb_on_prefill` gives the buffer a per-mode lifetime.
+
+    `defer_global_cb` only helps the *first* prefill; once decode has run, the
+    buffer is resident again and a prefill after a decode is unplaceable, which is
+    what a second runner in one process does. This releases and recreates it.
+
+    The properties that matter: the release drops the sealed decode context's
+    reference too (nothing else can free the L1), and the next decode activation
+    makes a *new* buffer and rebinds it, so the prefetch program is never handed
+    None.
+    """
+
+    owner = initialized_owner(
+        resources, expected_weight_count=1, defer_global_cb=True, release_global_cb_on_prefill=True
+    )
+    owner.register_weight("weight", FakeTensor(owner.config.mesh_device, 101, 128))
+    prefill, decode = owner.seal()
+
+    owner.activate("decode")
+    assert len(resources.created_cbs) == 1
+    first = decode.global_cb
+    assert first == resources.created_cbs[0]
+
+    owner.activate("prefill")
+    # Both references gone, so the C++ destructor can free the L1.
+    assert decode.global_cb is None
+    assert owner._global_cb is None
+    assert prefill.global_cb is None
+
+    owner.activate("decode")
+    assert len(resources.created_cbs) == 2
+    assert decode.global_cb == resources.created_cbs[1]
+    starts = [event for event in resources.prefetch_events if event[0] == "start"]
+    assert starts[-1][3] == resources.created_cbs[1]
+    owner.cleanup()
+
+
+def test_release_without_defer_is_rejected(expect_error):
+    with expect_error(ValueError, "requires defer_global_cb"):
+        make_config(defer_global_cb=False, release_global_cb_on_prefill=True)

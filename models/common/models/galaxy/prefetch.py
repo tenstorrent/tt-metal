@@ -114,6 +114,7 @@ def build_galaxy_prefetcher_config(
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetch_num_layers: int = 1,
     defer_global_cb: bool = True,
+    release_global_cb_on_prefill: bool = False,
 ) -> Prefetcher2DConfig:
     """Resolve the prefetcher policy that matches a Galaxy resource config.
 
@@ -139,6 +140,10 @@ def build_galaxy_prefetcher_config(
         prefetch_num_layers=prefetch_num_layers,
         mesh_shape=resources_config.mesh_shape,
         defer_global_cb=defer_global_cb,
+        # Defaults to False: see the field's docstring. Deferring the allocation is
+        # safe and qualified; releasing and recreating it per mode is not, and it is
+        # opt-in until something re-qualifies the decode path behind it.
+        release_global_cb_on_prefill=release_global_cb_on_prefill,
     )
 
 
@@ -149,6 +154,7 @@ def build_galaxy_prefetcher(
     expected_weight_count: int,
     global_cb_size: int | None = GALAXY_GLOBAL_CB_SIZE,
     prefetch_num_layers: int = 1,
+    release_global_cb_on_prefill: bool = False,
     **injections: Any,
 ) -> Prefetcher2D:
     """Create an initialized, unsealed `Prefetcher2D` for one Galaxy mesh."""
@@ -160,6 +166,7 @@ def build_galaxy_prefetcher(
             expected_weight_count=expected_weight_count,
             global_cb_size=global_cb_size,
             prefetch_num_layers=prefetch_num_layers,
+            release_global_cb_on_prefill=release_global_cb_on_prefill,
         ),
         **injections,
     )
