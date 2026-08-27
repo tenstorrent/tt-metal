@@ -303,6 +303,20 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     return L_inv_4d
 
 
+def _masked_gram_plus_identity(kk, mask, identity, *, memory_config):
+    """Form ``identity + kk * mask`` without three full matrices co-resident.
+
+    The multiply output owns fresh storage, so ``kk`` is dead as soon as that
+    operation completes. Releasing it before the add gives the allocator an
+    exact-size hole for the result and bounds the chunk scratch high-water.
+    """
+    scaled = ttnn.multiply(kk, mask, memory_config=memory_config)
+    ttnn.deallocate(kk)
+    result = ttnn.add(identity, scaled, memory_config=memory_config)
+    ttnn.deallocate(scaled)
+    return result
+
+
 def chunk_gated_delta_rule_seq(
     q,  # [BH, T, K] float32 on mesh
     k,  # [BH, T, K] float32 on mesh
@@ -466,8 +480,7 @@ def chunk_gated_delta_rule_seq(
 
     _ck("kk", kk)
     # ---- L_mat = I + kk * L_mask ----
-    L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
-    ttnn.deallocate(kk)
+    L_mat = _masked_gram_plus_identity(kk, L_mask, _eye_1cc, memory_config=_cmc)
     _ck("L_mat", L_mat)
 
     # ---- Normalize to unit-diagonal: L_unit = D^{-1} L_mat ----
