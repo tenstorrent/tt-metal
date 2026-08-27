@@ -111,20 +111,20 @@ safe-outputs:
     footer: "> 🔷 *Reviewed using [Tenstorrent domain skills](https://github.com/blozano-tt/skills) by [{workflow_name}]({run_url})*{ai_credits_suffix}{history_link}"
     run-failure: 🔷 [{workflow_name}]({run_url}) {status} during the Tenstorrent skills review.
 skills:
-- blozano-tt/skills/tt-review-core@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-review-router@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/ttnn-op-kernel-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-l1-memory-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-model-bringup-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-multichip-ccl-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-trace-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-precision-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-test-coverage-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/llk-race-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/llk-perf-audit-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-vllm-serving-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-perf-claim-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
-- blozano-tt/skills/tt-comment-hygiene-review@31e612028d6b50a5cf5916c869c636fa4dea2eb2
+- blozano-tt/skills/tt-review-core@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-review-router@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/ttnn-op-kernel-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-l1-memory-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-model-bringup-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-multichip-ccl-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-trace-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-precision-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-test-coverage-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/llk-race-audit-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/llk-perf-audit-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-vllm-serving-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-perf-claim-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
+- blozano-tt/skills/tt-comment-hygiene-review@29f986f97ca6ad20744315ebc916fd553c10d5d6
 timeout-minutes: 15
 ---
 
