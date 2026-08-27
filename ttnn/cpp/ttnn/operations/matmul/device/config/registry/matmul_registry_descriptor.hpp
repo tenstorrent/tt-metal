@@ -161,6 +161,9 @@ struct TableMetadata {
     // Zero for exact-only locks. Active online models bind this independently
     // reconstructed digest in both table metadata and model metadata.
     Sha256 online_model_bundle_binding_sha256{};
+    // Distinct from the current exact-entry bank: retained models bind the
+    // immutable tables they were actually fit on, even as exact data advances.
+    Sha256 online_model_training_table_inventory_sha256{};
 };
 
 static_assert(std::is_trivially_copyable_v<EntryDescriptor>);

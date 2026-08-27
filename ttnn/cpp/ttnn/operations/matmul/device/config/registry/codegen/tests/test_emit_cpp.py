@@ -141,7 +141,6 @@ def convert_to_direct_bank_lock(lock: dict, *, include_exact: bool = True) -> di
 
     models = lock.get("online_program_config_models", [])
     for model in models:
-        model["training_table_sha256"] = bank_artifact_sha256
         model["support"]["board_capability_class"] = 0
         model["support"]["device_count"] = 1
         model["support"]["mesh_rows"] = 1
@@ -163,6 +162,7 @@ def convert_to_direct_bank_lock(lock: dict, *, include_exact: bool = True) -> di
         "exact_entry_inventory_sha256": emitter._sha256_value(emitter._exact_entry_inventory(lock)),
         "exact_native_support_sha256": emitter.exact_native_support_hash(lock),
         "online_model_bundle_binding_sha256": models[0]["bundle_binding_sha256"] if models else "0" * 64,
+        "online_model_training_table_inventory_sha256": emitter.online_model_training_table_inventory_hash(models),
         "proof_sha256": "0" * 64,
         "safety_evidence_sha256": emitter.program_config_safety_inventory_hash(lock, models),
         "schema_version": 2,
@@ -462,16 +462,26 @@ def test_direct_bank_exact_entry_emits_without_session_certificate_and_rejects_t
             raise AssertionError("direct-bank evidence tamper must fail closed")
 
 
-def test_direct_bank_optional_online_model_emits_under_same_schema() -> None:
+def test_direct_bank_exact_update_coexists_with_prior_online_model_fit_bank() -> None:
     lock = fixture()
     lock["online_program_config_models"] = [active_online_model(lock)]
-    convert_to_direct_bank_lock(lock, include_exact=False)
+    convert_to_direct_bank_lock(lock)
     checked = emitter.validate_lock(lock)
     _, source = emitter.emit(checked)
     assert b".online_program_config_model_evidence_schema_version = 2" in source
     assert b"kOnlineModel0" in source
     assert checked["online_program_config_models"][0]["support"]["board_capability_class"] == 0
     assert checked["online_program_config_models"][0]["support"]["topology_sha256"] == "0" * 64
+    assert (
+        checked["online_program_config_models"][0]["training_table_sha256"]
+        != checked["program_config_only_evidence"]["bank_artifact_sha256"]
+    )
+    assert (
+        emitter._bytes_cpp(
+            checked["program_config_only_evidence"]["online_model_training_table_inventory_sha256"]
+        ).encode()
+        in source
+    )
 
 
 def test_active_online_program_config_model_validates_emits_and_has_reference_parity() -> None:

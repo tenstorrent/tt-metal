@@ -397,6 +397,24 @@ def online_models_bundle_binding(lock: dict[str, Any], models: list[dict[str, An
     return _sha256_value(preimage)
 
 
+def online_model_training_table_inventory_hash(models: list[dict[str, Any]]) -> str:
+    """Bind each retained model to its own immutable fit table.
+
+    Exact entries may advance to a newer bank independently of a previously
+    accepted model. Keeping this as a distinct root preserves both lineages.
+    """
+
+    return _sha256_value(
+        [
+            {
+                "model_sha256": model["model_sha256"],
+                "training_table_sha256": model["training_table_sha256"],
+            }
+            for model in models
+        ]
+    )
+
+
 def program_config_only_evidence_hash(evidence: dict[str, Any]) -> str:
     payload = {key: value for key, value in evidence.items() if key != "proof_sha256"}
     return _sha256_value(payload)
@@ -551,6 +569,7 @@ def _program_config_only_evidence(
             "exact_entry_inventory_sha256",
             "exact_native_support_sha256",
             "online_model_bundle_binding_sha256",
+            "online_model_training_table_inventory_sha256",
             "proof_sha256",
             "safety_evidence_sha256",
             "schema_version",
@@ -573,6 +592,7 @@ def _program_config_only_evidence(
             "online_model_bundle_binding_sha256": (
                 online_models[0]["bundle_binding_sha256"] if online_models else "0" * 64
             ),
+            "online_model_training_table_inventory_sha256": online_model_training_table_inventory_hash(online_models),
             "safety_evidence_sha256": program_config_safety_inventory_hash(lock, online_models),
         }
         for name, expected in bound_root.items():
@@ -582,11 +602,6 @@ def _program_config_only_evidence(
             if entry["bank_evidence"]["source_sha256"] != item["bank_artifact_sha256"]:
                 raise LockValidationError(
                     f"$.program_config_exact_entries[{index}].bank_evidence.source_sha256 bank binding mismatch"
-                )
-        for index, model in enumerate(online_models):
-            if model["training_table_sha256"] != item["bank_artifact_sha256"]:
-                raise LockValidationError(
-                    f"$.online_program_config_models[{index}].training_table_sha256 bank binding mismatch"
                 )
         if item["proof_sha256"] != program_config_only_evidence_hash(item):
             raise LockValidationError("$.program_config_only_evidence.proof_sha256 mismatch")
@@ -1708,6 +1723,7 @@ std::span<const compact::ProgramConfigGbdtModel> online_models() noexcept;
         + "}};"
     )
     bundle_binding = online_models[0]["bundle_binding_sha256"] if online_models else "0" * 64
+    model_training_tables = online_model_training_table_inventory_hash(online_models)
     evidence_schema_version = program_config_only_evidence["schema_version"] if program_config_only_evidence else 0
     source = f"""// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
@@ -1729,6 +1745,7 @@ constexpr compact::TableMetadata kMetadata{{
     .build_identity_sha256 = {_bytes_cpp(checked["build_identity_sha256"])},
     .runtime_capability_sha256 = {_bytes_cpp(checked["runtime_capability_sha256"])},
     .online_model_bundle_binding_sha256 = {_bytes_cpp(bundle_binding)},
+    .online_model_training_table_inventory_sha256 = {_bytes_cpp(model_training_tables)},
 }};
 constexpr std::array<compact::EntryDescriptor, {len(checked["entries"])}> kEntries{{{{
 {entry_text}
