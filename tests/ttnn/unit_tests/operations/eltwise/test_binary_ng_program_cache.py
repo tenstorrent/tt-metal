@@ -722,3 +722,62 @@ def test_ng_where_scalar_preallocated_output_dtype(device, isolate_program_cache
 
     ref = torch.where(pred.bool(), t_true.float(), torch.full(shape, scalar_false))
     assert_with_pcc(ref, ttnn.to_torch(res).float(), 0.999)
+
+
+@pytest.mark.parametrize("op", [ttnn.add, ttnn.subtract, ttnn.multiply, ttnn.div])
+def test_scalar_tensor_scalar_value_excluded_from_hash(device, isolate_program_cache, op):
+    """The mirrored scalar reaches the kernel as a runtime arg, so its value must not key
+    the cache -- only the operand side does."""
+    shape = (1, 1, 320, 384)
+    torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.5
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+
+    op(1.5, tt_a)
+    ttnn.synchronize_device(device)
+    before = device.num_program_cache_entries()
+
+    for scalar in [2.0, 2.5, 3.0, 4.0, 5.5, 6.25]:
+        result = ttnn.to_torch(op(scalar, tt_a))
+        assert_with_pcc(_torch_scalar_op(op)(scalar, torch_a), result, 0.999)
+
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == before
+
+
+@pytest.mark.parametrize("op", [ttnn.subtract, ttnn.div])
+def test_scalar_side_is_in_hash(device, isolate_program_cache, op):
+    """The two operand orders compile different kernels, so they must not share an entry --
+    sharing one would hand back the un-mirrored result on the second call."""
+    shape = (1, 1, 320, 384)
+    torch_a = torch.rand(shape, dtype=torch.bfloat16) + 0.5
+    tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    scalar = 2.0
+
+    tensor_first = ttnn.to_torch(op(tt_a, scalar))
+    ttnn.synchronize_device(device)
+    after_first = device.num_program_cache_entries()
+
+    scalar_first = ttnn.to_torch(op(scalar, tt_a))
+    ttnn.synchronize_device(device)
+
+    assert device.num_program_cache_entries() == after_first + 1
+    assert_with_pcc(_torch_scalar_op(op)(scalar, torch_a), scalar_first, 0.999)
+    assert_with_pcc(_torch_tensor_op(op)(torch_a, scalar), tensor_first, 0.999)
+
+
+def _torch_scalar_op(op):
+    return {
+        ttnn.add: lambda s, t: s + t,
+        ttnn.subtract: lambda s, t: s - t,
+        ttnn.multiply: lambda s, t: s * t,
+        ttnn.div: lambda s, t: s / t,
+    }[op]
+
+
+def _torch_tensor_op(op):
+    return {
+        ttnn.add: lambda t, s: t + s,
+        ttnn.subtract: lambda t, s: t - s,
+        ttnn.multiply: lambda t, s: t * s,
+        ttnn.div: lambda t, s: t / s,
+    }[op]
