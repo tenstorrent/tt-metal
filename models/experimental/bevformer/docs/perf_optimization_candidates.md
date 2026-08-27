@@ -14,20 +14,18 @@ Numbers quoted below as *cost* come from the baseline profile
 |--:|---|---|---|---|---|---|
 | [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | gap | **1917 ms** (62% of wall) | — | — | partly landed |
 | [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | gap | **−2171.9 ms wall (−71%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
-| [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | the last readback + trace capture | M | high | investigation |
+| [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel to unlock −218 ms gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** |
 | [1c](#1c-hoist-index-computation-above-the-layer-loop) | index computation once per frame, not per layer | gap | ÷6 at encoder level | S | low | todo |
 | [1d](#1d-per-call-constant-uploads) | move to `__init__` what is frame-invariant | gap | small, every layer | S | none | todo |
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | todo |
 | [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel | ~60 ms | M | low | todo |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | todo |
-| [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
+| [5](#candidate-5--trace-capture) | trace capture the encoder | gap | 218 ms/layer | M | low | parked behind 1b |
 
 Ordering rationale is at the [bottom](#ordering).
 
-**Rejected:** *hoist the invariant reads out of the host rebatch loop.* Measured at −1721 ms wall
-(−56%) and dropped anyway: it optimizes the number of host transfers instead of removing the reason
-for having any, and 1a deletes the loop it optimizes. Reducing a cost is not the same as removing
-it; when both are available at comparable effort, the removal wins.
+Things tried and rejected, with their numbers, are in
+[perf_reports/DEAD_ENDS.md](perf_reports/DEAD_ENDS.md).
 
 ---
 
@@ -78,39 +76,16 @@ this build.
 
 ### 1b. Bound `max_len` statically
 
-[tt_spatial_cross_attention.py:157](../tt/tt_spatial_cross_attention.py#L157),
-[:167](../tt/tt_spatial_cross_attention.py#L167)
+**Investigated and rejected** — [DEAD_ENDS entry 3](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len),
+data in [max_len_static_bound.md](perf_reports/max_len_static_bound.md).
 
-**An investigation, not a scheduled change.** `max_len = max over cameras of (valid query count)` is
-a **data-dependent shape**. It sizes `queries_rebatch`, so it must be a Python int, so `bev_mask`
-must come back to host. TTNN has no dynamic shapes and will not grow them for us; the fix, if there
-is one, is on our side.
+`max_len` is a data-dependent shape, so it forces the `bev_mask` readback that keeps the encoder from
+being trace-capturable. A bound is derivable — the coverage ratio is a stable camera-FOV property —
+but cost is exactly linear in it, the naive bound does not fit in DRAM at all, and a sensible one
+spends more than half of what trace capture would return. Re-test after candidate 2, which owns both
+the memory ceiling and most of the per-row cost.
 
-Padding slots address a sentinel row that is sliced off after the scatter, so an over-large
-`max_len` costs wasted MSDA compute, not correctness. At
-100×100 the measured `max_len` is **2484** — the MSDA signpost reports it directly as
-`query.shape[1]` — against `num_queries = 10000`. Bounding at the worst case is a **4× increase** on
-the 521 ms MSDA kernel, roughly 2.1 s per layer against a current whole-layer wall clock of 900 ms.
-Not a non-starter, but nowhere near free.
-
-`max_len` is already ~25% of `num_queries` at this grid size, so the headroom a bound has to cover
-is the gap between typical and worst-case camera coverage, not between a handful of queries and all
-of them. That is what makes a calibrated bound plausible here and worth measuring.
-
-So the investigation is: how tight can a *calibrated* per-config bound be, and what does it cost?
-Two things have to come out of it:
-
-1. **The compute curve.** MSDA time against `max_len`, so the price of any candidate bound is known
-   rather than guessed.
-2. **The safety argument.** A bound that some frame exceeds silently drops queries. Whatever bound
-   is chosen needs either a proof from the BEV grid and camera FOV geometry, or a runtime assert
-   plus a fallback path — and the assert reintroduces a sync unless it is debug-gated.
-
-The alternative that avoids the whole question: **one sync per forward instead of six** — see 1c.
-That gets nearly all of the remaining gap without a bound, and it is on the way here rather than a
-detour. 1b's real payoff is candidate 5 (trace capture), which needs static shapes across replays.
-
-**1b gates candidate 5.** Nothing else in candidate 1 needs it.
+**1b gates candidate 5**, and nothing else in candidate 1 needs it.
 
 ### 1c. Hoist index computation above the layer loop
 
@@ -249,7 +224,9 @@ reporting upstream.
 ## Candidate 5 — trace capture
 
 Blocked on 1b specifically: trace capture needs shapes that are static across replays, and `max_len`
-is the one shape that is not. 1a and 1c remove the transfers but not the sync that decides the
+is the one shape that is not. 1b is [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len), so 5
+is parked with it — the two only make sense together, and together they are worth ~10% of layer wall
+clock, less than candidates 2 and 4 on their own. 1a and 1c remove the transfers but not the sync that decides the
 shape. Once no host readback decides a downstream shape, the layer becomes trace-capturable and
 **all** remaining op-to-op gap collapses — 2416 ms per layer at baseline.
 
@@ -261,8 +238,8 @@ lifts.
 ## Ordering
 
 1. ~~**1a**~~ — landed, −2171.9 ms.
-2. **1b** — the `max_len` investigation. Documented as a study with a compute curve and a safety
-   argument, not as a change to land blind.
+2. ~~**1b**~~ — [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len): costs more than
+   half of what it unlocks, and candidate 2 owns the memory ceiling that caps it.
 3. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
    refactor, no op risk.
 4. **1d** — move to `__init__` what is genuinely frame-invariant.

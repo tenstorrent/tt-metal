@@ -66,6 +66,11 @@ Two independent problems, and they do not compete:
    [candidate 2](perf_optimization_candidates.md#candidate-2--fused-msda) and
    [candidate 3](perf_optimization_candidates.md#candidate-3--tile-padding-waste).
 
+## What was tried and rejected
+
+[perf_reports/DEAD_ENDS.md](perf_reports/DEAD_ENDS.md) — measured, not in the tree, with the reason
+each one lost. Two of the three are worth re-testing after candidate 2.
+
 ## Report format
 
 One file per landed change, `NN-slug.md`, containing: source commit, kernel/gap after, delta from
