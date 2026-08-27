@@ -107,6 +107,55 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     return std::min<uint32_t>(valid_local_rows, k_local.logical_shape()[2]) / tt::constants::TILE_HEIGHT;
 }
 
+// Four Fabric muxes have a fixed per-dispatch lifecycle cost. On the measured eight-rank BFP8 production shape,
+// warm-trace sweeps cross over near 20 MiB of aggregate forwarded payload per rank. Expressing the threshold in
+// bytes lets dtype, valid extent, batch/head count, and ring hops scale the decision naturally.
+constexpr uint64_t kMinMuxForwardedPayloadBytes = 20ull * 1024 * 1024;
+
+}  // namespace
+
+bool uses_muxed_multiworker_schedule(const operation_attributes_t& args, const tensor_args_t& tensors) {
+    if (!args.fused_ring.has_value() || !tensors.k_local.has_value() ||
+        args.fused_ring->num_links != ring_attention_all_gather_async_detail::kMuxedMultiworkerNumLinks ||
+        args.fused_ring->topology != ttnn::ccl::Topology::Ring) {
+        return false;
+    }
+    const uint32_t ring_size = ring_size_for(args, tensors.k);
+    if (ring_size <= 1) {
+        return false;
+    }
+
+    const auto& local_shape = tensors.k_local->padded_shape();
+    const uint32_t valid_height_tiles =
+        gather_valid_height_tiles(args, *tensors.k_local).value_or(local_shape[2] / tt::constants::TILE_HEIGHT);
+    const uint64_t batch_heads =
+        args.has_indexed_kv_cache() ? local_shape[1] : static_cast<uint64_t>(local_shape[0]) * local_shape[1];
+    const uint64_t local_valid_pages =
+        static_cast<uint64_t>(valid_height_tiles) * (local_shape[3] / tt::constants::TILE_WIDTH) * batch_heads;
+    const uint64_t forwarded_payload_bytes =
+        local_valid_pages * tensors.k_local->buffer()->page_size() * static_cast<uint64_t>(ring_size - 1);
+    if (forwarded_payload_bytes < kMinMuxForwardedPayloadBytes) {
+        return false;
+    }
+
+    const auto& gathered_k = tensors.k;
+    const auto grid = gathered_k.device()->compute_with_storage_grid_size();
+    const uint32_t direct_worker_cores = args.fused_ring->num_links * 2;
+    const uint32_t reserved_cols = (direct_worker_cores + grid.y - 1) / grid.y;
+    if (grid.x <= reserved_cols) {
+        return false;
+    }
+    return ring_attention_all_gather_async_detail::supports_muxed_multiworker_placement(
+        {gathered_k},
+        /*dim=*/2,
+        gathered_k.buffer()->page_size(),
+        args.fused_ring->ag_sub_device_id,
+        CoreCoord{grid.x - reserved_cols, 0},
+        ttnn::ccl::CoreAllocationStrategy::COL_MAJOR);
+}
+
+namespace {
+
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
 ProgramDescriptor build_ring_program_descriptor(
     const operation_attributes_t& args,
@@ -202,8 +251,9 @@ ProgramDescriptor build_ring_program_descriptor(
     // of the group count <= grid_y, so shaving even one row can halve the schedule (10 groups: grid_y 10->9 drops
     // group_rows 10->5 -> 55 cores instead of 110). cols_for_bands() just distributes the bands over min(bands,
     // compute_cols_x) columns (uneven remainder handled by band_list), so a reserved column costs exactly one
-    // column of compute -- no divisor cliff. The AG needs only num_links*2 workers; one column (grid_y cores) is
-    // plenty and the compute keeps grid_y*compute_cols_x cores.
+    // column of compute -- no divisor cliff. The direct AG schedule uses num_links*2 workers. The muxed
+    // multi-worker schedule expands that same reserved column to ten workers when all ten cores are placeable.
+    // In both cases the compute keeps grid_y*compute_cols_x cores.
     const uint32_t grid_y = phys_grid.y;  // full compute-grid height (all rows kept for compute)
     TT_FATAL(fused.num_links >= 1, "indexer_score fused: num_links must be >= 1 (got {})", fused.num_links);
     const uint32_t ag_worker_cores = fused.num_links * 2u;                   // AG uses 2 workers (fwd/bwd) per link
@@ -625,6 +675,8 @@ ProgramDescriptor build_ring_program_descriptor(
             // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
             ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
+            /*enable_muxed_multiworker=*/uses_muxed_multiworker_schedule(args, tensors),
+            /*enable_output_bank_owned_schedule=*/true,
             args.cache_batch_idx,
             gather_valid_height_tiles(args, k_local));
     }
@@ -704,6 +756,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t local_slot_pages =
         (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
     const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
+    const bool uses_muxed_schedule = uses_muxed_multiworker_schedule(args, tensors);
 
     for (auto& [range, program] : cached.workload.get_programs()) {
         const uint32_t device_index = device_index_for(args, range.start_coord(), q);
@@ -728,7 +781,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
 
-        // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
+        // kernel_idx: reader=0, writer=1, compute=2; direct AG kernels are 3..6. The muxed multi-worker schedule
+        // adds two single-client writer descriptors at 7..8 and the Fabric mux descriptor at 9.
         // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
         // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert.
         patch_field(0, 25u, k_batch_page_offset);
@@ -746,8 +800,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_field(1, 10u, geom.straddle_jump_tiles);
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
-        // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
-        // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
+        // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is
+        // hashed), so update the selected input slot and slab-rounded gather extent on every cache hit.
         const auto& shape = k_local.padded_shape();
         const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
@@ -758,13 +812,24 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
             auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            bool patched_any_core = false;
             for (auto& col_args : grid_args) {
                 for (auto& core_args : col_args) {
-                    if (core_args.size() > slot) {
-                        core_args[slot] = value;
+                    if (core_args.size() == 0) {
+                        continue;
                     }
+                    TT_FATAL(
+                        core_args.size() > slot,
+                        "indexer_score fused override: AG scalar slot {} out of range (size {}) for kernel {}",
+                        slot,
+                        core_args.size(),
+                        kernel_idx);
+                    core_args[slot] = value;
+                    patched_any_core = true;
                 }
             }
+            TT_FATAL(
+                patched_any_core, "indexer_score fused override: AG kernel {} has no runtime arguments", kernel_idx);
         };
 
         // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
@@ -792,6 +857,12 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_ag_field(/*reader backward=*/5, ag_reader_valid_pages, valid_pages);
         patch_ag_field(/*writer forward=*/4, ag_writer_valid_pages, valid_pages);
         patch_ag_field(/*writer backward=*/6, ag_writer_valid_pages, valid_pages);
+        if (uses_muxed_schedule) {
+            patch_ag_field(/*single-client writer forward=*/7, /*out_ready_sem=*/4, forward_semaphore);
+            patch_ag_field(/*single-client writer backward=*/8, /*out_ready_sem=*/4, backward_semaphore);
+            patch_ag_field(/*single-client writer forward=*/7, ag_writer_valid_pages, valid_pages);
+            patch_ag_field(/*single-client writer backward=*/8, ag_writer_valid_pages, valid_pages);
+        }
     }
 }
 

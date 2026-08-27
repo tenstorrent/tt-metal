@@ -24,26 +24,28 @@ using ttnn::ccl::Topology;
 ///////////////////////////////////////////////////
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);  // 2
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);
 constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);  // 2
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(7);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(8);
 constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr bool has_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t num_links = get_compile_time_arg_val(13);
+constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(14);
+constexpr uint32_t num_dram_banks = get_compile_time_arg_val(15);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
 // CB depth must be >= 2 * PREFETCH_PACKETS * packet_size_in_pages (see program_factory cb_num_pages).
-constexpr uint32_t PREFETCH_PACKETS = 4;
+constexpr uint32_t PREFETCH_PACKETS = get_compile_time_arg_val(16);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 14;
+    constexpr uint32_t page_size_base_idx = 17;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -73,6 +75,8 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_tile_id_end;
     std::array<uint32_t, num_inputs> input_valid_pages;
     std::array<uint32_t, num_inputs> worker_link;
+    std::array<uint32_t, num_inputs> worker_index_in_link;
+    std::array<uint32_t, num_inputs> workers_on_link;
     // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
     // The slice is always emitted into output slot 0, whatever the output batch size.
     std::array<uint32_t, num_inputs> input_batch_base;
@@ -96,6 +100,8 @@ void kernel_main() {
             ring_attention_all_gather::compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
         input_tile_id_start[input_idx] = link_page_range.start;
         input_tile_id_end[input_idx] = link_page_range.end;
+        worker_index_in_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        workers_on_link[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
@@ -147,33 +153,62 @@ void kernel_main() {
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
 
-    // Push out our local slice
-    // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
-    uint32_t output_tile_id_start = 0;
-    // Read local slice to our buffers, before sending them over
+    // Read the local slice into the packet CB before sending it over Fabric.
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        output_tile_id_start = input_batch_base[input_idx];
-        uint32_t tiles_read = input_tile_id_start[input_idx];
-        uint32_t tiles_to_read = input_tile_id_end[input_idx];
-        for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-            prefetch_batch_read_tiles<
-                input_tensor_page_size,
-                packet_size_in_pages,
-                PREFETCH_PACKETS,
-                contig_pages_advanced>(
-                noc_obj,
-                cb_output,
-                tiles_read,
-                tiles_to_read,
-                cb_fifo_limit,
-                cb_fifo_size,
-                input_tensor_addrgens[input_idx],
-                [&](uint32_t tr) { return output_tile_id_start + tr; });
-            tiles_read = input_tile_id_start[input_idx];
-            tiles_to_read = input_tile_id_end[input_idx];
-            output_tile_id_start += input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+        const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+        const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+        if constexpr (output_bank_owned_schedule) {
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
+                const uint32_t output_page_base =
+                    bh_idx * output_pages_per_batch_head + my_chip_id * input_pages_per_batch_head;
+                for (uint32_t bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
+                     bank < num_dram_banks;
+                     bank += num_links * workers_on_link[input_idx]) {
+                    const auto bank_slice = ring_attention_all_gather::get_bank_owned_slice(
+                        output_page_base, input_valid_pages[input_idx], bank, num_dram_banks);
+                    uint32_t pages_read = 0;
+                    prefetch_batch_read_tiles<
+                        input_tensor_page_size,
+                        packet_size_in_pages,
+                        PREFETCH_PACKETS,
+                        contig_pages_advanced>(
+                        noc_obj,
+                        cb_output,
+                        pages_read,
+                        bank_slice.page_count,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_tensor_addrgens[input_idx],
+                        [&](uint32_t page) {
+                            return input_page_base + bank_slice.first_page_offset + page * num_dram_banks;
+                        });
+                }
+            }
+        } else {
+            // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
+            uint32_t input_page_base = input_batch_base[input_idx];
+            uint32_t tiles_read = input_tile_id_start[input_idx];
+            uint32_t tiles_to_read = input_tile_id_end[input_idx];
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                prefetch_batch_read_tiles<
+                    input_tensor_page_size,
+                    packet_size_in_pages,
+                    PREFETCH_PACKETS,
+                    contig_pages_advanced>(
+                    noc_obj,
+                    cb_output,
+                    tiles_read,
+                    tiles_to_read,
+                    cb_fifo_limit,
+                    cb_fifo_size,
+                    input_tensor_addrgens[input_idx],
+                    [&](uint32_t tr) { return input_page_base + tr; });
+                tiles_read = input_tile_id_start[input_idx];
+                tiles_to_read = input_tile_id_end[input_idx];
+                input_page_base += input_pages_per_batch_head;
+            }
         }
-        output_tile_id_start = 0;
     }
 
     uint32_t slices_received = 0;
@@ -237,49 +272,77 @@ void kernel_main() {
         if ((topology == Topology::Linear && writes_expected > 0) ||
             (topology == Topology::Ring && (slices_received < (writes_expected + 1)))) {
             for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                uint32_t tiles_read = input_tile_id_start[input_idx];
-                uint32_t tiles_to_read = input_tile_id_end[input_idx];
-
-                uint32_t output_tile_id_start = 0;
-                uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                uint32_t row_offset =
-                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-                uint32_t slice_Wt = input_tensor_Wt[input_idx];
-                uint32_t stride_Wt = output_tensor_Wt[input_idx];
-                if (gather_dim == 3) {
-                    output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
+                const uint32_t input_pages_per_batch_head = input_tensor_Wt[input_idx] * input_tensor_Ht[input_idx];
+                const uint32_t output_pages_per_batch_head = output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                if constexpr (output_bank_owned_schedule) {
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
+                        const uint32_t output_page_base =
+                            bh_idx * output_pages_per_batch_head + actual_sender_chip_id * input_pages_per_batch_head;
+                        for (uint32_t bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
+                             bank < num_dram_banks;
+                             bank += num_links * workers_on_link[input_idx]) {
+                            const auto bank_slice = ring_attention_all_gather::get_bank_owned_slice(
+                                output_page_base, input_valid_pages[input_idx], bank, num_dram_banks);
+                            uint32_t pages_read = 0;
+                            prefetch_batch_read_physically_contiguous_tiles<
+                                input_tensor_page_size,
+                                packet_size_in_pages,
+                                PREFETCH_PACKETS>(
+                                noc_obj,
+                                cb_output,
+                                pages_read,
+                                bank_slice.page_count,
+                                cb_fifo_limit,
+                                cb_fifo_size,
+                                output_tensor_addrgens[input_idx],
+                                [&](uint32_t page) {
+                                    return output_page_base + bank_slice.first_page_offset + page * num_dram_banks;
+                                });
+                        }
+                    }
                 } else {
-                    output_tile_id_start =
-                        actual_sender_chip_id * input_tensor_Ht[input_idx] * input_tensor_Wt[input_idx];
-                }
-                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-                    prefetch_batch_read_tiles<
-                        input_tensor_page_size,
-                        packet_size_in_pages,
-                        PREFETCH_PACKETS,
-                        contig_pages_advanced>(
-                        noc_obj,
-                        cb_output,
-                        tiles_read,
-                        tiles_to_read,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        output_tensor_addrgens[input_idx],
-                        [&](uint32_t /* tiles_read */) {
-                            const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
-                            pages_read_in_row++;
-                            if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
-                                pages_read_in_row = 0;
-                            }
-                            return pid;
-                        });
-                    pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                    row_offset =
+                    uint32_t tiles_read = input_tile_id_start[input_idx];
+                    uint32_t tiles_to_read = input_tile_id_end[input_idx];
+                    uint32_t output_tile_id_start = 0;
+                    uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+                    uint32_t row_offset =
                         (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
-                    tiles_read = input_tile_id_start[input_idx];
-                    tiles_to_read = input_tile_id_end[input_idx];
-                    output_tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
+                    uint32_t slice_Wt = input_tensor_Wt[input_idx];
+                    uint32_t stride_Wt = output_tensor_Wt[input_idx];
+                    if (gather_dim == 3) {
+                        output_tile_id_start = actual_sender_chip_id * input_tensor_Wt[input_idx];
+                    } else {
+                        output_tile_id_start = actual_sender_chip_id * input_pages_per_batch_head;
+                    }
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                        prefetch_batch_read_tiles<
+                            input_tensor_page_size,
+                            packet_size_in_pages,
+                            PREFETCH_PACKETS,
+                            contig_pages_advanced>(
+                            noc_obj,
+                            cb_output,
+                            tiles_read,
+                            tiles_to_read,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            output_tensor_addrgens[input_idx],
+                            [&](uint32_t /* tiles_read */) {
+                                const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
+                                pages_read_in_row++;
+                                if (pages_read_in_row >= slice_Wt) {
+                                    row_offset += stride_Wt;
+                                    pages_read_in_row = 0;
+                                }
+                                return pid;
+                            });
+                        pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
+                        row_offset =
+                            (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+                        tiles_read = input_tile_id_start[input_idx];
+                        tiles_to_read = input_tile_id_end[input_idx];
+                        output_tile_id_start += output_pages_per_batch_head;
+                    }
                 }
             }
         }

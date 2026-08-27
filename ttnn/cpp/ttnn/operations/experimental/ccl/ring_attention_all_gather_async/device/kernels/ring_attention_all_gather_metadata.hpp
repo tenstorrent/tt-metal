@@ -25,6 +25,20 @@ struct LinkPageRange {
     uint32_t end;
 };
 
+struct BankOwnedSlice {
+    uint32_t first_page_offset;
+    uint32_t page_count;
+};
+
+FORCE_INLINE BankOwnedSlice
+get_bank_owned_slice(uint32_t output_page_base, uint32_t valid_pages, uint32_t bank, uint32_t num_dram_banks) {
+    const uint32_t base_bank = output_page_base % num_dram_banks;
+    const uint32_t first_page_offset = (bank + num_dram_banks - base_bank) % num_dram_banks;
+    const uint32_t page_count =
+        first_page_offset < valid_pages ? 1 + (valid_pages - 1 - first_page_offset) / num_dram_banks : 0;
+    return {first_page_offset, page_count};
+}
+
 // Partition a valid page prefix as evenly as possible across links. Earlier links receive one
 // additional page when the prefix is not evenly divisible. Reader and writer must use the same
 // range or their cb_output producer/consumer page counts can diverge.
@@ -48,13 +62,14 @@ inline uint32_t compute_gather_valid_Ht(uint32_t kv_actual_isl, uint32_t chunk_l
 }
 
 // Clamp each input to the valid slab prefix, then repartition that prefix across links. Reader and
-// writer must update both range endpoints identically or their cb_output page counts can diverge.
+// writer must update the effective page count and both range endpoints identically or their cb_output
+// page counts can diverge. The bank-owned path consumes the effective page count directly.
 template <size_t NumInputs>
 inline void update_link_page_ranges_for_gather_extent(
     uint32_t gather_valid_Ht,
     uint32_t num_links,
     const std::array<uint32_t, NumInputs>& input_tensor_Wt,
-    const std::array<uint32_t, NumInputs>& input_valid_pages,
+    std::array<uint32_t, NumInputs>& input_valid_pages,
     const std::array<uint32_t, NumInputs>& worker_link,
     std::array<uint32_t, NumInputs>& input_tile_id_start,
     std::array<uint32_t, NumInputs>& input_tile_id_end) {
@@ -62,6 +77,7 @@ inline void update_link_page_ranges_for_gather_extent(
         const uint32_t gather_valid_pages = gather_valid_Ht * input_tensor_Wt[input_idx];
         const uint32_t valid_pages =
             input_valid_pages[input_idx] < gather_valid_pages ? input_valid_pages[input_idx] : gather_valid_pages;
+        input_valid_pages[input_idx] = valid_pages;
         const auto link_page_range = compute_link_page_range(valid_pages, num_links, worker_link[input_idx]);
         input_tile_id_start[input_idx] = link_page_range.start;
         input_tile_id_end[input_idx] = link_page_range.end;

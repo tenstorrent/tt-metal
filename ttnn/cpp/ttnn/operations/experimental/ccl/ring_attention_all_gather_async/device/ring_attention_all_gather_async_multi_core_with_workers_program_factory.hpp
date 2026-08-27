@@ -53,8 +53,9 @@ constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
 // [4]=out_ready_sem, followed by one tensor-descriptor block per gathered input.
 constexpr uint32_t kWriterRuntimeArgHeaderCount = 5;
 // Per-input fields: Wt, Ht, out_Wt, out_Ht, batch_head_size, tile_id_start, tile_id_end,
-// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8), worker link (offset 9).
-constexpr uint32_t kTensorDescriptorFieldCount = 10;
+// input_batch_base (offset 7), valid_pages_per_batch_head (offset 8), worker link (offset 9),
+// worker index within the link (offset 10), and workers sharing the link (offset 11).
+constexpr uint32_t kTensorDescriptorFieldCount = 12;
 constexpr uint32_t kInputBatchBaseFieldOffset = 7;
 // Per-(batch,head) page count each worker is allowed to gather. Defaults to the full input
 // (input_Ht * input_Wt); the fused ring_joint_sdpa path patches it down to the logical_n-valid
@@ -72,6 +73,29 @@ constexpr uint32_t kNeighborWriterTensorDescriptorFieldCount = 5;
 constexpr uint32_t kNeighborWriterInputTileStartFieldOffset = 2;
 constexpr uint32_t kNeighborWriterInputTileEndFieldOffset = 3;
 constexpr uint32_t kNeighborWriterInputOriginPageFieldOffset = 4;
+
+constexpr uint32_t kRingDirectionCount = 2;
+constexpr uint32_t kMuxedMultiworkerNumLinks = 2;
+constexpr uint32_t kMuxedMultiworkerMaxWorkersPerLink = 2;
+constexpr uint32_t kMuxedMultiworkerWorkersPerDirection = kMuxedMultiworkerMaxWorkersPerLink + 1;
+constexpr uint32_t kMuxedMultiworkerNumReservedCores =
+    kRingDirectionCount * (kMuxedMultiworkerNumLinks + kMuxedMultiworkerWorkersPerDirection);
+constexpr uint32_t kMuxedMultiworkerMinDramBanks = 8;
+
+// Single source of truth for the output layout/page-size constraints required by the bank-owned transport.
+// Callers that reserve the muxed worker topology must include this result in their eligibility decision.
+bool supports_output_bank_owned_schedule(
+    const std::vector<Tensor>& output_tensors, int32_t dim, uint32_t transport_page_size);
+
+// In addition to the bank-owned transport requirements, verify that the selected sub-device and grid offset can
+// place the complete muxed schedule. Ring topology and bidirectional-neighbor requirements remain caller-owned.
+bool supports_muxed_multiworker_placement(
+    const std::vector<Tensor>& output_tensors,
+    int32_t dim,
+    uint32_t transport_page_size,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    CoreCoord core_grid_offset,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy);
 
 inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, uint32_t Ht, uint32_t Wt) {
     return batch_idx * num_heads * Ht * Wt;
@@ -104,6 +128,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    // Opt in to the ten-core muxed multi-worker schedule. The caller must reserve the full ten-core footprint
+    // and include the schedule class in its program-cache key.
+    bool enable_muxed_multiworker = false,
+    // Opt in to bank-owned DRAM traversal. This changes page arrival order and is intended for the fused
+    // ring-indexer transport; other shared-AG callers retain the legacy link-contiguous schedule.
+    bool enable_output_bank_owned_schedule = false,
     // When set, gather only this batch slot (dim-0 index) of `input_tensor` into slot 0 of
     // `output_tensor` — lets a consumer keep a full KV cache as input with a batch-1 gathered buffer
     // (a full-batch output also works; only slot 0 is written). std::nullopt => full batch (default).

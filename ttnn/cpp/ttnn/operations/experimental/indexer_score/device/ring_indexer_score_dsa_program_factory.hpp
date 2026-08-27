@@ -13,6 +13,10 @@
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
+// True when the fused all-gather descriptor uses the structurally distinct muxed multi-worker schedule.
+// This is shared with compute_program_hash because kv_len itself remains a runtime/cache-hit scalar.
+bool uses_muxed_multiworker_schedule(const operation_attributes_t& args, const tensor_args_t& tensors);
+
 // Ring-fused indexer_score factory (descriptor model). Selected only when operation_attributes.fused_ring is
 // set; the classic IndexerScoreProgramFactory stays byte-identical for all unfused usage. Mirrors
 // RingJointSDPAMeshWorkloadFactory: one ProgramDescriptor per coordinate co-scheduling the indexer compute +
