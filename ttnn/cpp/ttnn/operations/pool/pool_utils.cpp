@@ -133,6 +133,8 @@ FactoryParameters get_factory_parameters(
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
+    // SPMD compute threads per cluster for the Gen2/Quasar pool factory (see FactoryParameters).
+    uint32_t num_threads_per_cluster = 2;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)
@@ -182,6 +184,7 @@ FactoryParameters get_factory_parameters(
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
         .split_reader = split_reader,
+        .num_threads_per_cluster = num_threads_per_cluster,
         .nbytes = nbytes,
         .index_nbytes = index_nbytes,
         .data_format = data_format,
