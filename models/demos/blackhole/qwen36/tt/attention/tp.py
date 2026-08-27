@@ -6,6 +6,7 @@ Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
 Keep Q bf16 into SDPA unless bf8 mode (QWEN_SDPA_BF8=1).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
+import hashlib
 import os
 
 import torch
@@ -58,6 +59,22 @@ host. The same removal should be applied there once it can be tested.
 """
 
 
+def _rp_cache_tag(source_tensor, args):
+    """Content hash for a permuted-RoPE cache file name, over the PRE-permutation source weight
+    plus rope_tp.ROPE_PERM_VERSION plus the dims that shape the permutation. Two runs land on the
+    same tag iff both the checkpoint weight bytes and the permutation construction code are
+    unchanged, so a cache built by an older/different construction can never be silently reused --
+    ttnn.as_tensor just misses under the new name and rebuilds. See README-N300-9B.md's "warm
+    weight cache hides..." known limitation for the blind spot this closes."""
+    h = hashlib.sha256()
+    h.update(rope_tp.ROPE_PERM_VERSION.encode())
+    h.update(repr((tuple(source_tensor.shape), str(source_tensor.dtype), args.head_dim, args.rope_head_dim)).encode())
+    # .view(torch.uint8) reinterprets raw bytes regardless of dtype (bfloat16 included, unlike
+    # .numpy() which rejects it directly) -- exactly the bytes ttnn.as_tensor is about to consume.
+    h.update(source_tensor.contiguous().cpu().view(torch.uint8).numpy().tobytes())
+    return h.hexdigest()[:16]
+
+
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -84,15 +101,22 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # output. k_proj is plain per-head blocks. V and o_proj are deliberately untouched: nothing about
     # V is rotated and the output must reach o_proj in HF channel order. q/k NORM
     # weights are per-channel over head_dim, so they permute with it.
-    # Cache files get a ".rp" tag: these differ from the HF-order tensors and
-    # must never be served from (or written to) the same cache entry.
+    # Cache files get a ".rp.<hash>" tag: <hash> is a content hash of the PRE-permutation source
+    # weight plus rope_tp.ROPE_PERM_VERSION (see _rp_cache_tag), so these differ from the HF-order
+    # tensors AND self-invalidate if the checkpoint weights or the permutation construction code
+    # change -- a stale cache is never served from (or written to) the same entry as a fresh one.
     rope_permuted = getattr(args, "rope_permuted_enabled", False)
-    rp = ".rp" if rope_permuted else ""
     q_proj = state_dict["q_proj.weight"]
     q_norm_w = state_dict["q_norm.weight"].to(torch.float32) + 1.0
     k_norm_w = state_dict["k_norm.weight"].to(torch.float32) + 1.0
+    rp_q = rp_k = rp_fused = ""
     if rope_permuted:
         hd, rd = args.head_dim, args.rope_head_dim
+        q_tag = _rp_cache_tag(q_proj, args)
+        k_tag = _rp_cache_tag(k_proj, args)
+        rp_q = f".rp.{q_tag}"
+        rp_k = f".rp.{k_tag}"
+        rp_fused = f".rp.{q_tag}.{k_tag}"
         q_proj = rope_tp.permute_rope_channels(q_proj, hd, rd, mesh, stride=2 * hd)
         k_proj = rope_tp.permute_rope_channels(k_proj, hd, rd, mesh)
         q_norm_w = rope_tp.permute_rope_channels(q_norm_w, hd, rd, mesh)
@@ -133,7 +157,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
-            cache_path=c(_base + (".il" if _proj1d else ".dramshard") + rp),
+            cache_path=c(_base + (".il" if _proj1d else ".dramshard") + rp_fused),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -147,7 +171,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=qg_mc,
-            cache_path=c("wqkv" + tag + rp),
+            cache_path=c("wqkv" + tag + rp_q),
             dtype=ttnn.bfloat8_b,
         )
         # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
@@ -157,7 +181,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             mesh,
             dim=-1,
             memory_config=k_mc,
-            cache_path=c("wk" + tag + rp),
+            cache_path=c("wk" + tag + rp_k),
             dtype=ttnn.bfloat8_b,
         )
         tw["wv"] = tpc.shard_w(
