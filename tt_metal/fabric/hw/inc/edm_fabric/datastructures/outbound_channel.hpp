@@ -16,11 +16,10 @@ class SenderEthChannelInterface {
 public:
     explicit SenderEthChannelInterface() = default;
 
-    // Const-addressed channels take no arguments; runtime-addressed ones take the base address,
-    // buffer size and header size.
-    template <typename... Args>
-    FORCE_INLINE void init(Args... args) {
-        static_cast<DERIVED_T*>(this)->init_impl(args...);
+    FORCE_INLINE void init(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        static_cast<DERIVED_T*>(this)->init_impl(
+            channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const {

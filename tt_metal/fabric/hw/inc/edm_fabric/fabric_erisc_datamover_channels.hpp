@@ -43,61 +43,108 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
+// Slot addresses are tabulated so that a lookup is a shift-indexed load off a base register that is
+// already live, rather than a multiply. The table lives in the router's stack frame, which Blackhole
+// erisc0 in 2-erisc mode bounds via -Werror=stack-usage, so only the first MAX_TABULATED_SLOTS
+// entries are kept and deeper slots fall back to arithmetic off slot 0.
+//
+// Sizing this at 16 leaves every channel fully tabulated on Wormhole, where the allocator hands out
+// at most 11 slots outside of the worker injection channel. Those channels keep the plain lookup
+// with no residual test, because the bound and the slot count are both compile-time constants.
+constexpr uint8_t MAX_TABULATED_SLOTS = 16;
+
+template <uint8_t NUM_BUFFERS>
+inline constexpr uint8_t tabulated_slot_count = NUM_BUFFERS < MAX_TABULATED_SLOTS ? NUM_BUFFERS : MAX_TABULATED_SLOTS;
+
+// Slot stride, carried only by channels deep enough to need the fallback. Empty otherwise, so
+// fully tabulated channels keep their original layout.
+template <bool Needed>
+struct SlotStride {
+    FORCE_INLINE void set(size_t) {}
+};
+
+template <>
+struct SlotStride<true> {
+    size_t value;
+    FORCE_INLINE void set(size_t stride) { this->value = stride; }
+};
+
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
-// A slot address is a linear function of the slot index, and both the channel base and the slot
-// stride are compile-time constants, so addresses fold into immediates at every use. Tabulating
-// them instead would put 4 * NUM_BUFFERS bytes in the router's stack frame, which on Blackhole
-// erisc0 in 2-erisc mode is bounded by -Werror=stack-usage.
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS, size_t CHANNEL_BASE_ADDRESS, size_t BUFFER_SIZE_BYTES>
-class StaticSizedSenderEthChannel
-    : public SenderEthChannelInterface<
-          HEADER_TYPE,
-          NUM_BUFFERS,
-          StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS, CHANNEL_BASE_ADDRESS, BUFFER_SIZE_BYTES>> {
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+class StaticSizedSenderEthChannel : public SenderEthChannelInterface<
+                                        HEADER_TYPE,
+                                        NUM_BUFFERS,
+                                        StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>> {
 public:
     explicit StaticSizedSenderEthChannel() = default;
 
-    FORCE_INLINE void init_impl() {
+    FORCE_INLINE void init_impl(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         this->next_packet_buffer_index = BufferIndex{0};
-        size_t slot_addr = CHANNEL_BASE_ADDRESS;
-        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+        this->slot_stride.set(max_eth_payload_size_in_bytes);
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                this->buffer_addresses[i] = channel_base_address + i * max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                }
             }
-            slot_addr += BUFFER_SIZE_BYTES;
+        } else {
+            // Past the table there is no address to read back, so walk the slots instead.
+            size_t slot_addr = channel_base_address;
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                if (i < TABULATED_SLOTS) {
+                    this->buffer_addresses[i] = slot_addr;
+                }
+#pragma GCC unroll 1
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
+                }
+                slot_addr += max_eth_payload_size_in_bytes;
+            }
         }
         if constexpr (NUM_BUFFERS) {
-            cached_next_buffer_slot_addr = CHANNEL_BASE_ADDRESS;
+            cached_next_buffer_slot_addr = this->buffer_addresses[0];
         }
+    }
+
+    StaticSizedSenderEthChannel(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) :
+        SenderEthChannelInterface<HEADER_TYPE, NUM_BUFFERS, StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>>() {
+        this->init(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
     // For sender channel, only need a get_next_packet style
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl() const {
-        return CHANNEL_BASE_ADDRESS + next_packet_buffer_index.get() * BUFFER_SIZE_BYTES;
+        return address_of_slot(next_packet_buffer_index.get());
     }
 
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void advance_to_next_cached_buffer_slot_addr_impl() {
-        // The wrap test and the address reset are the same condition, so they share a branch. Split
-        // across two conditionals the compiler emits both, which costs more than the tabulated form.
-        const uint8_t index = next_packet_buffer_index.get();
-        if (index == NUM_BUFFERS - 1) {
-            next_packet_buffer_index = BufferIndex{0};
-            this->cached_next_buffer_slot_addr = CHANNEL_BASE_ADDRESS;
-        } else {
-            next_packet_buffer_index = BufferIndex{static_cast<uint8_t>(index + 1)};
-            this->cached_next_buffer_slot_addr += BUFFER_SIZE_BYTES;
-        }
+        next_packet_buffer_index = BufferIndex{wrap_increment<NUM_BUFFERS>(next_packet_buffer_index.get())};
+        this->cached_next_buffer_slot_addr = address_of_slot(next_packet_buffer_index.get());
     }
 
 private:
+    static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
+
+    [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            return this->buffer_addresses[slot];
+        } else {
+            return slot < TABULATED_SLOTS ? this->buffer_addresses[slot]
+                                          : this->buffer_addresses[0] + slot * this->slot_stride.value;
+        }
+    }
+
+    std::array<size_t, TABULATED_SLOTS> buffer_addresses;
     std::size_t cached_next_buffer_slot_addr;
     BufferIndex next_packet_buffer_index;
+    [[no_unique_address]] SlotStride<(NUM_BUFFERS > MAX_TABULATED_SLOTS)> slot_stride;
 };
 
 // A base Ethernet channel buffer interface class that will be specialized for different
@@ -107,11 +154,10 @@ class EthChannelBufferInterface {
 public:
     explicit EthChannelBufferInterface() = default;
 
-    // Const-addressed channels take no arguments; runtime-addressed ones take the base address,
-    // buffer size and header size.
-    template <typename... Args>
-    FORCE_INLINE void init(Args... args) {
-        static_cast<DERIVED_T*>(this)->init_impl(args...);
+    FORCE_INLINE void init(
+        size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
+        static_cast<DERIVED_T*>(this)->init_impl(
+            channel_base_address, max_eth_payload_size_in_bytes, header_size_bytes);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address(const BufferIndex& buffer_index) const {
@@ -154,12 +200,11 @@ public:
 // This class implements the interface for static sized receiver/Ethernet channels.
 // Static sized channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS, size_t CHANNEL_BASE_ADDRESS, size_t BUFFER_SIZE_BYTES>
-class StaticSizedEthChannelBuffer
-    : public EthChannelBufferInterface<
-          HEADER_TYPE,
-          NUM_BUFFERS,
-          StaticSizedEthChannelBuffer<HEADER_TYPE, NUM_BUFFERS, CHANNEL_BASE_ADDRESS, BUFFER_SIZE_BYTES>> {
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+class StaticSizedEthChannelBuffer : public EthChannelBufferInterface<
+                                        HEADER_TYPE,
+                                        NUM_BUFFERS,
+                                        StaticSizedEthChannelBuffer<HEADER_TYPE, NUM_BUFFERS>> {
 public:
     // The channel structure is as follows:
     //              &header->  |----------------| channel_base_address
@@ -172,78 +217,30 @@ public:
 
     explicit StaticSizedEthChannelBuffer() = default;
 
-    FORCE_INLINE void init_impl() {
-        size_t slot_addr = CHANNEL_BASE_ADDRESS;
-        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            // need to avoid unrolling to keep code size within limits
-            #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
-            }
-            slot_addr += BUFFER_SIZE_BYTES;
-        }
-
-        if constexpr (NUM_BUFFERS) {
-            set_cached_next_buffer_slot_addr_impl(CHANNEL_BASE_ADDRESS);
-        }
-    }
-
-    [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return CHANNEL_BASE_ADDRESS + buffer_index.get() * BUFFER_SIZE_BYTES;
-    }
-
-    template <typename T>
-    [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(get_buffer_address_impl(buffer_index));
-    }
-
-    template <typename T>
-    [[nodiscard]] FORCE_INLINE size_t get_payload_size_impl(const BufferIndex& buffer_index) const {
-        return get_packet_header_impl<T>(buffer_index)->get_payload_size_including_header();
-    }
-    [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes_impl(const BufferIndex& buffer_index) const {
-        return BUFFER_SIZE_BYTES;
-    }
-
-    // Doesn't return the message size, only the maximum eth payload size
-    [[nodiscard]] FORCE_INLINE size_t get_max_eth_payload_size_impl() const { return BUFFER_SIZE_BYTES; }
-
-#if defined(COMPILE_FOR_ERISC)
-    [[nodiscard]] FORCE_INLINE bool eth_is_acked_or_completed_impl(const BufferIndex& buffer_index) const {
-        return eth_is_receiver_channel_send_acked(buffer_index) || eth_is_receiver_channel_send_done(buffer_index);
-    }
-#endif
-
-    FORCE_INLINE size_t get_cached_next_buffer_slot_addr_impl() const { return this->cached_next_buffer_slot_addr; }
-
-    FORCE_INLINE void set_cached_next_buffer_slot_addr_impl(size_t next_buffer_slot_addr) {
-        this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
-    }
-
-    FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(CHANNEL_BASE_ADDRESS); }
-
-private:
-    std::size_t cached_next_buffer_slot_addr;
-};
-
-// Channel buffer whose base address is only known at run time, so slot addresses must be tabulated.
-// Used by the mux, relay and bring-up kernels; the fabric router uses the const-addressed channels
-// above instead, because a per-slot table there would not fit the erisc stack budget.
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
-class EthChannelBuffer
-    : public EthChannelBufferInterface<HEADER_TYPE, NUM_BUFFERS, EthChannelBuffer<HEADER_TYPE, NUM_BUFFERS>> {
-public:
-    explicit EthChannelBuffer() = default;
-
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
-        for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
-            this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
-                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
+                }
+            }
+        } else {
+            // Past the table there is no address to read back, so walk the slots instead.
+            size_t slot_addr = channel_base_address;
+            for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
+                if (i < TABULATED_SLOTS) {
+                    this->buffer_addresses[i] = slot_addr;
+                }
+#pragma GCC unroll 1
+                for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
+                    reinterpret_cast<volatile uint32_t*>(slot_addr)[j] = 0;
+                }
+                slot_addr += this->max_eth_payload_size_in_bytes;
             }
         }
 
@@ -252,17 +249,17 @@ public:
         }
     }
 
-    EthChannelBuffer(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
+    StaticSizedEthChannelBuffer(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
         this->init(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
     [[nodiscard]] FORCE_INLINE size_t get_buffer_address_impl(const BufferIndex& buffer_index) const {
-        return this->buffer_addresses[buffer_index];
+        return address_of_slot(buffer_index.get());
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
+        return reinterpret_cast<volatile T*>(address_of_slot(buffer_index.get()));
     }
 
     template <typename T>
@@ -293,52 +290,113 @@ public:
     FORCE_INLINE uint32_t channel_base_address() const { return static_cast<uint32_t>(this->buffer_addresses[0]); }
 
 private:
-    std::array<size_t, NUM_BUFFERS> buffer_addresses;
+    static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
+
+    // The stride is already carried for get_max_eth_payload_size, so deep slots need no extra state.
+    [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
+        if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
+            return this->buffer_addresses[slot];
+        } else {
+            return slot < TABULATED_SLOTS ? this->buffer_addresses[slot]
+                                          : this->buffer_addresses[0] + slot * this->max_eth_payload_size_in_bytes;
+        }
+    }
+
+    std::array<size_t, TABULATED_SLOTS> buffer_addresses;
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
     std::size_t cached_next_buffer_slot_addr;
 };
 
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+using EthChannelBuffer = StaticSizedEthChannelBuffer<HEADER_TYPE, NUM_BUFFERS>;
+
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
+using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
+
+template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, size_t... BufferSizes>
+struct ChannelTuple {
+    std::tuple<ChannelBase<HEADER_TYPE, BufferSizes>...> channel_buffers;
+
+    explicit ChannelTuple() = default;
+
+    void init(
+        const size_t channel_base_address[],
+        const size_t buffer_size_bytes,
+        const size_t header_size_bytes,
+        const size_t channel_base_id) {
+        size_t idx = 0;
+
+        std::apply(
+            [&](auto&... chans) {
+                ((chans.init(channel_base_address[idx], buffer_size_bytes, header_size_bytes), ++idx), ...);
+            },
+            channel_buffers);
+    }
+
+    template <size_t I>
+    auto& get() {
+        return std::get<I>(channel_buffers);
+    }
+};
+
+// Specific aliases
+template <typename HEADER_TYPE, size_t... BufferSizes>
+using EthChannelBufferTuple = ChannelTuple<tt::tt_fabric::EthChannelBuffer, HEADER_TYPE, BufferSizes...>;
+
+template <typename HEADER_TYPE, size_t... BufferSizes>
+using SenderEthChannelTuple = ChannelTuple<tt::tt_fabric::SenderEthChannel, HEADER_TYPE, BufferSizes...>;
+
+template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, auto& ChannelBuffers>
+struct StaticSizedChannelBuffersHelper {
+    template <size_t... Is>
+    static auto make(std::index_sequence<Is...>) {
+        return ChannelTuple<ChannelBase, HEADER_TYPE, ChannelBuffers[Is]...>{};
+    }
+};
+
+template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE>
+struct ChannelBuffersBase {
+    // Generic interface that derived types will specialize
+};
+
+// Static-sized variants using the new naming
+template <typename HEADER_TYPE, auto& ChannelBuffers>
+using StaticSizedEthChannelBuffers =
+    StaticSizedChannelBuffersHelper<StaticSizedEthChannelBuffer, HEADER_TYPE, ChannelBuffers>;
+
+template <typename HEADER_TYPE, auto& ChannelBuffers>
+using StaticSizedSenderEthChannelBuffers =
+    StaticSizedChannelBuffersHelper<StaticSizedSenderEthChannel, HEADER_TYPE, ChannelBuffers>;
+
+template <typename HEADER_TYPE, auto& ChannelBuffers>
+using EthChannelBuffers = StaticSizedEthChannelBuffers<HEADER_TYPE, ChannelBuffers>;
+
 // Channel buffer construction from ChannelAllocations compile-time data.
-// Each channel gets its num_slots and base_address from its allocation entry at compile time.
+// Each channel gets its num_slots from its allocation entry at compile time.
 template <
     typename HEADER_TYPE,
     typename Allocs,
-    template <typename, size_t, size_t, size_t> class ChannelType,
+    template <typename, size_t> class ChannelType,
     auto& ChannelToEntryIndex,
-    size_t BufferSizeBytes,
     typename IndexSequence>
 struct AllocChannelBuilder;
 
 template <
     typename HEADER_TYPE,
     typename Allocs,
-    template <typename, size_t, size_t, size_t> class ChannelType,
+    template <typename, size_t> class ChannelType,
     auto& ChannelToEntryIndex,
-    size_t BufferSizeBytes,
     size_t... Indices>
-struct AllocChannelBuilder<
-    HEADER_TYPE,
-    Allocs,
-    ChannelType,
-    ChannelToEntryIndex,
-    BufferSizeBytes,
-    std::index_sequence<Indices...>> {
+struct AllocChannelBuilder<HEADER_TYPE, Allocs, ChannelType, ChannelToEntryIndex, std::index_sequence<Indices...>> {
     template <size_t ChannelIdx>
     FORCE_INLINE static constexpr size_t get_buffer_count() {
         constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
         return Allocs::template Entry<entry_idx>::num_slots;
     }
 
-    template <size_t ChannelIdx>
-    FORCE_INLINE static constexpr size_t get_base_address() {
-        constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
-        return Allocs::template Entry<entry_idx>::base_address;
-    }
-
-    using type = std::tuple<
-        ChannelType<HEADER_TYPE, get_buffer_count<Indices>(), get_base_address<Indices>(), BufferSizeBytes>...>;
+    using type = std::tuple<ChannelType<HEADER_TYPE, get_buffer_count<Indices>()>...>;
 };
 
 // Channel tuple wrapper that initializes each channel from its allocation entry's base_address.
@@ -350,7 +408,10 @@ struct AllocChannelTuple {
 
     explicit AllocChannelTuple() = default;
 
-    FORCE_INLINE void init() { init_impl(std::make_index_sequence<num_channels>()); }
+    template <typename AllocsT>
+    FORCE_INLINE void init(size_t buffer_size_bytes, size_t header_size_bytes) {
+        init_impl<AllocsT>(buffer_size_bytes, header_size_bytes, std::make_index_sequence<num_channels>());
+    }
 
     template <size_t I>
     FORCE_INLINE auto& get() {
@@ -358,18 +419,26 @@ struct AllocChannelTuple {
     }
 
 private:
-    template <size_t... ChannelIndices>
-    FORCE_INLINE void init_impl(std::index_sequence<ChannelIndices...>) {
-        (std::get<ChannelIndices>(channel_buffers).init(), ...);
+    template <typename AllocsT, size_t... ChannelIndices>
+    FORCE_INLINE void init_impl(
+        size_t buffer_size_bytes, size_t header_size_bytes, std::index_sequence<ChannelIndices...>) {
+        (init_single_channel<AllocsT, ChannelIndices>(
+             std::get<ChannelIndices>(channel_buffers), buffer_size_bytes, header_size_bytes),
+         ...);
+    }
+
+    template <typename AllocsT, size_t ChannelIdx, typename Channel>
+    FORCE_INLINE void init_single_channel(Channel& chan, size_t buffer_size_bytes, size_t header_size_bytes) {
+        constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
+        chan.init(AllocsT::template Entry<entry_idx>::base_address, buffer_size_bytes, header_size_bytes);
     }
 };
 
 template <
     typename HEADER_TYPE,
     typename Allocs,
-    template <typename, size_t, size_t, size_t> class ChannelType,
-    auto& ChannelToEntryIndex,
-    size_t BufferSizeBytes>
+    template <typename, size_t> class ChannelType,
+    auto& ChannelToEntryIndex>
 struct ChannelBuffersFromAllocs {
     static constexpr size_t num_channels = ChannelToEntryIndex.size();
     static_assert(num_channels > 0, "Must have at least one channel");
@@ -379,7 +448,6 @@ struct ChannelBuffersFromAllocs {
         Allocs,
         ChannelType,
         ChannelToEntryIndex,
-        BufferSizeBytes,
         std::make_index_sequence<num_channels>>::type;
 
     FORCE_INLINE static auto make() {
@@ -387,13 +455,16 @@ struct ChannelBuffersFromAllocs {
     }
 };
 
-template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex, size_t BufferSizeBytes>
+template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
 using SenderChannelBuffersFromAllocs =
-    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedSenderEthChannel, ChannelToEntryIndex, BufferSizeBytes>;
+    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedSenderEthChannel, ChannelToEntryIndex>;
 
-template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex, size_t BufferSizeBytes>
+template <typename HEADER_TYPE, typename Allocs, auto& ChannelToEntryIndex>
 using ReceiverChannelBuffersFromAllocs =
-    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedEthChannelBuffer, ChannelToEntryIndex, BufferSizeBytes>;
+    ChannelBuffersFromAllocs<HEADER_TYPE, Allocs, StaticSizedEthChannelBuffer, ChannelToEntryIndex>;
+
+template <typename HEADER_TYPE, auto& ChannelBuffers>
+using SenderEthChannelBuffers = StaticSizedSenderEthChannelBuffers<HEADER_TYPE, ChannelBuffers>;
 
 // Base class for channel worker interfaces
 // Derived classes implement specific counter management strategies.
