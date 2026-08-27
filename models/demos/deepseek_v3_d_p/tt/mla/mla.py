@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
@@ -394,6 +395,11 @@ class ttMLA:
             f"mla_use_nope=True but rope_scaling carries a YaRN factor ({rope_factor}) that scaled "
             f"softmax to {self.scale}; a NoPE model has no positional scaling to compensate for"
         )
+
+        # Mistral's query temperature. Only Mistral's rope_scaling carries it, so absent (-> None)
+        # leaves every other variant's op graph byte-identical.
+        self._llama4_beta = rope_scaling.get("llama_4_scaling_beta")
+        self._llama4_orig_max = rope_scaling.get("original_max_position_embeddings")
 
         self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -1083,7 +1089,61 @@ class ttMLA:
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
         ttnn.deallocate(tt_q_nope)
         ttnn.deallocate(tt_q_rope)
+
+        if self._llama4_beta is not None:
+            scaled = ttnn.multiply(tt_q, self._llama4_scale(kv_actual_isl, seq_len_local, metadata))
+            ttnn.deallocate(tt_q)
+            tt_q = scaled
         return tt_q
+
+    def _llama4_scale(self, kv_actual_isl: Optional[int], seq_len_local: int, metadata) -> ttnn.Tensor:
+        """Per-position query temperature for this chunk, shaped like tt_q, SP-sharded.
+
+        Metadata/traced path reads ChunkMetadata.llama4_scale -- a captured graph can only read device
+        memory, and write_chunk_metadata refreshes it alongside the scalars. Building a host tensor
+        there would bake one chunk's offset into the capture. The host-scalar path builds it fresh and
+        caches on (start, seq_len_local), since the same offsets recur on every layer.
+
+        Full width rather than [1, 1, S, 1] + broadcast: a width-1 TILE_LAYOUT operand is tile-padded
+        to 32, and relying on bcast to read only column 0 is not worth the risk.
+        """
+        if metadata is not None:
+            buf = getattr(metadata, "llama4_scale", None)
+            assert buf is not None, (
+                "llama4 query scale on the metadata path needs ChunkMetadata.llama4_scale (allocate "
+                "with RotarySetup.make_llama4_scale_buffer, refresh via write_chunk_metadata)"
+            )
+            return buf
+
+        start = kv_actual_isl or 0
+        key = (start, seq_len_local)
+        cached = getattr(self, "_llama4_cache", {}).get(key)
+        if cached is not None:
+            return cached
+
+        scale = llama4_scale_host(
+            start,
+            self.sp_factor,
+            seq_len_local,
+            self.num_heads // self.tp_factor,
+            self.kv_lora_rank + self.qk_rope_head_dim,
+            self._llama4_beta,
+            self._llama4_orig_max,
+        )
+        shard_dims = [None, None]
+        shard_dims[self.sp_axis] = 2
+        tensor = ttnn.from_torch(
+            scale.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
+            ),
+        )
+        self._llama4_cache = {**getattr(self, "_llama4_cache", {}), key: tensor}
+        return tensor
 
     def _kv_stem(
         self,

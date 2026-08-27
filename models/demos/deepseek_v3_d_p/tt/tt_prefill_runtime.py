@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
+from models.demos.deepseek_v3_d_p.tt.mla.rope import ChunkMetadata
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
@@ -521,7 +522,10 @@ class TtPrefillRuntime:
         The per-element slices read from the persistent copy rather than metadata_msg so both forms are
         guaranteed to carry the same chunk's words."""
         ttnn.copy(metadata_msg, self._trace_metadata_msg)
-        for i, dst in enumerate(self._trace_metadata):
+        # [:3], not the whole tuple: ChunkMetadata carries a 4th field (Mistral's llama4_scale) that
+        # is persistent rather than per-chunk and has no word in the packed [1,1,1,3] message. Its
+        # docstring says index positionally and never iterate the whole tuple; this is that rule.
+        for i, dst in enumerate(self._trace_metadata[:3]):
             word = ttnn.slice(self._trace_metadata_msg, [0, 0, 0, i], [1, 1, 1, i + 1])
             ttnn.copy(word, dst)
             ttnn.deallocate(word)
@@ -567,7 +571,14 @@ class TtPrefillRuntime:
         # non-first rank make_chunk_input yields a placeholder hidden-state activation (the D2D-received one).
         self._trace_input = self.make_chunk_input([0] * chunk)
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
-        self._trace_metadata = (self._meta1_dev(0), self._meta1_dev(0), self._meta1_dev(chunk))
+        # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
+        # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
+        self._trace_metadata = ChunkMetadata(
+            self._meta1_dev(0),
+            self._meta1_dev(0),
+            self._meta1_dev(chunk),
+            self.model.rope_setup.make_llama4_scale_buffer(chunk),
+        )
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
         self._trace_metadata_msg = self._meta3_dev((0, 0, chunk))
@@ -685,6 +696,20 @@ class TtPrefillRuntime:
                 "on-device (the traced serving loop always carries it; the eager warm-up passes host ints)"
             )
             ttnn.copy(input_tensor, self._trace_input)
+            # The three scalars come off the device from metadata_msg -- on this path the host is
+            # not told the chunk offset at all (slot_id/actual_start/actual_end arrive None), which
+            # is the point of consuming them on-device.
+            #
+            # That is also why Mistral's query-scale buffer cannot ride along here: it is computed on
+            # host from actual_start, and there is no actual_start to compute it from. An unrefreshed
+            # buffer is ones-initialised, so the replay would silently apply a temperature of 1.0 --
+            # a wrong softmax scale that still produces plausible output. Fail instead; wiring the
+            # scale into the packed record (or deriving it on-device) is follow-up work.
+            assert self._trace_metadata.llama4_scale is None, (
+                "the traced runtime path consumes chunk metadata on-device and cannot refresh the "
+                "llama4 query-scale buffer, which is derived on host from actual_start; run Mistral "
+                "through the host-scalar path until the scale is carried in the metadata record"
+            )
             self._metadata_from_msg(metadata_msg)
             self._controller.replay()
             ttnn.deallocate(input_tensor)
