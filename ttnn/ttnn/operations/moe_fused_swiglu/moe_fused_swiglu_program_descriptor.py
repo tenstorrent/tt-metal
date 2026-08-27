@@ -48,7 +48,7 @@ KERNEL_CT_ORDER = {
     "reader": (
         "INPUT_FORMAT",
         "M_T_MAX",
-        "LOCAL_EXPERT_ID",
+        "EXPERTS_PER_CHIP",
         "EMB_T",
         "HID_T",
         "KR_PAD",
@@ -115,6 +115,7 @@ KERNEL_CT_ORDER = {
         "CB_MAILBOX_WRITER",
     ),
     "writer": (
+        "EXPERTS_PER_CHIP",
         "EMB_T",
         "HID_T",
         "KR_PAD",
@@ -172,6 +173,7 @@ KERNEL_CT_ORDER = {
         "CB_MAILBOX_WRITER",
     ),
     "compute": (
+        "EXPERTS_PER_CHIP",
         "M_BLOCK",
         "KR_PAD",
         "HN_PAD",
@@ -198,6 +200,7 @@ KERNEL_CT_ORDER = {
         "ELTWISE_BLK",
         "DEST_LIMIT",
         "GATHER_PAGES",
+        "DEPTH_H",
         "CB_X_IN",
         "CB_X_TILES",
         "CB_X_STAGE",
@@ -429,7 +432,6 @@ def create_program_descriptor(
     output_tensor,
     mailbox,
     *,
-    local_expert_id,
     input_m_tiles,
     compute_kernel_config,
     core_grid=None,
@@ -626,7 +628,7 @@ def create_program_descriptor(
         "ELTWISE_BLK": geo.ELTWISE_BLK,
         "DEST_LIMIT": geo.DEST_AUTO_LIMIT_TILES,
         "M_T_MAX": input_m_tiles,
-        "LOCAL_EXPERT_ID": local_expert_id,
+        "EXPERTS_PER_CHIP": 1,
         "X_PAGE": int(input_tensor.buffer_page_size()),
         "X_SLICE": x_stick_slice,
         "COUNTS_PAGE": max(int(counts.buffer_aligned_page_size()), dram_align),
@@ -697,6 +699,8 @@ def create_program_descriptor(
             args.extend(_rotating_mcast_args_for_cores(device, ttnn.NOC.NOC_0, x_group_cores))
             args.extend(h_mcast_args)
             args.extend(h_group_rect_args[kgroup // blk.mgroup_rows])
+            # Per-expert weight bases, role-major. EXPERTS_PER_CHIP is 1 here, so one entry each.
+            args.extend([w_gate.buffer_address(), w_down.buffer_address()])
             reader_rt[physical_x][physical_y] = args
 
             wargs = [
@@ -724,6 +728,7 @@ def create_program_descriptor(
             for r in range(kgroups):
                 wargs.extend(_virt(device, *physical_core(hgroup, r)))
             wargs.extend(h_mcast_noc1_args)
+            wargs.extend([w_up.buffer_address(), w_down.buffer_address()])
             writer_rt[physical_x][physical_y] = wargs
 
             compute_rt[physical_x][physical_y] = [mailbox_addr, kr, hn, ec, ec_group, hgroup, kgroup]

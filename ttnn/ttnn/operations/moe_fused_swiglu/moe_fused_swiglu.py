@@ -6,8 +6,10 @@
     h   = SiLU(x @ W_gate) * (x @ W_up)      # [count, hidden]  INTERNAL, never reaches DRAM
     out = h @ W_down                          # [capacity, emb]
 
-`count` is DEVICE-resident: the kernels read `counts[idx[local_expert_id]]` themselves; there is
-no host readback and no host branch on the counts' contents.
+ONE device program covers EVERY local expert: the kernels loop them, and each expert's `count` is
+DEVICE-resident — they read `counts[idx[e]]` themselves, so there is no host readback, no host
+branch on the counts' contents and no per-expert dispatch. A zero count skips that expert
+uniformly across the grid, so a masked `counts` routes a subset of the experts here.
 
 Registry model (eval/op_template.py): INPUT_TAGGERS / SUPPORTED / EXCLUSIONS declared here,
 validate() is the entry point's first line. INVALID is NOT declared here — it lives in
@@ -115,12 +117,11 @@ def _input_format(input_tensor):
 # ---------------------------------------------------------------------------
 def validate(
     input_tensor,
-    w_gate,
-    w_up,
-    w_down,
+    w_gates,
+    w_ups,
+    w_downs,
     counts,
     global_expert_idx_table,
-    local_expert_id,
     *,
     output=None,
     expert_region_offsets=None,
@@ -136,6 +137,23 @@ def validate(
             "moe_fused_swiglu: input_tensor leading dims must be (1, 1), got "
             f"({int(input_tensor.shape[0])}, {int(input_tensor.shape[1])})"
         )
+    if not w_gates:
+        raise ValueError("moe_fused_swiglu: at least one local expert is required")
+    if not (len(w_gates) == len(w_ups) == len(w_downs)):
+        raise ValueError(
+            f"moe_fused_swiglu: gate/up/down lists must have one entry per local expert "
+            f"({len(w_gates)}, {len(w_ups)}, {len(w_downs)})"
+        )
+    # ONE program serves every expert, so a single accessor layout descriptor per role must fit them
+    # all: expert 0 is the representative and the rest are checked against it.
+    w_gate, w_up, w_down = w_gates[0], w_ups[0], w_downs[0]
+    for e, (g, u, d) in enumerate(zip(w_gates, w_ups, w_downs)):
+        for name, w, ref in (("w_gate", g, w_gate), ("w_up", u, w_up), ("w_down", d, w_down)):
+            if list(w.shape) != list(ref.shape) or w.dtype != ref.dtype or w.layout != ref.layout:
+                raise ValueError(
+                    f"moe_fused_swiglu: {name}[{e}] must match {name}[0] in shape, dtype and layout; "
+                    f"got {list(w.shape)}/{w.dtype!r}/{w.layout} vs {list(ref.shape)}/{ref.dtype!r}/{ref.layout}"
+                )
     for name, w in (("w_gate", w_gate), ("w_up", w_up), ("w_down", w_down)):
         if len(w.shape) != 2:
             raise ValueError(f"moe_fused_swiglu: {name} must have rank 2, got rank {len(w.shape)}")
@@ -180,11 +198,8 @@ def validate(
             raise ValueError(f"moe_fused_swiglu: {name} must not be empty")
 
     num_local = int(global_expert_idx_table.shape[-1])
-    if not isinstance(local_expert_id, int) or local_expert_id < 0 or local_expert_id >= num_local:
-        raise ValueError(
-            f"moe_fused_swiglu: local_expert_id {local_expert_id} out of range for the idx table "
-            f"of length {num_local}"
-        )
+    if len(w_gates) > num_local:
+        raise ValueError(f"moe_fused_swiglu: {len(w_gates)} local experts exceed the idx table of length {num_local}")
 
     # ---- shared-buffer region mode (fused extract / insert) ------------------------
     # Same two knobs as `unified_routed_expert_ffn`: an offsets tensor turns the writer into a
@@ -276,12 +291,11 @@ def validate(
 # ---------------------------------------------------------------------------
 def moe_fused_swiglu(
     input_tensor: ttnn.Tensor,
-    w_gate: ttnn.Tensor,
-    w_up: ttnn.Tensor,
-    w_down: ttnn.Tensor,
+    w_gates: list[ttnn.Tensor],
+    w_ups: list[ttnn.Tensor],
+    w_downs: list[ttnn.Tensor],
     counts: ttnn.Tensor,
     global_expert_idx_table: ttnn.Tensor,
-    local_expert_id: int,
     *,
     input_m_tiles: int = None,
     dtype: ttnn.DataType = None,
@@ -312,12 +326,11 @@ def moe_fused_swiglu(
     """
     validate(
         input_tensor,
-        w_gate,
-        w_up,
-        w_down,
+        w_gates,
+        w_ups,
+        w_downs,
         counts,
         global_expert_idx_table,
-        local_expert_id,
         output=output,
         expert_region_offsets=expert_region_offsets,
         read_x_at_offset=read_x_at_offset,
@@ -376,12 +389,11 @@ def moe_fused_swiglu(
 
     return ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
         input_tensor,
-        w_gate,
-        w_up,
-        w_down,
+        w_gates,
+        w_ups,
+        w_downs,
         counts,
         global_expert_idx_table,
-        local_expert_id,
         input_m_tiles=m_t_max,
         dtype=out_dtype,
         memory_config=out_memory_config,

@@ -35,12 +35,12 @@ namespace ttnn::prim {
 
 ttnn::Tensor moe_fused_swiglu(
     const ttnn::Tensor& activations,
-    const ttnn::Tensor& w_gate,
-    const ttnn::Tensor& w_up,
-    const ttnn::Tensor& w_down,
+    const std::vector<ttnn::Tensor>& w_gates,
+    const std::vector<ttnn::Tensor>& w_ups,
+    const std::vector<ttnn::Tensor>& w_downs,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id,
+    uint32_t experts_per_chip,
     uint32_t m_tiles,
     uint32_t grid_x,
     uint32_t grid_y,
