@@ -5,7 +5,7 @@ description: Add a model to the models CI tier tests.
 
 Read `models/model_ci_tiers.md` and follow the instructions to add the user's named model to their requested tier. If the user did not specify a tier, default to Tier 3 and for LLMs choose each kind of decoder layer implemented in the model as the unit test to be added. For other kinds of models use your judgement to choose the most critical module to test.
 
-Add your model to the pipeline filters in the workflow files (`workflow/pipeline_reorg/models_e2e_tests.yaml` and `workflow/pipeline_reorg/models_unit_tests.yaml`).
+Add your model to the pipeline filters in the workflow files (`tests/pipeline_reorg/models_e2e_tests.yaml` and `tests/pipeline_reorg/models_unit_tests.yaml`).
 
 Update `models/model_ci_tiers.md` with the new model and tier.
 
@@ -17,4 +17,4 @@ Goal completion criteria:
 - [ ] The checklist in `models/MIGRATING_TO_TIERED_CI.md` is fully-completed.
 - [ ] The CI jobs for the new model and tier are passing.
 - [ ] The model is added to the `models/model_ci_tiers.md` file.
-- [ ] The model is added to the pipeline filters in the workflow files (`workflow/pipeline_reorg/models_e2e_tests.yaml` and `workflow/pipeline_reorg/models_unit_tests.yaml`).
+- [ ] The model is added to the pipeline filters in the workflow files (`tests/pipeline_reorg/models_e2e_tests.yaml` and `tests/pipeline_reorg/models_unit_tests.yaml`).

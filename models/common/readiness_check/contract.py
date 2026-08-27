@@ -16,12 +16,14 @@ The contract has two layers:
    `generator_vllm.py`. The caller (vLLM) owns the KV cache and page table
    and threads them through each call.
 
-2. **High level** (`generate`) — used by demo scripts, the readiness check,
-   and any HF-style host driver. The generator owns the KV cache and page
-   table internally; the caller only sees token IDs in and token IDs out.
+2. **High level** (`prefill_logits`, `generate`) — used by demo scripts, the
+   readiness check, and any HF-style host driver. The generator owns the KV
+   cache and page table internally; the caller never has to synthesize
+   model-specific cache state.
 
 A typical implementation builds the low level first, then implements
-`generate()` by allocating its own KV cache + page table and looping on top.
+`prefill_logits()` and `generate()` by allocating its own KV cache + page table
+and driving those low-level methods.
 
 # Discovery
 
@@ -91,6 +93,9 @@ class Generator(ABC):
             def decode_forward(self, tokens, start_pos, *, page_table, kv_cache, **kw):
                 return self._inner.decode_forward(...)
 
+            def prefill_logits(self, prompt_token_ids):
+                ...  # allocate model-specific cache state and return all prompt logits
+
             def generate(self, prompt_token_ids, max_new_tokens, *, next_input=None, enable_trace=True, **kw):
                 ...  # see method docstring
 
@@ -118,9 +123,8 @@ class Generator(ABC):
         Run prefill and update `kv_cache` in place.
 
         This is the **low-level** API. vLLM (via `tt/generator_vllm.py`)
-        calls this directly; the readiness runner may use it with
-        `return_all_logits=True` for batch prefill checks. Implementations
-        must:
+        calls this directly; other cache-owning callers may request
+        `return_all_logits=True`. Implementations must:
 
         - Accept `tokens` of shape ``[batch, prompt_len_padded]``. The
           caller is responsible for padding to whatever length the model
@@ -136,9 +140,10 @@ class Generator(ABC):
         - Return logits at the final prompt position with shape
           ``[batch, 1, vocab]`` when `return_all_logits=False` (default).
           When `return_all_logits=True`, return shape ``[batch, prompt_len, vocab]``.
-          If the implementation samples on device, it may instead return sampled
-          tokens; this is allowed because `generator_vllm.py` consumes both forms,
-          but the high-level `generate()` is responsible for normalising.
+          When ``return_all_logits=False``, an implementation that samples on
+          device may instead return sampled tokens because `generator_vllm.py`
+          consumes both forms. ``return_all_logits=True`` must always return the
+          full logits tensor described above.
 
         Implementations must update `kv_cache` in place so the subsequent
         `decode_forward` calls can read prior keys/values.
@@ -166,6 +171,22 @@ class Generator(ABC):
 
         Like `prefill_forward`, this method must be safe to call
         repeatedly; advancing `start_pos` is the caller's responsibility.
+        """
+
+    @abstractmethod
+    def prefill_logits(self, prompt_token_ids: List[int]) -> torch.Tensor:
+        """
+        High-level prefill driver used by the readiness check.
+
+        Allocate or reset the model-specific KV cache and page table internally,
+        run prefill for one unpadded prompt, and return logits with shape
+        ``[1, prompt_len, vocab]``. The returned sequence dimension must describe
+        the logical prompt length, even if the implementation pads internally.
+
+        This method exists because only the generator knows its decoder-layer
+        count, cache dtype, block size, capacity, and mesh distribution. Generic
+        readiness code must not invent placeholder cache tensors or page tables
+        for the low-level ``prefill_forward`` API.
         """
 
     @abstractmethod

@@ -118,7 +118,7 @@ def save_reference(reference: Reference, path: Path | str) -> Path:
 
 def load_reference(path: Path | str) -> Reference:
     path = Path(path)
-    payload = torch.load(path, weights_only=False)
+    payload = torch.load(path, weights_only=True)
     fmt = payload.get("format_version")
     if fmt != FORMAT_VERSION:
         raise ValueError(f"Unsupported reference format_version={fmt!r} in {path}; " f"expected {FORMAT_VERSION!r}")

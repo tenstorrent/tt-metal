@@ -96,6 +96,7 @@ from typing import Any, List, Optional
 
 import openai
 import requests
+from transformers import AutoTokenizer
 
 DEFAULT_PORT = 8000
 DEFAULT_BLOCK_SIZE = 64
@@ -404,36 +405,33 @@ def _run_qualitative_prompts(
 
     print(f"  Loaded {len(prompts)} prompts")
     client = openai.OpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
+    prompt_mode = _qualitative_prompt_mode(hf_model)
+    print(f"  Prompt mode: {prompt_mode}")
 
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):
         print(f"\n  Prompt {i}/{len(prompts)}: {prompt[:60]}...")
 
-        greedy_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.0,
-            )
-            .choices[0]
-            .text
+        greedy_text = _request_qualitative_completion(
+            client=client,
+            hf_model=hf_model,
+            prompt=prompt,
+            prompt_mode=prompt_mode,
+            temperature=0.0,
         )
-        sampled_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.7,
-                top_p=0.9,
-            )
-            .choices[0]
-            .text
+        sampled_text = _request_qualitative_completion(
+            client=client,
+            hf_model=hf_model,
+            prompt=prompt,
+            prompt_mode=prompt_mode,
+            temperature=0.7,
+            top_p=0.9,
         )
 
         results.append(
             {
                 "prompt": prompt,
+                "prompt_mode": prompt_mode,
                 "greedy_completion": greedy_text,
                 "sampled_completion": sampled_text,
             }
@@ -448,6 +446,43 @@ def _run_qualitative_prompts(
     print("  - coherent and on-topic")
     print("  - no repetition loops or gibberish")
     print("  - greedy and sampled outputs both reasonable")
+
+
+def _qualitative_prompt_mode(hf_model: str) -> str:
+    """Use chat endpoints exactly when the checkpoint declares a chat template."""
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    return "chat" if bool(getattr(tokenizer, "chat_template", None)) else "completion"
+
+
+def _request_qualitative_completion(
+    *,
+    client: openai.OpenAI,
+    hf_model: str,
+    prompt: str,
+    prompt_mode: str,
+    temperature: float,
+    top_p: Optional[float] = None,
+) -> str:
+    request_args: dict[str, Any] = {
+        "model": hf_model,
+        "max_tokens": 256,
+        "temperature": temperature,
+    }
+    if top_p is not None:
+        request_args["top_p"] = top_p
+
+    if prompt_mode == "chat":
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            **request_args,
+        )
+        content = response.choices[0].message.content
+        if content is None:
+            raise RuntimeError("Chat completion returned no text content")
+        return content
+    if prompt_mode == "completion":
+        return client.completions.create(prompt=prompt, **request_args).choices[0].text
+    raise ValueError(f"Unsupported qualitative prompt mode: {prompt_mode!r}")
 
 
 def _vllm_cli_command() -> List[str]:

@@ -6,7 +6,7 @@ Run prefill-based readiness check against a reference file.
 
 Validates TT model prefill accuracy by:
   1. Loading the generator from `<model_dir>/tt/generator.py`
-  2. Running `prefill_forward(return_all_logits=True)` on full sequences
+  2. Running the generator-owned `prefill_logits` path on full sequences
   3. Comparing predictions against reference top-K at each position
   4. Reporting top-1, top-5, and top-K accuracy
 
@@ -98,57 +98,20 @@ def _run_one_entry_prefill(
     gen_len = len(gen_tokens)
     full_len = prompt_len + gen_len
 
-    # Convert to tensor [1, full_len]
-    tokens_tensor = torch.tensor([full_sequence], dtype=torch.long)
-
-    # Prepare KV cache and page table (implementation-specific)
-    # This is a simplified version - real implementations need proper setup
-    # For now, we'll call prefill_forward with minimal setup and let the
-    # generator handle defaults through **kwargs
-
-    # Call prefill with return_all_logits=True to get logits at all positions
-    # Note: This requires the generator implementation to support return_all_logits
-    try:
-        # Most generators will need proper page_table and kv_cache setup
-        # This is a placeholder - real usage requires model-specific initialization
-        import ttnn
-
-        # Allocate dummy page table and kv cache
-        # Real implementations should use generator's initialization methods
-        batch_size = 1
-        max_blocks = 1024
-        page_table = torch.arange(max_blocks).reshape(batch_size, max_blocks)
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=generator.mesh_device if hasattr(generator, "mesh_device") else None,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
-        # Placeholder kv_cache - real implementation needs proper initialization
-        kv_cache = None  # Generator should handle None gracefully or we need to init properly
-
-        logits = generator.prefill_forward(
-            tokens=tokens_tensor,
-            page_table=page_table_tt,
-            kv_cache=kv_cache,
-            prompt_lens=[full_len],
-            return_all_logits=True,
-        )
-    except TypeError as e:
-        if "return_all_logits" in str(e):
-            raise NotImplementedError(
-                f"Generator {type(generator).__name__} does not support return_all_logits parameter. "
-                "Please update the generator to support the new contract."
-            ) from e
-        raise
-
-    # logits should be [1, full_len, vocab_size]
-    if logits.dim() == 2:
-        # [batch, vocab] - only got last position, not all positions
+    # Cache shape, dtype, page-table geometry, and mesh distribution are
+    # model-specific. The high-level generator API owns those details and
+    # returns logical (unpadded) prompt logits to this generic runner.
+    logits = generator.prefill_logits(full_sequence)
+    if not isinstance(logits, torch.Tensor) or logits.dim() != 3:
         raise RuntimeError(
-            f"Generator returned logits with shape {logits.shape}, but return_all_logits=True "
-            "should return shape [batch, seq_len, vocab]. Generator may not support return_all_logits."
+            f"Generator returned {type(logits).__name__} with shape "
+            f"{getattr(logits, 'shape', None)}, but prefill_logits must return "
+            "a torch.Tensor with shape [1, prompt_len, vocab]."
+        )
+    if logits.shape[0] != 1 or logits.shape[1] != full_len:
+        raise RuntimeError(
+            f"Generator returned logits with shape {tuple(logits.shape)}, but "
+            f"prefill_logits must return logical shape [1, {full_len}, vocab]."
         )
 
     # Extract logits at positions that predict gen_tokens

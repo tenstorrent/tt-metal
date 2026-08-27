@@ -136,9 +136,9 @@ but unattended experiments should not rely on it.
 - `--replace OLD=NEW` — substitute text in every prompt. Model bringup runs
   should always pass both `HF_MODEL` and `MODEL_DIR`; replacements with
   identifier-like names are also exported into check-script environments.
-- `--start-index N` — resume a run from stage N without repeating earlier
-  stages (after a fix, a machine move, or a harness stop). This starts a fresh
-  thread for stage N.
+- `--start-index N` — assign stage number N to the first prompt file supplied.
+  It does not skip files: to resume without repeating earlier stages, pass only
+  the prompt files beginning at stage N. This starts a fresh thread for stage N.
 - `--resume-stage N --log-dir DIR` — recover an existing terminal stage from
   `DIR/manifest.txt` by resuming its recorded `stage_N_thread_id`, sending a
   continuation turn in that same thread, running the stage check if it

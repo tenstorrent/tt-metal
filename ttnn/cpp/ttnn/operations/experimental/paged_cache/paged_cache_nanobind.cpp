@@ -38,7 +38,9 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
          Input tensors must be FLOAT32 or BFLOAT16 even when the destination cache is
          BFLOAT8_B/BFLOAT4_B. This op updates one token row inside an existing cache
          tile and owns the final repack into the cache dtype; do not pre-cast decode
-         K/V updates to the low-precision cache dtype.
+         K/V updates to the low-precision cache dtype. In contrast,
+         ``paged_fill_cache`` performs a raw tile copy and requires matching input
+         and cache dtypes.
          ``cache_position_modulo`` (optional, paged mode only) makes the kernel
          compute ``update_idx %= cache_position_modulo`` before resolving the
          page_table entry — i.e. treats the cache as a circular buffer of that
@@ -86,6 +88,11 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                 compute_kernel_config (DeviceComputeKernelConfig, Optional): Optional configuration for the device compute kernel. Defaults to None.
                 mesh_coords (Set[MeshCoordinate], optional): Set of mesh coordinates to execute on.
 
+            Input tensors must be FLOAT32 or BFLOAT16 even when the destination
+            caches are BFLOAT8_B/BFLOAT4_B; this op repacks into each cache dtype.
+            In contrast, ``paged_fill_cache`` performs a raw tile copy and requires
+            matching input and cache dtypes.
+
             Returns:
                 ttnn.Tensor, ttnn.Tensor: Tensors representing the updated cache states.
         )doc";
@@ -123,7 +130,9 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         ``paged_update_cache`` for details). Per-block byte count must be preserved.
         ``paged_fill_cache`` does not perform dtype conversion; it copies prefill K/V
         tiles into the cache. ``input_tensor.dtype`` must match ``cache_tensor.dtype``.
-        Cast prefill K/V to the cache dtype before calling this op.
+        Cast prefill K/V to the cache dtype before calling this op. In contrast,
+        ``paged_update_cache`` and ``paged_fused_update_cache`` accept FLOAT32 or
+        BFLOAT16 decode inputs and repack them into the cache dtype.
         ``cache_position_modulo`` (optional) treats the cache as a circular buffer of
         that many tokens: each tile write computes ``seq_tile_id %=
         cache_position_modulo / TILE_HEIGHT`` before the page_table lookup. Lets

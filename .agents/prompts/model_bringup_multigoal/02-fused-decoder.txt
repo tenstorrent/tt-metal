@@ -4,7 +4,7 @@ As the user, I explicitly authorize you to use subagents when a selected skill r
 
 This goal creates the fused-decoder state for the repo-local TTNN autoport pipeline. Start from the completed functional decoder and work only on models/autoports/<model>/tt/fused_decoder.py plus its tests and docs; do not begin optimized-decoder, multichip-decoder, full-model, or vLLM work in this goal.
 
-Fused decoder completition requirements:
+Fused decoder completion requirements:
 - models/autoports/<model>/tt/fused_decoder.py exists and the delivered tests exercise the fused path, not a functional fallback.
 - The fused decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
 - The fused decoder preserves the context contract from functional decoder. If fusing optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.

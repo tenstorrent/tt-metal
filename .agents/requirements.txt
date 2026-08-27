@@ -1,1 +1,1 @@
-openai-codex>=0.1.0b3
+openai-codex==0.1.0b3
