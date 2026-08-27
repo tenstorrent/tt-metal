@@ -63,7 +63,9 @@ pre-agent-steps:
               --jq '.[] | select(.patch != null)
                     | select(.filename | test("(\\.lock\\.yml$|(^|/)(generated|dist|build)/)") | not)
                     | (.previous_filename // .filename) as $a
-                    | "diff --git a/\($a) b/\(.filename)\n--- a/\($a)\n+++ b/\(.filename)\n\(.patch)"' \
+                    | (if .status == "added" then "/dev/null" else "a/\($a)" end) as $from
+                    | (if .status == "removed" then "/dev/null" else "b/\(.filename)" end) as $to
+                    | "diff --git a/\($a) b/\(.filename)\n--- \($from)\n+++ \($to)\n\(.patch)"' \
               > /tmp/gh-aw/agent/pr-diff.full 2>/tmp/gh-aw/agent/pr-diff.err
             FILES_EXIT=$?
             set -e
