@@ -236,6 +236,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # align_num_cached_tokens_to_sdpa applies locally.
         "resumed_prefill_token_alignment": SDPA_CHUNK_ALIGN,
         "supports_sample_on_device": True,
+        # prefill_forward_text routes a nonzero start_pos to the chunked SDPA and
+        # floors the offset to resumed_prefill_token_alignment, so a prompt split
+        # across engine steps needs no new prefill code.
+        "supports_chunked_prefill": True,
     }
 
     # vLLM pads decode to the nearest of these (not always max_num_seqs) so B=1
