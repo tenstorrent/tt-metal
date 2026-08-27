@@ -51,7 +51,9 @@ using namespace moe_fused_swiglu::compute;
 
 MOE_DECLARE_CT_ENUM(MOE_COMPUTE_CT_ARGS);
 
+constexpr uint32_t EXPERTS_PER_CHIP = CT(EXPERTS_PER_CHIP);
 constexpr uint32_t M_BLOCK = CT(M_BLOCK);
+constexpr uint32_t DEPTH_H = CT(DEPTH_H);
 constexpr uint32_t KR_PAD = CT(KR_PAD);
 constexpr uint32_t HN_PAD = CT(HN_PAD);
 constexpr uint32_t EC_MAX = CT(EC_MAX);  // phase-2 N stride (uniform CB increment)
@@ -330,36 +332,6 @@ void kernel_main() {
 
     CircularBuffer tilize_done(cb_tilize_done);
     CircularBuffer mailbox_compute(cb_mailbox_compute);
-    // UNPACK waits on the reader's program-local mailbox publication, then
-    // broadcasts the two scalar loop bounds to MATH and PACK through the
-    // hardware inter-TRISC mailbox. A CB wait is UNPACK-only, so the explicit
-    // broadcast is what keeps all three threads on the same trip count.
-    uint32_t m_t = 0;
-    uint32_t m_blocks = 0;
-    UNPACK(({
-        mailbox_compute.wait_front(1);
-        const uint32_t mailbox_addr = get_local_cb_interface(cb_mailbox_compute).fifo_rd_ptr << 4;
-        const auto mb = moe_fused_swiglu::mailbox_wait(mailbox_addr, MAILBOX_MAGIC, [] {
-            asm volatile("fence" ::: "memory");
-        });
-        m_t = mb.m_t;
-        m_blocks = mb.m_blocks;
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, m_t);
-        ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, m_blocks);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, m_t);
-        ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, m_blocks);
-        mailbox_compute.pop_front(1);
-    }));
-    MATH(({
-        m_t = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
-        m_blocks = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
-    }));
-    PACK(({
-        m_t = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
-        m_blocks = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
-    }));
-    const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
-
     CircularBuffer x_buf(cb_x_tiles);
     CircularBuffer wg_buf(cb_w_gate);
     CircularBuffer wu_buf(cb_w_up);
@@ -372,6 +344,8 @@ void kernel_main() {
     CircularBuffer gg_buf(cb_gather_gate);
     CircularBuffer gu_buf(cb_gather_up);
     CircularBuffer sg_buf(cb_slice_gate);
+    CircularBuffer su_buf(cb_slice_up);
+    CircularBuffer h_slice_buf(cb_h_slice);
     CircularBuffer h_buf(cb_h);
     CircularBuffer out_interm_buf(cb_out_interm);
     CircularBuffer out_tiles_buf(cb_out_tiles);
@@ -380,325 +354,414 @@ void kernel_main() {
     // core's write pointer to the CB base and lets a contributor use its OWN pointer as the
     // destination address.
     constexpr uint32_t REDUCE_SLOT_TILES = M_BLOCK * HN_PAD;
+    // The resident in0 slot the reader reserves and publishes: a WHOLE M_BLOCK for every block, so
+    // the CB write pointer stays on a slot boundary and `x_slot_offset` below is exact. A ragged
+    // block computes only its real prefix and never reads the padding rows.
+    constexpr uint32_t X_SLOT_FULL = M_BLOCK * KR_PAD;
+    // A CB's pushes must sum to EXACTLY its capacity per cycle, or the pointer advances out of
+    // bounds (dataflow_api.h, cb_wait_front). Every CB below is sized for a full M_BLOCK, so a
+    // ragged block moves the full width and computes only its `m_eff` prefix. Only the LAST block of
+    // an expert is ragged — and there are experts after it now.
+    constexpr uint32_t GU_FULL = M_BLOCK * HN_PAD;
+    constexpr uint32_t SLICE_FULL = GU_FULL / KGROUPS;
+    constexpr uint32_t OUT_FULL =
+        (WD_MGROUPS && MGROUP_ROWS * EC_GROUP_MAX > M_BLOCK * EC_MAX) ? MGROUP_ROWS * EC_GROUP_MAX : M_BLOCK * EC_MAX;
+    // cb_h's physical capacity. The reader realigns cb_h to its base at every expert boundary — the
+    // writer's h landing address is derived from the CB base, not from the running pointer — and the
+    // padding it pushes has to be drained here or the next expert's first round never gets a slot.
+    constexpr uint32_t H_FAST = WD_MROW_ROUNDS ? HID_T : (M_BLOCK * HN_PAD);
+    constexpr uint32_t H_CAP = DEPTH_H * H_FAST;
 
-    for (uint32_t block_idx = 0; block_idx < m_blocks; ++block_idx) {
-        // The RUNTIME token tile-rows this block works on — the same number the reader uses for its
-        // x-multicast rounds and the writer for its CB waits (moe_fused_swiglu_common.hpp). Every
-        // shape and trip count below is derived from it, so count 128 does HALF the gate/up matmul,
-        // reduce and `down` work of count 256 instead of the same amount.
-        const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
-        const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
-        const uint32_t x_slot_tiles = m_eff * KR_PAD;
-        const uint32_t gu_block_tiles = m_eff * HN_PAD;
-        const uint32_t down_ec = wd_mgroup ? ec_group : ec;
-        const uint32_t down_rows = wd_mgroup ? MGROUP_ROWS : m_eff;
-        const uint32_t out_ec_max = wd_mgroup ? EC_GROUP_MAX : EC_MAX;
-        const uint32_t out_block_tiles = down_rows * out_ec_max;
+    // ======================= per-local-expert loop =======================
+    // ONE program, every local expert, in the reader's order. `gb` is the M-block index ACROSS
+    // experts; only the resident-x slot rotation needs it, because that address has to track the
+    // reader's cb_x_tiles cursor, which is never reset. `block_idx` stays expert-relative.
+    uint32_t gb = 0;
+    for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
+        // UNPACK waits on the reader's program-local mailbox publication, then
+        // broadcasts the two scalar loop bounds to MATH and PACK through the
+        // hardware inter-TRISC mailbox. A CB wait is UNPACK-only, so the explicit
+        // broadcast is what keeps all three threads on the same trip count.
+        uint32_t m_t = 0;
+        uint32_t m_blocks = 0;
+        UNPACK(({
+            mailbox_compute.wait_front(1);
+            const uint32_t mailbox_addr = get_local_cb_interface(cb_mailbox_compute).fifo_rd_ptr << 4;
+            const auto mb = moe_fused_swiglu::mailbox_wait(mailbox_addr, MAILBOX_MAGIC + local_expert_id, [] {
+                asm volatile("fence" ::: "memory");
+            });
+            m_t = mb.m_t;
+            m_blocks = mb.m_blocks;
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, m_t);
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, m_blocks);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, m_t);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, m_blocks);
+            mailbox_compute.pop_front(1);
+        }));
+        MATH(({
+            m_t = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+            m_blocks = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+        }));
+        PACK(({
+            m_t = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+            m_blocks = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
+        }));
+        const bool wd_mgroup = WD_MGROUPS && (m_blocks >= WD_MGROUP_MIN_BLOCKS) && (m_t != 0) && ((m_t % M_BLOCK) == 0);
 
-        // PAGE vs ARITHMETIC. Everything above is a PAGE count on `m_eff` — those must divide
-        // M_BLOCK and agree across cores. `m_rows` is the ARITHMETIC count the gate/up matmul really
-        // produces, smaller only on a tail block whose remainder is not a power of two.
-        //
-        // GATE/UP ONLY, and that is the helper's policy rather than a choice: both calls retain via
-        // WaitAndRetainPerMSubblock and neither pops (num_k_blocks == 1), so this kernel pops x
-        // itself below. `down` has no such freedom — see shape_dn.
-        const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, block_idx, M_BLOCK);
-
-        // gate/up: [m_eff, HN_PAD] = x[m_eff, kr_rows] @ W[kr_rows, HN_PAD]. ONE K-block whose width is the
-        // whole per-row K extent, which is what lets both matmuls read the same resident in0.
-        // The in1 sub-blocking sits WITHIN one N-chunk; the host keeps HN_BLOCK a divisor of
-        // GU_CHUNK_W, so GU_CHUNKS == 1 degenerates to one sub-block over the whole HN_PAD.
-        constexpr uint32_t GU_IN1_SUBBLOCKS = GU_CHUNK_W / HN_BLOCK;
-
-        // down: [m_eff, ec] = h[m_eff, HGROUPS*HN_PAD] @ W_down[.., ec], HGROUPS K-blocks.
-        // The FMA width is the real `ec`; the in1 read stride and output row stride stay the uniform
-        // EC_MAX so every phase-2 CB increment is core-independent. Narrower cores then take more of
-        // DEST (ec=3 stays 2x3, ec=2 grows to 4x2), always at power-of-two heights.
-        uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
-        while (sbh_dn * 2 <= OUT_SUBBLOCK_H_DN_MAX && sbh_dn * 2 <= m_eff && sbh_dn * 2 * ec <= DEST_LIMIT) {
-            sbh_dn *= 2;
-        }
-        // `down` STAYS ON m_eff: WaitAndPopPerKBlock derives the POP from the shape, so shrinking it
-        // to m_rows drifts cb_h_local by (m_eff - m_rows) * HN_PAD per K-block and HANGS (seen at
-        // M 192). The NoWaitNoPop escape hatch would serialise the column gather against the matmul.
-        const MatmulShape shape_dn = MatmulShape::of(m_eff / sbh_dn, 1, sbh_dn, ec, HN_PAD, HGROUPS);
-
-        // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
-        if constexpr (INPUT_FORMAT == 0) {
-            MaybeDeviceZoneScope("compute_tilize");
-            const uint32_t x_slot_offset = (block_idx % DEPTH_X) * M_BLOCK * KR_PAD;
-            const uint32_t t_first = moe_fused_swiglu::inject_first(my_col);
-            for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
-                // The reader reserved the whole resident slot before publishing cb_x_in. Pack the
-                // converted row straight into its final multicast offset but leave cb_x_tiles'
-                // FIFO state untouched: the reader remains its only pusher. The tiny ready CB is
-                // the compute->reader completion edge that cb_x_stage's payload used to provide.
-                tilize_done.reserve_back(1);
-                {
-                    MaybeDeviceZoneScope("compute_tilize_input_wait");
-                    DataflowBuffer x_input(cb_x_in);
-                    x_input.wait_front(TILE_H);
-                }
-                {
-                    MaybeDeviceZoneScope("compute_tilize_body");
-                    tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(TILE_H, x_slot_offset + t * KR_PAD);
-                }
-                tilize_done.push_back(1);
+        uint32_t h_cursor = 0;
+        for (uint32_t block_idx = 0; block_idx < m_blocks; ++block_idx, ++gb) {
+            // The RUNTIME token tile-rows this block works on — the same number the reader uses for its
+            // x-multicast rounds and the writer for its CB waits (moe_fused_swiglu_common.hpp). Every
+            // shape and trip count below is derived from it, so count 128 does HALF the gate/up matmul,
+            // reduce and `down` work of count 256 instead of the same amount.
+            const uint32_t m_eff = moe_fused_swiglu::m_tiles_eff(m_t, block_idx, M_BLOCK, M_EFF_MIN);
+            const bool wd_mrow = WD_MROW_ROUNDS && (m_eff == M_BLOCK);
+            // The reader's twin, from the same grid-uniform inputs.
+            h_cursor += wd_mrow ? ((wd_mgroup ? MGROUP_ROWS : KGROUPS) * HID_T + (wd_mgroup ? 0u : HID_T))
+                                : (HGROUPS * m_eff * HN_PAD);
+            while (h_cursor >= H_CAP) {
+                h_cursor -= H_CAP;
             }
-        }
+            const uint32_t x_slot_tiles = m_eff * KR_PAD;
+            const uint32_t gu_block_tiles = m_eff * HN_PAD;
+            const uint32_t down_ec = wd_mgroup ? ec_group : ec;
+            const uint32_t down_rows = wd_mgroup ? MGROUP_ROWS : m_eff;
+            const uint32_t out_ec_max = wd_mgroup ? EC_GROUP_MAX : EC_MAX;
+            const uint32_t out_block_tiles = down_rows * out_ec_max;
 
-        // ---- 2. gate and up over the same resident x block ----
-        // The two matmuls walk the HIDDEN axis in GU_CHUNKS chunks, interleaved per chunk. Full-size
-        // M slots run up then gate because W_up is available during x multicast; smaller slots
-        // retain gate then up. `out_col_offset` + `caller_owns_pack_target` keep the layout m-major.
-        {
-            MaybeDeviceZoneScope("compute_gateup");
-            gate_buf.reserve_back(gu_block_tiles);
-            up_buf.reserve_back(gu_block_tiles);
-            // The ONE reconfig this phase needs, hoisted out of the loop (see the calls below).
-            reconfig_data_format(cb_w_gate, cb_x_tiles);
-            pack_reconfig_data_format(cb_gate_acc);
-            for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
-                // The ragged column (hn_cols < HN_PAD) narrows the FMA width of the chunk it falls in;
-                // the host guarantees every chunk keeps at least one real column. 0 means "full".
-                const uint32_t chunk_col0 = c * GU_CHUNK_W;
-                const uint32_t valid = (hn_cols > chunk_col0) ? (hn_cols - chunk_col0) : 0;
-                if (valid == 0) {
-                    // This chunk is entirely PAD on the ragged column. The dataflow kernels still
-                    // push it (unread) so cb_w_gate/cb_w_up's residency wrap is core-independent, so
-                    // consume it here without a matmul. The output columns it leaves untouched are
-                    // pad, and `down`'s HnSteps narrows the last K-block past them.
-                    constexpr uint32_t CHUNK_W_TILES = KR_PAD * GU_CHUNK_W;
-                    wg_buf.wait_front(CHUNK_W_TILES);
-                    wg_buf.pop_front(CHUNK_W_TILES);
-                    wu_buf.wait_front(CHUNK_W_TILES);
-                    wu_buf.pop_front(CHUNK_W_TILES);
-                    continue;
+            // PAGE vs ARITHMETIC. Everything above is a PAGE count on `m_eff` — those must divide
+            // M_BLOCK and agree across cores. `m_rows` is the ARITHMETIC count the gate/up matmul really
+            // produces, smaller only on a tail block whose remainder is not a power of two.
+            //
+            // GATE/UP ONLY, and that is the helper's policy rather than a choice: both calls retain via
+            // WaitAndRetainPerMSubblock and neither pops (num_k_blocks == 1), so this kernel pops x
+            // itself below. `down` has no such freedom — see shape_dn.
+            const uint32_t m_rows = moe_fused_swiglu::m_tiles_real(m_t, block_idx, M_BLOCK);
+
+            // gate/up: [m_eff, HN_PAD] = x[m_eff, kr_rows] @ W[kr_rows, HN_PAD]. ONE K-block whose width is the
+            // whole per-row K extent, which is what lets both matmuls read the same resident in0.
+            // The in1 sub-blocking sits WITHIN one N-chunk; the host keeps HN_BLOCK a divisor of
+            // GU_CHUNK_W, so GU_CHUNKS == 1 degenerates to one sub-block over the whole HN_PAD.
+            constexpr uint32_t GU_IN1_SUBBLOCKS = GU_CHUNK_W / HN_BLOCK;
+
+            // down: [m_eff, ec] = h[m_eff, HGROUPS*HN_PAD] @ W_down[.., ec], HGROUPS K-blocks.
+            // The FMA width is the real `ec`; the in1 read stride and output row stride stay the uniform
+            // EC_MAX so every phase-2 CB increment is core-independent. Narrower cores then take more of
+            // DEST (ec=3 stays 2x3, ec=2 grows to 4x2), always at power-of-two heights.
+            uint32_t sbh_dn = (OUT_SUBBLOCK_H_DN < m_eff) ? OUT_SUBBLOCK_H_DN : m_eff;
+            while (sbh_dn * 2 <= OUT_SUBBLOCK_H_DN_MAX && sbh_dn * 2 <= m_eff && sbh_dn * 2 * ec <= DEST_LIMIT) {
+                sbh_dn *= 2;
+            }
+            // `down` STAYS ON m_eff: WaitAndPopPerKBlock derives the POP from the shape, so shrinking it
+            // to m_rows drifts cb_h_local by (m_eff - m_rows) * HN_PAD per K-block and HANGS (seen at
+            // M 192). The NoWaitNoPop escape hatch would serialise the column gather against the matmul.
+            const MatmulShape shape_dn = MatmulShape::of(m_eff / sbh_dn, 1, sbh_dn, ec, HN_PAD, HGROUPS);
+
+            // ---- 1. fused tilize of the x tile-rows this core injects (bf16 ROW_MAJOR only) ----
+            if constexpr (INPUT_FORMAT == 0) {
+                MaybeDeviceZoneScope("compute_tilize");
+                const uint32_t x_slot_offset = (gb % DEPTH_X) * M_BLOCK * KR_PAD;
+                const uint32_t t_first = moe_fused_swiglu::inject_first(my_col);
+                for (uint32_t t = t_first; t < m_eff; t += HGROUPS) {
+                    // The reader reserved the whole resident slot before publishing cb_x_in. Pack the
+                    // converted row straight into its final multicast offset but leave cb_x_tiles'
+                    // FIFO state untouched: the reader remains its only pusher. The tiny ready CB is
+                    // the compute->reader completion edge that cb_x_stage's payload used to provide.
+                    tilize_done.reserve_back(1);
+                    {
+                        MaybeDeviceZoneScope("compute_tilize_input_wait");
+                        DataflowBuffer x_input(cb_x_in);
+                        x_input.wait_front(TILE_H);
+                    }
+                    {
+                        MaybeDeviceZoneScope("compute_tilize_body");
+                        tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(TILE_H, x_slot_offset + t * KR_PAD);
+                    }
+                    tilize_done.push_back(1);
                 }
-                MatmulShape shape_c = MatmulShape::of(
-                    moe_fused_swiglu::round_up_capped(m_rows, OUT_SUBBLOCK_H_GU, m_eff) / OUT_SUBBLOCK_H_GU,
-                    GU_IN1_SUBBLOCKS,
-                    OUT_SUBBLOCK_H_GU,
-                    HN_BLOCK,
-                    KR_PAD,
-                    1);
-                shape_c.last_in1_subblock_w_valid =
-                    (valid < GU_CHUNK_W) ? (valid - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
+            }
 
-                // One two-pass body keeps M runtime without cloning the helper instantiation.
-                // Full-size M slots run up first with progressive waits; smaller slots retain the
-                // original gate-first order and bulk wait because their short multicast cannot
-                // repay the extra CB bookkeeping.
-                const bool stream_m = (m_eff == M_BLOCK);
-                for (uint32_t pass = 0; pass < 2; ++pass) {
-                    const bool run_up = stream_m ? (pass == 0) : (pass != 0);
-                    CircularBuffer& weight_buf = run_up ? wu_buf : wg_buf;
-                    CircularBuffer& accum_buf = run_up ? up_buf : gate_buf;
-                    shape_c.wait_in0_per_m_subblock = stream_m && (pass == 0);
-                    if (run_up) {
-                        MaybeDeviceZoneScope("compute_up_matmul");
-                        matmul_row_major<
-                            /*init_matmul=*/true,
-                            /*retain_in0=*/true,
-                            /*retain_in1=*/false,
-                            MatmulTarget::Interm>(
-                            x_buf,
-                            weight_buf,
-                            accum_buf,
-                            accum_buf,
-                            shape_c,
-                            /*in1_width=*/GU_CHUNK_W,
-                            /*out_row_width=*/HN_PAD,
-                            KrSteps{kr_rows},
-                            NoPreKBlock{},
-                            NoIn1Offset{},
-                            chunk_col0);
-                    } else {
-                        MaybeDeviceZoneScope("compute_gate_matmul");
-                        matmul_row_major<
-                            /*init_matmul=*/true,
-                            /*retain_in0=*/true,
-                            /*retain_in1=*/false,
-                            MatmulTarget::Interm>(
-                            x_buf,
-                            weight_buf,
-                            accum_buf,
-                            accum_buf,
-                            shape_c,
-                            /*in1_width=*/GU_CHUNK_W,
-                            /*out_row_width=*/HN_PAD,
-                            KrSteps{kr_rows},
-                            NoPreKBlock{},
-                            NoIn1Offset{},
-                            chunk_col0);
+            // ---- 2. gate and up over the same resident x block ----
+            // The two matmuls walk the HIDDEN axis in GU_CHUNKS chunks, interleaved per chunk. Full-size
+            // M slots run up then gate because W_up is available during x multicast; smaller slots
+            // retain gate then up. `out_col_offset` + `caller_owns_pack_target` keep the layout m-major.
+            {
+                MaybeDeviceZoneScope("compute_gateup");
+                gate_buf.reserve_back(GU_FULL);
+                up_buf.reserve_back(GU_FULL);
+                // The ONE reconfig this phase needs, hoisted out of the loop (see the calls below).
+                reconfig_data_format(cb_w_gate, cb_x_tiles);
+                pack_reconfig_data_format(cb_gate_acc);
+                for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                    // The ragged column (hn_cols < HN_PAD) narrows the FMA width of the chunk it falls in;
+                    // the host guarantees every chunk keeps at least one real column. 0 means "full".
+                    const uint32_t chunk_col0 = c * GU_CHUNK_W;
+                    const uint32_t valid = (hn_cols > chunk_col0) ? (hn_cols - chunk_col0) : 0;
+                    if (valid == 0) {
+                        // This chunk is entirely PAD on the ragged column. The dataflow kernels still
+                        // push it (unread) so cb_w_gate/cb_w_up's residency wrap is core-independent, so
+                        // consume it here without a matmul. The output columns it leaves untouched are
+                        // pad, and `down`'s HnSteps narrows the last K-block past them.
+                        constexpr uint32_t CHUNK_W_TILES = KR_PAD * GU_CHUNK_W;
+                        wg_buf.wait_front(CHUNK_W_TILES);
+                        wg_buf.pop_front(CHUNK_W_TILES);
+                        wu_buf.wait_front(CHUNK_W_TILES);
+                        wu_buf.pop_front(CHUNK_W_TILES);
+                        continue;
+                    }
+                    MatmulShape shape_c = MatmulShape::of(
+                        moe_fused_swiglu::round_up_capped(m_rows, OUT_SUBBLOCK_H_GU, m_eff) / OUT_SUBBLOCK_H_GU,
+                        GU_IN1_SUBBLOCKS,
+                        OUT_SUBBLOCK_H_GU,
+                        HN_BLOCK,
+                        KR_PAD,
+                        1);
+                    shape_c.last_in1_subblock_w_valid =
+                        (valid < GU_CHUNK_W) ? (valid - (GU_IN1_SUBBLOCKS - 1) * HN_BLOCK) : 0;
+
+                    // One two-pass body keeps M runtime without cloning the helper instantiation.
+                    // Full-size M slots run up first with progressive waits; smaller slots retain the
+                    // original gate-first order and bulk wait because their short multicast cannot
+                    // repay the extra CB bookkeeping.
+                    const bool stream_m = (m_eff == M_BLOCK);
+                    for (uint32_t pass = 0; pass < 2; ++pass) {
+                        const bool run_up = stream_m ? (pass == 0) : (pass != 0);
+                        CircularBuffer& weight_buf = run_up ? wu_buf : wg_buf;
+                        CircularBuffer& accum_buf = run_up ? up_buf : gate_buf;
+                        shape_c.wait_in0_per_m_subblock = stream_m && (pass == 0);
+                        if (run_up) {
+                            MaybeDeviceZoneScope("compute_up_matmul");
+                            matmul_row_major<
+                                /*init_matmul=*/true,
+                                /*retain_in0=*/true,
+                                /*retain_in1=*/false,
+                                MatmulTarget::Interm>(
+                                x_buf,
+                                weight_buf,
+                                accum_buf,
+                                accum_buf,
+                                shape_c,
+                                /*in1_width=*/GU_CHUNK_W,
+                                /*out_row_width=*/HN_PAD,
+                                KrSteps{kr_rows},
+                                NoPreKBlock{},
+                                NoIn1Offset{},
+                                chunk_col0);
+                        } else {
+                            MaybeDeviceZoneScope("compute_gate_matmul");
+                            matmul_row_major<
+                                /*init_matmul=*/true,
+                                /*retain_in0=*/true,
+                                /*retain_in1=*/false,
+                                MatmulTarget::Interm>(
+                                x_buf,
+                                weight_buf,
+                                accum_buf,
+                                accum_buf,
+                                shape_c,
+                                /*in1_width=*/GU_CHUNK_W,
+                                /*out_row_width=*/HN_PAD,
+                                KrSteps{kr_rows},
+                                NoPreKBlock{},
+                                NoIn1Offset{},
+                                chunk_col0);
+                        }
+                    }
+                }
+                gate_buf.push_back(GU_FULL);
+                up_buf.push_back(GU_FULL);
+                // packer_l1_acc leaves L1 accumulation ENABLED after the last chunk (the `down` matmul
+                // below carries the same note). The reduce chain that follows would otherwise ACCUMULATE
+                // onto stale L1 instead of overwriting.
+                pack_reconfig_l1_acc(0);
+            }
+
+            // MY SLICE of this block's m_eff*HN_PAD tiles, from the one shared plan in common.hpp — a
+            // pure function of (m_eff, KGROUPS, my_row), identical on every core, which is what keeps
+            // the all-to-all deadlock-free. 0 = idle: still contributes a partial, owns no slice.
+            const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
+
+            // ---- 3. cross-column reduce + SwiGLU ----
+            {
+                MaybeDeviceZoneScope("compute_reduce");
+                // REDUCE-SCATTER, worker side: every contributor pushed its slice into slot `row`, so
+                // the reduce is `slice_tiles` wide rather than the whole block — that factor IS the win.
+                // PACK must be the ONLY pusher of the slice CBs: `cb_push_back` writes the shared
+                // `tiles_received` word from the pushing RISC-V's own count, so two pushers corrupt it.
+                if (slice_tiles) {
+#ifdef SITU_GLU
+                    // SiTU fuses both reductions with the binary SFPU pass below.
+#else
+                    // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
+                    fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
+                    // The final gate add, with SiLU on the packer thread. Chunked to DEST_LIMIT because
+                    // a slice can exceed one DEST window (slice_tiles is m_eff*HN_PAD/workers, e.g. 9 at
+                    // HN_PAD 9); each chunk pairs the partial with its corresponding final gate tile.
+                    gg_buf.wait_front(slice_tiles);
+                    for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
+                        uint32_t w = slice_tiles - t0;
+                        if (w > DEST_LIMIT) {
+                            w = DEST_LIMIT;
+                        }
+                        add_silu_elementwise(sg_buf, gg_buf, silu_buf, w, t0);
+                    }
+                    gg_buf.pop_front(slice_tiles);
+
+                    fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, slice_tiles);
+#endif
+                }
+            }
+
+            {
+                MaybeDeviceZoneScope("compute_swiglu");
+                // SwiGLU on MY SLICE ONLY, straight into the CB the writer unicasts from. The workers'
+                // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
+                // landing CB and no root-side copy.
+                if (slice_tiles) {
+#ifdef SITU_GLU
+                    fold_situ_glu_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
+#else
+                    // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
+                    // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
+                    mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
+#endif
+                    // Drain the landing CBs' padding tail so the pop total equals the reader's
+                    // WHOLE-CB push. That is not tidiness: the whole-CB push is what returns the
+                    // landing write pointer to the CB base on EVERY core every M-block, which is the
+                    // contract the contributors' own-write-pointer address proxy stands on.
+                    constexpr uint32_t CAP = GATHER_PAGES;
+                    const uint32_t live = KGROUPS * slice_tiles;
+                    if (CAP > live) {
+                        gg_buf.pop_front(CAP - live);
+                        gu_buf.pop_front(CAP - live);
+                    }
+                    // Same discipline for the slice chain, whose stride IS `slice_tiles`. The three
+                    // internal CBs cycle within this kernel; cb_h_slice's tail is drained by the
+                    // writer, which waits and pops the full width.
+                    if (SLICE_FULL > slice_tiles) {
+                        const uint32_t pad = SLICE_FULL - slice_tiles;
+                        h_slice_buf.reserve_back(pad);
+                        h_slice_buf.push_back(pad);
+#ifndef SITU_GLU
+                        sg_buf.reserve_back(pad);
+                        sg_buf.push_back(pad);
+                        sg_buf.wait_front(pad);
+                        sg_buf.pop_front(pad);
+                        su_buf.reserve_back(pad);
+                        su_buf.push_back(pad);
+                        su_buf.wait_front(pad);
+                        su_buf.pop_front(pad);
+                        silu_buf.reserve_back(pad);
+                        silu_buf.push_back(pad);
+                        silu_buf.wait_front(pad);
+                        silu_buf.pop_front(pad);
+#endif
                     }
                 }
             }
-            gate_buf.push_back(gu_block_tiles);
-            up_buf.push_back(gu_block_tiles);
-            // packer_l1_acc leaves L1 accumulation ENABLED after the last chunk (the `down` matmul
-            // below carries the same note). The reduce chain that follows would otherwise ACCUMULATE
-            // onto stale L1 instead of overwriting.
-            pack_reconfig_l1_acc(0);
-        }
 
-        // MY SLICE of this block's m_eff*HN_PAD tiles, from the one shared plan in common.hpp — a
-        // pure function of (m_eff, KGROUPS, my_row), identical on every core, which is what keeps
-        // the all-to-all deadlock-free. 0 = idle: still contributes a partial, owns no slice.
-        const uint32_t slice_tiles = moe_fused_swiglu::slice_assigned(gu_block_tiles, KGROUPS, my_row);
-
-        // ---- 3. cross-column reduce + SwiGLU ----
-        {
-            MaybeDeviceZoneScope("compute_reduce");
-            // REDUCE-SCATTER, worker side: every contributor pushed its slice into slot `row`, so
-            // the reduce is `slice_tiles` wide rather than the whole block — that factor IS the win.
-            // PACK must be the ONLY pusher of the slice CBs: `cb_push_back` writes the shared
-            // `tiles_received` word from the pushing RISC-V's own count, so two pushers corrupt it.
-            if (slice_tiles) {
-#ifdef SITU_GLU
-                // SiTU fuses both reductions with the binary SFPU pass below.
-#else
-                // KGROUPS-1 contributors fold here; the last one rides the SiLU-fused add below.
-                fold_chain<cb_slice_gate, cb_gather_gate>(KGROUPS - 1, slice_tiles);
-                // The final gate add, with SiLU on the packer thread. Chunked to DEST_LIMIT because
-                // a slice can exceed one DEST window (slice_tiles is m_eff*HN_PAD/workers, e.g. 9 at
-                // HN_PAD 9); each chunk pairs the partial with its corresponding final gate tile.
-                gg_buf.wait_front(slice_tiles);
-                for (uint32_t t0 = 0; t0 < slice_tiles; t0 += DEST_LIMIT) {
-                    uint32_t w = slice_tiles - t0;
-                    if (w > DEST_LIMIT) {
-                        w = DEST_LIMIT;
+            // ---- 4. down matmul: HGROUPS K-blocks. Non-last blocks packer-L1-accumulate in the
+            // fixed bf16 scratch; the last reloads that partial into DEST, adds its contribution,
+            // and packs straight to the caller-owned bfp8 output region. ----
+            {
+                MaybeDeviceZoneScope("compute_down");
+                out_tiles_buf.reserve_back(OUT_FULL);
+                reconfig_data_format(cb_w_down, cb_h);
+                pack_reconfig_data_format(cb_out_tiles);
+                if (wd_mrow) {
+                    // The reader publishes the complete resident W_down shard once, while cb_h carries
+                    // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
+                    // result never leaves DEST for an intermediate BF16 accumulation spill.
+                    constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
+                    wd_buf.wait_front(WD_RESIDENT_TILES);
+                    matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
+                    const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
+                    for (uint32_t r = 0; r < down_rows; ++r) {
+                        matmul_row_major<
+                            /*init_matmul=*/false,
+                            /*retain_in0=*/false,
+                            /*retain_in1=*/true,
+                            MatmulTarget::Out>(
+                            h_buf,
+                            wd_buf,
+                            out_tiles_buf,
+                            out_tiles_buf,
+                            row_shape,
+                            /*in1_width=*/WD_EC_MAX,
+                            /*out_row_width=*/out_ec_max,
+                            FullKSteps{});
+                        // The full output allocation was reserved before the loop, but publishing
+                        // this completed row advances the CB write pointer to row r+1 and lets the
+                        // writer issue row r while compute works on the next W_down matmul.
+                        out_tiles_buf.push_back(out_ec_max);
                     }
-                    add_silu_elementwise(sg_buf, gg_buf, silu_buf, w, t0);
-                }
-                gg_buf.pop_front(slice_tiles);
-
-                fold_chain<cb_slice_up, cb_gather_up>(KGROUPS, slice_tiles);
-#endif
-            }
-        }
-
-        {
-            MaybeDeviceZoneScope("compute_swiglu");
-            // SwiGLU on MY SLICE ONLY, straight into the CB the writer unicasts from. The workers'
-            // slices tile the ROOT's cb_h_local as they LAND, so the gather IS the assembly: no
-            // landing CB and no root-side copy.
-            if (slice_tiles) {
-#ifdef SITU_GLU
-                fold_situ_glu_blocked<cb_gather_gate, cb_gather_up, cb_h_slice>(KGROUPS, slice_tiles);
-#else
-                // Inherits phase 1's hoisted cb_gate_acc pack format, which is correct exactly
-                // because cb_h_slice is bfp8 — the epilogue's single dtype boundary.
-                mul_blocked<cb_gate_silu, cb_slice_up, cb_h_slice>(slice_tiles);
-#endif
-                // Drain the landing CBs' padding tail so the pop total equals the reader's
-                // WHOLE-CB push. That is not tidiness: the whole-CB push is what returns the
-                // landing write pointer to the CB base on EVERY core every M-block, which is the
-                // contract the contributors' own-write-pointer address proxy stands on.
-                constexpr uint32_t CAP = GATHER_PAGES;
-                const uint32_t live = KGROUPS * slice_tiles;
-                if (CAP > live) {
-                    gg_buf.pop_front(CAP - live);
-                    gu_buf.pop_front(CAP - live);
-                }
-            }
-        }
-
-        // ---- 4. down matmul: HGROUPS K-blocks. Non-last blocks packer-L1-accumulate in the
-        // fixed bf16 scratch; the last reloads that partial into DEST, adds its contribution,
-        // and packs straight to the caller-owned bfp8 output region. ----
-        {
-            MaybeDeviceZoneScope("compute_down");
-            out_tiles_buf.reserve_back(out_block_tiles);
-            reconfig_data_format(cb_w_down, cb_h);
-            pack_reconfig_data_format(cb_out_tiles);
-            if (wd_mrow) {
-                // The reader publishes the complete resident W_down shard once, while cb_h carries
-                // eight consecutive 1xHID_T activation rows.  Each call has one K-block, so the
-                // result never leaves DEST for an intermediate BF16 accumulation spill.
-                constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
-                wd_buf.wait_front(WD_RESIDENT_TILES);
-                matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
-                const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
-                for (uint32_t r = 0; r < down_rows; ++r) {
+                    if (!wd_mgroup) {
+                        h_buf.wait_front(HID_T);
+                        h_buf.pop_front(HID_T);  // ordinary path's payload-free alignment slot
+                    }
+                    wd_buf.pop_front(WD_RESIDENT_TILES);
+                } else if constexpr (WD_PACKED) {
+                    // Balanced hidden slices sit contiguously in the resident W_down payload while the
+                    // producer still publishes fixed HN_PAD*EC_MAX blocks for flow control: hold the read
+                    // pointer at the CB base and address the packed rows explicitly. Short tails only.
+                    constexpr uint32_t WD_BLOCK_TILES = HN_PAD * WD_EC_MAX;
+                    constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * WD_BLOCK_TILES;
+                    auto wait_packed_wd = [&](uint32_t block, uint32_t, bool) {
+                        wd_buf.wait_front((block + 1) * WD_BLOCK_TILES);
+                    };
                     matmul_row_major<
-                        /*init_matmul=*/false,
+                        /*init_matmul=*/true,
                         /*retain_in0=*/false,
                         /*retain_in1=*/true,
                         MatmulTarget::Out>(
                         h_buf,
                         wd_buf,
                         out_tiles_buf,
-                        out_tiles_buf,
-                        row_shape,
+                        out_interm_buf,
+                        shape_dn,
                         /*in1_width=*/WD_EC_MAX,
-                        /*out_row_width=*/out_ec_max,
-                        FullKSteps{});
-                    // The full output allocation was reserved before the loop, but publishing
-                    // this completed row advances the CB write pointer to row r+1 and lets the
-                    // writer issue row r while compute works on the next W_down matmul.
-                    out_tiles_buf.push_back(out_ec_max);
+                        /*out_row_width=*/EC_MAX,
+                        HnSteps{},
+                        wait_packed_wd,
+                        PackedWdOffset{});
+                    wd_buf.pop_front(WD_RESIDENT_TILES);
+                } else {
+                    matmul_row_major<
+                        /*init_matmul=*/true,
+                        /*retain_in0=*/false,
+                        /*retain_in1=*/false,
+                        MatmulTarget::Out>(
+                        h_buf,
+                        wd_buf,
+                        out_tiles_buf,
+                        out_interm_buf,
+                        shape_dn,
+                        /*in1_width=*/WD_EC_MAX,
+                        /*out_row_width=*/EC_MAX,
+                        HnSteps{});
                 }
-                if (!wd_mgroup) {
-                    h_buf.wait_front(HID_T);
-                    h_buf.pop_front(HID_T);  // ordinary path's payload-free alignment slot
+                if (!wd_mrow) {
+                    out_tiles_buf.push_back(out_block_tiles);
                 }
-                wd_buf.pop_front(WD_RESIDENT_TILES);
-            } else if constexpr (WD_PACKED) {
-                // Balanced hidden slices sit contiguously in the resident W_down payload while the
-                // producer still publishes fixed HN_PAD*EC_MAX blocks for flow control: hold the read
-                // pointer at the CB base and address the packed rows explicitly. Short tails only.
-                constexpr uint32_t WD_BLOCK_TILES = HN_PAD * WD_EC_MAX;
-                constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * WD_BLOCK_TILES;
-                auto wait_packed_wd = [&](uint32_t block, uint32_t, bool) {
-                    wd_buf.wait_front((block + 1) * WD_BLOCK_TILES);
-                };
-                matmul_row_major<
-                    /*init_matmul=*/true,
-                    /*retain_in0=*/false,
-                    /*retain_in1=*/true,
-                    MatmulTarget::Out>(
-                    h_buf,
-                    wd_buf,
-                    out_tiles_buf,
-                    out_interm_buf,
-                    shape_dn,
-                    /*in1_width=*/WD_EC_MAX,
-                    /*out_row_width=*/EC_MAX,
-                    HnSteps{},
-                    wait_packed_wd,
-                    PackedWdOffset{});
-                wd_buf.pop_front(WD_RESIDENT_TILES);
-            } else {
-                matmul_row_major<
-                    /*init_matmul=*/true,
-                    /*retain_in0=*/false,
-                    /*retain_in1=*/false,
-                    MatmulTarget::Out>(
-                    h_buf,
-                    wd_buf,
-                    out_tiles_buf,
-                    out_interm_buf,
-                    shape_dn,
-                    /*in1_width=*/WD_EC_MAX,
-                    /*out_row_width=*/EC_MAX,
-                    HnSteps{});
+                if (OUT_FULL > out_block_tiles) {
+                    out_tiles_buf.push_back(OUT_FULL - out_block_tiles);
+                }
+                // Leave a known packer state for the next M-block's gate/up path.
+                pack_reconfig_l1_acc(0);
             }
-            if (!wd_mrow) {
-                out_tiles_buf.push_back(out_block_tiles);
-            }
-            // Leave a known packer state for the next M-block's gate/up path.
-            pack_reconfig_l1_acc(0);
+
+            // The resident x block was retained by both matmuls; release it now. A ragged slot
+            // (for example m_rows=7, m_eff=8) deliberately computes only the real prefix, so front
+            // the whole reservation before popping it: the progressive matmul stops at the last real
+            // row, and the padding rows are published without ever being read.
+            x_buf.wait_front(X_SLOT_FULL);
+            x_buf.pop_front(X_SLOT_FULL);
         }
 
-        // The resident x block was retained by both matmuls; release it now. A ragged full-size
-        // slot (for example m_rows=7, m_eff=8) deliberately computes only the real prefix, so
-        // explicitly front the final padding-row publication before popping the whole reservation.
-        // Exact full blocks already fronted the last row in the progressive matmul; smaller slots
-        // are published atomically, so neither needs another wait.
-        if (m_eff == M_BLOCK && m_rows != m_eff) {
-            x_buf.wait_front(x_slot_tiles);
+        const uint32_t h_pad = (H_CAP - h_cursor) % H_CAP;
+        if (h_pad != 0) {
+            h_buf.wait_front(h_pad);
+            h_buf.pop_front(h_pad);
         }
-        x_buf.pop_front(x_slot_tiles);
     }
 }
