@@ -20,39 +20,61 @@
 
 namespace ttnn::transformer::neighborhood::chunk_layout {
 
-// Row-major decode shared by both levels: chunks within the volume, bricks within a chunk. The
-// UNIT is explicit at the call site because the two levels return positions in DIFFERENT units --
-// decoding a chunk index gives a ChunkPoint, which is a factor of the chunk shape away from the
-// BrickPoint the caller then wants.
-template <Unit UNIT>
-FORCE_INLINE Point3<uint32_t, UNIT> decode_row_major(uint32_t index, const kernel_args::AxisExtents& extent) {
-    const uint32_t per_time_slice = extent.height * extent.width;
+// A linear index into a (time, height, width) grid -> the point it names. The exact inverse of
+// point3_to_linear below, and both are ROW-MAJOR over (time, height, width) -- the order tokens
+// arrive in, the order bricks tile a chunk, and the order site_to_bricked_index uses on the host.
+// All four have to agree: a work item is decoded to a point here and re-linearised there to
+// address the tensor, so a disagreement reads the wrong tile row for every brick and still
+// returns plausible video.
+//
+// UNIT must be given explicitly, because it appears only in the return type and so cannot be
+// deduced -- and it genuinely differs between the two levels this serves. Decoding a chunk index
+// yields a ChunkPoint, which is a whole chunk shape away from the BrickPoint the caller wants;
+// decoding a brick index within a chunk yields a BrickPoint directly. Naming the unit at the call
+// site is what stops those two being confused.
+//
+// GridT is whatever measures the grid: an AxisExtents when it is a size (the volume in chunks), a
+// ChunkShapeInBricks when it is a ratio (the bricks in one chunk). Both reach their axes through
+// operator[], so this needs neither an overload nor a conversion.
+template <Unit UNIT, typename GridT>
+FORCE_INLINE Point3<uint32_t, UNIT> linear_to_point3(uint32_t index, const GridT& grid) {
+    const uint32_t width = grid[Axis::Width];
+    const uint32_t per_time_slice = grid[Axis::Height] * width;
     const uint32_t time = index / per_time_slice;
     const uint32_t remainder = index % per_time_slice;
-    return Point3<uint32_t, UNIT>::at(time, remainder / extent.width, remainder % extent.width);
+    return Point3<uint32_t, UNIT>::at(time, remainder / width, remainder % width);
 }
 
 // The brick coordinate of a chunk's first brick.
 FORCE_INLINE BrickPoint chunk_origin_brick(
-    uint32_t chunk_index, const kernel_args::AxisExtents& volume_chunks, const kernel_args::AxisExtents& chunk_bricks) {
-    return first_brick_of(decode_row_major<Unit::Chunks>(chunk_index, volume_chunks), chunk_bricks);
+    uint32_t chunk_index, const kernel_args::AxisExtents& volume_chunks, ChunkShapeInBricks chunk_shape) {
+    return first_brick_of(linear_to_point3<Unit::Chunks>(chunk_index, volume_chunks), chunk_shape);
 }
 
 // The brick coordinate of the `index`-th brick inside a chunk.
 FORCE_INLINE BrickPoint
-brick_within_chunk(uint32_t index_in_chunk, const BrickPoint& origin, const kernel_args::AxisExtents& chunk_bricks) {
-    return origin + decode_row_major<Unit::Bricks>(index_in_chunk, chunk_bricks);
+brick_within_chunk(uint32_t index_in_chunk, const BrickPoint& origin, ChunkShapeInBricks chunk_shape) {
+    return origin + linear_to_point3<Unit::Bricks>(index_in_chunk, chunk_shape);
 }
 
-// Linear brick index into the bricked tensor.
-FORCE_INLINE uint32_t brick_index(const BrickPoint& brick, const kernel_args::AxisExtents& volume_bricks) {
-    return (brick.time() * volume_bricks.height + brick.height()) * volume_bricks.width + brick.width();
+// A point -> the linear index naming it. The exact inverse of linear_to_point3 above, and the
+// call that turns a brick coordinate into a tile row of the bricked tensor.
+//
+// UNIT is DEDUCED here rather than named, which is the one asymmetry with the decode: it appears
+// in the argument, not only in the return type. Nothing is lost by that -- handing this a
+// ChunkPoint where a BrickPoint belongs is already a type error, and `grid` says which space the
+// index lands in.
+template <Unit UNIT, typename GridT>
+FORCE_INLINE uint32_t point3_to_linear(Point3<uint32_t, UNIT> point, const GridT& grid) {
+    return (point.time() * grid[Axis::Height] + point.height()) * grid[Axis::Width] + point.width();
 }
 
-// A brick that runs past the volume holds only ghost sites; its queries are discarded.
-FORCE_INLINE bool brick_is_inside(const BrickPoint& brick, const kernel_args::AxisExtents& volume_bricks) {
-    return brick.time() < volume_bricks.time && brick.height() < volume_bricks.height &&
-           brick.width() < volume_bricks.width;
+// Is this point inside the grid? A brick that runs past the volume holds only ghost sites, and
+// its queries are discarded. Generic for the same reason point3_to_linear is: the test is the
+// same on a chunk grid as on a brick grid, and the unit tag keeps the two apart.
+template <Unit UNIT, typename GridT>
+FORCE_INLINE bool point3_is_inside(Point3<uint32_t, UNIT> point, const GridT& grid) {
+    return point.time() < grid[Axis::Time] && point.height() < grid[Axis::Height] && point.width() < grid[Axis::Width];
 }
 
 // Where one (brick, head) pair's tiles begin.

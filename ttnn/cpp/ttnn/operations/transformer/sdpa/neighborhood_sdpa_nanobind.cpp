@@ -31,6 +31,16 @@ neighborhood::Extent3 to_extent(const AxisTuple& value) {
     return neighborhood::Extent3{{value[0], value[1], value[2]}};
 }
 
+// The two unit RATIOS, which are not extents: sites per brick and bricks per chunk. Separate
+// conversions so a Python-side tuple cannot land in the wrong one -- see UnitRatio.
+neighborhood::BrickShapeInSites to_brick_shape(const AxisTuple& value) {
+    return neighborhood::BrickShapeInSites::of(value[0], value[1], value[2]);
+}
+
+neighborhood::ChunkShapeInBricks to_chunk_shape(const AxisTuple& value) {
+    return neighborhood::ChunkShapeInBricks::of(value[0], value[1], value[2]);
+}
+
 neighborhood::NeighborhoodConfig to_config(
     const AxisTuple& volume,
     const AxisTuple& context_window,
@@ -42,9 +52,9 @@ neighborhood::NeighborhoodConfig to_config(
     const std::optional<AxisTuple>& query_extent = std::nullopt,
     const std::optional<AxisTuple>& query_origin = std::nullopt) {
     neighborhood::NeighborhoodConfig config{
-        to_extent(volume), to_extent(context_window), to_extent(stride), to_extent(brick)};
+        to_extent(volume), to_extent(context_window), to_extent(stride), to_brick_shape(brick)};
     if (query_chunk_bricks.has_value()) {
-        config.query_chunk_bricks = to_extent(*query_chunk_bricks);
+        config.query_chunk_bricks = to_chunk_shape(*query_chunk_bricks);
     }
     if (shard_extent.has_value()) {
         config.shard_extent = to_extent(*shard_extent);
@@ -69,7 +79,7 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
     mod.def(
         "neighborhood_choose_brick",
         [](const AxisTuple& context_window) {
-            const neighborhood::Extent3 brick = neighborhood::choose_brick(to_extent(context_window));
+            const neighborhood::BrickShapeInSites brick = neighborhood::choose_brick(to_extent(context_window));
             return AxisTuple{brick.time(), brick.height(), brick.width()};
         },
         nb::arg("context_window"),

@@ -89,8 +89,8 @@ void require(bool condition, const std::string& message) {
 
 }  // namespace
 
-Extent3 choose_brick(Extent3 context_window) {
-    Extent3 best_brick = Extent3::of(1, 1, SITES_PER_BRICK);
+BrickShapeInSites choose_brick(Extent3 context_window) {
+    BrickShapeInSites best_brick = BrickShapeInSites::of(1, 1, SITES_PER_BRICK);
     uint64_t best_union_sites = UINT64_MAX;
     uint32_t best_largest_extent = UINT32_MAX;
 
@@ -101,7 +101,7 @@ Extent3 choose_brick(Extent3 context_window) {
                 continue;
             }
             const uint32_t width_extent = SITES_PER_BRICK / planar_sites;
-            const Extent3 brick_candidate = Extent3::of(time_extent, height_extent, width_extent);
+            const BrickShapeInSites brick_candidate = BrickShapeInSites::of(time_extent, height_extent, width_extent);
 
             // The union one brick must gather at stride 1 -- the shape-sensitive cost.
             uint64_t union_sites = 1;
@@ -216,7 +216,7 @@ Site bricked_index_to_site(uint32_t bricked_index, const NeighborhoodConfig& con
 }
 
 void validate_config(const NeighborhoodConfig& config) {
-    require(config.brick.sites() == SITES_PER_BRICK, "brick must hold exactly 32 sites");
+    require(config.brick.product() == SITES_PER_BRICK, "brick must hold exactly 32 sites");
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         require(config.query_chunk_bricks.by_axis[axis_index] > 0, "query_chunk_bricks must be non-zero on every axis");
     }

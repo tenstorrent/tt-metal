@@ -7,7 +7,8 @@
 #include <array>
 #include <cstdint>
 
-// A point in (time, height, width), and the conversions between the units one can be measured in.
+// A point in (time, height, width), the unit shapes that rescale one, and the conversions
+// between the units it can be measured in.
 //
 // Included by BOTH the host planner (neighborhood_plan.hpp) and the device kernels
 // (neighborhood_kernel_args.hpp, neighborhood_chunk_layout.hpp, dataflow/neighborhood_mask_gen.hpp),
@@ -76,39 +77,71 @@ using BrickPoint = Point3<uint32_t, Unit::Bricks>;
 // flash pass.
 using ChunkPoint = Point3<uint32_t, Unit::Chunks>;
 
+// ---- unit ratios ----
+//
+// How many FINE units make up one COARSE unit. The aliases below name both halves --
+// BrickShapeInSites is a brick measured in sites, ChunkShapeInBricks a chunk measured in bricks --
+// because at a call site the fine unit is what the conversion actually multiplies or divides by.
+// These are the SECOND argument to every conversion, and they are deliberately NOT Extent3.
+//
+// An Extent3 is a SIZE -- "how big is this region". A ratio is a SCALE -- "what do I multiply by
+// to change units". They are the same three numbers, which is exactly the problem: while the
+// conversions took any extent-shaped type, `first_site_of(brick_point, config.volume)` and
+// `first_brick_of(chunk_point, config.brick)` both compiled, and both are wrong by a factor of
+// the whole volume or of the brick shape. A tagged POINT with an untyped extent checks only half
+// of each call, and the half it leaves open is the one that silently rescales a position.
+template <Unit COARSE, Unit FINE>
+struct UnitRatio {
+    std::array<uint32_t, AXIS_COUNT> by_axis{1, 1, 1};
+
+    static constexpr UnitRatio of(uint32_t time, uint32_t height, uint32_t width) {
+        return UnitRatio{{time, height, width}};
+    }
+    constexpr uint32_t time() const { return by_axis[0]; }
+    constexpr uint32_t height() const { return by_axis[1]; }
+    constexpr uint32_t width() const { return by_axis[2]; }
+    constexpr uint32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
+
+    // FINE units per one COARSE unit -- 32 sites for a BrickShapeInSites, the bricks in one
+    // chunk for a ChunkShapeInBricks. Not spelled sites(), which would be a false claim on the
+    // second; the alias name already says which unit the answer is in.
+    constexpr uint32_t product() const { return by_axis[0] * by_axis[1] * by_axis[2]; }
+
+    friend constexpr bool operator==(const UnitRatio& left, const UnitRatio& right) {
+        return left.by_axis == right.by_axis;
+    }
+};
+
+// The layout unit: one brick is this many sites, so product() == SITES_PER_BRICK.
+using BrickShapeInSites = UnitRatio<Unit::Bricks, Unit::Sites>;
+
+// One query chunk is this many bricks -- the knob deciding how far one gather amortises.
+using ChunkShapeInBricks = UnitRatio<Unit::Chunks, Unit::Bricks>;
+
 // ---- unit conversions ----
 //
-// Templated on the extent type so one definition serves both the host's Extent3 and the kernel's
-// AxisExtents; both provide operator[](Axis). These were six hand-written triples spread over the
-// reader and the planner, each one an opportunity to transpose height and width or to forget the
-// scale entirely.
+// The ONLY route between units, and the only place the multiply or divide by a unit shape
+// appears. Both arguments are typed, so neither the position nor the scale can be the wrong
+// thing: these were six hand-written triples spread over the reader and the planner, each one an
+// opportunity to transpose height and width or to scale by the wrong extent entirely.
 
 // Where a brick BEGINS, in sites.
-template <typename ExtentT>
-inline constexpr Site first_site_of(BrickPoint brick, const ExtentT& brick_sites) {
+inline constexpr Site first_site_of(BrickPoint brick, BrickShapeInSites brick_shape) {
     return Site::at(
-        brick.time() * brick_sites[Axis::Time],
-        brick.height() * brick_sites[Axis::Height],
-        brick.width() * brick_sites[Axis::Width]);
+        brick.time() * brick_shape.time(), brick.height() * brick_shape.height(), brick.width() * brick_shape.width());
 }
 
 // Where a chunk BEGINS, in bricks.
-template <typename ExtentT>
-inline constexpr BrickPoint first_brick_of(ChunkPoint chunk, const ExtentT& chunk_bricks) {
+inline constexpr BrickPoint first_brick_of(ChunkPoint chunk, ChunkShapeInBricks chunk_shape) {
     return BrickPoint::at(
-        chunk.time() * chunk_bricks[Axis::Time],
-        chunk.height() * chunk_bricks[Axis::Height],
-        chunk.width() * chunk_bricks[Axis::Width]);
+        chunk.time() * chunk_shape.time(), chunk.height() * chunk_shape.height(), chunk.width() * chunk_shape.width());
 }
 
 // The brick holding a site. Rounds DOWN, which is what a tile-granular read needs: one brick is
 // one tile row, and a read cannot start mid-row.
-template <typename ExtentT>
-inline constexpr BrickPoint containing_brick(Site site, const ExtentT& brick_sites) {
+inline constexpr BrickPoint containing_brick(Site site, BrickShapeInSites brick_shape) {
     return BrickPoint::at(
-        site.time() / brick_sites[Axis::Time],
-        site.height() / brick_sites[Axis::Height],
-        site.width() / brick_sites[Axis::Width]);
+        site.time() / brick_shape.time(), site.height() / brick_shape.height(), site.width() / brick_shape.width());
 }
 
 }  // namespace ttnn::transformer::neighborhood

@@ -237,7 +237,7 @@ Small named helpers shared by reader and writer, so the two cannot decode a chun
 
 | helper                                                                     | does                                                |
 | -------------------------------------------------------------------------- | --------------------------------------------------- |
-| `decode_row_major(index, extent)`                                          | linear index → `BrickCoordinate`                    |
+| `linear_to_point3(index, grid)`                                            | linear index → `BrickCoordinate`                    |
 | `chunk_origin_brick(chunk_index, volume_chunks, chunk_bricks)`             | which brick a chunk starts at                       |
 | `brick_within_chunk(index_in_chunk, origin, chunk_bricks)`                 | the n-th brick of a chunk                           |
 | `brick_index(brick, volume_bricks)`                                        | `BrickCoordinate` → linear                          |

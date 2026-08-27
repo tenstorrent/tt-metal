@@ -62,10 +62,10 @@ struct Extent3 {
 };
 
 struct NeighborhoodConfig {
-    Extent3 volume;          // the GLOBAL token grid, in sites
-    Extent3 context_window;  // what one query group attends to, in sites
-    Extent3 stride;          // query group extent, in sites
-    Extent3 brick;           // layout unit, in sites; brick.sites() == SITES_PER_BRICK
+    Extent3 volume;           // the GLOBAL token grid, in sites
+    Extent3 context_window;   // what one query group attends to, in sites
+    Extent3 stride;           // query group extent, in sites
+    BrickShapeInSites brick;  // layout unit: sites per brick; brick.product() == SITES_PER_BRICK
 
     // How many bricks one query CHUNK spans, per axis. A chunk is the set of queries that share
     // a single gather, so this is the knob that decides how far the gather amortises.
@@ -76,7 +76,7 @@ struct NeighborhoodConfig {
     // exactly this reason -- a small chunk re-gathers almost the same keys for every tile row.
     //
     // (1,1,1) is one brick per chunk, the original behaviour.
-    Extent3 query_chunk_bricks{{1, 1, 1}};
+    ChunkShapeInBricks query_chunk_bricks{{1, 1, 1}};
 
     // Sharding. `shard_extent` is what this device actually holds -- its owned region PLUS the
     // halo its queries reach into -- and `shard_origin` is where that sits in the global volume.
@@ -114,7 +114,7 @@ struct NeighborhoodConfig {
             query_chunk_bricks.height() * brick.height(),
             query_chunk_bricks.width() * brick.width());
     }
-    uint32_t bricks_per_query_chunk() const { return query_chunk_bricks.sites(); }
+    uint32_t bricks_per_query_chunk() const { return query_chunk_bricks.product(); }
 
     Extent3 resident_extent() const { return shard_extent.sites() == 0 ? volume : shard_extent; }
     bool is_sharded() const { return shard_extent.sites() != 0 && !(shard_extent == volume); }
@@ -180,7 +180,7 @@ struct NeighborhoodPlan {
 // Pick the brick shape minimising the gathered union for a given context window. A function
 // rather than a constant: a window flat in time wants a brick flat in time. `11x11x11` and
 // `2x4x4` belong in a model config, never here and never in a kernel.
-Extent3 choose_brick(Extent3 context_window);
+BrickShapeInSites choose_brick(Extent3 context_window);
 
 // Which boundary regime one site sits in on one axis.
 Regime regime_for_axis(uint32_t site_index, uint32_t volume_extent_sites, uint32_t context_window_extent_sites);

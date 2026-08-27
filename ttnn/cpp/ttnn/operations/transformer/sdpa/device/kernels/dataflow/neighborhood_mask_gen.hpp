@@ -60,7 +60,7 @@ constexpr uint32_t SITES_PER_BRICK_AXIS_MAX = 32;
 
 inline BrickCoverage classify_brick(
     const Site& query_brick_origin, const Site& key_brick_origin, const kernel_args::NeighborhoodExtents& extents) {
-    const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
+    const uint32_t brick[3] = {extents.brick_sites.time(), extents.brick_sites.height(), extents.brick_sites.width()};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
     const uint32_t window_config[3] = {
@@ -133,7 +133,7 @@ FORCE_INLINE void fill_mask_tile(
 
     volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_address);
 
-    const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
+    const uint32_t brick[3] = {extents.brick_sites.time(), extents.brick_sites.height(), extents.brick_sites.width()};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
     const int32_t shard[3] = {extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};

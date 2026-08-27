@@ -54,10 +54,42 @@ static_assert(!(Site::at(1, 2, 3) == Site::at(1, 2, 4)));
 // The conversions are the ONLY route between units, and they fold at compile time. Worked with
 // the shipped brick (2, 4, 4): brick (3, 1, 2) begins at site (6, 4, 8), and every site in that
 // brick -- (7, 5, 9) among them -- maps back to it.
-static_assert(first_site_of(BrickPoint::at(3, 1, 2), Extent3::of(2, 4, 4)) == Site::at(6, 4, 8));
-static_assert(containing_brick(Site::at(6, 4, 8), Extent3::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
-static_assert(containing_brick(Site::at(7, 5, 9), Extent3::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
-static_assert(first_brick_of(ChunkPoint::at(2, 1, 0), Extent3::of(4, 2, 2)) == BrickPoint::at(8, 2, 0));
+static_assert(first_site_of(BrickPoint::at(3, 1, 2), BrickShapeInSites::of(2, 4, 4)) == Site::at(6, 4, 8));
+static_assert(containing_brick(Site::at(6, 4, 8), BrickShapeInSites::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
+static_assert(containing_brick(Site::at(7, 5, 9), BrickShapeInSites::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
+static_assert(first_brick_of(ChunkPoint::at(2, 1, 0), ChunkShapeInBricks::of(4, 2, 2)) == BrickPoint::at(8, 2, 0));
+
+// ---- and the SCALE argument is typed too ----
+//
+// A tagged point with an untyped extent would check only half of each call, and the open half is
+// the one that silently rescales a position: `first_site_of(brick_point, config.volume)` once
+// compiled and multiplied a brick coordinate by the whole volume. A unit ratio is not an Extent3,
+// and the two ratios are not each other -- brick shape is sites-per-brick, chunk shape is
+// bricks-per-chunk, and they sit in the same argument slot of adjacent functions.
+template <typename PointT, typename ScaleT>
+concept ScalesToSite = requires(PointT point, ScaleT scale) { first_site_of(point, scale); };
+template <typename PointT, typename ScaleT>
+concept ScalesToBrick = requires(PointT point, ScaleT scale) { first_brick_of(point, scale); };
+template <typename PointT, typename ScaleT>
+concept DividesToBrick = requires(PointT point, ScaleT scale) { containing_brick(point, scale); };
+
+static_assert(ScalesToSite<BrickPoint, BrickShapeInSites>);
+static_assert(!ScalesToSite<BrickPoint, Extent3>);             // a size is not a scale
+static_assert(!ScalesToSite<BrickPoint, ChunkShapeInBricks>);  // bricks-per-chunk is not sites-per-brick
+static_assert(!ScalesToSite<ChunkPoint, BrickShapeInSites>);   // and a chunk is not a brick
+
+static_assert(ScalesToBrick<ChunkPoint, ChunkShapeInBricks>);
+static_assert(!ScalesToBrick<ChunkPoint, BrickShapeInSites>);
+static_assert(!ScalesToBrick<ChunkPoint, Extent3>);
+
+static_assert(DividesToBrick<Site, BrickShapeInSites>);
+static_assert(!DividesToBrick<Site, Extent3>);
+static_assert(!DividesToBrick<Site, ChunkShapeInBricks>);
+
+// product() rather than sites(), because on a ChunkShapeInBricks the answer is a BRICK count. Extent3
+// keeps sites() and is still used for every genuine size.
+static_assert(BrickShapeInSites::of(2, 4, 4).product() == SITES_PER_BRICK);
+static_assert(ChunkShapeInBricks::of(4, 2, 2).product() == 16);
 
 // Same-unit arithmetic, which is how a query brick is offset into the resident grid.
 static_assert(BrickPoint::at(1, 2, 3) + BrickPoint::at(10, 20, 30) == BrickPoint::at(11, 22, 33));
@@ -96,7 +128,7 @@ uint32_t oracle_window_origin(uint32_t site_index, uint32_t volume_extent_sites,
     return best_origin;
 }
 
-NeighborhoodConfig make_config(Extent3 volume, Extent3 context_window, Extent3 stride, Extent3 brick) {
+NeighborhoodConfig make_config(Extent3 volume, Extent3 context_window, Extent3 stride, BrickShapeInSites brick) {
     return NeighborhoodConfig{volume, context_window, stride, brick};
 }
 
@@ -104,12 +136,12 @@ NeighborhoodConfig make_config(Extent3 volume, Extent3 context_window, Extent3 s
 // the brick on every case, and one axis is shorter than the window.
 const std::vector<NeighborhoodConfig>& awkward_configs() {
     static const std::vector<NeighborhoodConfig> configs = {
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4)),
-        make_config(Extent3::of(7, 13, 11), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4)),
-        make_config(Extent3::of(3, 12, 12), Extent3::of(5, 7, 7), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4)),
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 4, 4), Extent3::of(2, 4, 4)),
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 2, 2), Extent3::of(2, 4, 4)),
-        make_config(Extent3::of(6, 8, 16), Extent3::of(3, 7, 7), Extent3::of(1, 1, 1), Extent3::of(1, 4, 8)),
+        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4)),
+        make_config(Extent3::of(7, 13, 11), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4)),
+        make_config(Extent3::of(3, 12, 12), Extent3::of(5, 7, 7), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4)),
+        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 4, 4), BrickShapeInSites::of(2, 4, 4)),
+        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 2, 2), BrickShapeInSites::of(2, 4, 4)),
+        make_config(Extent3::of(6, 8, 16), Extent3::of(3, 7, 7), Extent3::of(1, 1, 1), BrickShapeInSites::of(1, 4, 8)),
     };
     return configs;
 }
@@ -129,8 +161,8 @@ TEST(NeighborhoodChooseBrick, MatchesExhaustiveSearch) {
     };
 
     for (const Extent3& context_window : context_windows) {
-        const Extent3 chosen_brick = choose_brick(context_window);
-        ASSERT_EQ(chosen_brick.sites(), SITES_PER_BRICK) << "brick must be exactly one tile";
+        const BrickShapeInSites chosen_brick = choose_brick(context_window);
+        ASSERT_EQ(chosen_brick.product(), SITES_PER_BRICK) << "brick must be exactly one tile";
 
         uint64_t chosen_union_sites = 1;
         for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
@@ -158,9 +190,9 @@ TEST(NeighborhoodChooseBrick, MatchesExhaustiveSearch) {
 
 TEST(NeighborhoodChooseBrick, FollowsWindowShape) {
     // A cubic window wants a cubic brick.
-    EXPECT_EQ(choose_brick(Extent3::of(11, 11, 11)), Extent3::of(2, 4, 4));
+    EXPECT_EQ(choose_brick(Extent3::of(11, 11, 11)), BrickShapeInSites::of(2, 4, 4));
     // A window flat in time wants a brick flat in time -- this is why it cannot be a constant.
-    EXPECT_EQ(choose_brick(Extent3::of(1, 11, 11)), Extent3::of(1, 4, 8));
+    EXPECT_EQ(choose_brick(Extent3::of(1, 11, 11)), BrickShapeInSites::of(1, 4, 8));
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +201,7 @@ TEST(NeighborhoodChooseBrick, FollowsWindowShape) {
 
 TEST(NeighborhoodContextWindow, MatchesOracleAtStrideOne) {
     const NeighborhoodConfig config =
-        make_config(Extent3::of(7, 13, 11), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4));
+        make_config(Extent3::of(7, 13, 11), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4));
 
     for (uint32_t site_time = 0; site_time < config.volume.time(); ++site_time) {
         for (uint32_t site_height = 0; site_height < config.volume.height(); ++site_height) {
@@ -261,7 +293,7 @@ TEST(NeighborhoodBrickedOrder, RoundTripsAndIsInjective) {
 TEST(NeighborhoodBrickedOrder, PacksOneBrickContiguously) {
     // The whole point of bricking: 32 consecutive bricked indices are one compact 3D box.
     const NeighborhoodConfig config =
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4));
+        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4));
 
     for (uint32_t brick_index = 0; brick_index < 6; ++brick_index) {
         const Site brick_origin = brick_index_to_origin(brick_index, config);
@@ -367,7 +399,7 @@ TEST(NeighborhoodPlanBuild, GatherStaysInBoundsAndIsConstantSize) {
 TEST(NeighborhoodPlanBuild, StrideEqualToBrickGathersExactlyOneContextWindow) {
     // The payoff of striding: one window per brick, no union, nothing to mask.
     const NeighborhoodConfig config =
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 4, 4), Extent3::of(2, 4, 4));
+        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 4, 4), BrickShapeInSites::of(2, 4, 4));
     const NeighborhoodPlan plan = build_plan(config);
 
     EXPECT_EQ(plan.gather_extent, Extent3::of(5, 5, 5));
@@ -376,8 +408,8 @@ TEST(NeighborhoodPlanBuild, StrideEqualToBrickGathersExactlyOneContextWindow) {
 
 TEST(NeighborhoodPlanBuild, StrideOneGathersTheUnionOfTheBricksWindows) {
     // At stride 1 the 32 queries have 32 distinct windows: window + brick - 1 on each axis.
-    const NeighborhoodConfig config =
-        make_config(Extent3::of(16, 24, 24), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4));
+    const NeighborhoodConfig config = make_config(
+        Extent3::of(16, 24, 24), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4));
     const NeighborhoodPlan plan = build_plan(config);
 
     EXPECT_EQ(plan.gather_extent, Extent3::of(6, 8, 8));
@@ -386,17 +418,20 @@ TEST(NeighborhoodPlanBuild, StrideOneGathersTheUnionOfTheBricksWindows) {
 TEST(NeighborhoodPlanBuild, RejectsUnbuildableConfigs) {
     // A brick that is not one tile.
     EXPECT_THROW(
-        build_plan(make_config(Extent3::of(8, 8, 8), Extent3::of(3, 3, 3), Extent3::of(1, 1, 1), Extent3::of(2, 2, 2))),
+        build_plan(make_config(
+            Extent3::of(8, 8, 8), Extent3::of(3, 3, 3), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 2, 2))),
         std::invalid_argument);
 
     // A stride wider than the window would put a query outside its own context.
     EXPECT_THROW(
-        build_plan(make_config(Extent3::of(8, 8, 8), Extent3::of(3, 3, 3), Extent3::of(4, 1, 1), Extent3::of(2, 4, 4))),
+        build_plan(make_config(
+            Extent3::of(8, 8, 8), Extent3::of(3, 3, 3), Extent3::of(4, 1, 1), BrickShapeInSites::of(2, 4, 4))),
         std::invalid_argument);
 
     // A zero extent.
     EXPECT_THROW(
-        build_plan(make_config(Extent3::of(8, 0, 8), Extent3::of(3, 3, 3), Extent3::of(1, 1, 1), Extent3::of(2, 4, 4))),
+        build_plan(make_config(
+            Extent3::of(8, 0, 8), Extent3::of(3, 3, 3), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4))),
         std::invalid_argument);
 }
 
