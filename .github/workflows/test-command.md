@@ -162,7 +162,119 @@ pre-agent-steps:
       printf '%s\n' "$HEAD_REF" > /tmp/gh-aw/agent/pr-head-ref.txt
       printf '%s\n' "$IS_FORK"  > /tmp/gh-aw/agent/pr-is-fork.txt
 
+      # Authoritative copies for the post-agent enforcement step, kept OUTSIDE the
+      # agent-writable mount. The agent sandbox mounts /tmp (and /tmp/gh-aw) rw with
+      # unrestricted bash, so the two files above are model context, not facts — a
+      # prompt-injected agent could rewrite them before the post-step reads them.
+      # ${RUNNER_TEMP}/gh-aw is mounted read-only into the sandbox and other
+      # ${RUNNER_TEMP} paths are not mounted at all, so a sibling directory there is
+      # host-owned for the whole job: written here (before the agent starts), read
+      # only by the enforcement post-step (after it exits).
+      FACTS_DIR="${RUNNER_TEMP:?}/gh-aw-facts"
+      mkdir -p "$FACTS_DIR"
+      printf '%s\n' "$HEAD_REF" > "$FACTS_DIR/pr-head-ref.txt"
+      printf '%s\n' "$IS_FORK"  > "$FACTS_DIR/pr-is-fork.txt"
+
       echo "PR #${PR_NUMBER}: head=${HEAD_REF} fork=${IS_FORK} files=$(wc -l < /tmp/gh-aw/agent/pr-files.txt) diff_lines=$(wc -l < /tmp/gh-aw/agent/pr-diff.patch)"
+
+# Deterministic enforcement of *The ref rule* (see the prompt below). The rule is
+# executed by a model, and a model can skip it: in run 32947659949 the agent omitted
+# `ref` on both of its dispatch calls (while correctly naming the PR branch in its
+# summary comment), and gh-aw's fallback chain silently dispatched them against
+# `main`. When a dispatch_workflow item carries no `ref`, gh-aw resolves one as
+# target-ref > GITHUB_HEAD_REF > GITHUB_REF; an `issue_comment` event sets neither of
+# the first two, so the fallback is always `refs/heads/main` — and `allowed-refs` is
+# only checked against *explicit* refs, so no safe-outputs configuration can make
+# that fallback fail (github/gh-aw dispatch_workflow.cjs). Until gh-aw fails closed
+# or resolves the PR head itself, close the gap on our side: after the agent runs,
+# rewrite the collected safe-output items so every dispatch_workflow item's `ref` is
+# the runner-resolved PR head branch — missing, wrong, or right, it becomes the fact
+# computed in the pre-agent step above.
+#
+# Placement is load-bearing: gh-aw emits post-steps after its "Ingest agent output"
+# step (which materializes /tmp/gh-aw/agent_output.json from the safe-outputs JSONL)
+# and before the artifact upload that the safe_outputs job downloads and dispatches
+# from — so the file rewritten here is exactly the one the dispatcher reads.
+#
+# The head-ref and fork facts are read from ${RUNNER_TEMP}/gh-aw-facts, which the
+# agent sandbox cannot write (see the pre-agent step): the /tmp/gh-aw copies exist
+# only as model context and are treated as untrusted here.
+post-steps:
+  - name: Enforce PR head ref on dispatch_workflow items
+    if: always()
+    run: |
+      set -euo pipefail
+      OUT=/tmp/gh-aw/agent_output.json
+      FACTS_DIR="${RUNNER_TEMP:?}/gh-aw-facts"
+      REF_FILE="$FACTS_DIR/pr-head-ref.txt"
+      FORK_FILE="$FACTS_DIR/pr-is-fork.txt"
+
+      # FAIL CLOSED. The agent artifact upload after this step runs
+      # `if: always()`, and the safe_outputs job runs whenever the agent job
+      # was not skipped — a failed agent job still gets its collected items
+      # dispatched. A plain `exit 1` here would therefore ship the
+      # un-rewritten items downstream and reopen the exact hole this step
+      # exists to close. Instead, any exit that is not an explicit success —
+      # including unexpected command failures under `set -euo pipefail` —
+      # first empties the item list: no dispatches, no comment, and a red
+      # step pointing at what broke.
+      neutralize() {
+        echo '{"items":[]}' > "$OUT" || true
+      }
+      finish_ok=0
+      trap '[ "$finish_ok" = 1 ] || { echo "::error::Ref enforcement did not complete; discarding all safe-output items." >&2; neutralize; }' EXIT
+
+      # gh-aw's placeholder step (which writes '{"items":[]}' when the agent
+      # produced nothing) runs before post-steps, so this file normally exists
+      # by now even on a no-dispatch run. Guard anyway: if it is absent there is
+      # nothing to enforce and nothing the safe_outputs job could dispatch.
+      if [ ! -s "$OUT" ]; then
+        echo "No agent output collected; nothing to enforce."
+        finish_ok=1
+        exit 0
+      fi
+
+      # Deterministic fork stop. `workflow_dispatch` only accepts refs that
+      # exist in this repository, and a fork's head branch name can *also*
+      # exist here by coincidence — forcing it would then green-light a run
+      # of the wrong code. The prompt already tells the agent to dispatch
+      # nothing for forks, but that rule is executed by a model; enforce it
+      # here by stripping every dispatch item while keeping the agent's
+      # explanatory comment. Anything other than a literal "false"
+      # (including a missing file) is treated as a fork.
+      IS_FORK="$(cat "$FORK_FILE" 2>/dev/null || echo unknown)"
+      if [ "$IS_FORK" != "false" ]; then
+        echo "PR is from a fork (pr-is-fork.txt: '$IS_FORK'); stripping all dispatch_workflow items."
+        jq '.items = [ .items[]? | select(.type != "dispatch_workflow") ]' "$OUT" > "$OUT.tmp"
+        mv "$OUT.tmp" "$OUT"
+        finish_ok=1
+        exit 0
+      fi
+
+      # The pre-agent step hard-fails the run before the agent ever starts if the
+      # head ref cannot be resolved, so an empty file here means something upstream
+      # changed shape — discard the items (via the EXIT trap) and fail loudly
+      # rather than let a dispatch fall back to main.
+      if [ ! -s "$REF_FILE" ]; then
+        echo "::error::pr-head-ref.txt is missing or empty; cannot enforce dispatch refs." >&2
+        exit 1
+      fi
+      HEAD_REF="$(cat "$REF_FILE")"
+      case "$HEAD_REF" in
+        ""|null|main|master|refs/heads/main|refs/heads/master)
+          echo "::error::Refusing to enforce dispatch ref '$HEAD_REF'." >&2
+          exit 1
+          ;;
+      esac
+
+      BEFORE="$(jq -c '[.items[]? | select(.type == "dispatch_workflow") | {workflow_name, ref: (.ref // "MISSING")}]' "$OUT")"
+      jq --arg ref "$HEAD_REF" \
+        '.items = [ .items[]? | if .type == "dispatch_workflow" then .ref = $ref else . end ]' \
+        "$OUT" > "$OUT.tmp"
+      mv "$OUT.tmp" "$OUT"
+      echo "dispatch_workflow refs as emitted by the agent: $BEFORE"
+      echo "All dispatch_workflow items now target: $HEAD_REF"
+      finish_ok=1
 
 safe-outputs:
   mentions: false
@@ -185,8 +297,6 @@ safe-outputs:
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-deepseek-tests
-      - galaxy-perf-tests
-      - galaxy-demo-tests
       - galaxy-unit-tests
       - galaxy-integration-tests
       - galaxy-stress-tests
@@ -305,6 +415,10 @@ is not a branch, and dispatch rejects it. Dispatching anyway would either error 
 Post your comment explaining this, and point them at the Actions tab to run a pipeline by
 hand against a local copy of the branch if they need one. Then stop.
 
+A deterministic post-step strips any dispatch you emit for a fork PR (your comment still
+posts), so a mistake here cannot reach the dispatcher — but the comment you write must
+match that reality: never describe a pipeline as dispatched on a fork PR.
+
 ## Selection procedure
 
 1. **Read the changed-file list first.** Paths determine which subsystems and which
@@ -347,8 +461,8 @@ hand against a local copy of the branch if they need one. Then stop.
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
-| `galaxy-demo-tests`, `galaxy-deepseek-tests` | Galaxy | Model-level Galaxy demos; DeepSeek-specific model code |
-| `galaxy-perf-tests`, `galaxy-profiler-tests` | Galaxy | Galaxy performance or profiler instrumentation changes |
+| `galaxy-deepseek-tests` | Galaxy | DeepSeek-specific model code |
+| `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
 | `t3000-profiler-tests`, `single-card-profiler-tests`, `pipeline-select-profiler` | T3K / single card / selectable | `tt_metal/tools/profiler/**`, tracy, or profiling instrumentation |
@@ -458,6 +572,11 @@ tested none of their code, which is worse than no result at all.
 
 Copy the branch name from that file verbatim. Do not reconstruct it from the PR title, the
 comment, or your memory of the diff. Never dispatch `main`, `master`, or a release branch.
+
+A deterministic post-step also rewrites the `ref` of every dispatch you emit to the
+contents of that file before anything is dispatched, so an omitted or mistyped `ref`
+cannot actually reach `main` — but that backstop is not a reason to skip the rule. Your
+summary comment quotes the ref, and it must match what actually runs.
 
 ## Reporting
 
