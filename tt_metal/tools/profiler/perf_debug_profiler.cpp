@@ -258,11 +258,16 @@ bool role_split() {
 // This now sizes the HAL's DRAM PROFILER region too (perf_debug_dram_region_bytes_per_risc above), so it is
 // read before any device is opened. Lowering it lowers DRAM held per bank one-for-one; 12 MiB is enough for a
 // 5,000-zone/RISC capture and 64 MiB buys ~16-17k zones/RISC of runway (FINDINGS §N+39).
+//
+// DEFAULT 448 MiB, because runway is what keeps producers unstalled and it scales with VOLUME, not rate:
+// roughly 19 MB per 1k iterations per filler at the knee, so 448 covers ~24k iterations' worth of backlog
+// while 64 covers ~3.4k. Nothing is reserved unless the streaming profiler is enabled (see the gate above),
+// so the cost is paid only by runs that profile.
 uint32_t role_ring_mb() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_RING_MB");
-        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 64u;
-        return n == 0 ? 64u : n;
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 448u;
+        return n == 0 ? 448u : n;
     }();
     return v;
 }
@@ -275,15 +280,16 @@ uint32_t role_ring_mb() {
 // NoC core 0-0, the SAME core view 0 resolves to, and view 0 hosts mover 0. Two resident kernels on one core
 // is not a subtle failure, but nothing in pick_unused_dram_logical_core() would have stopped it, so the
 // duplicate-core TT_FATAL in boot_device now checks it explicitly for every roster.
-// TT_METAL_PERF_DEBUG_FILLERS: the role-split shape. 4 (default) = 4 fillers + 2 movers, the
-// sustained-optimized roster. 6 = 6 fillers + 1 mover: every DRAM view sweeps workers (cores/filler
-// 30 -> 20, ~1.5x faster revisit cadence = the onset lever), the single mover owns all six rings (no
-// odd peer split), at the cost of HALF the sustained evacuation ceiling -- pair it with ring runway
-// (ROLE_RING_MB) and the fill gate for onset work, not with unbounded max-rate captures.
+// TT_METAL_PERF_DEBUG_FILLERS: the role-split shape. 6 (default) = 6 fillers + 1 mover: every DRAM view
+// sweeps workers (cores/filler 30 -> 20, ~1.5x faster revisit cadence = the onset lever) and the single
+// mover owns all six rings, at the cost of HALF the sustained evacuation ceiling. 4 = 4 fillers + 2 movers,
+// the sustained-optimized roster: the second mover is worth ~2.3x on the sustained knee, so switch to 4 for
+// long max-rate captures. The 6-shape is the default because it keeps producers unstalled at the highest
+// offered rates, which is what perturbs a workload's own timing.
 uint32_t n_fillers() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLERS");
-        const uint32_t x = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 4u;
+        const uint32_t x = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 6u;
         TT_FATAL(x == 4 || x == 6, "TT_METAL_PERF_DEBUG_FILLERS must be 4 or 6, got {}", x);
         return x;
     }();
@@ -496,6 +502,14 @@ uint32_t nstage_cap(uint32_t computed) {
 // are not visible here, so if an arch differs the region comes out a different size and the ring adapts to
 // whatever was actually reserved (frames = region_bytes / slot_bytes).
 uint32_t perf_debug_dram_region_bytes_per_risc() {
+    // Gated on the streaming profiler actually being ENABLED, not merely on a Tracy-enabled build. The HAL
+    // reserves this region in every DRAM bank before any device is opened, and it comes straight out of
+    // DRAM_UNRESERVED -- i.e. out of what models can allocate. At the 448 MiB default that is ~3 GiB across
+    // a 7-bank part, which no build should pay for a profiler it never turns on.
+    const char* on = std::getenv("TT_METAL_STREAMING_PROFILER");
+    if (on == nullptr || *on == '\0' || *on == '0') {
+        return 0;
+    }
     if (!role_split()) {
         return 0;
     }
@@ -526,9 +540,11 @@ uint32_t perf_debug_dram_region_bytes_per_risc() {
 // the SUSTAINED word ceiling is mover-frames/us x fill x span words -- skipping half-empty cores is the
 // direct way to raise fill without touching the mover (FINDINGS N+65). MEASURED: full-pipeline
 // sustained stalls -45% (delay 100: 193k -> 107k), frame bytes -63% (fill 33% -> ~79%); NO_DECODE
-// sustained -12-17%. KNOWN TRADE: at high offered rates WITH large ring runway (the
-// ROLE_RING_MB=448 onset-hunting config) deferral erodes the worker-ring margin -- delay-25 went
-// clean -> 38k stalls -- so pair large-runway onset hunts with STAGE_MIN_FILL_PCT=0.
+// sustained -12-17%. KNOWN TRADE: at high offered rates WITH large ring runway (which is now the
+// default, ROLE_RING_MB=448) deferral erodes the worker-ring margin -- delay-25 went clean -> 38k
+// stalls. That is why the gate DEFAULTS TO 0 (off): holding a core's words back to ship fuller frames
+// costs producer headroom exactly where the default runway is spending it. Set 50 to trade that back
+// for ~2x fewer frames per zone on long sustained captures, where host cost dominates.
 // TT_METAL_PERF_DEBUG_MOVER_FRAME_GAP: deliberate mover traffic shaping, in DRISC cycles per frame
 // just moved. After a PRODUCTIVE sweep that nonetheless KEPT UP (every peer's backlog fit in one batch),
 // the mover pauses gap x frames_moved (capped at its 10 us pace ceiling) before the next sweep. A
@@ -548,7 +564,7 @@ uint32_t mover_frame_gap() {
 uint32_t stage_min_fill_pct() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_STAGE_MIN_FILL_PCT");
-        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 50u;
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 0u;
     }();
     return v;
 }
