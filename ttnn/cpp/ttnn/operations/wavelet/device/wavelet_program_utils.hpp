@@ -14,8 +14,9 @@
 
 namespace tt::tt_metal {
 
+struct KernelDescriptor;
 struct ProgramDescriptor;
-class WorkloadDescriptor;
+struct WorkloadDescriptor;
 
 namespace distributed {
 
@@ -59,6 +60,8 @@ struct CoreChunkWork {
     std::vector<uint32_t> payload,
     tt::tt_metal::WorkloadDescriptor& workload,
     const char* payload_name);
+
+void add_generated_scheme_include_path(tt::tt_metal::KernelDescriptor& descriptor);
 
 void append_program_to_mesh_ranges(
     tt::tt_metal::WorkloadDescriptor& workload,

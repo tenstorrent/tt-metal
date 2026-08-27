@@ -37,6 +37,7 @@
 namespace ttnn::prim {
 
 using namespace operations::wavelet;
+using wavelet_program_utils::add_generated_scheme_include_path;
 using wavelet_program_utils::checked_u32;
 using wavelet_program_utils::core_range_set;
 using wavelet_program_utils::CoreChunkWork;
@@ -438,6 +439,7 @@ template <typename Plan>
     compute_descriptor.core_ranges = cores;
     compute_descriptor.compile_time_args = {kSource0Cb, kSource1Cb, kBaseCb, kOutputCb};
     compute_descriptor.defines = std::move(compute_defines);
+    add_generated_scheme_include_path(compute_descriptor);
     compute_descriptor.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
         .fp32_dest_acc_en = true,

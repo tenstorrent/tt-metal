@@ -4,12 +4,14 @@
 
 #include "ttnn/operations/wavelet/device/wavelet_program_utils.hpp"
 
+#include <filesystem>
 #include <limits>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
 
 #include "tt-metalium/buffer.hpp"
+#include "tt-metalium/distributed.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/program_descriptors.hpp"
 #include "tt-metalium/workload_descriptor.hpp"
@@ -123,6 +125,13 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> upload_replicated_dram_me
         mesh_device.mesh_command_queue(), owner->buffer, owner->payload, false);
     workload.buffers.push_back({owner, buffer->get_backing_buffer()});
     return buffer;
+}
+
+void add_generated_scheme_include_path(tt::tt_metal::KernelDescriptor& descriptor) {
+    const std::filesystem::path include_root = TTNN_WAVELET_GENERATED_INCLUDE_ROOT;
+    if (std::filesystem::is_directory(include_root)) {
+        descriptor.compiler_include_paths.push_back(include_root);
+    }
 }
 
 void append_program_to_mesh_ranges(

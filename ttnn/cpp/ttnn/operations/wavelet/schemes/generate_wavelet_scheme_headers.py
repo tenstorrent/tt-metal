@@ -5,12 +5,12 @@
 import json
 import re
 import struct
+import sys
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 SCRIPT_DIRECTORY = Path(__file__).resolve().parent
 SCHEME_CATALOG = SCRIPT_DIRECTORY / "wavelet_schemes.json"
-GENERATED_DIRECTORY = SCRIPT_DIRECTORY.parent / "generated" / "wavelet_schemes"
 GENERATED_INCLUDE_DIRECTORY = PurePosixPath("ttnn/cpp/ttnn/operations/wavelet/generated/wavelet_schemes")
 SCHEME_COUNT = 106
 LICENSE_HEADER = """// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
@@ -314,10 +314,10 @@ def write_file(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def remove_stale_headers(keep: set[Path]) -> None:
-    if not GENERATED_DIRECTORY.exists():
+def remove_stale_headers(generated_directory: Path, keep: set[Path]) -> None:
+    if not generated_directory.exists():
         return
-    for path in GENERATED_DIRECTORY.glob("*.hpp"):
+    for path in generated_directory.glob("*.hpp"):
         if path not in keep:
             path.unlink()
 
@@ -334,6 +334,9 @@ def load_catalog() -> dict[str, dict]:
 
 
 def main() -> None:
+    if len(sys.argv) != 2:
+        raise RuntimeError("expected the generated output directory")
+    generated_directory = Path(sys.argv[1]).resolve()
     catalog = load_catalog()
 
     schemes = sorted(
@@ -345,18 +348,18 @@ def main() -> None:
 
     generated_headers: set[Path] = set()
     for scheme in schemes:
-        path = GENERATED_DIRECTORY / f"{scheme.identifier}.hpp"
+        path = generated_directory / f"{scheme.identifier}.hpp"
         generated_headers.add(path)
         write_file(path, render_scheme_header(scheme))
 
-    catalog_header = GENERATED_DIRECTORY / "scheme_catalog.hpp"
+    catalog_header = generated_directory / "scheme_catalog.hpp"
     generated_headers.add(catalog_header)
     write_file(catalog_header, render_catalog(schemes))
 
-    dispatch_header = GENERATED_DIRECTORY / "scheme_dispatch.hpp"
+    dispatch_header = generated_directory / "scheme_dispatch.hpp"
     generated_headers.add(dispatch_header)
     write_file(dispatch_header, render_dispatch(schemes))
-    remove_stale_headers(generated_headers)
+    remove_stale_headers(generated_directory, generated_headers)
 
 
 if __name__ == "__main__":
