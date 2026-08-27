@@ -364,6 +364,9 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // Producer tail-publish batch (kernel_profiler.hpp publish_tail_batched): the published TAIL can lag
 // true ring occupancy by up to this many words between fenced publishes. The drainer's anti-stall
 // pacing valves subtract it, so they fire on the earliest occupancy the lag could be hiding.
+// (16 was measured worth ~1.5 knee points at the ZONE_S knee -- the lag is drainer-invisible occupancy
+// against the producer's 506-word bar -- but rejected: the batch is a global producer-overhead knob,
+// and the drainer's hot-lane revisit recovers the margin without touching producers.)
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 64;
 
 static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;   // legacy pair (workers: stall zone, >3.2s fallback)

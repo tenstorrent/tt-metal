@@ -1846,7 +1846,12 @@ bool PerfDebugProfiler::boot_device(
                 // arg 40: per-core service-interval instrumentation (two wall-clock reads and a histogram
                 // update per shipped core). The svc lines it feeds found the rotation and staleness knees,
                 // but at the knee it is measurable sweep time, so it is opt-in.
-                perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_SVC") ? 1u : 0u};
+                perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_SVC") ? 1u : 0u,
+                // arg 41: the BASE instrumentation tier (phase cycle counters, ~55 wall-clock reads per
+                // sweep, ~1 us of a 15 us knee sweep). Default ON -- the LIFETIME/WINDOW/WORST/read-split
+                // report lines come from it; TT_METAL_PERF_DEBUG_DRISC_INSTR=0 compiles it out for record
+                // runs, and those lines then print zeros.
+                perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_INSTR", true) ? 1u : 0u};
             TT_FATAL(
                 my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
                 "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",

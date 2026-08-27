@@ -73,6 +73,11 @@ void kernel_main() {
     // core, ~0.5-1 us of a knee sweep. The svc lines it feeds are the diagnostic that found the rotation
     // and staleness mechanisms; opt-in via TT_METAL_PERF_DEBUG_DRISC_SVC when hunting the next one.
     constexpr uint32_t kSvcInstr = get_compile_time_arg_val(40);
+    // Master gate on the BASE instrumentation tier: the phase cycle counters and their ~55 wall-clock
+    // reads per sweep (~1 us of a 15 us knee sweep). 0 compiles them out for record runs -- the
+    // LIFETIME/WINDOW/WORST/read-split report lines then print zeros. Functional clock reads (credit
+    // and barrier deadlines, the pace gap, stop-path timing) are NOT behind this.
+    constexpr uint32_t kInstr = get_compile_time_arg_val(41);
     // PER-CORE SHIP THRESHOLD (0 = ship every live core every sweep). A frame costs the pipe the same
     // whether it carries 200 live words or 2,000, so a core ships only when it is worth the frame:
     // enough live words, any lane past kLaneShipWords, or the age bound below.
@@ -512,10 +517,10 @@ void kernel_main() {
             *phase = kPhDropped;
             credit_timeouts++;
             dropped_frames += count;
-            c_reserve += get_timestamp() - t0;
+            c_reserve += kInstr != 0 ? (get_timestamp() - t0) : 0;
             return;
         }
-        const uint64_t t1 = get_timestamp();
+        const uint64_t t1 = kInstr != 0 ? get_timestamp() : t0;  // t0 stays real (the credit deadline); anchoring the gated chain to it keeps every diff zero
         c_reserve += t1 - t0;
         if (static_cast<uint32_t>(t1 - t0) > max_reserve) {
             max_reserve = static_cast<uint32_t>(t1 - t0);
@@ -548,11 +553,11 @@ void kernel_main() {
                 wr -= fifo_size;
             }
         }
-        const uint64_t t2 = get_timestamp();
+        const uint64_t t2 = kInstr != 0 ? get_timestamp() : t1;
         c_wr_chunk += t2 - t1;
         *phase = kPhWrPush;
         socket_push_pages(sender, npages);
-        const uint64_t t3 = get_timestamp();
+        const uint64_t t3 = kInstr != 0 ? get_timestamp() : t2;
         c_wr_push += t3 - t2;
         *phase = kPhWrNotify;
         // NOT socket_notify_receiver: that re-inits write_cmd_buf onto NOC_UNICAST_WRITE_VC, and on a
@@ -569,7 +574,7 @@ void kernel_main() {
             sender.config_addr,
             (static_cast<uint64_t>(sender.d2h.bytes_sent_addr_hi) << 32) | sender.downstream_bytes_sent_addr,
             4u);
-        const uint64_t t4 = get_timestamp();
+        const uint64_t t4 = kInstr != 0 ? get_timestamp() : t3;
         c_wr_notify += t4 - t3;
         c_write += t4 - t1;
         *phase = kPhWrDone;
@@ -758,7 +763,7 @@ void kernel_main() {
         sweeps++;
         *hb = sweeps;
         *phase = kPhasePoll;
-        const uint64_t t_sweep0 = get_timestamp();
+        const uint64_t t_sweep0 = (kInstr != 0 || kSelfZones != 0) ? get_timestamp() : 0;
         const uint32_t frames_at_sweep_start = frames;
         const uint64_t s_read0 = c_read, s_proc0 = c_proc, s_rsv0 = c_reserve, s_wr0 = c_write, s_bar0 = c_barrier;
         const uint64_t words_at_sweep_start = total_words;
@@ -795,7 +800,7 @@ void kernel_main() {
                 // ---- CV-FIRST phases 0+1: read every core's control words, decide the ship set. ----
                 uint32_t n_ship = 0;
                 {
-                    const uint64_t t_cv0 = get_timestamp();
+                    const uint64_t t_cv0 = kInstr != 0 ? get_timestamp() : 0;
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_cv(
                             self_mark_phase);
@@ -812,7 +817,7 @@ void kernel_main() {
                         }
                         noc.async_read_barrier();
                     }
-                    const uint64_t t_cv1 = get_timestamp();
+                    const uint64_t t_cv1 = kInstr != 0 ? get_timestamp() : 0;
                     c_read += t_cv1 - t_cv0;
                     c_cv += t_cv1 - t_cv0;
                     // Half a lane. Re-derived for the gather-read frame and it still wins: a per-core
@@ -836,7 +841,7 @@ void kernel_main() {
                             scan_rot = 0;
                         }
                     }
-                    const uint64_t t_scan0 = get_timestamp();
+                    const uint64_t t_scan0 = kInstr != 0 ? get_timestamp() : 0;
                     uint32_t c = scan_rot;
                     for (uint32_t k = 0; k < num_cores; k++, (++c >= num_cores ? c = 0 : c)) {
                         const tt_l1_ptr uint32_t* tails =
@@ -917,7 +922,7 @@ void kernel_main() {
                         hot[c] = 1;
                         ship_list[n_ship++] = static_cast<uint8_t>(c);
                     }
-                    const uint64_t t_scan1 = get_timestamp();
+                    const uint64_t t_scan1 = kInstr != 0 ? get_timestamp() : 0;
                     c_scan += t_scan1 - t_scan0;
                     c_proc += t_scan1 - t_cv1;
                 }
@@ -978,7 +983,7 @@ void kernel_main() {
                 };
 
                 auto ship_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
-                    const uint64_t t_p0 = get_timestamp();
+                    const uint64_t t_p0 = kInstr != 0 ? get_timestamp() : 0;
                     // c_self joins the nested term because self_publish RESTORES c_reserve/c_write, so without it a
                     // mid-batch self publish would be charged to `proc`.
                     const uint64_t flush_at = c_reserve + c_write + (kSelfZones != 0 ? c_self : 0);
@@ -1050,7 +1055,7 @@ void kernel_main() {
                     // SATURATING: the nested emit_slots time is subtracted so it is not double-counted, but an unsigned
                     // wrap here once produced "proc 18727729111430.1%".
                     {
-                        const uint64_t t_p1 = get_timestamp();
+                        const uint64_t t_p1 = kInstr != 0 ? get_timestamp() : 0;
                         const uint64_t span = t_p1 - t_p0;
                         const uint64_t nested = (c_reserve + c_write + (kSelfZones != 0 ? c_self : 0)) - flush_at;
                         c_proc += (span > nested) ? (span - nested) : 0;
@@ -1076,7 +1081,7 @@ void kernel_main() {
                                 self_mark_phase);
                             flushed = write_barrier_bounded<true>(t_b0 + kCreditWaitCycles);
                         }
-                        c_barrier += get_timestamp() - t_b0;
+                        c_barrier += kInstr != 0 ? (get_timestamp() - t_b0) : 0;
                         if (!flushed) {
                             egress_dead = true;
                             break;
@@ -1086,7 +1091,7 @@ void kernel_main() {
 
                     // c_read is TWO disjoint intervals per batch -- the issue, and whatever wait survives the concurrent
                     // ship -- so it takes two zones.
-                    const uint64_t t_batch0 = get_timestamp();
+                    const uint64_t t_batch0 = kInstr != 0 ? get_timestamp() : 0;
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_issue(
                             self_mark_phase);
@@ -1115,7 +1120,7 @@ void kernel_main() {
                             n_cv_rd++;
                         }
                     }
-                    const uint64_t t_issue = get_timestamp();
+                    const uint64_t t_issue = kInstr != 0 ? get_timestamp() : 0;
 
                     // The overlap: the previous batch's PCIe writes go out on NOC_INDEX while the gather reads
                     // above fly on kReadNoc.
@@ -1125,13 +1130,13 @@ void kernel_main() {
 
                     // Issue cost plus only the wait REMAINING after the concurrent ship. Timing to the barrier instead
                     // would swallow ship_batch and double-count it against c_proc -- it did, and phases summed 133%.
-                    const uint64_t t_after_proc = get_timestamp();
+                    const uint64_t t_after_proc = kInstr != 0 ? get_timestamp() : 0;
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ_WAIT, SelfMarkPhase> z_wait(
                             self_mark_phase);
                         noc.async_read_barrier();
                     }
-                    const uint64_t t_read_end = get_timestamp();
+                    const uint64_t t_read_end = kInstr != 0 ? get_timestamp() : 0;
                     c_issue += t_issue - t_batch0;
                     c_read += (t_issue - t_batch0) + (t_read_end - t_after_proc);
 
@@ -1147,7 +1152,9 @@ void kernel_main() {
                 }
             }
 
-            sweep_cyc = static_cast<uint32_t>(get_timestamp() - t_sweep0);
+            if constexpr (kInstr != 0 || kSelfZones != 0) {
+                sweep_cyc = static_cast<uint32_t>(get_timestamp() - t_sweep0);
+            }
         }
         if (sweep_cyc > max_sweep) {
             max_sweep = sweep_cyc;
