@@ -140,6 +140,46 @@
   sp_config: sc1
 
 
+- name: "(Kimi-K2.6-1T) prefill block determinism 5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "torus-xy-8x4 and perf-random-5k and with_determinism and iter2 and not iter25 and not iter2000 and moe_gate_device and not pretrained" -vvv --tb=short --timeout=900
+    '
+  test_type: prefill_block_determinism
+  test_tags: [kimi_k2_6, block, determinism]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 12
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
+- name: "(Kimi-K2.6-1T) prefill transformer determinism 5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py::test_kimi_prefill_transformer -k "torus-xy-8x4 and 5_layers and e384_device and 5k and not 25k and iter2 and not iter25 and not iter2000 and smoke and with_determinism and non_balanced and right_pad and not json_prompts and not pretrained" -vvv --tb=short --timeout=1800
+    '
+  test_type: prefill_transformer_determinism
+  test_tags: [kimi_k2_6, transformer, determinism]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 25
+  owner_id: U08RL15T4N8
+  team: models
+  sp_config: sc1
+
 - name: "(Kimi-K2.6-1T) chunked prefill padded accuracy 15k@5k no-trace"
   fabric_profile: torus_xy
   cmd: |
@@ -151,7 +191,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and torus-xy-8x4 and L61 and mid15k and notrace" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_6 and torus-xy-8x4 and L61 and mid15k and notrace" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
   test_tags: [kimi_k2_6, transformer]
@@ -181,7 +221,7 @@
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/kimi_debug_55k_vllm
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_6 and torus-xy-8x4 and L61 and mid15k and traced" -vvv --tb=short
     '
   test_type: kimi_chunked_padded
   test_tags: [kimi_k2_6, transformer]
@@ -216,7 +256,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_6 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and notrace" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_6, transformer]
@@ -254,7 +294,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_6 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and traced" -xvs
     '
   test_type: kimi_chunked
   test_tags: [kimi_k2_6, transformer]
