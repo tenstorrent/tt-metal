@@ -19,6 +19,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;
@@ -40,10 +41,6 @@ std::optional<ConcatCbPlan> plan_concat_cb(uint32_t page_size, uint32_t max_batc
         return ConcatCbPlan{1, 1};
     }
     return std::nullopt;
-}
-
-uint32_t concat_l1_budget(IDevice* device) {
-    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
 }
 
 namespace {
@@ -140,6 +137,8 @@ uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
 }
 
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/concat/codegen/kernels/";
+constexpr const char* kSharedWriter =
+    "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
 constexpr uint32_t kCbIn = 0;
 constexpr uint32_t kCbScratch = 1;
 
@@ -159,7 +158,7 @@ ProgramDescriptor create_descriptor_rm(
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
     const uint32_t cb_page = std::max(
         {out_page, static_cast<uint32_t>(src0->aligned_page_size()), static_cast<uint32_t>(src1->aligned_page_size())});
-    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, concat_l1_budget(device));
+    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, operations::data_movement::get_max_l1_space(in0));
     TT_FATAL(plan.has_value(), "ConcatCodegen: RM concat CB page ({} B) does not fit per-core L1", cb_page);
     const uint32_t batch = plan->batch;
 
@@ -205,7 +204,7 @@ ProgramDescriptor create_descriptor_rm(
     writer_ct.push_back(batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
+    writer_desc.kernel_source = kSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -256,7 +255,7 @@ ProgramDescriptor create_descriptor_rm_width(
     const uint32_t l1_cb_granularity = device->allocator()->get_alignment(BufferType::L1);
     const uint32_t scratch_page = std::max(in0_page, in1_page) + l1_cb_granularity;
 
-    const uint64_t l1_budget = concat_l1_budget(device);
+    const uint64_t l1_budget = operations::data_movement::get_max_l1_space(in0);
     TT_FATAL(scratch_page <= l1_budget, "ConcatCodegen: RM width-concat scratch CB does not fit per-core L1");
     const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
     TT_FATAL(plan.has_value(), "ConcatCodegen: RM width-concat CB page ({} B) does not fit per-core L1", out_page);
@@ -299,7 +298,7 @@ ProgramDescriptor create_descriptor_rm_width(
     writer_ct.push_back(write_batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
+    writer_desc.kernel_source = kSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -333,7 +332,7 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
     const uint32_t in_page = static_cast<uint32_t>(src0->aligned_page_size());
     const uint32_t out_page = static_cast<uint32_t>(dst->aligned_page_size());
     const uint32_t cb_page = std::max(in_page, out_page);
-    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, concat_l1_budget(device));
+    const auto plan = plan_concat_cb(cb_page, kConcatNonWidthBatch, operations::data_movement::get_max_l1_space(in0));
     TT_FATAL(plan.has_value(), "ConcatCodegen: RM N-way concat CB page ({} B) does not fit per-core L1", cb_page);
     const uint32_t batch = plan->batch;
 
@@ -369,7 +368,7 @@ ProgramDescriptor create_descriptor_rm_nonwidth_nway(
     writer_ct.push_back(batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
+    writer_desc.kernel_source = kSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);
@@ -418,7 +417,7 @@ ProgramDescriptor create_descriptor_rm_width_nway(
         scratch_page = std::max(scratch_page, page_sizes[i]);
     }
 
-    const uint64_t l1_budget = concat_l1_budget(device);
+    const uint64_t l1_budget = operations::data_movement::get_max_l1_space(input_tensors[0]);
     TT_FATAL(scratch_page <= l1_budget, "ConcatCodegen: RM N-way width-concat scratch CB does not fit per-core L1");
     const auto plan = plan_concat_cb(out_page, kConcatWidthWriteBatch, l1_budget - scratch_page);
     TT_FATAL(
@@ -463,7 +462,7 @@ ProgramDescriptor create_descriptor_rm_width_nway(
     writer_ct.push_back(write_batch);
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = std::string(kKernelDir) + "writer_interleaved.cpp";
+    writer_desc.kernel_source = kSharedWriter;
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = split.all_cores;
     writer_desc.compile_time_args = std::move(writer_ct);

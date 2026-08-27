@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/concat/concat_force.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -260,41 +261,22 @@ MassagedConcat build_unsqueeze_squeeze_1D_rm_unaligned_concat(const MemoryConfig
 
 }  // namespace ttnn::operations::data_movement
 
-namespace ttnn {
+namespace ttnn::operations::data_movement::detail {
 
-// Wrapper for TTDNN
-ttnn::Tensor concat(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int dim,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    unsigned int groups,
-    const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
-    const std::string& implementation) {
-    namespace concat_codegen = ttnn::operations::data_movement::concat_codegen;
-    // Validate before any early return so an unrecognized value fails consistently.
-    const auto sel = concat_codegen::parse_implementation(implementation);
+namespace {
 
+void validate_inputs(
+    const std::vector<ttnn::Tensor>& input_tensors, const std::optional<ttnn::Tensor>& optional_output_tensor) {
     TT_FATAL(!input_tensors.empty(), "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
-    const auto mem_config =
-        memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
-                                                           // but causes CI errors for now
+}
 
-    if (input_tensors.size() == 1 && sel != concat_codegen::ImplementationSelector::Codegen) {
-        return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
-    }
-
-    // TODO: Issue #8426: Add validation for ttnn.concat for sharded inputs
-    // const bool all_tensors_are_tile_layout_without_padding = std::all_of(input_tensors.begin(), input_tensors.end(),
-    // [dim](const ttnn::Tensor& input_tensor){
-    //    return input_tensor.layout() == ttnn::TILE_LAYOUT and not has_tile_padding(input_tensor, dim);
-    //});
-    // TT_FATAL(all_tensors_are_tile_layout_without_padding, "Not Implemented");
-
+// Range-checks `dim` against the inputs and returns it normalized. Kept separate from
+// validate_inputs() so every entry point can answer a single-input call the way this op always
+// has -- by handing the tensor straight back, without range-checking a dim it never uses.
+int normalize_dim(const std::vector<ttnn::Tensor>& input_tensors, int dim) {
     const ttnn::Tensor& first_tensor = input_tensors.front();
     const int rank = first_tensor.logical_shape().rank();
-
     dim = first_tensor.logical_shape().get_normalized_index(dim);
 
     TT_FATAL(
@@ -313,62 +295,58 @@ ttnn::Tensor concat(
             for (int i = 0; i < ft_shape.rank(); i++) {
                 non_concat_dims_match &= dim == i or t_shape[i] == ft_shape[i];
             }
-            // bool non_concat_padded_dims_match = true;
-            // for(int i = 0; i < ft_shape.rank(); i++) {
-            //     non_concat_padded_dims_match &= dim == i or t_shape.with_tile_padding()[i] ==
-            //     ft_shape.with_tile_padding()[i];
-            // }
-            return ranks_match and non_concat_dims_match;  // and non_concat_padded_dims_match;
+            return ranks_match and non_concat_dims_match;
         });
 
     TT_FATAL(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
-    auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
-        ttnn::Shape shape_out = tensors[0].logical_shape();
-        shape_out[dim] = 0;
-        for (const Tensor& in_ref : tensors) {
-            ttnn::Shape curr_shape = in_ref.logical_shape();
-            shape_out[dim] += curr_shape[dim];
-        }
-        return shape_out;
-    };
+    return dim;
+}
 
-    ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
-
-    if (sel != concat_codegen::ImplementationSelector::Native) {
-        const bool controls_ok = concat_codegen::supported_execution_controls(groups, sub_core_grids);
-        const bool supported =
-            controls_ok && concat_codegen::supported_by_codegen(input_tensors, static_cast<uint32_t>(dim), mem_config);
-        auto make_params = [&]() {
-            uint64_t total_out_elems = 1;
-            for (int i = 0; i < logical_output_shape.rank(); i++) {
-                total_out_elems *= logical_output_shape[i];
-            }
-            return ttnn::prim::ConcatCodegenParams{
-                .dim = static_cast<uint32_t>(dim),
-                .num_inputs = static_cast<uint32_t>(input_tensors.size()),
-                .stick_size = static_cast<uint32_t>(logical_output_shape[-1] * first_tensor.element_size()),
-                .total_out_sticks = static_cast<uint32_t>(total_out_elems / logical_output_shape[-1]),
-                .output_mem_config = mem_config,
-            };
-        };
-        if (sel == concat_codegen::ImplementationSelector::Codegen) {
-            TT_FATAL(
-                controls_ok,
-                "ttnn.concat: implementation=\"codegen\" does not support groups > 1 or a sub_core_grids override; "
-                "no ConcatCodegen builder honours either");
-            TT_FATAL(
-                supported,
-                "ttnn.concat: implementation=\"codegen\" does not support this input/dim/dtype/memory "
-                "configuration; ConcatCodegen only covers row-major int32/uint32/bfloat16 interleaved concat");
-            return ttnn::prim::concat_codegen(input_tensors, make_params());
-        }
-        if (supported && !concat_codegen::is_demoted(input_tensors, static_cast<uint32_t>(dim))) {
-            return ttnn::prim::concat_codegen(input_tensors, make_params());
-        }
+ttnn::Shape compute_output_shape(const std::vector<ttnn::Tensor>& tensors, int dim) {
+    ttnn::Shape shape_out = tensors[0].logical_shape();
+    shape_out[dim] = 0;
+    for (const Tensor& in_ref : tensors) {
+        shape_out[dim] += in_ref.logical_shape()[dim];
     }
+    return shape_out;
+}
+
+ttnn::prim::ConcatCodegenParams make_codegen_params(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    int dim,
+    const ttnn::Shape& logical_output_shape,
+    const MemoryConfig& mem_config) {
+    uint64_t total_out_elems = 1;
+    for (int i = 0; i < logical_output_shape.rank(); i++) {
+        total_out_elems *= logical_output_shape[i];
+    }
+    return ttnn::prim::ConcatCodegenParams{
+        .dim = static_cast<uint32_t>(dim),
+        .num_inputs = static_cast<uint32_t>(input_tensors.size()),
+        .stick_size = static_cast<uint32_t>(logical_output_shape[-1] * input_tensors.front().element_size()),
+        .total_out_sticks = static_cast<uint32_t>(total_out_elems / logical_output_shape[-1]),
+        .output_mem_config = mem_config,
+    };
+}
+
+}  // namespace
+
+// The existing implementation, taking an already-normalized `dim`. Self-recursive rather than
+// re-entering ttnn::concat: the chunking below is a fixup for this path's own transpose fallback
+// overflowing L1, so a chunk is this path's problem. Routing chunks separately would also stop
+// concat_force_native() from being a native-only reference.
+ttnn::Tensor concat_native(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    int dim,
+    const MemoryConfig& mem_config,
+    unsigned int groups,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    const ttnn::Tensor& first_tensor = input_tensors.front();
+    const int rank = first_tensor.logical_shape().rank();
+    ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
     // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
     // which don't currently support sub_core_grids
@@ -462,15 +440,13 @@ ttnn::Tensor concat(
                     chunk_inputs.push_back(ttnn::slice(t, starts, ends, step, mem_config));
                 }
 
-                chunk_outputs.push_back(ttnn::concat(
-                    chunk_inputs, dim, memory_config, std::nullopt, groups, sub_core_grids, implementation));
+                chunk_outputs.push_back(concat_native(chunk_inputs, dim, mem_config, groups, sub_core_grids));
             }
 
             if (chunk_outputs.size() == 1) {
                 return chunk_outputs[0];
             }
-            return ttnn::concat(
-                chunk_outputs, rank - 2, memory_config, std::nullopt, 1, sub_core_grids, implementation);
+            return concat_native(chunk_outputs, rank - 2, mem_config, 1, sub_core_grids);
         }
     }
 
@@ -486,6 +462,79 @@ ttnn::Tensor concat(
     const std::vector<ttnn::Tensor>& itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);
     return res;
+}
+
+ttnn::Tensor concat_force_native(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    int dim,
+    const std::optional<MemoryConfig>& memory_config,
+    unsigned int groups,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    validate_inputs(input_tensors, std::nullopt);
+    const auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    if (input_tensors.size() == 1) {
+        return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
+    }
+    return concat_native(input_tensors, normalize_dim(input_tensors, dim), mem_config, groups, sub_core_grids);
+}
+
+ttnn::Tensor concat_force_codegen(
+    const std::vector<ttnn::Tensor>& input_tensors, int dim, const std::optional<MemoryConfig>& memory_config) {
+    namespace concat_codegen = ttnn::operations::data_movement::concat_codegen;
+    validate_inputs(input_tensors, std::nullopt);
+    const int norm_dim = normalize_dim(input_tensors, dim);
+    const auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
+    TT_FATAL(
+        concat_codegen::supported_by_codegen(input_tensors, static_cast<uint32_t>(norm_dim), mem_config),
+        "concat_force_codegen invoked for a case the codegen path does not support (requires 2 to {} "
+        "unsharded ROW_MAJOR inputs of one dtype among bfloat16/int32/uint32 and equal rank, an "
+        "interleaved output, and a projected circular-buffer plan that fits per-core L1; inputs beyond "
+        "two must additionally share one memory config). This entry never falls back to native, "
+        "because a forced leg that quietly served native would make any comparison against native "
+        "vacuous. Use ttnn::concat if you want the case routed.",
+        ttnn::prim::kConcatMaxNwayInputs);
+    ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, norm_dim);
+    return ttnn::prim::concat_codegen(
+        input_tensors, make_codegen_params(input_tensors, norm_dim, logical_output_shape, mem_config));
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+// Wrapper for TTDNN
+ttnn::Tensor concat(
+    const std::vector<ttnn::Tensor>& input_tensors,
+    int dim,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    unsigned int groups,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    namespace detail = ttnn::operations::data_movement::detail;
+    namespace concat_codegen = ttnn::operations::data_movement::concat_codegen;
+
+    detail::validate_inputs(input_tensors, optional_output_tensor);
+    const auto mem_config =
+        memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
+                                                           // but causes CI errors for now
+
+    if (input_tensors.size() == 1) {
+        return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
+    }
+
+    // TODO: Issue #8426: Add validation for ttnn.concat for sharded inputs
+
+    const int norm_dim = detail::normalize_dim(input_tensors, dim);
+
+    if (concat_codegen::supported_execution_controls(groups, sub_core_grids) &&
+        concat_codegen::supported_by_codegen(input_tensors, static_cast<uint32_t>(norm_dim), mem_config) &&
+        !concat_codegen::is_demoted(input_tensors, static_cast<uint32_t>(norm_dim))) {
+        ttnn::Shape logical_output_shape = detail::compute_output_shape(input_tensors, norm_dim);
+        return ttnn::prim::concat_codegen(
+            input_tensors, detail::make_codegen_params(input_tensors, norm_dim, logical_output_shape, mem_config));
+    }
+
+    return detail::concat_native(input_tensors, norm_dim, mem_config, groups, sub_core_grids);
 }
 
 }  // namespace ttnn

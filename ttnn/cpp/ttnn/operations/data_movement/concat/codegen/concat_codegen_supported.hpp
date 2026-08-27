@@ -5,18 +5,12 @@
 #pragma once
 
 #include <optional>
-#include <string>
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement::concat_codegen {
-
-enum class ImplementationSelector { Auto, Native, Codegen };
-
-// Parses the `implementation` kwarg. TT_FATALs on an unrecognized value.
-ImplementationSelector parse_implementation(const std::string& implementation);
 
 // Correctness/feasibility gate, transcribed from ops/concat/spec.py's RM builders
 // (build_concat_rm / build_concat_rm_width / build_concat_rm_nonwidth_nway /

@@ -29,6 +29,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/sequencers.h"
 
 void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(0);
@@ -65,6 +66,8 @@ void kernel_main() {
     Noc noc;
     CircularBuffer input_cb(cb_in);
 
+    SeqConcatState seq = seq_concat_init(curr_tensor, curr_tensor_id, stick_id_0, stick_id_1, ppb_0, ppb_1);
+
     uint32_t sticks_left = num_sticks;
 
     while (sticks_left > 0) {
@@ -73,24 +76,16 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
-            if (curr_tensor == 0) {
-                noc.async_read(s0, input_cb, IN0_PAGE_SIZE, {.page_id = stick_id_0}, {.offset_bytes = l1_offset});
-                stick_id_0++;
+            // seq_concat_next() advances the cursor and leaves seq.curr_tensor naming the
+            // tensor the returned page belongs to, so read it before the next call.
+            const uint32_t read_tensor = seq.curr_tensor;
+            const uint32_t page_id = seq_concat_next(seq);
+            if (read_tensor == 0) {
+                noc.async_read(s0, input_cb, IN0_PAGE_SIZE, {.page_id = page_id}, {.offset_bytes = l1_offset});
             } else {
-                noc.async_read(s1, input_cb, IN1_PAGE_SIZE, {.page_id = stick_id_1}, {.offset_bytes = l1_offset});
-                stick_id_1++;
+                noc.async_read(s1, input_cb, IN1_PAGE_SIZE, {.page_id = page_id}, {.offset_bytes = l1_offset});
             }
             l1_offset += CB_PAGE_SIZE;
-
-            // Advance block tracking
-            curr_tensor_id++;
-            if (curr_tensor == 0 && curr_tensor_id == ppb_0) {
-                curr_tensor_id = 0;
-                curr_tensor = 1;
-            } else if (curr_tensor == 1 && curr_tensor_id == ppb_1) {
-                curr_tensor_id = 0;
-                curr_tensor = 0;
-            }
         }
         noc.async_read_barrier();
         input_cb.push_back(batch);

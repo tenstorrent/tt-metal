@@ -46,10 +46,6 @@ struct ConcatCbPlan {
 // (concat_codegen_supported.cpp) and the factory, so they cannot drift.
 std::optional<ConcatCbPlan> plan_concat_cb(uint32_t page_size, uint32_t max_batch, uint64_t l1_budget_bytes);
 
-// Per-core L1 budget available to a statically allocated CB, mirroring
-// concat_program_factory.cpp's ConcatProgramFactory `l1_capacity` computation.
-uint32_t concat_l1_budget(tt::tt_metal::IDevice* device);
-
 struct ConcatCodegenParams {
     uint32_t dim{};
     uint32_t num_inputs{};

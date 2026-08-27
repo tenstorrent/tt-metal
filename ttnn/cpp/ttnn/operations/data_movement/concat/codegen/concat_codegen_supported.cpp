@@ -14,6 +14,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_program_factory.hpp"
 
 namespace ttnn::operations::data_movement::concat_codegen {
@@ -100,7 +101,7 @@ bool nonwidth_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_met
     for (const auto& t : input_tensors) {
         cb_page = std::max(cb_page, static_cast<uint32_t>(t.buffer()->aligned_page_size()));
     }
-    return ttnn::prim::plan_concat_cb(cb_page, ttnn::prim::kConcatNonWidthBatch, ttnn::prim::concat_l1_budget(device))
+    return ttnn::prim::plan_concat_cb(cb_page, ttnn::prim::kConcatNonWidthBatch, get_max_l1_space(input_tensors[0]))
         .has_value();
 }
 
@@ -147,7 +148,7 @@ bool width_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_metal:
     const uint32_t out_alignment = device->allocator()->get_alignment(output_mem_config.buffer_type());
     const uint32_t out_page = tt::align(out_stick, out_alignment);
 
-    const uint64_t l1_budget = ttnn::prim::concat_l1_budget(device);
+    const uint64_t l1_budget = get_max_l1_space(input_tensors[0]);
     if (scratch_page > l1_budget) {
         return false;
     }
@@ -156,19 +157,6 @@ bool width_cb_fits(const std::vector<Tensor>& input_tensors, const tt::tt_metal:
 }
 
 }  // namespace
-
-ImplementationSelector parse_implementation(const std::string& implementation) {
-    if (implementation == "auto") {
-        return ImplementationSelector::Auto;
-    }
-    if (implementation == "native") {
-        return ImplementationSelector::Native;
-    }
-    if (implementation == "codegen") {
-        return ImplementationSelector::Codegen;
-    }
-    TT_THROW("Unknown concat implementation '{}': expected 'auto', 'native', or 'codegen'", implementation);
-}
 
 bool supported_by_codegen(
     const std::vector<Tensor>& input_tensors, uint32_t dim, const tt::tt_metal::MemoryConfig& output_mem_config) {
