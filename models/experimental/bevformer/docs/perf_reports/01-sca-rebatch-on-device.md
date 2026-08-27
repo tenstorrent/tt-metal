@@ -2,12 +2,21 @@
 
 - source commit: [`4048ef2bbf1`](https://github.com/tenstorrent/tt-metal/commit/4048ef2bbf14158b14d27a58911944d604b0c926)
 - harness: `tests/perf/test_layer_perf.py`, one encoder layer, N150
-- kernel time: **682.0 ms** (+26.4 ms)
-- op-to-op gap: **218.3 ms** (−2198.2 ms)
-- wall: **900.2 ms** (−2171.9 ms, **−70.7%**)
+- kernel time: **683.0 ms** (+27.4 ms)
+- op-to-op gap: **44.4 ms** (−2372.1 ms) — corrected, see below
+- wall: **727.4 ms** (−2344.7 ms, **−76.5%**)
 - device ops in the signposted region: **146** (+15)
 - PCC gate: **0.999608** — identical to the baseline's 0.999608
-- CSV: `generated/profiler/reports/2026_08_26_23_06_02/ops_perf_results_2026_08_26_23_06_02.csv`
+- CSV: `generated/profiler/reports/2026_08_27_08_56_58/`
+
+> **Correction (gap only).** This report first published 218.3 ms of gap. That does not reproduce.
+> Re-measured 2026-08-27 on the same `tt/` sources: **44.4 ms**, same 146 device ops, kernel within
+> 1.0 ms, PCC identical. The original CSV has been deleted, so the higher figure cannot be
+> re-audited. Header numbers above are the corrected ones.
+>
+> Most of the 44.4 ms is [region-entry cost](../PERF.md#the-gap-column-carries-region-entry-cost),
+> not per-op latency. A two-iteration pass on this tree puts steady-state gap at **30.9 ms**
+> (`2026_08_27_20_58_53`).
 
 ## What this change was
 
@@ -108,7 +117,7 @@ gather is over whole rows, `embedding` is the op; `gather` is for when it genuin
 
 ## What this changes about the plan
 
-Kernel is now **76% of wall clock** (682.0 of 900.2 ms) and 623 ms of it is the two MSDA calls. The
+Kernel is now **94% of wall clock** (683.0 of 727.4 ms) and 623 ms of it is the two MSDA calls. The
 host side is no longer the story: candidates 2, 3 and 4 are, and the remaining gap is concentrated
 in TSA rather than SCA.
 

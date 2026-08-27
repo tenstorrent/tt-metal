@@ -1,13 +1,21 @@
 # Stage: 03-constant-uploads-cached
 
-- harness: encoder wall clock, same as [stage 02](02-rebatch-plan-hoisted.md)
-- config: `nuscenes_base`, 100×100, 6 layers, N150, 11 timed iterations after one warm-up
-- encoder wall: **4234.5 ms median** (−56.4 ms, **−1.3%**), 4217.7 ms min (−48.3 ms, −1.1%)
-- cumulative from the stage-01 tree: **−151.0 ms, −3.4%**
+- source commit: [`7d6f4433bb3`](https://github.com/tenstorrent/tt-metal/commit/7d6f4433bb38e0782d0e9ec468354bb3bb384134)
+- config: `nuscenes_base`, 100×100, N150
+- encoder wall: **4234.5 ms median** (−56.4 ms, **−1.3%**), 4217.7 ms min (−48.3 ms, −1.1%) — 6
+  layers, 11 timed iterations after one warm-up, same harness as [stage 02](02-rebatch-plan-hoisted.md)
+- layer profile: **681.7 ms kernel / 40.5 ms gap / 722.2 ms wall**, 121 device ops (−25), CSV
+  `generated/profiler/reports/2026_08_27_13_47_55/`; steady-state gap is **8.9 ms** once
+  [region-entry cost](../PERF.md#the-gap-column-carries-region-entry-cost) is separated out
+  (`2026_08_27_20_44_43`)
+- cumulative encoder wall from the stage-01 tree: **−151.0 ms, −3.4%**
 - PCC: 26 tests pass across the whole `tests/pcc/` suite; no numerical change
 
 Median and minimum agree here (−56.4 vs −48.3 ms) and the spread is much tighter than stage 02's
 (max 4295.2 ms against 4394.2 ms). This is the more trustworthy of the two encoder-level numbers.
+
+Unlike stage 02 this one **is** visible in the layer harness: the caches sit on the layer and on the
+deformable-attention module, not on the encoder, so 25 removed dispatches show up per layer: 146 ops to 121.
 
 ## What this change was
 
@@ -29,31 +37,28 @@ each other; either alone would only have covered layers 2–6 of a single forwar
 
 The `spatial_shapes` entry is not a cache. It was a `ttnn.to_torch` — a full device sync — run once
 per layer to check an invariant that holds by construction. It now runs only when the shapes are
-already on host, which is the path every current caller takes, so nothing is actually skipped today;
-what is removed is a sync that would appear the moment a caller passed shapes on device.
+already on host, the path every current caller takes; what is removed is a sync that would appear
+the moment a caller passed shapes on device.
 
 ## Read this as a steady-state win
 
-The benchmark warms up before timing, so every timed iteration hits warm caches. That is the honest
-framing of the result: **this is what a second and subsequent frame costs**, and the first forward
-still pays for all of it. For a model that runs over a sequence, which BEVFormer does, that is the
-number that matters — but it is not a one-shot latency improvement, and it should not be quoted as
-one.
+Every timed iteration hits warm caches, so **this is what a second and subsequent frame costs** —
+the first forward still pays for all of it. For a model running over a sequence, which BEVFormer
+does, that is the number that matters, but it is not a one-shot latency improvement.
 
-The cached device tensors stay resident for the module's lifetime. At these shapes that is a few
-hundred KB across all six layers, small enough not to matter and worth remembering if the grid grows.
+The cached device tensors stay resident for the module's lifetime — a few hundred KB across six
+layers at these shapes. Worth remembering if the grid grows.
 
 ## Candidate 1 is complete
 
 | | | |
 |---|---|---|
-| 1a | rebatch and scatter-back on device | −2171.9 ms layer wall (−71%) |
+| 1a | rebatch and scatter-back on device | −2344.7 ms layer wall (−76%) |
 | 1b | static `max_len` bound | [rejected](DEAD_ENDS.md#3-a-static-bound-on-max_len) |
 | 1c | rebatch plan once per forward | −94.6 ms encoder wall |
 | 1d | constant uploads cached | −56.4 ms encoder wall |
 
-The host-round-trip work is done. What remains of the per-layer host cost is dispatch, not
-transfers, and the profile has moved decisively to kernel time —
-[candidate 4](../perf_optimization_candidates.md#candidate-4--the-msda-concat) (one 115 ms concat)
-and [candidate 2](../perf_optimization_candidates.md#candidate-2--fused-msda) (623 ms of the 682 ms
-kernel) are what is left worth having.
+The host-round-trip work is done: 8.9 ms of steady-state gap against 682 ms of kernel, so **kernel
+is 99% of layer wall clock**. [Candidate 4](../perf_optimization_candidates.md#candidate-4--the-msda-concat)
+(one 115 ms concat) and [candidate 2](../perf_optimization_candidates.md#candidate-2--fused-msda)
+(623 ms of the 683 ms kernel) are what is left worth having.

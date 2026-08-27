@@ -6,21 +6,21 @@ here becomes `landed` with a link to its report.
 
 Numbers quoted below as *cost* come from the baseline profile
 ([00-baseline.md](perf_reports/00-baseline.md)): one encoder layer, N150, 655.6 ms kernel +
-2416.5 ms host gap = 3072.1 ms wall.
+2416.5 ms host gap = 3072.1 ms wall. The layer today is 682 ms kernel + 8.9 ms of steady-state gap.
 
 ## Candidates
 
 | # | candidate | targets | measured cost at baseline | effort | risk | status |
 |--:|---|---|---|---|---|---|
 | [1](#candidate-1--host-round-trips) | remove host round-trips from SCA | gap | **1917 ms** (62% of wall) | — | — | **complete** |
-| [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | gap | **−2171.9 ms wall (−71%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
-| [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel to unlock −218 ms gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** |
+| [1a](#1a-rebatch-and-scatter-back-on-device) | rebatch + scatter-back on device | gap | **−2344.7 ms wall (−76%)** | L | med | **landed — [01](perf_reports/01-sca-rebatch-on-device.md)** |
+| [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel to unlock ~9 ms gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** |
 | [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
 | [1d](#1d-per-call-constant-uploads) | cache what is frame-invariant | gap | −56.4 ms encoder wall (−1.3%) | S | none | **landed — [03](perf_reports/03-constant-uploads-cached.md)** |
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | todo |
 | [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel | ~60 ms | M | low | todo |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | todo |
-| [5](#candidate-5--trace-capture) | trace capture the encoder | gap | 218 ms/layer | M | low | parked behind 1b |
+| [5](#candidate-5--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1b |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -41,7 +41,7 @@ rebatch loop. Two-thirds of the layer's wall clock, one Python loop.
 
 ### 1a. Rebatch and scatter-back on device
 
-**Landed** — [stage 01](perf_reports/01-sca-rebatch-on-device.md), −2171.9 ms wall (−71%), PCC
+**Landed** — [stage 01](perf_reports/01-sca-rebatch-on-device.md), −2344.7 ms wall (−76%), PCC
 unchanged at 0.999608. Both rebatch gathers run as a single `ttnn.embedding` each and cost 0.27 ms
 combined; the scatter-back is one `ttnn.scatter_add` at 10.50 ms. What it was:
 
@@ -77,13 +77,13 @@ this build.
 ### 1b. Bound `max_len` statically
 
 **Investigated and rejected** — [DEAD_ENDS entry 3](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len),
-data in [max_len_static_bound.md](perf_reports/max_len_static_bound.md).
+full data in that entry.
 
 `max_len` is a data-dependent shape, so it forces the `bev_mask` readback that keeps the encoder from
 being trace-capturable. A bound is derivable — the coverage ratio is a stable camera-FOV property —
 but cost is exactly linear in it, the naive bound does not fit in DRAM at all, and a sensible one
-spends more than half of what trace capture would return. Re-test after candidate 2, which owns both
-the memory ceiling and most of the per-row cost.
+costs +129 ms of kernel against the ~9 ms of gap trace capture could return. Re-test after candidate
+2, which owns both the memory ceiling and most of the per-row cost.
 
 **1b gates candidate 5**, and nothing else in candidate 1 needs it.
 
@@ -105,9 +105,9 @@ therefore per-forward work that was being repeated per layer.
 
 ### 1d. Per-call constant uploads
 
-**Landed** — [stage 03](perf_reports/03-constant-uploads-cached.md), −56.4 ms encoder wall (−1.3%),
-no numerical change. A steady-state win: the caches are keyed so they hold across forwards, not just
-across layers, so the first frame still pays.
+**Landed** — [stage 03](perf_reports/03-constant-uploads-cached.md), −56.4 ms encoder wall (−1.3%)
+and −25 device ops per layer, taking layer gap to 8.9 ms. No numerical change. A steady-state win:
+the caches hold across forwards, not just across layers, so the first frame still pays.
 
 They were small individually, but ran every layer / every forward:
 
@@ -235,8 +235,14 @@ not — it is redecided every frame. 1a and 1c removed the transfers and moved t
 the layer loop, but neither makes that shape constant; only 1b would, and 1b is
 [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len) on its own terms.
 
-So 5 is parked with it. Together they are worth the 218 ms of per-layer gap that stage 01 left,
-minus 1b's own cost — around 10% of layer wall clock, less than candidates 2 and 4 on their own.
+So 5 is parked with it — and re-measurement has collapsed what it was worth. Per-layer gap is
+**8.9 ms**, not the 218 ms this entry was written against. Trace capture cannot recover more than
+that at the layer level, and against 1b's +129 ms of kernel the trade is not close.
+
+Candidate 5 keeps a reason to exist at the *encoder* level, where per-forward host work is not
+hidden behind device time — encoder wall is 4234.5 ms against 6 × 691 = 4146 ms of steady-state
+layer time, so ~90 ms sits outside the layers. That case has to be made on the encoder harness and nobody
+has measured it. Treat 5 as low-value, not as blocked high-value.
 
 Both perf harnesses document the current blocker in their module docstrings; update them when it
 lifts.
@@ -245,18 +251,21 @@ lifts.
 
 ## Ordering
 
-1. ~~**1a**~~ — landed, −2171.9 ms.
-2. ~~**1b**~~ — [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len): costs more than
-   half of what it unlocks, and candidate 2 owns the memory ceiling that caps it.
+1. ~~**1a**~~ — landed, −2344.7 ms.
+2. ~~**1b**~~ — [rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len): +129 ms of kernel
+   to unlock ~9 ms of gap, and candidate 2 owns the memory ceiling that caps it.
 3. ~~**1c**~~ — landed, −94.6 ms encoder wall.
 4. ~~**1d**~~ — landed, −56.4 ms encoder wall. **Candidate 1 is complete.**
 5. **4** — one op, 113 ms, cheap to try.
 6. **2** — the big kernel lever; 613 ms of kernel is the two MSDA calls. Measure the fused op at TSA
    shapes before committing to the rewrite.
 7. **3** — ~60 ms, but candidate 2 may delete some of the sites. Sequence after 2.
-8. **5** — needs 1b.
+8. **5** — needs 1b, and is worth ≤9 ms/layer rather than the 218 ms first claimed. Only revisit if
+   an encoder-harness measurement shows per-forward host time the layer profile does not.
 
 The baseline settled what was previously a guess: host round-trips dominated wall clock 4:1 over
 kernel time, and within kernel time it is layout churn, not arithmetic — matmul is 0.7%. Nothing in
 the matmul-tuning playbook applies here. After stage 01 the ratio has inverted — kernel is 77% of
-wall clock — so 4 and 2 are the live levers and the rest of candidate 1 is cleanup.
+wall clock — so 4 and 2 are the live levers and the rest of candidate 1 is cleanup. Re-measurement
+sharpens that: **kernel is 99% of layer wall clock**, steady-state gap is 8.9 ms. There is no
+host-gap lever left at the layer level.

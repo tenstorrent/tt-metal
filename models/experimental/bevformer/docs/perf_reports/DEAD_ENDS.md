@@ -4,16 +4,16 @@ Companion to [PERF.md](../PERF.md). Everything here was measured on a Wormhole N
 in the tree, kept so nobody spends a day rediscovering it.
 
 Each entry names the **stage** it was tried at — the row in
-[PERF.md's results table](../PERF.md#results), whose `wall` column gives the layer's state at that
-moment. That matters: the bottleneck moved as the work progressed, and a negative result here is
-evidence about a layer at that wall clock, not a law. Two of these would be worth re-testing after
+[PERF.md's results table](../PERF.md#results) that gives the layer's state at that moment. The
+bottleneck moved as the work progressed, so a negative result here is evidence about a layer at that
+wall clock, not a law. Two are worth re-testing after
 [candidate 2](../perf_optimization_candidates.md#candidate-2--fused-msda) lands.
 
 | # | what | why it lost |
 |---|---|---|
 | [1](#1-hoist-the-invariant-reads-out-of-the-host-rebatch-loop) | hoist invariant reads out of the host rebatch loop | −56% and dropped anyway — the loop it optimizes no longer exists |
 | [2](#2-ttnngather-for-the-reference-point-rebatch) | `ttnn.gather` for the reference-point rebatch | 800× slower than `ttnn.embedding` at the same shapes |
-| [3](#3-a-static-bound-on-max_len) | a static bound on `max_len` | costs more than half of what it unlocks, and the naive bound does not fit in DRAM |
+| [3](#3-a-static-bound-on-max_len) | a static bound on `max_len` | +129 ms of kernel to unlock ~9 ms of gap, and the naive bound does not fit in DRAM |
 
 ---
 
@@ -29,13 +29,11 @@ loop removed ~30 of ~36 host transfers, at zero risk: the PCC gate came back at 
 to six decimal places.
 
 **Why it was dropped:** it reduces the number of host transfers instead of removing the reason for
-having any, and [stage 01](01-sca-rebatch-on-device.md) deletes the loop it optimizes. Reducing a
-cost is not the same as removing it, and when both are available at comparable effort the removal
-wins. Stage 01 went on to measure −2171.9 ms, −71%, on the same baseline.
+having any, and [stage 01](01-sca-rebatch-on-device.md) deletes the loop it optimizes — measuring
+−2171.9 ms on the same baseline.
 
-Worth recording because **−56% was a genuinely large number to walk away from**, and because it is
-the trap this kind of work sets: the profile points at a loop, and optimizing the loop is not the
-same as asking why the loop is there.
+Recorded because −56% is a large number to walk away from, and because it is the trap: the profile
+points at a loop, and optimizing the loop is not the same as asking why the loop is there.
 
 ## 2. `ttnn.gather` for the reference-point rebatch
 
@@ -57,33 +55,93 @@ entire 97.59 ms.
 op. Reach for `gather` only when the index genuinely varies *within* a row. An index tensor that
 turns out to be the same value repeated across the last dimension is the tell.
 
-It also matters that this was caught by **measurement, not review**. The `gather` version was
-correct and passed every PCC gate. A correctness-only workflow ships it.
+Caught by measurement, not review — the `gather` version was correct and passed every PCC gate.
 
 ## 3. A static bound on `max_len`
 
-Investigated at stage 01 (900.2 ms wall) as
-[candidate 1b](../perf_optimization_candidates.md#1b-bound-max_len-statically). Full data in
-[max_len_static_bound.md](max_len_static_bound.md). Not implemented.
+Investigated at stage 01 (727.4 ms wall) as
+[candidate 1b](../perf_optimization_candidates.md#1b-bound-max_len-statically). Not implemented.
 
-`max_len` is a data-dependent shape, so it forces a host readback of `bev_mask`, which is what keeps
-the encoder from being trace-capturable. Pinning it to a constant would remove that.
+`max_len` is a data-dependent shape, so it forces a host readback of `bev_mask` — the last thing
+keeping the encoder from being trace-capturable. Pinning it to a constant would remove that.
 
-What the measurements said:
+**Why it lost: +129 ms of kernel to unlock ~9 ms of gap**, plus a failure mode the current code does
+not have. Candidates 4 and 2 are worth more, carry no correctness risk, and need no geometric
+argument.
 
-- **The bound would be derivable.** `max_len / num_queries` is 0.247 for the nuScenes rig and 0.215
-  for CARLA, identical from 30×30 to 200×200 — it is a camera-FOV property, not a grid property, and
-  CAM_BACK alone sets it. A 1 m mounting-translation error moves it under 4%.
-- **Cost is exactly linear**, 213–219 µs per row with no fixed overhead, so every row of headroom is
-  paid for at full price — the worst possible shape for a safety margin.
-- **The naive bound is impossible, not merely slow.** At `max_len = 5120`, deformable attention
-  fails to allocate a 2.0 GB DRAM buffer. The feasible range at 100×100 is `(2484, ~4096]`. This is
-  the same wall that keeps the `200×200` PCC parametrization deselected.
+The trade was originally priced against the 218 ms of per-layer gap reported in stage 01. That
+figure [does not reproduce](01-sca-rebatch-on-device.md); steady-state gap is ~9 ms, so the
+rejection is decisive rather than marginal.
 
-**Why it lost:** at a sensible bound of 3072 it is **+129 ms of kernel to unlock −218 ms of gap** —
-net −89 ms on a 900 ms layer, ~10% — and it buys a failure mode the current code does not have,
-since a frame exceeding the bound silently drops queries rather than failing. Candidates 4 and 2 are
-worth more, carry no correctness risk, and need no geometric argument.
+### The bound is derivable
 
-**Re-test after candidate 2.** The fused deformable-attention op owns the allocation that sets the
-memory ceiling and most of the per-row cost. If it moves either, the terms of this trade change.
+`max_len / num_queries` is **scale-invariant** — it is the rig's FOV coverage of the BEV disc, not a
+property of how finely that disc is sampled:
+
+| rig | 30×30 | 50×50 | 100×100 | 200×200 | ratio |
+|---|---:|---:|---:|---:|---:|
+| nuScenes | 225 | 621 | 2472 | 9885 | **0.247** |
+| CARLA | 193 | 537 | 2146 | 8587 | **0.215** |
+
+**CAM_BACK alone sets it** — 2472 of 10000 queries at nuScenes 100×100, against 1579–1919 for the
+other five. It is the wide-FOV unit (809 px focal against 1266 px). Any bound is a bound on one
+camera.
+
+It is stable: yaw ±5° and pitch +5° move `max_len` under 1%, and a 1 m mounting-translation error —
+far outside calibration tolerance — moves it 3.9%.
+
+Two caveats this study cannot close:
+
+- **Device and host disagree.** Device computes 2484 where host computes 2472 — a bfloat16
+  boundary-comparison effect, documented in
+  [pcc_drop_after_deterministic_lidar2img.md](../pcc_drop_after_deterministic_lidar2img.md). A
+  host-derived bound must cover that +0.5%.
+- **Synthetic rigs only.** Real nuScenes `lidar2img` is calibration plus ego motion between lidar
+  and camera timestamps. That it varies within the perturbations above is an inference from rig
+  geometry, not a measurement. Confirm against real matrices before landing a bound.
+
+### Cost is linear, and there is a hard ceiling
+
+Measured by driving the real SCA path with a synthetic `bev_mask` of controlled density, so
+`max_len` is the swept variable. nuScenes 100×100, N150.
+
+| `rebatch_len` | MSDA kernel | vs baseline | µs/row |
+|---:|---:|---:|---:|
+| 2496 *(today)* | 532.4 ms | 1.00× | 213.3 |
+| 2560 | 561.7 ms | 1.06× | 219.4 |
+| 2816 | 604.5 ms | 1.14× | 214.7 |
+| 3072 | 661.3 ms | 1.24× | 215.3 |
+| 4096 | 870.4 ms | 1.64× | 212.5 |
+| 5120 | — | — | **out of memory** |
+
+213–219 µs per row across the whole range: **no fixed overhead, no economy of scale.** Every row of
+headroom is paid at full price — the worst possible shape for a safety margin.
+
+At 5120 the run dies inside deformable attention:
+
+```
+TT_FATAL: Out of Memory: Not enough space to allocate 2013265920 B DRAM buffer
+```
+
+The feasible range at this grid is `(2484, ~4096]`. **The naive bound of `num_queries` was never a
+slow option — it was never an option.** Same wall the `200×200` PCC parametrization hits
+(`max_len` 9885), which is why that test is deselected.
+
+### The failure mode
+
+A frame exceeding the bound **silently drops queries**. Not a crash, not something an existing PCC
+gate catches — a quietly worse BEV feature for the queries that fell off the end. Guarding it needs
+a runtime assert, and an assert on a device tensor is another sync unless it is debug-gated.
+
+### Re-test after candidate 2
+
+**The memory ceiling is the real finding.** It is why `200×200` cannot run, and it caps any future
+`max_len` growth. It belongs to the deformable-attention allocation, so
+[candidate 2](../perf_optimization_candidates.md#candidate-2--fused-msda) may move both it and most
+of the per-row cost. Land 2 and 4 first; if the fused op lowers either, the same bound costs
+proportionally less and the trade improves on its own.
+
+**Reproducing:** both studies are scratch scripts, not committed. Coverage and sensitivity are host
+only. The cost curve drives `TTSpatialCrossAttention` with a synthetic `bev_mask` under `tracy`; the
+MSDA signpost reports `max_len` as `query.shape[1]`, so the CSV segments by it without extra
+instrumentation.
