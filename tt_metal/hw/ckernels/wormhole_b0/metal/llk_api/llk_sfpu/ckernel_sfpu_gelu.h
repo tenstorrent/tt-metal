@@ -207,21 +207,38 @@ void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         sfpi::vConstFloatPrgm0 = 0.5f;
 
-        // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32):
-        // [0.0, 0.5): slope=0.1928, intercept=-0.000104  (lreg0)
-        // [0.5, 1.0): slope=0.4939, intercept=-0.1605  (lreg0 hi / lreg4 hi)
-        // [1.0, 1.5): slope=0.6189, intercept=-0.2797  (lreg1)
-        // [1.5, 2.0): slope=0.6099, intercept=-0.2635  (lreg1 hi / lreg5 hi)
-        // [2.0, 3.0): slope=0.5402, intercept=-0.1194  (lreg2)
-        // [3.0, ∞):   slope=0.5,    intercept=0.0      (lreg2 hi / lreg6 hi)
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37E7322B);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB12286D8);
+        // LUT segments (6-entry piecewise linear, each hi/lo pair packed into one imm32).
+        // Coefficients are IEEE fp16; slopes in LReg0/1/2, intercepts in LReg4/5/6, lo half
+        // = even segment, hi half = odd. Minimax per segment for the target
+        // g(a) = a*(Phi(a) - 0.5), a = |x|; the segments are disjoint intervals so each
+        // (A, B) is independently optimal over the whole fp16 grid.
+        // [0.0, 0.5): slope=0.19140625,  intercept=-0.0115814209
+        // [0.5, 1.0): slope=0.491210938, intercept=-0.156616211
+        // [1.0, 1.5): slope=0.6171875,   intercept=-0.27734375
+        // [1.5, 2.0): slope=0.609375,    intercept=-0.262939453
+        // [2.0, 3.0): slope=0.541503906, intercept=-0.123901367
+        // [3.0, ∞):   slope=0.5,         intercept=0.0
+        //
+        // The last segment is PINNED at exactly (0.5, 0.0): with those values the kernel
+        // returns 0.5*x + 0.5*|x| + 0 == x to the last bit for x >= 3. A free minimax fit
+        // proposes slope 0.5004883 because it halves the error at x = 3, and that is wrong --
+        // the absolute error then grows without bound (x = 128 would return 128.06).
+        //
+        // Max |err| 0.0234 -> 0.0116 overall, measured on n300; the gain is concentrated in
+        // segment 0, where a line is fitting a quadratic (g(a) ~ 0.3989a^2) and the old
+        // near-zero intercept forced the line to be a chord. Letting the intercept float
+        // straddles the curve instead, which is the factor-of-two Chebyshev result. It costs
+        // gelu_appx(0) = -0.0116 rather than -0.000104, widening an already-negative sliver
+        // just above zero from x < 0.00015 to x < 0.0168; |err| is smaller at every point of
+        // the segment regardless.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x37DC3220);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0xB103A1EE);
 
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E138F3);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB437B479);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x38E038F0);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0xB435B470);
 
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003852);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afa4);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x38003855);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x7c00afee);
     } else if constexpr (is_fp32_dest_acc_en) {
         // FP32 accurate mode: rational erf evaluation requires reciprocal init
         sfpu_reciprocal_init<false>();
