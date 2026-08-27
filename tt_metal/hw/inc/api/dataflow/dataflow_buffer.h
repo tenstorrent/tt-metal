@@ -482,6 +482,9 @@ struct noc_traits_t<DataflowBuffer> {
     }
 };
 
+template <>
+inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
+
 #endif
 
 // Arch-specific _impl bodies for DataflowBuffer member functions
