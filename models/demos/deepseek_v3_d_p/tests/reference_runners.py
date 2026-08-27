@@ -142,7 +142,9 @@ def run_reference_mla(
         # frequency error is a phase error that grows with position.
         rotary = rotary_cls(config=config).float()
         with torch.no_grad():
-            cos, sin = rotary(hidden_states.float(), position_ids)
+            # `forward` reads this tensor only for device and dtype, so pass a small view rather
+            # than an fp32 copy of the whole [batch, seq, hidden] activation.
+            cos, sin = rotary(hidden_states[:1, :1].float(), position_ids)
             kwargs["position_embeddings"] = (cos.to(hidden_states.dtype), sin.to(hidden_states.dtype))
     with torch.no_grad():
         out = attn(**kwargs)

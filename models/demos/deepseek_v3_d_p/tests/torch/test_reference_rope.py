@@ -118,3 +118,34 @@ def test_a_layer_that_computes_rope_internally_needs_no_rotary_emb(expect_error)
     model.layers = [new_layer]
     with expect_error(AssertionError, "exposes no rotary_emb"):
         reference_position_embeddings(model, torch.zeros(1, 4, 8), torch.arange(4).unsqueeze(0), 1)
+
+
+def test_mscale_toggle_invalidates_the_chunked_reference_cache():
+    """Guards the mscale half of `fix(mla): build the reference rope from the config...`.
+
+    `mla_disable_yarn_mscale` scales softmax by ``mscale**2``, so a cache key that ignored it served
+    a stale reference for the opposite setting -- valid-looking, silently wrong. Holding weights and
+    hidden state constant, flipping only that flag must change the key.
+    """
+    from types import SimpleNamespace
+
+    from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import _ref_cache_key
+
+    weights = {"w": torch.zeros(4, 4)}
+    hidden = torch.zeros(4, 4)
+
+    def cfg(disable_mscale):
+        return SimpleNamespace(
+            num_attention_heads=8,
+            rms_norm_eps=1e-6,
+            mla_use_nope=False,
+            mla_use_output_gate=False,
+            mla_disable_yarn_mscale=disable_mscale,
+            rope_scaling=None,
+        )
+
+    off = _ref_cache_key(cfg(False), weights, hidden)
+    on = _ref_cache_key(cfg(True), weights, hidden)
+    assert off != on, f"mscale toggle must change the reference cache key, got {off} for both"
+    # and the key must be stable for an unchanged config, or every run misses
+    assert off == _ref_cache_key(cfg(False), weights, hidden)

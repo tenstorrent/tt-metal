@@ -640,12 +640,16 @@ def load_and_compute_layer_by_layer(
             hf_model.load_state_dict(layer_with_prefix, strict=False)
 
             with torch.no_grad():
+                # transformers >= 5 renamed the cache kwarg to `past_key_values`. The wrong name
+                # lands silently in **kwargs, so no KV is ever captured -- bind it by the layer's
+                # own signature, which is also what decides `position_embeddings` below.
+                layer_params = inspect.signature(hf_model.layers[i].forward).parameters
                 layer_kwargs = {
                     "attention_mask": attention_mask,
                     "position_ids": position_ids,
-                    "past_key_value": ref_cache,
                     "use_cache": True,
                 }
+                layer_kwargs["past_key_values" if "past_key_values" in layer_params else "past_key_value"] = ref_cache
                 if ref_position_embeddings is not None:
                     cos, sin = ref_position_embeddings
                     layer_kwargs["position_embeddings"] = (cos.to(h_ref.dtype), sin.to(h_ref.dtype))
