@@ -29,6 +29,7 @@ from helpers.perf.core import (
     _ci_provenance,
     _prune_runs,
     _refresh_latest,
+    _reject_duplicate_keys,
     combine_perf_reports,
     postprocess_tile_loop,
 )
@@ -687,3 +688,35 @@ def test_latest_swap_leaves_no_debris_when_it_fails(tmp_path, monkeypatch):
 
     assert (perf_data / "latest").readlink() == Path("runs") / "run-1"
     assert not list(perf_data.glob(".latest.tmp.*"))
+
+
+def test_duplicate_sweep_key_is_rejected_not_averaged():
+    # Two rows with the same (sweep-params, marker) key make the measurement
+    # ambiguous, so the run must fail instead of averaging them into one row.
+    frame = pd.DataFrame(
+        {
+            "dest_acc": ["Yes", "Yes"],
+            "tile_cnt": [8, 8],
+            MARKER: ["TILE_LOOP", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
+        }
+    )
+    with pytest.raises(PerfSchemaError) as excinfo:
+        _reject_duplicate_keys(frame, "perf_example.csv")
+    message = str(excinfo.value)
+    assert "perf_example.csv" in message
+    assert "duplicate" in message
+
+
+def test_distinct_sweep_keys_pass_through_unchanged():
+    frame = pd.DataFrame(
+        {
+            "dest_acc": ["Yes", "No"],
+            "tile_cnt": [8, 8],
+            MARKER: ["TILE_LOOP", "TILE_LOOP"],
+            stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
+        }
+    )
+    pd.testing.assert_frame_equal(
+        _reject_duplicate_keys(frame, "perf_example.csv"), frame
+    )

@@ -343,20 +343,19 @@ def get_unique_base_names(input_dir: Path):
     return sorted(unique_bases)
 
 
-def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
-    """Collapse rows sharing the same (sweep-params, marker) key into a single row.
+def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Fail the session if any rows share the same (sweep-params, marker) key.
 
-    Two distinct sweep variants can resolve to an identical recorded key when the
-    harness normalizes a parameter before recording it (e.g. dest_acc forced from
-    No to Yes for an outlier format combo in TestConfig). Such rows are repeated
-    measurements of the same effective kernel, so their metric columns are averaged
-    into one row.
+    The key columns are a row's identity, so two rows carrying the same key make
+    the measurement ambiguous. It happens when a sweep varies something the CSV
+    does not record, or when the harness normalizes a parameter onto a value
+    another sweep point already uses (dest_acc promoted from No to Yes for an
+    outlier format combo in TestConfig).
 
-    A warning is always emitted when duplicates are found, and it flags how many
-    collapsed keys disagreed on a metric value: a differing same-key pair is usually
-    benign run-to-run noise, but it is also the signature of a test that failed to
-    record a parameter that actually changes the kernel, so it should not pass
-    silently.
+    This used to average the duplicates and log a warning. The warning was never
+    visible: loguru writes to test_run*.log, which CI uploads only when the job
+    fails, so a green run discarded it. Raise instead, so the run fails and names
+    the offending test.
     """
     if frame.empty or MARKER not in frame.columns:
         return frame
@@ -383,26 +382,25 @@ def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
             ].nunique()
             differing = int((nunique > 1).any(axis=1).sum())
 
-        logger.warning(
-            "{}: collapsing {} duplicate (sweep-params, marker) key(s) spanning "
-            "{} rows into one row each (mean of metric columns); {} key(s) had "
-            "differing metric values (run-to-run noise, or a distinguishing "
-            "parameter not recorded as a column).",
-            label,
-            int(len(dup_groups)),
-            int(dup_groups.sum()),
-            differing,
+        examples = [
+            dict(zip(key_cols, key if isinstance(key, tuple) else (key,)))
+            for key in list(dup_groups.index[:3])
+        ]
+        raise PerfSchemaError(
+            f"{label}: {int(len(dup_groups))} duplicate (sweep-params, marker) "
+            f"key(s) spanning {int(dup_groups.sum())} rows; {differing} key(s) "
+            "disagreed on a metric value. A key must identify one measurement. "
+            "Either the sweep varies something that is not recorded as a column, "
+            "or two sweep points normalize onto the same recorded value (e.g. "
+            "dest_acc promoted from No to Yes for an outlier format combo). "
+            f"First duplicate key(s): {examples}"
         )
-
-        agg = {c: ("mean" if c in numeric_cols else "first") for c in value_cols}
-        collapsed = (
-            frame.groupby(key_cols, dropna=False, sort=False).agg(agg).reset_index()
-        )
-        # Restore the original column order (groupby/agg reorders columns).
-        return collapsed[list(frame.columns)]
+    except PerfSchemaError:
+        raise
     except Exception as e:
-        logger.warning("{}: duplicate-key collapse skipped due to error: {}", label, e)
-        return frame
+        raise PerfSchemaError(
+            f"{label}: duplicate-key check failed: {type(e).__name__}: {e}"
+        ) from e
 
 
 def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
@@ -641,7 +639,7 @@ def combine_perf_reports():
 
             _assert_combined_schema(dfs_regular, f"{base_name}.csv")
             combined_regular = pd.concat(dfs_regular, ignore_index=True)
-            combined_regular = _collapse_duplicate_keys(
+            combined_regular = _reject_duplicate_keys(
                 combined_regular, f"{base_name}.csv"
             )
             combined_regular = combined_regular.sort_values(
@@ -666,7 +664,7 @@ def combine_perf_reports():
 
             _assert_combined_schema(dfs_post, f"{base_name}.post.csv")
             combined_post = pd.concat(dfs_post, ignore_index=True)
-            combined_post = _collapse_duplicate_keys(
+            combined_post = _reject_duplicate_keys(
                 combined_post, f"{base_name}.post.csv"
             )
             combined_post = combined_post.sort_values(
@@ -685,7 +683,7 @@ def combine_perf_reports():
 
             if dfs_counters:
                 combined_counters = pd.concat(dfs_counters, ignore_index=True)
-                combined_counters = _collapse_duplicate_keys(
+                combined_counters = _reject_duplicate_keys(
                     combined_counters, f"{base_name}.counters.csv"
                 )
                 combined_counters = combined_counters.sort_values(
