@@ -1086,3 +1086,134 @@ def test_glm52_index_cache_pipeline_stage_addresses():
     mismatched = {k: (merged[k], golden[k]) for k in golden if merged[k] != golden[k]}
     assert not mismatched, f"{len(mismatched)} entries mismapped, e.g. {list(mismatched.items())[:2]}"
     logger.info(f"[glm52] merged 2-stage index-cache table matches the per-rank walk over {len(merged)} entries")
+
+
+# sp x tp -- Mistral-Small-4-119B (dense MLA, no DSA indexer) KV chunk address table.
+# Follows test_kimi_kv_cache_table (the dense-MLA, single-config template) rather than the GLM ones:
+# those reach into mla_tt._indexer and build a 2-config table for the sparse index-key cache, which
+# Mistral 4 has no equivalent of (resolve_has_indexer is False for its config).
+#
+# The point of the test is the NARROWER kvpe row: kv_lora_rank(256) + qk_rope_head_dim(64) = 320, vs
+# 512 + 64 = 576 for DeepSeek/Kimi. 320 is 10 tiles of 32, so a 32-token DRAM-bank chunk is 10 bfp8
+# tiles, not 18 -- every byte size below is derived from the config rather than copied. The cache is
+# TP-replicated (init_kvpe_cache stamps PlacementReplicate), so the 320 row is never split across the
+# 4 TP columns -- 320/4 = 80 would not be tile-aligned.
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],
+    ids=["8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [5 * 1024], ids=["seq5k"])
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral4"])
+@pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole")
+@pytest.mark.timeout(0)
+def test_mistral4_kv_cache_table(
+    mesh_device,
+    seq_len,
+    variant,
+    random_weights,
+    device_params,
+):
+    """
+    Readback test for the Mistral-Small-4-119B (non-balanced / sequential) KV chunk address table.
+
+    Runs one dense Mistral 4 MLA layer with random weights (SP=8 on axis 0, TP=4 on axis 1) to fill a
+    sequentially laid-out KVPE cache, builds the table with create_kv_chunk_address_table_kimi, then
+    reads every 32-token chunk back through the table and checks it against the gathered cache. The
+    sequential gather is already position-continuous, so no chunk reorder is needed.
+    """
+    config, weights = random_weights
+
+    assert config.num_attention_heads == 32, f"Not Mistral 4 config: {config.num_attention_heads} heads"
+
+    logger.info(f"model={variant.name} num_heads={config.num_attention_heads} hidden={config.hidden_size}")
+
+    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+
+    sp_axis = 0
+    tp_axis = 1
+    mesh_shape = list(mesh_device.shape)
+    config.max_seq_len = seq_len
+
+    # Test forward pass comparison
+    logger.info("=" * 80)
+    logger.info(f"Testing forward pass comparison (seq_len={seq_len})")
+    logger.info("=" * 80)
+
+    # Initialize KVPE cache
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 320
+    assert kvpe_cache_head_dim == 320, f"expected a 320-wide Mistral 4 kvpe row, got {kvpe_cache_head_dim}"
+
+    num_kvpe_cache_layers = 1
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BFP8_TILE,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_kvpe_cache_layers,
+    )
+
+    # Create and populate KV chunk address table using utility function.
+    # Derived, not the 19584 the 576-wide models use: a [1, 1, 32, 320] bfp8 chunk is 10 tiles and a
+    # 32x32 bfp8 tile is 1024 data + 64 exponent bytes (cf. GLM's 128-wide index cache: 4 * 1088).
+    CHUNK_SIZE_BYTES = (kvpe_cache_head_dim // 32) * 1088  # [1, 1, 32, 320] bfp8 = 10 tiles = 10880
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = num_kvpe_cache_layers
+    lookup_table_config.max_sequence_length = seq_len
+    lookup_table_config.num_slots = 1
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+
+    lookup_table = create_kv_chunk_address_table_kimi(
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        kvpe_cache=tt_kvpe_cache.storage,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+    )
+
+    # Run MLA inference using utility function
+    # Fill the single cache layer with the actual kv cache
+    run_mla_inference(
+        config=config,
+        weights=weights,
+        mesh_device=mesh_device,
+        seq_len=seq_len,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        topology=topology,
+        tt_kvpe_cache=tt_kvpe_cache,
+    )
+
+    tt_kvpe_cache_torch = ttnn.to_torch(
+        tt_kvpe_cache.storage,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+    ).to(torch.bfloat16)
+
+    # remember layer0 results
+    tt_kvpe_cache_torch_layer0 = tt_kvpe_cache_torch[:1, :1, :, :]
+
+    # Walk every chunk in layer 0, read it back via the address table, and compare
+    # against the corresponding 32-token slice of the gathered cache.
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
+    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+        expected_chunk = tt_kvpe_cache_torch_layer0[:, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :]
+        assert_equal(chunk_torch, expected_chunk)
+    logger.info(f"[mistral4] kvpe-cache (320-wide bfp8) address-table readback verified over {seq_len} tokens")
