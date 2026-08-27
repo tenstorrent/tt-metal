@@ -139,7 +139,7 @@ def run_model(
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
     it to run the forward inside a real-time-profiler window (see
-    ``tests/perf/test_kimi_k3_moe_perf.py``) so the measured region is the forward alone --
+    ``tests/perf/test_kimi_moe_perf.py``) so the measured region is the forward alone --
     the constructor's one-time weight tilize/typecast stays outside it.
     """
     if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
