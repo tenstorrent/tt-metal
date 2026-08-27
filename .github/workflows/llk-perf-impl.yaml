@@ -170,9 +170,11 @@ jobs:
             ${{ env.LLK_PATH }}/perf_data/runs/
             ${{ env.LLK_PATH }}/perf_data/*.parquet
 
-      - name: Upload test logs on failure
+      # Always, not only on failure: loguru writes warnings to test_run*.log and
+      # never to the console, so a green run used to discard them unread.
+      - name: Upload test logs
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: failure()
+        if: always()
         with:
           name: test-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: |
