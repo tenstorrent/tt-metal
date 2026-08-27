@@ -821,6 +821,22 @@ constexpr bool live_slot_is_compact_index() {
 }
 static_assert(live_slot_is_compact_index());
 
+// A pure-mesh E/W router has exactly one LIVE output (its opposite direction, compact slot 0).
+// Its existing data/sync command buffers can therefore retain that adapter's state across packets.
+// Any configuration with another runtime user of those command buffers stays on the non-stateful path.
+template <size_t DOWNSTREAM_EDM_SIZE>
+constexpr bool use_indexed_single_live_stateful_noc() {
+    constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
+    constexpr bool is_ew = my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST;
+    constexpr uint8_t LIVE = indexed_live_eth_mask<DOWNSTREAM_EDM_SIZE>();
+#if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED) && !defined(FABRIC_2D_VC1_ACTIVE)
+    return is_ew && LIVE == 0b0001 && NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode &&
+           !is_intermesh_router && !is_intermesh_router_on_edge && !is_intramesh_router_on_edge;
+#else
+    return false;
+#endif
+}
+
 // Checks local relay capacity when ld, plus the downstream queue for every LIVE direction whose
 // action bit is set. Only UDM mode queues local delivery through a relay interface.
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
@@ -873,11 +889,12 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
     uint8_t transaction_id) {
     constexpr uint8_t LIVE = indexed_live_eth_mask<DOWNSTREAM_EDM_SIZE>();
     constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+    constexpr bool stateful_api = use_indexed_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     if constexpr ((LIVE >> 0) & 1) {
         if (action & IndexedMeshRoutingFields::action_bit(dirs[0])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
-            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -888,7 +905,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
     if constexpr ((LIVE >> 1) & 1) {
         if (action & IndexedMeshRoutingFields::action_bit(dirs[1])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
-            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -899,7 +916,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
     if constexpr ((LIVE >> 2) & 1) {
         if (action & IndexedMeshRoutingFields::action_bit(dirs[2])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
-            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -910,7 +927,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
     if constexpr ((LIVE >> 3) & 1) {
         if (action & IndexedMeshRoutingFields::action_bit(dirs[3])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
-            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -2914,6 +2931,11 @@ void kernel_main() {
 
     // Ensure array size is at least 1 to avoid undefined behavior
     static_assert(VC0_DOWNSTREAM_EDM_SIZE > 0, "VC0_DOWNSTREAM_EDM_SIZE must be at least 1");
+#if defined(FABRIC_2D)
+    constexpr bool use_vc0_single_live_stateful_noc = use_indexed_single_live_stateful_noc<VC0_DOWNSTREAM_EDM_SIZE>();
+#else
+    constexpr bool use_vc0_single_live_stateful_noc = false;
+#endif
 
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids);
@@ -2997,7 +3019,8 @@ void kernel_main() {
                     vc0_local_free_slots_stream_id(0));
 #endif
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
-                if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
+                if constexpr (
+                    NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !use_vc0_single_live_stateful_noc) {
                     downstream_edm_noc_interfaces_vc0[compact_index]
                         .template setup_edm_noc_cmd_buf<
                             tt::tt_fabric::edm_to_downstream_noc,
@@ -3008,6 +3031,20 @@ void kernel_main() {
             compact_index++;
             has_downstream_edm >>= 1;
         }
+#if defined(FABRIC_2D)
+        if constexpr (use_vc0_single_live_stateful_noc) {
+            // LIVE == 0b0001 above pins the only destination to compact slot 0. Program it after
+            // construction so it is the retained state for both the data and credit command buffers.
+            if (has_downstream_edm_vc0_buffer_connection & 0x1) {
+                downstream_edm_noc_interfaces_vc0[0]
+                    .template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+            } else {
+                ASSERT(false);
+            }
+        }
+#endif
     }
 
     std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>, VC1_DOWNSTREAM_EDM_SIZE>
