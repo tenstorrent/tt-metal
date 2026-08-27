@@ -6,6 +6,8 @@
 # embed, position embeddings, every block, the output and deepstack mergers, at
 # the released depth and only production grid shapes.
 
+import time
+
 import pytest
 import torch
 import transformers
@@ -95,9 +97,16 @@ def _tower(reference, submesh, parallel_config=None, ccl_manager=None):
 # perf mode skips the quadratic CPU golden (shapes/finiteness only) and says nothing about accuracy
 _PERF_GRIDS = ("max_load", "ref_4to1", "ref_1to4", "image_and_video")
 assert all(name in GRIDS for name in _PERF_GRIDS)
-_CASES = [pytest.param(name, True, id=f"check-{name}") for name in GRIDS] + [
-    pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS
-]
+# The largest grids' check-mode CPU golden exceeds the default 300 s budget (measured at tp8_sp4:
+# ~492 s for the 65k single-block references, ~778 s for max_load's 168k rows). Per-grid timeout
+# headroom on the check cases only -- perf mode skips the golden. Sizes from 43682d4.
+_TIMEOUTS = {"ref_4to1": 900, "ref_1to4": 900, "max_load": 1800}
+_CASES = [
+    pytest.param(
+        name, True, id=f"check-{name}", marks=[pytest.mark.timeout(_TIMEOUTS[name])] if name in _TIMEOUTS else []
+    )
+    for name in GRIDS
+] + [pytest.param(name, False, id=f"perf-{name}") for name in _PERF_GRIDS]
 
 
 @VISION_PARAMS
@@ -125,14 +134,44 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
     assert cu_seqlens[0] == 0 and cu_seqlens[-1] == total, f"cu_seqlens must span [0, {total}]: {cu_seqlens}"
 
     tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
-    cos, sin = tower.prepare_rope(grid)
-    pos = tower.prepare_pos_embeds(grid)
-    tokens, deepstack = tower.forward(
-        sp_shard(patches, submesh, sp_axis),
-        pos_embeds=sp_shard(pos, submesh, sp_axis),
-        rope=(sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)),
-        cu_seqlens=cu_seqlens,
-    )
+    # `perf` runs the whole iteration twice: the first pass compiles/caches kernels, the second is the
+    # measured steady-state run. `check` runs once -- the golden PCC needs no warmup. Idiom:
+    # test_transformer_qwenimage.py. Each iteration is timed in two parts, split by a device sync:
+    #   prep = per-request host build (rope + position tables) + the host->device upload of every input
+    #   op   = the tower forward itself
+    # `patches` stays outside (it is the fixed test input feeding the golden, i.e. "pixels already in
+    # host memory"); everything else a real request rebuilds per call lives inside the timed region.
+    n_iters = 1 if check_pcc else 2
+    for iteration in range(n_iters):
+        print(f"Tower Forward ({iteration + 1}/{n_iters})")
+        ttnn.synchronize_device(submesh)  # device idle before timing
+        t_start = time.time()
+
+        # --- prep: host build + host->device upload ---
+        cos, sin = tower.prepare_rope(grid)
+        pos = tower.prepare_pos_embeds(grid)
+        tt_patches = _shard(patches, submesh, sp_axis)
+        tt_pos = _shard(pos, submesh, sp_axis)
+        tt_cos, tt_sin = _shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)
+        ttnn.synchronize_device(submesh)  # uploads landed on device
+        t_prep_done = time.time()
+
+        # --- op: the tower forward ---
+        tokens, deepstack = tower.forward(
+            sp_shard(patches, submesh, sp_axis),
+            pos_embeds=sp_shard(pos, submesh, sp_axis),
+            rope=(sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)),
+            cu_seqlens=cu_seqlens,
+        )
+        ttnn.synchronize_device(submesh)  # forward complete
+        t_end = time.time()
+
+        print(
+            f"iter {iteration + 1}/{n_iters}: "
+            f"prep {(t_prep_done - t_start) * 1000:8.1f} ms (host build + H2D) | "
+            f"op {(t_end - t_prep_done) * 1000:8.1f} ms (tower.forward) | "
+            f"e2e {(t_end - t_start) * 1000:8.1f} ms"
+        )
 
     merged = total // SPATIAL_MERGE_SIZE**2
     actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
