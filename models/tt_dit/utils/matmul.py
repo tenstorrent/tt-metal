@@ -685,12 +685,34 @@ class FusedMMRSConfig(NamedTuple):
     chunk_width_in_mm_blocks: int
     # Optional explicit reduce-scatter worker count
     num_workers_per_link: int | None = None
+    # Rolling L1 window over the MM output, in M blocks. The op requires it whenever the MM output
+    # lands in L1: unwindowed, the resident shard is Mt_per_core * Nt_per_core tiles per matmul
+    # core, which for a large M crowds out later programs' circular buffers (issue #52863). 2 is
+    # the shallowest depth that still lets the matmul run a block ahead of the RS readers, and
+    # measured perf is flat in this knob, so the default leaves the most L1 to circular buffers.
+    # get_params clamps it to the blocks a core actually has.
+    mm_window_blocks: int | None = 2
 
-    def get_params(self, core_grid, num_links):
+    def get_params(self, core_grid, num_links, M=None):
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
         num_workers_override = config_dict.pop("num_workers_per_link")
+        mm_window_blocks = config_dict.pop("mm_window_blocks")
+        if mm_window_blocks is not None and M is not None:
+            # Clamp to the M blocks a core actually walks (fused MMRS never transposes: M on grid.y).
+            mt_per_core = math.ceil(math.ceil(M / 32) / self.compute_with_storage_grid_size.y)
+            blocks_per_core = math.ceil(mt_per_core / self.M_block_size)
+            if blocks_per_core <= 1:
+                # A single block per core makes the window degenerate twice over: there is no slot
+                # rotation, so the pipelining the window exists for cannot happen; and the windowed
+                # tensor's height is quantized to WHOLE M blocks, so when M_block > Mt_per_core the
+                # "window" is TALLER than the real output (e.g. flux2 1024px: M_block=12 over 5 real
+                # rows -> a 384 KB/core resident shard, 2.4x full residency, which clashed with the
+                # blocking's own CBs). Fall back to the DRAM handoff instead.
+                mm_window_blocks = None
+            else:
+                mm_window_blocks = min(mm_window_blocks, blocks_per_core)
 
         if num_workers_override is not None:
             num_workers_per_link = num_workers_override
@@ -706,6 +728,7 @@ class FusedMMRSConfig(NamedTuple):
             "num_buffers_per_channel": num_buffers_per_channel,
             "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
             "num_workers_per_link": num_workers_per_link,
+            "mm_window_blocks": mm_window_blocks,
         }
 
 
@@ -720,15 +743,43 @@ fused_mmrs_configs = {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
     },
     ttnn.CoreCoord(12, 10): {
-        (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
-        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
-        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
-        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 12, 4, 8, 1, 1, None, 1, 5),
+        # Wan2.2 720p ff2, single galaxy, swept 2026-08-24 (windowed): Mt_per_core=37, M_block=8
+        # leaves 5 blocks.
+        (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 3, 8, 2, 2, None, 1, 5),  # 1744.0 us
+        # Entries marked "swept 2026-08-24 (windowed)" were swept under the windowed L1 handoff
+        # with the runner that windows combos leaving >= 2 M blocks per core (DRAM otherwise), on
+        # a binary verified to place the RS intermediate in DRAM (an earlier stale build parked it
+        # in L1, flattering times ~3-4%; those numbers were restated from clean re-sweeps).
+        # M_block must stay <= ceil(Mt_per_core / 2) for the window to rotate.
+        #
+        # Wan2.2 720p ff2 on the quad-galaxy config (M = 9472 / 4), swept 2026-08-24 (windowed):
+        # 557.4 us windowed vs 722.2 us best-DRAM. Mt_per_core=10, M_block=6 leaves 2 blocks.
+        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # 557.4 us
+        # LTX ff2 @stage_1 (M = 9728/sp8), swept 2026-08-24 (windowed): 362.9 us vs 376.1 us
+        # best-DRAM. Previously absent, so it fell to the default config whose M_block=8 exceeds
+        # the 5 rows per core -> DRAM fallback; this entry puts stage_1 on the windowed handoff.
+        (1216, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 6, 2, 2, None, 1, 5),  # 362.9 us
+        # LTX ff2 @stage_2 (M = 38912/sp8), swept 2026-08-24 (windowed): 973.0 us vs ~1088 us for
+        # the previous DRAM-era M7/K5/N6 blocking.
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 6, 2, 2, None, 1, 5),  # 973.0 us
+        # Aang ff2 (same K/N family as Wan). Windowed beats the best DRAM blocking on both:
+        # a2v 601.9 us vs 746.99 us DRAM-swept @ M6/K4/N8 (-19%); SR 2084.2 us vs 2191.75 us
+        # DRAM-swept @ M6/K4/N7 (-5%).
+        (2656, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # a2v, 601.9 us
+        (11520, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR, 2084.2 us
+        # Aang @1080p variants, swept 2026-08-24 (windowed). a2v-1080p has only 7 M tile-rows per
+        # core, so M_block drops to 4 to keep the window rotating.
+        (1664, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 2, 2, None, 1, 5),  # a2v 1080p, 428.3 us
+        (7200, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR 1080p, 1378.2 us
+        # Flux2 @1024px, swept 2026-08-24 (windowed). Windowed won both shapes outright:
+        # 407.5 us vs 443.8 us best-DRAM for (1152,...), 339.9 us vs 345.4 us for (1024,...).
+        # The pre-window (1152,...) M_block=12 entry was degenerate under the window (12-tile
+        # block over 5 rows/core -> 384 KB resident shard, CB clash).
+        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 6, 8, 1, 4, None, 1, 5),  # 407.5 us
         (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 1),
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 1, 2, None, 1),
+        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 2, 4, 8, 2, 2, None, 1, 5),  # 339.9 us, see above
         # 2048-resolution shapes — BH 4×8 ring sweep (2026-05-30, 2048.md)
         (4096, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),  # 1546.0 μs
         (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs
@@ -741,24 +792,56 @@ fused_mmrs_configs = {
 }
 
 
+_logged_mmrs_rule_signatures = set()
+
+
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
-    config = fused_mmrs_configs.get(device_core_grid, {})
-    if len(config) == 0:
-        logger.warning(f"No known fused MM/RS config for {device_core_grid} core grid, using default")
-    elif (M, K, N) not in config:
+    """Resolve the fused MM+RS parameter dict for a shape.
+
+    Precedence -- anything measured or explicit wins:
+      1. A swept ``(M, K, N)`` table entry (``fused_mmrs_configs``, including entries added via
+         ``register_fused_mmrs_configs``).
+      2. The v2.3 rule engine (`utils/mmrs_rules.py`) -- always the 12x8 matmul grid with the
+         reduce-scatter above it; blind-validated within 5% of the swept optimum on ~90% of
+         shapes across five ff2 families. Blackhole 12x10 only; the rules were fitted against
+         Blackhole L1, and unaligned M stays off them (the RS output height must be tile-aligned).
+      3. The warned generic default, which puts the matmul on an 8x7 grid at subblock 1x1 -- on a
+         larger device drastically slower than the unfused matmul + reduce-scatter it replaces,
+         so the fusion reads as a regression: sweep the shape instead.
+
+    On a rule hit, an info log prints the config as a paste-able table entry: sweep the shape
+    with `sweep_mm_block_sizes.py` (use case ``mmrs``) and paste the winner into
+    ``fused_mmrs_configs`` (or register it from a model table) to override the rules permanently.
+    """
+    table = fused_mmrs_configs.get(device_core_grid, {})
+    config = table.get((M, K, N))
+
+    if config is None and is_blackhole() and M % 32 == 0:
+        from .mmrs_rules import pick_v23
+
+        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
+        if v23 is not None:
+            m_blk, k_blk, n_blk = v23["blocks"]
+            sub_h, sub_w = v23["subblock"]
+            signature = (M, K, N, device_core_grid.x, device_core_grid.y)
+            if signature not in _logged_mmrs_rule_signatures:
+                logger.info(
+                    f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
+                    f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
+                    f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
+                    f"# paste into fused_mmrs_configs after sweeping to override"
+                )
+                _logged_mmrs_rule_signatures.add(signature)
+            config = FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
+
+    if config is None:
         logger.warning(
-            f"No known fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid, using default"
+            f"No fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid "
+            "and the rule engine does not cover it; using default, which is likely slower than not "
+            "fusing at all"
         )
-    elif (M, K, N) not in config:
-        # Worth a warning even though the grid is known: the default puts the matmul on an 8x7 grid at
-        # subblock 1x1, so on a larger device it is drastically slower than the unfused
-        # matmul + reduce-scatter it is meant to replace, and the fusion reads as a regression.
-        logger.warning(
-            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; "
-            "using default, which is likely slower than not fusing at all"
-        )
-    config = config.get((M, K, N), default_fused_mmrs_config)
-    return config.get_params(device_core_grid, num_links)
+        config = default_fused_mmrs_config
+    return config.get_params(device_core_grid, num_links, M=M)
 
 
 def register_matmul_configs(configs: dict) -> None:
