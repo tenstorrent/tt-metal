@@ -25,37 +25,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import core_block, make_cb, single_core, split_evenly, unified_program
+from unified_harness import core_block, dfb, run_unified_spec, single_core, split_evenly, unified_program_spec
 
 KERNEL = "unified_kernels/flash_attention.cpp"
 TILE = 32
 
-CB = dict(
-    q=0,
-    k=1,
-    v=2,
-    mask=3,
-    one=4,
-    scale=5,
-    scores=6,
-    scaled=7,
-    masked=8,
-    rowmax=9,
-    prob=10,
-    probscaled=11,
-    rowsum=12,
-    pv=13,
-    oscaled=14,
-    corrold=15,
-    out=16,
-    corrnew=17,
-    m=18,
-    l=19,
-    o=20,
-    recipl=21,
-    mnow=22,
-    colones=23,
-)
 
 MASK_NEG = -30.0  # exp's domain is finite; -1e4 leaves it (see the non-flash attention test)
 
@@ -104,7 +78,6 @@ def _launch(
     core_ranges, core_list = core_block(ncores)
     shares = split_evenly(n_heads, ncores)
 
-    ct_args = []
     named_ct_args = [
         ("sq", sq),
         ("sk", sk),
@@ -115,53 +88,59 @@ def _launch(
         ("n_heads", n_heads),
         ("n_kv_heads", n_kv_heads),
     ]
-    for t in (tq, tk, tv, tmask, tcolones, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    addrs = [t.buffer_address() for t in (tq, tk, tv, tmask, tcolones, tout)]
-    # Same addresses everywhere, different head range per core.
-    rt_args = {c: addrs + [begin, count] for c, (begin, count) in zip(core_list, shares)}
 
     scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
-    cbs = [
-        make_cb(CB["q"], core_ranges, num_pages=sq * dt),
+    dfbs = [
+        dfb("q", sq * dt),
         # Streamed per chunk, so these are the only CBs where a second block lets the
         # reader run ahead of the compute. Worth a measured 5-6%, for L1 pages and
         # nothing else -- these shipped single-buffered, which is what a single/double
         # sweep turned up. The state CBs below are a different matter: their 2x is an
         # aliasing requirement, and halving THEM deadlocks.
-        make_cb(CB["k"], core_ranges, num_pages=stream_buffering * dt * sk),
-        make_cb(CB["v"], core_ranges, num_pages=stream_buffering * sk * dt),
-        make_cb(CB["mask"], core_ranges, num_pages=stream_buffering * scores_pages),
-        make_cb(CB["one"], core_ranges, num_pages=1),
-        make_cb(CB["colones"], core_ranges, num_pages=sk),
-        make_cb(CB["masked"], core_ranges, num_pages=scores_pages),
-        make_cb(CB["rowmax"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["prob"], core_ranges, num_pages=scores_pages),
-        make_cb(CB["rowsum"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["pv"], core_ranges, num_pages=out_pages),
-        make_cb(CB["oscaled"], core_ranges, num_pages=out_pages),
-        make_cb(CB["corrold"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["recipl"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["mnow"], core_ranges, num_pages=vec_pages),
-        make_cb(CB["out"], core_ranges, num_pages=out_pages),
+        dfb("k", stream_buffering * dt * sk),
+        dfb("v", stream_buffering * sk * dt),
+        dfb("mask", stream_buffering * scores_pages),
+        dfb("one", 1),
+        dfb("col_ones", sk),
+        dfb("masked", scores_pages),
+        dfb("row_max", vec_pages),
+        dfb("prob", scores_pages),
+        dfb("row_sum", vec_pages),
+        dfb("p_v", out_pages),
+        dfb("o_scaled", out_pages),
+        dfb("corr_old", vec_pages),
+        dfb("recip_l", vec_pages),
+        dfb("m_now", vec_pages),
+        dfb("out", out_pages),
         # State: TWICE the block, so store() can reserve while the old value is still resident.
-        make_cb(CB["m"], core_ranges, num_pages=2 * vec_pages),
-        make_cb(CB["l"], core_ranges, num_pages=2 * vec_pages),
-        make_cb(CB["o"], core_ranges, num_pages=2 * out_pages),
+        dfb("m", 2 * vec_pages),
+        dfb("l", 2 * vec_pages),
+        dfb("o", 2 * out_pages),
     ]
 
-    program = unified_program(
+    tensors = {"q": tq, "k": tk, "v": tv, "mask": tmask, "colones": tcolones, "out": tout}
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=core_list,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
+        tensors=tensors,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        runtime_arg_names=["head_begin", "head_count"],
         defines=None if causal else [("FLASH_NONCAUSAL", "1")],
+        name="flash_attention",
         **(fidelity or {}),
     )
-    out = ttnn.generic_op([tq, tk, tv, tmask, tcolones, tout], program)
+    run_unified_spec(
+        device,
+        spec,
+        tensors,
+        # Same everywhere except the head range, which is this core's share.
+        runtime_args={
+            "head_begin": {c: b for c, (b, _) in zip(core_list, shares)},
+            "head_count": {c: n for c, (_, n) in zip(core_list, shares)},
+        },
+    )
+    out = tout
     # Free the inputs: run() is called many times in one device session, and without this
     # the accumulated allocations exhaust DRAM partway through the sweep rather than at a
     # boundary that would make the cause obvious.
