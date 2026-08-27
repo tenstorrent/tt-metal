@@ -35,10 +35,7 @@ def test_rsub_scalar(device, s, h, w):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    # TODO : add Tensor.__rsub__ eventually
-    output_tensor = ttnn.mul(input_tensor, -1.0)
-    output_tensor = ttnn.add(output_tensor, s)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.to_torch(s - input_tensor)
 
     assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
