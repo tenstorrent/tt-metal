@@ -1565,21 +1565,12 @@ std::vector<std::optional<ttnn::Tensor>> gelu_bw(
     const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> result;
-    if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
-    }
+    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'none', 'tanh')");
 
     auto output_memory_config =
         input_grad.has_value() ? input_grad->memory_config() : output_mem_config.value_or(input.memory_config());
-    TT_FATAL((approximate == "none" || approximate == "tanh"), "Incorrect approximate mode (expected 'none', 'tanh')");
 
-    DataType output_dtype = input.dtype();
-    auto result_tensor = ttnn::operations::unary_backward::gelu_bw::launch_gelu_bw(
-        grad, input, approximate == "tanh", output_dtype, output_memory_config, input_grad);
-    result.push_back(result_tensor);
-
-    return result;
+    return {ttnn::prim::gelu_bw(grad, input, approximate, input.dtype(), output_memory_config, input_grad)};
 }
 
 std::vector<Tensor> repeat_bw(

@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 /**
  * GELU Backward ULP Precision Tests
  *
- * This test file validates the accuracy of ttnn::experimental::gelu_bw (GELU derivative) across
+ * This test file validates the accuracy of ttnn::gelu_bw (GELU derivative) across
  * the entire BFloat16 range using the same methodology as test_gelu_ulp_bug.cpp.
  *
  * MATHEMATICAL FORMULA:
@@ -48,7 +48,6 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -248,8 +247,9 @@ float run_gelu_bw_single(tt::tt_metal::distributed::MeshDevice& device, float in
     auto input_tensor = ttnn::full(shape, input_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
     auto grad_tensor = ttnn::full(shape, grad_val, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
 
-    // Call experimental gelu_bw with approximate="none" (polynomial approximation)
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    // Call gelu_bw with approximate="none" (polynomial approximation)
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
 
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
@@ -421,7 +421,8 @@ TEST_F(GeluBwUlpTest, ComprehensiveULPByRegion) {
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
     // Run GELU backward once on entire tensor
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -579,7 +580,8 @@ TEST_F(GeluBwUlpTest, CumulativeULPDistribution) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -952,8 +954,9 @@ TEST_F(GeluBwPolyTest, ComprehensiveULPAnalysis) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    // Run experimental GELU backward with polynomial approximation
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    // Run GELU backward with polynomial approximation
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1130,7 +1133,8 @@ TEST_F(GeluBwPolyTest, DetailedSegmentAnalysis) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1316,7 +1320,8 @@ TEST_F(GeluBwPolyTest, ExpBasedRegionFullDump) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1437,7 +1442,8 @@ TEST_F(GeluBwPolyTest, DeepNegativeRegionAnalysis) {
     auto input_tensor = ttnn::Tensor::from_vector(std::move(bf16_inputs), tensor_spec).to_device(device_);
     auto grad_tensor = ttnn::Tensor::from_vector(std::move(bf16_grads), tensor_spec).to_device(device_);
 
-    auto result = ttnn::experimental::gelu_bw(grad_tensor, input_tensor, "none");
+    auto results = ttnn::gelu_bw(grad_tensor, input_tensor, "none");
+    auto result = results[0].value();
     auto output_cpu = ttnn::from_device(result);
     auto output_vec = output_cpu.to_vector<::bfloat16>();
 
@@ -1700,7 +1706,8 @@ TEST_F(GeluBwPolyTest, SaturationThresholdResearch) {
         auto in_t = ttnn::Tensor::from_vector(std::move(inputs), spec).to_device(device_);
         auto gr_t = ttnn::Tensor::from_vector(std::move(grads), spec).to_device(device_);
 
-        auto res = ttnn::experimental::gelu_bw(gr_t, in_t, "none");
+        auto res_vec = ttnn::gelu_bw(gr_t, in_t, "none");
+        auto res = res_vec[0].value();
         auto out = ttnn::from_device(res).to_vector<::bfloat16>();
 
         int violations = 0;

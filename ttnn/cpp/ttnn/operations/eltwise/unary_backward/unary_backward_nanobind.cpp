@@ -925,7 +925,7 @@ void bind_unary_backward_gelu(
         Keyword args:
             {2} (string): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            input_grad (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -939,7 +939,7 @@ void bind_unary_backward_gelu(
                * - Dtypes
                  - Layouts
                * - {6}
-                 - TILE, ROW_MAJOR
+                 - TILE
 
             {7}
         )doc",
@@ -1124,7 +1124,7 @@ void py_module(nb::module_& mod) {
         "none",
         R"doc(Performs backward operations for gelu on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
         :attr:`approximate` mode can be 'none', 'tanh'.)doc",
-        R"doc(BFLOAT16)doc",
+        R"doc(BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     bind_unary_backward_unary_optional_float<"pow_bw">(

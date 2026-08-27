@@ -18,26 +18,24 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_unary/fill.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    uint32_t num_tiles = get_arg(args::num_tiles);
 
-    constexpr auto cb_grad_out = tt::CBIndex::c_0;
-    constexpr auto cb_input = tt::CBIndex::c_1;
-    constexpr auto cb_grad_in = tt::CBIndex::c_2;
-
-    CircularBuffer cb_grad_out_cb(cb_grad_out);
-    CircularBuffer cb_input_cb(cb_input);
-    CircularBuffer cb_grad_in_cb(cb_grad_in);
+    // grad_out / input are consumed from the reader; grad_in is produced for the writer.
+    DataflowBuffer dfb_grad_out(dfb::grad_out);
+    DataflowBuffer dfb_input(dfb::input);
+    DataflowBuffer dfb_grad_in(dfb::grad_in);
 
     constexpr float kSqrt2 = 1.41421356237309504880f;          // sqrt(2)
     constexpr float kTwoOverSqrtPi = 1.12837916709551257390f;  // 2/sqrt(pi)
     constexpr float kBeta = kSqrt2 * kTwoOverSqrtPi * 0.5f;
     constexpr float kKappa = 0.044715f;
 
-    compute_kernel_hw_startup(cb_grad_out, cb_grad_in);
-    copy_init(cb_grad_out);
+    compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
+    copy_init(dfb::grad_out);
     add_binary_tile_init();
     mul_binary_tile_init();
     square_tile_init();
@@ -45,14 +43,14 @@ void kernel_main() {
     sub_binary_tile_init();
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_grad_in_cb.reserve_back(1);
-        cb_grad_out_cb.wait_front(1);
-        cb_input_cb.wait_front(1);
+        dfb_grad_in.reserve_back(1);
+        dfb_grad_out.wait_front(1);
+        dfb_input.wait_front(1);
 
         tile_regs_acquire();
 
-        copy_tile(cb_input, 0, 1);
-        copy_tile(cb_input, 0, 2);  // tile[2] = x
+        copy_tile(dfb::input, 0, 1);
+        copy_tile(dfb::input, 0, 2);  // tile[2] = x
 
         // tile[1] = x^3
         square_tile(1);
@@ -98,10 +96,10 @@ void kernel_main() {
         mul_binary_tile(2, 3, 2);
 
         // tile[0] is free now (tanh/sech² no longer needed): load grad_out.
-        copy_tile(cb_grad_out, 0, 0);
+        copy_tile(dfb::grad_out, 0, 0);
 
         // tile[2] = x * pdf term. Re-read x from the CB
-        copy_tile(cb_input, 0, 3);
+        copy_tile(dfb::input, 0, 3);
         mul_binary_tile(2, 3, 2);
 
         // result: tile[1] = cdf_term + x * pdf_term
@@ -112,12 +110,12 @@ void kernel_main() {
         tile_regs_commit();
         tile_regs_wait();
 
-        pack_tile(0, cb_grad_in);
+        pack_tile(0, dfb::grad_in);
 
         tile_regs_release();
 
-        cb_grad_out_cb.pop_front(1);
-        cb_input_cb.pop_front(1);
-        cb_grad_in_cb.push_back(1);
+        dfb_grad_out.pop_front(1);
+        dfb_input.pop_front(1);
+        dfb_grad_in.push_back(1);
     }
 }
