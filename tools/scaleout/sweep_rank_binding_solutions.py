@@ -56,6 +56,12 @@ HEARTBEAT_INTERVAL_S = 30.0
 # How long to wait for the producer (generate_rank_bindings) to finish on its own before a whole-cluster
 # recover (which would otherwise disrupt the producer's live MPI job); if it overruns, it is stopped.
 PRODUCER_SETTLE_BEFORE_RECOVER_S = 300.0
+# After the producer exits: how long to keep re-polling solutions_index.yaml before trusting that
+# the visible index is final. NFS close-to-open attribute-cache lag can hide the producer's last
+# write from another client for up to ~60s (acregmax default); add 30s margin.
+PRODUCER_EXIT_INDEX_SETTLE_S = 90.0
+# Poll cadence inside the post-exit settle window.
+PRODUCER_EXIT_INDEX_POLL_INTERVAL_S = 3.0
 
 
 def _short_id(sid: str) -> str:
@@ -203,6 +209,7 @@ def _build_producer_cmd(
     distinct_host_sets: bool,
     allow_shape_permutations: bool,
     mpi_args: Optional[List[str]],
+    tcp_interface: Optional[str] = None,
 ) -> List[str]:
     """Build the ``generate_rank_bindings --all-solutions`` command (the streaming *producer*).
 
@@ -217,6 +224,25 @@ def _build_producer_cmd(
     mock_rank_to_desc: Optional[Dict[int, Path]] = None
     if mock_cluster_rank_binding is not None:
         mock_rank_to_desc = load_mock_rank_to_descriptors(mock_cluster_rank_binding.resolve())
+
+    # The producer is its own mpirun job (independent of the per-solution tt-runs, which get
+    # --tcp-interface via tt-run's flag synthesis). Without these flags the producer relies on
+    # OMPI_MCA_* environment variables and multi-host runs fail interface selection
+    # ("server accept cannot find guid"). Mirror the flags tt-run generates.
+    if tcp_interface:
+        # Prepend so explicitly-passed --mpi-args keep override precedence (later flags win in
+        # Open MPI), matching tt-run's ordering of synthesized defaults vs user args.
+        mpi_args = [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_include",
+            tcp_interface,
+            "--prtemca",
+            "oob_tcp_if_include",
+            tcp_interface,
+        ] + list(mpi_args or [])
 
     cmd = build_generate_rank_bindings_mpi_cmd(
         executable=executable,
@@ -976,6 +1002,7 @@ class SolutionConsumer:
         cfg = self.cfg
         consumed: set = set()
         found_count = 0  # streaming: how many solutions the producer has generated so far (for the "N found" note)
+        producer_exited_at: Optional[float] = None  # set on first post-exit idle read; anchors the NFS settle window
         last_heartbeat = time.time()
         while True:
             # Total-budget check (before launching, so we never interrupt a running solve).
@@ -1022,6 +1049,29 @@ class SolutionConsumer:
                     last_heartbeat = time.time()
                 time.sleep(POLL_INTERVAL_S)
                 continue
+            # Producer-exit settle: the producer may run on a different NFS client than this consumer,
+            # and an index read right after its exit can be served from a stale attribute cache
+            # (close-to-open consistency lag, up to ~60s) -- hiding trailing solutions, or wrongly
+            # concluding 0. Keep polling (through the normal loop) until the settle window from
+            # producer exit expires, clipped to --sweep-timeout. Fast path: if the freshest read
+            # shows every enumerated solution consumed, the stream is complete -- no wait.
+            if self.producer is not None:
+                if consumed and len(avail) == len(consumed):
+                    break  # index fully consumed as of the freshest read
+                if producer_exited_at is None:
+                    producer_exited_at = time.time()
+                settle_deadline = producer_exited_at + PRODUCER_EXIT_INDEX_SETTLE_S
+                if cfg.sweep_timeout is not None:
+                    settle_deadline = min(settle_deadline, self.sweep_start + cfg.sweep_timeout)
+                if time.time() < settle_deadline:
+                    time.sleep(PRODUCER_EXIT_INDEX_POLL_INTERVAL_S)
+                    continue
+                if not consumed:
+                    self.log.line(
+                        f"⚠ producer exited and the solutions index stayed empty through the "
+                        f"{PRODUCER_EXIT_INDEX_SETTLE_S:.0f}s settle window; reporting 0 solutions. "
+                        f"If the producer log shows solutions were found, this is NFS index-visibility lag."
+                    )
             break  # producer finished (or none) and nothing new left to consume
         return self.results
 
@@ -1226,6 +1276,7 @@ def main(
             distinct_host_sets=distinct_host_sets,
             allow_shape_permutations=allow_shape_permutations,
             mpi_args=parsed_mpi_args,
+            tcp_interface=tcp_interface,
         )
         if dry_run:
             click.echo(f"{PREFIX} Producer (stream solutions):\n  {' '.join(shlex.quote(c) for c in producer_cmd)}")

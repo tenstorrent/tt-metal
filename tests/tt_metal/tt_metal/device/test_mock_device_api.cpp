@@ -33,7 +33,7 @@ protected:
     void TearDown() override { experimental::disable_mock_mode(); }
 };
 
-TEST_F(MockDeviceAPIFixture, ConfigureMockModeRegistersConfig) {
+TEST_F(MockDeviceAPIFixture, CPU_ConfigureMockModeRegistersConfig) {
     EXPECT_FALSE(experimental::is_mock_mode_registered());
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
@@ -42,7 +42,7 @@ TEST_F(MockDeviceAPIFixture, ConfigureMockModeRegistersConfig) {
     EXPECT_EQ(*desc, "blackhole_P150.yaml");
 }
 
-TEST_F(MockDeviceAPIFixture, ConfigureMockModeWormholeMultiChip) {
+TEST_F(MockDeviceAPIFixture, CPU_ConfigureMockModeWormholeMultiChip) {
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 8);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
     auto desc = experimental::get_mock_cluster_desc();
@@ -50,7 +50,7 @@ TEST_F(MockDeviceAPIFixture, ConfigureMockModeWormholeMultiChip) {
     EXPECT_EQ(*desc, "t3k_cluster_desc.yaml");
 }
 
-TEST_F(MockDeviceAPIFixture, DisableMockModeClearsConfig) {
+TEST_F(MockDeviceAPIFixture, CPU_DisableMockModeClearsConfig) {
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
     experimental::disable_mock_mode();
@@ -58,7 +58,7 @@ TEST_F(MockDeviceAPIFixture, DisableMockModeClearsConfig) {
     EXPECT_FALSE(experimental::get_mock_cluster_desc().has_value());
 }
 
-TEST_F(MockDeviceAPIFixture, WormholeConfigurationsAreValid) {
+TEST_F(MockDeviceAPIFixture, CPU_WormholeConfigurationsAreValid) {
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "wormhole_N150.yaml");
     experimental::disable_mock_mode();
@@ -78,7 +78,7 @@ TEST_F(MockDeviceAPIFixture, WormholeConfigurationsAreValid) {
     // Note: 32-chip TG configuration removed as tg_cluster_desc.yaml doesn't exist in UMD
 }
 
-TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
+TEST_F(MockDeviceAPIFixture, CPU_BlackholeConfigurationsAreValid) {
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "blackhole_P150.yaml");
     experimental::disable_mock_mode();
@@ -87,12 +87,12 @@ TEST_F(MockDeviceAPIFixture, BlackholeConfigurationsAreValid) {
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "blackhole_P300_both_mmio.yaml");
 }
 
-TEST_F(MockDeviceAPIFixture, QuasarConfigurationsAreValid) {
+TEST_F(MockDeviceAPIFixture, CPU_QuasarConfigurationsAreValid) {
     experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
     EXPECT_EQ(*experimental::get_mock_cluster_desc(), "quasar_Q1.yaml");
 }
 
-TEST_F(MockDeviceAPIFixture, UnsupportedConfigurationThrows) {
+TEST_F(MockDeviceAPIFixture, CPU_UnsupportedConfigurationThrows) {
     bool threw_during_configure = false;
     try {
         experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 99);
@@ -105,6 +105,8 @@ TEST_F(MockDeviceAPIFixture, UnsupportedConfigurationThrows) {
     }
 }
 
+// NOT CPU_-prefixed: this test probes real silicon (get_physical_architecture())
+// and skips when none is present, so it only provides coverage on device runners.
 TEST_F(MockDeviceAPIFixture, ConfigureMockModeFromHwDetectsArchitecture) {
     tt::ARCH detected_arch = get_physical_architecture();
     if (detected_arch == tt::ARCH::Invalid) {
@@ -117,7 +119,7 @@ TEST_F(MockDeviceAPIFixture, ConfigureMockModeFromHwDetectsArchitecture) {
     ASSERT_TRUE(desc.has_value());
 }
 
-TEST_F(MockDeviceAPIFixture, SwitchFromMockToRealHardware) {
+TEST_F(MockDeviceAPIFixture, CPU_SwitchFromMockToRealHardware) {
     // Test API state transitions: configure, disable, reconfigure
     experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
     EXPECT_TRUE(experimental::is_mock_mode_registered());
@@ -301,7 +303,7 @@ protected:
 };
 
 // Verify that the device profiler is not enabled on mock device.
-TEST_F(MockDeviceProfilerFixture, DeviceProfilerIsNotStartedOnMockDevice) {
+TEST_F(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 1);
 
     ASSERT_TRUE(MetalContext::instance().rtoptions().get_profiler_enabled())

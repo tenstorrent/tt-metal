@@ -22,6 +22,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from models.common.utility_functions import skip_for_blackhole
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
     normalized_shape = input.shape[-normalized_dims:]
@@ -643,6 +646,8 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)
@@ -681,6 +686,8 @@ def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, element
     torch.manual_seed(2024)
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, eps, dtype, device)

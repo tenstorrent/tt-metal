@@ -16,21 +16,22 @@
 
 namespace ckernel {
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
+    PACK((llk_pack_dest_init<is_fp32_dest_acc_en, PackMode::Default>(ocb)));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE>(icb)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(icb)));
+    MATH((llk_math_pack_sync_init<is_fp32_dest_acc_en>()));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb, icb)));
     // Eltwise unary / SFPU ops keep the Src zero-substitution flag disabled to preserve bf16 -0.0.
     // Asserted after hw_configure (which sets the operand-driven DEFAULT) so it is the last writer
     // before the op runs; skip-if-set keeps it cheap.
@@ -40,19 +41,20 @@ ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb, uint32_t call_line = 
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         0 /*transpose of faces*/, 0 /*transpose within 16x16 face*/, icb)));
 
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_hw_configure<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
     PACK((llk_pack_dest_init()));
 
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         icb)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(icb, icb)));
 #endif
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void init_sfpu(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    unary_op_init_common(icb, ocb, call_line);
+    unary_op_init_common<is_fp32_dest_acc_en>(icb, ocb, call_line);
 }
 
 }  // namespace ckernel

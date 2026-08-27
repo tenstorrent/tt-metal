@@ -14,6 +14,9 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_utils import TILE_HEIGHT, TILE_WIDTH
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize("num_iters_of_each_case", [2])
 @pytest.mark.parametrize("range_of_padding", [(0, 21, 10)])  # [0, 10, 20]

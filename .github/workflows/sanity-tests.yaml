@@ -211,7 +211,7 @@ on:
     branches: ["main"]
   schedule:
     # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
-    - cron: "0 */4 * * *"
+    - cron: "0 */2 * * *"
 
 permissions:
   actions: read

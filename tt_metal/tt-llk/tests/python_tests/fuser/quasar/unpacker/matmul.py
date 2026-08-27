@@ -33,6 +33,32 @@ class MatmulUnpacker(Unpacker):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b
 
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_tiles_y
+        ct_dim = block.block_tiles_x
+        return f"_perf_unpack_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        num_cols = compute_unit.src_a.tile_shape.total_col_dim()
+        kt_dim = compute_unit.src_a.dimensions[1] // num_cols
+        rt_dim = block.block_tiles_y
+        ct_dim = block.block_tiles_x
+        return f"_perf_math_matmul_mock(1, {rt_dim}, {kt_dim}, {ct_dim});\n"
+
     def init(
         self,
         operation: L1Operation,

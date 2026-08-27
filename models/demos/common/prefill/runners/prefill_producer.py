@@ -278,31 +278,51 @@ def _read_device_map(timeout_s: int) -> dict:
     chips by unique_id without touching the ControlPlane. Returns {(mesh_id, chip_id): unique_id}.
 
     The runner's two publishers do not share an encoding -- the shmem path writes JSON keyed
-    "<mesh>:<chip>", the file-export path writes "<mesh> <chip> <umd>" lines -- so accept either."""
+    "<mesh>:<chip>", the file-export path writes "<mesh> <chip> <umd>" lines -- so accept either.
+
+    A multi-rank runner writes one rank-scoped file per co-located rank (``<stem>_r<rank>.json``), so
+    all matches on this host are merged. Clear stale ``_r*`` siblings between runs whose topology
+    changed -- a leftover file would merge in."""
+    import glob as _glob
     import json
 
+    def _parse(raw: str) -> dict:
+        try:
+            return {tuple(int(x) for x in key.split(":")): int(unique_id) for key, unique_id in json.loads(raw).items()}
+        except json.JSONDecodeError:
+            parsed = {}
+            for line in raw.splitlines():
+                if not line.strip():
+                    continue
+                mesh_id, chip_id, unique_id = line.split()
+                parsed[(int(mesh_id), int(chip_id))] = int(unique_id)
+            return parsed
+
     path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+    stem, ext = os.path.splitext(path)
+
+    def _matches():
+        return ([path] if os.path.exists(path) else []) + sorted(_glob.glob(f"{stem}_r*{ext}"))
+
     deadline = time.perf_counter() + timeout_s
-    while not os.path.exists(path):
+    files = _matches()
+    while not files:
         if time.perf_counter() > deadline:
-            logger.warning(f"[producer] device map {path} not found after {timeout_s}s; skipping KV read.")
+            logger.warning(
+                f"[producer] device map {path} (or {stem}_r*{ext}) not found after {timeout_s}s; skipping KV read."
+            )
             return {}
         time.sleep(0.1)
+        files = _matches()
 
-    with open(path) as f:
-        raw = f.read()
-    try:
-        device_map = {
-            tuple(int(x) for x in key.split(":")): int(unique_id) for key, unique_id in json.loads(raw).items()
-        }
-    except json.JSONDecodeError:
-        device_map = {}
-        for line in raw.splitlines():
-            if not line.strip():
-                continue
-            mesh_id, chip_id, unique_id = line.split()
-            device_map[(int(mesh_id), int(chip_id))] = int(unique_id)
-    logger.info(f"[producer] read device map {path}: {len(device_map)} chips")
+    device_map = {}
+    for f_path in files:
+        with open(f_path) as f:
+            parsed = _parse(f.read())
+        device_map.update(parsed)
+        logger.info(f"[producer] read device map {f_path}: {len(parsed)} chips")
+    if len(files) > 1:
+        logger.info(f"[producer] merged {len(files)} device maps: {len(device_map)} chips total")
     return device_map
 
 
@@ -761,7 +781,15 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     kv_dir = Path(trace_dir) / "kv_cache"
     mins = {"k": 1.0, "v": 1.0}
+    checked = 0
     for layer in range(NUM_LAYERS):
+        # Skip layers owned by another host's stage (their chips are not in this host's device map).
+        loc0 = table.lookup(layer, 0, slot_id, 0)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+        checked += 1
         dev_k = torch.stack(
             [
                 _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
@@ -788,9 +816,12 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"[producer] slot {slot_id} GPT-OSS KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} (min {min_pcc:.6f})"
     )
+    # Zero resolved layers would return the 1.0 inits as a perfect pass — fail loudly instead.
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
     return mins
 
 
@@ -819,8 +850,16 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
     )
     kv_dir = Path(trace_dir) / "kv_cache"
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
+    checked = 0
     ik_checked = 0
     for layer in range(NUM_LAYERS):
+        # Skip layers owned by another host's stage (their chips are not in this host's device map).
+        loc0 = table.lookup(layer, 0, slot_id, 0)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+        checked += 1
         dev_k = torch.stack(
             [
                 _read_kv_slice(table, device_map, h, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk)
@@ -861,9 +900,12 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
     min_pcc = min(mins.values())
     logger.info(
-        f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> "
+        f"[producer] slot {slot_id} M3 KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
         f"K={mins['k']:.5f} V={mins['v']:.5f} index_k={mins['index_k']:.5f} (min {min_pcc:.6f})"
     )
+    # Zero resolved layers would return the 1.0 inits as a perfect pass — fail loudly instead.
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
     # Only some traces carry an index_k golden. Its min is still the 1.0 init when none did, so drop the
     # key rather than reporting an unmeasured cache as perfect.
     if not ik_checked:
@@ -976,23 +1018,19 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         n_index_layers = table.config(1).num_layers
-        # Config 1's layer axis is the full-indexer RANK (GLM-5.2 compacts the shared layers out of the
-        # cache); the golden is numbered by GLOBAL layer, so map rank -> global before loading it.
+        # Config 1 is published on the GLOBAL LAYER axis, same numbering as the golden: rows == full-indexer layer ids.
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
-        assert full_layers is None or len(full_layers) == n_index_layers, (
-            f"config 1 declares {n_index_layers} index-cache layers but layers [0,{NUM_LAYERS}) own only "
-            f"{len(full_layers)} full indexers. The index cache is sized from the model's WHOLE "
-            f"indexer_types map, so ranks {len(full_layers)}..{n_index_layers - 1} are never written by "
-            f"this run and would PCC against unwritten memory. Run the model's full layer count "
-            f"(PREFILL_NUM_LAYERS)."
+        index_rows = list(range(n_index_layers)) if full_layers is None else full_layers
+        assert full_layers is None or max(full_layers) < n_index_layers, (
+            f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
+            f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+            f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
         )
         min_index = 1.0
         checked_index = 0
-        for rank in range(n_index_layers):
-            # Same host-local filter as config 0: a merged multi-rank table spans every host's layers,
-            # so skip any index layer that resolves to no local unique_id (owned by another rank). Keyed
-            # by the full-indexer RANK (config 1's layer axis) -- same index the lookups below use.
-            loc0 = table.lookup(rank, 0, slot_id, 1)  # config 1 = index cache
+        for layer in index_rows:
+            # Same host-local filter as config 0: skip an index layer owned by another rank.
+            loc0 = table.lookup(layer, 0, slot_id, 1)  # config 1 = index cache
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
             except KeyError:
@@ -1000,7 +1038,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
 
             decoded_rows = []
             for pos in range(0, read_len, tokens_per_block):
-                loc = table.lookup(rank, pos, slot_id, 1)  # config 1 = index cache, keyed by full-layer rank
+                loc = table.lookup(layer, pos, slot_id, 1)  # config 1 = index cache, keyed by global layer
                 unique_id = _resolve_unique_id(
                     table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                 )
@@ -1010,19 +1048,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
             dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
 
-            golden_layer = rank if full_layers is None else full_layers[rank]
-            golden_ik = _load_golden_index_k(trace_dir, golden_layer, real_len)
+            golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             min_index = min(min_index, pcc_index)
             checked_index += 1
-            logger.info(
-                f"[producer] slot {slot_id} layer {golden_layer:>2} (index rank {rank:>2}) "
-                f"index PCC: {pcc_index:.5f}"
-            )
+            logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
 
         logger.info(
             f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
-            f"{checked_index}/{n_index_layers} local layers -> {min_index:.6f}"
+            f"{checked_index}/{len(index_rows)} local layers -> {min_index:.6f}"
         )
         mins["index"] = min_index
 
