@@ -634,11 +634,11 @@ Blackhole.
 
     // Wormhole, Blackhole
     vFloat lut(vFloat v, vLut8si si0, vLut8si si1, vLut8si si2,
-               LutSign  = LutSignRetain);
+               LutSign  = LutSign::Retain);
     vFloat lut(vFloat v, vLut16si si0, vLut16si si1, vLut16si si2,
-               LutSign  = LutSignRetain);
+               LutSign  = LutSign::Retain);
     vFloat lut(vFloat v, vLut32si si0, vLut32si si1, vLut132si si2,
-               LutSign  = LutSignRetain);
+               LutSign  = LutSign::Retain);
     template <LutMode Mode = LutMode::Fp16x6_HWM3>
     vFloat lut (vFloat v, vLut16ss s01, vLut16ii i01,
                 vLut16ss s23, vLut16ii i23,
