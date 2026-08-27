@@ -24,13 +24,32 @@ script. Do not try to install compilers or dependencies; do not run
 What the host does have: `docker`, a checkout with submodules already
 initialised, and a shared remote ccache.
 
-## You are expected to compile your change
+## Match the check to the change
 
-**A change that has not been compiled is not finished.** Historically, changes
-authored here were opened without ever being built, and validation was left
-entirely to post-hoc CI. Do not do that.
+Not every change needs a build. Building a docs-only change wastes your session.
 
-Build from the repository root:
+| You changed | What to run |
+| --- | --- |
+| C++, headers, kernels — `.cpp` / `.hpp` under `tt_metal/`, `ttnn/`, `tt_stl/`, `tt-train/` | **Build.** See below. |
+| nanobind bindings (the C++ behind the Python API) | **Build** — this is C++. |
+| CMake — `CMakeLists.txt`, `sources.cmake`, `cmake/`, `build_metal.sh` | **Build**, or at minimum `--configure-only` if you only need to prove configure still works. |
+| Python only | No build. Formatting is enforced by `pre-commit` (black, isort, autoflake). |
+| YAML, workflows | No build. `pre-commit` runs yamllint and check-yaml. |
+| Docs, markdown, CODEOWNERS | No build. |
+
+`.pre-commit-config.yaml` defines the formatting and lint hooks the repo enforces
+(including `clang-format` and `gersemi` for CMake). Run them if available; do not
+treat their absence in your environment as a reason to skip the table above.
+
+**If you are unsure whether your change affects the build, build it.**
+
+## Building
+
+**If you changed C++ or CMake, a change that has not been compiled is not
+finished.** Historically, changes authored here were opened without ever being
+built, and validation was left entirely to post-hoc CI. Do not do that.
+
+From the repository root:
 
 ```bash
 .github/scripts/copilot-build.sh
@@ -43,7 +62,7 @@ you pass go straight through to `build_metal.sh`:
 | Command | When |
 | --- | --- |
 | `.github/scripts/copilot-build.sh` | default — the usual case |
-| `… --configure-only` | you only need to prove CMake still configures (~6 min) |
+| `… --configure-only` | prove CMake still configures, without compiling (~6 min) |
 | `… --build-metal-tests` | you changed something under `tt_metal/` with tests |
 | `… --build-ttnn-tests` | likewise for `ttnn/` |
 | `… --build-programming-examples` | you touched `tt_metal/programming_examples/` |
@@ -57,12 +76,14 @@ If the wrapper warns that Garage credentials are missing, you are building
 against a cold cache and it will most likely not finish. Say so in the PR
 rather than burning the session on it.
 
-## What to do about the result
+## What to do about a build
 
 - **Builds clean** — say so explicitly in the PR description, including the
   exact command you ran.
 - **Fails to build** — fix it and rebuild. Do not open the PR and let CI find
   a compile error you could have caught.
+- **Did not need a build** (see the table above) — say which check you ran
+  instead, e.g. that it is a docs-only change.
 - **Genuinely cannot build** (cold cache, docker unavailable, environment
   problem) — open the PR anyway, but state plainly in the description that the
   change is **unverified** and why. An honest "not compiled" is far more useful
