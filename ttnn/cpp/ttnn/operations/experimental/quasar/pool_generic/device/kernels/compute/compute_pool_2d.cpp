@@ -215,7 +215,6 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            // [DEBUG pool compute stall] Which call blocks the WFD/UPTW deadlock? Newest ring marker per
 #if PACK_TO_SCRATCH == 0
             if constexpr (!is_output_tiled) {
                 out_cb.reserve_back(output_faces);
@@ -234,9 +233,6 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 curr_in_cb.wait_front(1);
-                // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
-                // per entry, t2r = tiles this reduce strides over. If the strided row walk for t2r tiles
-                // exceeds esz it reads into the next entry (wrong rows). First few sticks only (flood guard).
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,

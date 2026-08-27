@@ -20,7 +20,7 @@ inline void write_resharded_data(
     uint32_t worker_core_stride_w_bytes,
     uint32_t storage_core_stride_w_bytes,
     uint32_t block_ht) {
-    const uint32_t out_single_tile_size_bytes = get_tile_size(dfb_out.get_id());
+    const uint32_t out_single_tile_size_bytes = dfb_out.get_tile_size();
     uint32_t args_idx = 0;
     uint32_t worker_core_read_offset = 0;
 

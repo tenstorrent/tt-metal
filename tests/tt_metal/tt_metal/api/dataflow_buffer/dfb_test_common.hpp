@@ -468,7 +468,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, slice);
     }
 
-    slow_dispatch::LaunchProgram(mesh_device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // Verify (DM consumer only — Tensix consumer doesn't write DRAM).
     if (p.consumer_type == M2PorCType::DM) {

@@ -82,17 +82,27 @@ void ConfigureDevicePrintForCoord(
 // so the DEVICE_PRINT output directly matches what was configured in the DEVICE_PRINT filter.
 distributed::MeshWorkload BuildMeshCoordWorkload(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     distributed::MeshWorkload workload;
-    constexpr CoreCoord kCore = {0, 0};
+    constexpr experimental::NodeCoord kNode = {0, 0};
+    const experimental::KernelSpecName kKernel{"mesh_coord_print"};
+
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         auto [row, col] = GetGlobalCoord(mesh_device->get_device(coord)->id());
-        Program program;
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/device_print/print_mesh_coord.cpp",
-            kCore,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {row, col}});
-        workload.add_program(distributed::MeshCoordinateRange(coord, coord), std::move(program));
+
+        experimental::ProgramSpec spec{
+            .name = "dprint_mesh_coord",
+            .kernels = {experimental::KernelSpec{
+                .unique_id = kKernel,
+                .source =
+                    std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/device_print/print_mesh_coord.cpp"},
+                .num_threads = 1,
+                .compile_time_args = {{"row", row}, {"col", col}},
+                .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device->arch()),
+            }},
+            .work_units = {experimental::WorkUnitSpec{.name = "main", .kernels = {kKernel}, .target_nodes = kNode}},
+        };
+
+        workload.add_program(
+            distributed::MeshCoordinateRange(coord, coord), experimental::MakeProgramFromSpec(*mesh_device, spec));
     }
     return workload;
 }

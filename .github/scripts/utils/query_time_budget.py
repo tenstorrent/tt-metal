@@ -89,7 +89,7 @@ def build_testtype_map(workflows_dir):
     passed to verify_time_budget.py in the workflow that runs it -- NOT the file
     name. We read it live so the mapping tracks pipeline changes (and handles
     cases where the file name differs from the budget key, e.g. release_tests.yaml
-    -> 'demo', demo_sp_multihost_tests.yaml -> 'e2e').
+    -> 'demo').
     """
     mapping = {}
     for path in glob.glob(os.path.join(workflows_dir, "*.y*ml")):

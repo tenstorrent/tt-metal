@@ -19,8 +19,8 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/compute_kernel_api.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
+#include "api/compute/experimental/custom_mm.h"
+#include "api/compute/experimental/compressed_custom_mm.h"
 using namespace ckernel;
 #endif
 

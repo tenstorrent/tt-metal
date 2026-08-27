@@ -9,6 +9,11 @@ on:
         required: false
         default: all
         type: string
+      speed-of-light:
+        description: "Enable --speed-of-light for LLK performance tests"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   checks: write
@@ -107,22 +112,35 @@ jobs:
           cd tests
           ./setup_testing_env.sh
           cd ..
-      - name: Set CHIP_ARCH for logs and artifacts
+      - name: Set CHIP_ARCH and the run tag
         shell: bash
         env:
           RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
         run: |
           RUN_LABEL="${RUN_ON_LABELS%% *}"
           if [[ "$RUN_LABEL" =~ N150 ]]; then
-            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+            CHIP_ARCH=wormhole
           elif [[ "$RUN_LABEL" =~ P150 ]]; then
-            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+            CHIP_ARCH=blackhole
           else
-            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+            CHIP_ARCH=unknown
           fi
+          echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
+          # One name for everything this shard produces: the report directory
+          # perf_data/runs/<tag> and the published Parquet. Must be unique per
+          # job, because pytest-split divides by test item rather than by
+          # module, so one module's variants land in several shards and their
+          # reports would collide the moment the artefacts are brought together.
+          # It carries the workflow run id, so it is also unique across nights --
+          # which matters once these files are archived into one directory.
+          # Exported here rather than scoped to a single step: the publish step
+          # names its output from the same tag, and two naming schemes drift.
+          echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
       - name: Run tests
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
+        env:
+          SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
         run: |
           ${{ matrix.test-group.cmd }}
 
@@ -136,25 +154,21 @@ jobs:
           PIPELINE: ${{ github.event_name == 'schedule' && 'nightly' || 'PR' }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # This run only. publish_run globs **/*.csv, so pointing it at
+          # perf_data would sweep every retained run into one batch.
           python3 -m helpers.perf.publish_run \
-            --csv-dir ../../perf_data \
-            --out ../../perf_data/run-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.parquet \
+            --csv-dir ../../perf_data/latest \
+            --out ../../perf_data/llk-perf-${{ env.PERF_RUN_TAG }}.parquet \
             --arch ${{ env.CHIP_ARCH }}
-
-      - name: Zip performance data
-        if: always() && hashFiles('tt_metal/tt-llk/perf_data/**') != ''
-        shell: bash
-        working-directory: ${{ env.LLK_PATH }}
-        run: |
-          zip -r perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip perf_data/
-          echo "Performance data zipped successfully"
 
       - name: Upload performance data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: always() && hashFiles(format('tt_metal/tt-llk/perf_data-{0}-{1}.zip', env.CHIP_ARCH, matrix.test-group.split_group)) != ''
+        if: always() && hashFiles('tt_metal/tt-llk/perf_data/runs/**') != ''
         with:
           name: perf-data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
-          path: ${{ env.LLK_PATH }}/perf_data-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}.zip
+          path: |
+            ${{ env.LLK_PATH }}/perf_data/runs/
+            ${{ env.LLK_PATH }}/perf_data/*.parquet
 
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

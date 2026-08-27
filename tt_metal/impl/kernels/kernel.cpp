@@ -524,13 +524,19 @@ std::string ComputeKernel::config_hash() const {
         unpack_mode_descriptor = fmt::format("{}", fmt::join(unpack_modes, "."));
     }
 
-    return fmt::format(
+    std::string hash = fmt::format(
         "{}_{}_{}_{}_{}",
         enchantum::to_string(this->config_.math_fidelity),
         this->config_.fp32_dest_acc_en,
         this->config_.math_approx_mode,
         this->config_.dst_full_sync_en,
         unpack_mode_descriptor);
+    // Appended only when opted in, so hashes (and cached binaries) of kernels that don't use
+    // the RVV knob are unchanged.
+    if (this->config_.enable_trisc2_rvv) {
+        hash += "_rvv";
+    }
+    return hash;
 }
 
 uint64_t Kernel::compute_hash() const {

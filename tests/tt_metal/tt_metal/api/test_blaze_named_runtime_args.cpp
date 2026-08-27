@@ -504,7 +504,7 @@ void blaze_expect_cache_hit_values(
 
 }  // namespace
 
-TEST(NamedArgsDescriptorCacheHit, SameSchemaDifferentValuesShareProgramHash) {
+TEST(NamedArgsDescriptorCacheHit, CPU_SameSchemaDifferentValuesShareProgramHash) {
     // Premise of the staleness bug (and of the regression test below): the two
     // invocations must land on the SAME cache entry.  Values are deliberately
     // excluded from the schema hash; if that ever changes, this test fails first
@@ -517,7 +517,7 @@ TEST(NamedArgsDescriptorCacheHit, SameSchemaDifferentValuesShareProgramHash) {
         << "Same named-arg schema with different values must share a program-cache hash";
 }
 
-TEST(NamedArgsDescriptorCacheHit, NamedValuesReappliedOnCacheHit) {
+TEST(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{1, 0};
     ProgramDescriptor desc_v1{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
@@ -536,7 +536,7 @@ TEST(NamedArgsDescriptorCacheHit, NamedValuesReappliedOnCacheHit) {
     blaze_expect_cache_hit_values(program, core0, core1, 1000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, NamedOnlyValuesReappliedOnCacheHit) {
+TEST(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
     // No positional args at all: before the fix, apply_descriptor_runtime_args had
     // nothing to copy for this descriptor, so EVERY named value stayed frozen at the
     // first invocation's.  Covers all four named-RT-arg variants in this configuration.
@@ -577,7 +577,7 @@ TEST(NamedArgsDescriptorCacheHit, NamedOnlyValuesReappliedOnCacheHit) {
     EXPECT_EQ(common_args[2], 400u) << "named common array[1] must be desc_v2's value";
 }
 
-TEST(NamedArgsDescriptorCacheHit, RepeatedCacheHitsKeepReapplyingValues) {
+TEST(NamedArgsDescriptorCacheHit, CPU_RepeatedCacheHitsKeepReapplyingValues) {
     // Repeated same-schema invocations are the production norm.  The patch must be a
     // pure function of the current descriptor on EVERY hit — a works-once or otherwise
     // stateful re-application (e.g. one that corrupts sizes or skips later hits) must
@@ -598,7 +598,7 @@ TEST(NamedArgsDescriptorCacheHit, RepeatedCacheHitsKeepReapplyingValues) {
     blaze_expect_cache_hit_values(program, core0, core1, 2000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, MultipleNamedArgsPerVariantReappliedOnCacheHit) {
+TEST(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCacheHit) {
     // Two entries per variant (arrays of different lengths) pack into adjacent slots
     // in declaration order: positional, then scalars, then arrays.  Every packed
     // offset must be re-applied on a cache hit, not just the first named slot.

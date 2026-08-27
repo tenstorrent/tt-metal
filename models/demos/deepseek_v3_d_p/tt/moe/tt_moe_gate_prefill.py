@@ -16,8 +16,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
@@ -51,6 +55,25 @@ class GateComputeMode(Enum):
     GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
+# Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
+# drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
+GATE_PRODUCTION_SP_DIM = 640
+
+
+def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: int) -> tuple[int, int, int]:
+    """Key one gate matmul shape into mm_configs / mm_configs_interleaved.
+
+    The width is rounded up to a whole tile because that is the K the matmul contracts: a TILE_LAYOUT
+    tensor's K comes from its padded shape, so a per-device width that is not tile-aligned runs the
+    same matmul -- same K tiles, same L1 footprint -- as the next multiple of 32. GPT-OSS is the only
+    model where that bites: 2880 over TP 4 is 720, i.e. 22.5 tiles. Rounding here is what keeps that
+    production width and the 736 a height-sharded test's adjust_shapes_for_testing rounds it to (an
+    L1 shard width must be whole tiles) on one tuned entry, instead of the production key missing.
+    """
+    k_tiles = (per_device_emb_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    return (sp_dim, k_tiles * ttnn.TILE_SIZE, n_routed_experts)
+
+
 @dataclass
 class TtMoEGateConfig:
     # gate_params
@@ -67,51 +90,122 @@ class TtMoEGateConfig:
     )
     mm_configs: dict = field(
         default_factory=lambda: {
-            # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
-            # The seq-len element below is a placeholder — __post_init__ rewrites it to the actual
-            # per-chip sequence length (self.sp_dim) so the lookup tracks the real workload.
-            # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
-            (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+            # Keyed by gate_mm_config_key(sp_dim, per_device_emb_dim, n_routed_experts): __post_init__
+            # re-keys every entry through it and _device_matmul looks the tuple up through it too.
+            # An entry applies only at the depth it is keyed to; a missing key → TTNN auto-picks.
+            # per_core_N = n_routed_experts / 32 (tile width).
+            #
+            # per_core_M is not free: it must equal max(1, ceil(sp_dim / (32 * num_cores))), below
+            # which the 1D matmul wants more blocks than the grid has cores ("num_blocks_total <=
+            # num_cores"), and a height-sharded in0 additionally pins it to shard_shape[0] / 32.
+            # out_block_h follows it, and at 640 tokens it is 1: one M-tile per block.
+            #
+            # The other three are measured, and none takes the value a first reading suggests:
+            #   in0_block_w wants roughly a QUARTER of K: one K block leaves no weight read to overlap
+            #   with math, and its L1 footprint caps out_block_w -- the two couple through L1, so they
+            #   are swept as a pair, and the widest that fits is not the fastest.
+            #   out_subblock_w=1 wins only at a full-K in0_block_w; TTNN's area-first SUBBLOCK_HW_CHOICES
+            #   (widest the dest allows) is right only for the 12-wide out_block_w.
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
+                    in0_block_w=14,
                     out_subblock_h=1,
-                    out_subblock_w=4,
-                    out_block_h=2,
-                    out_block_w=4,
-                    per_core_M=2,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
                     per_core_N=8,
                     fuse_batch=True,
                     mcast_in0=False,
                 )
             ),
-            (4096, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
+                    in0_block_w=14,
                     out_subblock_h=1,
                     out_subblock_w=4,
-                    out_block_h=2,
-                    out_block_w=4,
-                    per_core_M=2,
+                    out_block_h=1,
+                    out_block_w=12,
+                    per_core_M=1,
                     per_core_N=12,
                     fuse_batch=True,
                     mcast_in0=False,
                 )
             ),
-            # per_core_M is not free: for a height-sharded in0 the matmul asserts
-            # per_core_M == roundup32(ceil(sp_dim / num_cores)) / 32, which is 1 at K3's depths and 2
-            # at the other models' 4096. out_block_h follows it.
-            (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+            (GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-                    in0_block_w=56,
+                    in0_block_w=14,
                     out_subblock_h=1,
-                    out_subblock_w=4,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=14,
+                    per_core_M=1,
+                    per_core_N=28,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=12,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            (
+                GATE_PRODUCTION_SP_DIM,
+                DeepSeekV4FlashConfig.EMB_SIZE // 4,
+                DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS,
+            ): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=8,
+                    per_core_M=1,
+                    per_core_N=8,
+                    fuse_batch=True,
+                    mcast_in0=False,
+                )
+            ),
+            # 2880 // 4 is 720, i.e. 22.5 tiles, which gate_mm_config_key keys at 736: in0_block_w=23
+            # is the full K, and out_block_w=4 the whole 128-expert N.
+            (GATE_PRODUCTION_SP_DIM, GptOss120BConfig.EMB_SIZE // 4, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                    in0_block_w=23,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
                     out_block_h=1,
                     out_block_w=4,
                     per_core_M=1,
-                    per_core_N=28,
+                    per_core_N=4,
                     fuse_batch=True,
                     mcast_in0=False,
                 )
@@ -121,6 +215,122 @@ class TtMoEGateConfig:
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=False,
+            ),
+        }
+    )
+
+    # 2D program configs for an INTERLEAVED in0 (what TtMoe feeds); keyed like mm_configs, and a miss
+    # falls back to the 1D entry there. The pick is by layout, not tuning: a height-sharded in0 also
+    # requires K == in0_block_w and a single-column shard grid, which the gate's 11-wide grid is not.
+    #
+    # The op only requires ceil(N_tiles / per_core_N) <= grid.x and ceil(M_tiles / per_core_M) <=
+    # grid.y, so per_core_N need NOT divide N_tiles: 896 experts' 28 N-tiles reach 10 columns at
+    # per_core_N=3 (the last padded) where exact division stops at 7. The usable grid is 11x10, and 20
+    # M-tiles over 10 rows forces per_core_M=2, so only the column count varies.
+    #
+    # The block sizes are swept, not derived: in0_block_w does NOT follow the 1D table's quarter-of-K
+    # rule (that one belongs to a 1D core owning all of N), it must be swept jointly with out_subblock_w
+    # because the ranking inverts once the subblock is free, and neither mcast knob is free -- trading
+    # grid columns for a wider per_core_N and transpose_mcast=True both lose.
+    mm_configs_interleaved: dict = field(
+        default_factory=lambda: {
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, KimiK26Config.EMB_SIZE // 4, KimiK26Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=2,
+                    out_block_w=2,
+                    per_core_M=2,
+                    per_core_N=2,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, KimiK3Config.EMB_SIZE // 4, KimiK3Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(10, 10),
+                    in0_block_w=14,
+                    out_subblock_h=1,
+                    out_subblock_w=3,
+                    out_block_h=2,
+                    out_block_w=3,
+                    per_core_M=2,
+                    per_core_N=3,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, GLM51Config.EMB_SIZE // 4, GLM51Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, MiniMaxM27Config.EMB_SIZE // 4, MiniMaxM27Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, DeepSeekV4FlashConfig.EMB_SIZE // 4, DeepSeekV4FlashConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, GptOss120BConfig.EMB_SIZE // 4, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
+                    in0_block_w=23,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
             ),
         }
     )
@@ -155,14 +365,23 @@ class TtMoEGateConfig:
                 f"experts/32 and will fail L1 allocation above it. Raise the ceiling only alongside "
                 f"the op-side CB work that makes it true."
             )
-        # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
-        # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
-        # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
-        # silently falling back to TTNN's default tiling.
-        self.mm_configs = {
-            ((self.sp_dim, *key[1:]) if isinstance(key, tuple) else key): value
-            for key, value in self.mm_configs.items()
-        }
+
+        # Drop the tuned entries authored at other depths, so _device_matmul's lookup either hits an
+        # entry tuned at the depth in use or misses and falls back to TTNN's default tiling. per_core_M
+        # encodes the depth, so a foreign-depth entry is not merely mistuned -- the matmul rejects it
+        # against a sharded in0. The surviving keys are normalized through gate_mm_config_key, the same
+        # call _device_matmul forms its lookup with.
+        def resolve(configs):
+            resolved = {}
+            for key, value in configs.items():
+                if not isinstance(key, tuple):
+                    resolved[key] = value
+                elif key[0] == self.sp_dim:
+                    resolved[gate_mm_config_key(*key)] = value
+            return resolved
+
+        self.mm_configs = resolve(self.mm_configs)
+        self.mm_configs_interleaved = resolve(self.mm_configs_interleaved)
 
     @property
     def num_cores(self):
@@ -575,8 +794,12 @@ class TtMoEGatePrefill(LightweightModule):
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
-        config_key = (self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
-        program_config = self.config.mm_configs.get(config_key)
+        config_key = gate_mm_config_key(self.config.sp_dim, per_device_dim, self.config.n_routed_experts)
+        program_config = None
+        if x.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+            program_config = self.config.mm_configs_interleaved.get(config_key)
+        if program_config is None:
+            program_config = self.config.mm_configs.get(config_key)
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 

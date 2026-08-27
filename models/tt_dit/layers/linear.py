@@ -279,8 +279,24 @@ class ColParallelLinear(Module):
         The matmul runs on ``fabric_cfg.mm_core_grid`` (lower rows); the strided all-gather workers
         run on the rows starting at ``fabric_cfg.ag_core_grid_offset`` (disjoint region). Returns the
         single (chunks==1) matmul output; the op's first output is the gathered-K scratch.
+
+        Under fused SwiGLU the weight is the packed [gate|up] matrix, so ``fabric_cfg`` blocks on the
+        doubled width and the returned tensor is half as wide. The op has no dtype override, so the
+        output follows the input/weight dtype rather than the caller's requested one.
         """
         mesh_axis = parallel_config.tensor_parallel.mesh_axis
+        # The op gathers on dim 3 and fatals unless padded_shape[0] and [1] are both 1, but model
+        # activations are rank 3 ([1, seq, K]), whose [1] is the sequence length. Widen here and
+        # restore the caller's rank on the way out so this stays a drop-in for the non-fabric path.
+        orig_rank = len(x.padded_shape)
+        if orig_rank != 4:
+            x = ttnn.unsqueeze_to_4D(x)
+        if self.fuse_swiglu:
+            # The factory partitions gate/up PAIRS across cores, so a pair must never straddle an
+            # N block. N_tiles and N_tiles_per_core are even by construction of the packed weight.
+            assert (
+                fabric_cfg.N_block_size % 2 == 0
+            ), f"fuse_swiglu needs an even N_block_size (in tiles), got {fabric_cfg.N_block_size}"
         matmul_config = ttnn.MinimalMatmulConfig(
             M_block_size=fabric_cfg.M_block_size,
             K_block_size=fabric_cfg.K_block_size,
@@ -312,9 +328,13 @@ class ColParallelLinear(Module):
             num_buffers_per_channel=fabric_cfg.num_buffers_per_channel,
             read_local_slice_from_input=True,
             chunks=1,
+            fuse_swiglu=self.fuse_swiglu,
         )
         # Op returns [all_gather_output, matmul_chunk_0]; take the single matmul chunk.
-        return _apply_activation_fn(outputs[1], self.activation_fn)
+        out = _apply_activation_fn(outputs[1], self.activation_fn)
+        if orig_rank != 4:
+            out = ttnn.reshape(out, tuple(out.shape)[-orig_rank:])
+        return out
 
     def forward(
         self,
@@ -326,6 +346,8 @@ class ColParallelLinear(Module):
         addcmul_a=None,
         addcmul_b=None,
         addcmul_scalar: float = 1.0,
+        core_grid=None,
+        use_heuristic_mmcfg=False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -362,20 +384,27 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
+        parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
+        needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
+        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
 
-            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op
-            fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
-            if fabric_cfg is not None and self.chunks in (None, 1) and not self.fuse_swiglu:
+            # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op.
+            # N is the weight width, so a fused-SwiGLU layer keys on its packed [gate|up] width.
+            # Restricted to chunks==1; other shapes fall through to the all_gather_minimal_matmul_async
+            # path below. The op gathers on dim 3 of a rank-4 input, so every dim above the matmul's
+            # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
+            fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
+            has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
+            if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
                 return self._forward_fabric_agmm(x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype)
 
-            core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            core_grid = core_grid or ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
-                x.shape, 3, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
+                x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
             )
             ag_global_semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(
                 parallel_config.tensor_parallel.mesh_axis
@@ -393,7 +422,6 @@ class ColParallelLinear(Module):
                 topology=self.ccl_manager.topology,
                 cluster_axis=parallel_config.tensor_parallel.mesh_axis,
                 barrier_semaphore=None,
-                force_transpose=True,
                 num_workers_per_link=full_grid.x // self.ccl_manager.num_links,
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
@@ -415,9 +443,15 @@ class ColParallelLinear(Module):
         else:
             M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
             core_grid = get_matmul_core_grid(self.mesh_device)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+
+            # Gather if needed here. Helps cleanup upstream code
+            if needs_gather:
+                x = self.ccl_manager.all_gather_persistent_buffer(
+                    x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
+                )
 
             if self.chunks is not None:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
                 outputs = ttnn.experimental.minimal_matmul_split(
                     x,
                     weight,
@@ -431,18 +465,17 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-            else:
-                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-                output = ttnn.experimental.minimal_matmul(
-                    input_tensor=x,
-                    weight_tensor=weight,
-                    bias_tensor=self.bias.data if self.bias is not None else None,
-                    config=matmul_config,
-                    fused_activation=self.fused_activation_fn,
-                    compute_kernel_config=compute_kernel_config or self.compute_config,
-                    dtype=dtype,
-                    fuse_swiglu=self.fuse_swiglu,
-                )
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=x,
+                weight_tensor=weight,
+                bias_tensor=self.bias.data if self.bias is not None else None,
+                config=matmul_config,
+                fused_activation=self.fused_activation_fn,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
+            )
 
         return _apply_activation_fn(output, self.activation_fn)
 
@@ -465,6 +498,7 @@ class RowParallelLinear(Module):
         # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
+        mm_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ):
         super().__init__()
 
@@ -474,6 +508,7 @@ class RowParallelLinear(Module):
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
+        self.mm_memory_config = mm_memory_config
 
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
@@ -524,6 +559,7 @@ class RowParallelLinear(Module):
         use_persistent_buffer: bool = True,
         default_block_size: tuple = None,
         dtype=None,
+        gather_output: bool = False,
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
@@ -561,16 +597,15 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
-            needs_reshape = len(output.shape) <= 3
-            if needs_reshape:
-                output = ttnn.unsqueeze(output, 0)
-
+            # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
+            dim = -2 if gather_output else -1
             output = self.ccl_manager.reduce_scatter(
-                output, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
+                output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
             )
-
-            if needs_reshape:
-                output = ttnn.squeeze(output, 0)
+            if gather_output:
+                output = self.ccl_manager.all_gather(
+                    output, dim=dim, mesh_axis=self.mesh_axis, use_hyperparams=True, use_persistent_buffer=True
+                )
 
         return output
 
@@ -632,12 +667,14 @@ class RowParallelLinear(Module):
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
             **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
             bias=self.bias.data if self.bias is not None else None,
-            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            memory_config_mm=self.mm_memory_config,
+            rs_intermediate_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             topology=self.ccl_manager.topology,
             cluster_axis=self.mesh_axis,
             compute_kernel_config=compute_kernel_config or self.compute_config,
-            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            using_persistent_buffers=True,
+            optional_rs_output_tensor=rs_output_buffer,
             fused_ternary_scalar=scalar,
             addcmul_input_tensor1=addcmul_a,
             addcmul_input_tensor2=addcmul_b,
@@ -660,7 +697,7 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
-        return t * ttnn.silu(gate)
+        return ttnn.multiply_(t, ttnn.silu(gate, output_tensor=gate))
 
     msg = f"Activation function {activation_fn} not supported"
     raise ValueError(msg)

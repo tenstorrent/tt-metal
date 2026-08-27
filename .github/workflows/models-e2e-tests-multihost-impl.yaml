@@ -1,15 +1,14 @@
 name: "[internal] Models end-to-end tests multihost (exabox) impl"
 
-# Multihost (exabox) e2e tests. Modeled on the multihost job in
-# demo-sp-multihost-impl.yaml: each leg runs on an exabox-multihost-ci-* runner with
+# Multihost (exabox) e2e tests. Each leg runs on an exabox-multihost-ci-* runner with
 # container.image for worker provisioning (runner hook), fans the build/wheel out with
 # `mpirun --pernode`, resets + validates the cluster, then runs the test.
 # Legs are selected by SKU: an entry lands here when prepare_test_matrix.py
 # marks it "multihost": true (SKU runs_on contains an exabox-multihost* label).
 #
 # Split out of models-e2e-tests-impl.yaml so the exabox lifecycle lives in one file.
-# The matrix is computed by load-test-matrix in models-e2e-tests-impl.yaml
-# (matrix_multihost output) and passed in.
+# models-e2e-tests-impl.yaml splits the filtered JSON array and passes the
+# multihost slice as the `matrix` input.
 
 on:
   workflow_call:
@@ -26,7 +25,19 @@ on:
       matrix:
         required: true
         type: string
-        description: "JSON array of exabox multihost legs (models-e2e-tests-impl.yaml matrix_multihost output)."
+        description: "JSON array of exabox multihost legs (fromJson into strategy.matrix.test-group). Pass [] to skip."
+      prefer-wheel-libs:
+        required: false
+        type: boolean
+        default: false
+        description: >
+          Prepend the installed wheel's ttnn/build/lib onto LD_LIBRARY_PATH.
+          True for a manylinux wheel (P&R); false for an inplace wheel (T1).
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
 
 # Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
 # `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
@@ -45,6 +56,8 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
+      # The cmake tarball. When prefer-wheel-libs is true (manylinux),
+      # setup-multihost-job prepends the installed wheel's ttnn/build/lib.
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
@@ -76,23 +89,27 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
+          prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
         # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         # Keep runtime compilation and tt-run working directory on a single source root.
-        working-directory: /home/user/tt-metal
-        run: |
-          # Store command safely using heredoc
-          CMD=$(cat << 'EOF'
-          ${{ matrix.test-group.cmd }}
-          EOF
-          )
+        uses: ./.github/actions/run-with-log
+        with:
+          working-directory: /home/user/tt-metal
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            # Store command safely using heredoc
+            CMD=$(cat << 'EOF'
+            ${{ matrix.test-group.cmd }}
+            EOF
+            )
 
-          echo "Running: ${{ matrix.test-group.name }}"
-          echo "$CMD"
-          eval "$CMD"
+            echo "Running: ${{ matrix.test-group.name }}"
+            echo "$CMD"
+            eval "$CMD"
 
       - name: Prepare artifacts for upload
         if: always()
@@ -106,6 +123,15 @@ jobs:
               mv -f "$path" "$dir/$(printf '%s' "$base" | tr ':' '_')"
             done
           fi
+          # Stage NFS launch/rank logs next to the run-with-log capture so AI summary
+          # can read cmds that redirect stdout off the Actions runner (DeepSeek).
+          mkdir -p /home/user/tt-metal/generated/test_logs
+          if [ -f "$PIPELINE_DIR/launch.log" ]; then
+            cp -f "$PIPELINE_DIR/launch.log" /home/user/tt-metal/generated/test_logs/launch.log
+          fi
+          if [ -d "$PIPELINE_DIR/ranklogs" ]; then
+            cp -r "$PIPELINE_DIR/ranklogs" /home/user/tt-metal/generated/test_logs/ranklogs
+          fi
 
       - name: Upload launch + per-rank logs and automapper outputs
         if: always()
@@ -115,6 +141,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: ${{ env.PIPELINE_DIR }}/
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "/home/user/tt-metal",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - name: Clean up shared staging dir
         if: always()

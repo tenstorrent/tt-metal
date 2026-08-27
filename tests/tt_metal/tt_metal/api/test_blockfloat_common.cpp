@@ -36,13 +36,13 @@ struct ConvertU32ToBfpParams {
 
 class ConvertU32ToBfpTests : public ::testing::TestWithParam<ConvertU32ToBfpParams> {};
 
-TEST_P(ConvertU32ToBfpTests, MantissaRoundingWithPositiveFloat) {
+TEST_P(ConvertU32ToBfpTests, CPU_MantissaRoundingWithPositiveFloat) {
     const auto& params = GetParam();
     roundtrip_test_for_mantissa_rounding_with_bfp8(
         params.float_input, params.expected_mantissa, params.expected_float_output);
 }
 
-TEST_P(ConvertU32ToBfpTests, MantissaRoundingWithNegativeFloat) {
+TEST_P(ConvertU32ToBfpTests, CPU_MantissaRoundingWithNegativeFloat) {
     const auto& params = GetParam();
     const auto float_input = -1 * params.float_input;
     const auto expected_mantissa = params.expected_mantissa | 0x80;

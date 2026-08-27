@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Confi
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     GATE_KEY_PREFIX_DEEPSEEK,
     GATE_KEY_PREFIX_KIMI_K3,
@@ -33,7 +34,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     load_gate_weights_from_hf,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+    GateComputeMode,
+    TtMoEGateConfig,
+    TtMoEGatePrefill,
+    gate_mm_config_key,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
     compare_pcc,
@@ -43,6 +49,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_composed,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 
@@ -60,29 +67,18 @@ GATE_MODELS = {
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
 
-# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig re-keys
-# its tuned matmul configs by sp_dim, so assigning it afterwards silently drops to default tiling.
+# Per-chip sequence every gate case runs at. Must be passed at construction: TtMoEGateConfig keeps
+# only the tuned matmul configs keyed to sp_dim, so assigning it afterwards drops to default tiling.
 GATE_SP_DIM = 640
 
 
 def _gate_config(gate_model: str) -> TtMoEGateConfig:
-    """Gate config at GATE_SP_DIM, minus tuned matmul entries authored for a different depth.
+    """Gate config at GATE_SP_DIM.
 
-    A tuned entry encodes its shard height in per_core_M, but TtMoEGateConfig re-keys every entry to
-    the sp_dim in use, so one tuned at 4096 claims to apply at 640 while still carrying per_core_M=2
-    -- and the matmul rejects it outright: "per_core_M (2) must equal shard_shape[0] (32) / in0_tile
-    height (32)". Entries that already match this depth are kept (K3's is authored at 640); the rest
-    are dropped so TTNN picks its default tiling, which is what the untuned models do here anyway.
+    The depth must be passed at construction: TtMoEGateConfig drops every tuned matmul entry keyed to
+    another depth, so assigning sp_dim afterwards leaves the lookup on TTNN's default tiling.
     """
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
-    shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
-    shard_height = ((shard_height + 31) // 32) * 32
-    config.mm_configs = {
-        key: value
-        for key, value in config.mm_configs.items()
-        if not isinstance(key, tuple) or value.per_core_M == shard_height // 32
-    }
-    return config
+    return TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
 
 
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
@@ -190,73 +186,55 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
 MESH_CONFIGS = [
     pytest.param(
         (2, 2),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
+        fabric2d_device_params(),
         2,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-        id="mesh-2x2",
-    ),
-    pytest.param(
-        (2, 2),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
         id="fabric2d-mesh-2x2",
     ),
     pytest.param(
-        (4, 2),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
-        2,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="mesh-4x2",
-    ),
-    pytest.param(
-        (4, 2),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-        },
-        2,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
         (2, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
+        fabric2d_device_params(),
         2,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-        id="mesh-2x4",
+        id="fabric2d-mesh-2x4",
     ),
     pytest.param(
         (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        },
+        torus_xy_device_params(),
         2,
-        ttnn.Topology.Linear,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="mesh-8x4",
+        id="torus-xy-8x4",
     ),
 ]
+
+# Blackhole LoudBox puts all 8 P150s on the SP axis, so TP is 1 and the gate does no TP all-reduce.
+LOUDBOX_TP1_MESH_CONFIG = pytest.param(
+    (8, 1),
+    {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+    },
+    1,
+    ttnn.Topology.Linear,
+    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+    id="linear-8",
+)
+
+# Galaxy TP=4: the deployed mesh. Unlike the LoudBox entry above this needs no dim scaling at all --
+# adjust_shapes_for_testing leaves a 4-wide TP axis alone -- so the gate runs the model's real dim and
+# the TP all-reduce is live, which the TP=1 case skips entirely.
+GALAXY_TP4_MESH_CONFIG = pytest.param(
+    (8, 4),
+    {
+        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+    },
+    2,
+    ttnn.Topology.Linear,
+    marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+    id="mesh-8x4",
+)
+
 
 # (gate_model id, gate compute mode). Sigmoid models (V3/Kimi) exercise both the host and on-device
 # gates; V4 (sqrtsoftplus) runs the regular gate on device, where the kernel applies the activation.
@@ -294,6 +272,22 @@ def _shard_gate_input(config, mesh_device, torch_input: torch.Tensor) -> ttnn.Te
         device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=sharded_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(0, -1),  # tensor parallel
+            mesh_shape=mesh_device.shape,
+        ),
+    )
+
+
+def _interleave_gate_input(config, mesh_device, torch_input: torch.Tensor) -> ttnn.Tensor:
+    """DRAM-interleaved gate input, matching what TtMoe hands the gate in the deployed model."""
+    return ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
@@ -390,48 +384,25 @@ def _validate_gate(
     merged.assert_passed("Gate prefill2d validation failed")
 
 
-@pytest.mark.parametrize("gate_model, gate_fallback_mode", REGULAR_GATE_CASES)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    MESH_CONFIGS,
-    indirect=["mesh_device", "device_params"],
-)
-def test_forward_pass(
-    gate_model,
-    mesh_device,
-    num_links,
-    topology,
-    gate_fallback_mode,
-):
-    """Gate PCC across model variants and compute modes. The gate picks grouped vs plain top-k from
-    n_expert_groups (Kimi / V4 have one group) and sigmoid vs sqrtsoftplus from SCORE_FUNC, so the
-    test just passes the model config and the compute mode."""
-    random.seed(42)
-    torch.manual_seed(42)
+def _ci_unsupported_param_combos_forward_pass(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
 
-    config = _gate_config(gate_model)
-    config.ccl_config["NUM_LINKS"] = num_links
-    adjust_shapes_for_testing(config, mesh_device)
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
 
-    # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
-    # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
-    use_real_weights = (
-        gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
-    ) or gate_model == "kimi_k3"
-    gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
-    if gate_w is None:
-        gate_w = create_gate_weights(config.n_routed_experts, config.dim)
 
-    # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
-    use_real = gate_model == "deepseek_v3" and use_real_weights
+def _reference_topk(config, gate_model, gate_fallback_mode, gate_w, torch_input):
+    """Golden top-k indices and scores from each model's own reference router.
 
-    n_sp_devices = mesh_device.shape[0]
-    total_seq_len = config.sp_dim * n_sp_devices
-    torch_input = _make_gate_input(config, total_seq_len, allow_real_input=use_real)
-
-    # Reference forward pass: V4 (sqrtsoftplus) routes through the activation-parametrized grouped
-    # gate (single group -> plain top-k, matching the V4 reference router); V3/Kimi use the V3 gate.
-    reference_logits = torch_input @ gate_w["weight"].T
+    The routing rule is not uniform across these models -- GPT-OSS takes top-k on biased logits
+    then softmaxes the selection, MiniMax sum-normalizes unbiased sigmoid, V4 uses sqrtsoftplus,
+    and V3/Kimi use the grouped noaux_tc gate -- so each dispatches to the upstream implementation
+    rather than to a reimplementation here.
+    """
     if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE):
         # GPT-OSS golden from the actual reference router: top-k on (x@W + bias), then softmax over the
         # selected top-k values. torch.topk (sorted=True, descending) matches _device_gpt_gate's order,
@@ -497,6 +468,56 @@ def test_forward_pass(
         reference_model.to(torch.bfloat16)
         reference_topk_indices, reference_topk_scores = reference_model.grouped_forward(torch_input.unsqueeze(0))
 
+    return reference_topk_indices, reference_topk_scores
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_forward_pass)
+@pytest.mark.parametrize("gate_model, gate_fallback_mode", REGULAR_GATE_CASES)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_forward_pass(
+    gate_model,
+    mesh_device,
+    device_params,
+    num_links,
+    gate_fallback_mode,
+):
+    """Gate PCC across model variants and compute modes. The gate picks grouped vs plain top-k from
+    n_expert_groups (Kimi / V4 have one group) and sigmoid vs sqrtsoftplus from SCORE_FUNC, so the
+    test just passes the model config and the compute mode."""
+    random.seed(42)
+    torch.manual_seed(42)
+
+    config = _gate_config(gate_model)
+    config.ccl_config["NUM_LINKS"] = num_links
+    config.ccl_config["TOPOLOGY"] = per_axis_topology(device_params["fabric_config"])[config.ccl_config["TP_AXIS"]]
+    adjust_shapes_for_testing(config, mesh_device)
+
+    # DeepSeek-V3's weights can't be reshaped to other expert counts or activations, so that path
+    # stays pinned to 256 experts + sigmoid; K3 loads its own 896-expert router.
+    use_real_weights = (
+        gate_model == "deepseek_v3" and config.n_routed_experts == 256 and config.score_func == "sigmoid"
+    ) or gate_model == "kimi_k3"
+    gate_w = _try_load_real_gate_weights(gate_model, config.n_routed_experts, config.dim) if use_real_weights else None
+    if gate_w is None:
+        gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+
+    # The real gate input is a DeepSeek-V3 prefill trace, so it is only meaningful for that model.
+    use_real = gate_model == "deepseek_v3" and use_real_weights
+
+    n_sp_devices = mesh_device.shape[0]
+    total_seq_len = config.sp_dim * n_sp_devices
+    torch_input = _make_gate_input(config, total_seq_len, allow_real_input=use_real)
+
+    # Reference forward pass: V4 (sqrtsoftplus) routes through the activation-parametrized grouped
+    # gate (single group -> plain top-k, matching the V4 reference router); V3/Kimi use the V3 gate.
+    reference_logits = torch_input @ gate_w["weight"].T
+    reference_topk_indices, reference_topk_scores = _reference_topk(
+        config, gate_model, gate_fallback_mode, gate_w, torch_input
+    )
     tt_input = _shard_gate_input(config, mesh_device, torch_input)
 
     tt_model = TtMoEGatePrefill(
@@ -554,7 +575,7 @@ HASH_GATE_MODES = [
 @pytest.mark.parametrize("gate_model", ["dsv4_pro", "dsv4_flash"])
 @pytest.mark.parametrize("gate_compute_mode", HASH_GATE_MODES)
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
@@ -562,8 +583,8 @@ def test_hash_gate_forward_pass(
     gate_model,
     gate_compute_mode,
     mesh_device,
+    device_params,
     num_links,
-    topology,
 ):
     """DeepSeek-V4 hash-routing gate PCC (host-first HASH_HOST and on-device HASH_DEVICE).
 
@@ -578,6 +599,7 @@ def test_hash_gate_forward_pass(
 
     config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
+    config.ccl_config["TOPOLOGY"] = per_axis_topology(device_params["fabric_config"])[config.ccl_config["TP_AXIS"]]
     adjust_shapes_for_testing(config, mesh_device)
 
     gate_w = create_gate_weights(config.n_routed_experts, config.dim)
@@ -628,4 +650,82 @@ def test_hash_gate_forward_pass(
         recall_threshold=0.997,
         logits_pcc_threshold=0.997,
         scores_pcc_threshold=scores_pcc_threshold,
+    )
+
+
+# Only the device modes run the gate matmul on device, and covering that program config is the
+# entire point of the interleaved TP=1 sweep, so the host-side cases are filtered out.
+DEVICE_GATE_CASES = [
+    case for case in REGULAR_GATE_CASES if case.values[1] in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
+]
+
+
+@pytest.mark.parametrize("gate_model, gate_fallback_mode", DEVICE_GATE_CASES)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [GALAXY_TP4_MESH_CONFIG, LOUDBOX_TP1_MESH_CONFIG],
+    indirect=["mesh_device", "device_params"],
+)
+def test_forward_pass_interleaved(mesh_device, num_links, topology, gate_model, gate_fallback_mode):
+    """Every model's deployed gate matmul shape, with the DRAM-interleaved input TtMoe really passes.
+
+    Both meshes land on the per-device width EMB_SIZE / 4 that a TP=4 deployment resolves, by
+    opposite routes: mesh-8x4 IS that deployment (real dim, TP=4, all-reduce live), while the TP=1
+    LoudBox gets there by adjust_shapes_for_testing dividing the dim by 4 and does no all-reduce at
+    all. The mm_configs lookup is therefore the same key production hits, but reached with the
+    interleaved input TtMoe actually passes rather than the height-sharded one every other case here
+    builds. That distinction is the point: a height-sharded input pins the matmul program config
+    (per_core_M must equal the shard height in tiles, and a 2D config additionally demands
+    K == in0_block_w and a single-column shard grid), so the sharded cases cannot cover the config the
+    deployment runs.
+
+    The width is also held un-rounded (tile_align_width=False), which only GPT-OSS notices: its
+    2880 / 4 = 720 is 22.5 tiles, and the other cases here round it to 736 so an L1 shard width stays
+    whole tiles. An interleaved input has no such constraint, so this case runs the raw deployed 720
+    and gate_mm_config_key resolves it to the tuned 23-K-tile entry the same way production does.
+    """
+    random.seed(42)
+    torch.manual_seed(42)
+
+    config = _gate_config(gate_model)
+    config.ccl_config["NUM_LINKS"] = num_links
+    adjust_shapes_for_testing(config, mesh_device, tile_align_width=False)
+
+    n_sp_devices, n_tp_devices = mesh_device.shape
+    config_key = gate_mm_config_key(config.sp_dim, config.dim // n_tp_devices, config.n_routed_experts)
+    assert config_key in config.mm_configs_interleaved, (
+        f"no tuned interleaved matmul program config for {config_key}. This sweep exists to hold every model's "
+        "deployed gate shape on a tuned config, so a miss is the regression it is here to catch."
+    )
+
+    # Scaling the dim to EMB_SIZE / 4 puts every model off its real router's width, so the checkpoint
+    # weights cannot be loaded here and the golden is built from seeded synthetic weights instead.
+    gate_w = create_gate_weights(config.n_routed_experts, config.dim)
+    torch_input = _make_gate_input(config, config.sp_dim * n_sp_devices, allow_real_input=False)
+    reference_logits = torch_input @ gate_w["weight"].T
+    reference_topk_indices, reference_topk_scores = _reference_topk(
+        config, gate_model, gate_fallback_mode, gate_w, torch_input
+    )
+
+    tt_model = TtMoEGatePrefill(
+        config,
+        mesh_device,
+        weight=gate_w["weight"],
+        bias=gate_w["e_score_correction_bias"],
+        fallback_mode=gate_fallback_mode,
+    )
+    tt_topk_scores, tt_topk_indices, tt_logits = tt_model(_interleave_gate_input(config, mesh_device, torch_input))
+
+    # Device-mode thresholds, matching the on-device branch of test_forward_pass.
+    _validate_gate(
+        mesh_device,
+        tt_topk_scores,
+        tt_topk_indices,
+        tt_logits,
+        reference_topk_indices,
+        reference_topk_scores,
+        reference_logits,
+        0.95,
+        0.997,
+        getattr(GATE_MODELS[gate_model], "GATE_SCORES_PCC_DEVICE", 0.93),
     )

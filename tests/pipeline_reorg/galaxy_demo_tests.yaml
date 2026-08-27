@@ -31,14 +31,3 @@
       timeout: 15
   owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models
-
-- name: Galaxy QwenImage demo tests
-  cmd: |
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
-    pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -k "4x8" --timeout 1200
-  model: qwenimage
-  skus:
-    wh_galaxy_perf:
-      timeout: 20
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models

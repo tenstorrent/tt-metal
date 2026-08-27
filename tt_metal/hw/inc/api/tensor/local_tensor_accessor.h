@@ -105,3 +105,45 @@ public:
 private:
     CoreLocalMem<T> mem_;
 };
+
+// A LocalTensorAccessor names this node's L1 region of a tensor, so it can be either endpoint of a NoC
+// transaction. This specialization makes it usable directly as the Src or Dst of any Noc operation.
+//
+// Notes:
+//  - `offset_bytes` addresses within the local region. LocalTensorAccessor does not expose the
+//    region's extent, so no bounds ASSERT is possible here.
+//  - LocalTensorAccessor may be used by both DM and compute (TRISC) kernels, but only DM kernels have
+//    NoC access.
+#if !defined(COMPILE_FOR_TRISC)
+template <typename T>
+struct noc_traits_t<LocalTensorAccessor<T>> {
+    struct src_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_type {
+        uint32_t offset_bytes = 0;
+    };
+    struct dst_args_mcast_type {};
+
+    template <Noc::AddressType address_type>
+    static auto src_addr(const LocalTensorAccessor<T>& src, const Noc&, const src_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1, "LocalTensorAccessor can only be used as a local L1 source");
+        return src.get_bank_base_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr(const LocalTensorAccessor<T>& dst, const Noc&, const dst_args_type& args) {
+        static_assert(
+            address_type == Noc::AddressType::LOCAL_L1,
+            "LocalTensorAccessor can only be used as a local L1 destination");
+        return dst.get_bank_base_address() + args.offset_bytes;
+    }
+    template <Noc::AddressType address_type>
+    static auto dst_addr_mcast(const LocalTensorAccessor<T>&, const Noc&, const dst_args_mcast_type&) {
+        static_assert(false, "LocalTensorAccessor cannot be used as a NoC multicast destination");
+    }
+};
+
+template <typename T>
+inline constexpr bool noc_zero_l1_endpoint_v<LocalTensorAccessor<T>> = true;
+#endif  // !defined(COMPILE_FOR_TRISC)

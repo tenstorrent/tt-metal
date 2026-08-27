@@ -51,8 +51,7 @@ void kernel_main() {
 #endif
 
     // ublocks size defined in tiles
-    const uint32_t src0_tile_bytes = get_tile_size(dfb_id_in0);
-    const DataFormat src0_data_format = get_dataformat(dfb_id_in0);
+    const uint32_t src0_tile_bytes = dfb_in0.get_tile_size();
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
@@ -69,7 +68,7 @@ void kernel_main() {
     //   face_bytes     = one 16x16 tile face = FACE_HW (256) datums; face 1 starts here within the tile
     //   half_row_bytes = first FACE_WIDTH (16) datums of a row = the face boundary in a row-major stick
 #ifdef FUSE_GAMMA
-    const uint32_t gamma_tile_bytes = get_tile_size(dfb_id_gamma);
+    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
     const uint32_t gamma_datum_bytes = gamma_tile_bytes / tt::constants::TILE_HW;
     const uint32_t gamma_row_bytes = tt::constants::TILE_WIDTH * gamma_datum_bytes;
     const uint32_t gamma_face_bytes = tt::constants::FACE_HW * gamma_datum_bytes;
@@ -77,7 +76,7 @@ void kernel_main() {
     const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
-    const uint32_t beta_tile_bytes = get_tile_size(dfb_id_beta);
+    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
     const uint32_t beta_datum_bytes = beta_tile_bytes / tt::constants::TILE_HW;
     const uint32_t beta_row_bytes = tt::constants::TILE_WIDTH * beta_datum_bytes;
     const uint32_t beta_face_bytes = tt::constants::FACE_HW * beta_datum_bytes;
@@ -85,7 +84,7 @@ void kernel_main() {
     const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t src1_tile_bytes = dfb_in1.get_tile_size();
     const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 

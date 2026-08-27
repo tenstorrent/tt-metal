@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 
@@ -193,7 +195,10 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
 
 
 @pytest.mark.parametrize("correction", [False, True])
-@pytest.mark.parametrize("width", [16385, 131072], ids=["partial_tree_leaf", "deep_tree"])
+# 10529 = 32 * 329 + 1: partial tail leaf, 8 carry levels, and 3 cross-level finalize_tree
+# merges, which neither 16385 (512 leaves) nor 131072 (4096 leaves) exercised, since both had a
+# single-bit leaf count. Detects a re-widened centered-moment block by ~43x the 1% tolerance.
+@pytest.mark.parametrize("width", [10529], ids=["partial_leaf_uneven_tree"])
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
 def test_std_var_wide_low_variance(device, torch_dtype, ttnn_dtype, width, correction):
     # The HW writer combines one equal-count partial per column. For sufficiently
@@ -455,18 +460,38 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
-@pytest.mark.parametrize("dim1", [1])
-# This test picks the maximum dim2 that will pick the singlecore implementation.
-# TopK multicore uses 8 cores in blackhole, so we need to add support for bitonic sort with 8 cores
-# and non power of 2 dims as compared to wormhole. Issue #23465.
-@pytest.mark.parametrize(
-    "dim2",
-    [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
+# The BH-routed ttnn.topk path (topk_large_indices, engages for bf16 largest at k>64 or wide
+# non-pow2 widths) crashes the CI simulator's ttsim build (silent worker death ~9s in; see the
+# sanity break on 1dc0e9673b6). The same tests pass on BH silicon and on a current ttsim
+# (SFPLOADMACRO-capable). Skip the routed cells on simulator runners until the runner image
+# ships an updated ttsim.
+skip_routed_topk_on_sim = pytest.mark.skipif(
+    is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
+    reason="BH-routed topk crashes the CI ttsim build; passes on silicon and current ttsim",
 )
+
+
+@pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim", [1])
-@pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# One case per distinct code path, instead of the (dim2 x k x dtype) product:
+#   (8192,   50) width is a power of 2 and >= multi_core_min_width, and adjusted_k=64 <= 64, so
+#                this is the only case here that reaches the multi-core program factory
+#   (50257,  50) width is not a multiple of 32 -> implicit padding in the last tile (GPT-2 vocab)
+#   (8192, 1024) k > 64 -> single-core, and Kt=32 exercises the multi-tile-k merge ramp
+#   bfloat8_b is paired with the large-k case: bfp8 unpack/pack reconfig plus the bfp8 L1 sizing
+#                path, which only matters when Kt is large
+
+
+@pytest.mark.parametrize(
+    "dim2, k, dtype",
+    [
+        (8192, 50, ttnn.bfloat16),
+        pytest.param(50257, 50, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        pytest.param(8192, 1024, ttnn.bfloat16, marks=skip_routed_topk_on_sim),
+        (8192, 1024, ttnn.bfloat8_b),
+    ],
+)
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -530,11 +555,14 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 
 
 @pytest.mark.parametrize("dim1", [1])
-@pytest.mark.parametrize("dim2", [128256, 151936])
+# 128256 (Llama-3 vocab) carries the UInt32 index / 32-bit-dest branch. 151936 (Qwen) takes the
+# same path and is 18% wider, and it is still covered by tests/.../reduce/test_topk.py.
+@pytest.mark.parametrize("dim2", [128256])
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@skip_routed_topk_on_sim
 def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
@@ -592,10 +620,19 @@ def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim3", [8])
 @pytest.mark.parametrize("dim4", [256])
 @pytest.mark.parametrize("dim5", [64])
-@pytest.mark.parametrize("dim", [3, 4])
-@pytest.mark.parametrize("k", [17, 32, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+# k=17 -> adjusted_k=32 plus the host-side slice, k=32 -> no slice, k=64 -> Kt=2.
+# dim=4 is the last dim (no transpose), dim=3 takes the transpose/transpose-back path.
+# dtype is orthogonal to both, so it is varied across the cases rather than crossed with them.
+@pytest.mark.parametrize(
+    "dim, k, dtype",
+    [
+        (4, 17, ttnn.bfloat16),
+        (4, 64, ttnn.bfloat8_b),
+        (3, 32, ttnn.bfloat16),
+        (3, 64, ttnn.bfloat8_b),
+    ],
+)
 def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5]
@@ -665,10 +702,15 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
 @pytest.mark.parametrize("dim5", [128])
 @pytest.mark.parametrize("dim6", [64])
 # @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5]) transpose cannot handle N-D tensor for all dims
-@pytest.mark.parametrize("dim", [4, 5])
-@pytest.mark.parametrize("k", [50, 64])
 @pytest.mark.parametrize("largest", [True])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "dim, k, dtype",
+    [
+        (5, 50, ttnn.bfloat16),
+        (5, 64, ttnn.bfloat8_b),
+        (4, 50, ttnn.bfloat16),
+    ],
+)
 def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2, dim3, dim4, dim5, dim6]

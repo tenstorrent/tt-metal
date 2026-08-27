@@ -483,6 +483,13 @@ PHASE1_CACHE_KEY_FILENAME = ".phase1_cache_key"
 # Short prefix of SHA-256 for cache directory names (balance: path length vs collision risk for local cache).
 PHASE1_CACHE_ID_HEX_LEN = 16
 
+# Environment variable that carries the Factory System Descriptor (FSD) path. tt-run sets this per-rank from
+# --factory-system-descriptor (managed the same way as TT_METAL_MOCK_CLUSTER_DESC_PATH: set explicitly in
+# get_rank_environment() and blocklisted from parent-env passthrough). It is propagated to both Phase 1
+# (generate_rank_bindings) and Phase 2 (the workload binary), where it is consumed via RTOptions
+# (RunTimeOptions::get_factory_system_descriptor_path()).
+FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR = "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH"
+
 
 def compute_phase1_cache_fingerprint_full(
     mgd_path: Path,
@@ -490,6 +497,7 @@ def compute_phase1_cache_fingerprint_full(
     mock_rank_to_desc: Optional[Dict[int, Path]],
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
+    factory_system_descriptor: Optional[Path] = None,
 ) -> str:
     """Full SHA-256 hex (64 chars) of MGD (or MGD mapping + all referenced MGDs) + hosts or mock descriptor contents.
 
@@ -537,6 +545,10 @@ def compute_phase1_cache_fingerprint_full(
             h.update(b"\0")
             desc_path = mock_rank_to_desc[rank]
             h.update(hashlib.sha256(desc_path.read_bytes()).digest())
+    # Mix the FSD content into the fingerprint so a different (or newly supplied) FSD invalidates the Phase 1 cache.
+    if factory_system_descriptor is not None:
+        h.update(b"\0fsd\0")
+        h.update(factory_system_descriptor.read_bytes())
     return h.hexdigest()
 
 
@@ -891,6 +903,7 @@ def build_generate_rank_bindings_mpi_cmd(
     mpi_args: Optional[List[str]] = None,
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
+    factory_system_descriptor: Optional[Path] = None,
 ) -> List[str]:
     """Build MPI command for running generate_rank_bindings.
 
@@ -903,6 +916,10 @@ def build_generate_rank_bindings_mpi_cmd(
         output_dir: Output directory for generated files
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
         mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
+        factory_system_descriptor: Optional FSD path. When set, generate_rank_bindings receives it via
+            the ``TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH`` env var (per-rank ``-x``) and reads it through
+            RTOptions. NOTE: the path is only propagated here; it is not yet consumed for mapping — Phase 1
+            still performs live PSD discovery.
 
     Returns:
         List of command-line arguments for mpirun
@@ -924,11 +941,13 @@ def build_generate_rank_bindings_mpi_cmd(
             rank_bindings=[RankBinding(rank=r, mesh_id=0) for r in ranks],
             mesh_graph_desc_path=mgd_path,
             mock_cluster_rank_binding=dict(mock_rank_to_desc),
+            factory_system_descriptor_path=factory_system_descriptor,
         )
     else:
         phase1_config = TTRunConfig(
             rank_bindings=[RankBinding(rank=0, mesh_id=0)],
             mesh_graph_desc_path=mgd_path,
+            factory_system_descriptor_path=factory_system_descriptor,
         )
         cmd.extend(
             build_rank_environment_args(
@@ -1010,6 +1029,7 @@ def run_phase1_generate_rank_bindings(
     mpi_args: Optional[List[str]] = None,
     *,
     mgd_is_mapping_yaml: Optional[bool] = None,
+    factory_system_descriptor: Optional[Path] = None,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings for rank_bindings (or overlay mapping), rankfile, and mocks.
 
@@ -1040,7 +1060,14 @@ def run_phase1_generate_rank_bindings(
     """
     executable = find_generate_rank_bindings_executable()
     cmd = build_generate_rank_bindings_mpi_cmd(
-        executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args, mgd_is_mapping_yaml=mgd_is_mapping_yaml
+        executable,
+        mgd_path,
+        hosts,
+        output_dir,
+        mock_rank_to_desc,
+        mpi_args,
+        mgd_is_mapping_yaml=mgd_is_mapping_yaml,
+        factory_system_descriptor=factory_system_descriptor,
     )
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
@@ -1184,6 +1211,11 @@ class TTRunConfig(BaseModel):
     mesh_graph_desc_path: Path = Field(..., description="Path to mesh graph descriptor")
     mock_cluster_rank_binding: Dict[int, Path] = Field(
         default_factory=dict, description="Mock cluster rank binding configuration (rank -> resolved path)"
+    )
+    factory_system_descriptor_path: Optional[Path] = Field(
+        default=None,
+        description="Optional Factory System Descriptor (FSD) path, applied to all ranks via "
+        "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",
     )
 
     model_config = {"arbitrary_types_allowed": True}
@@ -1582,6 +1614,7 @@ ENV_BLOCKLIST = frozenset(
         "TT_RUN_SUBCONTEXT_ID",  # Set when using merged rank-bindings mapping
         "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
+        "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",  # FSD path - set from --factory-system-descriptor, not parent env
         # Should only come from rank binding env_overrides
         "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
     }
@@ -1691,6 +1724,11 @@ def get_rank_environment(
 
     if config.mock_cluster_rank_binding:
         env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = str(config.mock_cluster_rank_binding[binding.rank])
+
+    # Factory System Descriptor: applied to all ranks and read via RTOptions in the worker process. NOTE: the
+    # path is only propagated for now; it is not yet consumed for mapping (Phase 1 still does live PSD discovery).
+    if config.factory_system_descriptor_path is not None:
+        env[FACTORY_SYSTEM_DESCRIPTOR_ENV_VAR] = str(config.factory_system_descriptor_path)
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
@@ -2156,6 +2194,7 @@ def legacy_flow(
     rankfile_syntax: Optional[RankfileSyntax] = None,
     phase2_failure_hint: Phase2FailureHint = "legacy",
     tracy_args: Optional[str] = None,
+    factory_system_descriptor: Optional[Path] = None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -2404,6 +2443,16 @@ def legacy_flow(
             config = parse_rank_bindings_mapping(rank_bindings_mapping, mock_cluster_rank_binding)
         else:
             config = parse_binding_config(rank_binding, mock_cluster_rank_binding, skip_mgd_check)
+        # Apply the FSD path (if any) to all ranks so the workload receives TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH.
+        # Resolve against the launch directory here so remote MPI workers get an absolute, valid path (matches how
+        # new_mode_flow resolves it). Resolving an already-absolute path (e.g. passed from new_mode_flow) is a no-op.
+        if factory_system_descriptor is not None:
+            config.factory_system_descriptor_path = resolve_path(
+                factory_system_descriptor,
+                description="Factory System Descriptor",
+                must_be_file=True,
+                must_exist=True,
+            )
     except (ValueError, ValidationError) as e:
         msg = f"Configuration error: {e}"
         # Stale Phase 1 cache guidance applies after a cache hit when MPI/apps fail — not typical for YAML parse.
@@ -2629,6 +2678,7 @@ def new_mode_flow(
     rankfile_syntax: Optional[RankfileSyntax] = None,
     force_rediscovery: bool = False,
     tracy_args: Optional[str] = None,
+    factory_system_descriptor: Optional[Path] = None,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor(s).
 
@@ -2668,6 +2718,20 @@ def new_mode_flow(
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} New mode: Mesh graph input = {resolved_mgd} (mapping YAML={mgd_is_mapping_yaml})")
 
+    # Resolve the optional Factory System Descriptor. When supplied it is propagated to Phase 1
+    # (generate_rank_bindings, via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH) and the Phase 2 workload, and folded into
+    # the Phase 1 cache fingerprint. NOTE: it is not yet consumed for mapping — Phase 1 still does live PSD discovery.
+    resolved_fsd: Optional[Path] = None
+    if factory_system_descriptor is not None:
+        resolved_fsd = resolve_path(
+            factory_system_descriptor,
+            description="Factory System Descriptor",
+            must_be_file=True,
+            must_exist=True,
+        )
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} New mode: Factory System Descriptor = {resolved_fsd}")
+
     mgd_mapping_yaml = mgd_is_mapping_yaml
 
     # Parse mock cluster mapping if provided
@@ -2683,7 +2747,11 @@ def new_mode_flow(
     hosts_for_phase1: Optional[List[str]] = sorted(hosts) if hosts else None
     try:
         fingerprint_full = compute_phase1_cache_fingerprint_full(
-            resolved_mgd, hosts_for_phase1, mock_rank_to_desc, mgd_is_mapping_yaml=mgd_mapping_yaml
+            resolved_mgd,
+            hosts_for_phase1,
+            mock_rank_to_desc,
+            mgd_is_mapping_yaml=mgd_mapping_yaml,
+            factory_system_descriptor=resolved_fsd,
         )
     except FileNotFoundError as e:
         raise click.ClickException(
@@ -2768,6 +2836,7 @@ def new_mode_flow(
                     mock_rank_to_desc,
                     phase1_mpi_args,
                     mgd_is_mapping_yaml=mgd_mapping_yaml,
+                    factory_system_descriptor=resolved_fsd,
                 )
                 print_command(
                     phase1_cmd,
@@ -2805,6 +2874,7 @@ def new_mode_flow(
                 mock_rank_to_desc=mock_rank_to_desc,
                 mpi_args=phase1_mpi_args,
                 mgd_is_mapping_yaml=mgd_mapping_yaml,
+                factory_system_descriptor=resolved_fsd,
             )
         except (FileNotFoundError, RuntimeError) as e:
             raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
@@ -2857,6 +2927,7 @@ def new_mode_flow(
         rankfile_syntax=rankfile_syntax,
         phase2_failure_hint=phase2_failure_hint,
         tracy_args=tracy_args,
+        factory_system_descriptor=resolved_fsd,  # Propagate FSD to Phase 2 workload
     )
 
 
@@ -2937,6 +3008,16 @@ def new_mode_flow(
     "When used with new mode (-m / -M), makes --hosts optional.",
 )
 @click.option(
+    "--factory-system-descriptor",
+    required=False,
+    type=click.Path(path_type=Path),
+    help="Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology. "
+    "The path is exported to every rank via TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH and folded into the Phase 1 "
+    "cache fingerprint. Relative paths are resolved against the launch directory. When provided, it also lets "
+    "Fabric 2.0 statically reroute traffic around broken links. Falls back to live PSD discovery when omitted. "
+    "See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.",
+)
+@click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
 @click.option("--skip-mgd-check", is_flag=True, help="Skip the check if MGD file exists on the local host")
@@ -2993,6 +3074,7 @@ def main(
     mpi_args: Optional[List[str]],
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
+    factory_system_descriptor: Optional[Path],
     skip_executable_check: bool,
     skip_mgd_check: bool,
     bare: bool,
@@ -3083,6 +3165,7 @@ def main(
             tcp_interface=tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             tracy_args=tracy_args,
+            factory_system_descriptor=factory_system_descriptor,
         )
         return
 
@@ -3116,6 +3199,7 @@ def main(
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,
+            factory_system_descriptor=factory_system_descriptor,
         )
         return
 

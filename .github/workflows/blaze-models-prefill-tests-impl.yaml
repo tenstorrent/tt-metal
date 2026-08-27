@@ -174,6 +174,13 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           create-pipeline-dir: "false"
 
+      - name: Configure TorusXY fabric profile
+        if: ${{ matrix.test-group.fabric_profile == 'torus_xy' }}
+        shell: bash
+        run: |
+          echo "TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" >> "$GITHUB_ENV"
+          echo "PREFILL_TORUS_XY_CERTIFIED=1" >> "$GITHUB_ENV"
+
       # Same mechanism as .github/actions/setup-job, which this job can't use (not a container
       # job, tests run under mpirun): on dispatch stall the runtime runs
       # TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE inside the hung rank, then throws. Armed here

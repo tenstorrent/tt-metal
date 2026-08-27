@@ -63,7 +63,6 @@ jobs:
             [
               ".github/workflows/sanity-tests.yaml",
               ".github/workflows/blackhole-e2e-tests.yaml",
-              ".github/workflows/blackhole-demo-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
               ".github/workflows/galaxy-deepseek-tests.yaml",
@@ -75,13 +74,11 @@ jobs:
               ".github/workflows/galaxy-e2e-tests.yaml",
               ".github/workflows/galaxy-sanity.yaml",
               ".github/workflows/galaxy-health.yaml",
-              ".github/workflows/t3000-perf-tests.yaml",
               ".github/workflows/t3000-e2e-tests.yaml",
               ".github/workflows/t3000-integration-tests.yaml",
               ".github/workflows/t3000-profiler-tests.yaml",
               ".github/workflows/single-card-profiler-tests.yaml",
               ".github/workflows/pipeline-select-profiler.yaml",
-              ".github/workflows/t3000-demo-tests.yaml",
               ".github/workflows/t3000-unit-tests.yaml",
 
               ".github/workflows/models-t1-e2e-tests.yaml",
@@ -92,7 +89,6 @@ jobs:
               ".github/workflows/models-t3-unit-tests.yaml",
 
               ".github/workflows/perf-device-models.yaml",
-              ".github/workflows/single-card-ttnn-models-frequent-tests.yaml",
               ".github/workflows/tt-metal-l2-nightly.yaml",
               ".github/workflows/ttnn-run-sweeps.yaml",
               ".github/workflows/vllm-model-tests.yaml",

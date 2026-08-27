@@ -39,7 +39,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import migration_file_export_enabled, serialize_device_map
+from models.demos.common.prefill.runners.migration import (
+    migration_file_export_enabled,
+    remove_stale_device_map_sidecars,
+    serialize_device_map,
+)
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -131,6 +135,14 @@ _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_g
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# Build the DFlash drafter context-KV cache during this prefill. Three gates, ALL required: the selected
+# model declares the capability (ADAPTER.supports_dflash — only Kimi K2.6/K2.7), the run explicitly opts in
+# (PREFILL_DFLASH=1), and a drafter checkpoint is provided (DFLASH_HF_MODEL, resolved by the runtime). The
+# capability gate keeps a non-dflash model from ever building a Kimi drafter; the explicit PREFILL_DFLASH
+# switch keeps it off unless asked for, even when a checkpoint happens to be on disk.
+DFLASH_ENABLED = (
+    ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
+)
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -143,6 +155,13 @@ _L1_SMALL_SIZE = ADAPTER.l1_small_size
 # swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
+# DFlash is not trace-compatible: the drafter tap / pack-unpack / KV finalize run outside the runtime's
+# captured per-chunk segment, so a replayed trace would silently skip them. Fail loudly rather than
+# produce meaningless drafter KV. (Per offline discussion — keep DFlash on the eager per-op path.)
+assert not (DFLASH_ENABLED and USE_TRACE), (
+    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
+    "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -516,6 +535,11 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        (
+            "DFLASH_ENABLED",
+            f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
+            f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
+        ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -637,6 +661,9 @@ def main() -> None:
         # headless: its last layer runs KV-only and no norm/LM-head is built. Only the last rank does
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
+        # NOT gated on is_last_rank: every rank builds its owned fc slices; the runtime derives the
+        # last-rank KV tail from is_last_rank.
+        dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
@@ -677,6 +704,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     num_ranks>1. Shutdown for num_ranks>1 is rough: downstream ranks block in D2D recv when rank 0
     stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
+    # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim), so the D2D
+    # activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
+    d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -705,7 +735,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
         # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
         # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
         # in rendezvous, deadlocking the lease handshake before any chunk flows.
@@ -764,7 +794,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # Mock integration (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC): publish the KV chunk table +
     # device map for an external device-less reader, with NO migration worker. Deliberately OUTSIDE the
     # _migration_enabled block below: that block's first step is
-    # deliver_device_map_and_gather_stage_layout(), which imports the _migration_client .so and joins a
+    # deliver_device_map_and_gather_stage_layouts(), which imports the _migration_client .so and joins a
     # cross-rank all-gather. Mock has neither a client nor peers, so routing it through there raises
     # ImportError(_migration_client) — which is exactly what happens if you only make the old in-block
     # `elif PREFILL_MOCK_MIGRATION` reachable. Both writes here are local (build table + serialize map).
@@ -773,7 +803,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
         # fabric_node -> ASIC unique_id, so the producer can resolve chips for read_dram_umd without
-        # touching the ControlPlane.
+        # touching the ControlPlane. Stale rank-scoped siblings from a prior multi-rank run would
+        # merge into the reader's map, so drop them first.
+        remove_stale_device_map_sidecars(_mock_map_path)
         serialize_device_map(mesh_device, _mock_map_path)
         logger.info(
             f"[mock-migration] KV chunk table -> {_mock_table_path}, device map -> {_mock_map_path} "
@@ -791,17 +823,24 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # With PREFILL_MIGRATION_EXPORT_TO_FILE=1 the device map goes to a host-local text file
         # and the table stays on disk instead; no worker handshake.
         from models.demos.common.prefill.runners.migration import (
-            allgather_kv_stage_layout,
-            deliver_device_map_and_gather_stage_layout,
-            export_device_map_file_and_gather_stage_layout,
+            KvCacheStage,
+            allgather_kv_stage_layouts,
+            deliver_device_map_and_gather_stage_layouts,
+            export_device_map_file_and_gather_stage_layouts,
             migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
+            rank_scoped_device_map_path,
+            remove_stale_device_map_sidecars,
         )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
-        # rank's range (same split the runtime/cache was built with).
-        first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
+        # rank's range -- via the adapter's boundaries, so it is the split the MODEL was built with in
+        # main(). Without them a cross-layer-reuse model (GLM-5.2 snaps 39/39 to 38/40) describes a
+        # partition its KV cache does not hold, mismapping every layer of the second stage.
+        first_layer_idx, num_my_layers = compute_layer_split(
+            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+        )[rank]
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
@@ -824,37 +863,49 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
             os.remove(table_path)
 
+        # Same rationale for the JSON device-map sidecars: a leftover rank-scoped file from a run with
+        # a different rank count would silently merge into this run's map. Must stay BEFORE the
+        # all-gather barrier below — every rank writes its fresh map only after it.
+        if not _file_export:
+            remove_stale_device_map_sidecars(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            )
+
         # ALL RANKS join the stage-layout all-gather (collective barrier; rank 0 needs the merged
         # layout to build the table). Real migration also delivers this rank's local FNID->UMD map to
         # its co-located worker first; mock has no worker (the producer reads a serialized JSON map),
         # so it joins the gather directly and never imports the worker client extension.
         #
-        # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
-        # KvCaches struct, whose shape is per-model.
-        if not hasattr(runtime, "kv_migration_base_address"):
+        # Ask the runtime to describe its migratable caches -- the engine must not introspect the opaque
+        # KvCaches struct, whose shape is per-model. One stage per config of the model's table, since a
+        # layout carries one cache's DRAM base and one layer-index space. A runtime predating
+        # `kv_migration_stages` exposes only the single-cache base address.
+        _multi_cache_runtime = hasattr(runtime, "kv_migration_stages")
+        if _multi_cache_runtime:
+            kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+        elif hasattr(runtime, "kv_migration_base_address"):
+            kv_stages = [KvCacheStage(runtime.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
+        else:
             raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} implements no "
-                "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+                f"migration enabled but runtime {type(runtime).__name__} implements neither "
+                "kv_migration_stages nor kv_migration_base_address "
+                "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
-        kv_base_addr = runtime.kv_migration_base_address(kv_caches)
         _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
         if _mock_migration:
-            stage_layout = allgather_kv_stage_layout(
-                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
-            )
+            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
         elif _file_export:
-            stage_layout = export_device_map_file_and_gather_stage_layout(
-                mesh_device,
-                kv_base_addr,
-                GLOBAL_MESH_SHAPE,
-                first_layer_idx,
-                num_my_layers,
-                migration_device_map_file_path(),
+            stage_layouts = export_device_map_file_and_gather_stage_layouts(
+                mesh_device, kv_stages, GLOBAL_MESH_SHAPE, migration_device_map_file_path()
             )
         else:
-            stage_layout = deliver_device_map_and_gather_stage_layout(
-                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
-            )
+            stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
+
+        # A runtime predating `kv_migration_stages` describes ONE cache and takes the singular
+        # `stage_layout=` -- its single gathered layout. Keep calling it that way: its single-rank guard
+        # counts stages in that layout, and handing it the outer per-cache list would count caches (always
+        # 1) and silently stop rejecting multi-rank migration.
+        _layout_kwarg = {"stage_layouts": stage_layouts} if _multi_cache_runtime else {"stage_layout": stage_layouts[0]}
 
         if _mock_migration:
             # Mock integration (prefill_producer.py): the SAME merged table the real publish builds, but
@@ -865,11 +916,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             #
             # EVERY rank serializes its OWN local fabric_node -> ASIC unique_id device map so each
             # co-located producer can resolve only its host's chips for read_dram_umd (the multi-rank
-            # merged table carries every host's fnids; a producer with just its local map naturally
-            # filters to its own layers). The device-map path is host-local (each rank overwrites the
-            # same name on its own host); the table path MUST be on shared storage (only rank 0 writes
-            # it, but every host's reader resolves the same path) — enforced above for num_ranks > 1.
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # merged table carries every host's fnids; a producer merges the local maps and skips
+            # layers owned by another host). Rank-scoped filename for num_ranks > 1 — co-located ranks
+            # would otherwise overwrite each other at the shared host-local path; the table path MUST
+            # be on shared storage (only rank 0 writes it, but every host's reader resolves the same
+            # path) — enforced above for num_ranks > 1.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             if is_first_rank:
                 # RANK 0 builds the merged table spanning every gathered stage — identical to the real
@@ -879,7 +935,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
@@ -891,7 +947,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
             logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
@@ -901,9 +957,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # device-less reader downstream: migration_driver's destination verification
             # (--verify-migration, both dst-bytes and dst-golden) and prefill_producer's source-KV
             # PCC each resolve chips through this file, log "device map ... not found", and FAIL —
-            # so a real migration run could never verify what it copied. Host-local by design (one
-            # file per host, each rank overwriting its own).
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # so a real migration run could never verify what it copied. Host-local by design;
+            # rank-scoped filename for num_ranks > 1 so co-located ranks don't overwrite each other.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
 
@@ -915,7 +975,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 migration_endpoint = publish_serialized_table_and_wait_ready(
                     table_path=table_path,
@@ -941,7 +1001,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # out of the pre-#48826 `if single_rank:` wrapper, so with num_ranks>1 every rank would build
         # a table covering only ITS layer slice and publish over the same paths -- and co-located
         # ranks would race serialize_device_map's `<path>.tmp` -> os.replace as well. Only the real
-        # migration path merges stages (deliver_device_map_and_gather_stage_layout), and that needs
+        # migration path merges stages (deliver_device_map_and_gather_stage_layouts), and that needs
         # the worker. Same guard #48826 removed for PREFILL_ENABLE_MIGRATION, kept for the mock path.
         if not single_rank:
             raise ValueError(
@@ -1083,7 +1143,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             kv_caches,
             rank,
             num_ranks,
-            hidden_size=hf_config.hidden_size,
+            hidden_size=d2d_activation_width,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,

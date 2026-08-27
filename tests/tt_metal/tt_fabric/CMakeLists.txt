@@ -11,6 +11,9 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
+        # FSD proto (tt::scaleout_tools::fsd::proto) constructed directly by test_physical_descriptor_builder.cpp;
+        # those symbols are hidden in libtt_metal.so (see tools/scaleout/CMakeLists.txt), so link explicitly.
+        TT::ScaleoutTools
         test_common_libs
         yaml-cpp::yaml-cpp
         protobuf::libprotobuf
@@ -24,6 +27,18 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+    SYSTEM
+    PRIVATE
+        # physical_descriptor_builder test includes the generated FSD + PSD proto headers
+        ${Metalium_BINARY_DIR}/tools/scaleout # protobuf/factory_system_descriptor.pb.h
+        "$<TARGET_PROPERTY:fabric,BINARY_DIR>" # protobuf/physical_system_descriptor.pb.h
+)
+
+# The physical_descriptor_builder test includes generated FSD/PSD proto headers.
+add_dependencies(
+    fabric_unit_tests
+    scaleout_generated_protos
+    fabric_generated_protos
 )
 
 set_target_properties(
@@ -293,3 +308,20 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# Reuse the shared test PCH (gtest + heavy tt-metalium headers) for all targets in this dir.
+foreach(
+    _fabric_test_target
+    IN
+    ITEMS
+        fabric_unit_tests
+        test_physical_discovery
+        test_system_health_smoke
+        test_fabric_smoke
+        test_tt_fabric
+        bench_unicast
+        test_addrgen_write
+        test_bandwidth_telemetry_validation
+)
+    target_precompile_headers(${_fabric_test_target} REUSE_FROM metal_test_pch)
+endforeach()

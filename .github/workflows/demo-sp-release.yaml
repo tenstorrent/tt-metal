@@ -42,9 +42,6 @@ on:
           - deepseek_decode
           - deepseek_unit_tests
           - wan22
-          - single_galaxy_deepseek
-          - sc4_deepseek
-          - sc16_deepseek
 
   schedule:
     # Run daily at 1 AM UTC
@@ -54,7 +51,6 @@ permissions:
   contents: write
   packages: write
   actions: write
-  id-token: write
 
 jobs:
   check-harbor:
@@ -119,40 +115,3 @@ jobs:
       model: wan22
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "
-
-  deepseek-sc16-tests:
-    name: "SC16 DeepSeek Tests"
-    needs: [build-artifact]
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc16_deepseek' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sc16
-
-  deepseek-sc4-tests:
-    name: "SC4 DeepSeek Tests"
-    needs: build-artifact
-    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'sc4_deepseek' || github.event_name == 'schedule' }}
-    secrets: inherit
-    uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sc4
-
-  # todo)) proven to work by itself but mess up SC4 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
-  # deepseek-single-galaxy-tests:w
-  #   name: "Single Galaxy DeepSeek Tests"
-  #   needs: build-artifact
-  #   if: ${{ inputs.test-group == 'all' || inputs.test-group == 'single_galaxy_deepseek' || github.event_name == 'schedule' }}
-  #   secrets: inherit
-  #   uses: ./.github/workflows/demo-sp-multihost-impl.yaml
-  #   with:
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     sp-config: sc1

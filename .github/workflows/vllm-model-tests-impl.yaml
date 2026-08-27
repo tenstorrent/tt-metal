@@ -507,7 +507,7 @@ jobs:
 
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
-        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        timeout-minutes: ${{ matrix.test-group.structured-output-timeout || matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG }}
@@ -674,7 +674,10 @@ jobs:
   ai-run-summary:
     name: "AI Run Summary"
     needs: [load-test-matrix, vllm-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

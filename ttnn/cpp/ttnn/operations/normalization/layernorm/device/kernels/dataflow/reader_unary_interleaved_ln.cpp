@@ -106,21 +106,21 @@ void kernel_main() {
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
     // TILE path: input a is already in tile layout.
-    const uint32_t src0_page_bytes = get_tile_size(dfb_id_in0);
+    const uint32_t src0_page_bytes = dfb_in0.get_tile_size();
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #ifdef FUSE_GAMMA
-    const uint32_t gamma_tile_bytes = get_tile_size(dfb_id_gamma);
+    const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
     const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
-    const uint32_t beta_tile_bytes = get_tile_size(dfb_id_beta);
+    const uint32_t beta_tile_bytes = dfb_beta.get_tile_size();
     const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(dfb_id_in1);
+    const uint32_t src1_tile_bytes = dfb_in1.get_tile_size();
     const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 

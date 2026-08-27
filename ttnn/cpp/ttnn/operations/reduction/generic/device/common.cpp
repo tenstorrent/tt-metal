@@ -158,7 +158,7 @@ std::vector<uint32_t> build_rm_compute_ct_args(
         post_mul_scaler_bits,
         plan.wt_tiles_per_chunk,
         plan.ht_tiles_per_chunk,
-        fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
+        fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 through the SFPU
     };
 }
 

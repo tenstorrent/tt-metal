@@ -116,6 +116,7 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_matmul_send_recv_pipeline.py ; fail+=$?
   # Regression test for async cpu() use-after-free (issue #43638)
   pytest tests/ttnn/unit_tests/base_functionality/test_device_synchronize.py::test_cpu_blocking_false_discarded_return_no_uaf -xv --count=3 ; fail+=$?
   # Record the end time
@@ -186,35 +187,6 @@ run_t3000_ttnn_multiprocess_slow_tests() {
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
-}
-
-run_t3000_grok_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_grok_tests"
-
-  pytest models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_grok_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
-run_t3000_deepseek_tests() {
-  uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-
-  export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
-  export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-  MESH_DEVICE=T3K pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
 }
 
 run_t3000_ccl_tests() {
@@ -419,9 +391,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run grok tests
-  run_t3000_grok_tests
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests

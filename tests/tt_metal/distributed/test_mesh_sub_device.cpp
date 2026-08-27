@@ -108,7 +108,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto datacopy_core_phys = mesh_device_->worker_core_from_logical_core(datacopy_coord);
 
     auto all_cores = syncer_core.merge(datacopy_core);
-    auto global_sem = CreateGlobalSemaphore(mesh_device_.get(), all_cores, 0);
+    auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
     Program sync_and_incr_program = CreateProgram();
     auto sync_kernel = CreateKernel(

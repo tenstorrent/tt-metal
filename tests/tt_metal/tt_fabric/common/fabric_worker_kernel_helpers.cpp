@@ -141,16 +141,14 @@ void signal_worker_teardown(
 void wait_for_worker_complete(
     fabric_router_tests::BaseFabricFixture* fixture,
     const std::shared_ptr<tt_metal::distributed::MeshDevice>& device,
-    tt_metal::Program& program,
     std::chrono::milliseconds timeout) {
-
     // Wait for the worker program to complete with timeout
     // This blocks until the program completes or timeout expires
 
     auto start = std::chrono::steady_clock::now();
 
     // Call the fixture's wait method to block until program completes
-    fixture->WaitForSingleProgramDone(device, program);
+    fixture->WaitForSingleProgramDone(device);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     if (elapsed > timeout) {

@@ -29,7 +29,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
-#include <tt-metalium/experimental/internal/blitz_decode_pipeline.hpp>
+#include <internal/blitz_decode_pipeline.hpp>
 
 namespace {
 
@@ -610,6 +610,38 @@ TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     EXPECT_EQ(*asic_location_y_size, 2) << "Fabric node id " << y_size << " should map to ASIC location 2";
 
     check_asic_mapping_against_golden("TestSingleGalaxyControlPlaneInit", "ControlPlaneFixture_SingleGalaxy");
+}
+
+// Checks that auto-discovery still reports all 32 chips on a galaxy that only wraps on Y.
+TEST_F(ControlPlaneFixture, ProbeWormholeSingleGalaxyAutoDiscoveryFullCoverage) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& dctx = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+
+    // Auto-discovery must map every physical chip, whatever fabric type it settles on.
+    const std::size_t expected_chips = cluster.number_of_devices();
+
+    auto check_full_coverage = [&](const std::string& label, tt::tt_fabric::FabricConfig cfg) {
+        SCOPED_TRACE(label);
+        std::unique_ptr<tt::tt_fabric::ControlPlane> cp;
+        ASSERT_NO_THROW(
+            cp = std::make_unique<tt::tt_fabric::ControlPlane>(cluster, rtoptions, hal, dctx, cfg, kReliabilityMode));
+
+        const auto mesh_ids = cp->get_user_physical_mesh_ids();
+        ASSERT_EQ(mesh_ids.size(), 1u) << "Auto-discovery should produce a single mesh on a single galaxy";
+
+        const auto mesh_shape = cp->get_physical_mesh_shape(mesh_ids.front());
+        EXPECT_EQ(mesh_shape.mesh_size(), expected_chips)
+            << "Auto-discovery dropped chips: got " << mesh_shape.mesh_size() << " of " << expected_chips;
+        EXPECT_TRUE(
+            mesh_shape == tt::tt_metal::distributed::MeshShape(8, 4) ||
+            mesh_shape == tt::tt_metal::distributed::MeshShape(4, 8))
+            << "Expected an 8x4 (or 4x8) mesh, got: " << mesh_shape[0] << "x" << mesh_shape[1];
+    };
+
+    check_full_coverage("FABRIC_1D_RING", tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
+    check_full_coverage("FABRIC_2D", tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {

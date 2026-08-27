@@ -447,11 +447,9 @@ def main():
         # Single-card
         "perf-device-models.yaml",
         # T3000 (T3K)
-        "t3000-demo-tests.yaml",
         "t3000-e2e-tests.yaml",
         "t3000-fast-tests.yaml",
         "t3000-integration-tests.yaml",
-        "t3000-perf-tests.yaml",
         "t3000-profiler-tests.yaml",
         "t3000-unit-tests.yaml",
         # Galaxy

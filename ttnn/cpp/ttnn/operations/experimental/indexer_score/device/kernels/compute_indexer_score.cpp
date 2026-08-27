@@ -480,6 +480,15 @@ void kernel_main() {
                 }
             }
             span.set(group, band0 + band);
+            // kv_len is runtime-variable while the work split is compiled for K capacity. Cells
+            // wholly past that prefix have no K/output work. Head streaming still receives one
+            // q-mcast block per band, so drain it to keep the row rendezvous in lockstep.
+            if (span.k_tiles() == 0) {
+                if constexpr (stream_heads) {
+                    drain_phantom_band_q();
+                }
+                continue;
+            }
             // Fused + streamed k waits incrementally inside the matmul (overlap the DRAM read); all other
             // paths wait the whole chunk here.
             if constexpr (!fuse_single || !fused_stream_k) {

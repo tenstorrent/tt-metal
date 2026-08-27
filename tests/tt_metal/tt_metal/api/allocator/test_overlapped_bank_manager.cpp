@@ -55,12 +55,12 @@ using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
 /*******************************
  * AllocatorDependencies Tests *
  *******************************/
-TEST(AllocatorDependencies, DefaultAllocatorDependencies) {
+TEST(AllocatorDependencies, CPU_DefaultAllocatorDependencies) {
     BankManager::AllocatorDependencies allocator_dependencies;
     EXPECT_EQ(allocator_dependencies.dependencies, BankManager::AllocatorDependencies::AdjacencyList{{}});
 }
 
-TEST(AllocatorDependencies, DuplicateDependencies) {
+TEST(AllocatorDependencies, CPU_DuplicateDependencies) {
     const std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>> dependencies_map = {
         {AllocatorID{0}, ttsl::SmallVector<AllocatorID>{AllocatorID{1}, AllocatorID{1}}}};
 
@@ -70,7 +70,7 @@ TEST(AllocatorDependencies, DuplicateDependencies) {
             ::testing::HasSubstr("Duplicate dependency for allocator 0: 1 appears more than once!")));
 }
 
-TEST(AllocatorDependencies, EquivalentDependenciesMaps) {
+TEST(AllocatorDependencies, CPU_EquivalentDependenciesMaps) {
     const std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>> dependencies_map1 = {
         {AllocatorID{0}, ttsl::SmallVector<AllocatorID>{AllocatorID{1}}},
         {AllocatorID{1}, ttsl::SmallVector<AllocatorID>{AllocatorID{0}}}};
@@ -87,7 +87,7 @@ TEST(AllocatorDependencies, EquivalentDependenciesMaps) {
 
 class AllocatorDependenciesParamTest : public ::testing::TestWithParam<AllocatorDependenciesParam> {};
 
-TEST_P(AllocatorDependenciesParamTest, ValidateDependencies) {
+TEST_P(AllocatorDependenciesParamTest, CPU_ValidateDependencies) {
     const auto& params = GetParam();
 
     BankManager::AllocatorDependencies allocator_dependencies{params.input};
@@ -155,7 +155,7 @@ INSTANTIATE_TEST_SUITE_P(
 /********************************
  * Overlapped BankManager Tests *
  ********************************/
-TEST(OverlappedAllocators, InvalidAllocator) {
+TEST(OverlappedAllocators, CPU_InvalidAllocator) {
     // Create bank manager with 2 allocators (0 and 1)
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
     BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
@@ -179,7 +179,7 @@ TEST(OverlappedAllocators, InvalidAllocator) {
             ::testing::HasSubstr("Invalid allocator ID 2 (num_allocators=2)")));
 }
 
-TEST(OverlappedAllocators, InvalidAPIsForOverlappedAllocators) {
+TEST(OverlappedAllocators, CPU_InvalidAPIsForOverlappedAllocators) {
     // Create bank manager with 2 allocators (0 and 1)
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
     BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
@@ -199,7 +199,7 @@ TEST(OverlappedAllocators, InvalidAPIsForOverlappedAllocators) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
 }
 
-TEST(OverlappedAllocators, DeallocateAllAndClear) {
+TEST(OverlappedAllocators, CPU_DeallocateAllAndClear) {
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{2}}}, {AllocatorID{1}, {AllocatorID{2}}}}};
     BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
@@ -249,7 +249,7 @@ TEST(OverlappedAllocators, DeallocateAllAndClear) {
     EXPECT_EQ(new_addr2, new_addr1 + alloc_size_2K);
 }
 
-TEST(OverlappedAllocators, IndependentAllocAndDeallocBottomUp) {
+TEST(OverlappedAllocators, CPU_IndependentAllocAndDeallocBottomUp) {
     // 2 independent allocators, no overlaps
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
     BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
@@ -332,7 +332,7 @@ TEST(OverlappedAllocators, IndependentAllocAndDeallocBottomUp) {
     EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, AllocatorID{0}), alloc0_addr1);
 }
 
-TEST(OverlappedAllocators, IndependentAllocAndDeallocTopDown) {
+TEST(OverlappedAllocators, CPU_IndependentAllocAndDeallocTopDown) {
     // 2 independent allocators, no overlaps
     const uint64_t total_size = 1024 * 1024;
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
@@ -416,7 +416,7 @@ TEST(OverlappedAllocators, IndependentAllocAndDeallocTopDown) {
     EXPECT_EQ(bank_manager.lowest_occupied_address(bank_id, AllocatorID{0}), alloc0_addr1);
 }
 
-TEST(OverlappedAllocators, OverlappedAllocAndDeallocBottomUp) {
+TEST(OverlappedAllocators, CPU_OverlappedAllocAndDeallocBottomUp) {
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{2}}}, {AllocatorID{1}, {AllocatorID{2}}}}};
     BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
@@ -562,7 +562,7 @@ TEST(OverlappedAllocators, OverlappedAllocAndDeallocBottomUp) {
     EXPECT_EQ(alloc2_addr1, alloc0_addr1);
 }
 
-TEST(OverlappedAllocators, OverlappedAllocAndDeallocTopDown) {
+TEST(OverlappedAllocators, CPU_OverlappedAllocAndDeallocTopDown) {
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     const uint64_t total_size = 1024 * 1024;
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{2}}}, {AllocatorID{1}, {AllocatorID{2}}}}};
@@ -709,7 +709,7 @@ TEST(OverlappedAllocators, OverlappedAllocAndDeallocTopDown) {
     EXPECT_EQ(alloc2_addr1, alloc0_addr1);
 }
 
-TEST(OverlappedAllocators, OverlappedAllocationsWithUnalignedSizesBottomUp) {
+TEST(OverlappedAllocators, CPU_OverlappedAllocationsWithUnalignedSizesBottomUp) {
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     const uint32_t alignment = 1024;
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{2}}}, {AllocatorID{1}, {AllocatorID{2}}}}};
@@ -787,7 +787,7 @@ TEST(OverlappedAllocators, OverlappedAllocationsWithUnalignedSizesBottomUp) {
     EXPECT_EQ(alloc0_addr1, alloc2_addr0 + alloc_size_aligned);
 }
 
-TEST(OverlappedAllocators, OverlappedAllocationsWithUnalignedSizesTopDown) {
+TEST(OverlappedAllocators, CPU_OverlappedAllocationsWithUnalignedSizesTopDown) {
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     const uint64_t total_size = 1024 * 1024;
     const uint32_t alignment = 1024;
@@ -866,7 +866,7 @@ TEST(OverlappedAllocators, OverlappedAllocationsWithUnalignedSizesTopDown) {
     EXPECT_EQ(alloc0_addr1, alloc2_addr0 - alloc_size_2K);
 }
 
-TEST(OverlappedAllocators, OverlappedAllocationsFromBothSides) {
+TEST(OverlappedAllocators, CPU_OverlappedAllocationsFromBothSides) {
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     const uint64_t total_size = 1024 * 1024;
     const uint32_t alignment = 1024;
@@ -996,7 +996,7 @@ TEST(OverlappedAllocators, OverlappedAllocationsFromBothSides) {
     EXPECT_EQ(alloc2_addr3, alloc2_addr0 + alloc_size_1K);
 }
 
-TEST(OverlappedAllocators, NonzeroAddressLimit) {
+TEST(OverlappedAllocators, CPU_NonzeroAddressLimit) {
     // Tests the clamping logic in BankManager::allocate_buffer when address_limit is not 0
 
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
@@ -1107,7 +1107,7 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
     EXPECT_EQ(alloc0_addr0_realloc, address_limit);  // Should still start at 256KB
 }
 
-TEST(OverlappedAllocators, NonzeroAllocOffset) {
+TEST(OverlappedAllocators, CPU_NonzeroAllocOffset) {
     // Tests that BankManager::allocate_buffer properly accounts for allocator offsets
     // If there are dependencies, allocate_buffer will rely on available_addresses, allocated_addresses, and
     // allocate_at_address APIs. Returned addresses must be absolute addresses otherwise possible bugs:
