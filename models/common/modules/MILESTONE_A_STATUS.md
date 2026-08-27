@@ -138,6 +138,17 @@ contract holds. Real Qwen3-32B has **64** attention heads, giving `attention_dim
 `Attention2D` row of the evidence matrix should be read accordingly. `mb-qwen` (Milestone B, plan
 steps 4-6) is the job that gets it some; until then this is an open gap, not a covered one.
 
+*Milestone B update, 2026-08-27 — half closed, on host only.* `mb-qwen` qualified the real decoupled
+geometry (`dim 5120`, `n_heads 64`, `head_dim 128`, `attention_dim 8192`, `wo [8192, 5120]`) **on the
+host**: attention rebuilt from the converted tensors alone reproduces unmodified HF `Qwen3Attention`
+at PCC >= 0.9999 on a fixture with the product's real shape character, and the `wo` placement
+pairing, the head-concat width and the `dim`-wide post-`wo` residual are each pinned by tests
+(`models/common/tests/models/qwen3_32b_galaxy/test_hf_conversion_host.py`, 13 tests, three fresh
+processes). **It remains unqualified on silicon** — `mb-qwen` had no working mesh, and the Qwen3-32B
+checkpoint is not on that host either. One trap worth carrying forward: `local_qkv_size ==
+local_dim == 1280` for this model, so a fused-QKV-vs-residual width confusion is **shape-invisible**;
+`local_attention_dim` (1024) is the width that differs, and so the one a shape check can catch.
+
 - **`wo` source shape** is now `(n_heads * head_dim, dim)` rather than `(dim, dim)`, which is the
   only way to express that geometry. The two coincide for every case the recorded evidence covers,
   so no recorded numerical result changes. Pinned host-side by both the decoupled case
@@ -157,6 +168,16 @@ while ~55 MB of L1 stays resident, and the next owner's `seal()` fails with an L
 must be torn down before, or together with, the owner.** Recommended design fix (Milestone B/C): make
 `global_cb` a property on the context rather than a stored handle.
 
+*Milestone B update, 2026-08-27 — the mechanism is now confirmed on the host, and the consequence is
+still not.* `mb-coverage` measured it with the module suite's injectable `create_global_cb`/
+`deallocate`: `cleanup()` clears `self._global_cb` **without ever handing it to `deallocate`**, so
+the owner's truthful `owned_resources == ()` and the CB's continued residency are the same event.
+Two owners in one process allocate two CBs and free neither. **The OOM itself needs real L1 and was
+not reproduced**, and the question that actually matters — whether the teardown-ordering contract is
+workable at model scale — is still unanswered, because the 80-layer model was never built. Read a
+clean `cleanup()` as "nothing this object still owns", not "nothing is left on the device".
+Redesign re-routed to Milestone C; see `models/common/models/MILESTONE_B_STATUS.md`.
+
 <a id="l2"></a>**L2 — an undersized `global_cb_size` is silently accepted.** The rejection contract
 does not exist. Low severity (the qualified configuration is correct) but it is a missing guard, not
 a working one.
@@ -168,19 +189,33 @@ tt-metal rejects programs straddling subdevices. It cannot be narrowed: `allowed
 be a dense rectangle, the worker subdevice is not one, and every origin-anchored rectangle includes
 sender column `x=0`.
 
-**Wired, not qualified (updated during the Milestone A/B reconciliation).** This is a program-config
-choice, not a module limit, and Milestone B now makes the partition-compatible choice: the decode QKV
-and `wo` projections resolve to the 24-core ring form built by
-`models/common/models/galaxy/recipes.py::ring_matmul_program_config` — `gather_in0=True`,
-`compute_with_storage_grid_size=(8, 3)`, `hop_cores=ring_hop_cores()`,
-`num_global_cb_receivers=2` — over `ring_cores()`, which lies entirely inside the worker subdevice.
-So L3 should no longer be read as an open deferral against an implementation that does not exist.
+~~**Wired, not qualified (updated during the Milestone A/B reconciliation).** This is a
+program-config choice, not a module limit, and Milestone B now makes the partition-compatible choice:
+the decode QKV and `wo` projections resolve to the 24-core ring form built by
+`models/common/models/galaxy/recipes.py::ring_matmul_program_config`.~~
 
-It has **not been proven on hardware**. Nothing in Milestone B has been run on a Galaxy at all. The
-Milestone A device evidence for this path is still the terminal-FAILED
-`attention_decode_with_active_prefetch` case, which was recorded against the old `(7,1)` grid and is
-deselected from the sweep. **`mb-llama` (Milestone B, plan steps 1-3) is the first job that can
-prove or disprove it**, and it is the fourth item in that job's bring-up order.
+> **Correction, 2026-08-27 — the paragraph above was wrong, and silicon is what disproved it.**
+> `mb-llama` tested this path on real hardware on 2026-08-26 (its defect **D-B5**) and found that the
+> Milestone B recipes moved the **MLP** to the ring/`gather_in0` form and left **both attention
+> matmuls on `dense_matmul_program_config`** — i.e. on the same `(7, 1)` grid this limitation names.
+> Re-verified independently by `mb-signoff` at `models/common/models/galaxy/recipes.py:708,711`.
+> The reconciliation read `ring_matmul_program_config` in the recipes file and inferred that
+> attention used it; only the MLP did, and no host test could see the difference.
+>
+> **L3 is therefore STILL OPEN**, now with a precise diagnosis. On the current build it aborts as
+> `TT_FATAL ... Illegal kernel placement for bmm_large_block_zm_fused_bias_activation, Kernels cannot
+> be placed on dispatch cores!` rather than as a sub-device mismatch.
+>
+> The claim above that it "cannot be narrowed" is also outdated: `ttnn` has since grown
+> `allowed_worker_cores` for exactly this, deprecating `compute_with_storage_grid_size`, and
+> populating it **does** make the program legal. But the largest rectangle inside `worker_cores()` is
+> only **three columns wide** instead of seven, which multiplies `per_core_N` by the same factor the
+> grid narrows — and the matmul's in1 circular buffer then clashes by ~20 kB with the decode
+> activations already resident on `x=1..3` (Milestone B defect **D-B9, still open**). The remaining
+> fix is the ring form, which the recipes already anticipate:
+> `attention_qkv_collective_input_memcfg` is shaped for exactly those 24 ring cores.
+>
+> Full account: `models/common/models/MILESTONE_B_STATUS.md`, defects D-B5 and D-B9.
 
 A related operational note: a `TT_FATAL` abort inside a multi-subdevice program leaves the mesh
 un-drainable — teardown blocks in `FDMeshCommandQueue::~FDMeshCommandQueue → wait_for_outstanding_reads`.
@@ -246,13 +281,17 @@ which is done. *Achievable sooner and worth separating:* the delegation itself h
 of any kind, and could be exercised on N150/T3K with an existing 1D model to prove the default is
 byte-for-byte preserved. See `tttv2_milestone_a_gap_briefs/gap3_batched_prefill_physical32_trace.md`.
 
-**D-B — Attention2D on the prefetch subdevice partition → Milestone B.** [L3](#l3). Terminal and
-fully diagnosed; the fix is a grid choice that Milestone B has to make regardless. Milestone B has
-now made it — the ring/`gather_in0` decode recipe — but has not run it on hardware.
+**D-B — Attention2D on the prefetch subdevice partition → ~~Milestone B~~ Milestone C.** [L3](#l3).
+~~Milestone B has now made it — the ring/`gather_in0` decode recipe — but has not run it on
+hardware.~~ **Corrected 2026-08-27:** Milestone B did **not** make that choice for attention (only
+for the MLP), and first silicon proved it — see the correction under [L3](#l3). Milestone B confined
+the dense grid with `allowed_worker_cores`, which is legal but costs four of seven worker columns and
+opened D-B9. **Still open**, re-routed to Milestone C.
 
-**D-C — `Prefetcher2D` global-CB ownership redesign → Milestone B/C.** [L1](#l1). The ordering
-contract is documented and enforced by the qualified test; the API change should land with the
-executor work that will actually exercise repeated owner lifecycles.
+**D-C — `Prefetcher2D` global-CB ownership redesign → ~~Milestone B/C~~ Milestone C.** [L1](#l1). The
+API change should land with the executor work that will actually exercise repeated owner lifecycles.
+**Milestone B did not reach it**: the 80-layer model was never built, so no one has yet observed a
+second Galaxy model construction in one process, and `test_two_models_in_one_process` has never run.
 
 **D-D — `global_cb_size` validation → any time.** [L2](#l2). Small and self-contained; no dependency
 on later milestones.

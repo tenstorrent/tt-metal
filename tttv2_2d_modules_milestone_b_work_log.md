@@ -796,3 +796,62 @@ Handoff: `tttv2_milestone_b_briefs/job3_completion_handoff.md`.
   `.shape` as the *shard* shape, read out of `TensorToMesh::Impl::create_tensor`, not measured.
   D-C1 rests on it; the one-line check is in the handoff.
 - No test was deleted, `xfail`ed, skipped or relaxed. No threshold was tuned.
+
+## 2026-08-27 — `mb-signoff` (job 4): the exit gate is NOT PASSED
+
+Host-only, no device taken. Commit read: `9d3ec5799ef`. Evidence:
+`tttv2_milestone_b_evidence/signoff/`.
+
+- **Verdict: Milestone B does not pass its exit gate.** 3 of 9 lines PASS (all three mechanical
+  boundary checks), 1 PARTIAL, **4 NOT REACHED**, 1 FAIL. Written up in
+  `models/common/models/MILESTONE_B_STATUS.md`, with the verdict in the first screen rather than
+  after the evidence.
+- **The cause is infrastructure, not code**, and the page says so in those words — the distinction
+  decides who has to act. Mesh re-checked here at 03:34Z: `ls /sys/class/tenstorrent | wc -l` → 21,
+  missing boards `0 1 2 3 4 5 6 7 10 11 14`, unchanged since `mb-qwen`. All four permitted recovery
+  attempts were spent by earlier jobs; none was spent here.
+- **No numerical result from silicon exists for either model, at any tree, from any job.** No PCC,
+  no accuracy figure, no demo output, no functional smoke. Three device jobs each had a night.
+  Recorded as "never measured", not as a judgement about what the gates would have shown.
+- **Nothing was quoted.** Every mechanical line was re-run here. All three boundary greps empty
+  (`_1d.py`, `llm_runtime`, model-named imports) over all 228 changed paths.
+- **The regression gate independently reproduced `mb-coverage`'s number**: `18 failed, 2121 passed,
+  2059 skipped, 3276 deselected, 351 errors in 1045.84s` against its `... 1048.36s`. Two jobs, two
+  processes, identical counts. `HF_HOME` was exported, so the real-checkpoint tests ran.
+  Decomposition checked, not accepted: 13 are `F-C2` (`test_plans.py` needs a cluster), 5 are `O2`,
+  and all 351 errors are cluster-open.
+- **`O2` re-proved mechanically here**: the five failing test files are **byte-identical** to the
+  Milestone A tip and `models/common/llm_runtime` is byte-identical (`git diff` → 0 lines). New
+  finding: **Milestone A's own 1263-test gate never collected them.** Read out of its log
+  (`host01_integrated_gate.log`) — it collected `tests/llm_runtime/`, `tests/modules/` and, under
+  `tests/models/`, only `tests/models/galaxy/`. Milestone B is the first milestone to measure that
+  exit-gate line, and it was red the first time anyone looked.
+- **`L3` corrected in `MILESTONE_A_STATUS.md`, because silicon disproved it.** That page claimed
+  Milestone B had moved the decode QKV and `wo` projections to the ring form. Re-verified here at
+  `recipes.py:708,711`: both are still `dense_matmul_program_config`; only the MLP moved. `D-B5` is
+  right and L3 is **still open**. Surgical edits only — the L3 paragraph, the `D-B` and `D-C`
+  deferrable rows (both re-routed to Milestone C), the `L1` mechanism now confirmed on host, and the
+  Qwen decoupled-geometry gap now half-closed on host.
+- **A documentation defect fixed in `modules/README.md`**: it asserted "A table sized to the full
+  physical batch is the prefill layout and decode rejects it." **`D-C1` disproves that** — decode
+  accepts it. The README now carries the gap instead of the false contract. Also updated: the L3
+  paragraph, the post-record contract amendments, and a new Milestone B section for the two Galaxy
+  model packages that states plainly that none of it is qualified on hardware.
+- **Two findings routed to a human, not filed as bugs.** `D-C1` (is a decode page table
+  discriminated by shape or by placement? — shape cannot do it) and `D-C2` (is a sampling seed
+  per-request or per-(request, slot)? — the design and the step-7 gate are in direct conflict).
+  Both need a decision before Milestone C builds serving on top of them.
+- **Modularity scorecard: the boundaries held.** Zero 1D implementation files changed; `llm_runtime`
+  **byte-identical**, not merely behaviour-preserving; no model-named package imported. 17 new
+  implementation files (+7841), 6 shared files changed (+289/−20, 3.5% of the implementation diff),
+  26 new test files (+9345) — more test code than implementation code. Four topology assumptions
+  were discovered in shared code, all on silicon, all now derived values or explicit parameters.
+  Recorded as an independent finding: **the boundaries holding and the model tests not running are
+  two separate results, and the plan asks for both.**
+- **`tttv2_milestone_c_brief.md` written, and explicitly not an authorisation to start.** It carries
+  what C inherits working (with commands), what it inherits broken (with evidence), the three items
+  routed to it by name — `L1`, `D-A`, and the CCL/`tt_ccl.py` merge evaluation — and the paired
+  TTTv1/TTTv2 performance methodology, so C stands the harness up first rather than retrofitting it.
+  Three known performance debts are listed against those thresholds up front.
+- No device work attempted. No test written, deleted, `xfail`ed, skipped or relaxed. No threshold
+  touched. This job changed **no implementation file** — four markdown files only.
