@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -64,6 +65,10 @@ def random_weights(config, emb_dim: int, vocab_size: int, dtype: torch.dtype):
         # fmt: off
         pytest.param(32, 1024, 10240, True, id="small"),
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.VOCAB_SIZE, False, id="full-no-pcc"),
+        # Mistral-Small-4-119B: emb 4096 / vocab 131072, the opposite aspect ratio to DeepSeek's
+        # 7168 x 129280. seq_len is TILE_SIZE because the PCC check only runs at that length, so a
+        # longer row would skip; this is the only row that checks PCC at a real model's dimensions.
+        pytest.param(ttnn.TILE_SIZE, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.VOCAB_SIZE, True, id="mistral4"),
         # fmt: on
     ],
 )

@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -141,6 +142,7 @@ def run_model(
     it to run the forward inside a real-time-profiler window (see
     ``tests/perf/test_kimi_k3_moe_perf.py``) so the measured region is the forward alone --
     the constructor's one-time weight tilize/typecast stays outside it.
+
     """
     if routed_activation not in _TORCH_ROUTED_ACTIVATION or routed_activation not in _UPSTREAM_ACT:
         raise ValueError(f"no torch reference for {routed_activation}; supported: {list(_TORCH_ROUTED_ACTIVATION)}")
@@ -978,4 +980,84 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+    )
+
+
+# Mistral-Small-4-119B MoE. Own test function rather than a row on test_ds_moe because the upstream
+# reference is a different class; the shared run_model body is unchanged.
+#
+# 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite. 128 experts at top-4 exercises
+# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. Random weights
+# only: the checkpoint stacks the routed experts, so the pretrained fixture loads attention alone.
+#
+# The [reference_output] check sits at its threshold by construction, for two reasons that are both
+# about routing rather than device numerics: Mistral's router scores with softmax while the device op
+# only knows sigmoid, and the fixture emits an e_score_correction_bias that the device consumes but
+# Mistral's router does not have. Together those cap this comparison near 0.977, against the
+# moe_pcc_threshold of 0.971. A miss here is far more likely to be routing than arithmetic.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            # fabric2d, not torus_xy, and deliberately unlike the sibling 8x4 rows: measured on CI run
+            # 32567382271, every torus_xy mistral4 case SKIPPED ("Galaxy TorusXY ... requires an
+            # explicit ring/ring descriptor and a cabling-certified allocation"), and a skipped leg
+            # reports green. FABRIC_2D is what this test ran under on ssalice/mistral4-119b-prefill,
+            # where it genuinely passed on CI. Revert once bh_sc1 is ring-cabled.
+            fabric2d_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+            ),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral4"])
+def test_mistral4_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
     )

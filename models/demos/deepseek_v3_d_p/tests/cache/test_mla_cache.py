@@ -50,9 +50,17 @@ def cleanup_cache():
     ],
     indirect=["mesh_device", "device_params"],
 )
-# "k3" (not "kimi_k3") because pytest -k is substring-based. deepseek_v3_d_p is the historical
-# default of the `variant` fixture, so keeping it first preserves this test's original coverage.
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k3"], indirect=True, ids=["dsv3", "k3"])
+# "k3" (not "kimi_k3") and "mistral4" (not "mistral_small_4") because pytest -k is substring-based.
+# deepseek_v3_d_p is the historical default of the `variant` fixture, so keeping it first preserves
+# this test's original coverage.
+# mistral_small_4 resolves through the adapter's hand-built `mistral4_hf_config` rather than
+# AutoConfig, so it needs no checkpoint here — only the MLA dims the state_dict below is built from.
+@pytest.mark.parametrize(
+    "variant",
+    ["deepseek_v3_d_p", "kimi_k3", "mistral_small_4"],
+    indirect=True,
+    ids=["dsv3", "k3", "mistral4"],
+)
 def test_mla_weights_cold_warm_cache(mesh_device, device_params, config_only, variant):
     """Test: weights → cold cache → warm cache produce identical outputs.
 
