@@ -462,6 +462,7 @@ PERF_TEST_SCHEMAS = {
             "unpack_transpose_faces",
             "unpack_transpose_within_face",
         ],
+        "aliases": {},
         "test_name_aliases": {"perf_sfpu_ema": "perf_sfpu_ema"},
     },
     "perf_sfpu_reduce": {
