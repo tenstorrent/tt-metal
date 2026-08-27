@@ -250,15 +250,28 @@ template <typename Scheme>
     const SignalBuffer& input, const BoundaryMode boundary_mode = BoundaryMode::kSymmetric) {
     static_assert(Scheme::tap_size > 0, "Static lifting schemes must have a positive tap size");
     static_assert(Scheme::num_steps > 0, "Static lifting schemes must have at least one step");
-    TT_FATAL(input.element_size_bytes == sizeof(float), "Forward lifting plan currently supports fp32 only");
     TT_FATAL(
-        input.length <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()),
-        "Input length {} exceeds uint32_t runtime limits",
-        input.length);
+        input.stick_width == kStickWidth,
+        "Forward lifting plan requires {}-element sticks, got {}",
+        kStickWidth,
+        input.stick_width);
+    TT_FATAL(input.element_size_bytes == sizeof(float), "Forward lifting plan currently supports fp32 only");
+    constexpr size_t wavelet_pad = static_cast<size_t>(Scheme::tap_size - 1);
+    constexpr size_t total_pad = 2 * wavelet_pad;
+    static_assert(total_pad <= kMaxSignedDeviceIndex);
+    TT_FATAL(
+        input.length <= static_cast<size_t>(kMaxSignedDeviceIndex) - total_pad,
+        "Input length {} with {} elements of padding exceeds the signed device-index limit {}",
+        input.length,
+        total_pad,
+        kMaxSignedDeviceIndex);
 
-    const uint32_t wavelet_pad = static_cast<uint32_t>(Scheme::tap_size - 1);
-    const PadSplit1DLayout preprocess_layout =
-        make_pad_split_1d_layout(input, Pad1DConfig{.mode = boundary_mode, .left = wavelet_pad, .right = wavelet_pad});
+    const PadSplit1DLayout preprocess_layout = make_pad_split_1d_layout(
+        input,
+        Pad1DConfig{
+            .mode = boundary_mode,
+            .left = static_cast<uint32_t>(wavelet_pad),
+            .right = static_cast<uint32_t>(wavelet_pad)});
 
     const SignalBuffer initial_even = preprocess_layout.output.even;
     const SignalBuffer initial_odd = preprocess_layout.output.odd;
