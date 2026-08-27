@@ -25,22 +25,11 @@ _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wr
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
 
 
-# Device time does not scale with ISL -- fixed dispatch overhead, CCL latency floors and expert-loop
-# tails all stay put -- so these values cannot be rescaled, only re-measured: Galaxy 8x4 for the two
-# _galaxy tests, LoudBox 8x1 + 2x4 for the proxy pair (which feed one estimate and must be cut
-# together). They stay here as the reference point for that measurement.
-_ISL_REBASELINE_SKIP = pytest.mark.skip(
-    reason="baseline measured at 3200 tokens/chip; rows now run 640/chip. Re-measure on the gating "
-    "box, then drop this mark."
-)
-
-
 def _require_certified_torus_xy():
     if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1" or not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
         pytest.fail("TorusXY perf requires a certified Galaxy and explicit mesh graph descriptor")
 
 
-@_ISL_REBASELINE_SKIP
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_loudbox():
     """Run the existing 8x1 + 2x4 proxies and retain their 8x4 approximation signal.
@@ -51,12 +40,16 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Recalibrated 2026-08-21 on this LoudBox, Fabric2D TorusY, with the routed experts folded
-        # into one program. Single run each, where the previous 8x1 was a mean of two.
-        expected_ns_8x1=14_385_886,
+        # Both re-measured 2026-08-22 at 640 tokens/chip on the BH LoudBox bh-lb-15 (8x p150b,
+        # DDR 16000 nominal, 150W TDP limit). Mean of 14 runs each; 30/30 gate runs passed.
+        # 5.876-5.921 ms, 0.76% peak to peak. Supersedes the 2026-08-21 recalibration, which was
+        # still taken at 3200 tokens/chip.
+        expected_ns_8x1=5_895_298,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=15_945_512,
+        # 9.548-9.655 ms, 1.12% peak to peak -- the widest of the four LoudBox gates, still inside
+        # the 3% band below.
+        expected_ns_2x4=9_601_530,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

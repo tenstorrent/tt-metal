@@ -56,15 +56,15 @@ _SUBTORUS_4X4_HOSTGATE_SKIP = pytest.mark.skip(
     [
         pytest.param(
             f"pytest {_TEST_PATH} -k 'fabric2d-mesh-2x4-2link and layer3 and gate_device and no_ref and isl_1k28' --wrapper-invocation",
-            30_330_761,  # Recalibrated 2026-08-21 on this LoudBox with the routed experts folded
-            # into one program. Single run, where the previous value was a mean of three.
+            14_179_641,  # Re-measured 2026-08-22 at 640 tokens/chip on the BH LoudBox bh-lb-15
+            # (8x p150b, DDR 16000 nominal, 150W TDP limit). Mean of 14 runs, 14.153-14.243 ms,
+            # 0.64% peak to peak.
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe_fabric2d",
             1,
             1,
             0.03,
             "2x4_layer3_moe_real_weights_fabric2d",
-            marks=_ISL_REBASELINE_SKIP,
         ),
         pytest.param(
             f"pytest {_TEST_PATH} -k 'torus-xy-8x4 and layer0 and gate_device and no_ref and isl_5k' --wrapper-invocation",

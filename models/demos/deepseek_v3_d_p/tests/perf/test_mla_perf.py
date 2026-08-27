@@ -63,24 +63,15 @@ def _ci_unsupported_param_combos(**params):
     return True
 
 
-# Two independent reasons this is off: CI does not want the non-chunked path at all (above), and the
-# baseline predates the ISL change. The skip covers local runs too; drop it once a LoudBox number
-# exists, which leaves the CI policy above standing.
-_ISL_REBASELINE_SKIP = pytest.mark.skip(
-    reason="baseline measured at 3200 tokens/chip; the row now runs 640/chip. Re-measure on a LoudBox, "
-    "then drop this mark."
-)
-
-
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
-@_ISL_REBASELINE_SKIP
 @pytest.mark.timeout(0)
 def test_deepseek_v3_mla_perf_loudbox():
     """Retain the existing 2x4 LoudBox proxy on unwrapped Fabric2D."""
     run_mla_perf_loudbox(
         command_2x4=_CMD_2X4,
-        # Measured 2026-08-15 on the BH LoudBox Fabric2D CI runner (run 31895358174).
-        expected_ns_2x4=8_857_393,
+        # Re-measured 2026-08-22 at 640 tokens/chip on the BH LoudBox bh-lb-15 (8x p150b, DDR 16000
+        # nominal, 150W TDP limit). Mean of 14 runs, 2.658-2.664 ms, 0.25% peak to peak.
+        expected_ns_2x4=2_660_615,
         model_name_2x4="deepseek_v3_mla_lb_2x4_fabric2d",
         subdir="deepseek_v3_mla",
         margin=0.03,
