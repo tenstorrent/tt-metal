@@ -590,6 +590,12 @@ def unified_program_spec(
             defs.pop("TT_UNIFIED_MCAST_SEM_FIRST", None)
             defs.pop("TT_UNIFIED_MCAST_SEM_LAST", None)
         k.compiler_options.defines = defs
+        # KernelSpec defaults EVERY kernel to O2. The legacy path defaulted compute to O3
+        # (kernel_types.hpp:132 against :82), and the difference is not only speed: an
+        # LLK-heavy compute kernel built at O2 can fail to LINK, because constant propagation
+        # stops reaching the addrmod immediates and LTO reports "impossible constraint in
+        # 'asm'". flash_attention does exactly that. So compute keeps the level it always had.
+        k.compiler_options.opt_level = ps.KernelBuildOptLevel.O3 if is_compute else ps.KernelBuildOptLevel.O2
         bindings = []
         for param in tensors:
             b = ps.KernelSpec.TensorBinding()
