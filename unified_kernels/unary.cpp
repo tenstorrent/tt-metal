@@ -17,6 +17,7 @@
 // Defines: one of UN_SQRT, UN_RSQRT, UN_EXP, UN_CHAIN; recip is the default.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -33,11 +34,11 @@ namespace u = tt::unified;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_named_compile_time_arg_val("num_blocks");
-    constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
 
-    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbIn = get_arg(args::cb_in);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
     u::compute_init(kCbIn, kCbOut);
 

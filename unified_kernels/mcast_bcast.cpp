@@ -39,10 +39,10 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t tiles_per_block = get_named_compile_time_arg_val("tiles_per_block");
+    constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
 
-    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbIn = get_arg(args::cb_in);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
     const uint32_t out_block = get_arg(args::out_block);
 
     u::compute_init(kCbIn, kCbOut);

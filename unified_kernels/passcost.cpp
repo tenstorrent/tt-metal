@@ -50,6 +50,7 @@
 // Define PASSES (1..8).
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -93,12 +94,12 @@ static_assert(PASSES == 1, "a reduction is not shape-preserving, so it cannot be
 #endif
 
 void kernel_main() {
-    constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
-    constexpr uint32_t cols = get_named_compile_time_arg_val("cols");
+    constexpr uint32_t rows = get_arg(args::rows);
+    constexpr uint32_t cols = get_arg(args::cols);
 
-    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t kCbVec = get_named_compile_time_arg_val("cb_vec");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbIn = get_arg(args::cb_in);
+    constexpr uint32_t kCbVec = get_arg(args::cb_vec);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
 #if defined(PC_MATMUL)
     static_assert(rows == cols, "a chained matmul has to be square to preserve the shape");

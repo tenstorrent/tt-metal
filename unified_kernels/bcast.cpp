@@ -20,6 +20,7 @@
 //          BC_OP_ADD / BC_OP_SUB / BC_OP_MUL.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -40,13 +41,13 @@ constexpr auto kAxis = u::Axis::Both;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t ht = get_named_compile_time_arg_val("ht");
-    constexpr uint32_t wt = get_named_compile_time_arg_val("wt");
+    constexpr uint32_t ht = get_arg(args::ht);
+    constexpr uint32_t wt = get_arg(args::wt);
 
-    constexpr uint32_t kCbBlock = get_named_compile_time_arg_val("cb_block");
-    constexpr uint32_t kCbVec = get_named_compile_time_arg_val("cb_vec");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t kCbTmp = get_named_compile_time_arg_val("cb_tmp");
+    constexpr uint32_t kCbBlock = get_arg(args::cb_block);
+    constexpr uint32_t kCbVec = get_arg(args::cb_vec);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kCbTmp = get_arg(args::cb_tmp);
 
     u::compute_init(kCbBlock, kCbOut);
 

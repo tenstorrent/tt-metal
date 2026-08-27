@@ -363,7 +363,7 @@ def dfb_intermed(name, *, dtype=ttnn.bfloat16, num_pages=2):
 # the only place that knows which projection stands at which end of a buffer, so it is the
 # place to read it from.
 _RE_STORAGE = re.compile(r"u::Storage<[^;]*?>\s+(\w+)\s*\(\s*(\w+)\s*\)")
-_RE_CB_NAMED = re.compile(r'(\w+)\s*=\s*get_named_compile_time_arg_val\(\s*"cb_(\w+)"\s*\)')
+_RE_CB_NAMED = re.compile(r"(\w+)\s*=\s*get_arg\(\s*args::cb_(\w+)\s*\)")
 _RE_PRODUCED = re.compile(
     r"(?:u::Block[\w<>: ]*|u::RetainedBlock[\w<>: ]*|auto)\s+(\w+)\s*=\s*(\w+)\.(?:store|accumulate)\("
 )

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -14,11 +15,11 @@ using Out = u::Shape<2, 2>;
 using Bias = u::Shape<1, 2>;
 
 void kernel_main() {
-    constexpr uint32_t kCbA = get_named_compile_time_arg_val("cb_a");
-    constexpr uint32_t kCbB = get_named_compile_time_arg_val("cb_b");
-    constexpr uint32_t kCbBias = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t kCbPartials = get_named_compile_time_arg_val("cb_partials");
+    constexpr uint32_t kCbA = get_arg(args::cb_a);
+    constexpr uint32_t kCbB = get_arg(args::cb_b);
+    constexpr uint32_t kCbBias = get_arg(args::cb_bias);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kCbPartials = get_arg(args::cb_partials);
 
     const auto a = TensorAccessor(tensor::a));
     const auto b = TensorAccessor(tensor::b));

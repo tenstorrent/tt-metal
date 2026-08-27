@@ -22,6 +22,7 @@
 // No runtime args: the tensors are bound, so their addresses ride with the accessors.
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
@@ -52,11 +53,11 @@ constexpr uint32_t kIn1Tiles = MM_KT_DIM * MM_CT_DIM;
 constexpr uint32_t kOutTiles = MM_RT_DIM * MM_CT_DIM;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t kCbIn1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t kCbBias = get_named_compile_time_arg_val("cb_bias");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
+    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
+    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
+    constexpr uint32_t kCbBias = get_arg(args::cb_bias);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
 #if defined(MM_BIAS)
     // Last, so a build without MM_BIAS sees exactly the layout it always did.
 #endif

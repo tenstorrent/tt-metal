@@ -19,15 +19,16 @@
 //   the sentinel
 
 #include <tt/unified/core>
+#include "experimental/kernel_args.h"
 
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t tiles = get_named_compile_time_arg_val("tiles");
+    constexpr uint32_t tiles = get_arg(args::tiles);
 
-    constexpr uint32_t kCbA = get_named_compile_time_arg_val("cb_a");
-    constexpr uint32_t kCbB = get_named_compile_time_arg_val("cb_b");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t kCbA = get_arg(args::cb_a);
+    constexpr uint32_t kCbB = get_arg(args::cb_b);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
 
     const auto a_acc = TensorAccessor(tensor::a));
     const auto b_acc = TensorAccessor(tensor::b));

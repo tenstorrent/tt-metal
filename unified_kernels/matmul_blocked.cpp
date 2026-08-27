@@ -92,16 +92,16 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t mt = get_named_compile_time_arg_val("mt");
-    constexpr uint32_t ktot = get_named_compile_time_arg_val("ktot");
-    constexpr uint32_t ntot = get_named_compile_time_arg_val("ntot");
-    constexpr uint32_t kt = get_named_compile_time_arg_val("kt");
-    constexpr uint32_t nt = get_named_compile_time_arg_val("nt");
+    constexpr uint32_t mt = get_arg(args::mt);
+    constexpr uint32_t ktot = get_arg(args::ktot);
+    constexpr uint32_t ntot = get_arg(args::ntot);
+    constexpr uint32_t kt = get_arg(args::kt);
+    constexpr uint32_t nt = get_arg(args::nt);
 
-    constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t kCbWo = get_named_compile_time_arg_val("cb_wo");
-    constexpr uint32_t kCbOut = get_named_compile_time_arg_val("cb_out");
-    constexpr uint32_t kCbAcc = get_named_compile_time_arg_val("cb_acc");
+    constexpr uint32_t kCbIn = get_arg(args::cb_in);
+    constexpr uint32_t kCbWo = get_arg(args::cb_wo);
+    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
 
     static_assert(kt > 0 && ktot % kt == 0, "the k-block width must divide K");
     static_assert(nt > 0 && ntot % nt == 0, "the output-column block width must divide N");
