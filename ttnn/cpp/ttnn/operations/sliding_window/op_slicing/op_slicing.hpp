@@ -18,8 +18,14 @@ struct Op2DSliceConfig {
     enum class SliceType : uint8_t {
         DRAM_HEIGHT,
         DRAM_WIDTH,
-        L1_FULL  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
-                 // L1.
+        L1_FULL,  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
+                  // L1.
+        // Appended rather than grouped with the DRAM_* values above so the existing enumerators keep
+        // their numeric values.
+        DRAM_CHANNEL  // Slice along the channel dimension. Only legal for ops with no cross-channel reduction (see
+                      // OpSliceAttr::channel_slice_granularity). Unlike height/width slicing there is no halo, so no
+                      // data is duplicated between slices; it is the only usable axis when both spatial dimensions are
+                      // too small to slice (e.g. a wide depthwise short convolution, output 1x23x8192).
     };
     SliceType slice_type = SliceType::DRAM_WIDTH;
 
@@ -49,6 +55,24 @@ public:
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) = 0;
     virtual std::string name() const = 0;
+
+    // ---- Channel slicing (SliceType::DRAM_CHANNEL) -----------------------------------------------
+    // Opt-in: an op supports channel slicing only if each output channel can be computed without
+    // reducing over the channels held by other slices. True for pooling (fully per-channel) and for
+    // depthwise/grouped convolution when slices land on group boundaries; false for a dense
+    // convolution, where every output channel reduces over all input channels.
+    //
+    // Returns the required channel alignment of a slice boundary, or 0 if the op does not support
+    // channel slicing (the default, so existing ops keep their spatial-only behaviour).
+    virtual uint32_t channel_slice_granularity() const;
+
+    // As get_L1_usage / run_L1_op, but for a slice covering the full spatial extent and the
+    // half-open output channel range [channel_start, channel_end). Only called when
+    // channel_slice_granularity() > 0.
+    virtual uint32_t get_L1_usage_for_channel_slice(
+        uint32_t channel_start, uint32_t channel_end, const op_slicing::Op2DSliceConfig& slice_config) const;
+    virtual std::vector<ttnn::Tensor> run_L1_op_channel_slice(
+        const ttnn::Tensor& sliced_input_tensor, uint32_t channel_start, uint32_t channel_end);
 };
 
 Op2DSliceConfig determine_slice_config(

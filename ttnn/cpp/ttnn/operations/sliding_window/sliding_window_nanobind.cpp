@@ -43,9 +43,10 @@ void bind_sliding_window(nb::module_& mod) {
         "slice_type",
         &Op2DSliceConfig::slice_type,
         R"doc(
-        | The type of slice to be used. Can be either SliceHeight or SliceWidth. When the tensor is in [N, H, W, C] format, then it can slice either along the height or width dimension.
+        | The type of slice to be used. When the tensor is in [N, H, W, C] format, it can slice along the height, width or channel dimension.
         | Slicing along the width is preferable as it reduces the size of the output of the Halo operation.
         | Use SliceHeight only when the height dimension is much larger than the width dimension.
+        | Use DRAMSliceChannel for ops with no cross-channel reduction (pooling, depthwise convolution); it has no halo, and it is the only usable axis when both spatial dimensions are too small to slice.
         )doc");
     py_op_slice_config.def_rw(
         "num_slices",
@@ -59,7 +60,8 @@ void bind_sliding_window(nb::module_& mod) {
     nb::enum_<Op2DSliceConfig::SliceType>(py_op_slice_config, "SliceTypeEnum")
         .value("L1Full", Op2DSliceConfig::SliceType::L1_FULL)
         .value("DRAMSliceHeight", Op2DSliceConfig::SliceType::DRAM_HEIGHT)
-        .value("DRAMSliceWidth", Op2DSliceConfig::SliceType::DRAM_WIDTH);
+        .value("DRAMSliceWidth", Op2DSliceConfig::SliceType::DRAM_WIDTH)
+        .value("DRAMSliceChannel", Op2DSliceConfig::SliceType::DRAM_CHANNEL);
 }
 
 }  // namespace ttnn::operations::sliding_window

@@ -1065,3 +1065,61 @@ def test_conv1d_depthwise_default_route_long_seq(device):
         packer_l1_acc=True,
         pcc=0.999,
     )
+
+
+# Qwen3.5 / Qwen3.6 35B-A3B Gated DeltaNet short convolution: depthwise over the fused QKV
+# stream, conv_dim = linear_key_head_dim * linear_num_key_heads * 2 + linear_value_head_dim *
+# linear_num_value_heads = 8192, kernel 4, causal padding 3 over a 20-token prompt.
+_GATED_DELTA_SHORT_CONV_SHAPE = dict(
+    batch_size=1,
+    in_channels=8192,
+    out_channels=8192,
+    input_length=20,
+    kernel_size=4,
+    stride=1,
+    padding=3,
+    groups=8192,
+)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_depthwise_channel_slicing_wide(device):
+    """A very deep, spatially tiny depthwise conv must auto-route through DRAM channel
+    slicing. Output is 1 x 23 x 8192: height is 1 and width 23 rounds into a single tile, so
+    neither spatial axis can be split, while the 4-tap halo over 8192 channels needs ~1.5 MB
+    against ~1.4 MB of L1. Before DRAM_CHANNEL existed this aborted the run with "DRAM Auto
+    slice could not find valid slice configuration. Tried up to 1 slices for width-slicing on
+    output dimension 23"."""
+    run_conv1d_route(device, **_GATED_DELTA_SHORT_CONV_SHAPE, shard_layout=None)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_channel_slicing_respects_num_slices(device):
+    """An explicitly requested channel slice count must be honoured and stay correct. Two
+    slices of 4096 already fit; 32 slices of 256 exercises many small slices, including the
+    per-slice weight slicing and the concatenation of the results."""
+    for num_slices in (2, 32):
+        run_conv1d_route(
+            device,
+            **_GATED_DELTA_SHORT_CONV_SHAPE,
+            shard_layout=None,
+            slice_config=ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceChannel,
+                num_slices=num_slices,
+            ),
+        )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_conv1d_grouped_not_channel_sliced(device):
+    """Channel slicing must stay gated to fully depthwise convs. At groups=64 each output
+    channel reduces over 128 input channels, so splitting channels at arbitrary boundaries
+    would compute the wrong result. This shape does not need slicing at all (a grouped conv
+    spreads channels over more cores, so it fits), which is exactly why it is worth pinning:
+    a gate regression that offered the channel axis here would corrupt the output silently
+    rather than raise, and only a numerical check would catch it."""
+    run_conv1d_route(
+        device,
+        **{**_GATED_DELTA_SHORT_CONV_SHAPE, "groups": 64},
+        shard_layout=None,
+    )

@@ -12,7 +12,23 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/operations/experimental/slice_write/slice_write.hpp>
 #include <ttnn/operations/experimental/padded_slice/padded_slice.hpp>
+#include <ttnn/operations/data_movement/slice/slice.hpp>
+#include <ttnn/operations/data_movement/concat/concat.hpp>
 namespace ttnn::operations::op_slicing {
+
+// Ops opt in to channel slicing by overriding these; the defaults keep every existing
+// implementation spatial-only.
+uint32_t OpSliceAttr::channel_slice_granularity() const { return 0; }
+
+uint32_t OpSliceAttr::get_L1_usage_for_channel_slice(
+    uint32_t /*channel_start*/, uint32_t /*channel_end*/, const op_slicing::Op2DSliceConfig& /*slice_config*/) const {
+    TT_THROW("{} does not support channel slicing", name());
+}
+
+std::vector<ttnn::Tensor> OpSliceAttr::run_L1_op_channel_slice(
+    const ttnn::Tensor& /*sliced_input_tensor*/, uint32_t /*channel_start*/, uint32_t /*channel_end*/) {
+    TT_THROW("{} does not support channel slicing", name());
+}
 
 // Compute the rounding value for slice boundaries based on output layout and slice type.
 // For tiled outputs, slices must align to tile boundaries (32 elements).
@@ -22,6 +38,44 @@ static uint32_t compute_slice_rounding_value(
         return tt::constants::TILE_HEIGHT;
     }
     return 1;
+}
+
+static const char* slice_type_name(Op2DSliceConfig::SliceType slice_type) {
+    switch (slice_type) {
+        case Op2DSliceConfig::SliceType::DRAM_HEIGHT: return "height";
+        case Op2DSliceConfig::SliceType::DRAM_WIDTH: return "width";
+        case Op2DSliceConfig::SliceType::DRAM_CHANNEL: return "channel";
+        case Op2DSliceConfig::SliceType::L1_FULL: return "L1_FULL";
+    }
+    return "unknown";
+}
+
+// Channel slices must respect the op's own alignment requirement rather than the output layout:
+// the channel dimension is the innermost (stick) dimension, not the tilized height.
+static uint32_t compute_channel_slice_rounding_value(const OpSliceAttr* op_slice_attr) {
+    const uint32_t granularity = op_slice_attr->channel_slice_granularity();
+    TT_FATAL(granularity > 0, "{} does not support channel slicing", op_slice_attr->name());
+    return granularity;
+}
+
+// Walk the channel slices implied by num_slices, invoking `visit(start, end)` for each.
+// Shared by the L1 usage estimate and the execution loop so the two cannot disagree.
+template <typename VisitFn>
+static void for_each_channel_slice(uint32_t channels, uint32_t rounding_value, uint32_t num_slices, VisitFn&& visit) {
+    TT_FATAL(num_slices > 0, "Channel slicing requires at least one slice");
+    const uint32_t rounded_units = tt::div_up(channels, rounding_value);
+    const uint32_t min_units_per_slice = rounded_units / num_slices;
+    const uint32_t units_remainder = rounded_units % num_slices;
+
+    uint32_t channel_start = 0;
+    for (uint32_t slice_index = 0; slice_index < num_slices && channel_start < channels; slice_index++) {
+        const uint32_t slice_units = min_units_per_slice + ((slice_index < units_remainder) ? 1 : 0);
+        const uint32_t channel_end = std::min(channels, channel_start + slice_units * rounding_value);
+        if (channel_end > channel_start) {
+            visit(channel_start, channel_end);
+        }
+        channel_start = channel_end;
+    }
 }
 
 // Compute the maximum number of slices allowed for the given output dimension and layout.
@@ -43,6 +97,20 @@ static uint32_t compute_L1_usage_for_slice_config(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
     auto [batch_size, output_height, output_width, output_channels] = output_shape.to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_shape.to_array_4D();
+
+    if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_CHANNEL) {
+        uint32_t max_memory_consumed = 0;
+        for_each_channel_slice(
+            output_channels,
+            compute_channel_slice_rounding_value(op_slice_attr),
+            dram_slice_config.num_slices,
+            [&](uint32_t channel_start, uint32_t channel_end) {
+                max_memory_consumed = std::max(
+                    max_memory_consumed,
+                    op_slice_attr->get_L1_usage_for_channel_slice(channel_start, channel_end, dram_slice_config));
+            });
+        return max_memory_consumed;
+    }
 
     // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width
     const uint32_t output_sliced_dim =
@@ -188,19 +256,29 @@ static Op2DSliceConfig determine_slice_config_internal(
         output_width,
         auto_slice_type);
 
-    const uint32_t slice_rounding_value = compute_slice_rounding_value(output_layout, return_slice_config.slice_type);
+    const bool channel_slicing = return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_CHANNEL;
 
-    // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width
+    const uint32_t slice_rounding_value =
+        channel_slicing ? compute_channel_slice_rounding_value(op_slice_attr)
+                        : compute_slice_rounding_value(output_layout, return_slice_config.slice_type);
+
+    // DRAM_HEIGHT = slice along image height, DRAM_WIDTH = slice along image width,
+    // DRAM_CHANNEL = slice along channels
     const uint32_t output_sliced_dim =
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+        channel_slicing ? output_shape[3]
+                        : (return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? output_height
+                                                                                                     : output_width);
 
-    const uint32_t max_num_slices = compute_max_num_slices(output_sliced_dim, slice_rounding_value, output_layout);
+    // Channel slices are bounded by the op's alignment, not by the output layout's tiling.
+    const uint32_t max_num_slices =
+        channel_slicing ? tt::div_up(output_sliced_dim, slice_rounding_value)
+                        : compute_max_num_slices(output_sliced_dim, slice_rounding_value, output_layout);
 
     log_debug(
         tt::LogOp,
         "Max possible slices for {} layout and {}-slicing: {} (output_sliced_dim={})",
         output_layout == tt::tt_metal::Layout::TILE ? "TILE" : "ROW_MAJOR",
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        slice_type_name(return_slice_config.slice_type),
         max_num_slices,
         output_sliced_dim);
 
@@ -229,7 +307,7 @@ static Op2DSliceConfig determine_slice_config_internal(
         log_warning(
             tt::LogOp,
             "Failed to find valid config with {}-slicing. Attempting fallback to {}-slicing.",
-            return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+            slice_type_name(return_slice_config.slice_type),
             return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "width" : "height");
 
         if (return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_WIDTH) {
@@ -254,6 +332,24 @@ static Op2DSliceConfig determine_slice_config_internal(
             true);  // Mark as retry attempt
     }
 
+    // Both spatial axes are exhausted. If the op has no cross-channel reduction, channels are still
+    // a legal axis to split on -- and the only one left when the image is small but very deep
+    // (e.g. a wide depthwise short convolution, whose output is 1 x 23 x 8192).
+    if (!found_valid_config && !channel_slicing && op_slice_attr->channel_slice_granularity() > 0) {
+        log_warning(
+            tt::LogOp,
+            "Failed to find valid config with {}-slicing. Attempting fallback to channel-slicing.",
+            slice_type_name(return_slice_config.slice_type));
+        return determine_slice_config_internal(
+            op_slice_attr,
+            input_shape,
+            output_shape,
+            Op2DSliceConfig{.slice_type = Op2DSliceConfig::SliceType::DRAM_CHANNEL, .num_slices = 0},
+            output_layout,
+            device,
+            true);  // Mark as retry attempt
+    }
+
     // If we haven't found a valid config, this is fatal
     TT_FATAL(
         found_valid_config,
@@ -261,7 +357,7 @@ static Op2DSliceConfig determine_slice_config_internal(
         "dimension {}. Available L1: {} bytes. Operation requires more memory than available even with maximum "
         "slicing.",
         current_num_slices - 1,
-        return_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_HEIGHT ? "height" : "width",
+        slice_type_name(return_slice_config.slice_type),
         output_sliced_dim,
         L1_stats.total_free_bytes);
 
@@ -278,6 +374,90 @@ Op2DSliceConfig determine_slice_config(
     MeshDevice* device) {
     return determine_slice_config_internal(
         op_slice_attr, input_shape, output_shape, slice_config_, output_layout, device, false);
+}
+
+// Execute the op one channel range at a time. Unlike the spatial loop there is no halo: slice N
+// reads exactly the channels it writes, so a plain slice replaces padded_slice and the op reshards
+// the activation itself.
+static void run_channel_sliced_op(
+    const ttnn::Tensor& input_tensor,
+    std::vector<OpSliceAttr::RefTensor>& output_tensors,
+    OpSliceAttr* op_slice_attr,
+    uint32_t num_slices,
+    tt::tt_metal::Layout output_layout) {
+    auto [batch_size, output_height, output_width, output_channels] =
+        output_tensors[0].get().logical_shape().to_array_4D();
+    auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
+    const uint32_t num_output_tensors = output_tensors.size();
+
+    // No halo means the input and output channel ranges coincide, which only holds for ops whose
+    // channels map one-to-one (pooling, depthwise convolution).
+    TT_FATAL(
+        input_channels == output_channels,
+        "Channel slicing requires matching input and output channel counts for {}, got {} and {}",
+        op_slice_attr->name(),
+        input_channels,
+        output_channels);
+
+    // slice_write cannot take a nonzero offset in the last dimension for a tiled sharded input
+    // (slice_write_tiled_sharded_input_program_factory: output_tensor_start[-1] == 0), so channel
+    // slices are gathered and concatenated rather than written in place. The preallocated output is
+    // replaced, as in the num_slices == 1 path.
+    const MemoryConfig dram_interleaved{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    std::vector<std::vector<ttnn::Tensor>> gathered_slices(num_output_tensors);
+
+    for_each_channel_slice(
+        output_channels,
+        compute_channel_slice_rounding_value(op_slice_attr),
+        num_slices,
+        [&](uint32_t channel_start, uint32_t channel_end) {
+            log_trace(
+                tt::LogOp,
+                "Op {} DRAM channel slicing: channels [{}, {})",
+                op_slice_attr->name(),
+                channel_start,
+                channel_end);
+
+            const Tensor sliced_input_tensor = ttnn::slice(
+                input_tensor,
+                ttsl::SmallVector<uint32_t>{0, 0, 0, channel_start},
+                ttsl::SmallVector<uint32_t>{batch_size, input_height, input_width, channel_end},
+                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+
+            auto sliced_output_tensors =
+                op_slice_attr->run_L1_op_channel_slice(sliced_input_tensor, channel_start, channel_end);
+            TT_FATAL(
+                sliced_output_tensors.size() == num_output_tensors,
+                "Number of output tensors from run_L1_op_channel_slice {} does not match the expected number of "
+                "output tensors {}",
+                sliced_output_tensors.size(),
+                num_output_tensors);
+
+            const uint32_t channel_slice_size = channel_end - channel_start;
+            for (uint32_t output_tensor_index = 0; output_tensor_index < num_output_tensors; output_tensor_index++) {
+                auto& sliced_output_tensor = sliced_output_tensors[output_tensor_index];
+                // Spill each slice to DRAM so concat sees uniform, unsharded inputs and L1 is freed
+                // for the next slice.
+                sliced_output_tensor = ttnn::to_memory_config(sliced_output_tensor, dram_interleaved);
+                if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
+                    sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
+                }
+                // The op returns a flattened activation; restore [N, H, W, C] so the concatenated
+                // result carries the 4D shape the caller allocated (it flattens this afterwards).
+                sliced_output_tensor = ttnn::reshape(
+                    sliced_output_tensor,
+                    ttnn::Shape({batch_size, output_height, output_width, channel_slice_size}),
+                    ttnn::Shape({batch_size, output_height, output_width, sliced_output_tensor.padded_shape()[3]}));
+                gathered_slices[output_tensor_index].push_back(sliced_output_tensor);
+            }
+        });
+
+    for (uint32_t output_tensor_index = 0; output_tensor_index < num_output_tensors; output_tensor_index++) {
+        auto& output_tensor = output_tensors[output_tensor_index].get();
+        // Free the preallocated output before concat allocates the real one.
+        output_tensor.deallocate(true);
+        output_tensor = ttnn::concat(gathered_slices[output_tensor_index], 3, dram_interleaved);
+    }
 }
 
 void run_sliced_op(
@@ -336,6 +516,13 @@ void run_sliced_op(
         input_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_free_bytes);
 
     log_debug(tt::LogOp, "{} DRAM with Slice Config {}", op_slice_attr->name(), dram_slice_config);
+
+    // Channels are sliced by their own loop: the bounds below are spatial, and the channel axis has
+    // no halo to compute.
+    if (dram_slice_config.slice_type == Op2DSliceConfig::SliceType::DRAM_CHANNEL) {
+        run_channel_sliced_op(input_tensor, output_tensors, op_slice_attr, dram_slice_config.num_slices, output_layout);
+        return;
+    }
 
     const uint32_t slice_rounding_value = compute_slice_rounding_value(output_layout, dram_slice_config.slice_type);
 

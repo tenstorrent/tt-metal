@@ -594,6 +594,7 @@ from ttnn.operations.conv2d import (
     Conv2dSliceConfig,
     Conv2dDRAMSliceHeight,
     Conv2dDRAMSliceWidth,
+    Conv2dDRAMSliceChannel,
     Conv2dL1Full,
     Conv2dL1FullSliceConfig,
     prepare_conv_weights,

@@ -20,10 +20,12 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -413,6 +415,10 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
+    // Channel slicing only: ttnn::slice is a device op, so a host-resident weight/bias is uploaded
+    // once and reused for every slice instead of once per slice.
+    std::optional<ttnn::Tensor> channel_slice_weight_on_device;
+    std::optional<ttnn::Tensor> channel_slice_bias_on_device;
 
 public:
     Conv2dSliceAttr(
@@ -659,6 +665,199 @@ public:
     }
 
     std::string name() const override { return "Conv2D"; }
+
+    // ---- Channel slicing -------------------------------------------------------------------------
+    // Legal only for a fully depthwise convolution, where output channel c reduces over input
+    // channel c alone. A dense conv reduces every output channel over all input channels, and a
+    // partially grouped conv would need slices aligned to group boundaries plus per-group weight
+    // bookkeeping, so both stay on the spatial path.
+    uint32_t channel_slice_granularity() const override {
+        const bool depthwise = groups > 1 && groups == input_channels && input_channels == output_channels;
+        if (!depthwise) {
+            return 0;
+        }
+        // Channels are the innermost activation dimension and the tile-width axis of a tiled
+        // output, so slice boundaries must stay tile-aligned.
+        return tt::constants::TILE_WIDTH;
+    }
+
+    // Memory config conv2d_L1 will pick for a channel slice: full spatial extent, narrower channels.
+    tt::tt_metal::MemoryConfig get_channel_slice_input_memory_config(uint32_t channels) const {
+        auto conv_config = this->conv_config;
+        auto [input_height, input_width] = input_shape;
+        auto [output_height, output_width] = calculate_output_image_size(
+            std::array<uint32_t, 2>{input_height, input_width}, kernel_size, stride, padding_n4, dilation);
+
+        if (!conv_config.shard_layout.has_value()) {
+            if (!conv_config.weights_dtype.has_value()) {
+                conv_config.weights_dtype = weight_tensor.dtype();
+            }
+            conv_config = determine_conv_config_for_auto_shard(
+                conv_config,
+                false,
+                batch_size,
+                channels,
+                channels,
+                output_height,
+                output_width,
+                weight_tensor.logical_shape()[3],
+                input_height,
+                input_width,
+                device->compute_with_storage_grid_size(),
+                input_layout,
+                input_dtype,
+                output_dtype,
+                std::nullopt,
+                kernel_size,
+                stride,
+                dilation,
+                padding_n4,
+                channels,
+                bias_tensor.has_value(),
+                compute_config);
+        }
+        TT_FATAL(conv_config.shard_layout.has_value(), "Conv2D DRAM channel slicing must have a shard layout set.");
+
+        ShardOrientation shard_orientation =
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+        return std::get<1>(determine_input_memory_config(
+            conv_config.shard_layout.value(),
+            shard_orientation,
+            batch_size,
+            ttnn::Shape({batch_size, input_height, input_width, channels}),
+            ttnn::Shape({batch_size, output_height, output_width, channels}),
+            false,
+            device->compute_with_storage_grid_size(),
+            input_layout,
+            BufferType::DRAM));
+    }
+
+    uint32_t get_L1_usage_for_channel_slice(
+        uint32_t channel_start, uint32_t channel_end, const op_slicing::Op2DSliceConfig& slice_config) const override {
+        auto conv_config = this->conv_config;
+        const uint32_t channels = channel_end - channel_start;
+        auto [input_height, input_width] = input_shape;
+        auto [output_height, output_width] = calculate_output_image_size(
+            std::array<uint32_t, 2>{input_height, input_width}, kernel_size, stride, padding_n4, dilation);
+
+        auto slice_input_memory_config = get_channel_slice_input_memory_config(channels);
+        if (!conv_config.shard_layout.has_value()) {
+            conv_config.shard_layout = slice_input_memory_config.memory_layout();
+        }
+        auto conv_L1_usage = calculate_L1_usage_for_conv_op(
+            batch_size,
+            channels,
+            channels,
+            input_height,
+            input_width,
+            output_height,
+            output_width,
+            kernel_size,
+            stride,
+            padding_n4,
+            dilation,
+            channels,  // depthwise: one group per channel in this slice
+            bias_tensor.has_value(),
+            input_dtype,
+            output_dtype,
+            input_layout,
+            device->compute_with_storage_grid_size(),
+            false,
+            conv_config.shard_layout.value(),
+            compute_config,
+            conv_config,
+            slice_input_memory_config);
+
+        log_trace(
+            tt::LogOp,
+            "Conv2D DRAM channel slicing: channels [{}, {}), num_slices = {}, L1 usage = {}",
+            channel_start,
+            channel_end,
+            slice_config.num_slices,
+            conv_L1_usage.total_size);
+        return std::max(conv_L1_usage.halo_input_size + conv_L1_usage.halo_output_size, conv_L1_usage.total_size);
+    }
+
+    std::vector<ttnn::Tensor> run_L1_op_channel_slice(
+        const ttnn::Tensor& sliced_input_tensor, uint32_t channel_start, uint32_t channel_end) override {
+        const uint32_t channels = channel_end - channel_start;
+        auto [input_height, input_width] = input_shape;
+
+        // Depthwise weights are [out_channels, 1, kH, kW], so the channel range selects whole
+        // filters and slicing dim 0 yields this slice's weights. Bias is [1, 1, 1, out_channels].
+        // These stay raw (unprepared), so conv2d_L1 prepares each slice's copy itself -- unlike the
+        // spatial path, one cached prepared weight cannot be shared across slices.
+        //
+        // ttnn::slice is a device op and conv weights usually arrive on host, so upload once here
+        // rather than per slice.
+        const MemoryConfig dram_interleaved{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+        if (!channel_slice_weight_on_device.has_value()) {
+            channel_slice_weight_on_device =
+                ttnn::is_device_tensor(weight_tensor)
+                    ? weight_tensor
+                    : ttnn::operations::core::to_device(weight_tensor, device, dram_interleaved);
+        }
+        const auto& device_weight = channel_slice_weight_on_device.value();
+        ttnn::Tensor weight_slice = ttnn::slice(
+            device_weight,
+            ttsl::SmallVector<uint32_t>{channel_start, 0, 0, 0},
+            ttsl::SmallVector<uint32_t>{
+                channel_end,
+                device_weight.logical_shape()[1],
+                device_weight.logical_shape()[2],
+                device_weight.logical_shape()[3]},
+            ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+
+        std::optional<ttnn::Tensor> bias_slice = std::nullopt;
+        if (bias_tensor.has_value()) {
+            if (!channel_slice_bias_on_device.has_value()) {
+                const auto& bias = bias_tensor->get();
+                channel_slice_bias_on_device = ttnn::is_device_tensor(bias)
+                                                   ? bias
+                                                   : ttnn::operations::core::to_device(bias, device, dram_interleaved);
+            }
+            const auto& device_bias = channel_slice_bias_on_device.value();
+            bias_slice = ttnn::slice(
+                device_bias,
+                ttsl::SmallVector<uint32_t>{0, 0, 0, channel_start},
+                ttsl::SmallVector<uint32_t>{
+                    device_bias.logical_shape()[0],
+                    device_bias.logical_shape()[1],
+                    device_bias.logical_shape()[2],
+                    channel_end},
+                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+        }
+
+        auto conv_config_l1 = conv_config;
+        conv_config_l1.deallocate_activation = true;
+        conv_config_l1.reallocate_halo_output = true;
+        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
+        conv_config_l1.output_layout = Layout::TILE;
+        // shard_layout is deliberately left as the caller set it: when unset, conv2d_L1 auto-shards
+        // per slice using that slice's channel count. Unlike the spatial path this attr never
+        // caches a layout back, so each slice starts from the caller's config.
+
+        auto conv2d_result = conv2d_L1(
+            sliced_input_tensor,
+            weight_slice,
+            device,
+            channels,
+            channels,
+            batch_size,
+            input_height,
+            input_width,
+            kernel_size,
+            stride,
+            padding_n4,
+            dilation,
+            channels,  // depthwise: one group per channel in this slice
+            output_dtype,
+            bias_slice,
+            conv_config_l1,
+            compute_config,
+            std::nullopt);
+        return {std::get<0>(conv2d_result)};
+    }
 
     std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
