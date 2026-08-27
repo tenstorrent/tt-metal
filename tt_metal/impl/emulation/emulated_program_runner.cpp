@@ -976,7 +976,7 @@ static std::function<void()> jit_compile_kernel(
     // keeps relative includes in the patched file resolvable.
     std::string patched_kernel_path = dir + "/patched_kernel.cpp";
     // WORKAROUND: see tt-emule/.claude/skills/workarounds (WA-2).
-    // The fabric mux (tt_fabric_mux.cpp) is a transport-layer aggregation kernel: workers write packets
+    // The fabric mux (tt_fabric_mux.cpp, and the v2 rename) is a transport-layer aggregation kernel: workers write packets
     // into its L1 channels and it forwards them over ethernet. emule has no ethernet — WorkerToFabricMux
     // Sender teleports each packet straight to its final destination (same as the no-mux direct path),
     // so the mux has nothing to do. The real kernel is also persistent (loops until an external
@@ -984,12 +984,13 @@ static std::function<void()> jit_compile_kernel(
     // compile and hang emule's run-to-completion join. Substitute a no-op kernel: it compiles, exits
     // immediately, and the teleporting mux sender carries the data. (Mirrors how emule collapses the eth
     // router/switch into the teleport — the mux is the worker-side half of that same transport.)
-    if (std::filesystem::path(abs_kernel).filename() == "tt_fabric_mux.cpp") {
+    const std::string kernel_basename = std::filesystem::path(abs_kernel).filename().string();
+    if (kernel_basename == "tt_fabric_mux.cpp" || kernel_basename == "tt_fabric_mux_v2.cpp") {
         std::ofstream f(patched_kernel_path);
         if (!f) {
             throw std::runtime_error("jit_compile_kernel: cannot write mux stub " + patched_kernel_path);
         }
-        f << "// emule no-op stub for tt_fabric_mux.cpp (the teleporting mux sender carries the data).\n"
+        f << "// emule no-op stub for the fabric mux (the teleporting mux sender carries the data).\n"
           << "#include \"api/dataflow/dataflow_api.h\"\n"
           << "void kernel_main() {}\n";
     } else {
