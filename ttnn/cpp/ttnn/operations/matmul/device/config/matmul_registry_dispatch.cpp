@@ -195,7 +195,7 @@ bool try_apply_registry_parameters(
         return false;
     }
 
-    const auto selected = select_registry_parameters(*inspection.request, inspection.eligibility, parameters);
+    auto selected = select_registry_parameters(*inspection.request, inspection.eligibility, parameters);
     if (!selected.has_value()) {
         return false;
     }
@@ -205,7 +205,7 @@ bool try_apply_registry_parameters(
         // registry-owned axes; caller-owned state never participates in this
         // assignment and a partial failure can restore the proven empty state.
         parameters.program_config = std::move(selected->program_config);
-        parameters.compute_kernel_config = std::move(selected->compute_kernel_config);
+        parameters.compute_kernel_config = selected->compute_kernel_config;
         return true;
     } catch (...) {
         parameters.program_config.reset();

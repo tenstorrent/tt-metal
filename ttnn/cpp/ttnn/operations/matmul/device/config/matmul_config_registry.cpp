@@ -459,14 +459,14 @@ std::optional<ttnn::prim::MatmulParams> materialize_parameters_for_execution(
         return std::nullopt;
     }
     auto program_config = materialize_registry_program_config(
-        *resolution.key, *resolution.program_config, *resolution.compute_kernel_config);
+        *resolution.key, *resolution.program_config, resolution.compute_kernel_config);
     auto compute_kernel_config = materialize_registry_compute_kernel_config(*resolution.compute_kernel_config);
     if (!program_config || !compute_kernel_config) {
         return std::nullopt;
     }
     auto result = legacy_parameters;
     result.program_config = std::move(program_config);
-    result.compute_kernel_config = std::move(compute_kernel_config);
+    result.compute_kernel_config = compute_kernel_config;
     return result;
 }
 
