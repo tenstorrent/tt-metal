@@ -15,16 +15,22 @@ It has three parts:
 
 ## Quick Start
 
-From a built tt-metal checkout with its `python_env` active, Codex installed
-and authenticated, and the agent dependencies installed
-(`python -m pip install -r .agents/requirements.txt`):
+From a built tt-metal checkout with Codex installed and authenticated, and the
+agent dependencies installed in the checkout's `python_env`
+(`./python_env/bin/python -m pip install -r .agents/requirements.txt`):
 
 ```bash
-python .agents/scripts/multigoal \
+./python_env/bin/python .agents/scripts/multigoal \
   --replace HF_MODEL=org/Your-Model-Here \
   --replace MODEL_DIR=models/autoports/org_your_model_here \
   .agents/prompts/model_bringup_multigoal/*.txt
 ```
+
+The runner disables Codex shell profile initialization by default. This keeps
+agent-issued commands in the environment inherited by app-server instead of
+reactivating an unrelated virtual environment from a login profile. A caller
+that deliberately needs profile initialization can override the default with
+`--config shell_environment_policy.experimental_use_profile=true`.
 
 That runs all eleven stages back to back. Expect a full bringup to take several
 hours of unattended work. Results land in `models/autoports/<model>/`, where

@@ -22,6 +22,8 @@ MAX_GOAL_OBJECTIVE_CHARS = 4_000
 TERMINAL_GOAL_STATUSES = {"complete", "blocked", "usageLimited", "budgetLimited"}
 SKILL_RE = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]*)")
 ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SHELL_PROFILE_CONFIG = "shell_environment_policy.experimental_use_profile"
+DEFAULT_SHELL_PROFILE_CONFIG = f"{SHELL_PROFILE_CONFIG}=false"
 
 # Stage check scripts exit with: 0 = pass, 1 = advisory failure (recorded,
 # pipeline continues), 2 = critical failure (after remediation attempts are
@@ -37,6 +39,13 @@ CHECK_CRITICAL = 2
 
 
 JsonObject = dict[str, Any]
+
+
+def with_shell_profile_default(config_overrides: list[str]) -> list[str]:
+    """Keep agent command shells in the environment inherited by app-server."""
+    if any(item.partition("=")[0].strip() == SHELL_PROFILE_CONFIG for item in config_overrides):
+        return config_overrides
+    return [DEFAULT_SHELL_PROFILE_CONFIG, *config_overrides]
 
 
 @dataclass
@@ -265,7 +274,10 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Codex config override passed to app-server. May be repeated.",
+        help=(
+            "Codex config override passed to app-server. May be repeated. "
+            "Shell profile initialization defaults to false."
+        ),
     )
     parser.add_argument(
         "--check-retries",
@@ -299,6 +311,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--service-tier")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.config = with_shell_profile_default(args.config)
     if args.start_index < 1:
         raise SystemExit("--start-index must be >= 1")
     if args.resume_stage is not None and args.resume_stage < 1:
