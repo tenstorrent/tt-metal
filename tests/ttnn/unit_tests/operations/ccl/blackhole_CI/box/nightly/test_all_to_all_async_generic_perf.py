@@ -25,14 +25,15 @@ from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_progra
 _NUM_LINKS = 2
 _MAX_PACKET_PAYLOAD_SIZE = 14 * 1024
 _PROFILE_SAMPLES = 3
-# Same-shape BF16 TILE qualification references with a 2% relative margin.
-_REFERENCE_USEFUL_BANDWIDTH_GBPS = {
-    (4, "head_to_sequence"): 31.3,
-    (4, "sequence_to_head"): 31.3,
-    (8, "head_to_sequence"): 31.8,
-    (8, "sequence_to_head"): 36.7,
-}
 _PERF_MARGIN = 0.02
+# Same-shape BF16 TILE qualification references.  The 2% relative margin makes
+# the enforced minima 76 GB/s on QuietBox and 29 GB/s on LoudBox.
+_REFERENCE_USEFUL_BANDWIDTH_GBPS = {
+    (4, "head_to_sequence"): 76 / (1 - _PERF_MARGIN),
+    (4, "sequence_to_head"): 76 / (1 - _PERF_MARGIN),
+    (8, "head_to_sequence"): 29 / (1 - _PERF_MARGIN),
+    (8, "sequence_to_head"): 29 / (1 - _PERF_MARGIN),
+}
 
 
 @dataclass(frozen=True)
