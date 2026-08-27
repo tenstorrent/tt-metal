@@ -20,11 +20,13 @@ device code reads:
    whereas ``tt/mla/mla.py`` and ``reference/mla_reference.py`` otherwise derive a YaRN mscale
    correction from ``factor`` and square it into the softmax scale. Both sides would inflate it
    identically, so PCC stays green while the model is wrong: the flag is not safe to drop.
-
-KNOWN GAP (not expressible in config): Mistral also scales queries by a position-dependent
-``get_llama_4_attn_scale`` = 1 + 0.1*ln(1 + floor(pos / 8192)), for which ttMLA has no equivalent. It
-is exactly 1.0 for every position below 8192 and steps up at each 8192-token boundary, so comparisons
-against an HF reference are only meaningful at or below 8192 until ttMLA implements it.
+3. ``llama_4_scaling_beta`` is kept inside ``rope_scaling``, where both sides look for it. Mistral
+   scales queries by a position-dependent ``get_llama_4_attn_scale`` = 1 + 0.1*ln(1 + floor(pos /
+   8192)): exactly 1.0 for every position below 8192, stepping up at each 8192-token boundary. It is
+   implemented on both sides -- ``ttMLA._llama4_scale`` / ``RotarySetup.make_llama4_scale_buffer`` on
+   device, ``MLAReference._llama4_attn_scale`` on host -- so comparisons against an HF reference are
+   meaningful past 8192. No other variant's config carries the key, so it reads as absent for them
+   and their query path is unchanged.
 """
 
 
@@ -77,7 +79,7 @@ class MistralSmall4Config:
     ROPE_SCALING_MSCALE_ALL_DIM = 1.0
     # partial_rotary_factor; sizes rope at 0.5 * head_dim = 64
     ROPE_PARTIAL_ROTARY_FACTOR = 0.5
-    LLAMA4_SCALING_BETA = 0.1  # llama_4_scaling_beta; no ttMLA equivalent (see module docstring)
+    LLAMA4_SCALING_BETA = 0.1  # llama_4_scaling_beta; the query temperature (see module docstring)
 
     # Misc read by the test fixtures / reference construction
     INITIALIZER_RANGE = 0.02
@@ -141,7 +143,7 @@ def mistral4_hf_config(max_seq: int = 8192):
             # Sizes rope at 0.5 * head_dim = 64. Omitting it spans the full 128, and the reference
             # then hands apply_rotary_pos_emb a cos twice as wide as the rope half of q.
             "partial_rotary_factor": C.ROPE_PARTIAL_ROTARY_FACTOR,
-            # Drives get_llama_4_attn_scale, exactly 1.0 below 8192 (see the module KNOWN GAP).
+            # Drives get_llama_4_attn_scale, exactly 1.0 below 8192 (see the module docstring).
             "llama_4_scaling_beta": C.LLAMA4_SCALING_BETA,
         },
         # MoE structure read by the MoE path and the pretrained cache-build path.
