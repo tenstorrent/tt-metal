@@ -41,10 +41,9 @@
 // `cols` prices one more OUTPUT tile, which is what puts a number on the one
 // tile_regs_acquire per output tile that Strategy<ReduceFusion> still does.
 //
-// Compile-time args:
-//   0            block height in tiles
-//   1            block width in tiles
-//   2..          TensorAccessorArgs for in, then vec (PC_BCAST only), then out
+// Compile-time args, all named, plus a cb_<name> per buffer that TT_U_CB reads:
+//   block height in tiles
+//   block width in tiles
 //
 // Runtime args: in address, then vec (PC_BCAST only), then out address.
 //
@@ -53,10 +52,6 @@
 #include <tt/unified/core>
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbIn = 0;
-constexpr uint32_t kCbVec = 8;
-constexpr uint32_t kCbOut = 16;
 
 #ifndef PASSES
 #define PASSES 1
@@ -101,22 +96,9 @@ void kernel_main() {
     constexpr uint32_t rows = get_named_compile_time_arg_val("rows");
     constexpr uint32_t cols = get_named_compile_time_arg_val("cols");
 
-    constexpr auto in_args = TensorAccessorArgs<0>();
-#if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT) || defined(PC_BIN)
-    constexpr auto vec_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<vec_args.next_compile_time_args_offset()>();
-#else
-    constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
-#endif
-
-    const uint32_t in_addr = get_arg_val<uint32_t>(0);
-#if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT) || defined(PC_BIN)
-    const uint32_t vec_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-#else
-    const uint32_t out_addr = get_arg_val<uint32_t>(1);
-    u::check_runtime_args<3>();
-#endif
+    constexpr uint32_t kCbIn = TT_U_CB(in);
+    constexpr uint32_t kCbVec = TT_U_CB(vec);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
 #if defined(PC_MATMUL)
     static_assert(rows == cols, "a chained matmul has to be square to preserve the shape");
@@ -142,14 +124,14 @@ void kernel_main() {
     // One scratch CB per intermediate pass.
     u::Storage<S> s1(1), s2(2), s3(3), s4(4), s5(5), s6(6), s7(7);
 
-    const auto in_acc = TensorAccessor(in_args, in_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto in_acc = TensorAccessor(tensor::in);
+    const auto out = TensorAccessor(tensor::out);
 
     u::ComputeBlock c0 = u::noc_load<1>(in_storage, in_acc, 0).wait();
 
 #if defined(PC_BIN)
     u::Storage<S> rhs_storage(kCbVec);
-    const auto rhs_acc = TensorAccessor(vec_args, vec_addr);
+    const auto rhs_acc = TensorAccessor(tensor::vec);
     u::ComputeBlock rhs = u::noc_load<1>(rhs_storage, rhs_acc, 0).wait();
 #endif
 #if defined(PC_BCAST) || defined(PC_MATMUL) || defined(PC_ALT)
@@ -160,7 +142,7 @@ void kernel_main() {
 #else
     u::Storage<Vec> vec_storage(kCbVec);
 #endif
-    const auto vec_acc = TensorAccessor(vec_args, vec_addr);
+    const auto vec_acc = TensorAccessor(tensor::vec);
     u::ComputeBlock vec = u::noc_load<1>(vec_storage, vec_acc, 0).wait();
 #endif
 

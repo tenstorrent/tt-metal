@@ -17,23 +17,13 @@
 //            pack the RT*CT subblock, push cb_out
 //   BRISC    drain cb_out (RT*CT tiles)
 //
-// Compile-time args:
-//   0..      TensorAccessorArgs for in0, then in1, then out
+// Compile-time args: a cb_<name> per buffer, which TT_U_CB reads.
 //
-// Runtime args (identical on all three kernels):
-//   0        in0 base address
-//   1        in1 base address
-//   2        out base address
+// No runtime args: the tensors are bound, so their addresses ride with the accessors.
 
 #include <tt/unified/core>
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbIn0 = 0;
-constexpr uint32_t kCbIn1 = 1;
-constexpr uint32_t kCbBias = 2;  // MM_BIAS only: 1 x ct tiles, resident
-constexpr uint32_t kCbOut = 16;
-constexpr uint32_t kCbAcc = 24;  // running total; a separate CB from kCbOut
 
 // No geometry to declare: the operand SHAPES below are the geometry, and the DST
 // budget static_assert keys on the output block they imply. MM_K_BLOCKS stays a plain
@@ -62,23 +52,17 @@ constexpr uint32_t kIn1Tiles = MM_KT_DIM * MM_CT_DIM;
 constexpr uint32_t kOutTiles = MM_RT_DIM * MM_CT_DIM;
 
 void kernel_main() {
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
+    constexpr uint32_t kCbIn1 = TT_U_CB(in1);
+    constexpr uint32_t kCbBias = TT_U_CB(bias);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbAcc = TT_U_CB(acc);
 #if defined(MM_BIAS)
     // Last, so a build without MM_BIAS sees exactly the layout it always did.
-    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 #endif
-
-    const uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t in1_addr = get_arg_val<uint32_t>(1);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
 #if defined(MM_BIAS)
-    const uint32_t bias_addr = get_arg_val<uint32_t>(3);
-    u::check_runtime_args<4>();
 #else
     // The count differs by build, so the check does too -- a bias adds an address.
-    u::check_runtime_args<3>();
 #endif
 
     using In0 = u::Shape<MM_RT_DIM, MM_KT_DIM>;
@@ -95,9 +79,9 @@ void kernel_main() {
     // SFPU work and matmul could not run against it.
     u::matmul_init<In0, In1, kTransposeB>(kCbIn0, kCbIn1, kCbOut);
 
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
-    const auto in1 = TensorAccessor(in1_args, in1_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto in0 = TensorAccessor(tensor::in0);
+    const auto in1 = TensorAccessor(tensor::in1);
+    const auto out = TensorAccessor(tensor::out);
 
 #if defined(MM_BIAS)
     // KERNEL SCOPE, deliberately. Every finishing k-block reads this, so it must
@@ -107,7 +91,7 @@ void kernel_main() {
     // refill that never comes. The CB holds exactly ct tiles, so the one reserve
     // below is the only one it ever gets.
     u::Storage<u::Shape<1, MM_CT_DIM>> bias_storage(kCbBias);
-    const auto bias_acc = TensorAccessor(bias_args, bias_addr);
+    const auto bias_acc = TensorAccessor(tensor::bias);
     u::ComputeBlock bias = u::noc_load<0>(bias_storage, bias_acc, 0).wait();
 #endif
 

@@ -7,25 +7,6 @@ namespace u = tt::unified;
 constexpr uint32_t kKeyChunks = 4;
 constexpr auto kRows = u::Axis::Cols;
 
-constexpr uint32_t kCbQ = 0;
-constexpr uint32_t kCbK = 1;
-constexpr uint32_t kCbV = 2;
-constexpr uint32_t kCbOnes = 3;
-constexpr uint32_t kCbScaler = 4;
-constexpr uint32_t kCbScores = 5;
-constexpr uint32_t kCbChunkMax = 6;
-constexpr uint32_t kCbProb = 7;
-constexpr uint32_t kCbChunkSum = 8;
-constexpr uint32_t kCbNewMax = 9;
-constexpr uint32_t kCbCorrection = 10;
-constexpr uint32_t kCbRescaled = 11;
-constexpr uint32_t kCbWeightedV = 12;
-constexpr uint32_t kCbReciprocal = 13;
-constexpr uint32_t kCbOut = 16;
-constexpr uint32_t kCbMax = 20;
-constexpr uint32_t kCbSum = 21;
-constexpr uint32_t kCbAcc = 22;
-
 using Queries = u::Shape<2, 2>;
 using KeysTransposed = u::Shape<2, 2>;
 using Values = u::Shape<2, 2>;
@@ -35,18 +16,30 @@ using Vec = u::reduce_shape<Scores, kRows>;
 using Out = u::Shape<2, 2>;
 
 void kernel_main() {
-    constexpr auto q_args = TensorAccessorArgs<0>();
-    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
-    constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    constexpr auto ones_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<ones_args.next_compile_time_args_offset()>();
+    constexpr uint32_t kCbQ = TT_U_CB(q);
+    constexpr uint32_t kCbK = TT_U_CB(k);
+    constexpr uint32_t kCbV = TT_U_CB(v);
+    constexpr uint32_t kCbOnes = TT_U_CB(ones);
+    constexpr uint32_t kCbScaler = TT_U_CB(scaler);
+    constexpr uint32_t kCbScores = TT_U_CB(scores);
+    constexpr uint32_t kCbChunkMax = TT_U_CB(chunk_max);
+    constexpr uint32_t kCbProb = TT_U_CB(prob);
+    constexpr uint32_t kCbChunkSum = TT_U_CB(chunk_sum);
+    constexpr uint32_t kCbNewMax = TT_U_CB(new_max);
+    constexpr uint32_t kCbCorrection = TT_U_CB(correction);
+    constexpr uint32_t kCbRescaled = TT_U_CB(rescaled);
+    constexpr uint32_t kCbWeightedV = TT_U_CB(weighted_v);
+    constexpr uint32_t kCbReciprocal = TT_U_CB(reciprocal);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
+    constexpr uint32_t kCbMax = TT_U_CB(max);
+    constexpr uint32_t kCbSum = TT_U_CB(sum);
+    constexpr uint32_t kCbAcc = TT_U_CB(acc);
 
-    const auto q_acc = TensorAccessor(q_args, get_arg_val<uint32_t>(0));
-    const auto k_acc = TensorAccessor(k_args, get_arg_val<uint32_t>(1));
-    const auto v_acc = TensorAccessor(v_args, get_arg_val<uint32_t>(2));
-    const auto ones_acc = TensorAccessor(ones_args, get_arg_val<uint32_t>(3));
-    const auto out = TensorAccessor(out_args, get_arg_val<uint32_t>(4));
-    u::check_runtime_args<5>();
+    const auto q_acc = TensorAccessor(tensor::q));
+    const auto k_acc = TensorAccessor(tensor::k));
+    const auto v_acc = TensorAccessor(tensor::v));
+    const auto ones_acc = TensorAccessor(tensor::ones));
+    const auto out = TensorAccessor(tensor::out));
 
     u::matmul_init<Queries, KeysTransposed>(kCbQ, kCbK, kCbOut);
 
