@@ -53,6 +53,7 @@ from models.common.models.galaxy.collectives import compose_galaxy_logits
 from models.common.models.llama33_70b_galaxy.hf_adaptor import DEFAULT_HF_MODEL, convert_hf_model_weights
 from models.common.models.llama33_70b_galaxy.model import (
     LLAMA33_70B_GALAXY_ACCURACY,
+    _relocate,
     build_llama33_70b_galaxy_model,
     parameters_from_hf_config,
 )
@@ -166,6 +167,101 @@ def _logits(output: ttnn.Tensor, vocab_size: int, mesh_device: ttnn.MeshDevice) 
     """
 
     return compose_galaxy_logits(output, mesh_device=mesh_device, vocab_size=vocab_size)
+
+
+def _compose_residual(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
+    """Compose a `[1, 1, rows, local_dim]` residual-stream tensor to `[rows, dim]`.
+
+    The residual stream is sharded over mesh *columns* on its last axis
+    (`local_dim = dim / 4`) and replicated over mesh rows, so mesh rows stack on
+    the free leading axis and row 0 is the authoritative copy. Explicit, not
+    `to_torch_auto_compose`, for the reason `compose_galaxy_logits` documents.
+    """
+
+    composed = ttnn.to_torch(
+        tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=_MESH_SHAPE),
+    ).float()
+    first_row = composed[0]
+    return first_row.reshape(-1, first_row.shape[-1])
+
+
+def _reference_decode_stages(hf: Any, tokens: torch.Tensor, position: int) -> dict[str, torch.Tensor]:
+    """Return HF's own tensors at each boundary the device graph crosses.
+
+    `output_hidden_states=True` gives the embedding output as `hidden_states[0]`
+    and the hidden state after layer 0 as `hidden_states[1]`; the final norm is
+    applied here with the checkpoint's own module. One HF forward, four
+    comparison points, and no hand-written re-implementation anywhere - which is
+    the property Milestone A found matters.
+    """
+
+    layer = hf.model.layers[0]
+    captured: dict[str, torch.Tensor] = {}
+
+    def capture(name: str):
+        def hook(_module, _inputs, output):
+            tensor = output[0] if isinstance(output, tuple) else output
+            captured[name] = tensor.detach().float()
+
+        return hook
+
+    handles = [
+        layer.input_layernorm.register_forward_hook(capture("attention norm")),
+        layer.self_attn.register_forward_hook(capture("attention out")),
+        layer.post_attention_layernorm.register_forward_hook(capture("ff norm")),
+        layer.mlp.register_forward_hook(capture("mlp out")),
+    ]
+    try:
+        out = hf(input_ids=tokens, use_cache=True, output_hidden_states=True)
+    finally:
+        for handle in handles:
+            handle.remove()
+
+    embedded = out.hidden_states[0].float()
+    stages = {
+        "embedding": embedded[0, position],
+        "attention norm": captured["attention norm"][0, position],
+        "attention out": captured["attention out"][0, position],
+        # The residual after attention, which is what the device's `h` carries.
+        "residual after attention": (embedded + captured["attention out"])[0, position],
+        "ff norm": captured["ff norm"][0, position],
+        "mlp out": captured["mlp out"][0, position],
+        "after layer 0": out.hidden_states[1].float()[0, position],
+        "final norm": hf.model.norm(out.hidden_states[1])[0].float()[position],
+        "logits": out.logits.float()[0, position],
+    }
+    return stages
+
+
+def _compose_decode_rot_mat(tensor: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
+    """Compose a decode `(cos, sin)` table to `[batch, head_dim]`.
+
+    `RotarySetup2D` shards the *position indices* over mesh columns and replicates
+    them over rows, so each device holds `users_per_column` rows of the table.
+    Mesh columns therefore concatenate on the user axis and mesh rows stack on the
+    free leading axis.
+    """
+
+    composed = ttnn.to_torch(
+        tensor,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 2), mesh_shape=_MESH_SHAPE),
+    ).float()
+    first_row = composed[0]
+    return first_row.reshape(-1, first_row.shape[-1])
+
+
+def _report_pcc(expected: torch.Tensor, actual: torch.Tensor, case: str) -> float:
+    """Compute and print a PCC without asserting on it.
+
+    Used for the bisection boundaries: asserting on the first boundary that
+    diverges hides the shape of everything after it, and the shape is the
+    diagnosis. The comparison that fails the test is still an assertion.
+    """
+
+    _, message = comp_pcc(expected.float(), actual.float(), _PCC)
+    print(f"[bisect] {case}: {message}", flush=True)
+    return 0.0
 
 
 def _assert_pcc(expected: torch.Tensor, actual: torch.Tensor, case: str) -> None:
@@ -484,4 +580,206 @@ def test_llama33_70b_galaxy_one_layer_prefill_2048(mesh_device: ttnn.MeshDevice)
                 for tensor in pair:
                     _deallocate(tensor)
             del model, kv_cache
+            gc.collect()
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param(_MESH_SHAPE, id="8x4")], indirect=True)
+@torch.no_grad()
+def test_llama33_70b_galaxy_decode_bisection(mesh_device: ttnn.MeshDevice):
+    """Bisect one decode step by sub-module boundary against the same HF reference.
+
+    `job1_llama.md`: "Bisect by sub-module when a block fails. The individual
+    modules are qualified, so a block failure is almost certainly composition...
+    Compare the residual stream at each boundary against the reference before you
+    suspect a module."
+
+    This is that comparison, and it is a separate test rather than instrumentation
+    inside the gate so the gate keeps asserting only what it gates. It runs the
+    decode step by hand - embedding, layer, final norm, LM head - and reports the
+    PCC at each boundary. **It reports rather than asserts on the intermediates**,
+    because the point is to see where a chain diverges, and an assertion on the
+    first boundary hides the shape of the rest. The logits assertion at the end is
+    the one that fails the test.
+
+    Prefill runs first and must be correct: the decode step at position 128 reads
+    the cache prefill wrote, so a decode-only comparison could not tell a bad
+    decode from a bad cache.
+    """
+
+    hf_model = os.getenv("LLAMA33_70B_HF_MODEL", DEFAULT_HF_MODEL)
+    hf_config = _hf_config_or_skip(hf_model)
+    params = parameters_from_hf_config(
+        hf_config,
+        n_layers=1,
+        max_seq_len=_MAX_SEQ_LEN,
+        prefill_sequence_lengths=(_PREFILL_LENGTH,),
+    )
+    precision = LLAMA33_70B_GALAXY_ACCURACY
+    ttnn.SetDefaultDevice(mesh_device)
+    torch.manual_seed(11)
+    tokens = torch.randint(0, params.vocab_size, (1, _PREFILL_LENGTH + 1), dtype=torch.long)
+    prefill_tokens, decode_token = tokens[:, :_PREFILL_LENGTH], tokens[:, _PREFILL_LENGTH:]
+
+    hf = _one_layer_reference(hf_model)
+    weights = convert_hf_model_weights(hf, params=params)
+    stages = _reference_decode_stages(hf, tokens, _PREFILL_LENGTH)
+    # Kept alive on purpose: `layer.mlp` is re-applied below to the device's *own*
+    # MLP input, which is the only way to tell "the MLP is a wrong function" from
+    # "the MLP was handed a wrong input".
+    reference_mlp = hf.model.layers[0].mlp
+    reference_cos = weights.rope_cos.float()
+    reference_sin = weights.rope_sin.float()
+
+    model = build_llama33_70b_galaxy_model(
+        mesh_device,
+        params=params,
+        weights=weights,
+        precision=precision,
+        paged_attention_config=None,
+        enable_device_sampling=False,
+    )
+    del weights
+    gc.collect()
+    kv_cache: list[list[ttnn.Tensor]] = []
+    try:
+        kv_cache = _contiguous_kv_cache(
+            mesh_device,
+            n_layers=params.n_layers,
+            n_local_kv_heads=params.n_kv_heads // _MESH_ROWS,
+            head_dim=params.head_dim,
+            dtype=precision.kv_cache_dtype,
+        )
+        model.set_kv_cache(kv_cache)
+
+        model.activate("prefill")
+        rot_mats = model.prepare_prefill_rot_mats(0, _PREFILL_LENGTH)
+        try:
+            x_embed = model.embed_prefill(_replicated_tokens(prefill_tokens, mesh_device))
+            output = model.prefill_forward(x_embed, rot_mats, sequence_length=_PREFILL_LENGTH, user_ids=(0,))
+            _deallocate(output)
+        finally:
+            for tensor in rot_mats:
+                _deallocate(tensor)
+
+        model.activate("decode")
+        positions = torch.full((_PHYSICAL_BATCH,), _PREFILL_LENGTH, dtype=torch.long)
+        decode_row = decode_token.reshape(1, 1).repeat(1, _PHYSICAL_BATCH)
+        rot_mats = model.prepare_decode_rot_mats(positions)
+        tt_positions = None
+        try:
+            tt_positions = ttnn.from_torch(
+                positions[: model.geometry.users_per_column].to(torch.int32),
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            from models.common.models.llama33_70b_galaxy.model import DecodeMetadata
+
+            metadata = DecodeMetadata(current_positions=tt_positions, page_table=None)
+
+            # Is the prefetcher's global circular buffer actually bound for decode?
+            # It is created lazily now (`defer_global_cb`), and every prefetched
+            # weight matmul reads it, so its absence would corrupt attention and
+            # the MLP together. Host-side, free, and it removes a whole family of
+            # explanations from the table below.
+            decode_prefetch = model.resources.prefetcher.context("decode")
+            print(f"[probe] decode global_cb bound: {getattr(decode_prefetch, 'global_cb', None) is not None}", flush=True)
+
+            # The decode RoPE tables, against the Meta-layout tables the adaptor
+            # built. All 32 positions are `_PREFILL_LENGTH` here, so every row must
+            # equal the table's row at that position. `job1_llama.md` ranks the
+            # RoPE/Attention2D pairing as the expected first failure, and this
+            # separates "the tables are wrong" from "the rotation is applied wrong".
+            cos_host = _compose_decode_rot_mat(rot_mats[0], mesh_device)
+            sin_host = _compose_decode_rot_mat(rot_mats[1], mesh_device)
+            print(f"[probe] decode cos composed {tuple(cos_host.shape)}", flush=True)
+            for user in (0, 8, 16, 24):
+                _report_pcc(reference_cos[0, 0, _PREFILL_LENGTH], cos_host[user], f"probe decode cos user {user}")
+                _report_pcc(reference_sin[0, 0, _PREFILL_LENGTH], sin_host[user], f"probe decode sin user {user}")
+
+            x_embed = model.embed_decode(_replicated_tokens(decode_row, mesh_device))
+            embedded = _compose_residual(x_embed, mesh_device)
+            _report_pcc(stages["embedding"], embedded[0], "bisect decode embedding user 0")
+
+            # Walk *inside* layer 0 rather than calling `decode_forward`, so every
+            # boundary the block crosses is a comparison. The sequence mirrors
+            # `Llama33_70BTransformerBlock2D.decode_forward` exactly; if that
+            # method changes, this stops being a bisection of it.
+            layer = model.layers[0]
+            attention_input, h = layer._decode_attention_norm(x_embed, None)
+            _report_pcc(
+                stages["attention norm"],
+                _compose_residual(attention_input, mesh_device)[0],
+                "bisect decode attention norm user 0",
+            )
+            attention_input = _relocate(attention_input, layer.config.decode_attention_input_memcfg)
+            attention_output = layer.attention.decode_forward(attention_input, rot_mats, metadata)
+            _report_pcc(
+                stages["attention out"],
+                _compose_residual(attention_output, mesh_device)[0],
+                "bisect decode attention out user 0",
+            )
+            mlp_input, h = layer.ff_norm.decode_forward(attention_output, residual=h)
+            _report_pcc(
+                stages["residual after attention"],
+                _compose_residual(h, mesh_device)[0],
+                "bisect decode residual after attention user 0",
+            )
+            _report_pcc(
+                stages["ff norm"],
+                _compose_residual(mlp_input, mesh_device)[0],
+                "bisect decode ff norm user 0",
+            )
+            device_mlp_input = _compose_residual(mlp_input, mesh_device)[0]
+            mlp_input = _relocate(mlp_input, layer.config.decode_mlp_input_memcfg, layer.config.decode_mlp_input_dtype)
+            x = layer.feed_forward.decode_forward(mlp_input)
+            device_mlp_out = _compose_residual(x, mesh_device)[0]
+            _report_pcc(stages["mlp out"], device_mlp_out, "bisect decode mlp out user 0")
+            # The MLP as a *function*: HF's own MLP applied to the device's own
+            # input. If this is also low, the MLP is wrong; if it is high, the MLP
+            # is faithfully propagating a wrong input.
+            with torch.no_grad():
+                mlp_on_device_input = reference_mlp(device_mlp_input.unsqueeze(0).to(torch.bfloat16)).float()[0]
+            _report_pcc(mlp_on_device_input, device_mlp_out, "probe mlp on the device's own input")
+            normed, residual = model.norm.decode_forward(x, residual=h)
+            after_layer = _compose_residual(residual, mesh_device)
+            normed_host = _compose_residual(normed, mesh_device)
+            _report_pcc(stages["after layer 0"], after_layer[0], "bisect decode after layer 0 user 0")
+            _report_pcc(stages["final norm"], normed_host[0], "bisect decode final norm user 0")
+
+            logits = model.lm_head.decode_forward(
+                _relocate(normed, model.config.lm_head_config.decode_input_memcfg)
+            )
+            actual = _logits(logits, params.vocab_size, mesh_device)
+            _deallocate(logits)
+            _assert_pcc(stages["logits"], actual[0], "bisect decode logits user 0")
+        except BaseException:
+            traceback.print_exc()
+            raise
+        finally:
+            _deallocate(tt_positions)
+            for tensor in rot_mats:
+                _deallocate(tensor)
+    finally:
+        try:
+            model.close()
+        finally:
+            for pair in kv_cache:
+                for tensor in pair:
+                    _deallocate(tensor)
+            del model, kv_cache
+            gc.collect()
+            del hf, reference_mlp
             gc.collect()

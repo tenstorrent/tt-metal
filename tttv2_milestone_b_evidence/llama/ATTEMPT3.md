@@ -382,3 +382,138 @@ identically zero.** Under the old rule `padded_vocab_size == vocab_size` and the
 mask was vacuous, which is why attempt 2 could not qualify the mask placement for
 Qwen. It is now load-bearing for Llama too — 768 columns of `-inf`, all of them in
 mesh row 7's shard.
+| 19 | `logs3/a3_19_step2_gate.log` | step-2 gate with the padded vocabulary | **D-B19 CLOSED on silicon**; prefill gate passed again; **decode logits PCC -0.0215** (D-B25) |
+| 20 | `logs3/a3_20_bisect.log` | decode bisection | **VOID** — launched while run 19 still held the mesh; see the harness note below |
+
+## Result 19 — D-B19 is closed, and the decode graph is numerically wrong
+
+`logs3/a3_19_step2_gate.log`. The padded vocabulary works, and the trace says so
+in the words that were missing before:
+
+```text
+[ccl] lm_head staged: logical=(1, 1, 32, 16128) shard=(32, 384) cores=42
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128)
+[ccl] lm_head all_reduce_async returned, shape=(1, 1, 32, 16128) -- completed on device
+[ccl] lm_head reduced placed back -- completed on device
+[ccl] lm_head synchronize
+[ccl] lm_head synchronized
+```
+
+16128 = 42 x 384 exactly. **D-B19 is CLOSED**, and the diagnosis was right: it was
+a width, not a flag, not a topology and not a semaphore count.
+
+The prefill half of the gate passed again, unchanged, with the wider vocabulary
+(prefill 128 0.99958, cache K 0.99993, V 0.99975). So the padding cost nothing
+numerically, as a masked pad should not.
+
+**And the decode logits are uncorrelated:**
+
+```text
+[pcc] decode position 128 user 0: -0.02154469920244183 (gate >= 0.99)
+```
+
+That is **D-B25**, and it is a new frontier rather than a regression: no decode
+logit had ever been compared to anything. The decode graph now runs end to end and
+produces the wrong numbers, which is a strictly better place to be than a hang,
+and it is the first time this failure mode has been *reachable*.
+
+## A harness rule attempt 3 had to learn the hard way
+
+Run 20 was launched about six minutes after run 19's pytest reported its failure —
+and run 19's process was **still holding all 64 `/dev/tenstorrent` fds**, hung in
+mesh teardown. Run 20 opened, blocked, and produced nothing:
+
+```text
+warning | UMD | Waiting for lock 'CHIP_IN_USE_22_PCIe' which is currently held by
+                thread TID: 131554, PID: 131554
+```
+
+Attempt 2 recorded that a `TT_FATAL` leaves the mesh un-drainable. **A plain
+`AssertionError` does too**, if it is raised after a decode step: the teardown
+hang is in the `mesh_device` fixture, not in the failing op, so any decode-mode
+failure leaves a holder behind. Attempt 2's `[stage] leave close model` warning
+generalises further than it was written.
+
+The rule, for whoever runs next: **never start a device cycle until the previous
+`cycle.sh`/`run3.sh` has actually exited** — the pytest verdict appearing in the
+log is not that moment, because the reap and the reset come after it. Both
+processes were reaped by PID after confirming `comm=python` and 64 open device
+fds, and the mesh was reset before continuing.
+| 22 | `logs3/a3_22_bisect.log` | decode bisection, model-level boundaries | embedding **1.0**, after layer 0 **0.0718** — the break is inside the layer |
+
+## Result 22 — the bisection localises D-B25 to inside the decoder layer
+
+`logs3/a3_22_bisect.log`:
+
+```text
+[bisect] bisect decode embedding user 0:      1.0
+[bisect] bisect decode after layer 0 user 0:  0.0717891518669863
+[bisect] bisect decode final norm user 0:     0.060994034769210365
+[pcc]    bisect decode logits user 0:         0.06410317912613331
+```
+
+The decode embedding is **exact** — PCC 1.0, not 0.999 — which rules out the token
+staging, the embedding table, the residual placement and the composition helper in
+one line. Everything from "after layer 0" onward is uncorrelated, and the final
+norm and the logits are simply carrying that forward, so there is exactly one
+suspect region: **the decoder layer's decode path**.
+
+That is the region `job1_llama.md` ranked first and second:
+
+> 1. RoPE composed with `Attention2D` is the expected first failure...
+> 4. Fused decode norm at real scale. Job 0 fixed the placement defect on paper.
+>    This job runs it.
+
+The bisection now walks inside layer 0 — attention norm, attention output,
+residual, FF norm, MLP output — against HF forward hooks on the same four modules,
+so one more run separates those two candidates and the three others (decode SDPA,
+the QKV create-heads collective, the user gather).
+| 23 | `logs3/a3_23_bisect_layer.log` | decode bisection, inside layer 0 | attention out **0.737**, MLP out **0.096** — two divergences, not one |
+
+## Result 23 — D-B25 is two defects, and the norms are not among them
+
+`logs3/a3_23_bisect_layer.log`, one process, in graph order:
+
+```text
+[bisect] bisect decode embedding user 0:                  1.0
+[bisect] bisect decode attention norm user 0:             0.9999956953474292
+[bisect] bisect decode attention out user 0:             *0.7372848194843996
+[bisect] bisect decode residual after attention user 0:   0.9435188057220959
+[bisect] bisect decode ff norm user 0:                    0.9311189676749084
+[bisect] bisect decode mlp out user 0:                   *0.0960404663734013
+[bisect] bisect decode after layer 0 user 0:              0.0701357106207587
+[bisect] bisect decode final norm user 0:                 0.0598278833917375
+[pcc]    bisect decode logits user 0:                     0.0626954356537722
+```
+
+Read the two starred rows and what surrounds them:
+
+* **the fused decode norm is correct.** `attention norm` is 0.99999 and `ff norm`
+  is 0.9311 *on a 0.9435 input*, so both norms are faithful. Job 0's C1 fix holds
+  on silicon, and the brief's risk 4 ("fused decode norm at real scale... this job
+  runs it") is discharged as a numerical question. That is worth stating plainly
+  because C1 was described as making every decode fail.
+* **attention is partly wrong** — 0.737 out of a 0.99999 input. Correlated but
+  wrong, which is the signature of a subset being wrong (some heads, some users,
+  or a rotation) rather than of garbage.
+* **the MLP is badly wrong** — 0.096 out of a 0.931 input. A correct function of a
+  0.93-correlated input would return roughly 0.9. This is a second, independent
+  defect.
+
+The residual dilutes the attention error (0.737 -> 0.9435) because the residual
+stream is the embedding plus the attention output, and the embedding is exact.
+
+Three probes were added rather than guessed at, all of them separating "wrong
+function" from "wrong input", and two of them free:
+
+1. **the decode RoPE tables**, composed and compared against the Meta-layout
+   tables the adaptor built, at the position all 32 users share. Host-side. This
+   is `job1_llama.md`'s ranked-first risk and it costs nothing to eliminate.
+2. **the prefetcher's global circular buffer**, checked to be bound for decode.
+   Every prefetched weight matmul reads it - `wqkv`, `wo`, `w1`, `w3`, `w2`, which
+   is exactly the set of matmuls inside the two broken regions - and attempt 3
+   made its creation lazy, so this had to be ruled out explicitly rather than
+   assumed. (`_prefetch_kwargs` is read per call, so the lazy binding should
+   reach them; "should" is not evidence.)
+3. **HF's own MLP re-applied to the device's own MLP input**, compared against the
+   device's MLP output. This is the decisive one for the 0.096.

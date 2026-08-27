@@ -113,7 +113,29 @@ LLAMA33_70B_CHECKPOINT_CONTRACT = {
 }
 
 #: Decode weights streamed by the prefetcher, in the order a layer issues them.
-LLAMA33_70B_PREFETCHED_WEIGHT_NAMES = ("wqkv", "wo", "w1", "w3", "w2")
+#:
+#: **The attention projections are not in this list, and that is a correctness
+#: requirement on this tree, not a performance choice.** The prefetcher's global
+#: circular buffer is received by the 24 ring cores
+#: (``galaxy_sender_receiver_mapping``), and a prefetched matmul reads its weight
+#: from that buffer in registration order. The MLP's three projections run on the
+#: ring. The attention decode projections do **not**: Milestone A limitation L3
+#: forced them onto a confined three-column worker rectangle
+#: (``dense_matmul_worker_rectangle``) so they would not straddle the prefetch
+#: sub-device partition, and a matmul there cannot take its weight from a buffer
+#: whose receivers are the ring.
+#:
+#: Registering them anyway put two entries per layer into the global CB that
+#: nothing on the ring consumed, so the MLP's `w1` read the entry meant for
+#: `wqkv`. Measured on `(8, 4)`: with all five registered, decode attention
+#: scored PCC 0.737 and the decode MLP 0.096 against Hugging Face, with the MLP
+#: wrong even as a *function* of its own input (0.085); with only the MLP's three
+#: registered, both are correct. See D-B25.
+#:
+#: Moving the attention decode matmuls onto the ring - attempt 1's report §4.1 -
+#: would let them be prefetched again and is the performance follow-up. Until
+#: then their weights are read straight from DRAM.
+LLAMA33_70B_PREFETCHED_WEIGHT_NAMES = ("w1", "w3", "w2")
 
 _MLP_PREFILL_RESHAPE_CUTOFF = 1024
 
@@ -449,6 +471,41 @@ def _lazy(
 
 def _mesh_mapper(*placements: Any) -> ttnn.MeshMapperConfig:
     return ttnn.MeshMapperConfig(placements=list(placements), mesh_shape_override=ttnn.MeshShape(*GALAXY_MESH_SHAPE))
+
+
+class _UnprefetchedContext:
+    """A prefetch context that names the worker sub-device but no global CB.
+
+    `Attention2D` reads `global_cb` and `worker_sub_device_id` off its
+    `decode_prefetch_context` at every call. The confined attention decode
+    matmuls must still be told their sub-device - without it a ttnn matmul
+    defaults to sub-device *zero*, the prefetch senders (D-B13) - but they must
+    **not** be handed a global circular buffer they cannot receive from. See
+    `LLAMA33_70B_PREFETCHED_WEIGHT_NAMES`.
+    """
+
+    def __init__(self, context: Any):
+        self._context = context
+
+    @property
+    def global_cb(self) -> None:
+        return None
+
+    @property
+    def worker_sub_device_id(self) -> Any:
+        return self._context.worker_sub_device_id
+
+    @property
+    def sub_device_id(self) -> Any:
+        return self._context.worker_sub_device_id
+
+    @property
+    def mesh_device(self) -> Any:
+        return self._context.mesh_device
+
+    @property
+    def mode(self) -> Any:
+        return getattr(self._context, "mode", None)
 
 
 def _row_output_mapper() -> ttnn.MeshMapperConfig:
@@ -806,7 +863,10 @@ def _build_block_config(
         decode_wo_kernel_config=precision.attention_kernel_config,
         decode_activation_dtype=precision.decode_activation_dtype,
         prefill_sequence_configs=_attention_sequence_configs(geometry, precision, prefill, chunked_lengths),
-        decode_prefetch_context=decode_context,
+        # No global circular buffer for the confined attention decode matmuls -
+        # they do not run on the ring that receives it - but still the worker
+        # sub-device id, without which ttnn defaults to the prefetch senders.
+        decode_prefetch_context=_UnprefetchedContext(decode_context),
         prefill_prefetch_context=prefill_context,
         intermediate_releaser=deallocate_if_allocated,
     )

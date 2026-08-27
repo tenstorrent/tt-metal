@@ -362,13 +362,22 @@ def test_prefetch_registration_is_ordered_per_layer():
     )
     registration = lazy.prefetch_registration()
 
-    assert LLAMA33_70B_PREFETCHED_WEIGHT_NAMES == ("wqkv", "wo", "w1", "w3", "w2")
+    # The MLP's three, and *only* those. The attention projections used to be here
+    # and had to be removed: the global circular buffer is received by the 24 ring
+    # cores, the MLP's projections run on the ring and the confined attention
+    # decode matmuls do not, so registering `wqkv` and `wo` put two entries per
+    # layer into the buffer that nothing on the ring consumed and the MLP's `w1`
+    # read the entry meant for `wqkv`. Measured on `(8, 4)`: decode attention PCC
+    # 0.737 and decode MLP 0.096 with all five registered. See D-B25.
+    assert LLAMA33_70B_PREFETCHED_WEIGHT_NAMES == ("w1", "w3", "w2")
     assert [name for name, _ in registration] == [
         f"layer[{index}].{name}" for index in range(2) for name in LLAMA33_70B_PREFETCHED_WEIGHT_NAMES
     ]
     # Decode weights carry the DRAM ring placement; prefill stays interleaved.
+    # Checked on `wqkv` deliberately, even though it is no longer prefetched: the
+    # ring placement is a property of the decode weight, not of registration.
     first = lazy.layers[0]
-    assert registration[0][1] is first.wqkv
+    assert registration[0][1] is first.w1
     assert first.wqkv.memory_config != ttnn.DRAM_MEMORY_CONFIG
     assert first.prefill_wqkv.memory_config == ttnn.DRAM_MEMORY_CONFIG
     assert first.wqkv.dtype == first.prefill_wqkv.dtype

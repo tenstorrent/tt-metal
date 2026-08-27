@@ -44,9 +44,32 @@ signal_child() {
     esac
 }
 
+# Two clocks, not one. `DEADLINE` bounds the whole run; `GRACE` bounds how long a
+# process may linger *after* pytest has printed its session summary.
+#
+# A decode-mode failure - a TT_FATAL or a plain AssertionError - leaves the mesh
+# un-drainable, and the hang is in the `mesh_device` fixture teardown, after the
+# test body and after the summary line. So the verdict is already in the log while
+# the process holds all 64 /dev/tenstorrent fds. Waiting out the full deadline for
+# a result that has already been written costs ten minutes a run, and attempt 3
+# lost a whole run to launching the next cycle while such a holder was still up.
+GRACE=${MB_TEARDOWN_GRACE:-90}
 waited=0
+summary_at=""
 while kill -0 "$child" 2>/dev/null && [ "$waited" -lt "$DEADLINE" ]; do
     sleep 5; waited=$((waited + 5))
+    # The per-test verdict, not the session summary. Measured on attempt 3's run
+    # 23: a decode-mode failure hangs the `mesh_device` fixture teardown *before*
+    # pytest gets to write its summary, so the log ends at a bare `FAILED` and a
+    # summary-based trigger never fires.
+    if [ -z "$summary_at" ] && grep -qE '(^|[[:space:]])(PASSED|FAILED|ERROR)([[:space:]]|$)' "$LOG" 2>/dev/null; then
+        summary_at="$waited"
+        echo "NOTE: pytest reported a verdict at ${waited}s; teardown grace ${GRACE}s" >> "$LOG"
+    fi
+    if [ -n "$summary_at" ] && [ $((waited - summary_at)) -ge "$GRACE" ]; then
+        echo "TEARDOWN HANG: summary written but the process still holds the mesh after ${GRACE}s" >> "$LOG"
+        break
+    fi
 done
 
 if kill -0 "$child" 2>/dev/null; then
