@@ -40,7 +40,36 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
           adamw:
             lr: 0.0003
             weight_decay: 0.01
+
+    LR scheduling contract: this optimizer holds TWO learning rates, so LR
+    schedulers must be attached to the inner optimizers individually — one to
+    ``muon_optimizer()`` and one to ``adamw_optimizer()`` (mirroring PyTorch's
+    idiom of a separate ``torch.optim.Muon`` and ``torch.optim.AdamW``, each
+    with its own scheduler). Attaching a scheduler to the wrapper itself
+    raises. Example:
+
+        opt = MuonWithAdamW(config, params)
+        muon_sched = CosineAnnealingScheduler(opt.muon_optimizer(), T_max=1000)
+        adamw_sched = CosineAnnealingScheduler(opt.adamw_optimizer(), T_max=1000)
+        ...
+        opt.step()
+        muon_sched.step()
+        adamw_sched.step()
+
+    Each inner optimizer records and checkpoints its own ``initial_lr``
+    (nested in this wrapper's state dict), so schedulers re-attached after a
+    resume see the correct per-optimizer base LRs.
     """
+
+    # TODO(#tt-metal issue pending): what contract should get_lr/set_lr (and
+    # get_adamw_lr/set_adamw_lr) honor on this fused optimizer? Today they
+    # address only one of the two internal LRs, which is why schedulers are
+    # rejected on the wrapper (see supports_lr_scheduling) — but the same
+    # hazard exists for any generic code that calls set_lr directly (e.g.
+    # grpo_trainer's manual warmup) or logs get_lr. Candidates: raise on both,
+    # or make set_lr scale both LRs proportionally from their bases.
+    supports_lr_scheduling = False
+    lr_scheduling_hint = "Attach one scheduler to .muon_optimizer() and another to .adamw_optimizer() instead."
 
     def __init__(self, config, params):
         super().__init__(params)
@@ -102,6 +131,14 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
     def set_steps(self, steps):
         self._muon.set_steps(steps)
         self._adamw.set_steps(steps)
+
+    def muon_optimizer(self):
+        """Inner Muon optimizer (2D hidden-layer weights). Attach its LR scheduler here."""
+        return self._muon
+
+    def adamw_optimizer(self):
+        """Inner AdamW optimizer (embeddings, norms, biases, LM head). Attach its LR scheduler here."""
+        return self._adamw
 
     def get_lr(self):
         return self._muon.get_lr()

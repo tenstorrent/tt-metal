@@ -72,6 +72,10 @@ def _roundtrip(make_sched_fn, n_steps=N_STEPS):
 
     opt2, sched2 = make_sched_fn()  # noqa: F841
     sched2.set_state_dict(state)
+    # Restoring scheduler state must also restore the optimizer's live LR
+    # (the constructor wrote the construction-time LR), so the first resumed
+    # optimizer step runs at the checkpoint's LR — before any step() call.
+    assert opt2.get_lr() == pytest.approx(sched1.get_last_lr(), abs=1e-8)
     resumed_lrs = []
     for _ in range(n_steps - half):
         _step(opt2, sched2)
@@ -99,6 +103,10 @@ class TestCosineAnnealingMatchesPyTorch:
         opt, sched = _make_cosine()  # noqa: F841
         torch_opt, _ = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.CosineAnnealingLR(torch_opt, T_max=T_MAX, eta_min=ETA_MIN)
+
+        # Step 0: construction-time LR must already match (torch performs an
+        # initial step at construction).
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7), "step 0"
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
@@ -237,6 +245,9 @@ class TestStepSchedulerMatchesPyTorch:
         torch_opt, _ = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.StepLR(torch_opt, step_size=STEP_SIZE, gamma=GAMMA)
 
+        # Step 0: construction-time LR must already match.
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7), "step 0"
+
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
             torch_opt.step()
@@ -352,6 +363,26 @@ def _make_linear(base_lr=BASE_LR, start_factor=START_FACTOR, end_factor=END_FACT
 
 
 class TestLinearSchedulerMatchesPyTorch:
+    def test_constructor_applies_start_factor(self):
+        """The pre-first-step LR must equal base_lr * start_factor, matching torch."""
+        opt, sched = _make_linear()  # noqa: F841
+        torch_opt, _ = _make_torch_opt()
+        torch.optim.lr_scheduler.LinearLR(
+            torch_opt, start_factor=START_FACTOR, end_factor=END_FACTOR, total_iters=TOTAL_STEPS
+        )
+        assert opt.get_lr() == pytest.approx(BASE_LR * START_FACTOR, abs=1e-7)
+        assert sched.get_last_lr() == pytest.approx(BASE_LR * START_FACTOR, abs=1e-7)
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7)
+
+    def test_invalid_factors_rejected(self, expect_error):
+        """Bounds match torch: 0 < start_factor <= 1 and 0 <= end_factor <= 1."""
+        for start_factor, end_factor in [(0.0, 1.0), (-0.1, 1.0), (1.5, 1.0), (1.0, -0.1), (1.0, 1.5)]:
+            with expect_error(ValueError, "multiplicative factor expected to be"):
+                LinearScheduler(_make_opt(), start_factor, end_factor, TOTAL_STEPS)
+        # Boundary values are legal: start_factor == 1, end_factor == 0 or 1.
+        LinearScheduler(_make_opt(), 1.0, 0.0, TOTAL_STEPS)
+        LinearScheduler(_make_opt(), 1.0, 1.0, TOTAL_STEPS)
+
     def test_lr_trajectory(self):
         """Must match torch.optim.lr_scheduler.LinearLR step-by-step."""
         opt, sched = _make_linear()  # noqa: F841
@@ -359,6 +390,11 @@ class TestLinearSchedulerMatchesPyTorch:
         torch_sched = torch.optim.lr_scheduler.LinearLR(
             torch_opt, start_factor=START_FACTOR, end_factor=END_FACTOR, total_iters=TOTAL_STEPS
         )
+
+        # Step 0: construction-time LR must already be base_lr * start_factor.
+        # This is the assertion that the pre-fix implementation failed: it left
+        # the optimizer at the full base_lr until the first step().
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7), "step 0"
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
@@ -484,11 +520,23 @@ def _make_lambda(base_lr=BASE_LR):
 
 
 class TestLambdaSchedulerMatchesPyTorch:
+    def test_constructor_applies_lambda_at_step_zero(self):
+        """The pre-first-step LR must equal base_lr * lambda(0), matching torch."""
+        opt = _make_opt()
+        sched = LambdaScheduler(opt, lambda step: 0.5)
+        assert opt.get_lr() == pytest.approx(BASE_LR * 0.5, abs=1e-7)
+        assert sched.get_last_lr() == pytest.approx(BASE_LR * 0.5, abs=1e-7)
+
     def test_lr_trajectory(self):
         """Must match torch.optim.lr_scheduler.LambdaLR step-by-step."""
         opt, sched = _make_lambda()  # noqa: F841
         torch_opt, _ = _make_torch_opt()
         torch_sched = torch.optim.lr_scheduler.LambdaLR(torch_opt, lr_lambda=_LAMBDA)
+
+        # Step 0: construction-time LR must already be base_lr * lambda(0).
+        # (_LAMBDA(0) == 1, so the real construction coverage is in
+        # test_constructor_applies_lambda_at_step_zero with a 0.5 factor.)
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7), "step 0"
 
         for step in range(1, N_STEPS + 1):
             _step(opt, sched)
@@ -575,7 +623,8 @@ class TestLambdaSchedulerStateDict:
             _step(opt, sched)
 
         saved = sched.get_state_dict()["m_lr_lambda"]
-        assert saved == {"decay": 0.9, "calls": 3}
+        # 4 calls: one at construction (lambda(0), matching PyTorch) + 3 steps.
+        assert saved == {"decay": 0.9, "calls": 4}
 
     def test_state_dict_callable_dict_is_a_copy(self):
         """Mutating the callable after saving must not change the saved state."""
@@ -594,7 +643,8 @@ class TestLambdaSchedulerStateDict:
         _step(opt, sched)
         saved = sched.get_state_dict()["m_lr_lambda"]
         counter.n = 999
-        assert saved == {"n": 1}
+        # 2 calls: one at construction (lambda(0), matching PyTorch) + 1 step.
+        assert saved == {"n": 2}
 
     def test_set_state_dict_restores_callable_object_state(self):
         """Round-trip must restore the callable's instance state."""
@@ -611,15 +661,15 @@ class TestLambdaSchedulerStateDict:
         src = LambdaScheduler(src_opt, _Counter(start=0))
         for _ in range(4):
             _step(src_opt, src)
-        # The source callable has been called 4 times.
-        assert src._lr_lambda.n == 4
+        # The source callable has been called 5 times: construction + 4 steps.
+        assert src._lr_lambda.n == 5
         state = src.get_state_dict()
 
         dst_opt = _make_opt()
         dst = LambdaScheduler(dst_opt, _Counter(start=0))
         dst.set_state_dict(state)
-        # Destination callable's ``n`` must be restored to 4.
-        assert dst._lr_lambda.n == 4
+        # Destination callable's ``n`` must be restored to 5.
+        assert dst._lr_lambda.n == 5
 
     def test_set_state_dict_with_none_lambda_does_not_touch_callable(self):
         """If saved ``m_lr_lambda`` is ``None`` the destination callable is left alone."""
@@ -699,26 +749,107 @@ class TestLambdaSchedulerStateDict:
 
 CHILD0_STEPS = 10  # warmup length
 CHILD1_STEPS = 20  # decay length
+# start_factor == 0 is rejected (matches PyTorch's LinearLR); warmup ramps from
+# base_lr / warmup_steps instead.
+WARMUP_START = 1.0 / CHILD0_STEPS
+
+
+def _warmup_factor(step, warmup_steps, start=None):
+    """Linear ramp factor from ``start`` (default 1/warmup_steps) to 1.0."""
+    if start is None:
+        start = 1.0 / warmup_steps
+    return start + (1.0 - start) * step / warmup_steps
 
 
 def _make_sequential(base_lr=BASE_LR):
-    """Linear warmup (0.0 -> 1.0 over CHILD0_STEPS) then Linear decay
+    """Linear warmup (WARMUP_START -> 1.0 over CHILD0_STEPS) then Linear decay
     (1.0 -> 0.1 over CHILD1_STEPS), chained via SequentialScheduler."""
     opt = _make_opt(base_lr)
     children = [
-        LinearScheduler(opt, start_factor=0.0, end_factor=1.0, total_steps=CHILD0_STEPS),
+        LinearScheduler(opt, start_factor=WARMUP_START, end_factor=1.0, total_steps=CHILD0_STEPS),
         LinearScheduler(opt, start_factor=1.0, end_factor=0.1, total_steps=CHILD1_STEPS),
     ]
     return opt, SequentialScheduler(opt, children, milestones=[CHILD0_STEPS, CHILD1_STEPS])
+
+
+class TestSequentialSchedulerMatchesPyTorch:
+    """Head-to-head against torch.optim.lr_scheduler.SequentialLR.
+
+    Milestone mapping: TTML milestones are per-child STEP COUNTS, while
+    torch's are cumulative switch points with len == len(schedulers) - 1.
+    So TTML [W, D] corresponds to torch [W].
+
+    At the handoff step torch runs the incoming child at epoch 0 while TTML
+    runs the outgoing child's final step; the trajectories coincide whenever
+    each child starts at the factor the previous child ended on (the standard
+    warmup -> decay construction used here).
+    """
+
+    def test_warmup_then_linear_decay_matches_sequential_lr(self):
+        opt, sched = _make_sequential()  # noqa: F841
+        torch_opt, _ = _make_torch_opt()
+        torch_children = [
+            torch.optim.lr_scheduler.LinearLR(
+                torch_opt, start_factor=WARMUP_START, end_factor=1.0, total_iters=CHILD0_STEPS
+            ),
+            torch.optim.lr_scheduler.LinearLR(torch_opt, start_factor=1.0, end_factor=0.1, total_iters=CHILD1_STEPS),
+        ]
+        torch_sched = torch.optim.lr_scheduler.SequentialLR(torch_opt, torch_children, milestones=[CHILD0_STEPS])
+
+        # Step 0: SequentialLR resets to initial_lr and redoes the first
+        # child's initial step at construction; TTML must land on the same LR.
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7), "step 0"
+
+        # Both LinearLR children clamp after total_iters, so it is safe to
+        # compare past the end of the chain (both sides hold base_lr * 0.1).
+        for step in range(1, CHILD0_STEPS + CHILD1_STEPS + 6):
+            _step(opt, sched)
+            torch_opt.step()
+            torch_sched.step()
+            assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-6), f"step {step}"
+
+    def test_warmup_then_cosine_decay_matches_sequential_lr(self):
+        warmup_steps = 5
+        decay_steps = 20
+        eta_min = 1e-4
+
+        opt = _make_opt()
+        children = [
+            LinearScheduler(opt, start_factor=1.0 / warmup_steps, end_factor=1.0, total_steps=warmup_steps),
+            CosineAnnealingScheduler(opt, T_max=decay_steps, eta_min=eta_min),
+        ]
+        sched = SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
+
+        torch_opt, _ = _make_torch_opt()
+        torch_children = [
+            torch.optim.lr_scheduler.LinearLR(
+                torch_opt, start_factor=1.0 / warmup_steps, end_factor=1.0, total_iters=warmup_steps
+            ),
+            torch.optim.lr_scheduler.CosineAnnealingLR(torch_opt, T_max=decay_steps, eta_min=eta_min),
+        ]
+        torch_sched = torch.optim.lr_scheduler.SequentialLR(torch_opt, torch_children, milestones=[warmup_steps])
+
+        assert opt.get_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-7), "step 0"
+
+        # Stop exactly at the end of the chain: past it TTML holds the final
+        # LR (step() is a no-op) while torch keeps stepping the cosine child,
+        # which cycles back up.
+        for step in range(1, warmup_steps + decay_steps + 1):
+            _step(opt, sched)
+            torch_opt.step()
+            torch_sched.step()
+            assert sched.get_current_lr() == pytest.approx(torch_opt.param_groups[0]["lr"], abs=1e-6), f"step {step}"
 
 
 class TestSequentialSchedulerBehavior:
     def test_warmup_then_decay_trajectory(self):
         """Closed-form check of the warmup-then-decay LR trajectory."""
         opt, sched = _make_sequential()  # noqa: F841
+        # Construction already applies the warmup child's start factor.
+        assert opt.get_lr() == pytest.approx(BASE_LR * WARMUP_START, abs=1e-7)
         for i in range(1, CHILD0_STEPS + 1):
             _step(opt, sched)
-            expected = BASE_LR * (i / CHILD0_STEPS)
+            expected = BASE_LR * _warmup_factor(i, CHILD0_STEPS)
             assert sched.get_current_lr() == pytest.approx(expected, abs=1e-7), f"warmup step {i}"
         for j in range(1, CHILD1_STEPS + 1):
             _step(opt, sched)
@@ -728,7 +859,8 @@ class TestSequentialSchedulerBehavior:
     def test_linear_warmup_then_cosine_decay(self):
         """Common training schedule: linear warmup -> cosine annealing decay.
 
-        - Warmup: ``warmup_steps`` linear steps from 0 to BASE_LR.
+        - Warmup: ``warmup_steps`` linear steps from BASE_LR / warmup_steps to
+                  BASE_LR.
         - Decay:  ``decay_steps`` cosine-annealing steps from BASE_LR down to
                   ``eta_min`` (where ``cos(pi) = -1`` lands the final LR exactly
                   at ``eta_min``).
@@ -740,15 +872,19 @@ class TestSequentialSchedulerBehavior:
 
         opt = _make_opt()  # opt.lr = BASE_LR at construction
         children = [
-            LinearScheduler(opt, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps),
+            LinearScheduler(opt, start_factor=1.0 / warmup_steps, end_factor=1.0, total_steps=warmup_steps),
             CosineAnnealingScheduler(opt, T_max=decay_steps, eta_min=eta_min),
         ]
         sched = SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
 
+        # Construction applies the warmup child's start factor; the cosine
+        # child (constructed second) must NOT have polluted the base LR.
+        assert opt.get_lr() == pytest.approx(BASE_LR / warmup_steps, abs=1e-7)
+
         # Warmup phase.
         for i in range(1, warmup_steps + 1):
             _step(opt, sched)
-            expected = BASE_LR * (i / warmup_steps)
+            expected = BASE_LR * _warmup_factor(i, warmup_steps)
             assert sched.get_current_lr() == pytest.approx(expected, abs=1e-7), f"warmup step {i}"
         # End of warmup hands off cleanly at exactly BASE_LR.
         assert opt.get_lr() == pytest.approx(BASE_LR, abs=1e-7)
@@ -780,7 +916,7 @@ class TestSequentialSchedulerBehavior:
     def test_get_last_lr_delegates_to_active_child(self):
         opt, sched = _make_sequential()  # noqa: F841
         sched.step()  # one step of warmup
-        assert sched.get_last_lr() == pytest.approx(BASE_LR * (1 / CHILD0_STEPS), abs=1e-7)
+        assert sched.get_last_lr() == pytest.approx(BASE_LR * _warmup_factor(1, CHILD0_STEPS), abs=1e-7)
 
     def test_get_last_lr_returns_stored_value_after_exhaustion(self):
         opt, sched = _make_sequential()  # noqa: F841
@@ -791,20 +927,20 @@ class TestSequentialSchedulerBehavior:
         sched.step()  # no-op
         assert sched.get_last_lr() == pytest.approx(BASE_LR * 0.1, abs=1e-7)
 
-    def test_requires_at_least_one_scheduler(self):
+    def test_requires_at_least_one_scheduler(self, expect_error):
         opt = _make_opt()
-        with pytest.raises(ValueError):
+        with expect_error(ValueError, "requires at least one scheduler"):
             SequentialScheduler(opt, [], [])
 
-    def test_milestones_length_must_match_schedulers(self):
+    def test_milestones_length_must_match_schedulers(self, expect_error):
         opt = _make_opt()
-        child = LinearScheduler(opt, 0.0, 1.0, 5)
-        with pytest.raises(ValueError):
+        child = LinearScheduler(opt, 0.2, 1.0, 5)
+        with expect_error(ValueError, r"must equal len\(milestones\)"):
             SequentialScheduler(opt, [child], [5, 10])
 
-    def test_none_scheduler_rejected(self):
+    def test_none_scheduler_rejected(self, expect_error):
         opt = _make_opt()
-        with pytest.raises(ValueError):
+        with expect_error(ValueError, r"schedulers\[0\] is None"):
             SequentialScheduler(opt, [None], [5])
 
 
@@ -867,7 +1003,7 @@ class TestSequentialSchedulerStateDict:
         dst = SequentialScheduler(dst_opt, dst_children, milestones=[CHILD0_STEPS, CHILD1_STEPS])
         dst.set_state_dict(state)
 
-        assert dst._schedulers[0]._start_factor == pytest.approx(0.0, abs=1e-12)
+        assert dst._schedulers[0]._start_factor == pytest.approx(WARMUP_START, abs=1e-12)
         assert dst._schedulers[0]._end_factor == pytest.approx(1.0, abs=1e-12)
         assert dst._schedulers[0]._total_steps == CHILD0_STEPS
         assert dst._schedulers[1]._start_factor == pytest.approx(1.0, abs=1e-12)
@@ -900,7 +1036,7 @@ class TestSequentialSchedulerStateDict:
     def _make_warmup_cosine(self, warmup_steps=5, decay_steps=20, eta_min=1e-4):
         opt = _make_opt()
         children = [
-            LinearScheduler(opt, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps),
+            LinearScheduler(opt, start_factor=1.0 / warmup_steps, end_factor=1.0, total_steps=warmup_steps),
             CosineAnnealingScheduler(opt, T_max=decay_steps, eta_min=eta_min),
         ]
         return opt, SequentialScheduler(opt, children, milestones=[warmup_steps, decay_steps])
@@ -934,7 +1070,7 @@ class TestSequentialSchedulerStateDict:
         # that must be overwritten by the round trip.
         dst_opt = _make_opt()
         dst_children = [
-            LinearScheduler(dst_opt, start_factor=0.0, end_factor=1.0, total_steps=warmup_steps),
+            LinearScheduler(dst_opt, start_factor=1.0 / warmup_steps, end_factor=1.0, total_steps=warmup_steps),
             CosineAnnealingScheduler(dst_opt, T_max=999, eta_min=0.5),
         ]
         dst = SequentialScheduler(dst_opt, dst_children, milestones=[warmup_steps, decay_steps])
@@ -1050,7 +1186,7 @@ class TestSequentialSchedulerStateDict:
         assert dst.get_last_lr() == pytest.approx(eta_min, abs=1e-7)
 
         # Linear child's full state preserved.
-        assert dst._schedulers[0]._start_factor == pytest.approx(0.0, abs=1e-12)
+        assert dst._schedulers[0]._start_factor == pytest.approx(1.0 / warmup_steps, abs=1e-12)
         assert dst._schedulers[0]._end_factor == pytest.approx(1.0, abs=1e-12)
         assert dst._schedulers[0]._total_steps == warmup_steps
         assert dst._schedulers[0]._last_step == warmup_steps
@@ -1066,6 +1202,223 @@ class TestSequentialSchedulerStateDict:
         for _ in range(3):
             dst.step()
             assert dst.get_last_lr() == pytest.approx(final_lr, abs=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Optimizer initial_lr serialization
+#
+# Mirrors PyTorch, where ``param_group["initial_lr"]`` (recorded when the
+# first scheduler attaches) rides along in ``optimizer.state_dict()`` so a
+# scheduler attached after resuming a checkpoint still sees the original base
+# LR rather than the decayed one. Unlike PyTorch's open param-group dicts,
+# TTML always writes the key (falling back to the current LR when no
+# scheduler has attached) and requires it when loading a state dict.
+# ---------------------------------------------------------------------------
+
+
+class TestOptimizerInitialLrStateDict:
+    def test_state_dict_always_contains_initial_lr(self):
+        # Before any scheduler attaches, the base LR is simply the current LR.
+        opt = _make_opt()
+        assert opt.get_state_dict()["initial_lr"] == pytest.approx(BASE_LR, abs=1e-8)
+
+    def test_state_dict_records_initial_lr_once_scheduler_attaches(self):
+        opt = _make_opt()
+        LinearScheduler(opt, 0.5, 1.0, 10)  # records initial_lr; LR becomes BASE_LR * 0.5
+        state = opt.get_state_dict()
+        assert state["initial_lr"] == pytest.approx(BASE_LR, abs=1e-8)
+        assert state["lr"] == pytest.approx(BASE_LR * 0.5, abs=1e-8)
+
+    def test_initial_lr_survives_optimizer_state_dict_round_trip(self):
+        # Source run: scheduler attaches (records initial_lr), LR decays
+        # mid-warmup, then the optimizer is checkpointed.
+        src = _make_opt()
+        sched = LinearScheduler(src, 0.5, 1.0, 10)
+        for _ in range(3):
+            sched.step()
+        decayed_lr = src.get_lr()
+        assert decayed_lr < BASE_LR
+        state = src.get_state_dict()
+        assert state["initial_lr"] == pytest.approx(BASE_LR, abs=1e-8)
+
+        # Resume into a fresh optimizer (deliberately different construction
+        # LR) BEFORE any scheduler attaches — the usual restore order.
+        dst = _make_opt(0.999)
+        dst.set_state_dict(state)
+        assert dst.get_lr() == pytest.approx(decayed_lr, abs=1e-8)
+        assert dst.get_initial_lr() == pytest.approx(BASE_LR, abs=1e-8)
+
+        # A brand-new scheduler attached after resume uses the ORIGINAL base
+        # LR: StepScheduler applies base_lr at construction, so the optimizer
+        # LR snaps back to BASE_LR, not the decayed checkpoint LR.
+        StepScheduler(dst, step_size=10, gamma=0.1)
+        assert dst.get_lr() == pytest.approx(BASE_LR, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Live LR is restored together with scheduler state
+#
+# Scheduler constructors write the construction-time LR to the optimizer, so
+# in the resume order "load optimizer state -> construct scheduler -> load
+# scheduler state" the checkpoint's live LR gets overwritten at construction.
+# set_state_dict must push m_last_lr back to the optimizer or the first
+# resumed optimizer.step() runs at the wrong LR.
+# ---------------------------------------------------------------------------
+
+
+class TestLiveLrRestoredWithSchedulerState:
+    def test_optimizer_state_loaded_before_scheduler_construction(self):
+        # Source run: decay a few steps mid-warmup, checkpoint both.
+        src = _make_opt()
+        src_sched = LinearScheduler(src, 0.5, 1.0, 10)
+        for _ in range(3):
+            src_sched.step()
+        live_lr = src.get_lr()
+        opt_state = src.get_state_dict()
+        sched_state = src_sched.get_state_dict()
+
+        # Resume in the hazardous order: optimizer state FIRST, then scheduler
+        # construction (which overwrites the live LR with base_lr * 0.5)...
+        dst = _make_opt()
+        dst.set_state_dict(opt_state)
+        assert dst.get_lr() == pytest.approx(live_lr, abs=1e-8)
+        dst_sched = LinearScheduler(dst, 0.5, 1.0, 10)
+        assert dst.get_lr() == pytest.approx(BASE_LR * 0.5, abs=1e-8)
+
+        # ...then scheduler state: the live LR must come back BEFORE any
+        # step() call, so the first resumed optimizer step uses it.
+        dst_sched.set_state_dict(sched_state)
+        assert dst.get_lr() == pytest.approx(live_lr, abs=1e-8)
+
+    def test_sequential_restores_active_childs_live_lr(self):
+        # Chain: 10-step warmup then 20-step decay; checkpoint 3 steps into
+        # the warmup (child 0 active).
+        def make():
+            opt = _make_opt()
+            warmup = LinearScheduler(opt, 0.1, 1.0, 10)
+            decay = LinearScheduler(opt, 1.0, 0.01, 20)
+            return opt, SequentialScheduler(opt, [warmup, decay], [10, 20])
+
+        src_opt, src_sched = make()
+        for _ in range(3):
+            src_sched.step()
+        live_lr = src_opt.get_lr()
+        state = src_sched.get_state_dict()
+
+        # Restoring child states pushes each child's saved live LR to the
+        # optimizer in turn (the LAST child's would win); the chain must
+        # re-apply the ACTIVE child's live LR afterwards.
+        dst_opt, dst_sched = make()
+        dst_sched.set_state_dict(state)
+        assert dst_opt.get_lr() == pytest.approx(live_lr, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Multi-LR optimizers: scheduling contract
+#
+# MuonWithAdamW holds TWO learning rates (Muon + AdamW), so its scheduling
+# contract is: attach one scheduler to ``muon_optimizer()`` and one to
+# ``adamw_optimizer()``. Attaching a scheduler to the wrapper itself is
+# rejected (``supports_lr_scheduling = False``) with an error that points the
+# user at the accessors.
+# ---------------------------------------------------------------------------
+
+MUON_LR = 0.02
+ADAMW_LR = 0.0003
+
+
+def _make_muon_with_adamw():
+    from ttml.common.muon_optimizer import MuonWithAdamW
+
+    config = {"muon": {"lr": MUON_LR}, "adamw": {"lr": ADAMW_LR}}
+    return MuonWithAdamW(config, ttml.NamedParameters())
+
+
+class TestSchedulersRejectMuonWithAdamWWrapper:
+    def test_muon_with_adamw_opts_out_of_scheduling(self):
+        from ttml.common.muon_optimizer import MuonWithAdamW
+
+        assert MuonWithAdamW.supports_lr_scheduling is False
+
+    def test_all_scheduler_types_reject_muon_with_adamw(self, expect_error):
+        opt = _make_muon_with_adamw()
+        make_scheds = [
+            lambda: StepScheduler(opt, step_size=10, gamma=0.1),
+            lambda: LinearScheduler(opt, 0.5, 1.0, 10),
+            lambda: CosineAnnealingScheduler(opt, T_max=10),
+            lambda: LambdaScheduler(opt, lambda s: 1.0),
+        ]
+        for make_sched in make_scheds:
+            with expect_error(TypeError, "does not support LR schedulers"):
+                make_sched()
+
+    def test_rejection_message_points_at_inner_accessors(self, expect_error):
+        opt = _make_muon_with_adamw()
+        with expect_error(TypeError, r"\.muon_optimizer\(\) and another to \.adamw_optimizer\(\)"):
+            StepScheduler(opt, step_size=10, gamma=0.1)
+
+    def test_sequential_scheduler_rejects_muon_with_adamw(self, expect_error):
+        # Children are built on a plain AdamW so that the rejection under test
+        # comes from SequentialScheduler itself, not from child construction.
+        child_opt = _make_opt()
+        child = StepScheduler(child_opt, step_size=10, gamma=0.1)
+        opt = _make_muon_with_adamw()
+        with expect_error(TypeError, "does not support LR schedulers"):
+            SequentialScheduler(opt, [child], [10])
+
+    def test_rejection_does_not_mutate_lrs(self, expect_error):
+        opt = _make_muon_with_adamw()
+        with expect_error(TypeError, "does not support LR schedulers"):
+            LinearScheduler(opt, 0.5, 1.0, 10)
+        assert opt.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
+
+
+class TestMuonWithAdamWPerInnerScheduling:
+    """The sanctioned pattern: one scheduler per inner optimizer."""
+
+    def test_inner_optimizers_accept_schedulers_independently(self):
+        opt = _make_muon_with_adamw()
+        muon_sched = StepScheduler(opt.muon_optimizer(), step_size=1, gamma=0.5)
+        adamw_sched = StepScheduler(opt.adamw_optimizer(), step_size=1, gamma=0.1)
+
+        assert opt.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
+
+        # Each scheduler drives only its own channel, from its own base.
+        muon_sched.step()
+        assert opt.get_lr() == pytest.approx(MUON_LR * 0.5, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
+
+        adamw_sched.step()
+        assert opt.get_lr() == pytest.approx(MUON_LR * 0.5, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR * 0.1, abs=1e-8)
+
+    def test_inner_initial_lrs_survive_wrapper_state_dict_round_trip(self):
+        # Source run: schedulers attach to both inners (recording each inner's
+        # initial_lr), decay mid-warmup, then the WRAPPER is checkpointed.
+        src = _make_muon_with_adamw()
+        muon_sched = LinearScheduler(src.muon_optimizer(), 0.5, 1.0, 10)
+        adamw_sched = LinearScheduler(src.adamw_optimizer(), 0.5, 1.0, 10)
+        for _ in range(3):
+            muon_sched.step()
+            adamw_sched.step()
+        assert src.get_lr() < MUON_LR
+        assert src.get_adamw_lr() < ADAMW_LR
+        state = src.get_state_dict()
+        assert state["muon"]["initial_lr"] == pytest.approx(MUON_LR, abs=1e-8)
+        assert state["adamw"]["initial_lr"] == pytest.approx(ADAMW_LR, abs=1e-8)
+
+        # Resume into a fresh wrapper, then attach brand-new schedulers to the
+        # inners: each must see its ORIGINAL base LR, not the decayed one.
+        # StepScheduler applies base_lr at construction, so both channels snap
+        # back to their bases.
+        dst = _make_muon_with_adamw()
+        dst.set_state_dict(state)
+        StepScheduler(dst.muon_optimizer(), step_size=10, gamma=0.1)
+        StepScheduler(dst.adamw_optimizer(), step_size=10, gamma=0.1)
+        assert dst.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
+        assert dst.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
 
 
 if __name__ == "__main__":

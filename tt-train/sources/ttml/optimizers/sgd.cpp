@@ -89,12 +89,14 @@ serialization::StateDict SGD::get_state_dict() const {
     dict["weight_decay"] = m_config.weight_decay;
     dict["nesterov"] = m_config.nesterov;
     dict["momentum"] = m_momentum;
+    save_initial_lr(dict);
     return dict;
 }
 
 void SGD::set_state_dict(const serialization::StateDict& dict) {
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    restore_initial_lr(dict);
     m_config.momentum = serialization::get_value_type<float>(dict, "momentum_factor");
     m_config.dampening = serialization::get_value_type<float>(dict, "dampening");
     m_config.weight_decay = serialization::get_value_type<float>(dict, "weight_decay");

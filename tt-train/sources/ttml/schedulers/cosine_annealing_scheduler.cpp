@@ -14,10 +14,14 @@ CosineAnnealingScheduler::CosineAnnealingScheduler(optimizers::OptimizerBase* op
     LRSchedulerBase(optimizer),
     m_T_max(T_max),
     m_eta_min(eta_min),
-    m_base_lr(optimizer->get_lr()),
+    m_base_lr(optimizer->get_initial_lr()),
     m_last_step(0),
-    m_last_lr(optimizer->get_lr()) {
+    m_last_lr(m_base_lr) {
     TT_FATAL(T_max > 0, "T_max = {} must be greater than zero.", T_max);
+
+    // Mirror PyTorch's construction-time initial step: at step 0 the cosine
+    // factor is 1, so the LR is (re)set to the base LR.
+    optimizer->set_lr(m_last_lr);
 }
 
 void CosineAnnealingScheduler::step() {
@@ -57,6 +61,8 @@ void CosineAnnealingScheduler::set_state_dict(const serialization::StateDict& di
     m_base_lr = serialization::get_value_type<float>(dict, "m_base_lr");
     m_T_max = serialization::get_value_type<size_t>(dict, "m_T_max");
     m_eta_min = serialization::get_value_type<float>(dict, "m_eta_min");
+    // Restore the live LR (see LinearScheduler::set_state_dict for rationale).
+    get_optimizer()->set_lr(m_last_lr);
 }
 
 }  // namespace ttml::schedulers

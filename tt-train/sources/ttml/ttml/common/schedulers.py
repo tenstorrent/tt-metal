@@ -61,11 +61,40 @@ class OptimParamSetter:
 
 
 class _SchedulerBase:
+    """Base class for stateful LR schedulers.
+
+    ``optimizer`` must expose ``get_initial_lr()`` (every subclass of
+    ``ttml.optimizers.OptimizerBase`` inherits it from the C++ base). It
+    mirrors PyTorch's ``param_group["initial_lr"]``: the optimizer records its
+    LR the first time a scheduler reads it, so a scheduler constructed after an
+    earlier one has already scaled ``get_lr()`` at construction (e.g. a chained
+    warmup + decay pair) still sees the original base LR.
+    """
+
     def __init__(self, optimizer):
+        # Optimizers with more than one internal LR (e.g. MuonWithAdamW) set
+        # ``supports_lr_scheduling = False`` because their get_lr/set_lr only
+        # address one of the LRs — a scheduler would silently leave the others
+        # unscheduled. Such optimizers may provide ``lr_scheduling_hint`` to
+        # tell the user what to do instead (e.g. attach schedulers to the
+        # inner optimizers individually).
+        if not getattr(optimizer, "supports_lr_scheduling", True):
+            msg = (
+                f"{type(optimizer).__name__} does not support LR schedulers: "
+                "its set_lr/get_lr only address one of its internal learning "
+                "rates, so a scheduler would leave the others unscheduled."
+            )
+            hint = getattr(optimizer, "lr_scheduling_hint", None)
+            raise TypeError(msg if hint is None else f"{msg} {hint}")
         self._optimizer = optimizer
-        self._base_lr = optimizer.get_lr()
+        self._base_lr = optimizer.get_initial_lr()
         self._last_step = 0
         self._last_lr = self._base_lr
+
+    def _apply_initial_lr(self, lr: float):
+        """Write the construction-time LR, mirroring PyTorch's initial step."""
+        self._optimizer.set_lr(lr)
+        self._last_lr = lr
 
     def step(self):
         raise NotImplementedError
@@ -87,6 +116,12 @@ class _SchedulerBase:
         self._last_step = state["m_last_step"]
         self._last_lr = state["m_last_lr"]
         self._base_lr = state["m_base_lr"]
+        # Push the restored live LR back to the optimizer. The constructor
+        # wrote the construction-time LR (e.g. base_lr * start_factor), so if
+        # the optimizer's own state was loaded before the scheduler was
+        # constructed, the checkpoint's live LR has been overwritten and the
+        # first resumed optimizer.step() would otherwise run at the wrong LR.
+        self._optimizer.set_lr(self._last_lr)
 
 
 class CosineAnnealingScheduler(_SchedulerBase):
@@ -96,6 +131,8 @@ class CosineAnnealingScheduler(_SchedulerBase):
         super().__init__(optimizer)
         self._T_max = T_max
         self._eta_min = eta_min
+        # At step 0 the cosine factor is 1, so the LR is (re)set to the base LR.
+        self._apply_initial_lr(self._base_lr)
 
     def step(self):
         self._last_step += 1
@@ -126,6 +163,8 @@ class StepScheduler(_SchedulerBase):
         super().__init__(optimizer)
         self._step_size = step_size
         self._gamma = gamma
+        # At step 0 the factor is gamma**0 == 1, so the LR is (re)set to the base LR.
+        self._apply_initial_lr(self._base_lr)
 
     def step(self):
         self._last_step += 1
@@ -150,10 +189,20 @@ class LinearScheduler(_SchedulerBase):
     def __init__(self, optimizer, start_factor: float, end_factor: float, total_steps: int):
         if total_steps <= 0:
             raise ValueError(f"total_steps = {total_steps} must be greater than zero.")
+        # Bounds match PyTorch's LinearLR. start_factor == 0 is rejected because
+        # the factor is applied at construction, so it would make the first
+        # optimizer step a no-op (LR = 0).
+        if start_factor > 1.0 or start_factor <= 0:
+            raise ValueError("Starting multiplicative factor expected to be greater than 0 and less or equal to 1.")
+        if end_factor > 1.0 or end_factor < 0:
+            raise ValueError("Ending multiplicative factor expected to be between 0 and 1.")
         super().__init__(optimizer)
         self._start_factor = start_factor
         self._end_factor = end_factor
         self._total_steps = total_steps
+        # Mirror PyTorch, which applies start_factor at construction: the LR
+        # used before the first step() is already base_lr * start_factor.
+        self._apply_initial_lr(self._base_lr * start_factor)
 
     def step(self):
         self._last_step += 1
@@ -181,6 +230,8 @@ class LambdaScheduler(_SchedulerBase):
     def __init__(self, optimizer, lr_lambda):
         super().__init__(optimizer)
         self._lr_lambda = lr_lambda
+        # Mirror PyTorch's LambdaLR, which applies lr_lambda(0) at construction.
+        self._apply_initial_lr(self._base_lr * lr_lambda(0))
 
     def step(self):
         self._last_step += 1
@@ -240,6 +291,12 @@ class SequentialScheduler(_SchedulerBase):
         self._milestones = list(milestones)
         self._current_scheduler_index = 0
         self._current_step_in_scheduler = 0
+        # The children were constructed back-to-back on the same optimizer, so
+        # the optimizer currently holds the LAST child's construction-time LR.
+        # Only the first child is active; restore its initial LR. Mirrors
+        # PyTorch's SequentialLR, which resets the LR to initial_lr and redoes
+        # the initial step of the first scheduler only.
+        self._apply_initial_lr(self._schedulers[0].get_last_lr())
 
     def step(self):
         if self._current_scheduler_index >= len(self._schedulers):
@@ -287,3 +344,8 @@ class SequentialScheduler(_SchedulerBase):
             prefix = f"scheduler_{i}/"
             child_state = {k[len(prefix) :]: v for k, v in state.items() if k.startswith(prefix)}
             child.set_state_dict(child_state)
+
+        # Each child's set_state_dict pushed ITS saved live LR to the
+        # optimizer, so the optimizer now holds the last child's — re-apply
+        # this chain's own live LR (the active child's).
+        self._optimizer.set_lr(self._last_lr)

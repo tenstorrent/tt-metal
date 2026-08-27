@@ -107,6 +107,7 @@ serialization::StateDict SGDComposite::get_state_dict() const {
     dict["theta"] = m_theta;
     dict["steps"] = m_steps;
     dict["lr"] = m_config.lr;
+    save_initial_lr(dict);
     return dict;
 }
 
@@ -114,6 +115,7 @@ void SGDComposite::set_state_dict(const serialization::StateDict& dict) {
     m_theta = std::get<serialization::NamedParameters>(dict.at("theta"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    restore_initial_lr(dict);
 }
 
 size_t SGDComposite::get_steps() const {
