@@ -1,6 +1,11 @@
 name: "Copilot Setup Steps"
 
 # This workflow configures the environment for GitHub Copilot Agent with gh-aw MCP server
+#
+# EXPERIMENT (see PR description): pointing Copilot's environment at an internal
+# runner + the tt-metal CI build image, to find out whether the coding agent can
+# build tt-metal against our ccache infra. Revert to `runs-on: ubuntu-latest`
+# with no `container:` to restore previous behaviour.
 on:
   workflow_dispatch:
   push:
@@ -10,7 +15,15 @@ on:
 jobs:
   # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
   copilot-setup-steps:
-    runs-on: ubuntu-latest
+    runs-on: tt-ubuntu-2204-large-stable
+    # NOTE: `container:` is NOT in Copilot's documented allowlist of honoured job
+    # keys (steps/permissions/runs-on/services/snapshot/timeout-minutes).
+    # Community reports say it is applied but then breaks Copilot's helper-script
+    # paths (exit 127). Testing whether that is still true as of 2026-08.
+    container:
+      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:bfe1fda5c0d2fc78c1e3ec657e3247e94de72a6f
+    # Copilot caps this at 59.
+    timeout-minutes: 30
 
     # Set minimal permissions for setup steps
     # Copilot Agent receives its own token with appropriate permissions
@@ -20,6 +33,41 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # --- Probes run before the gh-aw install so they always report, even if a
+      # --- later step fails. Read the step output, not just the job's red/green.
+      - name: Probe toolchain
+        run: |
+          echo "::group::toolchain"
+          for t in clang++-20 cmake ninja ccache python3; do
+            if command -v "$t" >/dev/null 2>&1; then
+              printf '%-12s OK  %s\n' "$t" "$("$t" --version 2>&1 | head -1)"
+            else
+              printf '%-12s MISSING\n' "$t"
+            fi
+          done
+          echo "::endgroup::"
+          command -v clang++-20 >/dev/null 2>&1 || {
+            echo "::error::clang++-20 absent - image does not carry the build toolchain"
+            exit 1
+          }
+
+      - name: Probe ccache/Garage reachability
+        # Non-fatal, mirroring the existing treatment in build-artifact.yaml:
+        # we want to know whether the runner can see Garage, not gate on it.
+        run: |
+          ENDPOINT="http://garage.garage.svc.cluster.local:3900"
+          echo "Probing ${ENDPOINT} ..."
+          if command -v curl >/dev/null 2>&1; then
+            if curl -sS -m 10 -o /dev/null -w 'HTTP %{http_code} in %{time_total}s\n' "${ENDPOINT}"; then
+              echo "Garage endpoint is REACHABLE from this runner."
+            else
+              echo "::warning::Garage endpoint NOT reachable - Copilot would build with a cold cache."
+            fi
+          else
+            echo "::warning::curl not present in image; skipped reachability probe."
+          fi
+
       - name: Install gh-aw extension
         uses: github/gh-aw-actions/setup-cli@4f46189e0dfaf63988118c40003c30652d562906 # v0.84.4
         with:
