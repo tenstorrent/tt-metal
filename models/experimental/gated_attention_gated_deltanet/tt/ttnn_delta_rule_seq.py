@@ -562,10 +562,6 @@ def chunk_gated_delta_rule_seq(
         ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    k_decay_4d = ttnn.multiply(k_c_4d, decay_diff_exp_4d, memory_config=_cmc)
-    ttnn.deallocate(decay_diff_exp_4d)
-    k_decay_t_4d = ttnn.transpose(k_decay_4d, 2, 3, memory_config=_cmc)
-    ttnn.deallocate(k_decay_4d)
 
     dl_exp_3d = ttnn.exp(ttnn.clip(decay_last_raw, min=-20.0, max=0.0), memory_config=_cmc)
     dl_exp_4d = ttnn.reshape(
@@ -593,9 +589,12 @@ def chunk_gated_delta_rule_seq(
     # two more large contiguous DRAM regions at the preprocessing high-water.
     q_decay_4d = _multiply_into_dead_lhs(q_c_4d, decay_raw_exp_4d, memory_config=_cmc)
     ttnn.deallocate(decay_raw_exp_4d)
-    ttnn.deallocate(k_c_4d)
+    k_decay_4d = _multiply_into_dead_lhs(k_c_4d, decay_diff_exp_4d, memory_config=_cmc)
+    ttnn.deallocate(decay_diff_exp_4d)
     intra_attn_4d = _multiply_into_dead_lhs(qk_4d, combined_mask_4d, memory_config=_cmc)
     ttnn.deallocate(combined_mask_4d)
+    k_decay_t_4d = ttnn.transpose(k_decay_4d, 2, 3, memory_config=_cmc)
+    ttnn.deallocate(k_decay_4d)
 
     # ---- Reshape preprocessing outputs to 4D for the C++ kernel ----
     def _to4d_f32(t, d1, d2):
