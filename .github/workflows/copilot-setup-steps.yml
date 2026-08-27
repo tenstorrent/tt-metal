@@ -72,10 +72,18 @@ jobs:
         # Referenced at step level: job-level env resolves empty for agent runs.
         env:
           ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          ACTIONS_GARAGE_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
-          if [ -n "${GARAGE_S3_ACCESS_KEY:-}" ]; then
-            echo "Agents secrets present - remote ccache will be used."
-          elif [ -n "${ACTIONS_GARAGE_ACCESS_KEY:-}" ]; then
+          # Both halves are required: copilot-build.sh enables the remote cache
+          # only when the pair is present, so reporting on one key alone would
+          # claim a warm cache while the build silently ran cold.
+          if [ -n "${GARAGE_S3_ACCESS_KEY:-}" ] && [ -n "${GARAGE_S3_SECRET_KEY:-}" ]; then
+            echo "Agents secrets present - remote ccache will be used (read-only)."
+          elif [ -n "${GARAGE_S3_ACCESS_KEY:-}" ] || [ -n "${GARAGE_S3_SECRET_KEY:-}" ]; then
+            echo "::error::Only one of GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY is set as an"
+            echo "::error::Agents secret. The remote cache needs both; the agent would build cold."
+            exit 1
+          elif [ -n "${ACTIONS_GARAGE_ACCESS_KEY:-}" ] && [ -n "${ACTIONS_GARAGE_SECRET_KEY:-}" ]; then
             echo "::notice::Actions secrets found (this validation run), but Copilot cannot read them."
             echo "::notice::Add GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY under Settings ->"
             echo "::notice::Secrets and variables -> Agents for the agent to get a warm cache."
