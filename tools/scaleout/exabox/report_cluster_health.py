@@ -34,9 +34,10 @@ from resolve_host_ring_order import (
 )
 
 STORE_ROOT_ENV = "CLUSTER_HEALTH_STORE_ROOT"
-# Shared-store date dirs must be world-writable: mkdir mode is umask-masked,
-# and the first writer of the day otherwise leaves 0755 owned by their uid.
-STORE_DIR_MODE = 0o777
+# setgid + sticky + owner/group rwx. mkdir is umask-masked (often 0755), so the
+# first writer of the day would otherwise lock out the store's group. Sticky
+# keeps writers from unlinking each other's records. No other-write.
+STORE_DIR_MODE = 0o3770
 
 
 def dumps_compact(obj: dict[str, Any]) -> str:
@@ -554,14 +555,27 @@ def _existing_or_conflict(
     return record
 
 
+def _apply_shared_dir_mode(target: Path) -> None:
+    """Best-effort chmod/chown so the store group can write; ignore EPERM."""
+    try:
+        os.chmod(target, STORE_DIR_MODE)
+    except OSError:
+        pass
+    try:
+        os.chown(target, -1, target.parent.stat().st_gid)
+    except OSError:
+        pass
+
+
 def _ensure_shared_dir(path: Path) -> None:
-    """Create ``path`` (and missing parents) and chmod each new dir plus the leaf.
+    """Create ``path`` (and missing parents) with group-write setgid+sticky mode.
 
     ``Path.mkdir(parents=True, mode=...)`` applies ``mode`` only to the leaf and
-    still masks with umask. Chmod after create so later uids can add files under
-    the same date directory. Existing ancestors are left unchanged. Chmod on a
-    directory we do not own is ignored (OSError) so a 0755 dir owned by someone
-    else still fails at the subsequent write, as before.
+    still masks with umask. Chmod after create so later uids in the store's
+    group can add files under the same date directory. Group is copied from
+    the parent so a setgid store root keeps working. Existing ancestors are
+    left unchanged. Chmod/chown on a directory we do not own is ignored so a
+    0755 dir owned by someone else still fails at the subsequent write.
     """
     missing: list[Path] = []
     cursor = path
@@ -573,11 +587,9 @@ def _ensure_shared_dir(path: Path) -> None:
         cursor = parent
     for component in reversed(missing):
         component.mkdir(exist_ok=True)
-    for target in missing + ([path] if path not in missing else []):
-        try:
-            os.chmod(target, STORE_DIR_MODE)
-        except OSError:
-            pass
+        _apply_shared_dir_mode(component)
+    if path not in missing:
+        _apply_shared_dir_mode(path)
 
 
 def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
@@ -588,7 +600,8 @@ def publish_record(record: dict[str, Any], store_root: str) -> dict[str, Any]:
     stdout-only record is returned. On I/O failure, warns and returns the
     stdout-only record (no record_id). Date directories (and any missing
     store-root parents this process creates) are chmod'd to STORE_DIR_MODE
-    so a shared store stays writable across users.
+    (setgid + sticky + group write) so a shared store stays writable for
+    the parent directory's group.
     """
     record_id = compute_record_id(
         record["test_type"],

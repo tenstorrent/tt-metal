@@ -11,6 +11,7 @@ import argparse
 import io
 import json
 import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -50,6 +51,15 @@ README_SOURCE = EXABOX_DIR / "README.md"
 
 HOSTS = "bh-glx-110-c01u02,bh-glx-110-c01u08"
 TS = "2026-08-19T03:12:00Z"
+
+
+def _assert_shared_dir_mode(testcase: unittest.TestCase, path: Path) -> None:
+    """Group-writable, sticky, not world-writable. Setgid is Linux-only."""
+    mode = path.stat().st_mode
+    testcase.assertEqual(mode & stat.S_IRWXU, stat.S_IRWXU)
+    testcase.assertEqual(mode & stat.S_IRWXG, stat.S_IRWXG)
+    testcase.assertEqual(mode & stat.S_IRWXO, 0)
+    testcase.assertTrue(mode & stat.S_ISVTX)
 
 
 def _run(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -401,7 +411,7 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(dest.parent.name, "2026-08-19")
             on_disk = json.loads(dest.read_text(encoding="utf-8"))
             self.assertEqual(on_disk["record_id"], record["record_id"])
-            self.assertEqual(dest.parent.stat().st_mode & 0o777, 0o777)
+            _assert_shared_dir_mode(self, dest.parent)
 
     def test_date_dir_chmod_repairs_umask_masked_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -424,9 +434,9 @@ class TestStoreWrite(unittest.TestCase):
             ]
             rc, out, err = _run(argv)
             self.assertEqual(rc, 0, err)
-            self.assertEqual(date_dir.stat().st_mode & 0o777, 0o777)
+            _assert_shared_dir_mode(self, date_dir)
 
-    def test_creates_missing_store_parents_world_writable(self):
+    def test_creates_missing_store_parents_group_writable(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = Path(tmp) / "nested" / "store"
             argv = [
@@ -447,9 +457,10 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             date_dir = store / "2026-08-19"
             self.assertTrue(date_dir.is_dir())
-            self.assertEqual(store.stat().st_mode & 0o777, 0o777)
-            self.assertEqual((Path(tmp) / "nested").stat().st_mode & 0o777, 0o777)
-            self.assertEqual(date_dir.stat().st_mode & 0o777, 0o777)
+            _assert_shared_dir_mode(self, store)
+            _assert_shared_dir_mode(self, Path(tmp) / "nested")
+            _assert_shared_dir_mode(self, date_dir)
+            self.assertEqual(date_dir.stat().st_gid, store.stat().st_gid)
 
     def test_dry_run_does_not_write(self):
         with tempfile.TemporaryDirectory() as tmp:
