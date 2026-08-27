@@ -22,8 +22,8 @@
 #if defined(ARCH_QUASAR)
 #include "tensix_neo_reg.h"
 // NEO cluster semaphore 31 is reserved for the MPSC head; kernels must not use it. The watcher's
-// host reader hardcodes the same register (watcher_device_reader.cpp). Semaphores 29/30 are
-// reserved for compute sync_threads.
+// host reader hardcodes the same register (watcher_device_reader.cpp). Semaphores 27–30 are
+// reserved for kernel thread barriers.
 constexpr uintptr_t watcher_ring_buf_sem = TENSIX_GLOBAL_REGS_SEMAPHORE_REGS_SEMAPHORE_31__REG_ADDR;
 #endif
 
