@@ -460,21 +460,9 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
-# The BH-routed ttnn.topk path (topk_large_indices, engages for bf16 largest at k>64 or wide
-# non-pow2 widths) aborts under ttsim (silent worker death ~9s in under xdist; the serial re-run
-# shows the error; see the sanity break on 1dc0e9673b6). Its topk_xl LLK gives each SFPU column
-# its own SFPSWAP comparator direction during the wide bitonic phases, via SFPCONFIG with
-# instr_mod1=8 -- a per-SFPU-instance LaneConfig write (the 0x4444/0x5050/0x5500 masks in
-# ckernel_sfpu_topk_xl.h). ttsim does not model that mode:
-#   ERROR: UnsupportedFunctionality: tensix_sfpconfig: instr_mod1=8
-# This is NOT the SFPLOADMACRO gap: topk_xl honours TT_METAL_DISABLE_SFPLOADMACRO (which the sim
-# CI job sets) and the LaneConfig writes sit outside that guard. The mode is unimplemented in
-# v1.10.2, v1.10.3 and ttsim main as of 2026-08-27, so bumping tt_metal/ttsim-version does NOT
-# lift this skip -- tenstorrent/ttsim-private#798 tracks the simulator work. The cells pass on
-# BH silicon.
 skip_routed_topk_on_sim = pytest.mark.skipif(
     is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason="BH-routed topk needs SFPCONFIG instr_mod1=8, unmodeled by ttsim (ttsim-private#798)",
+    reason="Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim (ttsim-private#798)",
 )
 
 
