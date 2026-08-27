@@ -346,14 +346,8 @@ inline void fabric_set_2d_single_hop_unicast_route_from_direction(
     const uint32_t dst_y = dst_dev_id / mesh_x_size;
     const uint32_t dst_x = dst_dev_id % mesh_x_size;
 
-    // Clear both axis maps: pool headers are reused, and a stale bit in an unpoked slot decodes as a
-    // valid extra action.
-    for (uint32_t i = 0; i < (uint32_t)mesh_y_size + mesh_x_size; ++i) {
-        packet_header->route_buffer[i] = 0;
-    }
-
     // The receiving router's decode axis matches the hop axis: N/S/Z hops read the Y byte, E/W hops
-    // the X byte.
+    // the X byte. Other map slots are intentionally left untouched under the one-hop contract.
     switch (next_hop_direction) {
         case eth_chan_directions::NORTH:
         case eth_chan_directions::SOUTH:
