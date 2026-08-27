@@ -44,7 +44,11 @@ class Qwen3VlContext:
     # `Qwen3VlTextEncoder`'s `high_fidelity_linears`.
     linear_compute_kernel_config: object | None = None
     # Sequence parallelism: shard the sequence on this axis and attend across shards with causal ring
-    # attention. Only usable with FSDP off (both want the non-TP axis), and only on the causal path.
+    # attention. Only the causal path is supported. Composes with FSDP on the same axis: FSDP shards
+    # WEIGHTS (all-gathered to full immediately before use, so every device on the axis applies
+    # identical weights) while SP shards ACTIVATION rows -- the two never interact, the classical
+    # FSDP-over-the-data-axis arrangement. They do share the axis's link bandwidth, so their
+    # collectives serialize; that is a perf tradeoff, not a correctness constraint.
     # Default None keeps every existing caller on the TP-only path, byte-for-byte.
     #
     # The ring uses contiguous shards (`is_balanced=False`). The zigzag-balanced layout was measured
@@ -58,8 +62,6 @@ class Qwen3VlContext:
             return
         if self.sp_axis == self.tp_axis:
             raise ValueError(f"sp_axis ({self.sp_axis}) must differ from tp_axis ({self.tp_axis})")
-        if self.fsdp_mesh_axis is not None:
-            raise ValueError("decoder SP requires FSDP off: they contend for the same non-TP mesh axis")
         if self.ccl_manager is None:
             raise ValueError("decoder SP needs a ccl_manager for the ring all-gather")
 
@@ -178,8 +180,8 @@ class Qwen3VlTextEncoder(Module):
             head_dim = hidden_size // num_attention_heads
 
         # Sequence parallelism: shard the sequence on the SP axis (the non-TP axis) and ring the
-        # causal attention over it. SP and FSDP both want that axis, so they are mutually exclusive;
-        # SP wins here (the caller opts in via `parallel_config.sequence_parallel`) and FSDP is off.
+        # causal attention over it. Composes with FSDP on the same axis (weights vs activation rows;
+        # see Qwen3VlContext).
         sp_axis = None
         if parallel_config is not None and parallel_config.sequence_parallel is not None:
             sp_axis = parallel_config.sequence_parallel.mesh_axis
@@ -188,9 +190,7 @@ class Qwen3VlTextEncoder(Module):
         # Since the encoder runs on a submesh (e.g., 1x4), we need to check if the other axis
         # has size > 1. If the mesh is 1xN, FSDP can't be enabled because there's no second axis.
         fsdp_mesh_axis = None
-        if is_fsdp and sp_axis is not None:
-            logger.warning("Qwen3-VL: FSDP requested but disabled — sequence parallelism owns the non-TP axis.")
-        elif is_fsdp and parallel_config is not None:
+        if is_fsdp and parallel_config is not None:
             tp_axis = parallel_config.tensor_parallel.mesh_axis
             # Check if there's a different axis that can be used for FSDP
             other_axis = 1 - tp_axis  # If TP is on axis 1, check axis 0; if TP is on axis 0, check axis 1
