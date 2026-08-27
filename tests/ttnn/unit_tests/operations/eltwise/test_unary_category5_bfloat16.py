@@ -8,7 +8,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
-    flush_to_zero,
+    generate_bfloat16_bits_in_range,
     to_tt_tensor,
 )
 
@@ -32,17 +32,8 @@ Accuracy criteria
   reglu  : ULP ≤ 1  (relu is exact piecewise linear, multiplication ≤ 1 ULP)
   geglu  : PCC ≥ 0.999  (GELU uses a tanh polynomial approximation)
   swiglu : PCC ≥ 0.999  (silu = B*sigmoid(B); SFPU FTZ for B < -88 gives
-                          device → 0 while CPU returns a tiny non-zero, same
-                          pattern as atanh in category 1)
-
-Implementation note
-───────────────────
-The C++ split_tensor_for_glu always indexes inshape[3], so the input must be
-4D: [1, 1, H, 2*W] with H and W both multiples of 32 (one TTNN tile = 32×32).
-generate_bfloat16_bits() returns a (256, 256) tensor of all 65 536 bfloat16
-values.  glu and reglu fix A=1.0 and sweep all values through B (see test
-docstrings for why).  swiglu and geglu use generate_bfloat16_bits() for both
-halves, giving all 65 536 values in each half.
+                          device → 0 while CPU returns a tiny non-zero value;
+                          ULP cannot distinguish legitimate hardware FTZ)
 """
 
 
@@ -61,6 +52,7 @@ def _build_glu_input(A, B):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("dim", [-1, 3])
 @pytest.mark.parametrize(
     "ttnn_op, ulp",
     [
@@ -68,17 +60,13 @@ def _build_glu_input(A, B):
         (ttnn.reglu, 1),
     ],
 )
-def test_glu_reglu_ops(device, ttnn_op, ulp):
-    """Exhaustive bfloat16 coverage for glu and reglu.
+def test_glu_reglu_ops(device, ttnn_op, ulp, dim):
+    """Exhaustive normal bfloat16 coverage for glu and reglu.
 
-    All 65 536 bfloat16 values are tested as the gate-half (B).  A is fixed
-    to 1.0 for two practical reasons:
-      • glu: sigmoid(B < -88) is a float32 subnormal on the SFPU (FTZ → 0).
-        With A=1.0 the output is sigmoid(B) ≈ 6e-39 < bfloat16_tiny, so
-        flush_to_zero zeros both sides correctly.  Arbitrary A would amplify
-        this into the normal bfloat16 range and produce a spurious ULP failure.
-      • reglu: output = A * relu(B). With arbitrary A, large positive A × large
-        positive B overflows to Inf.  With A=1.0, output = relu(B) ≤ max_bfloat16.
+    All 32 512 positive and 32 512 negative normal bfloat16 values are swept
+    through the gate-half (B).  A is fixed to 1.0 to avoid FTZ amplification
+    for glu and overflow for reglu with large inputs.  A half-swap is still
+    detectable: it would produce B * sigmoid(1.0) instead of sigmoid(B).
     """
     B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
     A = torch.ones_like(B)  # A=1.0: output = gate_fn(B) directly
@@ -86,13 +74,19 @@ def test_glu_reglu_ops(device, ttnn_op, ulp):
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn_op)
-    golden = golden_function(input_tensor, dim=-1, device=device)
+    golden = golden_function(input_tensor, dim=dim, device=device)
 
-    tt_result = ttnn_op(tt_in, dim=-1)
+    tt_result = ttnn_op(tt_in, dim=dim)
     result = ttnn.to_torch(tt_result)
 
-    result = flush_to_zero(result)
-    golden = flush_to_zero(golden)
+    # Derive FTZ mask from golden: permit device to output 0 only where the
+    # reference itself is subnormal.  Do not flush result independently.
+    tiny = torch.finfo(torch.bfloat16).tiny
+    ftz = (golden.abs() > 0) & (golden.abs() < tiny)
+    golden = golden.clone()
+    golden[ftz] = 0.0
+    result = result.clone()
+    result[ftz] = 0.0
 
     assert_with_ulp(golden, result, ulp)
 
@@ -102,24 +96,25 @@ def test_glu_reglu_ops(device, ttnn_op, ulp):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_swiglu_op(device):
-    """Exhaustive bfloat16 coverage for swiglu.
+@pytest.mark.parametrize("dim", [-1, 3])
+def test_swiglu_op(device, dim):
+    """Exhaustive normal bfloat16 coverage for swiglu.
 
-    silu(B) = B * sigmoid(B).  For large negative B (roughly B < -88),
-    sigmoid(B) becomes a float32 subnormal on the SFPU and gets flushed to 0,
-    giving device output = 0 while the CPU reference returns a tiny non-zero
-    value.  This is the same hardware FTZ behaviour that causes atanh to use
-    PCC in category 1.  PCC ≥ 0.999 tolerates these legitimate differences.
+    PCC ≥ 0.999 is used because SFPU flushes sigmoid subnormals to zero for
+    large negative gate inputs, causing small legitimate differences from the
+    CPU reference.  A uses values in [-1, 1] to prevent A * silu(B) from
+    overflowing to inf for large-magnitude B.
     """
-    B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
-    A = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
+    B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256) — all normal bf16
+    A_vals = generate_bfloat16_bits_in_range(-1.0, 1.0).flatten()
+    A = A_vals.repeat(B.numel() // A_vals.numel() + 1)[: B.numel()].view(B.shape)
     input_tensor = _build_glu_input(A, B)
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.swiglu)
-    golden = golden_function(input_tensor, dim=-1, device=device)
+    golden = golden_function(input_tensor, dim=dim, device=device)
 
-    tt_result = ttnn.swiglu(tt_in, dim=-1)
+    tt_result = ttnn.swiglu(tt_in, dim=dim)
     result = ttnn.to_torch(tt_result)
 
     assert_with_pcc(golden, result, pcc=0.999)
@@ -130,22 +125,24 @@ def test_swiglu_op(device):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_geglu_op(device):
-    """Exhaustive bfloat16 coverage for geglu.
+@pytest.mark.parametrize("dim", [-1, 3])
+def test_geglu_op(device, dim):
+    """Exhaustive normal bfloat16 coverage for geglu.
 
-    GELU uses a tanh polynomial approximation which introduces ~0.1-0.5%
-    relative error in the transition region [-3, 3].  PCC ≥ 0.999 is used
-    instead of ULP to tolerate this expected approximation error.
+    PCC ≥ 0.999 is used because GELU uses a tanh polynomial approximation
+    with ~0.1-0.5% relative error in [-3, 3].  A uses values in [-1, 1] to
+    prevent A * gelu(B) from overflowing to inf for large-magnitude B.
     """
-    B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
-    A = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
+    B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256) — all normal bf16
+    A_vals = generate_bfloat16_bits_in_range(-1.0, 1.0).flatten()
+    A = A_vals.repeat(B.numel() // A_vals.numel() + 1)[: B.numel()].view(B.shape)
     input_tensor = _build_glu_input(A, B)
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.geglu)
-    golden = golden_function(input_tensor, dim=-1, device=device)
+    golden = golden_function(input_tensor, dim=dim, device=device)
 
-    tt_result = ttnn.geglu(tt_in, dim=-1)
+    tt_result = ttnn.geglu(tt_in, dim=dim)
     result = ttnn.to_torch(tt_result)
 
     assert_with_pcc(golden, result, pcc=0.999)
