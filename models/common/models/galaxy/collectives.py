@@ -465,9 +465,24 @@ class GalaxyAttentionCollectives:
         while the ``wo`` projection lands in interleaved DRAM, so the input is
         first placed into the reduction's own output placement with
         ``interleaved_to_sharded`` - which runs on that placement's cores and so
-        stays inside the partition. No ``dtype`` is passed: the precision recipe
-        keeps the residual stream in bfloat16 so an 80-layer running sum is never
-        re-quantized, and this reduction is part of that sum.
+        stays inside the partition.
+
+        The reduction runs at ``head_dtype``, the decode activation dtype, not at
+        ``collective_dtype``. That is not a free choice: this axis-0 resource is
+        shared with ``MLP2D``, which hands ``all_reduce_async`` its
+        ``decode_ccl_dtype`` - the residual dtype, bfloat16 - and the op sizes its
+        circular buffer from the data and checks it against the persistent
+        buffer's L1 bank. The two consumers must therefore agree with each other
+        *and* with the buffer, which ``build_galaxy_decode_collectives`` now
+        allocates at the residual dtype for exactly this reason. Disagreeing
+        gives
+
+            TT_FATAL ... Cannot set circular buffer size to 65536. This is
+                         larger than the associated dynamically allocated L1
+                         buffer bank size of 34816 B
+
+        ``collective_dtype`` still governs the axis-1 fused QKV collective, which
+        has its own buffer.
 
         **Prefill** keeps the plain ``reduce_scatter`` + ``all_gather`` pair,
         which is what MLP2D uses for prefill too (its ``persistent=False``
@@ -506,10 +521,14 @@ class GalaxyAttentionCollectives:
 
         key = resource.key
         staged = tensor
+        reduced = None
         if not tensor.memory_config().is_sharded():
-            staged = ttnn.interleaved_to_sharded(tensor, output_memcfg)
+            staged = ttnn.interleaved_to_sharded(tensor, output_memcfg, output_dtype=self.head_dtype)
+        elif tensor.dtype != self.head_dtype:
+            staged = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG, output_dtype=self.head_dtype)
+            staged = ttnn.interleaved_to_sharded(staged, output_memcfg)
         try:
-            return ttnn.experimental.all_reduce_async(
+            reduced = ttnn.experimental.all_reduce_async(
                 staged,
                 resource.persistent_output_buffers[0],
                 cluster_axis=cluster_axis,
@@ -519,10 +538,22 @@ class GalaxyAttentionCollectives:
                 ),
                 num_links=resource.num_links,
                 memory_config=output_memcfg,
+                dtype=self.head_dtype,
                 topology=resource.topology,
                 subdevice_id=context.worker_sub_device_id,
                 use_optimal_ccl_for_llama=True,
             )
+            # Attention2D's decode-output contract is the activation dtype. The
+            # reduction already produces it, so this is a guard rather than a
+            # step; if a future recipe reduces at a different dtype it converts
+            # through the placement-preserving pair, which stays inside the
+            # partition where ttnn.typecast would not.
+            if reduced.dtype != self.head_dtype:
+                recast = ttnn.sharded_to_interleaved(reduced, ttnn.DRAM_MEMORY_CONFIG, output_dtype=self.head_dtype)
+                deallocate_if_allocated(reduced)
+                reduced = ttnn.interleaved_to_sharded(recast, output_memcfg)
+                deallocate_if_allocated(recast)
+            return reduced
         finally:
             self.resources.synchronize(mode)
             if staged is not tensor:

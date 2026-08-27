@@ -42,10 +42,11 @@ class _Tensor:
     the default here models the interleaved ``wo`` output that really arrives.
     """
 
-    def __init__(self, name, shape, sharded=False):
+    def __init__(self, name, shape, sharded=False, dtype=None):
         self.name = name
         self.shape = tuple(shape)
         self.sharded = sharded
+        self.dtype = ttnn.bfloat16 if dtype is None else dtype
 
     def memory_config(self):
         return SimpleNamespace(is_sharded=lambda: self.sharded)
@@ -91,11 +92,20 @@ def collectives(monkeypatch):
 
     def all_reduce_async(tensor, buffer_tensor, **kwargs):
         events.append(("all_reduce_async", tensor.shape))
-        return _Tensor("reduced", tensor.shape)
+        # The shared persistent buffer is allocated at the collective dtype, so
+        # the reduction returns bfloat8_b and the collective has to cast back to
+        # the activation dtype Attention2D contracts for.
+        return _Tensor("reduced", tensor.shape, sharded=True, dtype=kwargs.get("dtype", ttnn.bfloat8_b))
 
     def interleaved_to_sharded(tensor, memory_config, **kwargs):
         events.append(("interleaved_to_sharded", tensor.shape))
-        return _Tensor(f"sharded-{tensor.name}", tensor.shape)
+        return _Tensor(
+            f"sharded-{tensor.name}", tensor.shape, sharded=True, dtype=kwargs.get("output_dtype") or tensor.dtype
+        )
+
+    def sharded_to_interleaved(tensor, memory_config, **kwargs):
+        events.append(("sharded_to_interleaved", tensor.shape))
+        return _Tensor(f"interleaved-{tensor.name}", tensor.shape, dtype=kwargs.get("output_dtype") or tensor.dtype)
 
     def reshape(tensor, shape):
         events.append(("reshape", tuple(shape)))
@@ -105,6 +115,7 @@ def collectives(monkeypatch):
     monkeypatch.setattr(galaxy_collectives.ttnn, "all_gather", all_gather)
     monkeypatch.setattr(galaxy_collectives.ttnn.experimental, "all_reduce_async", all_reduce_async)
     monkeypatch.setattr(galaxy_collectives.ttnn, "interleaved_to_sharded", interleaved_to_sharded)
+    monkeypatch.setattr(galaxy_collectives.ttnn, "sharded_to_interleaved", sharded_to_interleaved)
     monkeypatch.setattr(galaxy_collectives.ttnn, "reshape", reshape)
     monkeypatch.setattr(galaxy_collectives.ttnn, "Shape", lambda value: tuple(value))
     monkeypatch.setattr(
@@ -284,3 +295,6 @@ def test_decode_output_reduction_uses_all_reduce_async_not_the_scatter_pair(coll
     # An interleaved wo output has to be width-sharded first; all_reduce_async
     # rejects TensorMemoryLayout::INTERLEAVED outright.
     assert "interleaved_to_sharded" in labels, labels
+    # And the bfloat8_b result must come back as the activation dtype, or
+    # Attention2D's own decode-output contract rejects it.
+    assert output.dtype == ttnn.bfloat16, output.dtype

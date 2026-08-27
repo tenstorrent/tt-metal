@@ -85,8 +85,27 @@ def build_galaxy_decode_collectives(
     mesh_device: Any,
     geometry: GalaxyDenseGeometry,
     placements: GalaxyDecodePlacements,
+    *,
+    residual_dtype: Any = ttnn.bfloat16,
 ) -> tuple[GalaxyCollectivePlan, ...]:
-    """Return the decode collectives for attention, MLP, and distributed norm."""
+    """Return the decode collectives for attention, MLP, and distributed norm.
+
+    ``residual_dtype`` sizes the shared axis-0 all-reduce buffer. It must match
+    the dtype the *consumers* hand ``all_reduce_async``, because that op sizes
+    its circular buffer from the data and checks it against the buffer's L1 bank:
+    a bfloat16 reduction against a bfloat8_b buffer fails with
+
+        TT_FATAL ... Cannot set circular buffer size to 65536. This is larger
+                     than the associated dynamically allocated L1 buffer bank
+                     size of 34816 B
+
+    Both Galaxy models set ``MLP2D``'s ``decode_ccl_dtype`` to their
+    ``decode_residual_dtype``, which is bfloat16 in both precision recipes -
+    deliberately, so that an 80-layer running residual sum is never re-quantized
+    - so bfloat16 is the default here rather than ``_spec``'s bfloat8_b. It is a
+    parameter and not a literal so a model with a different residual dtype can
+    say so instead of silently mismatching.
+    """
 
     row_shard = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=GALAXY_MESH_SHAPE)
     batch = GALAXY_PHYSICAL_BATCH
@@ -151,6 +170,7 @@ def build_galaxy_decode_collectives(
             _spec(
                 (*GALAXY_MESH_SHAPE, TILE, _ALL_REDUCE_BUFFER_WIDTH),
                 placements.all_reduce_buffer_memcfg,
+                dtype=residual_dtype,
                 mesh_mapper=row_shard,
             ),
         ),

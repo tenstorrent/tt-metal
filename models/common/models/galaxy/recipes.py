@@ -289,9 +289,18 @@ def dense_matmul_program_config(rows: int, local_k: int, local_n: int) -> Any:
     m_tiles = max(1, math.ceil(rows / TILE))
     n_tiles = local_n // TILE
     k_tiles = local_k // TILE
+    # Narrowing the grid from seven columns to the three inside `worker_cores()`
+    # multiplies per_core_N by the same factor, and the in1 circular buffer is
+    # `in0_block_w * per_core_N` tiles. At `gcd(k_tiles, 8)` that buffer no longer
+    # fits beside the decode activations already resident on x=1..3:
+    #     TT_THROW ... Statically allocated circular buffers in program N clash
+    #     with L1 buffers on core range [1-0 - 3-0]
+    # (by ~20 kB). Halving the K block halves the in1 buffer, which is far more
+    # than the shortfall, at the cost of more K iterations per output block.
+    in0_block_w = math.gcd(k_tiles, 4)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
-        in0_block_w=math.gcd(k_tiles, 8),
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=math.ceil(m_tiles / grid_y),
