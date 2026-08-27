@@ -55,6 +55,11 @@ void LinearScheduler::set_state_dict(const serialization::StateDict& dict) {
     m_start_factor = serialization::get_value_type<float>(dict, "m_start_factor");
     m_end_factor = serialization::get_value_type<float>(dict, "m_end_factor");
     m_total_steps = serialization::get_value_type<int>(dict, "m_total_steps");
+    // Push the restored live LR back to the optimizer: the constructor wrote
+    // the construction-time LR, so if the optimizer's state was loaded before
+    // the scheduler was constructed, the checkpoint's live LR was overwritten
+    // and the first resumed step would otherwise run at the wrong LR.
+    get_optimizer()->set_lr(m_last_lr);
 }
 
 serialization::StateDict LinearScheduler::get_state_dict() const {

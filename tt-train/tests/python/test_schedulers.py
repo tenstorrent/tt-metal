@@ -72,6 +72,10 @@ def _roundtrip(make_sched_fn, n_steps=N_STEPS):
 
     opt2, sched2 = make_sched_fn()  # noqa: F841
     sched2.set_state_dict(state)
+    # Restoring scheduler state must also restore the optimizer's live LR
+    # (the constructor wrote the construction-time LR), so the first resumed
+    # optimizer step runs at the checkpoint's LR — before any step() call.
+    assert opt2.get_lr() == pytest.approx(sched1.get_last_lr(), abs=1e-8)
     resumed_lrs = []
     for _ in range(n_steps - half):
         _step(opt2, sched2)
@@ -1249,6 +1253,172 @@ class TestOptimizerInitialLrStateDict:
         # LR snaps back to BASE_LR, not the decayed checkpoint LR.
         StepScheduler(dst, step_size=10, gamma=0.1)
         assert dst.get_lr() == pytest.approx(BASE_LR, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Live LR is restored together with scheduler state
+#
+# Scheduler constructors write the construction-time LR to the optimizer, so
+# in the resume order "load optimizer state -> construct scheduler -> load
+# scheduler state" the checkpoint's live LR gets overwritten at construction.
+# set_state_dict must push m_last_lr back to the optimizer or the first
+# resumed optimizer.step() runs at the wrong LR.
+# ---------------------------------------------------------------------------
+
+
+class TestLiveLrRestoredWithSchedulerState:
+    def test_optimizer_state_loaded_before_scheduler_construction(self):
+        # Source run: decay a few steps mid-warmup, checkpoint both.
+        src = _make_opt()
+        src_sched = LinearScheduler(src, 0.5, 1.0, 10)
+        for _ in range(3):
+            src_sched.step()
+        live_lr = src.get_lr()
+        opt_state = src.get_state_dict()
+        sched_state = src_sched.get_state_dict()
+
+        # Resume in the hazardous order: optimizer state FIRST, then scheduler
+        # construction (which overwrites the live LR with base_lr * 0.5)...
+        dst = _make_opt()
+        dst.set_state_dict(opt_state)
+        assert dst.get_lr() == pytest.approx(live_lr, abs=1e-8)
+        dst_sched = LinearScheduler(dst, 0.5, 1.0, 10)
+        assert dst.get_lr() == pytest.approx(BASE_LR * 0.5, abs=1e-8)
+
+        # ...then scheduler state: the live LR must come back BEFORE any
+        # step() call, so the first resumed optimizer step uses it.
+        dst_sched.set_state_dict(sched_state)
+        assert dst.get_lr() == pytest.approx(live_lr, abs=1e-8)
+
+    def test_sequential_restores_active_childs_live_lr(self):
+        # Chain: 10-step warmup then 20-step decay; checkpoint 3 steps into
+        # the warmup (child 0 active).
+        def make():
+            opt = _make_opt()
+            warmup = LinearScheduler(opt, 0.1, 1.0, 10)
+            decay = LinearScheduler(opt, 1.0, 0.01, 20)
+            return opt, SequentialScheduler(opt, [warmup, decay], [10, 20])
+
+        src_opt, src_sched = make()
+        for _ in range(3):
+            src_sched.step()
+        live_lr = src_opt.get_lr()
+        state = src_sched.get_state_dict()
+
+        # Restoring child states pushes each child's saved live LR to the
+        # optimizer in turn (the LAST child's would win); the chain must
+        # re-apply the ACTIVE child's live LR afterwards.
+        dst_opt, dst_sched = make()
+        dst_sched.set_state_dict(state)
+        assert dst_opt.get_lr() == pytest.approx(live_lr, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# Multi-LR optimizers: scheduling contract
+#
+# MuonWithAdamW holds TWO learning rates (Muon + AdamW), so its scheduling
+# contract is: attach one scheduler to ``muon_optimizer()`` and one to
+# ``adamw_optimizer()``. Attaching a scheduler to the wrapper itself is
+# rejected (``supports_lr_scheduling = False``) with an error that points the
+# user at the accessors.
+# ---------------------------------------------------------------------------
+
+MUON_LR = 0.02
+ADAMW_LR = 0.0003
+
+
+def _make_muon_with_adamw():
+    from ttml.common.muon_optimizer import MuonWithAdamW
+
+    config = {"muon": {"lr": MUON_LR}, "adamw": {"lr": ADAMW_LR}}
+    return MuonWithAdamW(config, ttml.NamedParameters())
+
+
+class TestSchedulersRejectMuonWithAdamWWrapper:
+    def test_muon_with_adamw_opts_out_of_scheduling(self):
+        from ttml.common.muon_optimizer import MuonWithAdamW
+
+        assert MuonWithAdamW.supports_lr_scheduling is False
+
+    def test_all_scheduler_types_reject_muon_with_adamw(self, expect_error):
+        opt = _make_muon_with_adamw()
+        make_scheds = [
+            lambda: StepScheduler(opt, step_size=10, gamma=0.1),
+            lambda: LinearScheduler(opt, 0.5, 1.0, 10),
+            lambda: CosineAnnealingScheduler(opt, T_max=10),
+            lambda: LambdaScheduler(opt, lambda s: 1.0),
+        ]
+        for make_sched in make_scheds:
+            with expect_error(TypeError, "does not support LR schedulers"):
+                make_sched()
+
+    def test_rejection_message_points_at_inner_accessors(self, expect_error):
+        opt = _make_muon_with_adamw()
+        with expect_error(TypeError, r"\.muon_optimizer\(\) and another to \.adamw_optimizer\(\)"):
+            StepScheduler(opt, step_size=10, gamma=0.1)
+
+    def test_sequential_scheduler_rejects_muon_with_adamw(self, expect_error):
+        # Children are built on a plain AdamW so that the rejection under test
+        # comes from SequentialScheduler itself, not from child construction.
+        child_opt = _make_opt()
+        child = StepScheduler(child_opt, step_size=10, gamma=0.1)
+        opt = _make_muon_with_adamw()
+        with expect_error(TypeError, "does not support LR schedulers"):
+            SequentialScheduler(opt, [child], [10])
+
+    def test_rejection_does_not_mutate_lrs(self, expect_error):
+        opt = _make_muon_with_adamw()
+        with expect_error(TypeError, "does not support LR schedulers"):
+            LinearScheduler(opt, 0.5, 1.0, 10)
+        assert opt.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
+
+
+class TestMuonWithAdamWPerInnerScheduling:
+    """The sanctioned pattern: one scheduler per inner optimizer."""
+
+    def test_inner_optimizers_accept_schedulers_independently(self):
+        opt = _make_muon_with_adamw()
+        muon_sched = StepScheduler(opt.muon_optimizer(), step_size=1, gamma=0.5)
+        adamw_sched = StepScheduler(opt.adamw_optimizer(), step_size=1, gamma=0.1)
+
+        assert opt.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
+
+        # Each scheduler drives only its own channel, from its own base.
+        muon_sched.step()
+        assert opt.get_lr() == pytest.approx(MUON_LR * 0.5, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
+
+        adamw_sched.step()
+        assert opt.get_lr() == pytest.approx(MUON_LR * 0.5, abs=1e-8)
+        assert opt.get_adamw_lr() == pytest.approx(ADAMW_LR * 0.1, abs=1e-8)
+
+    def test_inner_initial_lrs_survive_wrapper_state_dict_round_trip(self):
+        # Source run: schedulers attach to both inners (recording each inner's
+        # initial_lr), decay mid-warmup, then the WRAPPER is checkpointed.
+        src = _make_muon_with_adamw()
+        muon_sched = LinearScheduler(src.muon_optimizer(), 0.5, 1.0, 10)
+        adamw_sched = LinearScheduler(src.adamw_optimizer(), 0.5, 1.0, 10)
+        for _ in range(3):
+            muon_sched.step()
+            adamw_sched.step()
+        assert src.get_lr() < MUON_LR
+        assert src.get_adamw_lr() < ADAMW_LR
+        state = src.get_state_dict()
+        assert state["muon"]["initial_lr"] == pytest.approx(MUON_LR, abs=1e-8)
+        assert state["adamw"]["initial_lr"] == pytest.approx(ADAMW_LR, abs=1e-8)
+
+        # Resume into a fresh wrapper, then attach brand-new schedulers to the
+        # inners: each must see its ORIGINAL base LR, not the decayed one.
+        # StepScheduler applies base_lr at construction, so both channels snap
+        # back to their bases.
+        dst = _make_muon_with_adamw()
+        dst.set_state_dict(state)
+        StepScheduler(dst.muon_optimizer(), step_size=10, gamma=0.1)
+        StepScheduler(dst.adamw_optimizer(), step_size=10, gamma=0.1)
+        assert dst.get_lr() == pytest.approx(MUON_LR, abs=1e-8)
+        assert dst.get_adamw_lr() == pytest.approx(ADAMW_LR, abs=1e-8)
 
 
 if __name__ == "__main__":

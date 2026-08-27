@@ -47,6 +47,8 @@ void StepScheduler::set_state_dict(const serialization::StateDict &dict) {
     m_base_lr = serialization::get_value_type<float>(dict, "m_base_lr");
     m_step_size = serialization::get_value_type<size_t>(dict, "m_step_size");
     m_gamma = serialization::get_value_type<float>(dict, "m_gamma");
+    // Restore the live LR (see LinearScheduler::set_state_dict for rationale).
+    get_optimizer()->set_lr(m_last_lr);
 }
 serialization::StateDict StepScheduler::get_state_dict() const {
     serialization::StateDict res;

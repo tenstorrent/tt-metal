@@ -61,6 +61,8 @@ void CosineAnnealingScheduler::set_state_dict(const serialization::StateDict& di
     m_base_lr = serialization::get_value_type<float>(dict, "m_base_lr");
     m_T_max = serialization::get_value_type<size_t>(dict, "m_T_max");
     m_eta_min = serialization::get_value_type<float>(dict, "m_eta_min");
+    // Restore the live LR (see LinearScheduler::set_state_dict for rationale).
+    get_optimizer()->set_lr(m_last_lr);
 }
 
 }  // namespace ttml::schedulers

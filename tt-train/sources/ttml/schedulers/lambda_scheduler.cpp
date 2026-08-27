@@ -38,6 +38,8 @@ void LambdaScheduler::set_state_dict(const serialization::StateDict &dict) {
     m_last_step = serialization::get_value_type<size_t>(dict, "m_last_step");
     m_last_lr = serialization::get_value_type<float>(dict, "m_last_lr");
     m_base_lr = serialization::get_value_type<float>(dict, "m_base_lr");
+    // Restore the live LR (see LinearScheduler::set_state_dict for rationale).
+    get_optimizer()->set_lr(m_last_lr);
 }
 serialization::StateDict LambdaScheduler::get_state_dict() const {
     serialization::StateDict res;

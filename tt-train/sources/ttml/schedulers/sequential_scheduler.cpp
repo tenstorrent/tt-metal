@@ -109,6 +109,11 @@ void SequentialScheduler::set_state_dict(const serialization::StateDict &dict) {
         }
         m_schedulers[i]->set_state_dict(child_dict);
     }
+
+    // Each child's set_state_dict pushed ITS saved live LR to the optimizer,
+    // so the optimizer now holds the last child's — re-apply this chain's own
+    // live LR (the active child's).
+    get_optimizer()->set_lr(m_last_lr);
 }
 serialization::StateDict SequentialScheduler::get_state_dict() const {
     serialization::StateDict res;
