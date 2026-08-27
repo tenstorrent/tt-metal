@@ -1008,6 +1008,45 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     });
 }
 
+// Auto-discovery rejects FABRIC_1D_RING when the physical system cannot form a ring (<= 2 chips),
+// and still maps it when it can. Uses file-based mock PSDs so this runs on any host.
+TEST(TopologyMapperAutoDiscovery, Fabric1DRingRejectsTwoChipSystem) {
+    const std::filesystem::path psd_file_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_2asic_mesh.textproto";
+    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
+
+    EXPECT_THROW(
+        TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+            tt::tt_metal::MetalContext::instance().get_cluster(),
+            physical_system_descriptor,
+            FabricConfig::FABRIC_1D_RING,
+            FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE),
+        std::runtime_error);
+
+    // Same system maps fine when a ring is not requested.
+    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        physical_system_descriptor,
+        FabricConfig::FABRIC_1D,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}).values().size(), 2u);
+}
+
+TEST(TopologyMapperAutoDiscovery, Fabric1DRingMapsFourChipRing) {
+    const std::filesystem::path psd_file_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_ring.textproto";
+    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
+
+    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        physical_system_descriptor,
+        FabricConfig::FABRIC_1D_RING,
+        FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}).values().size(), 4u);
+}
+
 TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
     const std::filesystem::path galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
