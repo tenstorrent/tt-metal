@@ -13,13 +13,13 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 #include "ttnn/operations/transformer/sdpa/device/neighborhood_sdpa_device_operation.hpp"
 
 namespace ttnn::prim {
 
 namespace neighborhood = ttnn::transformer::neighborhood;
-namespace contract = ttnn::transformer::neighborhood::kernel_contract;
+namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 
 namespace {
 
@@ -112,45 +112,45 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
 
     constexpr uint32_t DOUBLE_BUFFERED = 2;
     add_circular_buffer(
-        contract::cb_query, tile_bytes, head_dim_tiles * query_tile_rows * DOUBLE_BUFFERED, data_format);
+        kernel_args::cb_query, tile_bytes, head_dim_tiles * query_tile_rows * DOUBLE_BUFFERED, data_format);
     add_circular_buffer(
-        contract::cb_key, tile_bytes, tiles_per_kv_chunk * head_dim_tiles * DOUBLE_BUFFERED, data_format);
+        kernel_args::cb_key, tile_bytes, tiles_per_kv_chunk * head_dim_tiles * DOUBLE_BUFFERED, data_format);
     add_circular_buffer(
-        contract::cb_value, tile_bytes, tiles_per_kv_chunk * head_dim_tiles * DOUBLE_BUFFERED, data_format);
+        kernel_args::cb_value, tile_bytes, tiles_per_kv_chunk * head_dim_tiles * DOUBLE_BUFFERED, data_format);
     // The mask is always bfloat16: the reader writes {0, -inf} bit patterns into it directly.
     // One tile per gather slot, NOT per query row: with one query group per chunk every row
     // shares the window, so the mask broadcasts down the chunk exactly as the reference's does.
-    add_circular_buffer(contract::cb_mask, bfloat16_tile_bytes, mask_cb_pages, bfloat16_format);
-    add_circular_buffer(contract::cb_reduce_scalar, bfloat16_tile_bytes, 1, bfloat16_format);
-    add_circular_buffer(contract::cb_zero, bfloat16_tile_bytes, 1, bfloat16_format);
-    add_circular_buffer(contract::cb_column_identity, bfloat16_tile_bytes, 1, bfloat16_format);
+    add_circular_buffer(kernel_args::cb_mask, bfloat16_tile_bytes, mask_cb_pages, bfloat16_format);
+    add_circular_buffer(kernel_args::cb_reduce_scalar, bfloat16_tile_bytes, 1, bfloat16_format);
+    add_circular_buffer(kernel_args::cb_zero, bfloat16_tile_bytes, 1, bfloat16_format);
+    add_circular_buffer(kernel_args::cb_column_identity, bfloat16_tile_bytes, 1, bfloat16_format);
     add_circular_buffer(
-        contract::cb_scores, bfloat16_tile_bytes, tiles_per_kv_chunk * query_tile_rows, bfloat16_format);
+        kernel_args::cb_scores, bfloat16_tile_bytes, tiles_per_kv_chunk * query_tile_rows, bfloat16_format);
 
     // Running statistics: one tile row of queries, so one tile each.
     for (uint32_t statistic_buffer :
-         {contract::cb_row_max_current,
-          contract::cb_row_max_previous,
-          contract::cb_row_sum_current,
-          contract::cb_row_sum_previous,
-          contract::cb_exp_max_difference}) {
+         {kernel_args::cb_row_max_current,
+          kernel_args::cb_row_max_previous,
+          kernel_args::cb_row_sum_current,
+          kernel_args::cb_row_sum_previous,
+          kernel_args::cb_exp_max_difference}) {
         add_circular_buffer(statistic_buffer, bfloat16_tile_bytes, query_tile_rows * DOUBLE_BUFFERED, bfloat16_format);
     }
     // Single-buffered on purpose: these accumulate in place across KV chunks.
     add_circular_buffer(
-        contract::cb_output_accumulator_current,
+        kernel_args::cb_output_accumulator_current,
         bfloat16_tile_bytes,
         head_dim_tiles * query_tile_rows,
         bfloat16_format);
     add_circular_buffer(
-        contract::cb_output_accumulator_previous,
+        kernel_args::cb_output_accumulator_previous,
         bfloat16_tile_bytes,
         head_dim_tiles * query_tile_rows,
         bfloat16_format);
     add_circular_buffer(
-        contract::cb_output, tile_bytes, head_dim_tiles * query_tile_rows * DOUBLE_BUFFERED, data_format);
+        kernel_args::cb_output, tile_bytes, head_dim_tiles * query_tile_rows * DOUBLE_BUFFERED, data_format);
     add_circular_buffer(
-        contract::cb_gather_origin, contract::GATHER_ORIGIN_ROW_BYTES, DOUBLE_BUFFERED, tt::DataFormat::UInt32);
+        kernel_args::cb_gather_origin, kernel_args::GATHER_ORIGIN_ROW_BYTES, DOUBLE_BUFFERED, tt::DataFormat::UInt32);
     // Holds ONE regime's whole mask set. Every chunk in a regime wants the same patterns, so
     // fetching them per chunk re-reads the same tiles from DRAM thousands of times; this keeps
     // them on the core and turns the per-chunk cost into a local copy.
@@ -161,67 +161,69 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // per chunk for nothing.
     const bool uses_resident_mask = tensors.interior_mask.has_value() && !per_brick_mask && !relative_mask_table;
     if (uses_resident_mask) {
-        add_circular_buffer(contract::cb_resident_mask, bfloat16_tile_bytes, plan.gather_brick_count, bfloat16_format);
+        add_circular_buffer(
+            kernel_args::cb_resident_mask, bfloat16_tile_bytes, plan.gather_brick_count, bfloat16_format);
     }
 
     // ---- compile-time arguments, written by name ----
-    std::vector<uint32_t> reader_compile_args(contract::reader_arg::COUNT);
-    reader_compile_args[contract::reader_arg::head_count] = head_count;
-    reader_compile_args[contract::reader_arg::brick_count] = brick_count;
-    reader_compile_args[contract::reader_arg::head_dim_tiles] = head_dim_tiles;
-    reader_compile_args[contract::reader_arg::query_chunk_bricks_time] = config.query_chunk_bricks.time();
-    reader_compile_args[contract::reader_arg::query_chunk_bricks_height] = config.query_chunk_bricks.height();
-    reader_compile_args[contract::reader_arg::query_chunk_bricks_width] = config.query_chunk_bricks.width();
-    reader_compile_args[contract::reader_arg::bricks_per_query_chunk] = query_tile_rows;
-    reader_compile_args[contract::reader_arg::volume_chunks_time] = plan.volume_chunks.time();
-    reader_compile_args[contract::reader_arg::volume_chunks_height] = plan.volume_chunks.height();
-    reader_compile_args[contract::reader_arg::volume_chunks_width] = plan.volume_chunks.width();
-    reader_compile_args[contract::reader_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
-    reader_compile_args[contract::reader_arg::per_brick_mask] = per_brick_mask ? 1u : 0u;
+    std::vector<uint32_t> reader_compile_args(kernel_args::reader_arg::COUNT);
+    reader_compile_args[kernel_args::reader_arg::head_count] = head_count;
+    reader_compile_args[kernel_args::reader_arg::brick_count] = brick_count;
+    reader_compile_args[kernel_args::reader_arg::head_dim_tiles] = head_dim_tiles;
+    reader_compile_args[kernel_args::reader_arg::query_chunk_bricks_time] = config.query_chunk_bricks.time();
+    reader_compile_args[kernel_args::reader_arg::query_chunk_bricks_height] = config.query_chunk_bricks.height();
+    reader_compile_args[kernel_args::reader_arg::query_chunk_bricks_width] = config.query_chunk_bricks.width();
+    reader_compile_args[kernel_args::reader_arg::bricks_per_query_chunk] = query_tile_rows;
+    reader_compile_args[kernel_args::reader_arg::volume_chunks_time] = plan.volume_chunks.time();
+    reader_compile_args[kernel_args::reader_arg::volume_chunks_height] = plan.volume_chunks.height();
+    reader_compile_args[kernel_args::reader_arg::volume_chunks_width] = plan.volume_chunks.width();
+    reader_compile_args[kernel_args::reader_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
+    reader_compile_args[kernel_args::reader_arg::per_brick_mask] = per_brick_mask ? 1u : 0u;
     const char* memset_env = std::getenv("DIFFVAE_NA_MASK_MEMSET_ONLY");
-    reader_compile_args[contract::reader_arg::mask_memset_only] =
+    reader_compile_args[kernel_args::reader_arg::mask_memset_only] =
         (memset_env != nullptr && memset_env[0] == '1') ? 1u : 0u;
     const char* skip_kv_env = std::getenv("DIFFVAE_NA_SKIP_KV");
-    reader_compile_args[contract::reader_arg::skip_kv] = (skip_kv_env != nullptr && skip_kv_env[0] == '1') ? 1u : 0u;
-    reader_compile_args[contract::reader_arg::kv_chunk_count] = kv_chunk_count;
-    reader_compile_args[contract::reader_arg::gather_brick_count] = plan.gather_brick_count;
-    reader_compile_args[contract::reader_arg::volume_bricks_time] = plan.volume_bricks.time();
-    reader_compile_args[contract::reader_arg::volume_bricks_height] = plan.volume_bricks.height();
-    reader_compile_args[contract::reader_arg::volume_bricks_width] = plan.volume_bricks.width();
-    reader_compile_args[contract::reader_arg::gather_bricks_time] = plan.gather_bricks.time();
-    reader_compile_args[contract::reader_arg::gather_bricks_height] = plan.gather_bricks.height();
-    reader_compile_args[contract::reader_arg::gather_bricks_width] = plan.gather_bricks.width();
-    reader_compile_args[contract::reader_arg::query_bricks_time] = plan.query_bricks.time();
-    reader_compile_args[contract::reader_arg::query_bricks_height] = plan.query_bricks.height();
-    reader_compile_args[contract::reader_arg::query_bricks_width] = plan.query_bricks.width();
-    reader_compile_args[contract::reader_arg::query_brick_count] = plan.query_brick_count;
-    reader_compile_args[contract::reader_arg::query_origin_bricks_time] = plan.query_origin_bricks.time();
-    reader_compile_args[contract::reader_arg::query_origin_bricks_height] = plan.query_origin_bricks.height();
-    reader_compile_args[contract::reader_arg::query_origin_bricks_width] = plan.query_origin_bricks.width();
-    reader_compile_args[contract::reader_arg::brick_sites_time] = config.brick.time();
-    reader_compile_args[contract::reader_arg::brick_sites_height] = config.brick.height();
-    reader_compile_args[contract::reader_arg::brick_sites_width] = config.brick.width();
-    reader_compile_args[contract::reader_arg::context_window_time] = config.context_window.time();
-    reader_compile_args[contract::reader_arg::context_window_height] = config.context_window.height();
-    reader_compile_args[contract::reader_arg::context_window_width] = config.context_window.width();
-    reader_compile_args[contract::reader_arg::stride_time] = config.stride.time();
-    reader_compile_args[contract::reader_arg::stride_height] = config.stride.height();
-    reader_compile_args[contract::reader_arg::stride_width] = config.stride.width();
-    reader_compile_args[contract::reader_arg::volume_time] = config.volume.time();
-    reader_compile_args[contract::reader_arg::volume_height] = config.volume.height();
-    reader_compile_args[contract::reader_arg::volume_width] = config.volume.width();
+    reader_compile_args[kernel_args::reader_arg::skip_kv] = (skip_kv_env != nullptr && skip_kv_env[0] == '1') ? 1u : 0u;
+    reader_compile_args[kernel_args::reader_arg::kv_chunk_count] = kv_chunk_count;
+    reader_compile_args[kernel_args::reader_arg::gather_brick_count] = plan.gather_brick_count;
+    reader_compile_args[kernel_args::reader_arg::volume_bricks_time] = plan.volume_bricks.time();
+    reader_compile_args[kernel_args::reader_arg::volume_bricks_height] = plan.volume_bricks.height();
+    reader_compile_args[kernel_args::reader_arg::volume_bricks_width] = plan.volume_bricks.width();
+    reader_compile_args[kernel_args::reader_arg::gather_bricks_time] = plan.gather_bricks.time();
+    reader_compile_args[kernel_args::reader_arg::gather_bricks_height] = plan.gather_bricks.height();
+    reader_compile_args[kernel_args::reader_arg::gather_bricks_width] = plan.gather_bricks.width();
+    reader_compile_args[kernel_args::reader_arg::query_bricks_time] = plan.query_bricks.time();
+    reader_compile_args[kernel_args::reader_arg::query_bricks_height] = plan.query_bricks.height();
+    reader_compile_args[kernel_args::reader_arg::query_bricks_width] = plan.query_bricks.width();
+    reader_compile_args[kernel_args::reader_arg::query_brick_count] = plan.query_brick_count;
+    reader_compile_args[kernel_args::reader_arg::query_origin_bricks_time] = plan.query_origin_bricks.time();
+    reader_compile_args[kernel_args::reader_arg::query_origin_bricks_height] = plan.query_origin_bricks.height();
+    reader_compile_args[kernel_args::reader_arg::query_origin_bricks_width] = plan.query_origin_bricks.width();
+    reader_compile_args[kernel_args::reader_arg::brick_sites_time] = config.brick.time();
+    reader_compile_args[kernel_args::reader_arg::brick_sites_height] = config.brick.height();
+    reader_compile_args[kernel_args::reader_arg::brick_sites_width] = config.brick.width();
+    reader_compile_args[kernel_args::reader_arg::context_window_time] = config.context_window.time();
+    reader_compile_args[kernel_args::reader_arg::context_window_height] = config.context_window.height();
+    reader_compile_args[kernel_args::reader_arg::context_window_width] = config.context_window.width();
+    reader_compile_args[kernel_args::reader_arg::stride_time] = config.stride.time();
+    reader_compile_args[kernel_args::reader_arg::stride_height] = config.stride.height();
+    reader_compile_args[kernel_args::reader_arg::stride_width] = config.stride.width();
+    reader_compile_args[kernel_args::reader_arg::volume_time] = config.volume.time();
+    reader_compile_args[kernel_args::reader_arg::volume_height] = config.volume.height();
+    reader_compile_args[kernel_args::reader_arg::volume_width] = config.volume.width();
     const neighborhood::Extent3 resident = config.resident_extent();
-    reader_compile_args[contract::reader_arg::resident_time] = resident.time();
-    reader_compile_args[contract::reader_arg::resident_height] = resident.height();
-    reader_compile_args[contract::reader_arg::resident_width] = resident.width();
+    reader_compile_args[kernel_args::reader_arg::resident_time] = resident.time();
+    reader_compile_args[kernel_args::reader_arg::resident_height] = resident.height();
+    reader_compile_args[kernel_args::reader_arg::resident_width] = resident.width();
     // A stride-1 table is relative; a GNA one is per-regime. The kernel indexes them differently.
     const bool relative_mask = config.stride.time() == 1 && config.stride.height() == 1 && config.stride.width() == 1;
-    reader_compile_args[contract::reader_arg::relative_mask] = relative_mask ? 1u : 0u;
+    reader_compile_args[kernel_args::reader_arg::relative_mask] = relative_mask ? 1u : 0u;
     const char* always_env = std::getenv("DIFFVAE_NA_TABLE_ALWAYS");
-    reader_compile_args[contract::reader_arg::table_always] = (always_env != nullptr && always_env[0] == '1') ? 1u : 0u;
+    reader_compile_args[kernel_args::reader_arg::table_always] =
+        (always_env != nullptr && always_env[0] == '1') ? 1u : 0u;
     // The relative table is read straight from DRAM per slot, so it needs no L1 staging -- and
     // staging is what forced the per-slot fill to be a word loop in the first place.
-    reader_compile_args[contract::reader_arg::has_interior_mask] =
+    reader_compile_args[kernel_args::reader_arg::has_interior_mask] =
         (tensors.interior_mask.has_value() && (relative_mask || uses_resident_mask)) ? 1u : 0u;
 
     // Accessor args come after the named block, in the order the reader constructs them.
@@ -232,34 +234,34 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     tt::tt_metal::TensorAccessorArgs(tensors.interior_mask.has_value() ? tensors.interior_mask->buffer() : nullptr)
         .append_to(reader_compile_args);
 
-    std::vector<uint32_t> writer_compile_args(contract::writer_arg::COUNT);
-    writer_compile_args[contract::writer_arg::head_count] = head_count;
-    writer_compile_args[contract::writer_arg::brick_count] = plan.query_brick_count;
-    writer_compile_args[contract::writer_arg::head_dim_tiles] = head_dim_tiles;
-    writer_compile_args[contract::writer_arg::query_chunk_bricks_time] = config.query_chunk_bricks.time();
-    writer_compile_args[contract::writer_arg::query_chunk_bricks_height] = config.query_chunk_bricks.height();
-    writer_compile_args[contract::writer_arg::query_chunk_bricks_width] = config.query_chunk_bricks.width();
-    writer_compile_args[contract::writer_arg::bricks_per_query_chunk] = query_tile_rows;
-    writer_compile_args[contract::writer_arg::volume_chunks_time] = plan.volume_chunks.time();
-    writer_compile_args[contract::writer_arg::volume_chunks_height] = plan.volume_chunks.height();
-    writer_compile_args[contract::writer_arg::volume_chunks_width] = plan.volume_chunks.width();
+    std::vector<uint32_t> writer_compile_args(kernel_args::writer_arg::COUNT);
+    writer_compile_args[kernel_args::writer_arg::head_count] = head_count;
+    writer_compile_args[kernel_args::writer_arg::brick_count] = plan.query_brick_count;
+    writer_compile_args[kernel_args::writer_arg::head_dim_tiles] = head_dim_tiles;
+    writer_compile_args[kernel_args::writer_arg::query_chunk_bricks_time] = config.query_chunk_bricks.time();
+    writer_compile_args[kernel_args::writer_arg::query_chunk_bricks_height] = config.query_chunk_bricks.height();
+    writer_compile_args[kernel_args::writer_arg::query_chunk_bricks_width] = config.query_chunk_bricks.width();
+    writer_compile_args[kernel_args::writer_arg::bricks_per_query_chunk] = query_tile_rows;
+    writer_compile_args[kernel_args::writer_arg::volume_chunks_time] = plan.volume_chunks.time();
+    writer_compile_args[kernel_args::writer_arg::volume_chunks_height] = plan.volume_chunks.height();
+    writer_compile_args[kernel_args::writer_arg::volume_chunks_width] = plan.volume_chunks.width();
     // The output is query-sized, so the writer's brick grid is the QUERY grid.
-    writer_compile_args[contract::writer_arg::volume_bricks_time] = plan.query_bricks.time();
-    writer_compile_args[contract::writer_arg::volume_bricks_height] = plan.query_bricks.height();
-    writer_compile_args[contract::writer_arg::volume_bricks_width] = plan.query_bricks.width();
+    writer_compile_args[kernel_args::writer_arg::volume_bricks_time] = plan.query_bricks.time();
+    writer_compile_args[kernel_args::writer_arg::volume_bricks_height] = plan.query_bricks.height();
+    writer_compile_args[kernel_args::writer_arg::volume_bricks_width] = plan.query_bricks.width();
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_enabled, packer_l1_accumulate, dst_full_sync_enabled] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attributes.compute_kernel_config);
     (void)packer_l1_accumulate;
 
-    std::vector<uint32_t> compute_compile_args(contract::compute_arg::COUNT);
-    compute_compile_args[contract::compute_arg::head_dim_tiles] = head_dim_tiles;
-    compute_compile_args[contract::compute_arg::query_tile_rows] = query_tile_rows;
-    compute_compile_args[contract::compute_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
-    compute_compile_args[contract::compute_arg::kv_chunk_count] = kv_chunk_count;
-    compute_compile_args[contract::compute_arg::work_item_count] = 0;  // per-core, set as a runtime arg
-    compute_compile_args[contract::compute_arg::scale_as_float_bits] = std::bit_cast<uint32_t>(attributes.scale);
+    std::vector<uint32_t> compute_compile_args(kernel_args::compute_arg::COUNT);
+    compute_compile_args[kernel_args::compute_arg::head_dim_tiles] = head_dim_tiles;
+    compute_compile_args[kernel_args::compute_arg::query_tile_rows] = query_tile_rows;
+    compute_compile_args[kernel_args::compute_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
+    compute_compile_args[kernel_args::compute_arg::kv_chunk_count] = kv_chunk_count;
+    compute_compile_args[kernel_args::compute_arg::work_item_count] = 0;  // per-core, set as a runtime arg
+    compute_compile_args[kernel_args::compute_arg::scale_as_float_bits] = std::bit_cast<uint32_t>(attributes.scale);
 
     // One query tile row means subblock_h is always 1, so DST capacity bounds the WIDTH alone.
     // subblock_h stays 1: matmul_blocks re-reads the mask from the CB front for every in0
@@ -267,11 +269,11 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     const uint32_t dst_capacity_tiles = fp32_dest_acc_enabled ? 4u : 8u;
     const uint32_t scores_subblock_width = widest_subblock(tiles_per_kv_chunk, dst_capacity_tiles);
     const uint32_t output_subblock_width = widest_subblock(head_dim_tiles, dst_capacity_tiles);
-    compute_compile_args[contract::compute_arg::scores_subblock_width] = scores_subblock_width;
-    compute_compile_args[contract::compute_arg::scores_subblock_count] = tiles_per_kv_chunk / scores_subblock_width;
-    compute_compile_args[contract::compute_arg::output_subblock_width] = output_subblock_width;
-    compute_compile_args[contract::compute_arg::output_subblock_count] = head_dim_tiles / output_subblock_width;
-    compute_compile_args[contract::compute_arg::mask_subblock_stride] = per_brick_mask ? tiles_per_kv_chunk : 0u;
+    compute_compile_args[kernel_args::compute_arg::scores_subblock_width] = scores_subblock_width;
+    compute_compile_args[kernel_args::compute_arg::scores_subblock_count] = tiles_per_kv_chunk / scores_subblock_width;
+    compute_compile_args[kernel_args::compute_arg::output_subblock_width] = output_subblock_width;
+    compute_compile_args[kernel_args::compute_arg::output_subblock_count] = head_dim_tiles / output_subblock_width;
+    compute_compile_args[kernel_args::compute_arg::mask_subblock_stride] = per_brick_mask ? tiles_per_kv_chunk : 0u;
 
     // ---- kernels ----
     const std::string kernel_directory = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";

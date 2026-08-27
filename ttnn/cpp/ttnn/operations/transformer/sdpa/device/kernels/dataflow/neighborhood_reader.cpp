@@ -12,7 +12,7 @@
 #include "neighborhood_mask_gen.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 // Feeds one query CHUNK at a time: the Q tiles of every brick in the chunk, then the context
 // window's K and V tiles in chunks, with a matching additive mask.
@@ -27,7 +27,7 @@
 // flash step. This is the only kernel that knows what a context window is; the compute kernel
 // downstream sees tiles and a mask.
 
-namespace contract = ttnn::transformer::neighborhood::kernel_contract;
+namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 namespace mask_gen = ttnn::transformer::neighborhood::mask_gen;
 namespace layout = ttnn::transformer::neighborhood::chunk_layout;
 
@@ -41,7 +41,7 @@ using layout::BrickCoordinate;
 // The key brick a gather slot names, and where it starts in sites. Lifted out of the gather loop
 // so the coverage cache can be filled with exactly the same decode the gather uses.
 FORCE_INLINE BrickCoordinate gather_slot_brick(
-    const BrickCoordinate& gather_origin_brick, uint32_t slot, const contract::AxisExtents& gather_bricks) {
+    const BrickCoordinate& gather_origin_brick, uint32_t slot, const kernel_args::AxisExtents& gather_bricks) {
     const uint32_t per_time_slice = gather_bricks.height * gather_bricks.width;
     const uint32_t within = slot % per_time_slice;
     return BrickCoordinate{
@@ -53,8 +53,8 @@ FORCE_INLINE BrickCoordinate gather_slot_brick(
 FORCE_INLINE mask_gen::SiteInBrick gather_slot_origin(
     const BrickCoordinate& gather_origin_brick,
     uint32_t slot,
-    const contract::AxisExtents& gather_bricks,
-    const contract::NeighborhoodExtents& extents) {
+    const kernel_args::AxisExtents& gather_bricks,
+    const kernel_args::NeighborhoodExtents& extents) {
     const BrickCoordinate brick = gather_slot_brick(gather_origin_brick, slot, gather_bricks);
     return mask_gen::SiteInBrick{
         brick.time * extents.brick_sites.time,
@@ -91,7 +91,7 @@ FORCE_INLINE int32_t relative_span_high(uint32_t window_extent, uint32_t brick_e
 FORCE_INLINE uint32_t relative_table_index(
     const mask_gen::SiteInBrick& query_origin_site,
     const mask_gen::SiteInBrick& key_origin_site,
-    const contract::NeighborhoodExtents& extents) {
+    const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t window[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
@@ -129,8 +129,8 @@ FORCE_INLINE uint32_t relative_table_index(
 FORCE_INLINE bool gather_is_canonical(
     const BrickCoordinate& gather_origin_brick,
     const mask_gen::SiteInBrick& query_origin_site,
-    const contract::AxisExtents& gather_bricks,
-    const contract::NeighborhoodExtents& extents) {
+    const kernel_args::AxisExtents& gather_bricks,
+    const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t window[3] = {
         extents.context_window.time, extents.context_window.height, extents.context_window.width};
@@ -157,7 +157,7 @@ FORCE_INLINE bool gather_is_canonical(
 // stop and no longer centres on the query, so the kernel still generates those. At most one
 // brick per edge per axis.
 FORCE_INLINE bool brick_window_is_unclamped(
-    const mask_gen::SiteInBrick& query_origin_site, const contract::NeighborhoodExtents& extents) {
+    const mask_gen::SiteInBrick& query_origin_site, const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
     const uint32_t configured[3] = {
@@ -203,7 +203,7 @@ FORCE_INLINE bool brick_window_is_unclamped(
 // is the unit whose clamping behaviour decides the pattern. Scanning a brick would give the
 // right answer only when the chunk is one brick.
 FORCE_INLINE uint32_t
-chunk_regime(const mask_gen::SiteInBrick& chunk_origin_site, const contract::NeighborhoodExtents& extents) {
+chunk_regime(const mask_gen::SiteInBrick& chunk_origin_site, const kernel_args::NeighborhoodExtents& extents) {
     const uint32_t group[3] = {extents.query_chunk.time, extents.query_chunk.height, extents.query_chunk.width};
     const uint32_t brick[3] = {extents.brick_sites.time, extents.brick_sites.height, extents.brick_sites.width};
     const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
@@ -254,88 +254,89 @@ chunk_regime(const mask_gen::SiteInBrick& chunk_origin_site, const contract::Nei
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t head_count = get_compile_time_arg_val(contract::reader_arg::head_count);
-    constexpr uint32_t brick_count = get_compile_time_arg_val(contract::reader_arg::brick_count);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(contract::reader_arg::head_dim_tiles);
-    constexpr uint32_t bricks_per_query_chunk = get_compile_time_arg_val(contract::reader_arg::bricks_per_query_chunk);
-    constexpr contract::AxisExtents query_chunk_bricks{
-        get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_time),
-        get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_height),
-        get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_width)};
-    constexpr contract::AxisExtents volume_chunks{
-        get_compile_time_arg_val(contract::reader_arg::volume_chunks_time),
-        get_compile_time_arg_val(contract::reader_arg::volume_chunks_height),
-        get_compile_time_arg_val(contract::reader_arg::volume_chunks_width)};
+    constexpr uint32_t head_count = get_compile_time_arg_val(kernel_args::reader_arg::head_count);
+    constexpr uint32_t brick_count = get_compile_time_arg_val(kernel_args::reader_arg::brick_count);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(kernel_args::reader_arg::head_dim_tiles);
+    constexpr uint32_t bricks_per_query_chunk =
+        get_compile_time_arg_val(kernel_args::reader_arg::bricks_per_query_chunk);
+    constexpr kernel_args::AxisExtents query_chunk_bricks{
+        get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_width)};
+    constexpr kernel_args::AxisExtents volume_chunks{
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_width)};
     constexpr uint32_t chunk_count = volume_chunks.time * volume_chunks.height * volume_chunks.width;
-    constexpr uint32_t tiles_per_kv_chunk = get_compile_time_arg_val(contract::reader_arg::tiles_per_kv_chunk);
-    constexpr uint32_t kv_chunk_count = get_compile_time_arg_val(contract::reader_arg::kv_chunk_count);
-    constexpr uint32_t gather_brick_count = get_compile_time_arg_val(contract::reader_arg::gather_brick_count);
+    constexpr uint32_t tiles_per_kv_chunk = get_compile_time_arg_val(kernel_args::reader_arg::tiles_per_kv_chunk);
+    constexpr uint32_t kv_chunk_count = get_compile_time_arg_val(kernel_args::reader_arg::kv_chunk_count);
+    constexpr uint32_t gather_brick_count = get_compile_time_arg_val(kernel_args::reader_arg::gather_brick_count);
 
-    constexpr contract::AxisExtents volume_bricks{
-        get_compile_time_arg_val(contract::reader_arg::volume_bricks_time),
-        get_compile_time_arg_val(contract::reader_arg::volume_bricks_height),
-        get_compile_time_arg_val(contract::reader_arg::volume_bricks_width)};
+    constexpr kernel_args::AxisExtents volume_bricks{
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_width)};
     // Q lives on the query grid; K, V and the gather live on the resident grid above. Equal
     // unless the host asked for a query sub-region.
-    constexpr contract::AxisExtents query_bricks{
-        get_compile_time_arg_val(contract::reader_arg::query_bricks_time),
-        get_compile_time_arg_val(contract::reader_arg::query_bricks_height),
-        get_compile_time_arg_val(contract::reader_arg::query_bricks_width)};
-    constexpr uint32_t query_brick_count = get_compile_time_arg_val(contract::reader_arg::query_brick_count);
-    constexpr contract::AxisExtents query_origin_bricks{
-        get_compile_time_arg_val(contract::reader_arg::query_origin_bricks_time),
-        get_compile_time_arg_val(contract::reader_arg::query_origin_bricks_height),
-        get_compile_time_arg_val(contract::reader_arg::query_origin_bricks_width)};
-    constexpr contract::AxisExtents gather_bricks{
-        get_compile_time_arg_val(contract::reader_arg::gather_bricks_time),
-        get_compile_time_arg_val(contract::reader_arg::gather_bricks_height),
-        get_compile_time_arg_val(contract::reader_arg::gather_bricks_width)};
+    constexpr kernel_args::AxisExtents query_bricks{
+        get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_width)};
+    constexpr uint32_t query_brick_count = get_compile_time_arg_val(kernel_args::reader_arg::query_brick_count);
+    constexpr kernel_args::AxisExtents query_origin_bricks{
+        get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_width)};
+    constexpr kernel_args::AxisExtents gather_bricks{
+        get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_width)};
     // Not constexpr: `shard_origin` is filled in per chunk from the gather origin table, because
     // it is the one geometric value that differs per device and the mesh runs one program.
     // Everything else here is a compile-time constant and still folds.
-    contract::NeighborhoodExtents extents{
-        {get_compile_time_arg_val(contract::reader_arg::brick_sites_time),
-         get_compile_time_arg_val(contract::reader_arg::brick_sites_height),
-         get_compile_time_arg_val(contract::reader_arg::brick_sites_width)},
-        {get_compile_time_arg_val(contract::reader_arg::context_window_time),
-         get_compile_time_arg_val(contract::reader_arg::context_window_height),
-         get_compile_time_arg_val(contract::reader_arg::context_window_width)},
-        {get_compile_time_arg_val(contract::reader_arg::stride_time),
-         get_compile_time_arg_val(contract::reader_arg::stride_height),
-         get_compile_time_arg_val(contract::reader_arg::stride_width)},
-        {get_compile_time_arg_val(contract::reader_arg::volume_time),
-         get_compile_time_arg_val(contract::reader_arg::volume_height),
-         get_compile_time_arg_val(contract::reader_arg::volume_width)},
-        {get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_time) *
-             get_compile_time_arg_val(contract::reader_arg::brick_sites_time),
-         get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_height) *
-             get_compile_time_arg_val(contract::reader_arg::brick_sites_height),
-         get_compile_time_arg_val(contract::reader_arg::query_chunk_bricks_width) *
-             get_compile_time_arg_val(contract::reader_arg::brick_sites_width)},
+    kernel_args::NeighborhoodExtents extents{
+        {get_compile_time_arg_val(kernel_args::reader_arg::brick_sites_time),
+         get_compile_time_arg_val(kernel_args::reader_arg::brick_sites_height),
+         get_compile_time_arg_val(kernel_args::reader_arg::brick_sites_width)},
+        {get_compile_time_arg_val(kernel_args::reader_arg::context_window_time),
+         get_compile_time_arg_val(kernel_args::reader_arg::context_window_height),
+         get_compile_time_arg_val(kernel_args::reader_arg::context_window_width)},
+        {get_compile_time_arg_val(kernel_args::reader_arg::stride_time),
+         get_compile_time_arg_val(kernel_args::reader_arg::stride_height),
+         get_compile_time_arg_val(kernel_args::reader_arg::stride_width)},
+        {get_compile_time_arg_val(kernel_args::reader_arg::volume_time),
+         get_compile_time_arg_val(kernel_args::reader_arg::volume_height),
+         get_compile_time_arg_val(kernel_args::reader_arg::volume_width)},
+        {get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_time) *
+             get_compile_time_arg_val(kernel_args::reader_arg::brick_sites_time),
+         get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_height) *
+             get_compile_time_arg_val(kernel_args::reader_arg::brick_sites_height),
+         get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_width) *
+             get_compile_time_arg_val(kernel_args::reader_arg::brick_sites_width)},
         {0, 0, 0},  // shard_origin: filled from the table below
-        {get_compile_time_arg_val(contract::reader_arg::resident_time),
-         get_compile_time_arg_val(contract::reader_arg::resident_height),
-         get_compile_time_arg_val(contract::reader_arg::resident_width)}};
+        {get_compile_time_arg_val(kernel_args::reader_arg::resident_time),
+         get_compile_time_arg_val(kernel_args::reader_arg::resident_height),
+         get_compile_time_arg_val(kernel_args::reader_arg::resident_width)}};
 
-    constexpr auto query_accessor_args = TensorAccessorArgs<contract::reader_arg::COUNT>();
+    constexpr auto query_accessor_args = TensorAccessorArgs<kernel_args::reader_arg::COUNT>();
     constexpr auto key_accessor_args = TensorAccessorArgs<query_accessor_args.next_compile_time_args_offset()>();
     constexpr auto value_accessor_args = TensorAccessorArgs<key_accessor_args.next_compile_time_args_offset()>();
-    constexpr uint32_t has_interior_mask = get_compile_time_arg_val(contract::reader_arg::has_interior_mask);
+    constexpr uint32_t has_interior_mask = get_compile_time_arg_val(kernel_args::reader_arg::has_interior_mask);
     // Per-brick masks: one tile per (query brick, gather slot) rather than one per slot shared by
     // the chunk. Needed once the chunk is wider than the stride, because then each brick centres a
     // DIFFERENT window and a shared mask would attend to the wrong one.
-    constexpr uint32_t per_brick_mask = get_compile_time_arg_val(contract::reader_arg::per_brick_mask);
-    constexpr uint32_t mask_memset_only = get_compile_time_arg_val(contract::reader_arg::mask_memset_only);
-    constexpr uint32_t skip_kv = get_compile_time_arg_val(contract::reader_arg::skip_kv);
-    constexpr uint32_t relative_mask = get_compile_time_arg_val(contract::reader_arg::relative_mask);
-    constexpr uint32_t table_always = get_compile_time_arg_val(contract::reader_arg::table_always);
+    constexpr uint32_t per_brick_mask = get_compile_time_arg_val(kernel_args::reader_arg::per_brick_mask);
+    constexpr uint32_t mask_memset_only = get_compile_time_arg_val(kernel_args::reader_arg::mask_memset_only);
+    constexpr uint32_t skip_kv = get_compile_time_arg_val(kernel_args::reader_arg::skip_kv);
+    constexpr uint32_t relative_mask = get_compile_time_arg_val(kernel_args::reader_arg::relative_mask);
+    constexpr uint32_t table_always = get_compile_time_arg_val(kernel_args::reader_arg::table_always);
     constexpr auto origin_accessor_args = TensorAccessorArgs<value_accessor_args.next_compile_time_args_offset()>();
     constexpr auto interior_mask_args = TensorAccessorArgs<origin_accessor_args.next_compile_time_args_offset()>();
 
     // Which regime's set is currently sitting in cb_resident_mask, so a run of chunks that share
     // a regime -- which is nearly all of them, the interior being one regime -- fetches once.
     uint32_t resident_regime = NO_REGIME;
-    CircularBuffer cb_resident_mask(contract::cb_resident_mask);
+    CircularBuffer cb_resident_mask(kernel_args::cb_resident_mask);
 
     // ---- the interior mask, WRITTEN ONCE and then left alone ----
     //
@@ -378,11 +379,11 @@ void kernel_main() {
     const auto origin_reader = TensorAccessor(origin_accessor_args, gather_origin_address);
     const auto interior_mask_reader = TensorAccessor(interior_mask_args, interior_mask_address);
 
-    CircularBuffer cb_query(contract::cb_query);
-    CircularBuffer cb_key(contract::cb_key);
-    CircularBuffer cb_value(contract::cb_value);
-    CircularBuffer cb_mask(contract::cb_mask);
-    CircularBuffer cb_gather_origin(contract::cb_gather_origin);
+    CircularBuffer cb_query(kernel_args::cb_query);
+    CircularBuffer cb_key(kernel_args::cb_key);
+    CircularBuffer cb_value(kernel_args::cb_value);
+    CircularBuffer cb_mask(kernel_args::cb_mask);
+    CircularBuffer cb_gather_origin(kernel_args::cb_gather_origin);
 
     Noc noc;
 
@@ -434,7 +435,7 @@ void kernel_main() {
         noc.async_read(
             origin_reader,
             CoreLocalMem<uint32_t>(origin_write_pointer),
-            contract::GATHER_ORIGIN_ROW_BYTES,
+            kernel_args::GATHER_ORIGIN_ROW_BYTES,
             {.page_id = chunk_index},
             {});
         noc.async_read_barrier();
@@ -442,7 +443,7 @@ void kernel_main() {
 
         const volatile tt_l1_ptr uint32_t* origin_row =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(origin_write_pointer);
-        namespace column = contract::gather_origin_column;
+        namespace column = kernel_args::gather_origin_column;
         // Origins are rounded down to a brick boundary by the planner, so this division is exact.
         const BrickCoordinate gather_origin_brick{
             origin_row[column::gather_time] / extents.brick_sites.time,
@@ -451,7 +452,7 @@ void kernel_main() {
 
         // Where this device sits in the global volume. Addressing above is LOCAL; window
         // placement below is GLOBAL, and this is what converts between them.
-        extents.shard_origin = contract::SignedAxisOffsets{
+        extents.shard_origin = kernel_args::SignedAxisOffsets{
             static_cast<int32_t>(origin_row[column::shard_origin_time]),
             static_cast<int32_t>(origin_row[column::shard_origin_height]),
             static_cast<int32_t>(origin_row[column::shard_origin_width])};

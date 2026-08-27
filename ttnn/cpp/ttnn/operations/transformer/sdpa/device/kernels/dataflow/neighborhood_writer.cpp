@@ -12,7 +12,7 @@
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_contract.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 // Drains one query brick's normalized output per work item.
 //
@@ -20,29 +20,30 @@
 // it directly -- the permute happens once at stage entry and once at exit, not per block.
 // Nothing here knows about context windows; it writes the tile row it is handed.
 
-namespace contract = ttnn::transformer::neighborhood::kernel_contract;
+namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 namespace layout = ttnn::transformer::neighborhood::chunk_layout;
 
 void kernel_main() {
-    constexpr uint32_t head_count = get_compile_time_arg_val(contract::writer_arg::head_count);
-    constexpr uint32_t brick_count = get_compile_time_arg_val(contract::writer_arg::brick_count);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(contract::writer_arg::head_dim_tiles);
-    constexpr uint32_t bricks_per_query_chunk = get_compile_time_arg_val(contract::writer_arg::bricks_per_query_chunk);
-    constexpr contract::AxisExtents query_chunk_bricks{
-        get_compile_time_arg_val(contract::writer_arg::query_chunk_bricks_time),
-        get_compile_time_arg_val(contract::writer_arg::query_chunk_bricks_height),
-        get_compile_time_arg_val(contract::writer_arg::query_chunk_bricks_width)};
-    constexpr contract::AxisExtents volume_chunks{
-        get_compile_time_arg_val(contract::writer_arg::volume_chunks_time),
-        get_compile_time_arg_val(contract::writer_arg::volume_chunks_height),
-        get_compile_time_arg_val(contract::writer_arg::volume_chunks_width)};
-    constexpr contract::AxisExtents volume_bricks{
-        get_compile_time_arg_val(contract::writer_arg::volume_bricks_time),
-        get_compile_time_arg_val(contract::writer_arg::volume_bricks_height),
-        get_compile_time_arg_val(contract::writer_arg::volume_bricks_width)};
+    constexpr uint32_t head_count = get_compile_time_arg_val(kernel_args::writer_arg::head_count);
+    constexpr uint32_t brick_count = get_compile_time_arg_val(kernel_args::writer_arg::brick_count);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(kernel_args::writer_arg::head_dim_tiles);
+    constexpr uint32_t bricks_per_query_chunk =
+        get_compile_time_arg_val(kernel_args::writer_arg::bricks_per_query_chunk);
+    constexpr kernel_args::AxisExtents query_chunk_bricks{
+        get_compile_time_arg_val(kernel_args::writer_arg::query_chunk_bricks_time),
+        get_compile_time_arg_val(kernel_args::writer_arg::query_chunk_bricks_height),
+        get_compile_time_arg_val(kernel_args::writer_arg::query_chunk_bricks_width)};
+    constexpr kernel_args::AxisExtents volume_chunks{
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_time),
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_height),
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_width)};
+    constexpr kernel_args::AxisExtents volume_bricks{
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_time),
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_height),
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_width)};
     constexpr uint32_t chunk_count = volume_chunks.time * volume_chunks.height * volume_chunks.width;
 
-    constexpr auto output_accessor_args = TensorAccessorArgs<contract::writer_arg::COUNT>();
+    constexpr auto output_accessor_args = TensorAccessorArgs<kernel_args::writer_arg::COUNT>();
 
     uint32_t argument_index = 0;
     const uint32_t output_address = get_arg_val<uint32_t>(argument_index++);
@@ -51,7 +52,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_arg_val<uint32_t>(argument_index++);
 
     const auto output_writer = TensorAccessor(output_accessor_args, output_address);
-    CircularBuffer cb_output(contract::cb_output);
+    CircularBuffer cb_output(kernel_args::cb_output);
     Noc noc;
 
     // The reduce identity, built once and left resident: the compute kernel's row max and row
@@ -59,11 +60,11 @@ void kernel_main() {
     // of a known constant, and the writer is otherwise idle until the first output appears.
     // bfloat16 1.0 packed into both halves of a uint32, the form the helper expects.
     constexpr uint32_t reduce_identity_bits = 0x3F803F80;
-    wh_generate_reduce_scaler(contract::cb_reduce_scalar, reduce_identity_bits);
+    wh_generate_reduce_scaler(kernel_args::cb_reduce_scalar, reduce_identity_bits);
 
     // A genuine zero tile. matmul_blocks folds the mask in as `dst += zero + mask`, so if this
     // is not actually zero the scores are quietly corrupted rather than obviously broken.
-    CircularBuffer cb_zero(contract::cb_zero);
+    CircularBuffer cb_zero(kernel_args::cb_zero);
     cb_zero.reserve_back(1);
     volatile tt_l1_ptr uint32_t* zero_tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_zero.get_write_ptr());
     for (uint32_t word = 0; word < (32 * 32 * sizeof(uint16_t)) / sizeof(uint32_t); ++word) {
@@ -73,7 +74,7 @@ void kernel_main() {
 
     // Ones down column 0. sub_exp only partially reduces each chunk's sum, so the final
     // within-tile row reduction is deferred out of the KV loop and done as a matmul here.
-    generate_bcast_col_scalar(CircularBuffer(contract::cb_column_identity), reduce_identity_bits);
+    generate_bcast_col_scalar(CircularBuffer(kernel_args::cb_column_identity), reduce_identity_bits);
 
     for (uint32_t work_item = work_item_start; work_item < work_item_start + work_item_count; ++work_item) {
         // Same decomposition as the reader: one work item is one query chunk.

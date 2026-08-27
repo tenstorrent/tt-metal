@@ -188,11 +188,11 @@ allows. Worth **54 gathered bricks instead of 96** at an 11³ window.
 `stride % brick == 0`. This rule was open-coded in **five** places before being centralised;
 that is the drift hazard this header exists to prevent.
 
-### 2.2 The host↔device contract
+### 2.2 The host↔device argument layout
 
 
 
-#### `kernels/neighborhood_kernel_contract.hpp` (~190 lines)
+#### `kernels/neighborhood_kernel_args.hpp` (~240 lines)
 
 CB ids and compile-arg slots **named on both sides**, so the factory and the kernel cannot
 disagree about what argument 14 means.
