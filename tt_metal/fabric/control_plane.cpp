@@ -2769,9 +2769,14 @@ void ControlPlane::generate_intermesh_connectivity() {
         // Intermesh Connectivity generation for the single-host case
         intermesh_connections = this->generate_intermesh_connections_on_local_host();
     }
-    // Divide by 2 here, since the intermesh_connections data structure stores connections
-    // bidirectionally.
-    auto num_assigned_intermesh_connections = intermesh_connections.size() / 2;
+
+    // intermesh_connections stores each cable bidirectionally (one directed slot per direction).
+    // We compare directed-slot counts on both sides of the check below: requested_intermesh_connections
+    // is likewise populated per direction by the MGD parser, so the raw .size()s are in the same unit.
+    // Do NOT divide by 2 here -- that historical /2 (introduced in PR #34397) put the two sides in
+    // mismatched units and made any 2-mesh, single-cable topology unsatisfiable even though one
+    // physical cable is topologically sufficient for a mesh pair.
+    auto num_assigned_intermesh_connections = intermesh_connections.size();
 
     TT_FATAL(
         num_assigned_intermesh_connections >= get_num_requested_intermesh_connections(),
