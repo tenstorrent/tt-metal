@@ -11,6 +11,7 @@ This module demonstrates:
 - SiLU activation fusion, or Kimi-K3's SiTU-GLU (see ``situ_glu``)
 """
 
+import math
 from pathlib import Path
 from typing import Optional
 
@@ -134,8 +135,8 @@ def get_program_configs(
     """
 
     def cfg(k: int, n: int, activation=None):
-        per_core_M = -(-m_tiles // grid.y)
-        per_core_N = -(-n // grid.x)
+        per_core_M = math.ceil(m_tiles / grid.y)
+        per_core_N = math.ceil(n / grid.x)
         # Across every model the gate/up projections sit at K/N >= 4.7 and the down projections at
         # <= 0.21, so the threshold falls in a wide empty gap rather than near either cluster.
         subblock_h, subblock_w = _out_subblock(per_core_M, per_core_N, deep_k=k >= 2 * n)
