@@ -5,11 +5,14 @@
 // Cross-op unpacker-state restore test for `_llk_unpack_tilize_uninit_`.
 //
 // Goal: prove that after a `unpack_tilize` op, `_llk_unpack_tilize_uninit_`
-// restores the SrcA tile-descriptor (num_faces / Y-dim), the unpack config
-// word-0 (tilize_mode etc.), and `Tile_x_dim_cntx0` back to the canonical
-// operand baseline programmed by `configure_unpack_AB` — so that a *following*
-// op that uses the SAME operand baseline (and therefore performs NO data-format
-// reconfig) reads correct data.
+// reverts the state tilize init altered — the unpack config word-0 (tilize_mode
+// etc.) and `Tile_x_dim_cntx0` — back to the canonical operand baseline programmed
+// by `configure_unpack_AB`, so that a *following* op that uses the SAME operand
+// baseline (and therefore performs NO data-format reconfig) reads correct data.
+// The SrcA tile-descriptor (num_faces / Y-dim) is deliberately NOT touched by
+// uninit: WH tilize neither writes nor mutates it (tt-llk#1161), so it must stay
+// at the `configure_unpack_AB` baseline on its own — this test also guards that it
+// is preserved (not corrupted) across tilize+uninit.
 //
 // To isolate the uninit restore as the *only* state reset between the two ops,
 // this test deliberately:
@@ -27,9 +30,10 @@
 //         tile-descriptor Z-dim at a tilize-specific value, or leaves
 //         tilize_mode set), this datacopy is corrupted and the test fails.
 //
-// The `num_faces ∈ {1, 2}` cases specifically exercise the tile-descriptor
-// Z-dim restore (`_llk_unpack_tilize_uninit_` line restoring num_faces) that no
-// existing tilize test covers — every other uninit call site uses num_faces=4.
+// The `num_faces ∈ {1, 2}` cases specifically exercise that the tile-descriptor
+// Z-dim is preserved (not corrupted) across tilize+uninit for non-4-face operands
+// — a case no other tilize test covers, since every other uninit call site uses
+// num_faces=4.
 
 #include <algorithm>
 #include <cstdint>
