@@ -13,18 +13,15 @@
 // repeat: it establishes that every root has finished collecting the previous
 // round before anyone writes into the next one. See noc_core_write.
 //
-// Compile-time args:
-//   0        num_blocks
-//   1        in_ht                    this core's block is in_ht x in_wt tiles
-//   2        in_wt
-//   3        num_cores_y              cores in a column: the gather's height, and
-//                                     so the number of writers row 0 collects
-//   4..      TensorAccessorArgs for in0, then in1, then out
+// Compile-time args, all named:
+//   num_blocks
+//   in_ht, in_wt             this core's block is in_ht x in_wt tiles
+//   num_cores_y              cores in a column: the gather's height, and so the
+//                            number of writers row 0 collects
+//   cb_<name> per buffer, read by TT_U_CB
 //
-// Runtime args (identical on all three kernels):
-//   0        in0 base address
-//   1        in1 base address
-//   2        out base address
+// No runtime args: the tensors are bound, so their addresses ride along with the
+// accessors.
 //
 // Columns are independent: column x reduces input block b * kCoreGridW + x and
 // writes result block b * kCoreGridW + x, so `in0` and `out` both hold
@@ -34,12 +31,6 @@
 #include <tt/unified/core>
 
 namespace u = tt::unified;
-
-constexpr uint32_t kCbIn0 = 0;
-constexpr uint32_t kCbTmp0 = 1;
-constexpr uint32_t kCbTmp1 = 2;
-constexpr uint32_t kCbScaler = 3;
-constexpr uint32_t kCbOut = 16;
 
 // Which fold. Sum is the default because it is the only one the TWO-STAGE tree
 // can do: stage 2 reduces stage-1 results whose non-result rows the packer zeroed,
@@ -65,15 +56,11 @@ void kernel_main() {
     // stage-1 results, which the gather has laid out as num_cores_y x in_wt.
     constexpr auto kAxis = u::ReduceAxis::Rows;
 
-    // TensorAccessor compile-time args, laid out in0, in1, out -- starting AFTER
-    // the four scalars above.
-    constexpr auto in0_args = TensorAccessorArgs<0>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-
-    const uint32_t in0_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_addr = get_arg_val<uint32_t>(2);
-    u::check_runtime_args<3>();
+    constexpr uint32_t kCbIn0 = TT_U_CB(in0);
+    constexpr uint32_t kCbTmp0 = TT_U_CB(tmp0);
+    constexpr uint32_t kCbTmp1 = TT_U_CB(tmp1);
+    constexpr uint32_t kCbScaler = TT_U_CB(scaler);
+    constexpr uint32_t kCbOut = TT_U_CB(out);
 
     u::compute_init(kCbIn0, kCbOut);
 
@@ -91,8 +78,8 @@ void kernel_main() {
     u::Storage<Gathered> tmp1_storage(kCbTmp1);
     u::Storage<Reduced> out_storage(kCbOut);
 
-    const auto in0 = TensorAccessor(in0_args, in0_addr);
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto in0 = TensorAccessor(tensor::in0);
+    const auto out = TensorAccessor(tensor::out);
 
     // The scaler metal folds into every reduce_tile: 1 for sum and max, 1/N for a
     // mean. Getting this wrong turns a mean into a sum with nothing to say so.
