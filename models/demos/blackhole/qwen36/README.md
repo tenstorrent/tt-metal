@@ -116,8 +116,7 @@ traced decode path automatically.
 
 ## Tests
 
-There are three tiers of tests under `tests/`: single-device component PCC, the
-multi-device TP contract, and full-depth parity against HuggingFace.
+There are two tiers of tests under `tests/`.
 
 ### Single-device unit / component tests — **9B**
 
@@ -139,8 +138,6 @@ per-test thresholds.
 | `test_lm_head.py`          | LM head logits (bf8 vs bf16)                          |
 | `test_layer.py`            | full decoder-block sanity (no NaN/Inf, non-constant) |
 | `test_model.py`            | Generator decode contract: traced vs paged decode    |
-| `test_prefill.py`          | full-depth prefill logits vs HF (see below)          |
-| `test_decode.py`           | full-depth decode logits vs HF (see below)           |
 | `test_substate.py`         | weight `substate` helper (pure CPU, no device)       |
 
 `tests/` (single-device, also 9B):
@@ -186,92 +183,6 @@ pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 pytest models/demos/blackhole/qwen36/tests/test_model_tp.py -svq
 pytest models/demos/blackhole/qwen36/tests/test_generate_tp.py -v -s
 ```
-
-### Full-depth HF parity — **both models**
-
-`tests/unit/test_prefill.py` and `tests/unit/test_decode.py` are the only tests that
-run **every** layer with real weights and compare against the HuggingFace reference
-(`Qwen3_5ForCausalLM`) instead of against another TT path. Both share
-`tests/unit/full_depth_pcc_common.py` (mesh + device params, full-depth model build,
-paged KV, prompt, HF forward) and both cover either checkpoint — `HF_MODEL` picks the
-model, `MESH_DEVICE` the mesh.
-
-| Test                   | Validates                                                                        |
-| ---------------------- | -------------------------------------------------------------------------------- |
-| `unit/test_prefill.py` | full-depth `prefill_paged` last-position logits vs HF                            |
-| `unit/test_decode.py`  | full-depth teacher-forced decode steps (vLLM contract chain) vs HF, after prefill |
-
-Each decode step is fed HF's own argmax token, so one step's PCC does not inherit an
-earlier greedy divergence — while still carrying the paged KV and GDN recurrent/conv
-state the previous steps advanced.
-
-```bash
-# 9B (32 layers)
-HF_MODEL=Qwen/Qwen3.5-9B MESH_DEVICE=P150 \
-  pytest models/demos/blackhole/qwen36/tests/unit/test_prefill.py \
-         models/demos/blackhole/qwen36/tests/unit/test_decode.py -v -s
-
-# 27B (64 layers)
-HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=P150x4 \
-  pytest models/demos/blackhole/qwen36/tests/unit/test_prefill.py \
-         models/demos/blackhole/qwen36/tests/unit/test_decode.py -v -s
-```
-
-Measured on Wormhole (128-token prompt, bf16 reference): 9B/N300 prefill 0.9913,
-decode min 0.9827; 27B/T3K prefill 0.9957, decode min 0.9595. The gates
-(`test_full_depth_prefill_logits_pcc` 0.98, `test_full_depth_decode_logits_pcc` 0.95
-in `pcc_thresholds.json`) sit below the worse of the two — they are regression
-detectors at this prompt length, not accuracy targets; the per-step PCC and
-argmax/top-5 lines the tests log are the finer signal. Knobs:
-`QWEN36_FULL_DEPTH_PROMPT_LEN` (default 128, keep it a multiple of 128),
-`QWEN36_FULL_DEPTH_DECODE_STEPS` (5), `QWEN36_FULL_DEPTH_REF_DTYPE` (bfloat16).
-
-### Teacher-forced e2e — **both models**
-
-`tests/e2e/test_teacher_forcing_e2e.py` runs the real generation path — `prefill_paged`
-then the demo's decode chain — but feeds the **ground-truth** token at every step, so
-each step is an independent measurement instead of one diverged sample. Ground truth is
-*A Tale of Two Cities* (the tt_transformers corpus); override with `QWEN36_TF_TEXT_FILE`.
-
-| Test                             | Validates                                                     |
-| -------------------------------- | ------------------------------------------------------------- |
-| `test_teacher_forcing_e2e`       | top-1 / top-5 token accuracy, TT vs HF and both vs truth      |
-| `test_teacher_forcing_logits_pcc`| full-vocab logit PCC at every teacher-forced step             |
-
-The unit tests gate 5 decode steps; this runs 128+ and reports the **trend**, which is
-the failure mode a short test structurally cannot see. Beyond the raw rates it prints a
-flip classification (by the reference's own top1−top2 margin), position-trend bins beside
-HF's own accuracy/margin/entropy, Wilson intervals next to each floor, and KL +
-max|Δlogit| over HF's top-32.
-
-```bash
-# 9B
-HF_MODEL=Qwen/Qwen3.5-9B MESH_DEVICE=P150 \
-  pytest models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py -sv --timeout=0
-
-# 27B
-HF_MODEL=Qwen/Qwen3.6-27B MESH_DEVICE=P150x4 \
-  pytest models/demos/blackhole/qwen36/tests/e2e/test_teacher_forcing_e2e.py -sv --timeout=0
-```
-
-Measured on Wormhole at prefill_128 / max_new_tokens_128 (bf16 reference):
-
-| Model | top-1 vs HF | top-5 vs HF | logit PCC mean | worst step |
-| ----- | ----------- | ----------- | -------------- | ---------- |
-| 9B / N300 (TP=2)  | 90.70% | 96.12% | 0.9674 | 0.5763 |
-| 27B / T3K (TP=8)  | 75.97% | 84.50% | 0.8403 | 0.3957 |
-
-> **Open finding.** The 27B agrees with HF markedly less than the 9B here (75.97% vs
-> 90.70% top-1) and this is **not yet explained**. Ruled out by measurement: the reference
-> method (HF chunked vs recurrent agree to 0.9997, no position trend), TP width (TP=4 and
-> TP=8 identical bin for bin), the stale-GDN-state bug in `prefill_paged` (numbers unchanged
-> after that fix), and sequence length (a 128-token prefill scores *worse* than a 256-token
-> one — PCC here tracks which row is scored, not length). The corpus explains ~4 points:
-> starting past the book's front matter (`QWEN36_TF_PREFILL_LEN=512`) gives 79.84%. The
-> unexplained part is the trend — agreement falls 96.97% → 43.33% across position bins while
-> the *reference* grows more decisive (margin 7.75 → 9.75, entropy → 0.05), the opposite of a
-> text-difficulty explanation. Floors in `_MEASURED_FLOORS` record this state so a change is
-> visible; they are not a statement that it is acceptable.
 
 > `test_substate.py` and `test_weight_mapping.py` are pure-CPU and need no device.
 > `test_weight_mapping.py`'s shape constants assume the 9B checkpoint.

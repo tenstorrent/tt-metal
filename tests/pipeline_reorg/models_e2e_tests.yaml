@@ -482,6 +482,29 @@
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
 
+- name: Qwen3.5-9B e2e tests
+  # Wormhole N300 sibling of the Qwen3.6-27B/P150x4 entry above -- different checkpoint, mesh
+  # (1,2), and code path (TP=2 + Wormhole gates), see README-N300-9B.md "CI coverage". Tier 3, not
+  # tier 1, matching the unit-test leg (see that doc's "Why not tier 1"). Same -k filters as the
+  # 27B leg: single ISL + determinism + one vision case, not the full 4k-256k ISL ladder or vision
+  # demo matrix (out of CI budget on both device targets).
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B MESH_DEVICE=N300
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
+  model: qwen3.5-9b
+  model_family: Qwen
+  skus:
+    # 25 is the tier-3 budget cap, not a measured time -- land a measured value + slack after the
+    # first green scheduled run (see README-N300-9B.md "Land a measured timeout").
+    wh_n300:
+      timeout: 25
+      tier: 3
+      release_ready: false
+  owner_id: U08HL8X1ECD # Aniruddha Tupe
+  team: models
+
 # ── Gemma ──────────────────────────────────────────────────────────
 
 # Tier 3: accuracy-only e2e (ci-token-matching). Validated locally on N300
