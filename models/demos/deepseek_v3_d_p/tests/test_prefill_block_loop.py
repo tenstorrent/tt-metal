@@ -93,9 +93,9 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "isl_total",
-    # One entry per SP factor the mesh list below covers; the body skips every pair that does not
-    # land ISL_TOKENS_PER_CHIP on each chip, so only the matching (mesh, isl) combinations run.
-    [640, 1280, 2560, 5120],
+    # ISL_TOKENS_PER_CHIP on each chip, for every SP factor the mesh list below covers. The body
+    # skips any (mesh, isl_total) pair that does not land it, so only the matching ones run.
+    [ISL_TOKENS_PER_CHIP * sp for sp in (1, 2, 4, 8)],
     ids=["isl_640", "isl_1k28", "isl_2k56", "isl_5k"],
 )
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
@@ -144,8 +144,6 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
-    # Only 640 tokens/chip is tested, so the isl_total x mesh cross product is pruned to the pairs
-    # that land it.
     if isl_total != ISL_TOKENS_PER_CHIP * mesh_device.shape[0]:
         pytest.skip(
             f"only {ISL_TOKENS_PER_CHIP} tokens/chip is tested; {tuple(mesh_device.shape)} needs "
