@@ -20,9 +20,13 @@ Two properties, deliberately separate:
      at S-1. Padding therefore sits AFTER the real tokens and causality should exclude it, so PCC
      must be flat across a 128 boundary. A mask cut at the wrong place would show as a step.
 
-WHY NO REFERENCE COMPARISON IN (1): a 26-layer fp32 CPU forward at S=2048 is prohibitively slow,
-and the failure this targets is a tile that is never written -- a structural property that needs no
-oracle. Accuracy against the reference is `test_backbone_pcc.py`'s job, on real prompts.
+(1) DOES compare against the reference. An earlier version of this file did not, on the grounds
+that "a 26-layer fp32 CPU forward at S=2048 is prohibitively slow" -- which was asserted without
+measuring. Measured: 3.8 s at S=256, 6.9 s at 512, 16.1 s at 1024, so ~45 s at 2048 and about two
+minutes for all sixteen shapes. Cheap enough, and without it the test only proved a tile was
+WRITTEN, not that it was written with the right values -- so a long shape picking a wrong program
+config and emitting plausible-but-wrong numbers would have passed. `test_backbone_pcc.py` covers 15
+real prompts but all are P <= 357, so Sp 512..2048 had no value check anywhere.
 
 Run:
     pytest -svv models/experimental/voxtral_tts/tests/test_prefill_shapes.py
@@ -43,6 +47,7 @@ from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # no
 from models.experimental.voxtral_tts.tests.gates import compare_hidden  # noqa: E402
 from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E402
     backbone_state,
+    corpus_embeds,
     fixture_embeds,
 )
 from models.experimental.voxtral_tts.tt import ttnn_voxtral_gpt as gpt  # noqa: E402
@@ -55,9 +60,22 @@ TILE = 32
 
 # Lengths straddling a 128 boundary, all reachable from the longest fixture prompt (P=357).
 # 250,256 -> Sp 256 (6 and 0 pad rows); 257,300,352 -> Sp 384 (127, 84, 32 pad rows).
-PAD_LENGTHS = (250, 256, 257, 300, 352)
-PAD_PCC = 0.999
-PAD_SPREAD = 0.002      # PCC must be FLAT across the boundary, not merely above the gate
+# Pooled over ALL S positions -- the stable statistic, and it covers the whole block rather than
+# one row of it. A SINGLE position's PCC is the noisiest thing here (measured swinging 0.938..0.998
+# within one prompt), so it gets its own looser gate and is reported for diagnosis only.
+# Both thresholds are set FROM the measured sweep with margin, and the measurements are recorded so
+# drift is visible rather than absorbed. Measured 2026-08-27 over all 16 shapes:
+#
+#   pooled PCC   0.994786 (Sp=768) .. 0.999272 (Sp=128), spread 0.004486
+#   worst-sample 1.57% .. 3.89%, plateauing at 3.89% from Sp=1152 up
+#
+# The pooled curve is a U -- highest at 128, lowest around 768, rising again to 2048 -- which tracks
+# the synthetic prompt's composition changing with length, not the shapes. Hence:
+SHAPE_PCC_POOLED = 0.99    # a COLLAPSE floor, not an accuracy gate. XTTS's version of this failure
+                           # read 0.63 and 0.826 against 0.9997, so 0.99 catches it with room while
+                           # leaving the 0.9948 measured minimum alone.
+SHAPE_SPREAD = 0.008       # the shape-sensitive assertion. Measured 0.004486; 0.008 leaves headroom
+                           # so it flags a real outlier rather than flaking on the existing band.
 
 
 @pytest.fixture(scope="module")
@@ -79,41 +97,106 @@ def big(dev, w):
 
 
 def _long_input(w, S):
-    """S rows built by repeating a real prompt's embeddings.
+    """S rows of a SINGLE well-formed prompt whose text is long enough to reach S tokens.
 
-    Real embedding vectors, not `randn`: trap 12 (random activations are off-manifold and read PCC
-    0.892 where real prompts give 0.9994) applies to anything Block-1 shaped. Repeating is not a
-    natural prompt, but every row is a genuine embedding, which is what the write path sees.
+    NOT a repeated assembled prompt. An earlier version tiled `fixture_embeds(3)` to length, which
+    duplicates the BOS/header rows mid-sequence -- and those embeddings are ~3x the magnitude of an
+    ordinary token (position 0 measured absmax 122 against 30-48 typical). The tell was that
+    worst-sample came out at 47.16% for EVERY shape from Sp=1152 to 2048, identical to two decimals:
+    eight shapes cannot share a worst element by chance, so it was the input, not the shape.
+
+    Here the corpus sentences are joined into one long text and tokenized ONCE, so there is a single
+    header and a long natural body. `ar_male` because it has the fewest placeholder rows (67), which
+    leaves the most room for text at small S.
     """
-    full, _ = fixture_embeds(3, w)                      # longest fixture prompt, P=357
-    reps = (S + full.shape[1] - 1) // full.shape[1]
-    return full.repeat(1, reps, 1)[:, :S]
+    from models.experimental.voxtral_tts.reference.voxtral_tokenizer_ref import TekkenTokenizer
+    from models.experimental.voxtral_tts.tests.sentence_corpus import SENTENCES
+
+    voice = "ar_male"
+    tok = TekkenTokenizer()
+    pool = [t for group in SENTENCES.values() for t in group]
+    text, ids = "", []
+    while len(ids) < S:
+        text = (text + " " + pool[len(text) % len(pool)]).strip() if text else pool[0]
+        ids = tok.build_prompt(text, voice)
+        if len(text) > 40000:                     # guard: cannot reach S, fail loudly
+            raise AssertionError(f"cannot build a prompt of {S} tokens (reached {len(ids)})")
+    return corpus_embeds(text, voice, w)[:, :S]
+
+
+# Filled in by the parametrized test below; read by the cross-shape test after it. One shape per
+# test because the repo enforces a 300 s per-test timeout and the CPU reference alone is ~45 s at
+# S=2043 -- a single test over all 16 shapes times out.
+_POOLED: dict = {}
 
 
 @pytest.mark.parametrize("sp", SHAPES, ids=lambda s: f"Sp{s}")
-def test_every_padded_prefill_shape_fills_the_cache(big, w, sp):
-    """Every head and every position-tile of the KV cache must be written at this shape."""
-    S = sp - 5                                          # so the shape is reached WITH padding
-    embeds = _long_input(w, S)
-    big.reset()
-    out = big.prefill(embeds, last_only=True)
-    assert torch.isfinite(out).all(), f"Sp={sp}: prefill produced non-finite output"
-    assert big.pos == S, f"Sp={sp}: pos is {big.pos}, expected the real length {S}"
+def test_every_padded_prefill_shape_is_correct(big, w, sp):
+    """Right values against fp32, and every KV-cache tile written, at this shape.
 
-    n_tiles = (S + TILE - 1) // TILE                    # tiles holding at least one real position
-    blocks = N_KV_HEADS * (sp // TILE)
+    WHY THE FLOOR IS 0.995 HERE WHEN REAL PROMPTS GATE AT 0.999. No natural prompt in this repo
+    exceeds 357 tokens, so long shapes must be fed a synthetic long prompt, and every construction
+    is off-distribution to a degree:
+
+      - repeating the assembled prompt duplicates the BOS/header rows mid-sequence, whose embeddings
+        are ~3x an ordinary token's magnitude -> worst-sample 47.16%;
+      - joining corpus sentences into one long body fixes that -> 3.89%, but still cycles 19
+        sentences across 9 languages, which no real request looks like.
+
+    In BOTH constructions worst-sample came out IDENTICAL at every shape (47.16% everywhere, then
+    3.89% everywhere). Shapes cannot share a worst element by chance, so the residual error is the
+    INPUT and the shape is not the variable -- which is why the shape-sensitive assertion is the
+    cross-shape spread in the next test, not the absolute level here. This floor exists to catch
+    collapse: XTTS's version of this failure read 0.63 and 0.826 against 0.9997.
+
+    Real-prompt accuracy at Sp<=384 lives in `test_backbone_pcc.py` (15 prompts, 0.9997+) and
+    `test_all_voices_smoke.py` (all 20 voices, pooled 0.99971-0.99978).
+    """
+    S = sp - 5                                          # reach the shape WITH padding
+    embeds = _long_input(w, S)
+    exp = bref.reference_forward(embeds, w, n_layers=N_LAYERS)
+    big.reset()
+    out = big.prefill(embeds, last_only=False)
+    assert torch.isfinite(out).all(), f"Sp={sp}: non-finite output"
+    assert big.pos == S, f"Sp={sp}: pos {big.pos}, expected {S}"
+    assert out.shape == exp.shape, f"Sp={sp}: {tuple(out.shape)} vs {tuple(exp.shape)}"
+    m = compare_hidden(out, exp)
+    m_last = compare_hidden(out[:, S - 1], exp[:, S - 1])
+    _POOLED[sp] = m["pcc"]
+
+    n_tiles = (S + TILE - 1) // TILE
     unwritten = []
-    for li in (0, N_LAYERS // 2, N_LAYERS - 1):         # first, middle, last layer
+    for li in (0, N_LAYERS // 2, N_LAYERS - 1):
         k = ttnn.to_torch(big.caches[li][0]).float()
         for h in range(N_KV_HEADS):
             for t in range(n_tiles):
                 if float(k[0, h, TILE * t : TILE * (t + 1), :].abs().max()) == 0.0:
                     unwritten.append((li, h, t))
-    print(f"\n  Sp={sp:>4} S={S:>4} fill_cache blocks={blocks:>4} "
-          f"tiles/head={n_tiles:>2}  unwritten={len(unwritten)}")
+    print(f"\n  Sp={sp:>4} S={S:>4} blocks={N_KV_HEADS * (sp // TILE):>4} tiles/head={n_tiles:>2}  "
+          f"unwritten={len(unwritten)}  pooled {m['pcc']:.6f}  last {m_last['pcc']:.6f}  "
+          f"worst {m['worst_pct']:.2f}%")
     assert not unwritten, (
-        f"Sp={sp}: {len(unwritten)} (layer, head, tile) triples are ALL ZERO -- prefill never wrote "
+        f"Sp={sp}: {len(unwritten)} (layer, head, tile) blocks are ALL ZERO -- prefill never wrote "
         f"them. First few: {unwritten[:6]}. This is the fill_cache head-straddle (XTTS BUG-7).")
+    assert m["pcc"] > SHAPE_PCC_POOLED, (
+        f"Sp={sp}: pooled PCC {m['pcc']:.6f} over all {S} positions -- this shape computes the "
+        f"wrong values, not merely a missing tile")
+
+
+def test_no_shape_computes_differently_from_its_neighbours():
+    """The shape-sensitive assertion: with the input held constant in KIND, no Sp is an outlier.
+
+    Reads what the parametrized test above measured, so it needs the whole sweep to have run --
+    skipped under `-k`.
+    """
+    if len(_POOLED) < len(SHAPES):
+        pytest.skip(f"needs all {len(SHAPES)} shapes; have {len(_POOLED)}")
+    lo, hi = min(_POOLED.values()), max(_POOLED.values())
+    print(f"\n  pooled PCC across {len(_POOLED)} shapes: {lo:.6f} .. {hi:.6f} "
+          f"(spread {hi - lo:.6f})")
+    assert hi - lo < SHAPE_SPREAD, (
+        f"pooled PCC varies by {hi - lo:.6f} across shapes -- one shape computes differently from "
+        f"its neighbours: {sorted((k, round(v, 6)) for k, v in _POOLED.items())}")
 
 
 def test_padding_costs_no_accuracy(big, w):
