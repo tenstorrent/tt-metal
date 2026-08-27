@@ -76,10 +76,19 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     prefill_trace_layout = "single_file"
 
     # --- CPU reference ---------------------------------------------------------------------------
-    # Model class only -- create_hf_model needs it for every random-weight row, and rope is computed
-    # at model level so the standalone-attention problem does not arise. attention / moe stay
-    # unwired: run_reference_mla does not pass position_embeddings, and run_reference_moe expects a
-    # different state dict. Those two comparisons skip rather than error.
+    # Model and MoE are wired below; attention deliberately is not. transformers' Mistral4Attention
+    # needs the precomputed position_embeddings that run_reference_mla does not pass, so leaving
+    # reference_attention_cls unset makes that one comparison skip rather than error. rope is
+    # computed at model level, so create_hf_model -- which every random-weight row needs -- does not
+    # hit the standalone-attention problem.
+    @property
+    def reference_moe_cls(self):
+        """Upstream MoE, used by run_reference_moe. Imported lazily: conftest imports every adapter
+        at collection time and transformers is expensive."""
+        from transformers.models.mistral4.modeling_mistral4 import Mistral4MoE
+
+        return Mistral4MoE
+
     @property
     def reference_model_cls(self):
         from transformers.models.mistral4.modeling_mistral4 import Mistral4Model

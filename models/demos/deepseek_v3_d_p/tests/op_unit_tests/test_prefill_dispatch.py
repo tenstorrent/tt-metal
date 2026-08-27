@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -430,6 +431,9 @@ DISPATCH_MODELS = [
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
+    # Mistral-Small-4-119B routes only 128 experts top-4 (vs 256-384 top-8 above), so the // 16 pcc
+    # param lands at 8 experts — the same floor gptoss_120b already exercises.
+    ("mistral4", MistralSmall4Config, True),
 ]
 
 # Models whose dispatch supports the fp8-compression path (fp8 input + per-token scale tail). Their
