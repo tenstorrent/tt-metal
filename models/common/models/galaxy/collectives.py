@@ -16,6 +16,7 @@ in ``MILESTONE_A_STATUS.md``.
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable
 
 import torch
@@ -64,6 +65,20 @@ def _aliases_borrowed_buffer(tensor: Any, resource: Any) -> bool:
         if address is not None and address == _buffer_address(buffer):
             return True
     return False
+
+
+def _ccl_trace(message: str) -> None:
+    """Print and flush a CCL step name when TTTV2_GALAXY_CCL_TRACE is set.
+
+    A device-side CCL hang leaves the host blocked in
+    `FDMeshCommandQueue::wait_for_outstanding_reads` with no Python traceback and
+    no further log output, so the only way to say *which* enqueued op never
+    completed is to name each one before entering it. Off by default; this costs
+    nothing when the variable is unset.
+    """
+
+    if os.getenv("TTTV2_GALAXY_CCL_TRACE"):
+        print(f"[ccl] {message}", flush=True)
 
 
 def _relocate_sharded(tensor: Any, memory_config: Any) -> Any:
@@ -195,7 +210,9 @@ class GalaxyColumnAllReduce:
         """
 
         context = self.resources.context("decode")
+        _ccl_trace(f"lm_head stage input from {tensor.memory_config().shard_spec.grid.num_cores()} cores")
         staged = _relocate_sharded(tensor, self.placements.lm_head_all_reduce_input_memcfg)
+        _ccl_trace(f"lm_head staged, shape={tuple(staged.shape)}")
         resource = select_galaxy_resource(context, "all_reduce", self.cluster_axis, staged)
         if not resource.persistent_output_buffers:
             raise ValueError("decode LM head all-reduce requires a persistent output buffer")
@@ -206,9 +223,11 @@ class GalaxyColumnAllReduce:
         # it stays inside the partition, and freeing the L1 copy straight after
         # keeps the largest allocation of the decode step off the worker cores for
         # all but one op.
+        _ccl_trace("lm_head buffer DRAM -> L1")
         buffer_l1 = ttnn.interleaved_to_sharded(
             resource.persistent_output_buffers[0], self.placements.lm_head_all_reduce_buffer_memcfg
         )
+        _ccl_trace(f"lm_head buffer in L1, shape={tuple(buffer_l1.shape)}")
         try:
             reduced = ttnn.experimental.all_reduce_async(
                 staged,
@@ -225,7 +244,9 @@ class GalaxyColumnAllReduce:
                 subdevice_id=self._resolved_subdevice_id(),
                 fp32_dest_acc=True,
             )
+            _ccl_trace(f"lm_head all_reduce_async returned, shape={tuple(reduced.shape)}")
             placed = _relocate_sharded(reduced, tensor.memory_config())
+            _ccl_trace("lm_head reduced placed back")
             # `all_reduce_async` may hand back the L1 buffer view itself rather
             # than a fresh tensor; that one is released once, below, in `finally`.
             if placed is not reduced and reduced is not buffer_l1:
@@ -240,7 +261,9 @@ class GalaxyColumnAllReduce:
                 deallocate_if_allocated(reduced)
             raise
         finally:
+            _ccl_trace("lm_head synchronize")
             self.resources.synchronize("decode")
+            _ccl_trace("lm_head synchronized")
             deallocate_if_allocated(buffer_l1)
             if staged is not tensor:
                 deallocate_if_allocated(staged)

@@ -9,6 +9,11 @@ set -u
 D="$(cd "$(dirname "$0")" && pwd)"
 MANIFEST="$1"
 export HF_HOME=/proj_sw/user_dev/hf_data
+# Name each Galaxy CCL step before entering it. A device-side CCL hang leaves
+# the host in FDMeshCommandQueue::wait_for_outstanding_reads with no traceback
+# and no further log output, so the last [ccl] line is the only thing that says
+# which enqueued op never completed.
+export TTTV2_GALAXY_CCL_TRACE=1
 
 while read -r deadline logname node; do
     case "${deadline:-}" in ''|\#*) continue ;; esac

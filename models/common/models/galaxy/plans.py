@@ -88,7 +88,10 @@ def build_galaxy_decode_collectives(
     placements: GalaxyDecodePlacements,
     *,
     residual_dtype: Any = ttnn.bfloat16,
-    lm_head_dtype: Any = ttnn.bfloat16,
+    # The LM head all-reduce buffer follows the *logits*, which both Galaxy
+    # precision recipes store at bfloat8_b -- the production dtype, and the only
+    # one whose buffer fits beside the ring matmul's circular buffers.
+    lm_head_dtype: Any = ttnn.bfloat8_b,
 ) -> tuple[GalaxyCollectivePlan, ...]:
     """Return the decode collectives for attention, MLP, and distributed norm.
 

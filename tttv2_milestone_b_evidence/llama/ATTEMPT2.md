@@ -46,6 +46,16 @@ the machine has since been power-cycled by someone outside this job.
 | 11 | `logs2/a2_11_tt_smi_after_recovery.log` | mesh health after recovery | **exit 0**, 32 boards, 0 errors |
 | 12 | `logs2/a2_12_decode_step.log` | one decode step | **FAILED** — D-B13 fixed; new defect **D-B14** |
 | 13 | `logs2/a2_13_host_quick.log` | `test_lm_head_2d.py` + `test_model_host.py` after D-B14's fix | **50 passed** |
+| 14 | `logs2/a2_14_decode_step.log` | one decode step | **FAILED** — D-B14 fixed; new defect **D-B15** |
+| 15 | `logs2/a2_15_host_quick.log` | host after D-B15's fix | **58 passed** |
+| 16 | `logs2/a2_16_decode_step.log` | one decode step | **FAILED** — D-B15 fixed; new defect **D-B17** |
+| 17 | `logs2/a2_17_lm_head_host.log` | `test_lm_head_2d.py` | **20 passed** |
+| 18 | `logs2/a2_18_host_quick.log` | host after D-B17's fix | **50 passed** |
+| 19 | `logs2/a2_19_decode_step.log` | one decode step | **FAILED** — resource key width; **D-B16 struck** |
+| 20 | `logs2/a2_20_host_quick.log` | host after the key fix and the D-B16 revert | **50 passed** |
+| 21 | `logs2/a2_21_decode_step.log` | one decode step | **FAILED** — key resolves, reduction reached; new defect **D-B18** |
+| 22 | `logs2/a2_22_host_quick.log` | host after D-B18's fix | **50 passed** |
+| 24 | `logs2/a2_24_accuracy_plumbing_host.log` | accuracy-gate plumbing, host only | **runnable**: 512/511 resolves, perfect prediction scores (1.0, 1.0) |
 
 Every device run so far has failed *later* than the one before it, at a
 different op, and each failure was a placement or sub-device fault with an exact
@@ -655,3 +665,124 @@ Two consequences, and the second is a correction to this document:
 D-B16 is struck. It is left in this document rather than deleted because the
 mistake is the useful part: the two ops' width conventions differ, nothing says
 so, and the only way to find out was to ask the mesh.
+
+## Result 21 — D-B18: the reduction buffer's dtype, and why bfloat8_b is the right one
+
+`logs2/a2_21_decode_step.log`. The resource key now resolves, the reduction is
+reached, and ~30 programs report the same L1 clash at once:
+
+```text
+TT_THROW: Statically allocated circular buffers in program 862 clash with L1
+          buffers on core range [5-6 - 6-7]. L1 buffer allocated at 355840 and
+          static circular buffer region ends at 376768
+```
+
+about 21 kB, on four cores that are in *both* the 42-core reduce staging set and
+the 24-core matmul ring — so they carry the ring matmul's circular buffers and the
+reduction's L1 buffer view at the same time.
+
+The arithmetic is unforgiving. The buffer is `GALAXY_COLUMNS` times the width of
+the logits, so per core it is about `4 * 32 * (16032 / cores) * bytes`:
+
+```text
+             bfloat16   bfloat8_b
+42 cores      96 kB       49 kB
+50 cores      82 kB       41 kB
+```
+
+Spreading over more cores cannot get bfloat16 below ~82 kB, and the shortfall is
+21 kB against a 96 kB allocation. **The dtype is the variable that matters, not
+the core count.**
+
+**bfloat8_b is not a concession here, it is the qualified value.** The production
+Galaxy LM head calls `ttnn.linear(..., dtype=ttnn.bfloat8_b)` for both modes and
+allocates `tt_lm_head_buffer` at bfloat8_b, and the accuracy gates this milestone
+reuses — top-1 >= 91%, top-5 >= 99% from `tt_transformers` — were established
+against exactly that. The Milestone B recipe's `decode_output_dtype =
+decode_activation_dtype` (bfloat16) was an authoring choice that had never run.
+`Llama33_70BGalaxyPrecision.lm_head_dtype` already declares bfloat8_b for the LM
+head *weight*; the output now agrees with it, as a named field
+(`lm_head_output_dtype`) rather than a borrowed one.
+
+And the accumulation is unaffected: `fp32_dest_acc=True` means the cross-device
+sum runs in fp32 regardless. Only the stored logits are bfloat8_b — the same
+arrangement upstream ships. For reference, the upstream unit test for this exact
+op reports `LMHead1D vs reference: 0.99987` at bfloat8_b, comfortably above this
+job's PCC >= 0.99 gate.
+
+**This is the one precision value attempt 2 changed, and it is called out here
+rather than buried because changing precision to make something fit would
+otherwise be exactly the wrong move.** The justification is that it moves *to*
+the qualified value, not away from a gate; the accuracy measurement is the arbiter
+and it is still to be taken.
+
+## Result 23 — D-B19, OPEN: the axis-1 LM head reduction hangs on device
+
+`logs2/a2_23_decode_step.log`, and the gdb dump in
+`logs2/a2_23_hang_gdb_dump1.log`. D-B18's bfloat8_b logits removed the L1 clash —
+the run got past it — and then **hung**. It did not abort; it stopped producing
+output entirely, was reaped at the 900 s deadline, and needed a reset.
+
+This is the first hang of attempt 2 and it was diagnosed before spending a
+recovery attempt, as the house rules require.
+
+**It is a device-side hang, not a host stall, and not a compile.** Established,
+in this order:
+
+1. `/proc/<pid>/stat` showed >100% CPU across 296 threads, so the process was
+   running, not blocked;
+2. no child processes, no new `.elf` artifacts and no JIT cache directories
+   touched in three minutes, so it was **not** kernel compilation — which was the
+   obvious benign explanation and is what the CPU load looks like;
+3. per-thread CPU accounting named one thread burning 151 s of the 260 s;
+4. `gdb -p <pid> -batch -ex "thread apply all bt"` on that thread and the main
+   thread gave the answer:
+
+```text
+Thread 294 (the spinning one):
+  tt::tt_metal::SystemMemoryManager::completion_queue_wait_front(...)
+  tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue_event(...)
+  tt::tt_metal::distributed::FDMeshCommandQueue::read_completion_queue()
+
+Thread 1 (main):
+  pthread_cond_wait
+  tt::tt_metal::distributed::FDMeshCommandQueue::wait_for_outstanding_reads(...)
+  tt::tt_metal::distributed::FDMeshCommandQueue::finish_nolock(...)
+  tt::tt_metal::distributed::Synchronize(...)
+  <- ttnn.synchronize_device, i.e. this collective's own `finally`
+```
+
+So: an enqueued device program **never signalled completion**, the completion-queue
+reader spins on it forever, and the main thread waits on the reader. The `finally`
+that blocks is `self.resources.synchronize("decode")` in
+`GalaxyColumnAllReduce._persistent_all_reduce`, which means the op that hung is one
+of the three that collective enqueues — the DRAM-to-L1 buffer materialisation, the
+`all_reduce_async` itself, or the placement of the result back onto the ring.
+
+**What was ruled out by reading, not by running:**
+
+* **topology and link count.** The reference selects `Ring`/4 links for a 6U
+  Galaxy and `Linear`/3 for 4U. This machine is 6U (`tt-smi` offers `-r` on
+  Galaxy 6U; the reset does IPMI tray resets), and every other decode plan in
+  `plans.py` uses `Ring`/4 on both axes and works, including three axis-1
+  collectives. Not the cause.
+* **semaphore count.** For decode the reference's `gather_semaphore_handles`
+  holds **one** global semaphore per slot, which is exactly
+  `semaphores_per_slot = 1`, the default this plan uses and the value the working
+  axis-0 `all_reduce` uses. Not the cause.
+* **buffer sizing.** `buffer_shard_volume >= output_shard_volume * ring_size`
+  holds with equality — 32x1536 against 4 x 32x384 — which is also how the
+  working axis-0 buffer is sized (32x1024 against 8 x 32x128). Not obviously the
+  cause.
+
+What remains are the two flags that differ from the axis-0 call proven on this
+mesh (`use_optimal_ccl_for_llama`, which axis 0 sets and this does not, and
+`fp32_dest_acc`, which this sets and axis 0 does not), and the possibility that
+one of the two relocations rather than the reduction is the op that hung.
+
+**Rather than guess between them, the collective is now instrumented.**
+`_ccl_trace` prints and flushes a name before each device op it enqueues, gated on
+`TTTV2_GALAXY_CCL_TRACE` so it costs nothing when unset, and `run_sequence.sh`
+exports it. A hang leaves no traceback and no further log output, so naming each
+op before entering it is the only way to turn "one of three ops" into "this op" —
+and it turns one device run into a fact instead of a coin toss.

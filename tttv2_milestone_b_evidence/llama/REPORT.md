@@ -690,6 +690,7 @@ and each failing later than the last. Full evidence and quoted aborts in
 | D-B15 | `galaxy/plans.py` | That persistent buffer was allocated **resident in L1**. It is `GALAXY_COLUMNS` times the width of the logits — 129 kB per core at bfloat16 — and clashed with the decode activations' circular buffers. "Persistent" means the resource owns it across calls, not that it must sit in L1. | fixed — DRAM-resident, L1 view per call |
 | ~~D-B16~~ | `modules/lm_head/lm_head_2d.py` | **Not a defect — struck.** I reasoned from the MLP's `decode_reduce_scatter_width` that a ring output reports its *padded* width, and widened the mask to match. Hardware says a matmul output keeps its **logical** width (16032); only a reduce-scatter output takes the padded one. Reverted, with the distinction recorded in the code. | reverted |
 | D-B17 | `galaxy/recipes.py` | The reduce staging used the production's literal `num_cores_after_lm_head = 32`. A width-sharded L1 shard must be a whole number of tiles, and 32 does not divide Llama's 504. | fixed — core count derived |
+| D-B18 | `llama33_70b_galaxy/model.py` precision recipe | The decode logits, and so the reduction buffer, were bfloat16 (`decode_activation_dtype`). The buffer is `GALAXY_COLUMNS` times the logits' width, ~96 kB/core, and clashed with the ring matmul's circular buffers on the cores they share. No core count fixes it: bfloat16 cannot go below ~82 kB. | fixed — `lm_head_output_dtype = bfloat8_b`, the production value |
 
 D-B14's fix carries the one finding of the night that no amount of device time
 would have produced: the production LM head all-reduce passes
@@ -714,6 +715,30 @@ Also fixed, found by reading rather than by a run:
   squeezes at its own call site; this now happens once, in the loader.
 * **`GalaxyColumnAllReduce` never passed `subdevice_id`** to `ttnn.all_reduce`,
   which forwards straight to `all_reduce_async`.
+
+### The one precision value attempt 2 changed
+
+D-B18 changed the decode LM head's output dtype from bfloat16 to **bfloat8_b**,
+and that deserves to be stated plainly rather than left in a table, because
+changing a precision to make something fit is normally exactly the wrong move.
+
+It is defensible here for one reason: it moves *to* the qualified value, not away
+from a gate.
+
+* The production Galaxy LM head calls `ttnn.linear(..., dtype=ttnn.bfloat8_b)`
+  for both modes and allocates `tt_lm_head_buffer` at bfloat8_b. The accuracy
+  gates this milestone reuses — top-1 >= 91%, top-5 >= 99% from
+  `tt_transformers` — were established against that.
+* `Llama33_70BGalaxyPrecision.lm_head_dtype` already declared bfloat8_b for the
+  LM head *weight*. The output now agrees, under its own named field
+  (`lm_head_output_dtype`) rather than borrowing `decode_activation_dtype`.
+* The **accumulation** is untouched: `fp32_dest_acc=True` on the all-reduce means
+  the cross-device sum runs in fp32. Only the stored logits are bfloat8_b.
+* Upstream's own unit test for this op reports PCC `0.99987` at bfloat8_b against
+  its reference, comfortably above this job's `>= 0.99`.
+
+The measurement is still the arbiter, and it has not been taken. Nothing here
+claims otherwise.
 
 ## A2.3 The decode LM head, as it now stands
 
@@ -945,3 +970,239 @@ should read it *first*, not fifth:
 Item 3 is the strongest argument in this report for the project's own
 three-runs-in-fresh-processes rule, and also for reading the qualified
 implementation before trusting a graph that merely executes.
+
+## A2.8 The decode LM head as a checklist
+
+For `mb-qwen`, and for anyone who has to do this again on another geometry. Seven
+things must be simultaneously true. Getting six right still aborts, and each of
+these cost one device run to learn:
+
+```text
+1  program config        ring_matmul_program_config(local_dim, pad_ring_width(local_padded_vocab))
+                         NOT dense_matmul_program_config: decode has one row tile,
+                         so a 2D mcast matmul gets 3 cores and per_core_N = 167
+2  in0 placement         width-sharded on ring_cores() at pad_ring_width(local_dim)
+                         (identical to mlp_input_memcfg -- already qualified)
+3  out placement         width-sharded on ring_cores(), the SAME set and order as in0.
+                         NOT ring_receiver_cores(): same 24 cores, different order,
+                         and gather_in0 with a DRAM-interleaved in1 compares grids
+4  global CB receivers   1, not the MLP's 2 -- the LM head is not prefetched
+5  sub_device_id         passed to ttnn.linear. The default is sub-device ZERO,
+                         which is the prefetch sender set
+6  the reduction         all_reduce_async with a keyed persistent buffer, staged onto
+                         the largest core count that divides the width in tiles,
+                         with the buffer DRAM-resident and an L1 view per call,
+                         and fp32_dest_acc=True
+7  the resource key      the tensor's LOGICAL width (local_padded_vocab_size), not
+                         the ring-padded physical width
+```
+
+Items 3, 5, 6 and 7 all default to something that is silently wrong on this mesh
+rather than to something that fails loudly, which is why this took as many runs
+as it did.
+
+## A2.9 What is still open
+
+**Attempt 1's open items, unchanged unless noted.**
+
+* **L1 — global-CB ownership across two constructions.** Still never measured.
+  `test_two_models_in_one_process` exists and has still not run: attempt 2 spent
+  its device time on the single decode step, so the bringup file was never
+  executed as a whole. Job 0's O5 stands.
+* **L3 — attention decode on the prefetch partition.** Attempt 1 confined the two
+  attention matmuls with `allowed_worker_cores` and left D-B9 open against it.
+  **D-B9 is now closed and both matmuls execute**, so L3 is closed as an
+  *execution* question at the cost attempt 1 named: three worker columns instead
+  of seven. The performance answer — moving them to the 24-core ring, as the LM
+  head now is — is unattempted and is now a much smaller job than it was, because
+  the ring wiring exists and is exercised.
+* **`allowed_worker_cores` unset on the ring matmul config** (attempt 1 §4.2).
+  Deliberately untouched: it works, it warns, and a qualified path should not
+  change on a night with no way to re-qualify it. Every log carries the warning.
+* **The 64-head decoupled geometry still has no hardware evidence.** Llama's
+  `n_heads * head_dim == dim`; nothing here changes that.
+
+**New, and both are for whoever runs next.**
+
+* **Step 3 cannot avoid paged KV.** `from_pretrained` computes
+  `paged = paged_attention_config or default_paged_attention_config(params)`, so
+  passing `None` selects the *default paged* geometry and there is no argument
+  that selects a contiguous cache. Every 80-layer path — the full-model test, the
+  accuracy gate, the demo — is therefore paged, while `job1_llama.md` assigns
+  paged KV to step 7 and `test_model_wh_galaxy.py`'s docstring records paged
+  decode as unqualified. `GalaxyDirectRunner` supports both; the loader does not
+  expose the choice. **Recorded as a scope dependency rather than absorbed.**
+* **`from_pretrained` loads the whole 141 GB checkpoint eagerly, once per
+  process**, and each test in `test_full_model_wh_galaxy.py` calls `_load`
+  separately — there is no shared-model fixture. For several 80-layer runs that
+  cost dominates the session. `load_layer_subset_causal_lm` solved the equivalent
+  problem for step 2; step 3 needs the same treatment or a module-scoped model.
+
+## A2.10 The accuracy gate is now runnable — proved on host
+
+Worth its own section, because it is the difference between a gate and a
+placebo. `logs2/a2_24_accuracy_plumbing_host.log`:
+
+```text
+reference_tokens: (1024,) len = 1024   <- 1-D after the loader fix
+top5_tokens     : (1024, 5)
+prompt len = 512   targets = 511   aligned = (511, 5)
+perfect prediction (reference argmax) -> (1.0, 1.0)
+the reference's own target tokens     -> (0.9335, 0.9941)
+```
+
+Before the `load_reference_tokens` fix, `len(reference_tokens)` was **1** — the
+loader returned the stored `(1, 1024)` tensor raw — so
+`test_full_model_wh_galaxy.py::_reference_prompt(512)` raised
+
+```text
+pytest.skip("reference sequence has 1 tokens, need more than 512")
+```
+
+The Milestone B accuracy gate for **either** model could not have run, and it
+would have reported a **skip**, not a failure. A gate that fails open is worse
+than no gate, and this one was sitting in a file whose header says every threshold
+is the plan's gate.
+
+It now resolves 512/511 correctly, and a perfect prediction scores exactly
+`(1.0, 1.0)` against `teacher_forcing_accuracy` — the self-consistency check that
+says the scoring is measuring what it claims to. The second line is context, not
+a ceiling: the reference sequence's own next tokens agree with the reference
+model's top-1 93% of the time and its top-5 99% of the time, which is a property
+of the text, while the gate scores the *model* against the *reference model's*
+predictions.
+
+No accuracy number is claimed for the Galaxy model. What is claimed is that the
+apparatus for measuring one now works, which it demonstrably did not.
+
+## A2.11 Method — what the shape of this night says
+
+Ten device runs of the same one-step test, each aborting later than the last, each
+at a different op, none reproducing a previously fixed defect. That is not a
+struggle; it is what a correct diagnostic loop looks like when a graph has never
+run. Three things made it work, and they are the transferable part:
+
+**1. The `_stage` context manager.** Attempt 1 wrote it and attempt 2 relied on it
+for every one of these. A `TT_FATAL` inside a multi-sub-device program leaves the
+mesh un-drainable, so the pytest session never reaches its failure summary and the
+traceback dies with the reaped process. The last `[stage] enter` line is then the
+only thing that says which call aborted. In attempt 2 the Python traceback did
+usually survive, but the stage line is what made the *log tail* readable at a
+glance across ten runs.
+
+**2. Reading the qualified implementation, not just the failures.** Three fixes
+came from `models/demos/llama3_70b_galaxy` and could not have come from anywhere
+else — §A2.7. One of them (`fp32_dest_acc=True`) prevents a defect that does not
+crash at all.
+
+**3. Refusing to batch speculative fixes.** Twice in this session a fix that
+"obviously" also needed doing was wrong: the DRAM-width-sharded LM head weight
+(silently discarded — D-B12) and the widened invalid-logits mask (the wrong
+direction entirely — struck D-B16). Both were reasoned from a real precedent. A
+device run costs about seven minutes and returns one exact fact; a speculative
+batch costs the same run and returns an ambiguous one.
+
+The cost is also worth recording honestly: **eight of the ten runs ended in a
+`TT_FATAL` that left the mesh un-drainable**, so each needed a reap and a
+`tt-smi -glx_reset`, and one of those resets timed out and wedged a chip's ARC
+controller for ten minutes. About half the wall-clock of this session was mesh
+recovery, not computation.
+
+## A2.12 D-B19 — the one open defect
+
+**Status: diagnosed to the layer, not to the op. Instrumentation committed; the
+run that names the op has not happened.**
+
+The decode LM head's axis-1 column all-reduce **hangs on device**. It does not
+abort. The process stops producing output, is reaped at the deadline, and the mesh
+needs a reset.
+
+Diagnosed with `gdb` before spending a recovery attempt, per the house rules
+(`logs2/a2_23_hang_gdb_dump1.log`):
+
+```text
+Thread 294:  SystemMemoryManager::completion_queue_wait_front
+             FDMeshCommandQueue::read_completion_queue_event
+             FDMeshCommandQueue::read_completion_queue          <- spinning, 151 s of CPU
+
+Thread 1:    pthread_cond_wait
+             FDMeshCommandQueue::wait_for_outstanding_reads
+             FDMeshCommandQueue::finish_nolock
+             distributed::Synchronize                           <- this collective's own finally
+```
+
+An enqueued device program never signalled completion. The blocked call is
+`resources.synchronize("decode")` in
+`GalaxyColumnAllReduce._persistent_all_reduce`, so the culprit is one of the three
+ops that method enqueues: the DRAM→L1 buffer materialisation, the
+`all_reduce_async`, or the placement of the result back onto the ring.
+
+**A note on how nearly this was misdiagnosed.** The symptom is >100% CPU across
+296 threads, which looks exactly like tt-metal JIT compilation — the benign
+explanation, and the one I initially assumed. What ruled it out was cheap and
+worth reusing: **no child processes, no new `.elf` artifacts, and no JIT cache
+directory touched in three minutes.** Only after that did the per-thread CPU
+accounting and the gdb dump become worth taking.
+
+Ruled out by reading rather than by burning runs: the topology and link count
+(6U Galaxy is `Ring`/4, and three other axis-1 decode collectives already use it
+successfully), the semaphore count (the reference's decode
+`gather_semaphore_handles` holds one global semaphore per slot, matching
+`semaphores_per_slot = 1`), and the buffer sizing (equality in
+`buffer_shard_volume >= output_shard_volume * ring_size`, exactly as the working
+axis-0 buffer is sized).
+
+What remains are two flag differences from the axis-0 all-reduce that *is* proven
+on this mesh — it passes `use_optimal_ccl_for_llama=True` and this does not; this
+passes `fp32_dest_acc=True` and it does not — and the possibility that a
+relocation rather than the reduction is what hung.
+
+**The next session should not guess between them.** `_ccl_trace` in
+`collectives.py` prints and flushes a name before each device op the collective
+enqueues, gated on `TTTV2_GALAXY_CCL_TRACE`, and `run_sequence.sh` exports it.
+Because a hang leaves no traceback and no further log output, the last `[ccl]`
+line is the only thing that can name the op. One run with it converts this from a
+choice between three candidates into a fact.
+
+## A2.13 Verdict
+
+**The finish condition in `job1_llama.md` is NOT met.** Stated exactly:
+
+| Required | Status |
+| --- | --- |
+| One Llama block qualified in decode and prefill at PCC >= 0.99 | **NOT MET** — no PCC number exists |
+| KV-cache PCC >= 0.99 | **NOT MET** — the test now exists and has not run |
+| 80-layer model producing coherent demo output | **NOT MET** — never attempted |
+| Teacher-forced accuracy measured and recorded | **NOT MET** — the apparatus is now verified working (§A2.10); the number has not been taken |
+| Handoff written | **MET** — `tttv2_milestone_b_briefs/job1_completion_handoff_attempt2.md` |
+
+What *is* met, with a log for each, is the ground the two attempts have taken
+together:
+
+| Claim | Evidence |
+| --- | --- |
+| The mesh was recovered and is healthy | `logs2/a2_00_partition.log`, `logs2/a2_11_...` |
+| The Llama adaptor is numerically correct on host (attempt 1) | attempt 1 §1.1, 9 tests, 3 processes |
+| A one-layer model constructs, seals, resolves, binds and tears down (attempt 1) | attempt 1 §1.2 |
+| **D-B9 is closed on silicon** | `logs2/a2_01`, and every run after it |
+| **A whole Llama layer and the final norm execute at batch 32 on real weights** | `logs2/a2_01_decode_step.log` stage markers onward |
+| **The 24-core `gather_in0` LM head matmul builds and runs** | `logs2/a2_14`, `a2_16`, `a2_21` |
+| **The accuracy gate's apparatus works** (it previously could only skip) | `logs2/a2_24_accuracy_plumbing_host.log` |
+| Host regression gate green on the changed modules | `logs2/a2_22_host_quick.log`, `a2_17`, `a2_18`, `a2_20` |
+
+**One defect is open: D-B19**, the axis-1 LM head all-reduce hang, diagnosed to
+three candidate ops with instrumentation in place to name it in one run (§A2.12).
+
+### Why this is the honest verdict and not a pessimistic one
+
+Attempt 1 stopped with the decode graph aborting at the *attention* matmul and a
+dead mesh. Attempt 2 moved the frontier past attention, past the MLP, past the
+final norm, through the LM head matmul and into its column reduction — seven
+defects, each one a real placement or sub-device fault with a named site, plus one
+that had to be struck when hardware refuted it. The remaining gap to the step-2
+gate is a single hanging collective.
+
+But "one defect from a PCC number" has been the shape of this milestone at every
+stage, and the honest reading of ten runs is that each one revealed a constraint
+nobody had written down. **Nothing in this report should be read as predicting
+that D-B19 is the last one.**

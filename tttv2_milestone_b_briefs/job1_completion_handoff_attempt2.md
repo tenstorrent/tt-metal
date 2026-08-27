@@ -287,3 +287,95 @@ they have never had is a decode graph that runs to the logits.
   `allowed_worker_cores`** — attempt 1's §4.2 recommendation stands untouched, on
   purpose: it currently works and a qualified path should not be changed on a
   night with no way to re-qualify it. The warning is in every log.
+
+## The LM head checklist, condensed
+
+Seven things must be simultaneously true for the decode LM head. Six is not
+enough; each of these cost one device run.
+
+```text
+1  program config     ring_matmul_program_config(local_dim, pad_ring_width(local_padded_vocab))
+2  in0 placement      width-sharded on ring_cores() at pad_ring_width(local_dim)
+3  out placement      width-sharded on ring_cores() -- SAME set and order as in0
+4  global CB rx       1, not the MLP's 2 (the LM head is not prefetched)
+5  sub_device_id      passed to ttnn.linear
+6  the reduction      all_reduce_async with a keyed persistent buffer, staged onto
+                      the largest core count dividing the width in tiles, buffer
+                      DRAM-resident with an L1 view per call, fp32_dest_acc=True
+7  the resource key   the tensor's LOGICAL width, not the ring-padded physical one
+```
+
+Items 3, 5, 6 and 7 all *default* to something silently wrong on this mesh rather
+than something that fails loudly.
+
+## Two width conventions that differ, and nothing says so
+
+This one cost a run and produced a defect that had to be struck:
+
+* a **reduce-scatter** output reports the ring-**padded** width. That is what
+  `GalaxyDenseGeometry.decode_reduce_scatter_width` encodes, and it is validated
+  on silicon;
+* a **matmul** output keeps its **logical** width, with a shard spec that
+  over-covers it — 24 cores x 672 = 16128 columns of spec for a 16032-column
+  tensor.
+
+I generalised the first to the second, keyed a resource on 16128, and got
+
+```text
+KeyError: no all_reduce resources for axis=1, geometry=(1, 1, 32, 16032), sequence=32
+```
+
+Do not assume either convention. Key on what the op actually reports, and if you
+must guess, guess and then check the KeyError.
+
+## One precision value changed, deliberately
+
+The decode LM head's output dtype is now `bfloat8_b`
+(`Llama33_70BGalaxyPrecision.lm_head_output_dtype`), not `decode_activation_dtype`
+(bfloat16). Reason: the reduction buffer is `GALAXY_COLUMNS` times the width of the
+logits, ~96 kB per core at bfloat16, and it clashes with the ring matmul's
+circular buffers on the cores they share. No core count fixes that — bfloat16
+cannot get below ~82 kB per core.
+
+bfloat8_b is the **production** value (`ttnn.linear(..., dtype=ttnn.bfloat8_b)`,
+`tt_lm_head_buffer` at bfloat8_b) and the value the reused accuracy gates were set
+against, and `fp32_dest_acc=True` keeps the cross-device accumulation in fp32
+regardless. Qwen should do the same, and should expect to have to: its vocabulary
+is *larger*, so its buffer is larger.
+
+## Do not
+
+* Do not re-derive the seven LM head constraints. They are above, and every one
+  of them is a run.
+* Do not copy `num_cores_after_lm_head = 32` or `num_global_cb_receivers = 2` from
+  anywhere. Both are geometry-specific; both are now derived in `recipes.py`.
+* Do not set `*_weights_memcfgs` on an `LMHead2DConfig` and expect it to apply.
+* Do not read a passing device result into anything in this package that does not
+  say "passed" with a log beside it. `REPORT.md` §"Attempt 2" is explicit about
+  which claims have logs and which do not.
+* Do not edit `models/common/modules/MILESTONE_A_STATUS.md` or
+  `tttv2_2d_modules_plan.md`; job 0 and job 4 own them. Proposed L3 text is in
+  attempt 1's `REPORT.md` §4.5 and is now stronger, because D-B9 is closed.
+* Do not touch `models/common/modules/**/*_1d.py` or `models/common/llm_runtime/**`.
+  Both greps are empty across both attempts.
+* Do not raise `after_device_run.sh`'s reset cap back to 600 s. It is 900 s now
+  for a measured reason.
+
+## Where attempt 2 stopped
+
+See `tttv2_milestone_b_evidence/llama/REPORT.md` §"Attempt 2" for the verdict and
+`ATTEMPT2.md` for the run-by-run log. In one paragraph:
+
+The decode graph executes a whole Llama decoder layer and the final distributed
+norm on silicon with real layer-0 weights at batch 32, and D-B9 is closed. Every
+remaining piece of work in attempt 2 was in the decode **LM head**, which had
+never been reached before: seven defects fixed, one recorded and struck, and the
+frontier moved from `_relocate` staging (the first op after the final norm) to the
+end of that chain. **No PCC number, no accuracy number and no demo text exists
+for the Galaxy Llama model.** The tests that would produce them exist and their
+apparatus is now verified — including the accuracy gate, which could not have run
+at all before this attempt — but the numbers have not been taken.
+
+If you are looking for a Llama baseline to compare Qwen against, there still is
+not one. What there is, and what attempt 1 did not have, is a decode graph that
+gets to the logits and a written account of every constraint on the way.

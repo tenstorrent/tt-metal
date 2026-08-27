@@ -149,6 +149,23 @@ class Llama33_70BGalaxyPrecision:
     prefill_mlp_activation_dtype: Any = ttnn.bfloat8_b
     prefill_residual_dtype: Any = ttnn.bfloat16
     attention_collective_dtype: Any = ttnn.bfloat8_b
+    # The decode logits, and with them the LM head's column all-reduce buffer.
+    # bfloat8_b, not `decode_activation_dtype`, for two reasons that agree:
+    #
+    #  * it is the qualified precision. The production Galaxy LM head calls
+    #    `ttnn.linear(..., dtype=ttnn.bfloat8_b)` and allocates
+    #    `tt_lm_head_buffer` at bfloat8_b, and the tt_transformers accuracy gates
+    #    this milestone reuses (top-1 >= 91%, top-5 >= 99%) were set against that;
+    #  * the reduction buffer is `GALAXY_COLUMNS` times the width of the logits,
+    #    so at bfloat16 it is ~96 kB per core and clashes with the ring matmul's
+    #    circular buffers on the cores they share:
+    #        TT_THROW ... Statically allocated circular buffers in program 862
+    #        clash with L1 buffers on core range [5-6 - 6-7]
+    #
+    # The *accumulation* is unaffected: the all-reduce runs `fp32_dest_acc=True`,
+    # because a bfloat16 cross-device sum of the logits is order-dependent on ETH
+    # ring arrival. Only the stored result is bfloat8_b, exactly as upstream.
+    lm_head_output_dtype: Any = ttnn.bfloat8_b
 
     attention_kernel_config: Any = field(default_factory=compute_kernel_config)
     mlp_ff1_ff3_kernel_config: Any = field(default_factory=lambda: compute_kernel_config(packer_l1_acc=True))
@@ -1004,7 +1021,7 @@ def build_llama33_70b_galaxy_transformer_2d_config(
             # all-gather whose internal `concat` is not sub-device aware.
             resources=resources,
             placements=decode,
-            dtype=precision.decode_activation_dtype,
+            dtype=precision.lm_head_output_dtype,
         ),
         prefill_collective=GalaxyColumnAllReduce(
             mesh_device,
@@ -1036,7 +1053,7 @@ def build_llama33_70b_galaxy_transformer_2d_config(
         # to sub-device 0 - the prefetch senders - if it is not told.
         decode_sub_device_id=lambda: resources.context("decode").worker_sub_device_id,
         prefill_sub_device_id=lambda: resources.context("prefill").worker_sub_device_id,
-        decode_output_dtype=precision.decode_activation_dtype,
+        decode_output_dtype=precision.lm_head_output_dtype,
         prefill_output_dtype=precision.prefill_activation_dtype,
     )
     # Sampling2D consumes logits whose users are sharded over the four mesh
