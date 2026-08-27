@@ -175,7 +175,9 @@ def test_version_gate_accepts_current_and_rejects_the_future():
 
     major, minor = tt_llk_harness.HARNESS_API_VERSION
     tt_llk_harness.require_version(major, minor)  # must not raise
-    with pytest.raises(RuntimeError, match="harness API"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        RuntimeError, match="harness API"
+    ):
         tt_llk_harness.require_version(major + 1)
 
 
@@ -423,7 +425,9 @@ def test_per_variant_include_dirs_override_suite_wide_ones():
         dest_acc=DestAccumulation.No,
     )
 
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        RuntimeError
+    ) as excinfo:
         configuration.run()
 
     message = str(excinfo.value)
@@ -448,7 +452,9 @@ def test_per_variant_include_dirs_override_suite_wide_ones():
 
 def test_missing_test_name_is_rejected():
     """Documented guardrail: the driver is not optional."""
-    with pytest.raises(RuntimeError, match="test_name"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        RuntimeError, match="test_name"
+    ):
         TestConfig(None, _formats())
 
 
@@ -457,7 +463,9 @@ def test_driver_path_that_breaks_the_include_directive_is_rejected():
     containing a quote, backslash, or newline is not representable there, so
     the harness must reject it up front rather than emit broken C++."""
     for bad in ('/tmp/we"ird.cpp', "/tmp/back\\slash.cpp", "/tmp/new\nline.cpp"):
-        with pytest.raises(ValueError):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError
+        ):
             TestConfig(bad, _formats())
 
 
