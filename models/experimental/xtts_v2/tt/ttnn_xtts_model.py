@@ -415,6 +415,7 @@ class XttsV2:
         """z torch [1,1024,L] + d-vector -> waveform torch [1,1,L*HOP], padded to z's bucket."""
         dev = self.mesh_device
         L, Lb = z.shape[-1], _voc_bucket(z.shape[-1])
+        self.last_timings["voc_bucket"] = Lb  # which trace replayed, before any trimming shortens wav
         z_nhwc = _voc_pad(z, Lb).permute(0, 2, 1).reshape(1, 1, Lb, 1024)
         g_2d = speaker_embedding.reshape(1, 512)
         trace = self._voc_traces.get(Lb)
@@ -522,6 +523,7 @@ class XttsV2:
                     "truncated": truncated,
                     "run_on_s": 0.0,
                     "vocoder_s": 0.0,
+                    "voc_bucket": None,
                     "wav_samples": 0,
                 }
             )

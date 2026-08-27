@@ -24,7 +24,7 @@ Run:
 """
 import torch
 
-from models.experimental.xtts_v2.tt.ttnn_xtts_model import HOP, VOC_BUCKETS, XttsV2, _voc_bucket
+from models.experimental.xtts_v2.tt.ttnn_xtts_model import VOC_BUCKETS, XttsV2
 
 # max_new_tokens picks the bucket: a code is 1024 samples @22.05kHz resampled to 24 kHz, so
 # frames = codes * (1024/256) * (24000/22050) ~= codes * 4.354.
@@ -73,7 +73,9 @@ def run_request_path_repeatability(verbose=True):
         for i, key in enumerate(ORDER):
             prompt, n = key
             wav = tts.generate(PROMPTS[prompt], voice, seed=0, max_new_tokens=n)
-            Lb = _voc_bucket(wav.shape[-1] // HOP)
+            # The vocoder picks its bucket from the latents, before trimming shortens the wav,
+            # so re-deriving it from the returned wav can name a bucket that never ran.
+            Lb = tts.last_timings["voc_bucket"]
             buckets.add(Lb)
             assert torch.isfinite(wav).all(), f"request {i} ({prompt}, {n}) produced non-finite samples"
             if key not in first:
