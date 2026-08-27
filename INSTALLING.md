@@ -119,8 +119,10 @@ the Tenstorrent vLLM plugin loads architectures from.
 > they take precedence when resolving bundled model parameters, so a stale value silently loads
 > configs from the wrong tree.
 
-See [`packaging/tt-metal-models/README.md`](packaging/tt-metal-models/README.md) for what the
-package contains, its known limitations, and how it is built.
+See [`packaging/tt-metal-models/README.md`](https://github.com/tenstorrent/tt-metal/blob/main/packaging/tt-metal-models/README.md)
+for what the package contains, its known limitations, and how it is built. (Absolute URL:
+this file is copied into the Sphinx docs tree, where a repository-relative link has no target
+and fails the docs build.)
 
 ---
 
