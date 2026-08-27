@@ -26,7 +26,7 @@ def test_negative_exponent(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
-    with pytest.raises(RuntimeError) as _e:
+    with pytest.raises(RuntimeError) as _e:  # allow-pytest.raises: pre-existing, predates this hook
         tt_output_tensor_on_device = ttnn.pow_bw(grad_tensor, input_tensor, exponent)
     assert "exponent >= 0.0" in str(_e.value)
 
@@ -248,3 +248,48 @@ def test_bw_unary_pow_edge_case_exponents(device, input_shapes, exponent, high1,
 
     status = compare_pcc(output_tensor, golden_tensor, pcc=0.99)
     assert status
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [0.0, 2.0])
+def test_bw_pow_writes_through_preallocated_input_grad(input_shapes, exponent, device):
+    """The caller's preallocated input_grad must be written, not replaced.
+
+    Regression: for exponent 0, `input_grad = ttnn::zeros_like(input)` rebound the local
+    optional instead of filling the supplied tensor, so a caller reading its own tensor
+    got stale data. Comparing only the returned tensor does not catch that.
+    """
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0.1, 10, device)
+
+    sentinel = 7.0
+    preallocated = ttnn.full(input_shapes, sentinel, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
+
+    ttnn.pow_bw(grad_tensor, input_tensor, exponent, input_grad=preallocated)
+
+    written = ttnn.to_torch(preallocated)
+    assert not torch.equal(
+        written, torch.full(input_shapes, sentinel, dtype=torch.bfloat16)
+    ), "preallocated input_grad was never written"
+    if exponent == 0.0:
+        assert torch.all(written == 0.0), "exponent 0 gradient must be zero"
+
+
+@pytest.mark.parametrize("input_shapes", ((torch.Size([1, 1, 32, 32])),))
+@pytest.mark.parametrize("exponent", [0.0, 2.0])
+def test_bw_pow_honours_requested_memory_config(input_shapes, exponent, device):
+    """With no preallocated output, the gradient must land in the requested memory config.
+
+    Regression: `empty_like`/`zeros_like` were called without `output_mem_config`, so the
+    result inherited the input's config instead. Existing tests use the same config for
+    inputs and output, so the two never diverge there.
+    """
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -10, 10, device)
+    in_data, input_tensor = data_gen_with_range(input_shapes, 0.1, 10, device)
+
+    # inputs land in DRAM by default, so request L1 to force a divergence
+    result = ttnn.pow_bw(grad_tensor, input_tensor, exponent, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert (
+        result[0].memory_config().buffer_type == ttnn.BufferType.L1
+    ), f"requested L1 but gradient landed in {result[0].memory_config().buffer_type}"
