@@ -22,7 +22,10 @@ sys.path.insert(0, str(_PKG))  # the perf_automation dir, so `agent` imports res
 
 from agent.perf_test_agent import _run_and_format  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+try:  # mcp < 2.0
+    from mcp.server.fastmcp import FastMCP  # noqa: E402
+except ModuleNotFoundError:  # mcp >= 2.0 renamed FastMCP -> MCPServer
+    from mcp.server.mcpserver import MCPServer as FastMCP  # noqa: E402
 
 mcp = FastMCP("perftest-mcp")
 

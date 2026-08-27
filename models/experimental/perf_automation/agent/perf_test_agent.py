@@ -131,6 +131,14 @@ _SYSTEM = (
 )
 
 
+_MCP_IMPORT_PROBE = (
+    "try:\n"
+    "    from mcp.server.fastmcp import FastMCP\n"
+    "except ModuleNotFoundError:\n"
+    "    from mcp.server.mcpserver import MCPServer as FastMCP\n"
+)
+
+
 def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_body: str, max_turns: int = 48) -> bool:
     """Author ONE single-component perf test with the claude-code CLI (`claude -p`), exactly like the
     rest of the cc engine: login auth, NO claude SDK, NO model tier / escalation ladder (claude's own
@@ -158,8 +166,13 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
     # as the model being hard to generate for. On 2026-08-15 the real cause was a dependency: mcp
     # 2.0.0 moved FastMCP, so the server died at import and the tool silently fell back to the
     # one-shot generator for three runs. Import failures are cheap to check and expensive to guess.
+    #
+    # PROBE WHAT THE SERVERS DO, not one spelling of it. They now import FastMCP under mcp 1.x and
+    # MCPServer under 2.x, so a probe hard-coded to `mcp.server.fastmcp` reports "unavailable" for a
+    # server that would have started perfectly well -- the same silent fallback, caused by the check
+    # rather than the dependency. Measured 2026-08-27 on a venv resolved to mcp 2.1.1.
     _probe = _sp.run(
-        [sys.executable, "-c", "import mcp.server.fastmcp"],
+        [sys.executable, "-c", _MCP_IMPORT_PROBE],
         capture_output=True,
         text=True,
         timeout=60,
@@ -168,7 +181,7 @@ def build_component_perf_test(root: str | Path, task: str, out_rel: str, prompt_
         print(
             "      · agentic builder unavailable: the perf-test MCP server cannot start, so the "
             "agent would have no way to RUN what it writes.\n        %s\n        fix: pip install "
-            "'mcp>=1.0,<2' (see requirements-agent.txt)"
+            "-r models/experimental/perf_automation/requirements-agent.txt"
             % ((_probe.stderr or "").strip().splitlines() or ["import failed"])[-1],
             file=sys.stderr,
             flush=True,

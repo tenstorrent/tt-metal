@@ -6,13 +6,15 @@
 # --- Claude Agent SDK (lead agent + sub-agents, in-process MCP tools) ---
 claude-agent-sdk==0.2.95
 
-# --- The in-process MCP servers (perf_mcp, perf_test_mcp) import mcp.server.fastmcp ---
-# PIN, NOT A FLOOR. mcp 2.0.0 relocated FastMCP out of `mcp.server.fastmcp`, so a fresh install
-# picks up 2.x and every MCP server here dies at import. That failure is invisible from the outside:
-# the perf-test agent simply loses its run_perf_test tool, writes a test it cannot execute, and gives
-# up with "agentic builder did not converge" -- which reads as a model problem and costs an hour to
-# trace back to a dependency. Measured 2026-08-15 on a fresh venv.
-mcp>=1.0,<2
+# --- The in-process MCP servers (perf_mcp, perf_test_mcp) ---
+# FLOOR, NOT A PIN. mcp 2.0.0 moved FastMCP out of `mcp.server.fastmcp`, which used to kill every
+# server here at import: the perf-test agent lost its run_perf_test tool, wrote a test it could not
+# execute, and gave up with "agentic builder did not converge" -- a dependency failure that reads as
+# a model problem. That was pinned around (mcp<2) on 2026-08-15 and fixed properly on 2026-08-27:
+# every server imports FastMCP under 1.x and MCPServer under 2.x, and the availability probe in
+# perf_test_agent.py checks the same pair rather than one spelling. Verified against 2.1.1 by an
+# initialize/list_tools/call_tool handshake over stdio on perf-mcp, perftest-mcp and e2e-mcp.
+mcp>=1.23
 
 # --- Credentials: load .env.agent as the sole credential source (PLAN section 3.1) ---
 python-dotenv>=1.0.0

@@ -62,7 +62,10 @@ from scripts.tt_hw_planner._cli_helpers import auto_iterate as _auto  # noqa: E4
 from scripts.tt_hw_planner._cli_helpers import bringup_ladder  # noqa: E402
 from scripts.tt_hw_planner._cli_helpers.agent import resolve_claude_bin  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+try:
+    from mcp.server.fastmcp import FastMCP  # noqa: E402
+except ModuleNotFoundError:
+    from mcp.server.mcpserver import MCPServer as FastMCP  # noqa: E402
 
 mcp = FastMCP("bringup-mcp")
 
@@ -819,9 +822,7 @@ def decompose_component(component: str) -> dict:
     _attempts_now = (_st_now.get("attempts", {}) or {}).get(component, 0)
     _last_class_now = (_st_now.get("last_failure_class", {}) or {}).get(component, "")
     _agent_may_decompose = (
-        _new_is_unlimited(component)
-        and _attempts_now >= 10
-        and _last_class_now not in ("", "HARNESS_SKIP")
+        _new_is_unlimited(component) and _attempts_now >= 10 and _last_class_now not in ("", "HARNESS_SKIP")
     )
     if not _agent_may_decompose and not _component_is_at_cap(component):
         st = _load_state()
@@ -946,12 +947,16 @@ def termination_check() -> dict:
             last_failure_class=last_class_map,
             last_pcc=st.get("last_pcc", {}) or {},
         )
-        at_cap = False if _new_is_unlimited(c) else bringup_ladder.is_at_cap(
-            c,
-            attempts_per_component=st.get("attempts", {}) or {},
-            consecutive_same_class_attempts=st.get("consecutive_same_class", {}) or {},
-            effective_cap=eff,
-            hard_total_attempt_cap=_HARD_CAP,
+        at_cap = (
+            False
+            if _new_is_unlimited(c)
+            else bringup_ladder.is_at_cap(
+                c,
+                attempts_per_component=st.get("attempts", {}) or {},
+                consecutive_same_class_attempts=st.get("consecutive_same_class", {}) or {},
+                effective_cap=eff,
+                hard_total_attempt_cap=_HARD_CAP,
+            )
         )
         if at_cap and _g8_extend is not None:
             verdict = _g8_extend(
@@ -1040,7 +1045,8 @@ def termination_check() -> dict:
                 "rung": rung,
                 "reason": f"component '{c}' not graduated (attempts={attempts}, last_class={last_class or 'none'}). "
                 f"run_component to see the failure; if it cannot even run, fix tests/pcc/conftest.py; else "
-                f"edit _stubs/{c}.py to native ttnn; re-run; record_result. PCC>={_PCC} graduates it." + _decompose_hint,
+                f"edit _stubs/{c}.py to native ttnn; re-run; record_result. PCC>={_PCC} graduates it."
+                + _decompose_hint,
             }
     elif needs_cap:
         c = needs_cap[0]

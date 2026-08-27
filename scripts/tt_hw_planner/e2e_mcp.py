@@ -35,7 +35,10 @@ sys.path.insert(0, str(_REPO))
 
 from scripts.tt_hw_planner.commands.emit_e2e import _run_deterministic_gates  # noqa: E402
 
-from mcp.server.fastmcp import FastMCP  # noqa: E402
+try:
+    from mcp.server.fastmcp import FastMCP  # noqa: E402
+except ModuleNotFoundError:
+    from mcp.server.mcpserver import MCPServer as FastMCP  # noqa: E402
 
 mcp = FastMCP("e2e-mcp")
 
