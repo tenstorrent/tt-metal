@@ -9,7 +9,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_pipeline_builder.cpp
     fabric_router/test_mesh_graph_descriptor.cpp
     fabric_router/test_express_ring_topology.cpp
-    fabric_router/test_indexed_route_codec.cpp
+    fabric_router/test_2d_route_codec.cpp
     fabric_router/test_axis_topology_sweep.cpp
     fabric_router/test_mcast_reverse_tree.cpp
     fabric_router/test_physical_grouping_descriptor.cpp

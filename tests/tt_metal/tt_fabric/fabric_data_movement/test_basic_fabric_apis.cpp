@@ -1945,10 +1945,10 @@ TEST_F(Fabric1DFixture, TestSetUnicastRouteIdleEth) {
 
 // 1 mesh all-to-all
 //
-// The 2D variants are disabled by the indexed-codec cutover. Their kernel
+// The 2D variants are disabled by the 2D action-map cutover. Their kernel
 // (kernels/test_fabric_set_unicast_route.cpp) validates fabric_set_unicast_route() by diffing it
 // against a *reference* encoding built from fabric_set_route() -- the raw hop-program primitive. 2D
-// now emits destination-indexed action maps, so the two sides no longer describe the same thing and
+// now emits destination-major action maps, so the two sides no longer describe the same thing and
 // the comparison is meaningless rather than merely failing. fabric_set_route() itself is deleted with
 // the rest of the legacy 2D producers.
 //

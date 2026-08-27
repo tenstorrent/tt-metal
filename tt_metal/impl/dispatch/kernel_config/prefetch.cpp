@@ -548,8 +548,8 @@ void PrefetchKernel::CreateKernel() {
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
             // A 2D relay builds routes through the same worker API as any other 2D kernel, so it
-            // needs the same per-mesh ABI selector. Without it the relay would encode hop programs
-            // on a chip whose L1 holds indexed vectors.
+            // needs the same destination-major 2D action-map mesh defines. Without them the relay
+            // would encode hop programs on a chip whose L1 holds the destination-major route table.
             auto& control_plane = get_control_plane_ref();
             const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device_->id());
             for (const auto& [name, value] :

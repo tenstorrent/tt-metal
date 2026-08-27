@@ -192,11 +192,11 @@ TEST(AxisTopologySweep, MinimumCoverage) {
     RecordProperty("derivations_failed", r.derivations_failed);
 }
 
-// Every mesh shape that a descriptor declares must be representable by the indexed codec, or the
+// Every mesh shape that a descriptor declares must be representable by the 2D route table, or the
 // control plane's validation would reject it at startup. Shapes that exceed the packet header's
 // route buffer are reported rather than asserted: that is a separate bound (issue #32237) and the
 // host fatals with a clear message, so it is a known limit, not a defect.
-TEST(AxisTopologySweep, EveryDeclaredShapeIsIndexable) {
+TEST(AxisTopologySweep, EveryDeclaredShapeFitsThe2DRouteTable) {
     int checked = 0;
     std::vector<std::string> over_header_bound;
 
@@ -213,9 +213,9 @@ TEST(AxisTopologySweep, EveryDeclaredShapeIsIndexable) {
             const auto x = static_cast<uint32_t>(shape[1]);
             checked++;
 
-            EXPECT_TRUE(IndexedMeshRoutingFields::shape_is_indexable(y, x))
+            EXPECT_TRUE(Routing2DCodec::shape_fits_route_table(y, x))
                 << path.filename().string() << " mesh " << *mesh_id << " shape " << y << "x" << x
-                << " cannot be packed into the indexed vectors";
+                << " cannot be packed into the destination-major 2D route table";
 
             constexpr uint32_t kMaxRouteBytes = 67;  // see fabric_edm_packet_header.hpp
             if (y + x > kMaxRouteBytes) {

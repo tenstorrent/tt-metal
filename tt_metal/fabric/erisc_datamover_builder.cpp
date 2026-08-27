@@ -966,7 +966,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     }
 
     // UPDATE_PKT_HDR_ON_RX_CH is gone: it chose between an RX-side and a sender-side realisation of
-    // the legacy 2D hop-program advance, and indexed 2D transit does not advance anything. 1D keeps
+    // the legacy 2D hop-program advance, and 2D action-map transit does not advance anything. 1D keeps
     // its own decrement/shift/refill, which never consulted this flag.
 
     // TODO: this validation should be done in the allocator with the channel IDs passed in
@@ -1241,12 +1241,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
-    // --- Indexed 2D ABI args (every 2D router; the kernel reads them under FABRIC_2D) ---
-    // No longer keyed on express_routing_enabled: every 2D mesh runs the indexed decode, so every 2D
+    // --- 2D action-map args (every 2D router; the kernel reads them under FABRIC_2D) ---
+    // No longer keyed on express_routing_enabled: every 2D mesh runs the action-map decode, so every 2D
     // router needs its coordinate bounds and its landing-intercept flags.
     if (fabric_context.is_2D_routing_enabled()) {
-        // Same accessor and scope the packer and the worker defines use. These are the router's
-        // coordinate bounds, so a disagreement with the packed L1 vectors reads the wrong row.
+        // Same accessor and scope the route-table packer and the worker defines use. These are the
+        // router's coordinate bounds, so a disagreement with the packed L1 2D route table reads the
+        // wrong row.
         const auto mesh_shape =
             control_plane.get_physical_mesh_shape(this->local_fabric_node_id.mesh_id, MeshScope::GLOBAL);
         named_args["MESH_Y_SIZE"] = mesh_shape[0];

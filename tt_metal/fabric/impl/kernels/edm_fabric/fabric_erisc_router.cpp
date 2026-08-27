@@ -37,7 +37,7 @@
 #include "hostdev/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 // The router re-encodes an intermesh packet's route when it lands, via
-// fabric_set_indexed_intermesh_landing_route(). That declaration used to arrive transitively through
+// fabric_set_2d_intermesh_landing_route(). That declaration used to arrive transitively through
 // fabric_edge_node_router.hpp, which included tt_fabric_api.h; deleting that header in 4.2 took the
 // router's only path to it. Included directly and 2D-gated, matching the sole call site.
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -766,7 +766,7 @@ FORCE_INLINE void forward_to_local_destination(
 }
 
 // ============================================================================
-// Indexed 2D routing — admit/forward dispatch
+// 2D action-map routing — admit/forward dispatch
 // ============================================================================
 // Each LIVE slot tests the action bit for fwd_dirs<MY_DIR>()[slot] directly. pack_fwd_key was
 // the dense 4-bit key for the old 32-arm switch; the linear scan does not need it, and packing
@@ -780,15 +780,15 @@ FORCE_INLINE void forward_to_local_destination(
 // opposite-Y) are if-constexpr gone. Extra action bits outside LIVE are ignored; there is no
 // refuse path for them (that would hang the slot with no SW retry).
 //
-// Indexed transit consumes no hop program, so no header update runs here.
+// 2D action-map transit consumes no hop program, so no header update runs here.
 
 // Packed-slot bitset of eth outputs this ELF actually has. Bit i is fwd_dirs<MY_DIR>()[i].
 // Intramesh E/W also drop N/S (packed bits 1 and 2): Y-before-X forbids those turns, and
 // decode_action for E/W never reads the Y byte. INTERMESH E/W landings keep them.
 template <size_t DOWNSTREAM_EDM_SIZE>
-constexpr uint8_t indexed_live_eth_mask() {
+constexpr uint8_t live_eth_mask_2d() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
-    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<my_dir>();
+    constexpr auto dirs = Routing2DCodec::fwd_dirs<my_dir>();
     uint8_t live = 0;
     if constexpr (dispatch_arm_is_realizable<DOWNSTREAM_EDM_SIZE, dirs[0]>()) {
         live |= static_cast<uint8_t>(1u << 0);
@@ -815,7 +815,7 @@ constexpr uint8_t indexed_live_eth_mask() {
 // is compact-keyed, so this identity is what keeps admit's stream id on the same slot init wrote.
 constexpr bool live_slot_is_compact_index() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
-    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<my_dir>();
+    constexpr auto dirs = Routing2DCodec::fwd_dirs<my_dir>();
     return get_downstream_edm_interface_index<dirs[0]>() == 0 && get_downstream_edm_interface_index<dirs[1]>() == 1 &&
            get_downstream_edm_interface_index<dirs[2]>() == 2 && get_downstream_edm_interface_index<dirs[3]>() == 3;
 }
@@ -825,10 +825,10 @@ static_assert(live_slot_is_compact_index());
 // Its existing data/sync command buffers can therefore retain that adapter's state across packets.
 // Any configuration with another runtime user of those command buffers stays on the non-stateful path.
 template <size_t DOWNSTREAM_EDM_SIZE>
-constexpr bool use_indexed_single_live_stateful_noc() {
+constexpr bool use_2d_single_live_stateful_noc() {
     constexpr auto my_dir = static_cast<eth_chan_directions>(my_direction);
     constexpr bool is_ew = my_dir == eth_chan_directions::EAST || my_dir == eth_chan_directions::WEST;
-    constexpr uint8_t LIVE = indexed_live_eth_mask<DOWNSTREAM_EDM_SIZE>();
+    constexpr uint8_t LIVE = live_eth_mask_2d<DOWNSTREAM_EDM_SIZE>();
 #if !defined(DEBUG_PRINT_ENABLED) && !defined(WATCHER_ENABLED) && !defined(FABRIC_2D_VC1_ACTIVE)
     return is_ew && LIVE == 0b0001 && NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC && !udm_mode &&
            !is_intermesh_router && !is_intermesh_router_on_edge && !is_intramesh_router_on_edge;
@@ -840,37 +840,37 @@ constexpr bool use_indexed_single_live_stateful_noc() {
 // Checks local relay capacity when ld, plus the downstream queue for every LIVE direction whose
 // action bit is set. Only UDM mode queues local delivery through a relay interface.
 template <typename DownstreamSenderT, typename LocalRelayInterfaceT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_indexed_dispatch(
+FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_2d_dispatch(
     uint8_t action,
     bool ld,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
-    constexpr uint8_t LIVE = indexed_live_eth_mask<DOWNSTREAM_EDM_SIZE>();
-    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+    constexpr uint8_t LIVE = live_eth_mask_2d<DOWNSTREAM_EDM_SIZE>();
+    constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
     bool ok = true;
     if constexpr (udm_mode) {
         ok = !ld || local_relay_interface.template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
     }
     if constexpr ((LIVE >> 0) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[0])) {
+        if (action & Routing2DCodec::action_bit(dirs[0])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[0]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
     }
     if constexpr ((LIVE >> 1) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[1])) {
+        if (action & Routing2DCodec::action_bit(dirs[1])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[1]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
     }
     if constexpr ((LIVE >> 2) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[2])) {
+        if (action & Routing2DCodec::action_bit(dirs[2])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[2]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
     }
     if constexpr ((LIVE >> 3) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[3])) {
+        if (action & Routing2DCodec::action_bit(dirs[3])) {
             ok = ok && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, dirs[3]>(
                            downstream_edm_interfaces, local_relay_interface);
         }
@@ -881,18 +881,18 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) bool admit_indexed_disp
 // One unmodified full-packet copy per LIVE direction whose action bit is set. Remote receiver
 // credit is left to the sender step's bubble flow control, and local delivery to the caller.
 template <typename DownstreamSenderT, size_t DOWNSTREAM_EDM_SIZE>
-FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_dispatch(
+FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_2d_dispatch(
     uint8_t action,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     uint8_t transaction_id) {
-    constexpr uint8_t LIVE = indexed_live_eth_mask<DOWNSTREAM_EDM_SIZE>();
-    constexpr auto dirs = IndexedMeshRoutingFields::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
-    constexpr bool stateful_api = use_indexed_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
+    constexpr uint8_t LIVE = live_eth_mask_2d<DOWNSTREAM_EDM_SIZE>();
+    constexpr auto dirs = Routing2DCodec::fwd_dirs<static_cast<eth_chan_directions>(my_direction)>();
+    constexpr bool stateful_api = use_2d_single_live_stateful_noc<DOWNSTREAM_EDM_SIZE>();
     const uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     if constexpr ((LIVE >> 0) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[0])) {
+        if (action & Routing2DCodec::action_bit(dirs[0])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[0]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
@@ -903,7 +903,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
         }
     }
     if constexpr ((LIVE >> 1) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[1])) {
+        if (action & Routing2DCodec::action_bit(dirs[1])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[1]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
@@ -914,7 +914,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
         }
     }
     if constexpr ((LIVE >> 2) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[2])) {
+        if (action & Routing2DCodec::action_bit(dirs[2])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[2]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
@@ -925,7 +925,7 @@ FORCE_INLINE __attribute__((optimize("no-jump-tables"))) void forward_indexed_di
         }
     }
     if constexpr ((LIVE >> 3) & 1) {
-        if (action & IndexedMeshRoutingFields::action_bit(dirs[3])) {
+        if (action & Routing2DCodec::action_bit(dirs[3])) {
             constexpr auto edm_index = get_downstream_edm_interface_index<dirs[3]>();
             forward_payload_to_downstream_edm<enable_deadlock_avoidance, stateful_api>(
                 packet_start,
@@ -1427,24 +1427,24 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if defined(FABRIC_2D)
             // need the FABRIC_2D ifdef since the packet header for 1D does not have route_buffer field in it.
             {
-                // Indexed RX path: landing intercept (boundary receivers only) -> decode ->
+                // 2D action-map RX path: landing intercept (boundary receivers only) -> decode ->
                 // intermesh-exit intercept -> linear LIVE admit on action bits. No hop program
                 // and no header mutation. Self is not in fwd_dirs so no arm tests it; extra bits
                 // outside LIVE are ignored. boundary_dir_is_addressable is the only remaining
                 // bounds check, because a bad intermesh exit index walks off the compact array.
                 if constexpr (receiver_channel_is_intermesh_ingress[receiver_channel]) {
-                    // Runs before decode, which would otherwise consume stale source-mesh maps. The
-                    // landing encode replaces them from this mesh's own vector table.
-                    fabric_set_indexed_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
+                    // Runs before decode, which would otherwise consume stale source-mesh action maps. The
+                    // landing encode replaces them from this mesh's destination-major route table.
+                    fabric_set_2d_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
                 }
-                action = IndexedMeshRoutingFields::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
                     packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 // This chip is the exit when the maps say deliver here but the final mesh is
                 // elsewhere. CT-gated so interior routers skip the mesh-id compare.
                 bool intermesh_exit = false;
                 if constexpr (is_intramesh_router_on_edge) {
-                    intermesh_exit = IndexedMeshRoutingFields::action_is_intermesh_exit(
-                        action, packet_header->dst_start_mesh_id, my_mesh_id);
+                    intermesh_exit =
+                        Routing2DCodec::action_is_intermesh_exit(action, packet_header->dst_start_mesh_id, my_mesh_id);
                 }
                 if (intermesh_exit) {
                     // Forward the packet as-is on the INTERMESH egress in boundary_dir, with no
@@ -1470,9 +1470,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                                 .template edm_has_space_for_packet<ENABLE_RISC_CPU_DATA_CACHE>();
                     }
                 } else {
-                    local_deliver = (action & IndexedMeshRoutingFields::ACTION_LOCAL_DELIVER) != 0;
+                    local_deliver = (action & Routing2DCodec::ACTION_LOCAL_DELIVER) != 0;
                     can_send_to_all_local_chip_receivers =
-                        admit_indexed_dispatch(action, local_deliver, downstream_edm_interfaces, local_relay_interface);
+                        admit_2d_dispatch(action, local_deliver, downstream_edm_interfaces, local_relay_interface);
                 }
             }
 #endif
@@ -1510,7 +1510,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                                 trid);
                         } else {
                             // Same action byte as admission. Local delivery stays outside the scan.
-                            forward_indexed_dispatch(
+                            forward_2d_dispatch(
                                 action, packet_header, cached_routing_fields, downstream_edm_interfaces, trid);
                             if (local_deliver) {
                                 forward_to_local_destination<receiver_channel>(
@@ -2932,7 +2932,7 @@ void kernel_main() {
     // Ensure array size is at least 1 to avoid undefined behavior
     static_assert(VC0_DOWNSTREAM_EDM_SIZE > 0, "VC0_DOWNSTREAM_EDM_SIZE must be at least 1");
 #if defined(FABRIC_2D)
-    constexpr bool use_vc0_single_live_stateful_noc = use_indexed_single_live_stateful_noc<VC0_DOWNSTREAM_EDM_SIZE>();
+    constexpr bool use_vc0_single_live_stateful_noc = use_2d_single_live_stateful_noc<VC0_DOWNSTREAM_EDM_SIZE>();
 #else
     constexpr bool use_vc0_single_live_stateful_noc = false;
 #endif

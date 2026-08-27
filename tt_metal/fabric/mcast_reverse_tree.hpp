@@ -16,7 +16,7 @@
 
 namespace tt::tt_fabric {
 
-// Source-rooted reverse trees for indexed multicast: T(root) is the union over every destination of
+// Source-rooted reverse trees for 2D action-map multicast: T(root) is the union over every destination of
 // the canonical route from root along one axis. Where that union is an arborescence, a worker can
 // encode a multicast by walking the edge list once from the leaves inward, setting a parent's output
 // when its subtree holds a requested target.
@@ -62,7 +62,7 @@ struct ArborescenceGateResult {
 ArborescenceGateResult run_mcast_arborescence_gate(
     const MeshGraph& mesh_graph, MeshId mesh_id, const AxisRouteTopology& topo);
 
-// The one-hot IndexedMeshRoutingFields::ACTION_* bit a hop in this direction asks a router to take.
+// The one-hot Routing2DCodec::ACTION_* bit a hop in this direction asks a router to take.
 std::uint8_t mcast_action_bit(RoutingDirection direction);
 
 // Packed device descriptor. The 64-row bound fixes the two 6-bit row fields:
@@ -74,12 +74,10 @@ std::uint8_t mcast_action_bit(RoutingDirection direction);
 inline constexpr int MCAST_TREE_MAX_AXIS_LEN = 64;
 
 // Host spelling of the accessors that live with the device decode in fabric_common.h.
-constexpr int mcast_tree_edge_child(std::uint16_t packed) { return IndexedMeshRoutingFields::mcast_edge_child(packed); }
-constexpr int mcast_tree_edge_parent(std::uint16_t packed) {
-    return IndexedMeshRoutingFields::mcast_edge_parent(packed);
-}
+constexpr int mcast_tree_edge_child(std::uint16_t packed) { return Routing2DCodec::mcast_edge_child(packed); }
+constexpr int mcast_tree_edge_parent(std::uint16_t packed) { return Routing2DCodec::mcast_edge_parent(packed); }
 constexpr std::uint8_t mcast_tree_edge_output(std::uint16_t packed) {
-    return IndexedMeshRoutingFields::mcast_edge_output(packed);
+    return Routing2DCodec::mcast_edge_output(packed);
 }
 
 // Serializes the edge list for the device, checking the axis bound, that each direction is
@@ -115,8 +113,8 @@ std::vector<RoutingDirection> mcast_root_output_directions(
     int w_hops,
     std::string* failure = nullptr);
 
-// Writes this chip's two trees -- T(my_y) and T(my_x) -- into its indexed vector table at the offsets
-// the device loader reads. Unlike the mesh-identical unicast vectors, these are written per chip.
+// Writes this chip's two trees -- T(my_y) and T(my_x) -- into its 2D route table at the offsets the
+// device loader reads. Unlike the mesh-identical unicast action maps, these are written per chip.
 //
 // This also serves as the mesh-wide gate, since every root on an axis is some chip's own root: refusing
 // a non-arborescent tree here rejects exactly the meshes the full sweep would, at O(axis^2) per chip.
@@ -130,7 +128,7 @@ bool embed_mcast_reverse_trees(
     const AxisRouteTopology& x_topo,
     int my_y,
     int my_x,
-    std::uint8_t* table,
+    std::uint8_t* route_table_2d,
     std::string* failure = nullptr);
 
 }  // namespace tt::tt_fabric

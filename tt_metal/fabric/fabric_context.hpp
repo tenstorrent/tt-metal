@@ -75,18 +75,18 @@ public:
     // ============ Z Router Queries ============
     // Do not add a raw "does this node/mesh have a Z edge" query here. Scanning connectivity for
     // RoutingDirection::Z answers a weaker question than any of its callers actually ask:
-    //   - selecting the indexed ABI      -> ControlPlane::express_routing_enabled(mesh_id), which also
-    //                                       requires the ring decomposition to have validated, and is
-    //                                       what route generation keyed on when it packed the tables
+    //   - selecting the 2D action-map format
+    //                                    -> is_2D_routing_enabled(), independent of whether the mesh
+    //                                       has a Z edge
     //   - sizing the VC0 downstream fan  -> get_vc0_downstream_edm_count(is_2D, express_routing_enabled)
     //   - intermesh / express edge role  -> classify_fabric_edge() and ZPortRole, per edge
 
-    // Kernel defines that select the indexed destination-keyed 2D ABI for a worker kernel running on
-    // mesh_id, or empty when that mesh uses the legacy hop-program encode. EVERY builder that
-    // compiles a kernel which produces 2D routes must apply these: the ABI is chosen per kernel
-    // compile, so a kernel missing them writes hop programs while its chip's L1 holds indexed
-    // vectors, with no diagnostic. The shape is the GLOBAL physical shape the L1 vectors were
-    // packed with, matching the ControlPlane embed and the router's named args.
+    // Kernel defines that configure destination-major 2D action-map encoding for a worker kernel
+    // running on mesh_id, or empty outside 2D routing mode. EVERY builder that compiles a kernel which
+    // produces 2D routes must apply these: the format is chosen per kernel compile, so a kernel missing
+    // them writes hop programs while its chip's L1 holds a 2D route table, with no diagnostic. The
+    // shape is the GLOBAL physical shape used to pack the L1 route table, matching the ControlPlane
+    // embed and the router's named args.
     std::map<std::string, std::string> get_2d_kernel_defines(const ControlPlane& control_plane, MeshId mesh_id) const;
 
     // ============ Tensix Config Query ============
@@ -152,7 +152,7 @@ private:
         uint32_t buffer_size;
     };
     // Base is 60 B since is_mcast_active was retired (was 61), so every tier gained a route byte.
-    // The 36 matters: [32,4] needs Y+X = 36 indexed route bytes and now fits a 96 B header rather
+    // The 36 matters: [32,4] needs Y+X = 36 2D action-map bytes and now fits a 96 B header rather
     // than spilling to 112 B.
     static constexpr Routing2DBufferTier ROUTING_2D_BUFFER_TIERS[] = {
         // NOTE: 80B header size de-stabilized some Mesh benchmarks for 8X4 mesh, so disabling for now
@@ -174,7 +174,7 @@ private:
     // Topology-based sizing
     uint32_t get_max_1d_hops_from_topology(const ControlPlane& control_plane) const;
     uint32_t get_max_2d_hops_from_topology(const ControlPlane& control_plane) const;
-    uint32_t get_max_2d_indexed_route_bytes_from_topology(const ControlPlane& control_plane) const;
+    uint32_t get_max_2d_route_buffer_bytes_from_topology(const ControlPlane& control_plane) const;
     uint32_t compute_1d_pkt_hdr_extension_words(uint32_t max_hops) const;
     uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t required_route_bytes) const;
     void compute_packet_specifications(const ControlPlane& control_plane, const tt_metal::Hal& hal, tt::ARCH arch);
