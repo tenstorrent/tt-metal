@@ -9,29 +9,11 @@ import ttnn
 from models.common.utility_functions import skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
-from models.demos.llama3_70b_galaxy.tt.model_config import (
-    PREFETCHER_NOC1_GRID,
-)
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-SUB_DEVICE_CRS = ttnn.CoreRangeSet(
-    [
-        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-    ]
-)
-
-QKV_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 10, SUB_DEVICE_CRS, row_wise=True)
-
-RING_CRS = ttnn.CoreRangeSet(
-    [
-        ttnn.CoreRange(
-            ttnn.CoreCoord(x, y),
-            ttnn.CoreCoord(x, y),
-        )
-        for x, y in PREFETCHER_NOC1_GRID
-    ]
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI._all_reduce_helpers import (
+    SUB_DEVICE_CRS,
+    QKV_CRS,
+    RING_CRS,
 )
 
 # Import the actual run_all_reduce_impl from the parent test file
