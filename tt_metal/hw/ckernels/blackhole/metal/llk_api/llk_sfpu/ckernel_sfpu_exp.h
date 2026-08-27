@@ -1110,6 +1110,14 @@ void exp_init() {
             TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
 
             // LREG13 = c2 = 0.337189436f (0x3eaca418).
+            //
+            // NOTE: tt-train programs LREG12/LREG13 itself, in
+            // tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp
+            // (sdpa_calculate_exponential_face_init), so that it can fold the SDPA scale into
+            // LREG12. It calls this same _sfpu_exp_21f_bf16_tti_ body. Any change to the
+            // coefficients here has to be mirrored there or SDPA silently runs a different
+            // polynomial.
+            //
             // Same coefficient as the scalar kernel's 4.791750143340323e-15f, rescaled by
             // 2^46 because the TTI body's fractional part is a float rather than the raw
             // 23-bit mantissa. Identical mantissa bits, exponent shifted. The quadratic

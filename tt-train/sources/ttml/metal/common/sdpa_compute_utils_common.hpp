@@ -21,7 +21,7 @@ void sdpa_calculate_exponential_face() {
 }
 
 // Loads LREG12 = (SCALE_EN ? scale : 1) * (1/ln2), and LREG13 = c2.
-template <bool SCALE_EN, uint32_t scaler_fp32 = 0>
+template <bool SCALE_EN, std::uint32_t scaler_fp32 = 0>
 inline void sdpa_calculate_exponential_face_init() {
     addr_mod_t{
         .srca = {.incr = 0},
@@ -37,9 +37,9 @@ inline void sdpa_calculate_exponential_face_init() {
         // the scale in init.
         constexpr float scale_f = __builtin_bit_cast(float, scaler_fp32);
         constexpr float scaled_inv_ln2 = scale_f * 1.4426950408889634F;
-        constexpr uint32_t bits = __builtin_bit_cast(uint32_t, scaled_inv_ln2);
-        constexpr uint16_t hi = static_cast<uint16_t>((bits >> 16) & 0xFFFFU);
-        constexpr uint16_t lo = static_cast<uint16_t>(bits & 0xFFFFU);
+        constexpr std::uint32_t bits = __builtin_bit_cast(std::uint32_t, scaled_inv_ln2);
+        constexpr std::uint16_t hi = static_cast<std::uint16_t>((bits >> 16) & 0xFFFFU);
+        constexpr std::uint16_t lo = static_cast<std::uint16_t>(bits & 0xFFFFU);
 
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, hi);
         TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, lo);
@@ -50,8 +50,15 @@ inline void sdpa_calculate_exponential_face_init() {
     }
     TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
 
-    // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
+    // LREG13 = c2 = 0.337189436f (0x3eaca418).
+    //
+    // This must track ckernel_sfpu_exp.h's exp_init(). The TTI body's fractional part is a
+    // float, not the raw 23-bit mantissa the scalar kernel uses, so c2 carries the matching
+    // 2^46 rescale -- same mantissa bits (0x..a418), exponent shifted. Loading the scalar
+    // kernel's 4.791750143340323e-15f here zeroes the quadratic term in practice and takes
+    // exp() from 0.20 % to 8 % max relative error, which shows up as SDPA forward/backward
+    // MSE failures rather than anything that names exp.
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3eac);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
     TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
 }
@@ -83,7 +90,7 @@ inline void sdpa_calculate_exponential_first_column() {
 // Wormhole scaled exp workaround: pre-multiply by the scaler in sfpi inline,
 // then call the sfpi accurate exp path directly, avoiding the TTI variant.
 namespace _sdpa_detail {
-template <int ITERATIONS, bool is_fp32_dest_acc_en, uint32_t DST_STRIDE = 1>
+template <int ITERATIONS, bool is_fp32_dest_acc_en, std::uint32_t DST_STRIDE = 1>
 inline void sfpi_exp() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
@@ -100,11 +107,11 @@ inline void sfpi_exp() {
     }
 }
 
-template <int ITERATIONS, bool is_fp32_dest_acc_en, uint16_t scale_bf16, int DST_STRIDE = 1>
+template <int ITERATIONS, bool is_fp32_dest_acc_en, std::uint16_t scale_bf16, int DST_STRIDE = 1>
 inline void mul_then_sfpi_exp() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
-        val = val * sfpi::sFloat16b(static_cast<uint32_t>(scale_bf16));
+        val = val * sfpi::sFloat16b(static_cast<std::uint32_t>(scale_bf16));
         sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -121,7 +128,7 @@ inline void mul_then_sfpi_exp() {
 
 // Full-tile exp (8 SFPU face groups, VectorMode::RC).
 // WH uses sfpi accurate exp; BH uses the TTI path configured by sdpa_exp_tile_init.
-inline void sdpa_exp_tile(uint32_t idst) {
+inline void sdpa_exp_tile(std::uint32_t idst) {
 #ifdef TRISC_MATH
 #ifdef ARCH_WORMHOLE
     _llk_math_eltwise_unary_sfpu_params_(
@@ -140,7 +147,7 @@ inline void sdpa_exp_tile(uint32_t idst) {
 
 // First-column exp (4 half-face SFPU iterations, VectorMode::C).
 // Column vectors only have meaningful data in column 0, so 4× fewer iterations.
-inline void sdpa_exp_tile_first_column(uint32_t idst) {
+inline void sdpa_exp_tile_first_column(std::uint32_t idst) {
 #ifdef TRISC_MATH
 #ifdef ARCH_WORMHOLE
     _llk_math_eltwise_unary_sfpu_params_(
@@ -152,7 +159,7 @@ inline void sdpa_exp_tile_first_column(uint32_t idst) {
 }
 
 // Blackhole exp init: configures LREG12 for unscaled or scaled TTI exp.
-template <bool approx, bool SCALE_EN, uint32_t scaler_fp32 = 0>
+template <bool approx, bool SCALE_EN, std::uint32_t scaler_fp32 = 0>
 inline void sdpa_exp_tile_init() {
 #if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
     ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::exponential>(
@@ -169,12 +176,12 @@ inline void sdpa_exp_tile_init() {
 //   WH: pre-multiplies by the BF16 scale via sfpi then calls accurate exp directly.
 //       `scaler_bf16` carries the host-side RNE conversion of `scaler_fp32` (low 16 bits).
 //   BH: folds the full FP32 scale into LREG12 at init time — one SFPU op fewer per element.
-template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-inline void sdpa_exp_tile_scaled(uint32_t idst) {
+template <std::uint32_t scaler_fp32, std::uint32_t scaler_bf16>
+inline void sdpa_exp_tile_scaled(std::uint32_t idst) {
 #ifdef ARCH_WORMHOLE
 #ifdef TRISC_MATH
     _llk_math_eltwise_unary_sfpu_params_(
-        _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, static_cast<uint16_t>(scaler_bf16)>,
+        _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, static_cast<std::uint16_t>(scaler_bf16)>,
         idst,
         VectorMode::RC);
 #endif
@@ -185,15 +192,18 @@ inline void sdpa_exp_tile_scaled(uint32_t idst) {
 }
 
 // Arch-dispatched scaled first-column exp: exp(scale * x) over column 0 only (4 iterations).
-template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-inline void sdpa_exp_tile_first_column_scaled(uint32_t idst) {
+template <std::uint32_t scaler_fp32, std::uint32_t scaler_bf16>
+inline void sdpa_exp_tile_first_column_scaled(std::uint32_t idst) {
 #ifdef ARCH_WORMHOLE
 #ifdef TRISC_MATH
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr int DST_STRIDE = 2;
     _llk_math_eltwise_unary_sfpu_params_(
-        _sdpa_detail::
-            mul_then_sfpi_exp<ITERATIONS_HALF_FACE, DST_ACCUM_MODE, static_cast<uint16_t>(scaler_bf16), DST_STRIDE>,
+        _sdpa_detail::mul_then_sfpi_exp<
+            ITERATIONS_HALF_FACE,
+            DST_ACCUM_MODE,
+            static_cast<std::uint16_t>(scaler_bf16),
+            DST_STRIDE>,
         idst,
         VectorMode::C);
 #endif
