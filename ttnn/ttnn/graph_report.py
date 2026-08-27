@@ -368,6 +368,11 @@ def _in_flight_operation_frame(function_stack: list, error_operation: str):
     return None
 
 
+def _without_capture_boundaries(nodes: list) -> list:
+    """Drop report-level capture_start/capture_end so the per-op wrapper can add exactly one pair."""
+    return [node for node in nodes if node.get("node_type") not in ("capture_start", "capture_end")]
+
+
 def _build_operation_subgraph(nodes: list) -> list:
     """Wrap an operation's trace nodes in capture_start/capture_end and renumber them."""
     capture_start = {
@@ -1655,7 +1660,9 @@ def import_graph(
         for idx, tid in enumerate(py_io.get("input_tensor_ids", [])):
             input_tensors_batch.append((operation_id, idx, int(tid), rank))
 
-        subgraph = py_io.get("captured_graph") or _build_operation_subgraph(current_op_nodes)
+        subgraph = py_io.get("captured_graph") or _build_operation_subgraph(
+            _without_capture_boundaries(current_op_nodes)
+        )
         if subgraph:
             for snode in subgraph:
                 if "counter" in snode:

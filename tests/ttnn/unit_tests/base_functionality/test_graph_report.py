@@ -761,6 +761,98 @@ class TestImportGraphUnit:
 
         conn.close()
 
+    def test_orphan_subgraph_excludes_report_capture_end(self, tmp_path):
+        """Orphan fallback must not wrap the report-level capture_end in a second pair."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "tensor",
+                "params": {"tensor_id": "7", "shape": "[1, 1, 6400, 256]", "device_id": "0", "address": "1024"},
+                "connections": [2],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [],
+                "input_tensors": [1],
+            },
+            {"counter": 3, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [
+            {
+                "name": "ttnn.conv2d",
+                "arguments": {"in_channels": "256"},
+                "input_tensor_ids": [7],
+                "error": {"type": "RuntimeError", "message": "Something went wrong"},
+            }
+        ]
+
+        report = _make_report(mock_graph, python_io=python_io)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT captured_graph FROM captured_graph")
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"expected one per-op graph, got {len(rows)}"
+        stored = json.loads(rows[0][0])
+        node_types = [node["node_type"] for node in stored]
+        assert node_types[0] == "capture_start", f"expected synthetic capture_start first, got {node_types}"
+        assert node_types[-1] == "capture_end", f"expected synthetic capture_end last, got {node_types}"
+        assert node_types.count("capture_start") == 1, f"duplicate capture_start: {node_types}"
+        assert node_types.count("capture_end") == 1, f"report capture_end leaked into the subgraph: {node_types}"
+        assert "function_start" in node_types, f"orphan function_start missing from subgraph: {node_types}"
+
+        conn.close()
+
+    def test_orphan_subgraph_keeps_inner_nodes(self, tmp_path):
+        """Stripping report boundaries must keep nodes captured after the orphan start."""
+        mock_graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": [1]},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.conv2d"},
+                "connections": [2],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "function_start",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [3],
+                "input_tensors": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "Conv2dDeviceOperation"},
+                "connections": [4],
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+        report = _make_report(mock_graph)
+        conn, cursor = _import_to_db(report, tmp_path)
+
+        cursor.execute("SELECT captured_graph FROM captured_graph")
+        rows = cursor.fetchall()
+        assert len(rows) == 1, f"expected one per-op graph, got {len(rows)}"
+        stored = json.loads(rows[0][0])
+        node_types = [node["node_type"] for node in stored]
+        assert node_types == [
+            "capture_start",
+            "function_start",
+            "function_start",
+            "function_end",
+            "capture_end",
+        ], f"inner nodes dropped or report boundary kept: {node_types}"
+        assert stored[1]["params"]["name"] == "ttnn.conv2d"
+        assert stored[2]["params"]["name"] == "Conv2dDeviceOperation"
+        assert stored[3]["params"]["name"] == "Conv2dDeviceOperation"
+
+        conn.close()
+
     def test_incomplete_operation_without_error_record_still_imported(self, tmp_path):
         """Without a recorded exception the reason stays generic, but the operation is still listed."""
         mock_graph = [
