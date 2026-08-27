@@ -22,11 +22,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/matmul.cpp"
 
-CB_IN0, CB_IN1, CB_BIAS, CB_OUT, CB_ACC = 0, 1, 2, 16, 24
 TILE = 32
 
 
@@ -64,28 +63,20 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
     core_ranges, cores = single_core()
 
     # bias args go last, so a build without MM_BIAS keeps the existing layout.
-    ct_args = []
-    for t in (ta, tb, tout, tbias):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address(), tbias.buffer_address()]
 
-    cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=rt * kt),
-        make_cb(CB_IN1, core_ranges, num_pages=kt * ct),
-        # Pushed once and never popped, like the reduce scaler: every finishing
-        # block re-reads the same ct tiles.
-        make_cb(CB_BIAS, core_ranges, num_pages=ct),
-        make_cb(CB_OUT, core_ranges, num_pages=rt * ct),
-        make_cb(CB_ACC, core_ranges, num_pages=rt * ct),
+    dfbs = [
+        dfb("in0", rt * kt),
+        dfb("in1", kt * ct),
+        dfb("bias", ct),
+        dfb("out", rt * ct),
+        dfb("acc", rt * ct),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
+        tensors={"in0": ta, "in1": tb, "out": tout, "bias": tbias},
         defines=(
             [
                 ("MM_RT_DIM", str(rt)),
@@ -107,7 +98,8 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
     # Output last: generic_op hands back the final tensor in the list. That order is
     # independent of the accessor-arg order above, where bias must stay last so a
     # build without MM_BIAS sees the layout the other matmul tests use.
-    out = ttnn.generic_op([ta, tb, tbias, tout], program)
+    run_unified_spec(device, spec, {"in0": ta, "in1": tb, "out": tout, "bias": tbias})
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)
     want = torch.zeros([1, 1, rt * TILE, ct * TILE], dtype=torch.float32)
