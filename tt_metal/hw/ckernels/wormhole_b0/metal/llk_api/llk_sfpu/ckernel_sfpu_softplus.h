@@ -93,7 +93,44 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     return result;
 }
 
-inline void softplus_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// ======================================================================
+// APPROXIMATION_MODE table: f(a) = ln(1 + exp(-a)), the residual the accurate
+// path already evaluates by degree-6/8 Horner. This is the cleanest drop-in of
+// the whole set, because softplus is *already* written as
+//
+//   softplus(t) = max(t, 0) + f(|t|)
+//
+// so only the residual changes -- one instruction in place of the Horner chain
+// and the a > 5 tail branch, whose job (return ~0 far out) the table's last
+// segment does for free.
+//
+// Hardware breakpoints on |t| (FP16 6-entry TABLE2, sfpi mode = 0):
+//   [0.0, 0.5): -0.438477*|t| + 0.689453
+//   [0.5, 1.0): -0.322021*|t| + 0.631836
+//   [1.0, 1.5): -0.223633*|t| + 0.534180
+//   [1.5, 2.0): -0.148926*|t| + 0.422852
+//   [2.0, 4.0): -0.054352*|t| + 0.223389
+//   [4.0, inf):  0.009239
+//
+// TABLE2 rather than TABLE1: f is still decaying at 3.0, so the wider final
+// segment halves the error (0.0123 vs 0.0244 max abs on softplus itself).
+// ======================================================================
+inline void softplus_appx_load_lut() {
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0xB527B704);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0xB0C4B328);
+    sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x7C00AAF5);
+    sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x390E3984);
+    sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x36C43846);
+    sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x20BB3326);
+}
+
+template <bool APPROXIMATION_MODE>
+inline void softplus_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    if constexpr (APPROXIMATION_MODE) {
+        softplus_appx_load_lut();
+    }
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
@@ -166,6 +203,38 @@ inline void calculate_softplus(std::uint32_t param0, std::uint32_t param1, std::
     const float beta = Converter::as_float(param0);
     const float beta_reciprocal = Converter::as_float(param1);
     const float threshold = Converter::as_float(param2);
+
+    if constexpr (APPROXIMATION_MODE) {
+        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+        sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+        sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+        sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+        sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+#pragma GCC unroll 1
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat t = beta * sfpi::vFloat(sfpi::dst_reg[0]);
+            // Above the threshold softplus(t) == t to within rounding, and the
+            // accurate path leaves dst untouched there; keep that behaviour.
+            v_if(t < threshold) {
+                sfpi::vFloat mt = sfpi::max(t, 0.0f);
+                sfpi::vFloat residual = lut2_sign(t, l0, l1, l2, l4, l5, l6, 0);
+                sfpi::dst_reg[0] = beta_reciprocal * (mt + residual);
+            }
+            v_endif;
+            sfpi::dst_reg++;
+        }
+
+        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+        sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+        sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+        sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+        sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+        return;
+    }
+
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_softplus_body<APPROXIMATION_MODE, is_fp32_dest_acc_en>(beta, beta_reciprocal, threshold);
         sfpi::dst_reg++;

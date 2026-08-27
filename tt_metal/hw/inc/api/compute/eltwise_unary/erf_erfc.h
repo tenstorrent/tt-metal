@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #ifndef ARCH_QUASAR
@@ -19,7 +20,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = false>
 ALWI void erf_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (fast_and_approx)));
 }
@@ -38,8 +39,8 @@ ALWI void erf_tile_init() {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = true>
-ALWI void erf_tile(uint32_t idst) {
+template <bool fast_and_approx = false>
+ALWI void erf_tile(std::uint32_t idst) {
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf, (fast_and_approx), idst, VectorMode::RC));
 }
 
@@ -48,7 +49,10 @@ ALWI void erf_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (true /*APPROXIMATION_MODE*/))); }
+template <bool fast_and_approx = false>
+ALWI void erfc_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (fast_and_approx)));
+}
 
 // clang-format off
 /**
@@ -64,8 +68,9 @@ ALWI void erfc_tile_init() { MATH(SFPU_UNARY_INIT_FN(erfc, sfpu::erfc_init, (tru
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void erfc_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (), idst, VectorMode::RC));
+template <bool fast_and_approx = false>
+ALWI void erfc_tile(std::uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (fast_and_approx), idst, VectorMode::RC));
 }
 
 #endif

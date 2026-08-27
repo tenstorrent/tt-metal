@@ -19,8 +19,12 @@ namespace sfpu {
 // max_iter specifies the number of Newton-Raphson iterations.
 // max_iter = 2: sufficient for float32 precision (≤1 ulps).
 // max_iter = 1: sufficient for bfloat16/float16 precision (≤0.5 ulps).
-// max_iter = 0: this has the same effect as max_iter=1 at the moment;
-//               it may be replaced with a cheaper approximation in future.
+// max_iter = 0: quadratic seed only, no Newton refinement. ~1.0e-2 relative
+//               (2.6 bf16 ULP) against 1.0e-4 (0.03 ULP) for max_iter=1, and two
+//               SFPU ops cheaper. This is what APPROXIMATION_MODE selects; it
+//               used to be an alias for max_iter=1, so every approximate-mode
+//               caller (mish, erf, erfc, softsign, snake_beta, i1, atan, div)
+//               paid the accurate price.
 template <int max_iter = 2>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
@@ -52,6 +56,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     sfpi::vFloat scale = sfpi::setman(sfpi::as<sfpi::vFloat>(scale_bits), 0);
 
     // First iteration of Newton-Raphson: t = 1.0 - x*y.
+    // Kept unconditional: at max_iter == 0 the two uses below are compiled out and
+    // this dead MAD goes with them, so guarding it here would only duplicate the
+    // scale-adjust line that has to sit between the two halves for scheduling.
     sfpi::vFloat t = 1.0f + negative_x * y;
 
     // Scale factor adjustment: scale = scale*0.5.
@@ -61,7 +68,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     scale *= 0.5f;
 
     // Continue Newton-Raphson: y = y + y*t.
-    y = y + y * t;
+    if constexpr (max_iter > 0) {
+        y = y + y * t;
+    }
 
     if constexpr (max_iter > 1) {
         // Second iteration of Newton-Raphson: t = 1.0 - x*y; y = y + y*t.

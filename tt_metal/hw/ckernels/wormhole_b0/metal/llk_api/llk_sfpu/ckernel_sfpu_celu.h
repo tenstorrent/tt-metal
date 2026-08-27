@@ -9,10 +9,15 @@
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
+#include "ckernel_sfpu_negexp_lut.h"
 
 namespace ckernel::sfpu {
 
-inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// The approximate path programs its own CREGs + table inside calculate_celu().
+template <bool APPROXIMATION_MODE>
+inline void celu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
@@ -20,6 +25,46 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);
+
+    // APPROXIMATION_MODE: same branch-free collapse as ELU (see
+    // ckernel_sfpu_elu.h), with the LUT argument pre-scaled by 1/alpha because
+    // celu's exponent is x/alpha:
+    //   u = (mx - x) * alpha_recip;   t = mx - alpha;   celu = alpha*L(u) + t
+    if constexpr (APPROXIMATION_MODE) {
+        // ORDER IS LOAD-BEARING: a vConstFloatPrgm write clobbers LReg0, which
+        // holds the slopes for segments 0 and 1, so all CREG writes must precede
+        // the table load. See ckernel_sfpu_elu.h for the full note.
+        sfpi::vConstFloatPrgm0 = Converter::as_float(param0);
+        sfpi::vConstFloatPrgm1 = Converter::as_float(param1);
+        negexp_appx_load_lut();
+
+        sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+        sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
+        sfpi::vUInt l4 = sfpi::l_reg[sfpi::LRegs::LReg4];
+        sfpi::vUInt l5 = sfpi::l_reg[sfpi::LRegs::LReg5];
+        sfpi::vUInt l6 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat x = sfpi::dst_reg[0];
+            sfpi::vFloat mx = sfpi::max(x, 0.0f);
+            sfpi::vFloat u = sfpi::vConstFloatPrgm1 * (mx - x);
+            sfpi::vFloat t = mx - sfpi::vConstFloatPrgm0;
+            sfpi::vFloat L = lut2_sign(u, l0, l1, l2, l4, l5, l6, 0);
+            sfpi::dst_reg[0] = sfpi::vConstFloatPrgm0 * L + t;
+            sfpi::dst_reg++;
+        }
+
+        sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+        sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+        sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
+        sfpi::l_reg[sfpi::LRegs::LReg4] = l4;
+        sfpi::l_reg[sfpi::LRegs::LReg5] = l5;
+        sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
+        return;
+    }
+
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
 // partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
 #pragma GCC unroll 2

@@ -39,73 +39,73 @@
 // calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
 // the tt-llk sfpu/ckernel_sfpu_comp.h (_calculate_zero_comp_ etc.) included
 // below; the two share no symbol names so both can coexist.
+#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
+#include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_digamma.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32.h"
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
+#include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_erf.h"
 #include "llk_sfpu/ckernel_sfpu_erfc.h"
+#include "llk_sfpu/ckernel_sfpu_erfinv.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_exp2.h"
 #include "llk_sfpu/ckernel_sfpu_expm1.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_gcd.h"
+#include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
 #include "llk_sfpu/ckernel_sfpu_hardshrink.h"
 #include "llk_sfpu/ckernel_sfpu_hardtanh.h"
+#include "llk_sfpu/ckernel_sfpu_heaviside.h"
+#include "llk_sfpu/ckernel_sfpu_i0.h"
 #include "llk_sfpu/ckernel_sfpu_i1.h"
 #include "llk_sfpu/ckernel_sfpu_identity.h"
 #include "llk_sfpu/ckernel_sfpu_isclose.h"
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
+#include "llk_sfpu/ckernel_sfpu_lerp.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_log.h"
+#include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
+#include "llk_sfpu/ckernel_sfpu_mish.h"
 #include "llk_sfpu/ckernel_sfpu_mul_int32.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_rdiv.h"
+#include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
+#include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
+#include "llk_sfpu/ckernel_sfpu_selu.h"
+#include "llk_sfpu/ckernel_sfpu_shift.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_silu.h"
+#include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
+#include "llk_sfpu/ckernel_sfpu_softshrink.h"
+#include "llk_sfpu/ckernel_sfpu_softsign.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
+#include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
+#include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_trigonometry.h"
+#include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
-#include "llk_sfpu/ckernel_sfpu_celu.h"
-#include "llk_sfpu/ckernel_sfpu_elu.h"
-#include "llk_sfpu/ckernel_sfpu_erfinv.h"
-#include "llk_sfpu/ckernel_sfpu_exp.h"
-#include "llk_sfpu/ckernel_sfpu_exp2.h"
-#include "llk_sfpu/ckernel_sfpu_gelu.h"
-#include "llk_sfpu/ckernel_sfpu_heaviside.h"
-#include "llk_sfpu/ckernel_sfpu_i0.h"
-#include "llk_sfpu/ckernel_sfpu_lerp.h"
-#include "llk_sfpu/ckernel_sfpu_log1p.h"
-#include "llk_sfpu/ckernel_sfpu_mish.h"
-#include "llk_sfpu/ckernel_sfpu_rdiv.h"
-#include "llk_sfpu/ckernel_sfpu_recip.h"
-#include "llk_sfpu/ckernel_sfpu_rsqrt.h"
-#include "llk_sfpu/ckernel_sfpu_selu.h"
-#include "llk_sfpu/ckernel_sfpu_shift.h"
-#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
-#include "llk_sfpu/ckernel_sfpu_snake_beta.h"
-#include "llk_sfpu/ckernel_sfpu_softshrink.h"
-#include "llk_sfpu/ckernel_sfpu_softsign.h"
-#include "llk_sfpu/ckernel_sfpu_sqrt.h"
-#include "llk_sfpu/ckernel_sfpu_square.h"
-#include "llk_sfpu/ckernel_sfpu_tanh.h"
-#include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
-#include "llk_sfpu/ckernel_sfpu_trigonometry.h"
-#include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "sfpu/ckernel_sfpu_add_int.h"
 #include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
@@ -438,7 +438,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::asin || OPERATION == SfpuType::acos)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
     }
     else if constexpr (OPERATION == SfpuType::sinh)
     {
@@ -599,8 +599,8 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
-        // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
-        // vConstFloatPrgm0 that calculate_silu depends on.
+        // silu_init routes to sigmoid_init<APPROX_MODE>: the accurate path needs the
+        // reciprocal constants, the approximate one needs sigmoid's 6-entry LUT.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -678,7 +678,7 @@ void call_unary_sfpu_operation_init()
     }
     else
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en>();
+        llk_math_eltwise_unary_sfpu_init<OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
     }
 }
 
@@ -1001,7 +1001,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::tanhshrink)
     {
@@ -1276,7 +1276,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::erfc)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erfc, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::expm1)
     {

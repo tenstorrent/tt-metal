@@ -153,16 +153,18 @@ sfpi_inline void _sfpu_tanh_polynomial_x2_(
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
-        // SFPU microcode
+        // 6-segment SFPLUTFP32, replacing the legacy 3-entry SFPLUT. See tanh_init.
         sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
         sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
         sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
+        sfpi::vUInt l4 = l_reg[sfpi::LRegs::LReg4];
+        sfpi::vUInt l5 = l_reg[sfpi::LRegs::LReg5];
+        sfpi::vUInt l6 = l_reg[sfpi::LRegs::LReg6];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, l0, l1, l2);
-            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg[0] = sfpi::copysgn(lut2_sign(val, l0, l1, l2, l4, l5, l6), val);
 
             sfpi::dst_reg++;
         }
@@ -170,6 +172,9 @@ inline void calculate_tanh() {
         l_reg[sfpi::LRegs::LReg0] = l0;
         l_reg[sfpi::LRegs::LReg1] = l1;
         l_reg[sfpi::LRegs::LReg2] = l2;
+        l_reg[sfpi::LRegs::LReg4] = l4;
+        l_reg[sfpi::LRegs::LReg5] = l5;
+        l_reg[sfpi::LRegs::LReg6] = l6;
     } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
@@ -209,9 +214,32 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
+        // 6-segment piecewise linear via SFPLUTFP32, replacing the legacy 3-entry
+        // SFPLUT (slopes 0.90625 / 0.09375 then a hard 1.0, breakpoints at 1.0 and
+        // 2.0 only, 8-bit coefficients). That table measures 0.145 max abs error on
+        // device; this one measures ~0.0125 by the same sweep -- ~12x better for one
+        // extra cycle, since SFPLUTFP32 is 2 cycles against SFPLUT's 1 and the
+        // instruction count is unchanged.
+        //
+        // Hardware breakpoints on |x| (FP16 6-entry TABLE1, sfpi mode = 1):
+        //   [0.0, 0.5): 0.949219*|x|
+        //   [0.5, 1.0): 0.599121*|x| + 0.174194
+        //   [1.0, 1.5): 0.287109*|x| + 0.481934
+        //   [1.5, 2.0): 0.117737*|x| + 0.731934
+        //   [2.0, 3.0): 0.030975*|x| + 0.905762
+        //   [3.0, inf): 1.0
+        //
+        // Segment 0's intercept is pinned to 0 so tanh(0) == 0 and the fit is
+        // continuous across the sign flip. Slopes pack lo/hi into LReg0/1/2 and
+        // intercepts into LReg4/5/6; a half-word of 0x7C00 reads as 0.0. The result
+        // is signed with copysgn because sfpi 7.71.0 only admits the SGN_UPDATE
+        // form of the 6-entry LUT (see ckernel_sfpu_erf.h).
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x38CB3B98);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x2F893498);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0x7C0027EE);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vUInt(0x31937C00);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vUInt(0x39DB37B6);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vUInt(0x3C003B3F);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)

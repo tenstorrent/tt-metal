@@ -32,8 +32,10 @@ void bitwise_and_init();
 void bitwise_not_init();
 void bitwise_or_init();
 void bitwise_xor_init();
+template <bool APPROXIMATION_MODE = false>
 void celu_init();
 void clamp_init();
+template <bool APPROXIMATION_MODE = false>
 void elu_init();
 void equal_zero_init();
 void greater_than_equal_zero_init();
@@ -54,8 +56,10 @@ void prelu_init();
 void relu_max_init();
 void reshuffle_rows_init();
 void right_shift_init();
+template <bool APPROXIMATION_MODE = false>
 void selu_init();
 void sign_init();
+template <bool APPROXIMATION_MODE = false>
 void softplus_init();
 void softshrink_init();
 void square_init();
@@ -112,7 +116,7 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 // Bare init entry point: delegates per SFPU op to its self-contained sfpu::<op>_init().
 // is_fp32_dest_acc_en is threaded to the (few) ops whose init depends on the dest-acc mode
 // (asin/acos prime the endpoint-sqrt constants only in fp32 dest); it is ignored by the rest.
-template <SfpuType sfpu_op, bool is_fp32_dest_acc_en>
+template <SfpuType sfpu_op, bool is_fp32_dest_acc_en, bool APPROXIMATION_MODE = false>
 inline void llk_math_eltwise_unary_sfpu_init() {
     // Per-op common SFPU init (config reg + invariant ADDR_MOD_7), formerly hoisted once-per-kernel via
     // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
@@ -138,11 +142,11 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::ceil) {
         sfpu::ceil_init();
     } else if constexpr (sfpu_op == SfpuType::celu) {
-        sfpu::celu_init();
+        sfpu::celu_init<APPROXIMATION_MODE>();
     } else if constexpr (sfpu_op == SfpuType::clamp) {
         sfpu::clamp_init();
     } else if constexpr (sfpu_op == SfpuType::elu) {
-        sfpu::elu_init();
+        sfpu::elu_init<APPROXIMATION_MODE>();
     } else if constexpr (sfpu_op == SfpuType::equal_zero) {
         sfpu::equal_zero_init();
     } else if constexpr (sfpu_op == SfpuType::fill) {
@@ -204,13 +208,13 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     } else if constexpr (sfpu_op == SfpuType::right_shift) {
         sfpu::right_shift_init();
     } else if constexpr (sfpu_op == SfpuType::selu) {
-        sfpu::selu_init();
+        sfpu::selu_init<APPROXIMATION_MODE>();
     } else if constexpr (sfpu_op == SfpuType::sign) {
         sfpu::sign_init();
     } else if constexpr (sfpu_op == SfpuType::silu) {
         sfpu::silu_init();
     } else if constexpr (sfpu_op == SfpuType::softplus) {
-        sfpu::softplus_init();
+        sfpu::softplus_init<APPROXIMATION_MODE>();
     } else if constexpr (sfpu_op == SfpuType::softshrink) {
         sfpu::softshrink_init();
     } else if constexpr (sfpu_op == SfpuType::square) {
