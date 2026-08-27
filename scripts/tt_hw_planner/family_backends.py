@@ -367,6 +367,27 @@ def composite_type_candidates(pipeline_class: Optional[str]) -> List[str]:
     return out
 
 
+ROUTING_GENERIC = "generic"
+
+
+def is_generic(backend) -> bool:
+    """A backend with no per-model template: its demo is architecture-portable and
+    reads the target model from the environment."""
+    return (getattr(backend, "routing_mode", "") or "") == ROUTING_GENERIC
+
+
+def prefers_module_tree(backend) -> bool:
+    """Should this backend's bring-up decompose the model by WALKING it?
+
+    True when the entry declares ``use_module_tree``, and also for any GENERIC
+    backend. "Generic" describes the registry entry -- there is no per-model
+    template folder to copy -- not the model, which can still be loaded and walked
+    like any other. Treating the two as the same thing sent every model that fell
+    through to the catch-all down the cold-start path instead of per-component
+    bring-up, even though walking it yields real components immediately."""
+    return bool(getattr(backend, "use_module_tree", False)) or is_generic(backend)
+
+
 def demo_path_exists(backend: FamilyBackend) -> bool:
     """Is this backend's demo actually present in the checkout?
 
@@ -406,7 +427,7 @@ def pick_backend_with_quality(
     # a wrong-architecture skeleton, which is the failure that rule exists to
     # prevent (the real fix there is writing that demo). A TEMPLATE backend with
     # no folder can only produce nothing, so prefer any backend that does exist.
-    if (getattr(backend, "routing_mode", "") or "") == "generic":
+    if is_generic(backend):
         return backend, quality
     alt, alt_quality = _pick_backend_impl(
         category=category, model_type=model_type, pipeline_tag=pipeline_tag, require_demo=True
@@ -471,7 +492,7 @@ def _pick_backend_impl(
 
     if candidates:
         for b in candidates:
-            if getattr(b, "routing_mode", "") == "generic":
+            if is_generic(b):
                 return (b, "category-default")
         return (candidates[0], "category-default")
     return (None, "none")
@@ -510,7 +531,7 @@ def rank_backends(
             score = 70 if same_cat else 60
             reason = f"pipeline_tag '{pt}'" + ("" if same_cat else f" (cross-category {b.category})")
         elif same_cat:
-            generic = getattr(b, "routing_mode", "") == "generic"
+            generic = is_generic(b)
             score = 40 if generic else 30
             reason = f"category '{category}' default" + (" (generic runner)" if generic else "")
         else:

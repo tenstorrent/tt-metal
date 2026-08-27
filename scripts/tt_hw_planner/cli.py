@@ -1763,7 +1763,9 @@ def _enforce_backend_match_quality_or_abort(
         )
         return None
 
-    if getattr(backend, "routing_mode", "") == "generic":
+    from .family_backends import is_generic
+
+    if is_generic(backend):
         if probe.category != "Unknown":
             print(
                 f"  Backend match: GENERIC  ({backend.name})  "
@@ -8790,7 +8792,9 @@ def _cmd_up_core_impl(args) -> int:
                     model_type=_model_type,
                     pipeline_tag=_pipeline_tag,
                 )
-                _generic_backend_picked = _backend is not None and getattr(_backend, "routing_mode", "") == "generic"
+                from .family_backends import is_generic as _is_generic
+
+                _generic_backend_picked = _backend is not None and _is_generic(_backend)
         except Exception as exc:
             _generic_pick_error = f"{type(exc).__name__}: {exc}"
             _generic_backend_picked = False

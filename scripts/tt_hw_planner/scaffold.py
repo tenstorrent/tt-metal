@@ -333,28 +333,24 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             model_type=(probe.raw_config or {}).get("model_type"),
             pipeline_tag=getattr(probe, "pipeline_tag", None),
         )
-        if (
-            _be is not None
-            and getattr(_be, "routing_mode", "") == "generic"
-            and not getattr(_be, "use_module_tree", False)
-        ):
-            raise ColdStartScaffoldError(
-                new_model_id,
-                f"{new_model_id} uses a GENERIC LLM/VLM backend "
-                f"(`{_be.name}` / `{_be.demo_path}`). Scaffolding "
-                f"copies a per-model `tt/` folder from a sibling; "
-                f"generic backends don't have one (the demo is "
-                f"architecture-portable and reads HF_MODEL from the "
-                f"env)",
-                suggested_cmd=(f"python -m scripts.tt_hw_planner prepare " f"{new_model_id} --execute"),
-            )
-    except ScaffoldError:
-        raise
     except Exception:
         pass
 
-    if _be is not None and getattr(_be, "use_module_tree", False):
-        return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
+    # Matching the generic backend used to raise ColdStartScaffoldError here: no
+    # per-model `tt/` folder exists to copy, so the only option seemed to be running
+    # the whole model through the portable demo. But "generic" describes the registry
+    # entry, not the model -- the model can be loaded and walked like any other, and
+    # walking it yields real, bound components. Since EVERY generic backend carries
+    # use_module_tree=False (a flag that predates module-tree discovery), that branch
+    # fired for every model that fell through to the catch-all and ended the run
+    # instead of bringing it up per component. Cold-start now remains only for the
+    # two cases it was written for: no ported sibling for the architecture family,
+    # and no backend registered for the category at all.
+    if _be is not None:
+        from .family_backends import prefers_module_tree
+
+        if prefers_module_tree(_be):
+            return _plan_demo_folder_scaffold(new_model_id=new_model_id, probe=probe)
 
     sibling_id = compat.similar_supported_model
     if not sibling_id:

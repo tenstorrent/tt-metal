@@ -208,7 +208,7 @@ def _extract_path(raw: Optional[str]) -> Optional[str]:
 def _registered_paths() -> List[tuple]:
     """Every (where, path) the deterministic registries point at."""
     from .compatibility import BUILDING_BLOCKS
-    from .family_backends import all_backends
+    from .family_backends import all_backends, is_generic
 
     out: List[tuple] = []
     for b in all_backends():
@@ -216,7 +216,7 @@ def _registered_paths() -> List[tuple]:
         # model (models/demos/<family>/<model>/) rather than reading one. Its
         # demo_path names an output location, so "not present yet" is normal and
         # reporting it as drift is noise that buries the real cases.
-        if (getattr(b, "routing_mode", "") or "") == "generic":
+        if is_generic(b):
             continue
         for fld in ("demo_path", "smoke_test_entry"):
             p = _extract_path(getattr(b, fld, None))
@@ -251,11 +251,11 @@ def prunable_backends() -> List[tuple]:
     which. Routing already skips these, so a stale entry is inert either way."""
     import os
 
-    from .family_backends import all_backends
+    from .family_backends import all_backends, is_generic
 
     out: List[tuple] = []
     for b in all_backends():
-        if (getattr(b, "routing_mode", "") or "") == "generic":
+        if is_generic(b):
             continue
         path = _extract_path(getattr(b, "demo_path", None))
         if path and not os.path.exists(path):

@@ -2661,15 +2661,26 @@ def test_audit_bug_14_sliding_window_check_detects_layer_types() -> None:
 
 
 def test_audit_bug_17_scaffold_distinguishes_generic_backend_error() -> None:
-    """2026-05-23 audit bug #17: direct `scaffold` subcommand always
-    asked for a sibling, even for generic backends where simple_text_demo
-    is portable and no per-model tt/ folder is needed. Pin the
-    differentiated error message that points to `prepare --execute`."""
-    src = (Path(cli.__file__).parent / "scaffold.py").read_text()
+    """2026-05-23 audit bug #17: direct `scaffold` always asked for a sibling, even
+    for generic backends where no per-model tt/ folder is needed.
 
-    assert "routing_mode" in src and '"generic"' in src, "scaffold must inspect the picked backend's routing_mode"
-    assert "prepare " in src and "--execute" in src, (
-        "scaffold's generic-backend error must point users at " "`prepare --execute` instead of demanding a sibling"
+    Originally pinned an error message pointing at `prepare --execute`. The
+    resolution is now stronger: a generic backend does not error at all, it walks
+    the model and brings it up per component. Pin THAT, since the bug being
+    guarded against is "generic backends are made to demand a sibling"."""
+    from scripts.tt_hw_planner.family_backends import FamilyBackend, ROUTING_GENERIC, prefers_module_tree
+
+    generic = FamilyBackend(
+        category="LLM",
+        name="pin",
+        demo_path="models/demos/whatever",
+        routing_mode=ROUTING_GENERIC,
+        canonical_hf_id=None,
+        use_module_tree=False,
+    )
+    assert prefers_module_tree(generic), (
+        "a generic backend must route to the module-tree scaffold rather than "
+        "demanding a sibling or falling through to cold-start"
     )
 
 
@@ -2965,12 +2976,23 @@ def test_plan_scaffold_raises_cold_start_for_no_sibling() -> None:
         "so cmd_up can fall through to prepare --execute"
     )
 
-    generic_idx = src.find('routing_mode", "") == "generic"')
-    assert generic_idx >= 0
-    body2 = src[generic_idx : generic_idx + 1500]
-    assert "ColdStartScaffoldError" in body2, (
-        "the generic-backend branch must raise ColdStartScaffoldError " "(not plain ScaffoldError) for the same reason"
-    )
+    # The generic-backend branch that also raised ColdStartScaffoldError has been
+    # removed: "generic" describes the registry entry, not the model, and the model
+    # can be walked. Cold-start is now reached only for the two cases it was written
+    # for -- no ported sibling (pinned above) and no backend registered for the
+    # category (pinned by test_demo_folder_scaffold_uses_cold_start_when_no_backend
+    # _registered). See test_coldstart_triggers.py.
+    from scripts.tt_hw_planner.family_backends import FamilyBackend, ROUTING_GENERIC, prefers_module_tree
+
+    assert prefers_module_tree(
+        FamilyBackend(
+            category="LLM",
+            name="pin",
+            demo_path="models/demos/whatever",
+            routing_mode=ROUTING_GENERIC,
+            canonical_hf_id=None,
+        )
+    ), "a generic backend must no longer route to cold-start"
 
 
 def test_demo_folder_scaffold_uses_cold_start_when_no_backend_registered() -> None:
