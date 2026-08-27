@@ -21,10 +21,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/matmul.cpp"
-CB_IN0, CB_IN1, CB_OUT, CB_ACC = 0, 1, 16, 24
 TILE = 32
 
 
@@ -51,30 +50,22 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
 
     core_ranges, cores = single_core()
 
-    ct_args = []
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
-
     # Each operand CB must hold its whole block: the k-loop indexes tiles inside
     # it, so partial residency is not an option here.
-    cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=rt * kt),
-        make_cb(CB_IN1, core_ranges, num_pages=kt * ct),
-        make_cb(CB_OUT, core_ranges, num_pages=rt * ct),
-        # The running total. A separate CB from CB_OUT: intermediates are pushed
-        # here and re-consumed by the next k-block, so the DM writer must not see
-        # them. Sized to exactly one block, matching push/pop granularity.
-        make_cb(CB_ACC, core_ranges, num_pages=rt * ct),
+    dfbs = [
+        dfb("in0", rt * kt),
+        dfb("in1", kt * ct),
+        dfb("out", rt * ct),
+        dfb("acc", rt * ct),
+        # Declared even without MM_BIAS: the kernel declares its Storage unconditionally.
+        dfb("bias", ct),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
+        tensors={"in0": ta, "in1": tb, "out": tout},
         defines=(
             [("MM_RT_DIM", str(rt)), ("MM_CT_DIM", str(ct)), ("MM_KT_DIM", str(kt)), ("MM_K_BLOCKS", str(k_blocks))]
             + ([("MM_ACC_L1", "1")] if mode == "l1" else [])
@@ -87,7 +78,8 @@ def run(device, rt, ct, kt, k_blocks=1, relu=None, mode="dst", seed=0, fidelity=
     )
 
     logger.info(f"running unified matmul: rt={rt} ct={ct} kt={kt} k_blocks={k_blocks} mode={mode} relu={relu}")
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(device, spec, {"in0": ta, "in1": tb, "out": tout})
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)
     # Sum of per-block products, with the chains applied where the hardware

@@ -21,11 +21,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from unified_harness import make_cb, single_core, unified_program
+from unified_harness import dfb, run_unified_spec, single_core, unified_program_spec
 
 KERNEL = "unified_kernels/eltwise_add_exp.cpp"
-
-CB_IN0, CB_IN1, CB_OUT = 0, 1, 16
 
 
 def run(device, num_blocks=1, tiles_per_block=1, custom_load=False, seed=0):
@@ -45,36 +43,30 @@ def run(device, num_blocks=1, tiles_per_block=1, custom_load=False, seed=0):
     core_ranges, cores = single_core()
 
     # CT args: [num_blocks, tiles_per_block] then TensorAccessorArgs for in0, in1, out
-    ct_args = []
     named_ct_args = [("num_blocks", num_blocks), ("tiles_per_block", tiles_per_block)]
-    for t in (ta, tb, tout):
-        ct_args.extend(ttnn.TensorAccessorArgs(t).get_compile_time_args())
-
-    rt_args = [ta.buffer_address(), tb.buffer_address(), tout.buffer_address()]
 
     # Double-buffer the inputs; the output CB must hold a whole block because the
     # SFPU strategy reserves the block, packs each tile, then pushes once.
-    cbs = [
-        make_cb(CB_IN0, core_ranges, num_pages=2 * tiles_per_block),
-        make_cb(CB_IN1, core_ranges, num_pages=2 * tiles_per_block),
-        make_cb(CB_OUT, core_ranges, num_pages=2 * tiles_per_block),
+    dfbs = [
+        dfb("in0", 2 * tiles_per_block),
+        dfb("in1", 2 * tiles_per_block),
+        dfb("out", 2 * tiles_per_block),
     ]
 
-    program = unified_program(
+    spec = unified_program_spec(
         kernel_source=KERNEL,
-        core_ranges=core_ranges,
-        cores=cores,
-        cbs=cbs,
-        compile_time_args=ct_args,
+        nodes=core_ranges,
+        dfbs=dfbs,
         named_compile_time_args=named_ct_args,
-        runtime_args=rt_args,
+        tensors={"in0": ta, "in1": tb, "out": tout},
         defines=[("EA_CUSTOM_LOAD", "1")] if custom_load else None,
     )
 
     logger.info(
         f"running unified kernel: num_blocks={num_blocks} tiles_per_block={tiles_per_block} custom_load={custom_load}"
     )
-    out = ttnn.generic_op([ta, tb, tout], program)
+    run_unified_spec(device, spec, {"in0": ta, "in1": tb, "out": tout})
+    out = tout
 
     got = ttnn.to_torch(out).to(torch.float32)
     want = torch.exp(a.to(torch.float32) + b.to(torch.float32))
