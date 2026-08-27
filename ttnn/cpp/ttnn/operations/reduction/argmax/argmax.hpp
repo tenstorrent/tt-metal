@@ -14,6 +14,7 @@ Tensor argmax(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt,
     bool use_rvv = false,
+    bool use_sfpu = false,
     std::optional<Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn
