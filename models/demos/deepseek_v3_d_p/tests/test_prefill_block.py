@@ -502,6 +502,8 @@ def _ci_unsupported_param_combos(**params):
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
+        # pcc-prompt_5k runs ~3x longer than perf-prompt_5k (122s vs 41s warm on 8x4) because the CPU
+        # reference dominates, not the device. Rebalancing CI around that split is a separate PR.
         ("prompt_5k", False, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
         ("prompt_5k", True, PREFILL_CHUNK_OUTPUT_TOKENS, 8),
     ],
