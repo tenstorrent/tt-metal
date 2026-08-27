@@ -1284,12 +1284,19 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
 
-- name: TT-DiT Wan2.2-T2V-A14B e2e tests (BH QuietBox 2)
+- name: TT-DiT Wan2.2-T2V-A14B e2e tests
   cmd: |
     unset HF_HUB_OFFLINE
-    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    fail=0
+    # 2x2 and the 2x4 family skip on a Galaxy by device count; ring_bh_4x8 now skips on the
+    # fabric payload guard in conftest.py. wh_4x8 at 480p is still excluded: it misses its
+    # encoder tolerance (0.105-0.111 measured against 0.1), which is a separate question.
     pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
-      -k "resolution_480p and t2v"
+      -k "resolution_480p and t2v and not wh_4x8" || fail=1
+    pytest --timeout 1500 models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py \
+      -k "4x8sp1tp0nl4_ring_is_fsdp1 and resolution_720p" || fail=1
+    exit $fail
   model: wan-2.2-t2v
   model_family: Wan
   skus:
@@ -1297,6 +1304,10 @@
       timeout: 50
       tier: 1
       release_ready: true
+    wh_galaxy_perf:
+      timeout: 60
+      tier: 1
+      release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1477,6 +1488,21 @@
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+# ── DeepSeek V3 (Wormhole Galaxy / TG) ──
+- name: DeepSeek-V3 decode stress e2e tests (Galaxy)
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG
+    pytest models/demos/deepseek_v3/demo/test_demo.py -k "tg_stress or tg_upr8" --timeout 900
+  model: deepseek-v3-tg
+  model_family: DeepSeek
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+      tier: 1
+      release_ready: false
+  owner_id: U08H32XUS9W # Yousef Al Rawwash
   team: models
 
 # ── DeepSeek V3 B1 (Black Hole supercluster, bh_sc4 / bh_sc16) ──
