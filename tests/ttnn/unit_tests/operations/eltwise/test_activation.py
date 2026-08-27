@@ -253,7 +253,8 @@ def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
     assert boundary == torch.tensor(boundary, dtype=torch.bfloat16).item(), "boundary must be exact in bf16"
 
     # One bf16 step either side pins the split: below and on the boundary are softplus, above is linear.
-    values = [_bfloat16_neighbour(boundary, -1), boundary, _bfloat16_neighbour(boundary, 1)]
+    values = [_bfloat16_neighbour(boundary, steps=-1), boundary, _bfloat16_neighbour(boundary, steps=1)]
+    stride = len(values)
     torch_input_tensor = torch.tensor(values, dtype=torch.bfloat16).repeat(64, 32)
 
     torch_output_tensor = torch.nn.functional.softplus(torch_input_tensor, beta=beta, threshold=threshold)
@@ -264,18 +265,24 @@ def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
     output_tensor = ttnn.softplus(input_tensor, beta=beta, threshold=threshold)
     output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
 
-    # The regression assertion is tolerance-free. softplus(x) is strictly greater than x, so on the
-    # boundary a result equal to the input can only mean the linear branch was taken. Selecting the
-    # boundary column rather than checking the whole tile keeps a localised error from being averaged
-    # away, which is also why the accuracy check below cannot be the one carrying the regression.
-    on_boundary = output_tensor[:, 1::3]
-    assert not torch.equal(
-        on_boundary, torch_input_tensor[:, 1::3]
+    # The regression assertion is tolerance-free and per-element. softplus(x) is strictly greater
+    # than x, so on the boundary any lane equal to its input took the linear branch. Comparing
+    # elementwise rather than with torch.equal is what makes this catch an error confined to a
+    # subset of lanes, faces or unrolled iterations; a whole-tensor equality check would pass as
+    # long as any single lane differed.
+    on_boundary = output_tensor[:, 1::stride]
+    assert torch.all(
+        on_boundary > torch_input_tensor[:, 1::stride]
     ), f"softplus took the linear branch at beta*x == threshold (beta={beta}, threshold={threshold})"
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+# `threshold` must stay at roughly 4 or below. The boundary residual is log1p(exp(-threshold))/beta,
+# which falls under half a bfloat16 output ULP by threshold=5, and past SOFTPLUS_POLY_BOUNDARY = 5.0f
+# the kernel drops the residual entirely. A correct softplus then returns the input bit for bit and
+# the strict-inequality assertion below would fail spuriously. Note the neighbouring test_softplus
+# uses thresholds up to 40 and the ttnn default is 20; neither can be reused here.
 @pytest.mark.parametrize("beta, threshold", [(2, 1), (1, 2), (0.5, 1), (4, 1), (1, 0.5)])
 def test_softplus_threshold_boundary(device, beta, threshold):
     run_softplus_boundary_test(device, beta, threshold)
