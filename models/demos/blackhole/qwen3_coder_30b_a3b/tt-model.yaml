@@ -1,0 +1,151 @@
+# tt-model container package (v5.1) — qwen3-coder-30b-a3b on QB2 (2x P300, 4 chips).
+#
+# This one file is the whole authoring interface:
+#   tt-model package --container models/demos/blackhole/qwen3_coder_30b_a3b/tt-model.yaml
+#
+# It lives next to the model on purpose: the serving recipe then travels through review
+# in the same PR as the code it serves.
+schema: "5.1"
+
+repo: raahemnabeel/qwen3-coder-30b-a3b
+name: qwen3-coder-30b-a3b
+weights: Qwen/Qwen3-Coder-30B-A3B-Instruct   # a POINTER — 57 GB, never baked into the image
+kind: vllm-plugin                            # stock vLLM + the standalone tenstorrent/vllm-tt-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/raahem/metal-publish
+
+  # EXACTLY what ships — an allowlist, never a denylist. The image's tt-metal tree holds
+  # NO models/ except these, so an under-specified list fails the image's own build-time
+  # import check on the author's machine, not on a consumer's first boot.
+  code:
+    # tt/ imports models.common.modules.sampling.sampling_1d,
+    # models.common.modules.tt_ccl and models.common.readiness_check.contract
+    - models/common
+    # the whole model, 1.6 MB: tt/, vllm_bundle/, config/, tests/, README.md
+    - models/demos/blackhole/qwen3_coder_30b_a3b
+
+  ubuntu: "24.04"
+  python: "3.12"
+
+runtime:
+  # The plugin monkeypatches vLLM internals, so this pin is load-bearing, not cosmetic.
+  # This box serves with 0.24.0 (reported 0.24.0+empty — the local tag comes from the
+  # VLLM_TARGET_DEVICE=empty sdist build, which is what the image does too).
+  vllm: {version: "0.24.0"}
+
+  # tenstorrent/vllm-tt-plugin at origin/main. Nothing model-specific lives in the plugin:
+  # this model registers purely through extra_models_dir below, so the plugin is a plain
+  # dependency here. Pinned to a SHA because a moving plugin under a validated model is
+  # exactly the failure this whole path exists to prevent.
+  plugin:
+    repo: https://github.com/tenstorrent/vllm-tt-plugin
+    ref: 9350f5ae5d9ec9e2fffb696ef8f2351578368845
+
+  # The directory the plugin SCANS — it walks the CHILDREN of this dir for
+  # vllm_metadata.json. Registration chain:
+  #   register_tt_models() -> _register_models_from_extra_dir() -> this dir ->
+  #   vllm_bundle/qwen3_coder_30b_a3b_instruct/vllm_metadata.json ->
+  #   Qwen3MoeForCausalLM registered as TTQwen3MoeForCausalLM ->
+  #   "tt_qwen3_coder_30b_a3b_instruct:Qwen3CoderForCausalLM" -> the shim ->
+  #   models.demos.blackhole.qwen3_coder_30b_a3b.tt.generator_vllm:Qwen3CoderForCausalLM
+  # The shim's parents[6] still resolves in-container: the tree lands at
+  # /opt/tt-metal/models/demos/blackhole/<model>/vllm_bundle/<bundle>/, so six levels up
+  # is /opt/tt-metal, which is also PYTHONPATH. Setting this also makes the build pass
+  # TT_VLLM_BUILTIN_MODELS=0, so registration comes solely from here.
+  extra_models_dir: models/demos/blackhole/qwen3_coder_30b_a3b/vllm_bundle
+
+  # Uncomment once requirements.lock is committed next to this file, after the first
+  # successful build — later builds then resolve nothing at all.
+  # lock: requirements.lock
+
+serve:
+  port: 8000
+
+  # 256000, NOT the 262144 HF advertises. config/context_contract.json records
+  # current_supported_context: 256000 with capability_reduction: true, and
+  # tt/generator_vllm.py reads that file as the source of truth and REFUSES to start
+  # above it. (Reason on record: an unresolved prefill cliff in the last ~3,100 tokens,
+  # and 17.5 min TTFT at that length even on the path that works.)
+  max_model_len: 256000
+
+  # 64, from the validated tt-inference-server P300X2 spec, which is authoritative here.
+  # config/context_contract.json's prose says "paging is unchanged (block_size 32)"; that
+  # text is older than the serving config and the spec supersedes it.
+  block_size: 64
+
+  # One configuration, measured. max_num_seqs only bounds what vLLM batches IN FLIGHT, and
+  # with the stage-11 decode-width ladder now the model default, batch-1 decode is already
+  # efficient at this cap — so a lower cap buys nothing. Measured on this box, 128 output
+  # tokens, tt-model 0.1.0:
+  #
+  #                          seqs=1        seqs=32
+  #   single-stream TTFT     0.232 s       0.219 s
+  #   single-stream decode   50.6 tok/s    49.2 tok/s
+  #   8 concurrent, total    46.7 tok/s    71.4 tok/s
+  #   8 concurrent, /user     5.8 tok/s     8.9 tok/s
+  #   slowest of the 8       21.9 s        14.4 s
+  #
+  # seqs=32 is identical for one user and strictly better for several, so there is no
+  # latency-vs-capacity trade to expose as separate profiles. Untested above 8 concurrent,
+  # and TTFT-under-load is unmeasured; if either turns out to matter, `serve_profiles:`
+  # is how you would split this again.
+  hardware: p300x2
+  mesh_device: P300x2
+  max_num_seqs: 32
+
+  # Structured, not a JSON string: tt-model renders it into --additional-config.
+  additional_config:
+    tt:
+      sample_on_device_mode: all
+      trace_region_size: 50331648
+      fabric_config: FABRIC_1D_RING
+
+  # Tool calling. tt-model emits --enable-auto-tool-choice alongside the parser, because
+  # vLLM hard-errors on the parser flag without it.
+  capabilities:
+    tool_parser: qwen3_coder
+
+  # Runtime environment, from the validated tt-inference-server P300X2 spec.
+  # MESH_DEVICE is NOT listed: it is derived from each profile's mesh_device.
+  # VLLM_TARGET_DEVICE is NOT listed either: it is a BUILD-time variable for the vLLM
+  # fork, and this image builds stock vLLM with VLLM_TARGET_DEVICE=empty plus the plugin.
+  env:
+    ARCH_NAME: blackhole
+    VLLM_CONFIGURE_LOGGING: "1"
+    VLLM_RPC_TIMEOUT: "900000"
+    VLLM_ALLOW_LONG_MAX_MODEL_LEN: "1"
+    TORCHDYNAMO_DISABLE: "1"
+    TT_METAL_OPERATION_TIMEOUT_SECONDS: "120.0"
+    # The variable-width decode ladder (stage 11, doc/batch_scaling). This is the model's
+    # default now, so setting it changes nothing today — it is kept to pin the behaviour
+    # explicitly, so a future change to that default cannot silently move this model.
+    QWEN3_DECODE_WIDTHS: "1,2,4,8,16,32"
+
+  # Anything without a named field goes here, verbatim.
+  args:
+    - [--max-num-batched-tokens, "256000"]
+    - [--max-log-len, "32"]
+    - [--generation-config, vllm]
+    - [--seed, "9472"]
+
+
+# Build-time assertions, run INSIDE the finished image after the USER switch. These make
+# the code/ allowlist and the tree prune safe: an under-shipped image fails HERE.
+verify:
+  # config/ is RUNTIME DATA, not documentation. tt/generator_vllm.py reads both files;
+  # _supported_context() swallows OSError and silently falls back to in-code defaults, so
+  # a missing file would serve at the wrong precision/context with no error at all.
+  - "from pathlib import Path; p = Path('/opt/tt-metal/models/demos/blackhole/qwen3_coder_30b_a3b'); assert (p/'config'/'selected_precision_config.json').is_file(), 'precision config missing — the model would silently use in-code defaults'; assert (p/'config'/'context_contract.json').is_file(), 'context contract missing — _supported_context() would silently fall back'"
+  # the real adapter. (The bundle shim is NOT asserted here: it is importable only once
+  # something has put its folder on sys.path, which is what the plugin does. tt-model
+  # verifies that resolution generically for every model — see launchers.py's
+  # RESOLVE_EXTRA_MODELS — so a per-model assertion would only duplicate it, badly.)
+  - "from models.demos.blackhole.qwen3_coder_30b_a3b.tt.generator_vllm import Qwen3CoderForCausalLM; assert Qwen3CoderForCausalLM"
+
+card:
+  quickstart: |
+    ### Use it
+    An OpenAI-compatible server on `http://127.0.0.1:8000`. Point any OpenAI client at it
+    with model id `Qwen/Qwen3-Coder-30B-A3B-Instruct`.
