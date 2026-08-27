@@ -174,6 +174,8 @@ std::vector<uint32_t> make_reader_ct(
         direct_write || operation_arguments.read_x_at_offset,
         operation_arguments.read_x_at_offset,
         start_page,
+        operation_arguments.min_active_tokens,
+        operation_arguments.max_active_tokens,
         geo::CB_X_IN,
         geo::CB_X_TILES,
         geo::CB_X_STAGE,

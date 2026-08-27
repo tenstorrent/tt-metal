@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -41,7 +42,12 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<ttnn::Tensor>& output = std::nullopt,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
     bool read_x_at_offset = false,
-    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu,
+    // Active-token band this op owns: an expert whose count falls outside [min, max] is
+    // dropped like a zero count. Wide open by default; a hybrid dispatch narrows it so this
+    // op and unified_routed_expert_moe split the experts by load over ONE counts vector.
+    uint32_t min_active_tokens = 0,
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu
 

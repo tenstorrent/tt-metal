@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <limits>
 #include <cstdint>
 #include "moe_fused_swiglu_program_factory.hpp"
 #include "moe_fused_swiglu_types.hpp"
@@ -50,6 +51,8 @@ ttnn::Tensor moe_fused_swiglu(
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets);
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    uint32_t min_active_tokens = 0,
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
 
 }  // namespace ttnn::prim
