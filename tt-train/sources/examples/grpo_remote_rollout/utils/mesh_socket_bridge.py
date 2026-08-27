@@ -49,7 +49,7 @@ _LOGICAL_CORE = (0, 0)
 # pages through it, so this only needs to hold a few pages; the socket is a
 # credit-based ring and the send/recv side advance in lockstep at the tile
 # granularity. 64 KiB comfortably fits several bf16 tiles.
-_DEFAULT_FIFO_SIZE_BYTES = 64 * 1024
+_DEFAULT_FIFO_SIZE_BYTES = 128 * 1024
 
 
 def _require_single_device_mesh(role: str, mesh: Any) -> None:
@@ -87,6 +87,23 @@ class MeshSocketWeightBridge(WeightBridge):
     / ``receive_weights`` (receiver) -> ``barrier()``. ``send_weights`` and
     ``receive_weights`` may be called any number of times between ``connect``
     and process teardown; the socket is created once by ``connect`` and reused.
+
+    Assumes the weight-dict structure -- the set of keys and each key's
+    shape, dtype, and layout -- is FIXED between ``connect()`` and process
+    teardown. The JSON manifest is exchanged over MPI exactly once (on the
+    first send/receive after connect, via ``_lazy_manifest_exchange``); the
+    key order is captured in ``self._ordered_keys`` and used verbatim for
+    every subsequent ``send_async`` / ``recv_async``; and the receiver's
+    destination tensors are allocated exactly once into
+    ``self._receiving_pad`` and reused across every ``receive_weights()``.
+    Source-tensor validation on the sender likewise runs exactly once
+    inside ``_lazy_manifest_exchange`` -- subsequent pushes trust the
+    contract.
+
+    If the workload adds/removes keys or resizes any tensor between pushes,
+    this bridge will misalign bytes into the wrong destination or raise a
+    shape mismatch inside ``send_async`` / ``recv_async``. Callers whose
+    model structure is not fixed must construct a fresh bridge.
     """
 
     def __init__(
@@ -122,6 +139,15 @@ class MeshSocketWeightBridge(WeightBridge):
 
         # Cached MeshSocket, populated by connect().
         self._socket: Any = None
+        # Populated on the first send/recv after connect (see _lazy_manifest_exchange).
+        self._manifest_exchanged: bool = False
+        # Stable key order shared by sender and receiver -- send_async and
+        # recv_async positions must match, so both sides iterate this exact
+        # list on every push.
+        self._ordered_keys: Optional[List[str]] = None
+        # Receiver only: cached destination tensors reused across every
+        # receive_weights().
+        self._receiving_pad: Optional[dict[str, "ttnn.Tensor"]] = None
 
     @classmethod
     def init_sender(
@@ -181,24 +207,67 @@ class MeshSocketWeightBridge(WeightBridge):
         )
         self._socket = ttnn.MeshSocket(self._mesh, socket_config)
 
+    def _lazy_manifest_exchange(
+        self,
+        *,
+        weights: Optional[dict[str, "ttnn.Tensor"]] = None,
+    ) -> None:
+        """First-call handshake: sender validates its source tensors and ships
+        the manifest; receiver recvs the manifest and allocates
+        ``self._receiving_pad``. Both roles record the ordered key list into
+        ``self._ordered_keys`` so subsequent ``send_async`` / ``recv_async``
+        use the same, position-matched order. No-op on subsequent calls.
+
+        Sender must pass ``weights``; receiver calls with no args.
+        """
+        if self._manifest_exchanged:
+            return
+        if self._role == _ROLE_SENDER:
+            assert weights is not None, "MeshSocketWeightBridge._lazy_manifest_exchange: sender must pass weights"
+            ordered_keys = sorted(weights.keys())
+            # Source-tensor contract (bf16/TILE/DRAM/replicated) is validated
+            # once; structure is fixed for the lifetime of the bridge (see
+            # class docstring).
+            for k in ordered_keys:
+                _validate_source_tensor(k, weights[k])
+            _send_manifest(self._peer_rank, weights, ordered_keys)
+            self._ordered_keys = ordered_keys
+        else:
+            assert self._targets is not None  # enforced in __init__ for receivers.
+            target = self._targets[0]
+            manifest = _recv_manifest(self._peer_rank)
+            pad: dict[str, "ttnn.Tensor"] = {}
+            ordered_keys: List[str] = []
+            for entry in manifest["entries"]:
+                key = entry["key"]
+                spec = ttnn.TensorSpec(
+                    entry["shape"],
+                    _dtype_from_name(entry["dtype"]),
+                    _layout_from_name(entry["layout"]),
+                )
+                pad[key] = ttnn.allocate_tensor_on_device(spec, target)
+                ordered_keys.append(key)
+            self._receiving_pad = pad
+            self._ordered_keys = ordered_keys
+        self._manifest_exchanged = True
+
     def send_weights(self, weights: dict[str, "ttnn.Tensor"]) -> None:
         if self._role != _ROLE_SENDER:
             raise RuntimeError("MeshSocketWeightBridge.send_weights called on a receiver.")
         if self._socket is None:
             raise RuntimeError("MeshSocketWeightBridge.send_weights: call connect() first.")
 
-        keys = sorted(weights.keys())
-        for k in keys:
-            _validate_source_tensor(k, weights[k])
+        # On the first push this validates source tensors and ships the
+        # manifest; subsequent pushes are a no-op that just reuses the
+        # already-captured ``self._ordered_keys``.
+        self._lazy_manifest_exchange(weights=weights)
 
-        # Manifest (order + spec) travels over MPI so the receiver knows exactly
-        # what to allocate and in which order to post recv_async.
-        _send_manifest(self._peer_rank, weights, keys)
-
-        # Stream all tensor bytes over the fabric. No inter-tensor sync: the
-        # single MeshSocket queues them in order and the receiver pulls them in
-        # order via recv_async posted in the same key order.
-        for k in keys:
+        # Stream all tensor bytes over the fabric in the position-matched
+        # order captured on the first push. No inter-tensor sync: the single
+        # MeshSocket queues them in order and the receiver pulls them in the
+        # same order via recv_async.
+        assert self._ordered_keys is not None
+        for k in self._ordered_keys:
             ttnn.experimental.send_async(weights[k], self._socket)
 
         # Drain the fabric so the following barrier is meaningful (barrier is
@@ -212,33 +281,22 @@ class MeshSocketWeightBridge(WeightBridge):
             raise RuntimeError("MeshSocketWeightBridge.receive_weights called on a sender.")
         if self._socket is None:
             raise RuntimeError("MeshSocketWeightBridge.receive_weights: call connect() first.")
-        assert self._targets is not None  # enforced in __init__ for receivers.
 
-        manifest = _recv_manifest(self._peer_rank)
-        entries = manifest["entries"]
-        target = self._targets[0]
+        # On the first push this recvs the manifest and allocates the
+        # receiving pad; subsequent pushes reuse the pad + key order.
+        self._lazy_manifest_exchange()
 
-        # Allocate first, in manifest order, so we can post recv_async without
-        # racing against another allocation on the target device.
-        allocated: List[tuple[str, "ttnn.Tensor"]] = []
-        for entry in entries:
-            spec = ttnn.TensorSpec(
-                entry["shape"],
-                _dtype_from_name(entry["dtype"]),
-                _layout_from_name(entry["layout"]),
-            )
-            tensor = ttnn.allocate_tensor_on_device(spec, target)
-            allocated.append((entry["key"], tensor))
-
+        assert self._ordered_keys is not None
+        assert self._receiving_pad is not None
         # Post recv_async in the exact order the sender used for send_async.
-        for _key, tensor in allocated:
-            ttnn.experimental.recv_async(tensor, self._socket)
+        for key in self._ordered_keys:
+            ttnn.experimental.recv_async(self._receiving_pad[key], self._socket)
 
         # Drain all recvs so the returned tensors are fully written before we
         # hand them back to the caller (who will do worker.update_weights).
         ttnn.synchronize_device(self._mesh)
 
-        return [{k: t for k, t in allocated}]
+        return [self._receiving_pad]
 
     def barrier(self) -> None:
         _handshake(self._role, self._peer_rank)
