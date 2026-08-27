@@ -147,11 +147,12 @@ struct TableMetadata {
     std::uint16_t lock_schema_version{};
     std::uint16_t key_schema_version{};
     std::uint16_t replay_schema_version{};
-    // Zero means legacy replay evidence whose explicit CKC cannot authorize a
-    // program-config-only runtime selection. Exact entries require schema 1.
+    // Zero disables typed exact selection. Schema 1 is the legacy attested
+    // form; schema 2 is deterministic direct-bank evidence, which binds the
+    // semantic/build contract without inventing device-session provenance.
     std::uint16_t program_config_only_evidence_schema_version{};
-    // Enabled online models independently require the same bound activation
-    // evidence even when the lock contains no exact entries.
+    // Enabled online models independently require the same bound evidence
+    // schema even when the lock contains no exact entries.
     std::uint16_t online_program_config_model_evidence_schema_version{};
     Sha256 content_sha256{};
     Sha256 semantic_source_sha256{};

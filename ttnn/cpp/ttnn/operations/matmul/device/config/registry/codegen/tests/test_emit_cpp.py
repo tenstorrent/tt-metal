@@ -114,6 +114,66 @@ def add_program_config_exact_entry(lock: dict, family: str = "multi_core_reuse")
     return entry
 
 
+def convert_to_direct_bank_lock(lock: dict, *, include_exact: bool = True) -> dict:
+    entry = add_program_config_exact_entry(lock) if include_exact else None
+    lock["entries"] = []
+    lock["policy_version"] = emitter.POLICY_VERSION
+    lock["runtime_capability_sha256"] = "0" * 64
+    bank_artifact_sha256 = "d" * 64
+    if entry is not None:
+        key = entry["key"]
+        key["board_capability_class"] = 0
+        key["device_count"] = 1
+        key["mesh_rows"] = 1
+        key["mesh_cols"] = 1
+        key["topology_sha256"] = "0" * 64
+        entry.pop("certificate")
+        entry["entry_id"] = emitter.program_config_exact_entry_id(entry)
+        entry["bank_evidence"] = {
+            "lookup_key_sha256": emitter._sha256_value({"domain": entry["domain"], "key": entry["key"]}),
+            "policy_version": emitter.DIRECT_BANK_EVIDENCE_POLICY_VERSION,
+            "program_config_sha256": emitter._sha256_value(entry["program_config"]),
+            "schema_version": 1,
+            "source_sha256": bank_artifact_sha256,
+        }
+    else:
+        lock["program_config_exact_entries"] = []
+
+    models = lock.get("online_program_config_models", [])
+    for model in models:
+        model["training_table_sha256"] = bank_artifact_sha256
+        model["support"]["board_capability_class"] = 0
+        model["support"]["device_count"] = 1
+        model["support"]["mesh_rows"] = 1
+        model["support"]["mesh_cols"] = 1
+        model["support"]["topology_sha256"] = "0" * 64
+        model["support_sha256"] = emitter._sha256_value(model["support"])
+        model["model_sha256"] = emitter.online_model_hash(model)
+    if models:
+        binding = emitter.online_models_bundle_binding(lock, models)
+        for model in models:
+            model["bundle_binding_sha256"] = binding
+
+    evidence = {
+        "authorizes_exact_entries": include_exact,
+        "bank_artifact_sha256": bank_artifact_sha256,
+        "bank_entry_inventory_sha256": emitter.direct_bank_entry_inventory_hash(lock),
+        "bank_policy_version": emitter.DIRECT_BANK_EVIDENCE_POLICY_VERSION,
+        "build_identity_sha256": lock["build_identity_sha256"],
+        "exact_entry_inventory_sha256": emitter._sha256_value(emitter._exact_entry_inventory(lock)),
+        "exact_native_support_sha256": emitter.exact_native_support_hash(lock),
+        "online_model_bundle_binding_sha256": models[0]["bundle_binding_sha256"] if models else "0" * 64,
+        "proof_sha256": "0" * 64,
+        "safety_evidence_sha256": emitter.program_config_safety_inventory_hash(lock, models),
+        "schema_version": 2,
+        "semantic_source_sha256": lock["semantic_source_sha256"],
+    }
+    evidence["proof_sha256"] = emitter.program_config_only_evidence_hash(evidence)
+    lock["program_config_only_evidence"] = evidence
+    resign(lock)
+    return lock
+
+
 def active_online_model(lock: dict) -> dict:
     if "program_config_only_evidence" not in lock:
         lock["program_config_only_evidence"] = op_default_evidence(lock)
@@ -369,6 +429,49 @@ def test_program_config_only_exact_entries_require_bound_authorization() -> None
         pass
     else:
         raise AssertionError("unauthorized program-config exact entry must fail closed")
+
+
+def test_direct_bank_exact_entry_emits_without_session_certificate_and_rejects_tamper() -> None:
+    lock = convert_to_direct_bank_lock(fixture())
+    checked = emitter.validate_lock(lock)
+    _, source = emitter.emit(checked)
+    assert b".program_config_only_evidence_schema_version = 2" in source
+    assert b"kProgramConfigExactEntries" in source
+    assert "certificate" not in lock["program_config_exact_entries"][0]
+    assert "runtime_capability_sha256" not in lock["program_config_only_evidence"]
+
+    mutations = (
+        lambda item: item["program_config_exact_entries"][0]["bank_evidence"].__setitem__("source_sha256", "e" * 64),
+        lambda item: item["program_config_exact_entries"][0]["bank_evidence"].__setitem__(
+            "lookup_key_sha256", "e" * 64
+        ),
+        lambda item: item["program_config_exact_entries"][0]["bank_evidence"].__setitem__(
+            "program_config_sha256", "e" * 64
+        ),
+        lambda item: item["program_config_only_evidence"].__setitem__("semantic_source_sha256", "e" * 64),
+    )
+    for mutate in mutations:
+        tampered = copy.deepcopy(lock)
+        mutate(tampered)
+        resign(tampered)
+        try:
+            emitter.validate_lock(tampered)
+        except emitter.LockValidationError:
+            pass
+        else:
+            raise AssertionError("direct-bank evidence tamper must fail closed")
+
+
+def test_direct_bank_optional_online_model_emits_under_same_schema() -> None:
+    lock = fixture()
+    lock["online_program_config_models"] = [active_online_model(lock)]
+    convert_to_direct_bank_lock(lock, include_exact=False)
+    checked = emitter.validate_lock(lock)
+    _, source = emitter.emit(checked)
+    assert b".online_program_config_model_evidence_schema_version = 2" in source
+    assert b"kOnlineModel0" in source
+    assert checked["online_program_config_models"][0]["support"]["board_capability_class"] == 0
+    assert checked["online_program_config_models"][0]["support"]["topology_sha256"] == "0" * 64
 
 
 def test_active_online_program_config_model_validates_emits_and_has_reference_parity() -> None:

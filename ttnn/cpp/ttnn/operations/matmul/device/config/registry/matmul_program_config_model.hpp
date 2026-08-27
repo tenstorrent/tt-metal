@@ -104,11 +104,36 @@ static_assert(std::is_standard_layout_v<ProgramConfigExactEntry>);
 inline constexpr const ProgramConfigExactEntry* lookup_program_config_exact(
     const KeyDescriptor& key, const std::span<const ProgramConfigExactEntry> entries) noexcept {
     const auto candidate = std::lower_bound(
-        entries.begin(), entries.end(), key,
+        entries.begin(),
+        entries.end(),
+        key,
         [](const ProgramConfigExactEntry& entry, const KeyDescriptor& requested_key) {
             return entry.key < requested_key;
         });
     return candidate != entries.end() && candidate->key == key ? &*candidate : nullptr;
+}
+
+// Direct-bank measurements describe the one-chip architecture and legal
+// worker grid, not a particular board serial/topology. Normalize only those
+// physical attestation fields; device count and mesh shape remain semantic
+// deployment axes and must still match exactly.
+constexpr KeyDescriptor direct_bank_key(KeyDescriptor key) noexcept {
+    key.board_capability_class = 0;
+    key.topology_sha256 = {};
+    return key;
+}
+
+inline constexpr const ProgramConfigExactEntry* lookup_program_config_exact_direct_bank(
+    const KeyDescriptor& key, const std::span<const ProgramConfigExactEntry> entries) noexcept {
+    const auto normalized = direct_bank_key(key);
+    const auto candidate = std::lower_bound(
+        entries.begin(),
+        entries.end(),
+        normalized,
+        [](const ProgramConfigExactEntry& entry, const KeyDescriptor& requested_key) {
+            return direct_bank_key(entry.key) < requested_key;
+        });
+    return candidate != entries.end() && direct_bank_key(candidate->key) == normalized ? &*candidate : nullptr;
 }
 
 struct GbdtNode {
@@ -271,12 +296,10 @@ constexpr bool is_canonical_tile_padding(
         return false;
     }
     const auto tile_count = whole_tiles + has_partial_tile;
-    return tile_count <= std::numeric_limits<std::uint64_t>::max() / tile_extent &&
-           padded == tile_count * tile_extent;
+    return tile_count <= std::numeric_limits<std::uint64_t>::max() / tile_extent && padded == tile_count * tile_extent;
 }
 
-constexpr std::uint64_t calibrated_axis_delta(
-    const std::uint64_t span, const std::uint64_t threshold_ppm) noexcept {
+constexpr std::uint64_t calibrated_axis_delta(const std::uint64_t span, const std::uint64_t threshold_ppm) noexcept {
     constexpr std::uint64_t million = 1'000'000;
     // floor(span * threshold / 1e6), decomposed to avoid overflow.
     return (span / million) * threshold_ppm + ((span % million) * threshold_ppm) / million;
@@ -329,20 +352,21 @@ constexpr bool model_shape_is_training_landmark(
 constexpr bool model_supports(
     const KeyDescriptor& key,
     const ProgramConfigGbdtModel& model,
-    const Sha256& expected_bundle_binding_sha256) noexcept {
+    const Sha256& expected_bundle_binding_sha256,
+    const bool direct_bank_scope = false) noexcept {
     const auto& support = model.support;
     return model.enabled && model.schema_version == 1 && nonzero_sha256(model.feature_schema_sha256) &&
            nonzero_sha256(model.model_sha256) && nonzero_sha256(model.training_table_sha256) &&
            nonzero_sha256(model.safety_evidence_sha256) && nonzero_sha256(model.candidate_policy_sha256) &&
            nonzero_sha256(model.lineage_sha256) && nonzero_sha256(model.evaluation_model_payload_sha256) &&
-           nonzero_sha256(model.quality_evaluation_sha256) &&
-           nonzero_sha256(model.unseen_abstention_policy_sha256) && model.minimum_score_margin != 0 &&
-           nonzero_sha256(model.support_sha256) &&
+           nonzero_sha256(model.quality_evaluation_sha256) && nonzero_sha256(model.unseen_abstention_policy_sha256) &&
+           model.minimum_score_margin != 0 && nonzero_sha256(model.support_sha256) &&
            nonzero_sha256(model.bundle_binding_sha256) &&
            model.bundle_binding_sha256 == expected_bundle_binding_sha256 && key.architecture == support.architecture &&
-           key.board_capability_class == support.board_capability_class && key.device_count == support.device_count &&
-           key.mesh_rows == support.mesh_rows && key.mesh_cols == support.mesh_cols &&
-           key.topology_sha256 == support.topology_sha256 && key.domain == support.domain &&
+           (direct_bank_scope || key.board_capability_class == support.board_capability_class) &&
+           key.device_count == support.device_count && key.mesh_rows == support.mesh_rows &&
+           key.mesh_cols == support.mesh_cols &&
+           (direct_bank_scope || key.topology_sha256 == support.topology_sha256) && key.domain == support.domain &&
            key.input_a == support.input_a && key.input_b == support.input_b && key.output == support.output &&
            // The raw-feature trainer synthesizes exactly ceil-to-tile padded
            // dimensions. Reject larger custom padding rather than scoring an
@@ -358,12 +382,10 @@ constexpr bool model_supports(
            key.logical_m >= support.minimum_m && key.logical_m <= support.maximum_m &&
            key.logical_k >= support.minimum_k && key.logical_k <= support.maximum_k &&
            key.logical_n >= support.minimum_n && key.logical_n <= support.maximum_n &&
-           !model_shape_is_training_landmark(key, model) &&
-           model_shape_is_near_training_data(key, model);
+           !model_shape_is_training_landmark(key, model) && model_shape_is_near_training_data(key, model);
 }
 
-constexpr std::uint64_t nonnegative_score_distance(
-    const std::int64_t lower, const std::int64_t upper) noexcept {
+constexpr std::uint64_t nonnegative_score_distance(const std::int64_t lower, const std::int64_t upper) noexcept {
     if (upper < lower) {
         return 0;
     }
@@ -456,8 +478,7 @@ constexpr bool legal_program_config_candidate(
         }
         case ProgramFamily::MultiCast2D: {
             if (!program.fuse_batch || program.mcast_in0 || program.out_block_h != program.per_core_m ||
-                program.out_block_w != program.per_core_n ||
-                program.num_global_cb_receivers != 0) {
+                program.out_block_w != program.per_core_n || program.num_global_cb_receivers != 0) {
                 return false;
             }
             const auto m_blocks = m_tiles / program.per_core_m + (m_tiles % program.per_core_m != 0);
@@ -465,9 +486,8 @@ constexpr bool legal_program_config_candidate(
             // Native validation swaps output-block axes when transpose_mcast is
             // selected (matmul_device_operation.cpp). Mirror that exact grid
             // extent check so valid banked transpose candidates remain usable.
-            return program.transpose_mcast
-                       ? m_blocks <= program.compute_grid_x && n_blocks <= program.compute_grid_y
-                       : m_blocks <= program.compute_grid_y && n_blocks <= program.compute_grid_x;
+            return program.transpose_mcast ? m_blocks <= program.compute_grid_x && n_blocks <= program.compute_grid_y
+                                           : m_blocks <= program.compute_grid_y && n_blocks <= program.compute_grid_x;
         }
     }
     return false;
@@ -477,8 +497,9 @@ constexpr std::optional<std::int64_t> score_program_config_candidate(
     const KeyDescriptor& key,
     const ProgramConfigCandidate& candidate,
     const ProgramConfigGbdtModel& model,
-    const Sha256& expected_bundle_binding_sha256) noexcept {
-    if (!model_supports(key, model, expected_bundle_binding_sha256) ||
+    const Sha256& expected_bundle_binding_sha256,
+    const bool direct_bank_scope = false) noexcept {
+    if (!model_supports(key, model, expected_bundle_binding_sha256, direct_bank_scope) ||
         model.score_orientation != GbdtScoreOrientation::LowerIsBetterNegatedPairwiseMargin || model.score_scale == 0) {
         return std::nullopt;
     }
@@ -519,8 +540,11 @@ inline ProgramConfigLookupResult lookup_program_config(
     const KeyDescriptor& key,
     const std::span<const ProgramConfigExactEntry> exact_entries,
     const ProgramConfigGbdtModel& model,
-    const Sha256& expected_bundle_binding_sha256) noexcept {
-    if (const auto* exact = lookup_program_config_exact(key, exact_entries); exact != nullptr) {
+    const Sha256& expected_bundle_binding_sha256,
+    const bool direct_bank_scope = false) noexcept {
+    const auto* exact = direct_bank_scope ? lookup_program_config_exact_direct_bank(key, exact_entries)
+                                          : lookup_program_config_exact(key, exact_entries);
+    if (exact != nullptr) {
         if (!legal_program_config_candidate(
                 key,
                 ProgramConfigCandidate{.program_config = exact->program_config, .candidate_id = exact->entry_id})) {
@@ -550,7 +574,8 @@ inline ProgramConfigLookupResult lookup_program_config(
         if (!legal_program_config_candidate(key, candidate)) {
             continue;
         }
-        const auto score = score_program_config_candidate(key, candidate, model, expected_bundle_binding_sha256);
+        const auto score =
+            score_program_config_candidate(key, candidate, model, expected_bundle_binding_sha256, direct_bank_scope);
         if (!score.has_value()) {
             continue;
         }

@@ -699,9 +699,7 @@ TEST(MatmulConfigRegistry, OnlineGbdtScoresOnlyLegalProgramConfigsAndFallsBackOn
     };
     const std::array trees{compact::GbdtTree{.node_offset = 0, .node_count = 3}};
     const std::array training_shapes{compact::TrainingShapeLandmark{
-        .logical_m = training_key.logical_m,
-        .logical_k = training_key.logical_k,
-        .logical_n = training_key.logical_n}};
+        .logical_m = training_key.logical_m, .logical_k = training_key.logical_k, .logical_n = training_key.logical_n}};
     const compact::ProgramConfigGbdtModel model{
         .schema_version = 1,
         .enabled = true,
@@ -734,8 +732,8 @@ TEST(MatmulConfigRegistry, OnlineGbdtScoresOnlyLegalProgramConfigsAndFallsBackOn
     ASSERT_TRUE(selected.program_config.has_value());
     EXPECT_EQ(selected.program_config->compute_grid_x, 8);
 
-    const auto missing_exact = compact::lookup_program_config(
-        training_key, {}, model, compact_metadata().online_model_bundle_binding_sha256);
+    const auto missing_exact =
+        compact::lookup_program_config(training_key, {}, model, compact_metadata().online_model_bundle_binding_sha256);
     EXPECT_EQ(missing_exact.source, compact::ProgramConfigLookupSource::None);
     EXPECT_FALSE(missing_exact.program_config.has_value());
 
@@ -874,9 +872,7 @@ TEST(MatmulConfigRegistry, OnlineModelSupportRejectsNoncanonicalAndOverflowingPa
     EXPECT_FALSE(compact::model_supports(key, model, compact_metadata().online_model_bundle_binding_sha256));
 
     EXPECT_FALSE(compact::is_canonical_tile_padding(
-        std::numeric_limits<std::uint64_t>::max(),
-        std::numeric_limits<std::uint64_t>::max(),
-        key.input_b.tile_width));
+        std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::uint64_t>::max(), key.input_b.tile_width));
 
     const std::array sparse_landmarks{
         compact::TrainingShapeLandmark{.logical_m = 1, .logical_k = 1, .logical_n = 1},
@@ -897,8 +893,7 @@ TEST(MatmulConfigRegistry, OnlineModelSupportRejectsNoncanonicalAndOverflowingPa
     EXPECT_TRUE(compact::model_shape_is_near_training_data(near, sparse_model));
     near.logical_m = 11;
     EXPECT_FALSE(compact::model_shape_is_near_training_data(near, sparse_model));
-    sparse_model.maximum_normalized_shape_distance_ppm =
-        compact::MAX_NORMALIZED_SHAPE_DISTANCE_PPM + 1;
+    sparse_model.maximum_normalized_shape_distance_ppm = compact::MAX_NORMALIZED_SHAPE_DISTANCE_PPM + 1;
     EXPECT_FALSE(compact::model_shape_is_near_training_data(key, sparse_model));
     sparse_model.maximum_normalized_shape_distance_ppm = 100'000;
     auto sparse_interior = near;
@@ -1455,6 +1450,40 @@ TEST(MatmulConfigRegistry, CompatibilityValidationIsExactAndFailClosed) {
     actual = compatible_digests();
     actual.runtime_capability_sha256.back() ^= 1;
     EXPECT_EQ(validate_registry_compatibility(metadata, 1, actual), CompatibilityStatus::RuntimeCapabilityMismatch);
+}
+
+TEST(MatmulConfigRegistry, DirectBankExactIgnoresUnbankablePhysicalSessionFields) {
+    auto request = exact_request();
+    request.device.attestation_status = DeviceAttestationStatus::QueryFailed;
+    request.device.board_capability_class += 17;
+    request.device.topology_sha256 = repeated_digest(0xa5);
+    request.device.runtime_capability_sha256 = repeated_digest(0xb6);
+
+    const auto legacy = compact_entry();
+    auto bank_key = legacy.key;
+    bank_key.board_capability_class = 0;
+    bank_key.topology_sha256 = {};
+    const std::array bank_entries{compact::ProgramConfigExactEntry{
+        .entry_id = repeated_digest(0x7a),
+        .key = bank_key,
+        .program_config = compact::exact_program_config(legacy.replay),
+    }};
+    auto metadata = compact_metadata();
+    metadata.program_config_only_evidence_schema_version = 2;
+    metadata.online_program_config_model_evidence_schema_version = 0;
+    metadata.runtime_capability_sha256 = {};
+    auto actual = compatible_digests();
+    actual.runtime_capability_sha256 = repeated_digest(0xc7);
+
+    const auto result = resolve_with_compact_table_for_testing(
+        Mode::On, request, Eligibility{.call = request.call}, metadata, {}, actual, {}, bank_entries);
+    EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
+    EXPECT_TRUE(result.predicted_program_config.has_value());
+
+    request.device.architecture += 1;
+    const auto wrong_architecture = resolve_with_compact_table_for_testing(
+        Mode::On, request, Eligibility{.call = request.call}, metadata, {}, actual, {}, bank_entries);
+    EXPECT_EQ(wrong_architecture.reason, ResolutionReason::EmptyRegistry);
 }
 
 TEST(MatmulConfigRegistry, DeviceAttestationMatchesFrozenExporterContract) {

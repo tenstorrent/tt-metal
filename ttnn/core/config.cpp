@@ -19,7 +19,11 @@
 namespace ttnn::core {
 
 namespace {
-MatmulRegistryMode matmul_registry_mode = MatmulRegistryMode::Off;
+// A populated, compatible registry is the ordinary matmul policy. Empty,
+// incompatible, unsupported, or explicitly overridden requests still fall
+// through to TTNN's existing selector, and callers can set Off before first
+// use for an emergency rollback.
+MatmulRegistryMode matmul_registry_mode = MatmulRegistryMode::On;
 MatmulRegistryMode agmm_registry_mode = MatmulRegistryMode::Off;
 }  // namespace
 

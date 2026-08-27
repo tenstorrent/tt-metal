@@ -411,7 +411,11 @@ CompatibilityStatus validate_registry_compatibility(
     if (expected.build_identity_sha256 != actual.build_identity_sha256) {
         return CompatibilityStatus::BuildIdentityMismatch;
     }
-    if (expected.runtime_capability_sha256 != actual.runtime_capability_sha256) {
+    // Direct-bank evidence (schema 2) is build/semantic attestation. The bank
+    // has no truthful per-session runtime-capability digest to bind.
+    if (expected.program_config_only_evidence_schema_version != 2 &&
+        expected.online_program_config_model_evidence_schema_version != 2 &&
+        expected.runtime_capability_sha256 != actual.runtime_capability_sha256) {
         return CompatibilityStatus::RuntimeCapabilityMismatch;
     }
     return CompatibilityStatus::Compatible;
@@ -911,7 +915,9 @@ static Resolution resolve_impl(
     if (selectable_count == 0) {
         return {.reason = ResolutionReason::EmptyRegistry};
     }
-    if (request.device.attestation_status != DeviceAttestationStatus::Success) {
+    const bool direct_bank_scope = metadata.program_config_only_evidence_schema_version == 2 ||
+                                   metadata.online_program_config_model_evidence_schema_version == 2;
+    if (!direct_bank_scope && request.device.attestation_status != DeviceAttestationStatus::Success) {
         return {.reason = ResolutionReason::DeviceAttestationUnavailable};
     }
     const auto compatibility = actual_compatibility != nullptr
@@ -920,9 +926,9 @@ static Resolution resolve_impl(
     if (compatibility != CompatibilityStatus::Compatible) {
         return {.reason = compatibility_reason(compatibility)};
     }
-    if (metadata.runtime_capability_sha256 != request.device.runtime_capability_sha256 ||
-        (actual_compatibility != nullptr &&
-         actual_compatibility->runtime_capability_sha256 != request.device.runtime_capability_sha256)) {
+    if (!direct_bank_scope && (metadata.runtime_capability_sha256 != request.device.runtime_capability_sha256 ||
+                               (actual_compatibility != nullptr && actual_compatibility->runtime_capability_sha256 !=
+                                                                       request.device.runtime_capability_sha256))) {
         return {.reason = ResolutionReason::RuntimeCapabilityMismatch};
     }
 
@@ -930,9 +936,11 @@ static Resolution resolve_impl(
     if (!key.has_value()) {
         return {.reason = ResolutionReason::IncompleteRequest};
     }
-    if (metadata.program_config_only_evidence_schema_version == 1) {
-        if (const auto* exact = compact::lookup_program_config_exact(*key, program_config_exact_entries);
-            exact != nullptr) {
+    if (metadata.program_config_only_evidence_schema_version != 0) {
+        const auto* exact = direct_bank_scope
+                                ? compact::lookup_program_config_exact_direct_bank(*key, program_config_exact_entries)
+                                : compact::lookup_program_config_exact(*key, program_config_exact_entries);
+        if (exact != nullptr) {
             if (!compact::legal_program_config_candidate(
                     *key,
                     compact::ProgramConfigCandidate{
@@ -965,12 +973,12 @@ static Resolution resolve_impl(
     // lock compatibility but are never selectable, including in a mixed lock:
     // a PC-only exact certificate must not authorize a distinct legacy row.
 
-    if (!models.empty() && metadata.online_program_config_model_evidence_schema_version != 1) {
+    if (!models.empty() && metadata.online_program_config_model_evidence_schema_version == 0) {
         return {.reason = ResolutionReason::EmptyRegistry};
     }
     const compact::ProgramConfigGbdtModel* supported_model = nullptr;
     for (const auto& model : models) {
-        if (compact::model_supports(*key, model, metadata.online_model_bundle_binding_sha256)) {
+        if (compact::model_supports(*key, model, metadata.online_model_bundle_binding_sha256, direct_bank_scope)) {
             if (supported_model != nullptr) {
                 // Overlapping support is invalid even if one model happens to
                 // contain no legal candidates for this particular key.
@@ -984,7 +992,8 @@ static Resolution resolve_impl(
             *key,
             std::span<const compact::ProgramConfigExactEntry>{},
             *supported_model,
-            metadata.online_model_bundle_binding_sha256);
+            metadata.online_model_bundle_binding_sha256,
+            direct_bank_scope);
         if (predicted_match.source != compact::ProgramConfigLookupSource::Gbdt ||
             !predicted_match.program_config.has_value()) {
             return {.reason = ResolutionReason::EmptyRegistry};

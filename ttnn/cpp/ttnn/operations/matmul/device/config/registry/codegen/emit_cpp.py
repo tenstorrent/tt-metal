@@ -21,7 +21,9 @@ from typing import Any
 
 ARTIFACT_KIND = "ttnn_matmul_registry_lock"
 GENERATOR_VERSION = "ttnn-matmul-lock-emitter-v1"
-POLICY_VERSION = "matmul-promotion-v2"
+POLICY_VERSION = "matmul-direct-bank-v1"
+LEGACY_POLICY_VERSION = "matmul-promotion-v2"
+DIRECT_BANK_EVIDENCE_POLICY_VERSION = "deterministic-matmul-bank-v1"
 LOCK_SCHEMA_VERSION = 1
 KEY_SCHEMA_VERSION = 1
 REPLAY_SCHEMA_VERSION = 2
@@ -296,7 +298,7 @@ def program_config_candidate_id(program_config: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_bytes({"program_config": program_config})).hexdigest()
 
 
-def _model_support(value: Any, path: str) -> dict[str, Any]:
+def _model_support(value: Any, path: str, *, direct_bank: bool = False) -> dict[str, Any]:
     fields = {
         "architecture",
         "board_capability_class",
@@ -318,11 +320,18 @@ def _model_support(value: Any, path: str) -> dict[str, Any]:
         "topology_sha256",
     }
     item = _exact_fields(value, fields, path)
-    for name in ("architecture", "board_capability_class"):
-        _uint(item[name], 32, f"{path}.{name}", positive=True)
+    _uint(item["architecture"], 32, f"{path}.architecture", positive=True)
+    _uint(item["board_capability_class"], 32, f"{path}.board_capability_class", positive=not direct_bank)
     for name in ("device_count", "mesh_rows", "mesh_cols"):
         _uint(item[name], 16, f"{path}.{name}", positive=True)
     _hex(item["topology_sha256"], 64, f"{path}.topology_sha256")
+    if direct_bank:
+        if item["board_capability_class"] != 0:
+            raise LockValidationError(f"{path}.board_capability_class must be zero for direct-bank wildcard scope")
+        if set(item["topology_sha256"]) != {"0"}:
+            raise LockValidationError(f"{path}.topology_sha256 must be zero for direct-bank wildcard scope")
+        if (item["device_count"], item["mesh_rows"], item["mesh_cols"]) != (1, 1, 1):
+            raise LockValidationError(f"{path} direct-bank support is limited to one-chip 1x1 scope")
     if item["domain"] not in {"dense.matmul", "dense.linear", "dense.addmm"}:
         raise LockValidationError(f"{path}.domain is unsupported")
     for name in ("input_a", "input_b", "output"):
@@ -393,6 +402,37 @@ def program_config_only_evidence_hash(evidence: dict[str, Any]) -> str:
     return _sha256_value(payload)
 
 
+def direct_bank_entry_inventory_hash(lock: dict[str, Any]) -> str:
+    return _sha256_value(
+        [
+            {
+                "bank_evidence": entry["bank_evidence"],
+                "entry_id": entry["entry_id"],
+                "table_kind": "program_config_only",
+            }
+            for entry in lock.get("program_config_exact_entries", [])
+        ]
+    )
+
+
+def _direct_bank_evidence(
+    value: Any, *, domain: str, key: dict[str, Any], program_config: dict[str, Any], path: str
+) -> dict[str, Any]:
+    fields = {"lookup_key_sha256", "policy_version", "program_config_sha256", "schema_version", "source_sha256"}
+    item = _exact_fields(value, fields, path)
+    if item["schema_version"] != 1 or item["policy_version"] != DIRECT_BANK_EVIDENCE_POLICY_VERSION:
+        raise LockValidationError(f"{path} direct-bank policy/schema is unsupported")
+    for name in ("lookup_key_sha256", "program_config_sha256", "source_sha256"):
+        _hex(item[name], 64, f"{path}.{name}")
+        if set(item[name]) == {"0"}:
+            raise LockValidationError(f"{path}.{name} must be nonzero")
+    if item["lookup_key_sha256"] != _sha256_value({"domain": domain, "key": key}):
+        raise LockValidationError(f"{path}.lookup_key_sha256 mismatch")
+    if item["program_config_sha256"] != _sha256_value(program_config):
+        raise LockValidationError(f"{path}.program_config_sha256 mismatch")
+    return item
+
+
 def exact_native_support_hash(lock: dict[str, Any]) -> str:
     inventory = [
         {
@@ -413,13 +453,13 @@ def exact_native_support_hash(lock: dict[str, Any]) -> str:
         }
         for entry in lock["entries"]
     ]
+    direct_bank = lock["policy_version"] == POLICY_VERSION
     inventory.extend(
         {
             "table_kind": "program_config_only",
             "entry_id": entry["entry_id"],
             "native_support": {
                 "architecture": entry["key"]["architecture"],
-                "board_capability_class": entry["key"]["board_capability_class"],
                 "device_count": entry["key"]["device_count"],
                 "domain": entry["domain"],
                 "input_a": entry["key"]["input_a"],
@@ -427,8 +467,15 @@ def exact_native_support_hash(lock: dict[str, Any]) -> str:
                 "mesh_cols": entry["key"]["mesh_cols"],
                 "mesh_rows": entry["key"]["mesh_rows"],
                 "output": entry["key"]["output"],
-                "topology_sha256": entry["key"]["topology_sha256"],
                 "program_family": entry["program_config"]["family"],
+                **(
+                    {}
+                    if direct_bank
+                    else {
+                        "board_capability_class": entry["key"]["board_capability_class"],
+                        "topology_sha256": entry["key"]["topology_sha256"],
+                    }
+                ),
             },
         }
         for entry in lock.get("program_config_exact_entries", [])
@@ -467,7 +514,11 @@ def program_config_safety_inventory_hash(lock: dict[str, Any], online_models: li
                     {
                         "table_kind": "program_config_only",
                         "entry_id": entry["entry_id"],
-                        "evidence_sha256": entry["certificate"]["evidence_sha256"],
+                        "evidence_sha256": (
+                            entry["bank_evidence"]["source_sha256"]
+                            if "bank_evidence" in entry
+                            else entry["certificate"]["evidence_sha256"]
+                        ),
                     }
                     for entry in lock.get("program_config_exact_entries", [])
                 ]
@@ -490,6 +541,56 @@ def _program_config_only_evidence(
 ) -> dict[str, Any] | None:
     if value is None:
         return None
+    if lock["policy_version"] == POLICY_VERSION:
+        fields = {
+            "authorizes_exact_entries",
+            "bank_artifact_sha256",
+            "bank_entry_inventory_sha256",
+            "bank_policy_version",
+            "build_identity_sha256",
+            "exact_entry_inventory_sha256",
+            "exact_native_support_sha256",
+            "online_model_bundle_binding_sha256",
+            "proof_sha256",
+            "safety_evidence_sha256",
+            "schema_version",
+            "semantic_source_sha256",
+        }
+        item = _exact_fields(value, fields, "$.program_config_only_evidence")
+        if item["schema_version"] != 2 or item["bank_policy_version"] != DIRECT_BANK_EVIDENCE_POLICY_VERSION:
+            raise LockValidationError("$.program_config_only_evidence direct-bank policy/schema is unsupported")
+        _boolean(item["authorizes_exact_entries"], "$.program_config_only_evidence.authorizes_exact_entries")
+        for name in fields - {"schema_version", "bank_policy_version", "authorizes_exact_entries"}:
+            _hex(item[name], 64, f"$.program_config_only_evidence.{name}")
+            if set(item[name]) == {"0"} and not (name == "online_model_bundle_binding_sha256" and not online_models):
+                raise LockValidationError(f"$.program_config_only_evidence.{name} must be nonzero")
+        bound_root = {
+            "bank_entry_inventory_sha256": direct_bank_entry_inventory_hash(lock),
+            "build_identity_sha256": lock["build_identity_sha256"],
+            "semantic_source_sha256": lock["semantic_source_sha256"],
+            "exact_entry_inventory_sha256": _sha256_value(_exact_entry_inventory(lock)),
+            "exact_native_support_sha256": exact_native_support_hash(lock),
+            "online_model_bundle_binding_sha256": (
+                online_models[0]["bundle_binding_sha256"] if online_models else "0" * 64
+            ),
+            "safety_evidence_sha256": program_config_safety_inventory_hash(lock, online_models),
+        }
+        for name, expected in bound_root.items():
+            if item[name] != expected:
+                raise LockValidationError(f"$.program_config_only_evidence.{name} binding mismatch")
+        for index, entry in enumerate(lock.get("program_config_exact_entries", [])):
+            if entry["bank_evidence"]["source_sha256"] != item["bank_artifact_sha256"]:
+                raise LockValidationError(
+                    f"$.program_config_exact_entries[{index}].bank_evidence.source_sha256 bank binding mismatch"
+                )
+        for index, model in enumerate(online_models):
+            if model["training_table_sha256"] != item["bank_artifact_sha256"]:
+                raise LockValidationError(
+                    f"$.online_program_config_models[{index}].training_table_sha256 bank binding mismatch"
+                )
+        if item["proof_sha256"] != program_config_only_evidence_hash(item):
+            raise LockValidationError("$.program_config_only_evidence.proof_sha256 mismatch")
+        return item
     fields = {
         "build_identity_sha256",
         "authorizes_exact_entries",
@@ -558,7 +659,7 @@ def _tensor(value: Any, path: str) -> dict[str, Any]:
     return item
 
 
-def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
+def _key(value: Any, path: str, domain: str, *, direct_bank: bool = False) -> dict[str, Any]:
     fields = {
         "alpha_f32_bits",
         "architecture",
@@ -600,11 +701,18 @@ def _key(value: Any, path: str, domain: str) -> dict[str, Any]:
         or item["padded_n"] < item["logical_n"]
     ):
         raise LockValidationError(f"{path} padded dimensions must cover logical dimensions")
-    for name in ("architecture", "board_capability_class"):
-        _uint(item[name], 32, f"{path}.{name}", positive=True)
+    _uint(item["architecture"], 32, f"{path}.architecture", positive=True)
+    _uint(item["board_capability_class"], 32, f"{path}.board_capability_class", positive=not direct_bank)
     for name in ("device_count", "mesh_rows", "mesh_cols", "compute_grid_x", "compute_grid_y"):
         _uint(item[name], 16, f"{path}.{name}", positive=True)
     _hex(item["topology_sha256"], 64, f"{path}.topology_sha256")
+    if direct_bank:
+        if item["board_capability_class"] != 0:
+            raise LockValidationError(f"{path}.board_capability_class must be zero for direct-bank wildcard scope")
+        if set(item["topology_sha256"]) != {"0"}:
+            raise LockValidationError(f"{path}.topology_sha256 must be zero for direct-bank wildcard scope")
+        if (item["device_count"], item["mesh_rows"], item["mesh_cols"]) != (1, 1, 1):
+            raise LockValidationError(f"{path} direct-bank exact entries are limited to one-chip 1x1 scope")
     for name in ("transpose_a", "transpose_b", "has_bias", "has_activation", "untilize_out", "run_batched"):
         _boolean(item[name], f"{path}.{name}", False)
     if domain == "dense.addmm":
@@ -850,15 +958,25 @@ def _validate_program_config_for_key(key: dict[str, Any], program: dict[str, Any
         raise LockValidationError(f"{path} is not a legal multi_cast_2d work split")
 
 
-def _program_config_exact_entry(value: Any, path: str) -> dict[str, Any]:
-    item = _exact_fields(value, {"certificate", "domain", "entry_id", "key", "program_config"}, path)
+def _program_config_exact_entry(value: Any, path: str, policy_version: str) -> dict[str, Any]:
+    evidence_field = "bank_evidence" if policy_version == POLICY_VERSION else "certificate"
+    item = _exact_fields(value, {evidence_field, "domain", "entry_id", "key", "program_config"}, path)
     if item["domain"] not in {"dense.matmul", "dense.linear", "dense.addmm"}:
         raise LockValidationError(f"{path}.domain is unsupported")
     _hex(item["entry_id"], 64, f"{path}.entry_id")
-    key = _key(item["key"], f"{path}.key", item["domain"])
+    key = _key(item["key"], f"{path}.key", item["domain"], direct_bank=policy_version == POLICY_VERSION)
     program = _program_config(item["program_config"], f"{path}.program_config")
     _validate_program_config_for_key(key, program, f"{path}.program_config")
-    _certificate(item["certificate"], f"{path}.certificate")
+    if policy_version == POLICY_VERSION:
+        _direct_bank_evidence(
+            item["bank_evidence"],
+            domain=item["domain"],
+            key=key,
+            program_config=program,
+            path=f"{path}.bank_evidence",
+        )
+    else:
+        _certificate(item["certificate"], f"{path}.certificate")
     item["key"] = key
     item["program_config"] = program
     if item["entry_id"] != program_config_exact_entry_id(item):
@@ -937,7 +1055,11 @@ def _online_program_config_model(value: Any, lock: dict[str, Any]) -> dict[str, 
     if item["feature_schema_sha256"] != FEATURE_SCHEMA_SHA256:
         raise LockValidationError("$.online_program_config_model.feature_schema_sha256 mismatch")
 
-    support = _model_support(item["support"], "$.online_program_config_model.support")
+    support = _model_support(
+        item["support"],
+        "$.online_program_config_model.support",
+        direct_bank=lock["policy_version"] == POLICY_VERSION,
+    )
     if item["support_sha256"] != _sha256_value(support):
         raise LockValidationError("$.online_program_config_model.support_sha256 mismatch")
 
@@ -1141,7 +1263,8 @@ def validate_lock(value: Any) -> dict[str, Any]:
         or lock["replay_schema_version"] != REPLAY_SCHEMA_VERSION
     ):
         raise LockValidationError("lock schema version is unsupported")
-    if _string(lock["policy_version"], "$.policy_version") != POLICY_VERSION:
+    policy_version = _string(lock["policy_version"], "$.policy_version")
+    if policy_version not in {POLICY_VERSION, LEGACY_POLICY_VERSION}:
         raise LockValidationError("$.policy_version is unsupported")
     for name in ("semantic_source_sha256", "build_identity_sha256", "runtime_capability_sha256", "content_sha256"):
         _hex(lock[name], 64, f"$.{name}")
@@ -1160,14 +1283,17 @@ def validate_lock(value: Any) -> dict[str, Any]:
     program_config_exact_entries = lock.get("program_config_exact_entries", [])
     if not isinstance(program_config_exact_entries, list) or len(program_config_exact_entries) > MAX_ENTRIES:
         raise LockValidationError("$.program_config_exact_entries must be a bounded array")
+    if policy_version == POLICY_VERSION and entries:
+        raise LockValidationError("direct-bank locks must not contain legacy replay entries")
     if entries or program_config_exact_entries:
         compatibility_values = (
             lock["semantic_source_sha256"],
             lock["build_identity_sha256"],
-            lock["runtime_capability_sha256"],
             producer["codegen_commit"],
             producer["measured_tt_metal_commit"],
         )
+        if policy_version == LEGACY_POLICY_VERSION:
+            compatibility_values += (lock["runtime_capability_sha256"],)
         if any(set(value) == {"0"} for value in compatibility_values):
             raise LockValidationError("nonempty locks require measured compatibility and provenance digests")
     prior_key: bytes | None = None
@@ -1200,7 +1326,7 @@ def validate_lock(value: Any) -> dict[str, Any]:
     pc_keys: set[bytes] = set()
     for index, raw_entry in enumerate(program_config_exact_entries):
         path = f"$.program_config_exact_entries[{index}]"
-        item = _program_config_exact_entry(raw_entry, path)
+        item = _program_config_exact_entry(raw_entry, path, policy_version)
         key_bytes = canonical_bytes({"domain": item["domain"], "key": item["key"]})
         if prior_pc_key is not None and key_bytes < prior_pc_key:
             raise LockValidationError("$.program_config_exact_entries are not sorted by canonical key")
@@ -1582,6 +1708,7 @@ std::span<const compact::ProgramConfigGbdtModel> online_models() noexcept;
         + "}};"
     )
     bundle_binding = online_models[0]["bundle_binding_sha256"] if online_models else "0" * 64
+    evidence_schema_version = program_config_only_evidence["schema_version"] if program_config_only_evidence else 0
     source = f"""// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 // Generated by emit_cpp.py. Do not edit.
@@ -1593,10 +1720,10 @@ constexpr compact::TableMetadata kMetadata{{
     .lock_schema_version = {checked["lock_schema_version"]},
     .key_schema_version = {checked["key_schema_version"]},
     .replay_schema_version = {checked["replay_schema_version"]},
-    // Existing v2 exact recipes measured an explicit CKC. Runtime now owns
-    // program_config only, so legacy exact rows cannot activate.
-    .program_config_only_evidence_schema_version = {1 if program_config_only_evidence is not None and program_config_only_evidence["authorizes_exact_entries"] else 0},
-    .online_program_config_model_evidence_schema_version = {1 if program_config_only_evidence is not None else 0},
+    // Schema 2 is deterministic direct-bank evidence. Legacy schema 1 remains
+    // readable for old checked locks, but neither form owns caller CKC state.
+    .program_config_only_evidence_schema_version = {evidence_schema_version if program_config_only_evidence is not None and program_config_only_evidence["authorizes_exact_entries"] else 0},
+    .online_program_config_model_evidence_schema_version = {evidence_schema_version},
     .content_sha256 = {_bytes_cpp(checked["content_sha256"])},
     .semantic_source_sha256 = {_bytes_cpp(checked["semantic_source_sha256"])},
     .build_identity_sha256 = {_bytes_cpp(checked["build_identity_sha256"])},
