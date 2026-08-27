@@ -748,11 +748,21 @@ class ttMLA:
         kt = weight.shape[-2] // ttnn.TILE_SIZE
         if kt % in0_block_w == 0:
             return True
-        logger.warning(
-            f"[ttMLA] tuned matmul config for '{weight_name}' has in0_block_w={in0_block_w}, which does "
-            f"not divide this model's Kt={kt} — falling back to the default program config. The tuned "
-            f"table is keyed on (weight, seq_len) only, so it is another variant's tuning."
-        )
+        # Once per distinct mismatch, not once per resolution: the forward path resolves a config
+        # for every projection, layer and chunk (q_b_proj twice -- activation memory, then matmul),
+        # so an unguarded warning here is thousands of identical lines per request.
+        warned = getattr(self, "_cfg_fit_warned", None)
+        if warned is None:
+            warned = set()
+            setattr(self, "_cfg_fit_warned", warned)
+        mismatch = (weight_name, in0_block_w, kt)
+        if mismatch not in warned:
+            warned.add(mismatch)
+            logger.warning(
+                f"[ttMLA] tuned matmul config for '{weight_name}' has in0_block_w={in0_block_w}, which does "
+                f"not divide this model's Kt={kt} — falling back to the default program config. The tuned "
+                f"table is keyed on (weight, seq_len) only, so it is another variant's tuning."
+            )
         return False
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
