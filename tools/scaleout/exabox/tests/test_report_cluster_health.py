@@ -436,7 +436,8 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             _assert_shared_dir_mode(self, date_dir)
 
-    def test_creates_missing_store_parents_group_writable(self):
+    def test_only_date_dir_is_group_writable(self):
+        """Missing store-root ancestors keep default mkdir permissions."""
         with tempfile.TemporaryDirectory() as tmp:
             store = Path(tmp) / "nested" / "store"
             argv = [
@@ -457,10 +458,12 @@ class TestStoreWrite(unittest.TestCase):
             self.assertEqual(rc, 0, err)
             date_dir = store / "2026-08-19"
             self.assertTrue(date_dir.is_dir())
-            _assert_shared_dir_mode(self, store)
-            _assert_shared_dir_mode(self, Path(tmp) / "nested")
             _assert_shared_dir_mode(self, date_dir)
             self.assertEqual(date_dir.stat().st_gid, store.stat().st_gid)
+            for ancestor in (store, Path(tmp) / "nested"):
+                mode = ancestor.stat().st_mode
+                self.assertFalse(mode & stat.S_IWGRP, f"{ancestor} was loosened")
+                self.assertFalse(mode & stat.S_IWOTH, f"{ancestor} was loosened")
 
     def test_dry_run_does_not_write(self):
         with tempfile.TemporaryDirectory() as tmp:
