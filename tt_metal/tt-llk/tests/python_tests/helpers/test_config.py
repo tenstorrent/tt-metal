@@ -904,8 +904,8 @@ class TestConfig:
         self,
         test_name: str,
         formats: InputOutputFormat = None,
-        templates: list[TemplateParameter] = [],
-        runtimes: list[RuntimeParameter] = [],
+        templates: list[TemplateParameter] = None,
+        runtimes: list[RuntimeParameter] = None,
         variant_stimuli: StimuliConfig = None,
         boot_mode: BootMode = BootMode.DEFAULT,
         profiler_build: ProfilerBuild = ProfilerBuild.No,
@@ -934,8 +934,17 @@ class TestConfig:
 
         self._prepared = False
 
+        # Own copies before anything below mutates them. The speed-of-light
+        # branch folds runtimes into templates in place; with a shared ``[]``
+        # default that mutated the default object itself, so every later
+        # variant constructed without explicit ``templates`` inherited the
+        # previous variant's runtimes. It also grew a list the caller still
+        # held. Both are invisible until they change what gets compiled.
+        templates = list(templates or [])
+        runtimes = list(runtimes or [])
+
         if TestConfig.SPEED_OF_LIGHT:
-            templates += runtimes
+            templates = templates + runtimes
             runtimes = []
             compile_time_formats = True
 
@@ -1239,7 +1248,36 @@ class TestConfig:
             if field_name not in NON_COMPILATION_ARGUMENTS
         ]
 
-        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+        # Header and source search dirs decide which copy of a given relative
+        # include a driver compiles against, so they are compilation inputs.
+        # Most of them live in class state (``add_include_dirs`` /
+        # ``add_src_include_dirs`` / ``add_helpers_tree``, and the in-tree
+        # ``INCLUDES`` built by ``setup_compilation_options``), which
+        # ``self.__dict__`` cannot see — so hashing instance fields alone gave
+        # two variants the same id while they compiled against different
+        # headers. That matters because ``prepare`` does not rebuild in CONSUME
+        # mode: it trusts this id to locate the ELF the producer pass built.
+        # Order is part of the value: these lists are precedence-ordered, and
+        # reordering them changes which header wins.
+        # ``INCLUDES`` is the merged view, and only exists once ``setup_build``
+        # has run; before that the registered extras live solely in
+        # ``EXTRA_INCLUDE_*``. Hash both, so a variant built before the merge
+        # and one built after cannot collide.
+        include_tokens = TestConfig._as_include_flags(self.include_dirs) + list(
+            TestConfig.INCLUDES
+        )
+        include_tokens += [
+            flag
+            for flag in TestConfig.EXTRA_INCLUDE_PREPEND
+            + TestConfig.EXTRA_INCLUDE_APPEND
+            if flag not in include_tokens
+        ]
+        src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
+        search_dirs = include_tokens + src_include_prepend + src_include_append
+
+        self.variant_id = sha256(
+            str(" | ".join(temp_str + search_dirs)).encode()
+        ).hexdigest()
 
     def resolve_shared_compile_options(self) -> tuple[str, str, str]:
         """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
