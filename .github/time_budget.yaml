@@ -426,6 +426,7 @@ models:
     bh_quietbox_2: 310
     wh_llmbox: 297
     bh_loudbox: 75
+    bh_galaxy: 65
     wh_n150: 65
 umd:
   unit:
