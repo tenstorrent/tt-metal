@@ -95,9 +95,8 @@ def test_deepseek_v3_mla_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        # Measured 2026-08-22 on the 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified
-        # (DDR 16000 nominal, high power).
-        # Two runs 3.894 / 3.886 ms, spread 0.21% -- the tightest of the five.
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 3.894 / 3.886 ms, spread 0.21%.
         expected_device_perf_ns_per_iteration=3_890_333,
         subdir="deepseek_v3_mla",
         model_name="deepseek_v3_mla_glx_8x4",
