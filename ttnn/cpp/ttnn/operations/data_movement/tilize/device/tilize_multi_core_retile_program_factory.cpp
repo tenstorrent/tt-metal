@@ -15,6 +15,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -118,8 +119,7 @@ ProgramDescriptor TilizeMultiCoreRetileProgramFactory::create_descriptor(
     const uint32_t max_input_rows_per_core = shrink ? max_blocks : max_blocks * ratio;
     const uint32_t mid_input_pages = max_input_rows_per_core * tiles_per_block;
     const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
-    const uint32_t mid_total_size =
-        ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
+    const uint32_t mid_total_size = tt::round_up(mid_input_pages * mid_input_page_size, mid_size_align);
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t mid_cb_index = tt::CBIndex::c_1;       // input tile geometry (untilize producer)

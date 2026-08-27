@@ -246,7 +246,12 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     const bool output_is_sharded =
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED &&
         operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::ND_SHARDED;
-    if (output_is_sharded && can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+    // A retile is excluded: inheriting the input's shard spec and padded shape assumes both sides
+    // tile the same way, but a retile changes the tile height, so the output's physical height (and
+    // therefore its shard height) can differ from the input's. The caller's output_mem_config
+    // already describes the output tiling, so respect it.
+    if (output_is_sharded && !is_retile(operation_attributes, tensor_args) &&
+        can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
         log_warning(
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "

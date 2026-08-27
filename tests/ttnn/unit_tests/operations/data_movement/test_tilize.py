@@ -1063,6 +1063,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
         ([1, 1, 64, 128], None),
         ([1, 1, 16, 128], None),
         # Sharded input/output (invokes the sharded retile factory).
+        ([1, 1, 1, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         ([1, 1, 32, 1024], ttnn.TensorMemoryLayout.WIDTH_SHARDED),
         ([1, 1, 1024, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         ([1, 1, 256, 256], ttnn.TensorMemoryLayout.BLOCK_SHARDED),
@@ -1079,42 +1080,49 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     if input_tile_shape[0] == output_tile_shape[0]:
         pytest.skip("Input and output tile shapes are the same")
 
-    # bfloat8_b is supported at every tile height (1..32): the packer LLK sizes the BFP exponent
-    # section from face_r_dim, so partial-face (tile height < 16) block-float tiles pack with the
-    # same layout the host and unpacker use.
-
-    # Build a (possibly sharded) already-tiled input using the source tile shape.
-    mem_cfg = None
-    if shard_layout is not None:
-        # Use a 32x32 shard so the shard height is divisible by every tile height under test,
-        # keeping both the input and output tilings tile-aligned within each shard.
+    def make_mem_cfg(tile_h):
+        """Shard spec for this tensor tiled at `tile_h`, or None when interleaved."""
+        if shard_layout is None:
+            return None
         H, W = tensor_shape[-2], tensor_shape[-1]
-        shard_h, shard_w = 32, 32
+        # The tensor's physical height is H padded up to a whole tile row, so it depends on the
+        # tile height: a tensor shorter than one tile (e.g. H=1 with a 2x32 tile) occupies exactly
+        # one tile row, not a full 32 rows.
+        padded_h = ((H + tile_h - 1) // tile_h) * tile_h
+        # Use a 32-row shard where the tensor is tall enough, so the shard height is divisible by
+        # every tile height under test and both tilings stay tile-aligned within each shard.
+        shard_h, shard_w = min(32, padded_h), 32
         if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            num_cores = H // shard_h
+            num_cores = padded_h // shard_h
             grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
         elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            # Width sharding splits along W only, so each shard must span the full physical height.
+            shard_h = padded_h
             num_cores = W // shard_w
             grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), row_wise=True)
         else:
             assert shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            n_y, n_x = H // shard_h, W // shard_w
+            n_y, n_x = padded_h // shard_h, W // shard_w
             grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(n_x - 1, n_y - 1))})
         shard_spec = ttnn.ShardSpec(grid, [shard_h, shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        mem_cfg = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
+        return ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
 
+    # Build a (possibly sharded) already-tiled input using the source tile shape.
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         tile=ttnn.Tile(list(input_tile_shape)),
-        memory_config=mem_cfg,
+        memory_config=make_mem_cfg(input_tile_shape[0]),
     )
     assert tt_input.layout == ttnn.TILE_LAYOUT
 
-    # Re-tilize into a different tile shape; input and output tile shapes differ.
-    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), memory_config=mem_cfg)
+    # Re-tilize into a different tile shape; input and output tile shapes differ. The output's
+    # physical height (and so its shard height) follows the output tile, not the input's.
+    tt_output = ttnn.tilize(
+        tt_input, tile=ttnn.Tile(list(output_tile_shape)), memory_config=make_mem_cfg(output_tile_shape[0])
+    )
 
     assert tt_output.layout == ttnn.TILE_LAYOUT
     if shard_layout is not None:

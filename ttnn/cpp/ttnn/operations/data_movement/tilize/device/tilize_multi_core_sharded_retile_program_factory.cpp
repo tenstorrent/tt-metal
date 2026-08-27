@@ -7,6 +7,7 @@
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
+#include <algorithm>
 #include <numeric>
 
 #include <tt-metalium/constants.hpp>
@@ -60,14 +61,9 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
         in_tile_width);
     TT_FATAL(
         shard_height % in_tile_height == 0,
-        "Sharded retile requires shard height {} divisible by input tile height {}",
+        "Sharded retile requires input shard height {} divisible by input tile height {}",
         shard_height,
         in_tile_height);
-    TT_FATAL(
-        shard_height % out_tile_height == 0,
-        "Sharded retile requires shard height {} divisible by output tile height {}",
-        shard_height,
-        out_tile_height);
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -95,14 +91,40 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     // A retile leaves element dimensions unchanged, so each core's shard maps to whole tile-rows on
     // both sides; only the tiling of those elements changes. Work is per-core and independent.
     const uint32_t tiles_per_block = shard_width / in_tile_width;
-    const uint32_t num_input_tile_rows = shard_height / in_tile_height;
-    const uint32_t num_output_tile_rows = shard_height / out_tile_height;
+
+    // The two sides pad the logical height up to different multiples when it is not a multiple of
+    // both tile heights, so each side's shard height must come from its own spec. For example a
+    // tensor of height 1 occupies 2 element rows when tiled 2x32 but only 1 when tiled 1x32; the
+    // extra input row is padding that must be truncated away rather than retiled into the output.
+    const uint32_t tensor_width = a.padded_shape()[-1];
+    const uint32_t in_shard_height = shard_height;
+    const uint32_t in_total_rows = static_cast<uint32_t>(a.physical_volume() / tensor_width);
+    const uint32_t out_total_rows = static_cast<uint32_t>(output.physical_volume() / tensor_width);
+    const uint32_t num_row_bands = std::max(1u, in_total_rows / in_shard_height);
+    const uint32_t out_shard_height = output_is_interleaved ? (out_total_rows + num_row_bands - 1) / num_row_bands
+                                                            : output.shard_spec().value().shape[0];
+    TT_FATAL(
+        out_shard_height % out_tile_height == 0,
+        "Sharded retile requires output shard height {} divisible by output tile height {}",
+        out_shard_height,
+        out_tile_height);
+
+    // Real tile-rows actually backed by each side's buffer. These bound the reader, the writer and
+    // the compute kernel's tilize loop.
+    const uint32_t num_input_tile_rows = in_shard_height / in_tile_height;
+    const uint32_t num_output_tile_rows = out_shard_height / out_tile_height;
     const uint32_t num_tiles_per_shard_in = num_input_tile_rows * tiles_per_block;
     const uint32_t num_tiles_per_shard_out = num_output_tile_rows * tiles_per_block;
 
+    // The untilized intermediate has to cover every element row the output consumes, which in the
+    // grow case can exceed what the input shard holds. Round the taller of the two row spans up to
+    // whole input tile-rows; the compute kernel zero-fills the ones the input doesn't back.
+    const uint32_t mid_element_rows = std::max(in_shard_height, out_shard_height);
+    const uint32_t num_mid_tile_rows = (mid_element_rows + in_tile_height - 1) / in_tile_height;
+
     // Compute untilizes the whole shard into mid, then tilizes it. Aliased c_1/c_2 page sizes can
     // differ, so the allocation must be a multiple of both.
-    const uint32_t mid_input_pages = num_tiles_per_shard_in;
+    const uint32_t mid_input_pages = num_mid_tile_rows * tiles_per_block;
     const uint32_t mid_size_align = std::lcm(mid_input_page_size, mid_output_page_size);
     const uint32_t mid_total_size =
         ((mid_input_pages * mid_input_page_size + mid_size_align - 1) / mid_size_align) * mid_size_align;
@@ -256,11 +278,13 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
             .fp32_dest_acc_en = fp32_llk_acc,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         };
-        // All shards are the same size, so every core does identical work. num_input_blocks is in
-        // input tile-rows; all rows are real on both sides (no grow-case height padding and no
-        // shrink-case surplus within a shard), so the kernel's real-row caps equal the full counts.
+        // All shards are the same size, so every core does identical work. num_mid_tile_rows is the
+        // number of input tile-rows to materialise in the intermediate; the trailing
+        // (num_mid_tile_rows - num_input_tile_rows) of those are grow-case height padding that the
+        // kernel zero-fills. num_output_tile_rows caps the tilize loop so shrink-case surplus rows
+        // (an input tile taller than the output's padded height) are truncated instead of written.
         for (const auto& core : corerange_to_cores(all_cores)) {
-            compute_desc.emplace_runtime_args(core, {num_input_tile_rows, num_input_tile_rows, num_output_tile_rows});
+            compute_desc.emplace_runtime_args(core, {num_mid_tile_rows, num_input_tile_rows, num_output_tile_rows});
         }
         desc.kernels.push_back(std::move(compute_desc));
     }
