@@ -3,6 +3,7 @@
 """Blackhole PCC tests for the chunk-parallel KDA operation."""
 
 import time
+from typing import Literal
 
 import pytest
 import torch
@@ -18,28 +19,6 @@ pytestmark = [
     run_for_blackhole(),
     pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
 ]
-
-
-def test_chunk_scan_strategy_policy(device: ttnn.Device) -> None:
-    compute_config = ops._RecurrenceComputeConfig(None, None, None)
-    cases = (
-        (159, None, 1, ops._DirectScan),
-        (160, None, 1, ops._LocalGroupedScan),
-        (161, None, 1, ops._LocalGroupedScan),
-        (161, None, 12, ops._DirectScan),
-        (8, 0, 1, ops._DistributedGroupedScan),
-        (9, 0, 1, ops._DistributedGroupedScan),
-    )
-    for num_chunks, sp_axis, batch_heads, expected in cases:
-        actual = ops._select_scan(
-            num_chunks=num_chunks,
-            program_config=KDARecurrenceProgramConfig(summary_group_chunks=8),
-            compute_config=compute_config,
-            sequence_parallel_axis=sp_axis,
-            batch_heads=batch_heads,
-            device=device,
-        )
-        assert isinstance(actual, expected)
 
 
 def _to_device(tensor: torch.Tensor, device: ttnn.Device, dtype: ttnn.DataType) -> ttnn.Tensor:
@@ -62,7 +41,7 @@ def _run_recurrence(
     state: ttnn.Tensor,
     *,
     summary_group_chunks: int = 8,
-    grouped_scan_min_chunks: int = 160,
+    local_scan_strategy: Literal["direct", "grouped"] = "direct",
 ) -> ops._ScanResult:
     prefix_compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -74,7 +53,7 @@ def _run_recurrence(
         state,
         program_config=KDARecurrenceProgramConfig(
             summary_group_chunks=summary_group_chunks,
-            grouped_scan_min_chunks=grouped_scan_min_chunks,
+            local_scan_strategy=local_scan_strategy,
         ),
         compute_config=ops._RecurrenceComputeConfig(
             preparation=None,
@@ -157,17 +136,17 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
 
 
 @pytest.mark.parametrize(
-    "sequence,heads,key_dim,value_dim,summary_group_chunks,grouped_scan_min_chunks",
+    "sequence,heads,key_dim,value_dim,summary_group_chunks,local_scan_strategy",
     [
-        (32, 2, 32, 32, 8, 160),
-        (64, 32, 128, 128, 8, 160),
-        (256, 4, 128, 128, 8, 160),
-        (512, 4, 128, 128, 8, 160),
-        (2816, 12, 128, 128, 21, 1),
-        (5120, 2, 32, 32, 8, 160),
-        (5120, 1, 128, 128, 8, 160),
-        (5152, 2, 32, 32, 8, 160),
-        (5152, 12, 128, 128, 20, 160),
+        (32, 2, 32, 32, 8, "direct"),
+        (64, 32, 128, 128, 8, "direct"),
+        (256, 4, 128, 128, 8, "direct"),
+        (512, 4, 128, 128, 8, "direct"),
+        (2816, 12, 128, 128, 21, "grouped"),
+        (5120, 2, 32, 32, 8, "grouped"),
+        (5120, 1, 128, 128, 8, "grouped"),
+        (5152, 2, 32, 32, 8, "grouped"),
+        (5152, 12, 128, 128, 20, "direct"),
     ],
 )
 def test_chunk_recurrence_pcc(
@@ -177,7 +156,7 @@ def test_chunk_recurrence_pcc(
     key_dim: int,
     value_dim: int,
     summary_group_chunks: int,
-    grouped_scan_min_chunks: int,
+    local_scan_strategy: Literal["direct", "grouped"],
 ) -> None:
     generator = torch.Generator().manual_seed(401 + sequence + heads)
     shape = (1, sequence, heads)
@@ -202,7 +181,7 @@ def test_chunk_recurrence_pcc(
             _to_device(beta, device, ttnn.float32),
             _to_device(state, device, ttnn.float32),
             summary_group_chunks=summary_group_chunks,
-            grouped_scan_min_chunks=grouped_scan_min_chunks,
+            local_scan_strategy=local_scan_strategy,
         )
 
     assert result.final_state.memory_config() == ttnn.DRAM_MEMORY_CONFIG
@@ -309,7 +288,7 @@ def test_chunk_recurrence_determinism(device: ttnn.Device) -> None:
                 beta_tt,
                 state_tt,
                 summary_group_chunks=2,
-                grouped_scan_min_chunks=1,
+                local_scan_strategy="grouped",
             )
         ttnn.synchronize_device(device)
         results.append((ttnn.to_torch(result.output), ttnn.to_torch(result.final_state)))
