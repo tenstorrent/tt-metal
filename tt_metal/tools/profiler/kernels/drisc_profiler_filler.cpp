@@ -1068,13 +1068,17 @@ void kernel_main() {
                         // POSTED: the barriers exist to protect STAGING reuse, which a head write never
                         // touches, so its worker ACK round-trip bought nothing -- and the ack packet itself
                         // rode the congested worker route. Scratch reuse stays safe on the slot rotation.
-                        // Issuing this on the read NoC instead, to decouple head visibility from the egress
-                        // queue, was measured stall-neutral at the delay-16 saturation wall and deleted.
+                        // On the READ NoC: on the egress NoC this 32 B packet queues behind the previous
+                        // batch's frames, so head visibility inherited the PCIe tile's acceptance jitter --
+                        // exactly the term that binds at the knee. (Stall-neutral when tried in the
+                        // delay-16 era; the margins that expose it are new.) The read NoC's queue holds
+                        // only our own read requests, which drain at issue speed.
                         noc_async_write_one_packet<true, true>(
                             sc,
                             get_noc_addr(
                                 coords[c] & 0xFFFFu, coords[c] >> 16, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u),
-                            kNumRisc * 4u);
+                            kNumRisc * 4u,
+                            kReadNoc);
                         hb_slot = (hb_slot + 1u) & (kMaxCores - 1u);
                         if constexpr (kSvcInstr != 0) {
                             c_ph_head += get_timestamp() - t_h0;
@@ -1328,7 +1332,8 @@ void kernel_main() {
     // packets stream out in ns) so no scratch slot or unstreamed head is left behind at report time.
     {
         const uint64_t t_ps = get_timestamp() + 1350000u;
-        while (!ncrisc_noc_posted_writes_sent(NOC_INDEX) && get_timestamp() < t_ps) {
+        while (!(ncrisc_noc_posted_writes_sent(NOC_INDEX) && ncrisc_noc_posted_writes_sent(kReadNoc)) &&
+               get_timestamp() < t_ps) {
         }
     }
     const uint64_t t_end = get_timestamp();
