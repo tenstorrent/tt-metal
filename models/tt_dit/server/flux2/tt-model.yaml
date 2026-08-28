@@ -97,8 +97,14 @@ card:
     | weights converted to device layout | ~105 GB | `~/.cache/tt-model/flux2-dev-qb2/weights` |
 
     The third one is written on first boot so later boots skip the conversion: 291s to
-    ready the first time, 80s after. Delete that directory to reclaim ~105 GB at the cost
-    of one slow boot; nothing else breaks.
+    ready the first time, 80s after.
+
+    You do not have to keep both copies. Once the converted cache exists, the pipeline
+    reads the source weights only on a cache miss, so deleting everything except
+    `config.json`, `scheduler/` and `tokenizer/` from the HF snapshot (~17 MB) leaves a
+    working ~105 GB install that still boots in 80s. Keep the source if you intend to
+    change resolution, mesh or precision: the cache is keyed by checkpoint, parallel
+    config, mesh shape and dtype, and a change to any of them means fetching it again.
 
     **Hardware: four Blackhole chips**, opened as a 2x2 mesh (`p300x2` / `QB2`). This is
     not a preference. FLUX.2 needs its sequence and tensor parallel factors both above 1,
