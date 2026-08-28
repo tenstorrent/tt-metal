@@ -100,6 +100,10 @@ SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 # Full 36-host subtorus SC36 galaxy (revC, Aisle D, hosts bh-glx-120-d01..d10). 36 hosts / 144 mesh
 # slots -- the largest all-hosts mock; used by bh-ring-stress to exercise the mapper at scale.
 SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revC_subtorus_aisleD/SC36_32x4_revC_subtorus_aisleD_mapping.yaml"
+# 24-host SC24 revC subtorus (system-110, aisle C columns c01-c07, units u02-u20); used by the SC24
+# 96-stage / six-BigMesh ring-stress entries.
+# TODO(rsong): pending tt-cluster-descriptors SC24 aisle-C set; path will be finalized when it lands.
+SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_aisleC/SC24_32x4_revC_subtorus_aisleC_mapping.yaml"
 # (The non-subtorus flat SC20 revAB Aisle C mock was removed: real revAB systems are subtorus, and the
 # flat mock only exposes 12 physical meshes, so the SC20 rings can't map onto it. Use the revAB subtorus
 # mock (SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING) instead.)
@@ -741,6 +745,14 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
     --per-solution-timeout ${RING_STRESS_TIMEOUT} \
     --recover-command 'true' \
     -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:${GTEST_SUBTORUS_2X4_PIPELINE}"
+
+# SC24 (24-host) mocks. Two views of the same 96-rank spec-decode fabric tour:
+#  - 96-stage 4x2 ring: one mesh per rank, exact-fit host packing (96 x 8 = 768 = 24 x 32 ASICs).
+#  - six 4x32 BigMeshes (host_topology [1,16] -> 16 ranks each), fully connected (15 relaxed pairs)
+#    so the resolver can place the closed 96-stage tour across the six physical quads.
+SC24_RING_STRESS_TIMEOUT=600
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x2_pipeline_96stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 
 fi # bh-ring-stress
 
