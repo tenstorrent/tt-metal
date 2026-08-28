@@ -578,8 +578,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         };
     }
 
-    const uint32_t pad_scaler_bits = pad.scaler_bits(num_rows_per_batch_per_core * num_datum_row_per_group);
-
     // writer defines
     std::map<std::string, std::string> writer_defines;
     writer_defines["TILE_HW_VAL"] = std::to_string(tile_hw);
@@ -826,6 +824,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // enable_fp32_reconfig is read by both compute kernels; the alias args only by the welford one.
     KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
         {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
+        // Statistics divisors for the two-pass path's post-reduce multiply (unused by Welford).
+        // The reduce runs as an exact SUM; the division happens once, in fp32, on DST (#53846).
+        // mean_recip_bits is pad-corrected via the logical/padded ratio when H*W is unaligned.
+        {"mean_recip_bits", pad.recip_bits(num_rows_per_batch_per_core * num_datum_row_per_group)},
+        {"global_recip_bits",
+         std::bit_cast<uint32_t>(1.0f / static_cast<float>(num_cores_per_batch * num_cores_per_group))},
     };
     if (use_welford) {
         compute_named_compile_time_args.push_back({"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)});
@@ -1351,8 +1355,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         writer_mcast_sender_args.push_back(gamma_tile_start_id);
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
-        // args 8, 9: only read when PAD_CORRECTION.
-        writer_mcast_sender_args.push_back(pad_scaler_bits);
+        // Arg 8: kept-but-unused slot (was pad_scaler_bits) so args 9+ keep their indices; the
+        // pad-corrected divisor now reaches the compute kernel as mean_recip_bits (#53846).
+        writer_mcast_sender_args.push_back(0u);
         // Arg 9: the core's valid-row count for the c_18 rowvalid tile. Only the core holding
         // a batch's final row-tile gets a partial count; the rest get tile_height, making their
         // rowvalid tile all-ones.

@@ -18,7 +18,7 @@ namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
-// Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
+// Non-tile-aligned H*W: the statistics must divide by the real element count (`recip_bits`),
 // and the padding rows must be excluded from both accumulation passes. The interleaved kernels do
 // that by switching to a row-masked set of input-mask tiles on each batch's final row-tile, of
 // which `rows_in_last_tile` are real; the sharded kernels compose that row mask on device from a
@@ -32,12 +32,14 @@ struct GroupNormPadCorrection {
     uint32_t kernel_logical_hw = 0;  // logical when active, else padded
     uint32_t rows_in_last_tile = 0;  // logical_hw % tile_height
 
-    // Reduce scaler that divides by the real element count rather than the padded one. The sqrt is
-    // because the AVG/REDUCE_SCALAR LLK applies the scaler twice (row then col). Scaling the divisor
-    // rather than masking the scaler tile is forced: prepare_reduce_scaler's
-    // `valid_reduce_dim_elements_in_tile` is ignored under REDUCE_SCALAR. L/P being a ratio makes
-    // this invariant to how H*W splits across cores -- reduce_factor_c still yields L * C_g.
-    uint32_t scaler_bits(uint32_t reduce_factor_w) const;
+    // fp32 bits of the reciprocal of the real element count (not the padded one). Fed to the
+    // compute kernel's post-reduce multiply: the reduce itself runs as an exact SUM (scaler 1.0)
+    // and the division by N happens once, in fp32, on the reduced DST element. The scaler-tile
+    // route is not usable for this: REDUCE_SCALAR applies the scaler twice (row then col), so the
+    // effective divisor would be bf16(1/sqrt(N))^2, which is inexact for any N whose square root
+    // is not a power of two (#53846). L/P being a ratio makes this invariant to how H*W splits
+    // across cores -- reduce_factor_c still yields L * C_g.
+    uint32_t recip_bits(uint32_t reduce_factor_w) const;
 };
 
 GroupNormPadCorrection make_group_norm_pad_correction(

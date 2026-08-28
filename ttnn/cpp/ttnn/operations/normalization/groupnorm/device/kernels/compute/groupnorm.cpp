@@ -10,6 +10,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -100,6 +101,13 @@ void kernel_main() {
 
     constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
     constexpr uint32_t group = get_named_compile_time_arg_val("group");
+
+    // fp32 bits of the statistics divisors, applied once on DST after each SUM reduce. The old
+    // route -- bf16(1/sqrt(N)) in the scaler tile, applied twice by REDUCE_SCALAR -- made the
+    // effective divisor bf16(1/sqrt(N))^2, inexact unless sqrt(N) is a power of two (#53846).
+    // mean_recip_bits is pad-corrected on host when H*W is not tile-aligned.
+    constexpr uint32_t mean_recip_bits = get_named_compile_time_arg_val("mean_recip_bits");
+    constexpr uint32_t global_recip_bits = get_named_compile_time_arg_val("global_recip_bits");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
@@ -288,6 +296,17 @@ void kernel_main() {
     }
 
     // Start Batch Loop
+    // Post-reduce hooks: run on DST after the reduce math, before pack (same pattern as
+    // dit_rmsnorm_fused_compute.cpp). One fp32 multiply replaces the doubly-applied bf16 scaler.
+    auto scale_by_mean_recip = [](uint32_t dst_idx) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_idx, mean_recip_bits);
+    };
+    auto scale_by_global_recip = [](uint32_t dst_idx) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_idx, global_recip_bits);
+    };
+
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
 
@@ -391,7 +410,10 @@ void kernel_main() {
                     dfb_ex_partial_id,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::NoAccumulation{},
+                    scale_by_mean_recip);
                 dfb_x.pop_front(out_block_hw_normal);
 
                 dfb_ex_partial.wait_front(1);
@@ -407,7 +429,10 @@ void kernel_main() {
                     dfb_ex_global_id,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
+                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::NoAccumulation{},
+                    scale_by_global_recip);
                 if (num_cores_per_mcast_group > 1) {
                     dfb_ex.reserve_back(1);
                     dfb_ex.push_back(1);
@@ -555,7 +580,10 @@ void kernel_main() {
                     dfb_ex2_partial_id,
                     compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::NoAccumulation{},
+                    scale_by_mean_recip);
                 dfb_xmm.pop_front(out_block_hw_normal);
             }
             // End Local Reduce
@@ -569,7 +597,10 @@ void kernel_main() {
                     dfb_ex2_global_id,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
+                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required),
+                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                    compute_kernel_lib::NoAccumulation{},
+                    scale_by_global_recip);
                 if (num_cores_per_mcast_group > 1) {
                     dfb_ex2.reserve_back(1);
                     dfb_ex2.push_back(1);

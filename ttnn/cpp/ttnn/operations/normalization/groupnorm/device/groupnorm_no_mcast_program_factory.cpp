@@ -739,11 +739,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"TILE_WIDTH", tile_width},
         {"TILE_HW", tile_hw},
         {"groupnorm_mode", groupnorm_mode},
-        {"reduce_factor_w", reduce_factor_w_group_1},
-        {"reduce_factor_c", reduce_factor_c_group_1},
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
-        {"pad_scaler_bits", pad.scaler_bits(reduce_factor_w_group_1)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
     };
 
@@ -773,11 +770,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         {"TILE_WIDTH", tile_width},
         {"TILE_HW", tile_hw},
         {"groupnorm_mode", groupnorm_mode},
-        {"reduce_factor_w", reduce_factor_w_group_2},
-        {"reduce_factor_c", reduce_factor_c_group_2},
         {"logical_hw", pad.kernel_logical_hw},
         {"padded_hw", pad.padded_hw},
-        {"pad_scaler_bits", pad.scaler_bits(reduce_factor_w_group_2)},
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
     };
 
@@ -982,6 +976,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     mcast_sender_compute_named_compile_time_args_group_2["cb_in0_welford"] = cb_in0_welford_index;
     mcast_sender_compute_named_compile_time_args_group_2["enable_fp32_reconfig"] =
         static_cast<uint32_t>(enable_fp32_reconfig);
+
+    // Statistics divisors for the two-pass path's post-reduce multiply (unused by Welford).
+    // The reduce runs as an exact SUM; the division happens once, in fp32, on DST (#53846).
+    mcast_sender_compute_named_compile_time_args_group_1["mean_recip_bits"] = pad.recip_bits(reduce_factor_w_group_1);
+    mcast_sender_compute_named_compile_time_args_group_1["global_recip_bits"] =
+        std::bit_cast<uint32_t>(1.0f / static_cast<float>(reduce_factor_c_group_1));
+    mcast_sender_compute_named_compile_time_args_group_2["mean_recip_bits"] = pad.recip_bits(reduce_factor_w_group_2);
+    mcast_sender_compute_named_compile_time_args_group_2["global_recip_bits"] =
+        std::bit_cast<uint32_t>(1.0f / static_cast<float>(reduce_factor_c_group_2));
 
     KernelDescriptor compute_desc_g1;
     compute_desc_g1.kernel_source = compute_kernel_path;
