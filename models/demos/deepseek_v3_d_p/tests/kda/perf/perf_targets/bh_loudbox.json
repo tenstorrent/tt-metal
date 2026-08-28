@@ -14,7 +14,7 @@
   },
   "provenance": {
     "measured_at_commit": "003156d7b4a053876991ebe8e7de2a9ce15306ae",
-    "runtime_source_sha256": "50659c1dfaf4132c72d4139ed4944d1cef34fbdac42855c1247adae27e216266",
+    "runtime_source_sha256": "638c22e5006d5392fc7000ed3ff21c7621b5af08478a76c41386cfc48efac33f",
     "measured_at_utc": "2026-08-28",
     "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample; the pinned runtime-source delta preserves the measured T=5120 dispatch"
   },
