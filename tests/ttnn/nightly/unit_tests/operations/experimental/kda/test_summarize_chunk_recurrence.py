@@ -135,6 +135,47 @@ def _production_compute_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelC
     )
 
 
+def _log_summary_subtraction_conditioning(
+    case_id: str,
+    expected: tuple[torch.Tensor, torch.Tensor],
+    actual: list[ttnn.Tensor],
+) -> None:
+    expected_a, expected_b = expected
+    actual_a, actual_b = (ttnn.to_torch(output).float() for output in actual)
+    raw_identity_state = expected_a + expected_b
+    a_scale = expected_a.abs().max().item()
+    subtraction_scale = max(raw_identity_state.abs().max().item(), expected_b.abs().max().item())
+    a_max_abs_error = (actual_a - expected_a).abs().max().item()
+    b_max_abs_error = (actual_b - expected_b).abs().max().item()
+    logger.info(
+        f"summary conditioning {case_id}: "
+        f"A=[{expected_a.min().item():.6e},{expected_a.max().item():.6e}] max_abs={a_scale:.6e}; "
+        f"B=[{expected_b.min().item():.6e},{expected_b.max().item():.6e}] "
+        f"max_abs={expected_b.abs().max().item():.6e}; "
+        f"raw_identity_state_max_abs={raw_identity_state.abs().max().item():.6e}; "
+        f"subtraction_amplification={subtraction_scale / a_scale:.6e}; "
+        f"A_max_abs_error={a_max_abs_error:.6e} ({a_max_abs_error / a_scale:.6e} of A scale); "
+        f"B_max_abs_error={b_max_abs_error:.6e}"
+    )
+    assert_outputs_accurate(
+        expected,
+        actual,
+        names=("affine_a", "affine_b"),
+        context=f"summary subtraction conditioning {case_id}",
+    )
+
+
+@pytest.mark.parametrize("case_id", ["regression", "production"])
+def test_summarize_chunk_recurrence_subtraction_conditioning(device: ttnn.Device, case_id: str) -> None:
+    if case_id == "production":
+        host_inputs, inputs = _production_protocol(device, seed=117)
+        outputs = run_summary(inputs, compute_kernel_config=_production_compute_config(device))
+    else:
+        host_inputs, inputs = _regression_protocol(device, seed=117)
+        outputs = run_summary(inputs)
+    _log_summary_subtraction_conditioning(case_id, summary_oracle(host_inputs), outputs)
+
+
 def test_summarize_chunk_recurrence_is_device_deterministic(device: ttnn.Device) -> None:
     host_inputs, inputs = _regression_protocol(device, seed=1441)
     reference, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, lambda: run_summary(inputs))
