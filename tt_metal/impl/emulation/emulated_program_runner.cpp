@@ -2707,13 +2707,21 @@ static uint8_t* __emule_fabric_resolve_peer(uint32_t dst_chip, uint64_t noc_addr
     if (slot == SIZE_MAX) {
         return nullptr;
     }
+    // Bounded by the destination's own L1, exactly as the local path is below: a worker's L1 is
+    // smaller than the 2 MB slot stride, so masking alone would land a write in the slot's padding
+    // where the core can never read it -- and still count it as delivered, which is worse than
+    // dropping it, because the tally the fixed point rests on would move without any data behind it.
+    const uint64_t peer_raw = noc_addr & NOC_LOCAL_MASK;
+    if (peer_raw >= static_cast<uint64_t>(peer->soc->worker_l1_size)) {
+        return nullptr;  // masking first would alias an out-of-slot address into range
+    }
+    const uint32_t peer_offset = static_cast<uint32_t>(peer_raw) & L1_SLOT_MASK;
     // Only TALLIED here — publishing happens in __emule_fabric_deliver once the stores are done.
     // The counter must never lead the data: a peer that saw it move without the bytes behind it
     // would re-poll, find nothing, and re-park, which is precisely the lost wakeup this exists to
     // prevent. See tt-emule docs/multi-rank-emulation.md.
     ++t_peer_writes;
-    return peer->base + slot * tt_emule::L1Pool::SLOT_SIZE +
-           (static_cast<uint32_t>(noc_addr & NOC_LOCAL_MASK) & L1_SLOT_MASK);
+    return peer->base + slot * tt_emule::L1Pool::SLOT_SIZE + peer_offset;
 }
 
 // Resolve (noc_addr) -> host pointer on an arbitrary chip, mirroring __emule_resolve_noc_addr but
@@ -3469,18 +3477,15 @@ static void __emule_fabric_deliver_ops(
         }
         default: {
             // emule expresses multicast through the target list above, so 5-8 are expected to arrive
-            // already fanned out. If one reaches here the op itself is unimplemented and every target
-            // delivery would be a silent no-op — report once per type rather than dropping the write.
-            static std::array<std::atomic<bool>, 256> reported{};
-            const auto idx = static_cast<size_t>(noc_send_type) & 0xFFu;
-            if (!reported[idx].exchange(true, std::memory_order_relaxed)) {
-                std::fprintf(
-                    stderr,
-                    "[EMULE_FABRIC] WARNING: fabric send type %u has no delivery op — the addressed "
-                    "peer will never observe this write.\n",
-                    static_cast<unsigned>(noc_send_type));
-            }
-            break;
+            // already fanned out. Reaching here means the op itself is unimplemented, and there is no
+            // safe continuation: the destination word never changes, so a consumer waiting on it
+            // blocks until a watchdog fires, far from the cause. Fail the dispatch instead — the
+            // fiber's fault names the type and the run stops here rather than hanging elsewhere.
+            TT_THROW(
+                "EMULE fabric: send type {} has no delivery op, so this write would be dropped and its "
+                "consumer would wait forever. Implement the terminal op for this type, or route it "
+                "through the target list as a fanned-out unicast.",
+                static_cast<unsigned>(noc_send_type));
         }
     }
 }
@@ -4747,6 +4752,12 @@ static void pump_device_locked() {
     } catch (...) {
         // pump() threw (kernel exception / host-wait stall deadlock) — the scheduler registry is torn
         // down; drop the mesh keepalives + host-wait/defer flags so a later dispatch starts clean.
+        //
+        // Tell the peers too. This rank is neither done nor quiesced from here on, so without the
+        // fault they hold a PeerWait against a rank that has already given up and only escape on the
+        // driver's wall-clock timeout. The dispatch path and the driver both publish it; this path
+        // was the gap.
+        emule_rank_state().note_faulted();
         clear_suspended_run_state();
         throw;
     }
