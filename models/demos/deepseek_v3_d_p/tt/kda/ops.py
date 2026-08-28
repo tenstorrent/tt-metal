@@ -140,16 +140,6 @@ class _FlatRecurrenceInputs:
 
 
 @dataclass(frozen=True)
-class _ChunkConstants:
-    eye: ttnn.Tensor
-    tril: ttnn.Tensor
-    ones: ttnn.Tensor
-
-    def as_kernel_args(self) -> tuple[ttnn.Tensor, ...]:
-        return self.eye, self.tril, self.ones
-
-
-@dataclass(frozen=True)
 class _PreparedChunks:
     v_beta: ttnn.Tensor
     kd: ttnn.Tensor
@@ -242,22 +232,17 @@ def _prepare_chunk_inputs(
 
 def _prepare_chunk_terms(
     inputs: _FlatRecurrenceInputs,
-    constants: _ChunkConstants,
     geometry: _RecurrenceGeometry,
     *,
     program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> _PreparedChunks:
-    eye_tile, tril_tile, ones_tile = constants.as_kernel_args()
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         inputs.q,
         inputs.k,
         inputs.v,
         inputs.gate,
         inputs.beta,
-        eye_tile,
-        tril_tile,
-        ones_tile,
         geometry.heads,
         memory_config=program_config.preparation_memory_config,
         compute_kernel_config=compute_config.preparation,
@@ -564,22 +549,16 @@ def _restore_recurrence_output(scan: _ScanResult, geometry: _RecurrenceGeometry)
     return _ScanResult(output=output, final_state=final_state)
 
 
-def _assert_chunk_constants(constants: _ChunkConstants, chunk_size: int) -> None:
-    expected_shapes = (
-        (constants.eye, (1, 1, chunk_size, chunk_size)),
-        (constants.tril, (1, 1, chunk_size, chunk_size)),
-        (constants.ones, (1, 1, chunk_size, chunk_size)),
-    )
-    for tensor, expected_shape in expected_shapes:
-        assert tuple(tensor.shape) == expected_shape
-        assert tensor.dtype == ttnn.float32
-        assert tensor.layout == ttnn.TILE_LAYOUT
+def _assert_chunk_identity(identity: ttnn.Tensor, chunk_size: int) -> None:
+    assert tuple(identity.shape) == (1, 1, chunk_size, chunk_size)
+    assert identity.dtype == ttnn.float32
+    assert identity.layout == ttnn.TILE_LAYOUT
 
 
 def _chunk_recurrence(
     inputs: _FlatRecurrenceInputs,
     initial_state: ttnn.Tensor,
-    constants: _ChunkConstants,
+    chunk_identity: ttnn.Tensor,
     *,
     program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -606,7 +585,7 @@ def _chunk_recurrence(
         geometry.value_dim,
     )
     assert initial_state.memory_config() == program_config.output_memory_config
-    _assert_chunk_constants(constants, program_config.chunk_size)
+    _assert_chunk_identity(chunk_identity, program_config.chunk_size)
 
     state = ttnn.reshape(
         initial_state,
@@ -621,12 +600,11 @@ def _chunk_recurrence(
     chunk_inputs = _prepare_chunk_inputs(inputs, geometry)
     prepared = _prepare_chunk_terms(
         chunk_inputs,
-        constants,
         geometry,
         program_config=program_config,
         compute_config=compute_config,
     )
-    scan = scan_strategy.run(prepared, state, constants.eye, geometry)
+    scan = scan_strategy.run(prepared, state, chunk_identity, geometry)
     result = _restore_recurrence_output(scan, geometry)
     assert result.output.dtype == program_config.scan_output_dtype
     assert result.final_state.dtype == program_config.recurrent_state_dtype

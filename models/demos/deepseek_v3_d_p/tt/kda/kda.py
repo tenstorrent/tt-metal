@@ -15,7 +15,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.const_tiles import build_kda_const_tiles
+from models.demos.deepseek_v3_d_p.tt.kda.const_tiles import build_kda_identity_tile
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -187,7 +187,7 @@ class ttKDA:
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
-        self.chunk_constants = ops._ChunkConstants(*build_kda_const_tiles(mesh_device))
+        self.chunk_identity = build_kda_identity_tile(mesh_device)
         # Ordinary matmuls (input and decay projections) keep packer L1 accumulation.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -476,7 +476,7 @@ class ttKDA:
         result = ops._chunk_recurrence(
             recurrence_inputs,
             recurrent_state,
-            self.chunk_constants,
+            self.chunk_identity,
             program_config=self.recurrence_config,
             compute_config=self.recurrence_compute_config,
             sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
