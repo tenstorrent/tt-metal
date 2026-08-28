@@ -58,7 +58,9 @@ struct DevicePlacement {
 using MeshPlacement = std::map<ttnn::MeshCoordinate, DevicePlacement>;
 
 // Placement for every chip on the mesh. Decided for the whole mesh at once because a sender's arguments
-// name the worker serving the same stream on the downstream chip.
-MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links);
+// name the worker serving the same stream on the downstream chip. `untilizers_per_group` of zero reserves no
+// untilizer cores at all, which is what a caller with nothing to untilize asks for.
+MeshPlacement decide_placement(
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d
