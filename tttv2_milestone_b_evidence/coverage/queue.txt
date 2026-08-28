@@ -12,7 +12,6 @@
 # (TT_FATAL program.cpp:2205, kernel group cores do not match sub device cores).
 # 2m36s a run, so the three-run rule is cheap here, and the Llama half decides
 # whether D-C8 is geometry-dependent the way the L1 clash is. ----
-2400|2100|a3_l_dc5|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
 # a3_q_pool_default ran at 08:33:24 from the working tree, 90 s before the same
 # source was committed as 6df3c4a14a3 (black formatting was the only change), so its
 # log is stamped 2061c126743, a commit that does not contain the test. Re-recorded
@@ -96,3 +95,9 @@
 2400|2100|a3_l_padded_greedy|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]|
 2400|2100|a3_l_temperature|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_seeded|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
+# ---- informational tail, lowest priority: the part of the brief's regression
+# command that needs the mesh. The 1D module *device* suites are not one of the
+# nine gate lines, and a failure here on an (8, 4) mesh is as likely to be an
+# arch mismatch as a regression, so this runs only if the night has room and its
+# result is reported as informational either way. ----
+1800|1500|a3_1d_module_device_suites|models/common/tests/modules/rope/test_rope_1d.py|models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py models/common/tests/modules/embedding/test_embedding_1d.py

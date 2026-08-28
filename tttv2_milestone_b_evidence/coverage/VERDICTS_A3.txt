@@ -41,3 +41,4 @@ a3_q_pool_explicit rc=0 | 1 passed |   |
 a3_q_dc5 rc=1 | 1 failed |   | TT_FATAL: Kernel group cores do not match sub device cores for programmable core type TENSIX (assert.hpp:104)
 a3_q_pool_default_run2 rc=0 | 1 passed |   |
 a3_q_dc5_run2 rc=1 | 1 failed |   | TT_FATAL: Kernel group cores do not match sub device cores for programmable core type TENSIX (assert.hpp:104)
+a3_q_dc5_run3 rc=1 | 1 failed |   | TT_FATAL: Kernel group cores do not match sub device cores for programmable core type TENSIX (assert.hpp:104)

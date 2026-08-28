@@ -207,7 +207,11 @@ This is why the diagnostic was worth a Galaxy quarter-hour.
 
 `a3_q_dc5` (`logs2/a3_q_dc5.log`, commit `152d4c49efb`, `1 failed, 2 warnings in
 156.06s`) relocated the decode logits exactly as D-C5's proposed one-line fix
-would:
+would. **Three fresh processes, byte-identical**: `a3_q_dc5` 156.06s,
+`a3_q_dc5_run2` 157.88s, `a3_q_dc5_run3` 154.84s, each printing the same
+relocation line and raising the same `TT_FATAL`. On this hardware a passing run
+proves nothing, and the same rule applied to a failure says the opposite: this
+is not a race and not aliased L1, it is a function of the resolved placement.
 
 ```text
 [dc5] greedy: decode logits were TensorMemoryLayout.WIDTH_SHARDED, width 19200;
