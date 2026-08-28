@@ -24,7 +24,10 @@ pytestmark = pytest.mark.slow
 from models.experimental.voxtral_tts.reference import voxtral_backbone_ref as bref  # noqa: E402
 from models.experimental.voxtral_tts.reference import voxtral_flow_ref as fref  # noqa: E402
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import (  # noqa: E402
+    EMPTY_AUDIO_ID,
+    END_AUDIO_ID,
     FM_INPUT_DIM,
+    N_AUDIO_SPECIAL,
     N_ACOUSTIC_CODEBOOK,
     N_DECODING_STEPS,
     N_LAYERS,
@@ -305,3 +308,54 @@ def test_memoised_schedules_and_buffers_do_not_go_stale(rig, wb):
     assert torch.equal(first, again), (
         "codes changed after other step counts ran, so a cached schedule or buffer went stale")
     print(f"\n  {tuple(sorted(gen._sched))} schedules cached; first result reproduced exactly")
+
+
+def _same_codes(got, exp, label):
+    """Semantic exact, acoustic within one FSQ level and no more than the shipped count."""
+    d = (exp.long() - got.long()).abs()
+    n_diff, mx = int((d != 0).sum()), int(d.max()) if d.numel() else 0
+    print(f"\n  {label}: {n_diff} of {exp.numel()} codes differ, max |delta| {mx}")
+    assert n_diff <= MAX_FRAME_CODES_DIFF, f"{label}: {n_diff} codes differ"
+    assert mx <= 1, f"{label}: a code is off by {mx} FSQ levels"
+
+
+@pytest.mark.slow
+def test_an_end_audio_frame_is_not_decoded(rig, wb):
+    """A frame whose semantic code is [END_AUDIO] must come back as empty acoustic slots.
+
+    Otherwise the codec renders whatever the solver produced at the end of an utterance.
+    """
+    gen, w, _, _ = rig
+    h, _ = _real_hidden(wb, REAL_CASES[0])
+    x_0 = torch.randn(BATCH, N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(0))
+    sem = torch.full((BATCH, 1), END_AUDIO_ID, dtype=torch.long)
+
+    got = gen.decode_frame(sem, h, x_0=x_0)
+    exp = fref.decode_frame(sem, h, w, x_0=x_0)
+    expected_slot = EMPTY_AUDIO_ID + N_AUDIO_SPECIAL
+    print(f"\n  [END_AUDIO] frame -> device {got[0, :4].tolist()}, reference {exp[0, :4].tolist()}")
+    assert torch.equal(got, exp), "device and reference disagree on an [END_AUDIO] frame"
+    assert bool((got == expected_slot).all()), (
+        f"acoustic slots are {got[0, :4].tolist()}, expected all {expected_slot}")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfg_alpha", (1.0, 2.0), ids=lambda a: f"cfg{a}")
+def test_frame_codes_at_other_cfg_alphas(rig, wb, cfg_alpha):
+    """CFG strengths other than the shipped default must still match the reference."""
+    gen, w, _, _ = rig
+    h, _ = _real_hidden(wb, REAL_CASES[0])
+    x_0 = torch.randn(BATCH, N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(0))
+    _same_codes(gen(h, x_0=x_0, cfg_alpha=cfg_alpha),
+                fref.reference_frame(h, w, x_0=x_0, cfg_alpha=cfg_alpha), f"cfg_alpha {cfg_alpha}")
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("n_steps", (3, 14), ids=lambda n: f"steps{n}")
+def test_frame_codes_at_other_step_counts(rig, wb, n_steps):
+    """Step counts other than the shipped 7 must still match the reference, schedule included."""
+    gen, w, _, _ = rig
+    h, _ = _real_hidden(wb, REAL_CASES[0])
+    x_0 = torch.randn(BATCH, N_ACOUSTIC_CODEBOOK, generator=torch.Generator().manual_seed(0))
+    _same_codes(gen(h, x_0=x_0, n_steps=n_steps),
+                fref.reference_frame(h, w, x_0=x_0, n_steps=n_steps), f"n_steps {n_steps}")
