@@ -23,30 +23,20 @@ class MLPWeights:
 
 # WORMHOLE MLP prefill: one K pass for gate/up/down.
 #
-# The unfused prefill arm below used halve_out_block=True because the full per_core_N-wide
-# output/intermediate CB (gate AND up live at once) overflowed WH L1 by ~28KB.
-# Halving out_block_w turns one K pass into two, and each extra pass re-reads
-# the DRAM-resident activation. Dropping fp32 dest accumulation halves the CB
-# and raises the output-subblock cap from 4 to 8, so the full-width block fits
-# (-16% on the GDN in-proj too). packer_l1_acc goes ON at the same time.
+# The unfused arm needed halve_out_block=True because the full per_core_N-wide CB (gate AND up live
+# at once) overflowed WH L1 by ~28KB -- which turns one K pass into two, each re-reading the
+# DRAM-resident activation. Dropping fp32 dest accumulation halves the CB and raises the
+# output-subblock cap from 4 to 8, so the full-width block fits. packer_l1_acc goes on with it.
 #
-# MEASURED IN THE REAL LAYER (Tracy, T=2048, N300, full decoder layer):
-#     gate  2048x4096x6144  1,321us @ 33.5% of peak  ->  982us @ 45.1%   (-339us)
-#     up    2048x4096x6144  1,183us @ 37.4%          ->  903us @ 49.0%   (-280us)
-#     down  2048x6144x4096  1,110us @ 39.9%          -> 1,013us @ 43.7%  (-97us)
-#                                                                        = -716us/layer
-# The GDN in/out-proj matmuls are byte-identical in the same capture, the check
-# that this is scoped to the MLP.
+# MEASURED in the real layer (Tracy, T=2048, N300): gate 1,321 -> 982us, up 1,183 -> 903us,
+# down 1,110 -> 1,013us = -716us/layer, with the GDN matmuls byte-identical in the same capture
+# (the check that this is MLP-scoped). Accuracy cost is negligible.
 #
-# ACCURACY: negligible. MLP PCC T=2048 0.9867734 -> 0.9866364 (test_mlp_tp). STALE: measured when
-# gate/up were bfp4; they are bfloat8_b on wh_9b_n300 now. Conclusion holds -- fp32 dest accumulation
-# is not the limiter -- but re-measure before quoting these two figures.
+# CAUTION: tests/perf/test_mlp_matmul_sweep_prefill.py runs DRAM-saturated and misreports this
+# config as 2,060us against a real 1,321us. Trust the full-layer capture.
 #
-# CAUTION: tests/perf/test_mlp_matmul_sweep_prefill.py runs DRAM-saturated and misreports this config
-# as 2,060us against a real 1,321us. Trust the full-layer capture.
-#
-# Wormhole only. On Blackhole at TP>1 mlp_gateup_agmm_enabled is always True, so the branch below is
-# unreachable there; the guard makes that explicit rather than relying on it.
+# Wormhole only -- on Blackhole at TP>1 mlp_gateup_agmm_enabled is always True, so the branch below
+# is unreachable; the guard makes that explicit rather than relying on it.
 _CKC_MLP_KPASS1 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False, packer_l1_acc=True
 )
@@ -378,25 +368,17 @@ class Qwen36MLP:
             # PCC unchanged to 5 decimals (gate 0.99013, up 0.99313, down 0.99983)
             # this is pure blocking, not an accuracy trade.
             _sub_cap = tpc.DST_TILES if _kpass1 else None
-            # MODEL-GATED (27B on Wormhole). The 27B's per-device gate/up width is
-            # hidden_dim/tp = 17408/8 = 2176 = 68 tiles, and 68's only divisors <=8 are 1/2/4 -- so
-            # _best_prefill_cols, which picks the grid width that maximises the output subblock,
-            # settles on 6 columns = 48 of 64 cores. That trade is wrong here: the missing 16 cores
-            # cost far more than the wider subblock earns. The 9B's 192 tiles already land on the
-            # full 8 wide, so it never saw this and is left byte-identical (gate on dim, not
-            # model_name: HF_MODEL is often a hashed snapshot directory).
+            # MODEL-GATED (27B on Wormhole). The 27B's per-device gate/up width is 2176 = 68 tiles,
+            # whose only divisors <=8 are 1/2/4, so _best_prefill_cols (which maximises the output
+            # subblock) settles on 6 columns = 48 of 64 cores. Wrong trade here -- the missing 16
+            # cores cost far more than the wider subblock earns. The 9B's 192 tiles already fill 8
+            # columns, so it never saw this and stays byte-identical (gate on dim, not model_name:
+            # HF_MODEL is often a hashed snapshot directory).
             #
-            # MEASURED (T3K TP=8, device kernel duration, M=2048, in0 bf8;
-            # tests/perf/test_mlp_prefill_matmul_sweep.py -- and both baselines below reproduce the
-            # real layer's numbers to within 1.5us, which is why this isolated sweep is trusted for
-            # this shape where mlp.py's older caution applied to a compute-config axis):
-            #     gate/up  2048x5120x2176  cols=6 in0_bw=4 sub=1x6  468.5us  (48 cores, 40.7% FPU)
-            #                              cols=8 in0_bw=8 sub=1x3  352.3us  (64 cores, 54.7% FPU)  -24.8%
-            #     down     2048x2176x5120  cols=8 in0_bw=4 sub=1x5  442.8us  (64 cores, 44.5% FPU)
-            #                              cols=8 in0_bw=4 sub=2x4  390.9us  (64 cores, 49.6% FPU)  -11.7%
-            # PCC is unchanged (0.9989485 either way, test_mlp_tp_prefill[in_bf8]) -- pure blocking.
-            # out_subblock_h is passed explicitly because no simple rule predicts both winners; see
-            # create_prefill_mlp_matmul_program_config_full_grid.
+            # MEASURED (T3K TP=8, M=2048, in0 bf8; tests/perf/test_mlp_prefill_matmul_sweep.py, whose
+            # baselines reproduce the real layer to within 1.5us): gate/up 468.5 -> 352.3us (-24.8%)
+            # at cols=8, down 442.8 -> 390.9us (-11.7%) at sub=2x4. PCC unchanged -- pure blocking.
+            # out_subblock_h is passed explicitly because no simple rule predicts both winners.
             if _mlp_full_grid:
                 pc_gate = tpc.create_prefill_mlp_matmul_program_config_full_grid(
                     seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, out_subblock_h=1
@@ -426,41 +408,25 @@ class Qwen36MLP:
                 )
             if _kpass1:
                 ckc = _CKC_MLP_KPASS1
-            # MODEL-GATED (27B on Wormhole, M <= PREFILL_FULL_GRID_MAX_M via _mlp_full_grid).
-            # gate/up outputs -- and therefore the SwiGLU product below -- stay in L1.
+            # MODEL-GATED (27B on Wormhole): gate/up outputs, and so the SwiGLU product, stay in L1.
             #
-            # The note further down says L1 for `hidden` is a verified dead end. That verdict was
-            # measured at 9B/N300 shapes and does NOT carry to the 27B at TP=8, because the tensor is
-            # 5x smaller per core: [1,1,2048,hidden/tp] is 6144 cols of bf16 = 25.2MB = 393KB/core on
-            # the 9B, but 2176 cols of bf8 = 4.7MB = 74KB/core here (TP=8 narrows it, and the bf8
-            # gather above already halved the dtype). Peak L1 is the 3 live tensors across the
-            # multiply -- gate + up + product = ~222KB/core -- which leaves the down-proj room for
-            # its CBs where the 9B had none.
+            # The dead-end note further down was measured at 9B/N300 shapes and does NOT carry here:
+            # at TP=8 the tensor is 5x smaller per core (74KB vs 393KB), so peak L1 across the
+            # multiply -- gate + up + product, ~222KB/core -- leaves the down-proj room for its CBs
+            # where the 9B had none.
             #
-            # MEASURED (T3K TP=8, 27B, seq 2048, device kernel duration, 2 runs each, DRAM -> L1):
-            #     up    2048x5120x2176   302/301us -> 250/250us   -17%  (FLOPs 65.1% -> 78.5%)
-            #     mul   [1,1,2048,2176]   80/80us  ->  42/42us    -47%  (pure bandwidth op)
-            #     gate  2048x5120x2176   352/352us -> 350/350us   unchanged
-            #     down  2048x2176x5120   392/393us -> 392/391us   unchanged (reads in0 from L1)
-            #                                                     = -89us/layer
-            # The two collectives move +10/-6us and +31/+4us across the same runs, i.e. CCL noise;
-            # they are not affected by this.
-            #
-            # Why only `up` gains: gate carries the fused SILU, which costs ~100us at this shape
-            # (visible in the DRAM baseline too, 352 vs 301 for an identical matmul), and that is
-            # what it stays pinned by. `down` is unchanged because at 19-23% DRAM utilisation none of
-            # these matmuls is bandwidth-bound -- the win is the elementwise multiply, which is, plus
-            # up no longer contending with it for DRAM.
+            # MEASURED (T3K TP=8, 27B, seq 2048, DRAM -> L1): up 302 -> 250us (-17%), the multiply
+            # 80 -> 42us (-47%), gate and down unchanged = -89us/layer. Only `up` gains because gate
+            # is pinned by its fused SILU (~100us at this shape) and `down` already reads in0 from
+            # L1; at 19-23% DRAM utilisation the matmuls are not bandwidth-bound, but the elementwise
+            # multiply is.
             _gu_mc = ttnn.L1_MEMORY_CONFIG if _mlp_full_grid else ttnn.DRAM_MEMORY_CONFIG
-            # FLOOR THE OUTPUT AT bf8 IF in0 EVER GOES BELOW IT. Inert today (in0 is bf16 or bf8);
-            # it exists because ttnn.linear defaults its output dtype to in0's (matmul.cpp:72), and
-            # that inheritance is a trap here. It was a WIN going to bf8 (narrowing ff_norm's gather
-            # made gate/up emit bf8 too: up 507 -> 373us), but it does NOT keep being one: gate/up
-            # outputs are post-matmul ACCUMULATIONS feeding the SwiGLU product, where a 4-bit
-            # mantissa costs far more than it does on an input activation whose error the bfp4
-            # weights already dominate. A bfp4 ff_norm gather was measured and rejected (layer.py
-            # _ff_gather_dtype); this line is what kept that experiment measuring the ACTIVATION
-            # narrowing alone, which is the only claim ever made for it. Keep it if you re-open that.
+            # FLOOR THE OUTPUT AT bf8 IF in0 EVER GOES BELOW IT. Inert today (in0 is bf16 or bf8),
+            # but ttnn.linear defaults its output dtype to in0's, and that inheritance is a trap:
+            # gate/up outputs are post-matmul ACCUMULATIONS feeding the SwiGLU product, where a
+            # 4-bit mantissa costs far more than on an input activation whose error the bfp4 weights
+            # already dominate. This floor is what kept the rejected bfp4 ff_norm gather experiment
+            # (layer.py _ff_gather_dtype) measuring the activation narrowing alone. Keep it.
             _gu_dt = {"dtype": ttnn.bfloat8_b} if x.dtype == ttnn.bfloat4_b else {}
             w1_out = ttnn.linear(
                 x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc, **_gu_dt
@@ -483,29 +449,19 @@ class Qwen36MLP:
             mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
             if _mlp_full_grid:
                 mc_out = ttnn.L1_MEMORY_CONFIG  # see _gu_mc above for why this is safe on the 27B
-            # MEASURED (N300, 2026-08): putting `hidden` in L1 on WH prefill does NOT work, and the
-            # reason differs from the note above. On WH the two are never both L1
-            # prefill_out_memory_config's 8MB budget already sends the [2048,4096] down-proj OUTPUT to
-            # anyway, but `hidden` ALONE is too big: [1,2048,6144] bf16 = 25.2MB
-            # down-proj then cannot place its own circular buffers ("clash with L1 buffers ... L1 buffer
-            # allocated at 1080192 and static circular buffer region ends at 1162432",
-            # test_mlp_tp_prefill at T=2048). No smaller budget helps: 2048 IS the production
-            # chunk-outer length, so anything that excludes it wins nothing. Keep DRAM.
+            # `hidden` in L1 on WH prefill does NOT work: [1,2048,6144] bf16 is 25.2MB, and the
+            # down-proj then cannot place its own circular buffers (CB clash, test_mlp_tp_prefill at
+            # T=2048). No smaller budget helps -- 2048 IS the production chunk-outer length, so
+            # anything that excludes it wins nothing. Keep DRAM.
             #
-            # WORMHOLE PREFILL: emit `hidden` as bf8 while KEEPING IT IN DRAM. This is deliberately
-            # the dtype axis, NOT placement: L1 is the known-dead end above, and
-            # in DRAM means none of that CB-clash risk applies. Two wins for one change:
-            #   * the multiply writes half as many bytes (it is pure bandwidth, no FLOPs)
-            #   * the down-proj's in0 becomes bf8, turning it into a BFP8 x BFP8 matmul
-            # MEASURED (device kernel duration, N300, T=2048):
-            #   SwiGLU mul  [1,1,2048,6144]  out DRAM/bf16 424.0us -> out DRAM/bf8 348.6us  -17.8%
-            #                                (tests/perf/test_layer_elementwise_l1_sweep.py, pcc 0.99996)
-            #   down-proj   2048x6144x4096   in0 bf16 924.8us -> in0 bf8 758.5us  -18.0%
-            #                                (tests/perf/test_mlp_subblock_actdtype_sweep.py, pcc 0.99978)
-            # It also halves `hidden`'s DRAM footprint (25.2MB -> 12.6MB), easing pressure for
-            # everything downstream. Only on the one-K-pass (_kpass1 / Wormhole) prefill arm, whose
-            # numerics are already the loosest in the layer (LoFi + bfp4 gate/up weights) -- Blackhole's
-            # fused-AGMM path produces `hidden` inside all_gather_swiglu_prefill and never reaches here.
+            # WORMHOLE PREFILL: emit `hidden` as bf8 while KEEPING IT IN DRAM -- the dtype axis, not
+            # placement, so none of the CB-clash risk above applies. Two wins: the multiply writes
+            # half the bytes (it is pure bandwidth), and the down-proj's in0 becomes bf8, making it a
+            # BFP8 x BFP8 matmul. MEASURED (N300, T=2048): the SwiGLU multiply 424.0 -> 348.6us
+            # (-17.8%, pcc 0.99996) and the down-proj 924.8 -> 758.5us (-18.0%, pcc 0.99978), plus
+            # `hidden`'s DRAM footprint halves. Only on the one-K-pass Wormhole arm, whose numerics
+            # are already the loosest in the layer -- Blackhole builds `hidden` inside
+            # all_gather_swiglu_prefill and never reaches here.
             _hidden_dt = {"dtype": ttnn.bfloat8_b} if (_prefill_tuned and not tpc.is_blackhole()) else {}
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
             if _silu_fused:
