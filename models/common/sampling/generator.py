@@ -131,6 +131,7 @@ class SamplingGenerator:
         self.seed_manager = SeedManager(
             self.tt_sampling,
             max_batch_size=seed_batch_size,
+            salt_duplicate_seeds=getattr(args, "salt_duplicate_seeds", True),
         )
 
     def _new_trace_state(self):
@@ -172,10 +173,10 @@ class SamplingGenerator:
                 continue
         self._trace_states.clear()
 
-    def reset_prompt_tokens(self, prompt_tokens):
+    def reset_prompt_tokens(self, prompt_tokens, slots: list[int] | None = None):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_prompt_tokens(prompt_tokens)
+        self.tt_penalties.reset_prompt_tokens(prompt_tokens, slots=slots)
 
     def reset_output_state(self, tokens=None):
         if not self._penalties_active:
@@ -446,7 +447,6 @@ class SamplingGenerator:
         # Explicit request seeds update a persistent seed tensor every token;
         # run them directly so trace replay cannot observe stale seed state.
         use_internal_trace = enable_trace and not self.seed_manager.has_active_request_seed()
-
         if not use_internal_trace:
             tt_out = self._run_sampling(
                 logits,
@@ -780,10 +780,24 @@ class SeedManager:
     writes to device. `write_device_seed_values` writes explicit seeds only.
     """
 
-    def __init__(self, tt_sampling, max_batch_size=32):
+    def __init__(self, tt_sampling, max_batch_size=32, salt_duplicate_seeds=True):
         self.max_batch_size = max_batch_size
+        # When False, concurrent slots sharing a request seed keep salt 0, so two independent
+        # requests carrying the same seed stay bit-identical (the OpenAI/vLLM reproducibility
+        # contract, asserted by the vLLM TT sampling suite).
+        #
+        # #53077 added salting for "n>1 completions of one prompt with a fixed seed occupy
+        # several slots with the same request seed". That premise does not hold on the vLLM v1
+        # path: ParentRequest._get_child_sampling_params already gives child i `seed + i`
+        # (vllm/v1/engine/parallel_sampling.py), so n>1 children never reach the backend
+        # sharing a seed. There, every duplicate seed is genuinely independent requests that
+        # MUST match, and salting them is a regression. Demo paths that do replicate one seed
+        # across slots (e.g. simple_text_demo.py) keep the default and are unaffected.
+        self.salt_duplicate_seeds = salt_duplicate_seeds
         self.seeds = [None for _ in range(max_batch_size)]
         self.seed_counters = [0 for _ in range(max_batch_size)]
+        # Last per-slot device seeds pushed by get_new_values; the Python sampler turns these
+        # into its per-user uniforms so it draws from the same stream as the device PRNG path.
         # Disambiguates concurrent slots that carry the SAME explicit request
         # seed (n>1 completions of one prompt with a fixed seed). A slot whose
         # seed is unique among active slots always has salt 0, preserving the
@@ -840,6 +854,8 @@ class SeedManager:
         rather than a running count -- avoids re-colliding with a surviving
         duplicate after an earlier one finished and vacated its slot.
         """
+        if not self.salt_duplicate_seeds:
+            return 0
         taken = {
             self.seed_salts[other]
             for other in range(self.max_batch_size)
