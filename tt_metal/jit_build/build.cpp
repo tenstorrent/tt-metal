@@ -168,8 +168,9 @@ void JitBuildEnv::init(
         "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval "
         // Ban dynamic initializations, via a check we've added
         "-ftt-no-dyninit "
-        // Rely on Link Time Optimization (removes globally unreachable code)
-        "-flto=auto "
+        // EXPERIMENT (do not merge): "-flto=auto " removed here to see what CI reports.
+        // See tenstorrent/tt-metal#54692 -- locally this fails with three
+        // -Werror=array-bounds errors on fixed-address mailbox accesses.
         // Fast math allows non-IEEE compliant optimizations ...
         "-ffast-math "
         // ... but we require these IEEE behaviors
