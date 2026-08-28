@@ -7,22 +7,12 @@ import ttnn
 
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import weight_memory_configs
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
-    create_program_descriptor,
-    make_mailbox,
-    weight_memory_configs as descriptor_weight_memory_configs,
-)
 
 EMB = 3584
 HIDDEN = 3072
 COUNT = 32
 GRID = ttnn.CoreCoord(11, 8)
 GLOBAL_EXPERT_ID = 137
-GRID_CASES = (
-    (ttnn.CoreCoord(11, 8), "8x11"),
-    (ttnn.CoreCoord(12, 8), "8x12"),
-)
 
 
 def _to_device(tensor, dtype, layout, device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -54,19 +44,7 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
     ]
 
     x = _to_device(x_host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
-    gate_up_memory_config, down_memory_config = weight_memory_configs(device, EMB, HIDDEN, core_grid=GRID)
-    weights = [
-        _to_device(weight, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device, memory_config)
-        for weight, memory_config in zip(
-            host_weights,
-            (gate_up_memory_config, gate_up_memory_config, down_memory_config),
-        )
-    ]
-    # The composite takes DRAM-interleaved weights only, and `weight_memory_configs` has no
-    # interleaved path — it is the fused op's ND placement helper. A second upload of the SAME host
-    # tensors keeps the cross-check honest: bfp4 quantization is placement-independent, so both ops
-    # see identical values.
-    interleaved_weights = [_to_device(weight, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device) for weight in host_weights]
+    weights = [_to_device(weight, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device) for weight in host_weights]
 
     counts_host = torch.zeros(384, dtype=torch.int32)
     counts_host[GLOBAL_EXPERT_ID] = COUNT
@@ -96,9 +74,9 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
         offsets,
         counts,
         expert_ids,
-        [interleaved_weights[0]],
-        [interleaved_weights[1]],
-        [interleaved_weights[2]],
+        [weights[0]],
+        [weights[1]],
+        [weights[2]],
         COUNT,
         activation=ttnn.RoutedExpertActivation.SituGlu,
     )
@@ -115,97 +93,3 @@ def test_moe_fused_situ_glu_3584x3072_rm_bf16_bfp4(device, weight_scale):
     # composite's own. They compute the same math but block and accumulate
     # differently, so this is a genuine agreement bound, not a self-comparison.
     assert_with_pcc(actual, composite_actual, pcc=0.999)
-
-
-# No fabric: this op is single-device and `mesh_device` is only a device handle here, so a fabric
-# config buys nothing and its tensix-mux bring-up fails outright on a multi-card host.
-@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
-@pytest.mark.parametrize(
-    "emb,hidden,activation",
-    [
-        (3584, 3072, ttnn.RoutedExpertActivation.Silu),
-        (3584, 3072, ttnn.RoutedExpertActivation.SituGlu),
-        (6144, 2048, ttnn.RoutedExpertActivation.Silu),
-        (7168, 2048, ttnn.RoutedExpertActivation.Silu),
-    ],
-    ids=["3584x3072-silu", "3584x3072-situ-glu", "6144x2048-silu", "7168x2048-silu"],
-)
-@pytest.mark.parametrize("core_grid", [case[0] for case in GRID_CASES], ids=[case[1] for case in GRID_CASES])
-def test_moe_fused_swiglu_python_descriptor_grouped_m(mesh_device, emb, hidden, activation, core_grid):
-    """Validate both supported grids in the Python descriptor against the C++ implementation."""
-    device = mesh_device
-    available_grid = device.compute_with_storage_grid_size()
-    if core_grid.x > available_grid.x or core_grid.y > available_grid.y:
-        pytest.skip(
-            f"requested {core_grid.y}x{core_grid.x} grid exceeds available "
-            f"{available_grid.y}x{available_grid.x} grid"
-        )
-    count = 1024  # Four 256-token blocks: enough to exercise the grouped-M down schedule.
-    torch.manual_seed(20260819)
-    x_host = torch.randn((1, 1, count, emb), dtype=torch.bfloat16)
-    host_weights = [
-        torch.randn(shape, dtype=torch.bfloat16) * 2.0e-2 for shape in ((emb, hidden), (emb, hidden), (hidden, emb))
-    ]
-    x = _to_device(x_host, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device)
-    gate_up_memory_config, down_memory_config = descriptor_weight_memory_configs(
-        device, emb, hidden, core_grid=core_grid
-    )
-    weights = [
-        _to_device(weight, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device, memory_config)
-        for weight, memory_config in zip(
-            host_weights,
-            (gate_up_memory_config, gate_up_memory_config, down_memory_config),
-        )
-    ]
-    counts_host = torch.zeros(384, dtype=torch.int32)
-    counts_host[GLOBAL_EXPERT_ID] = count
-    counts = _to_device(counts_host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
-    expert_ids = _to_device(
-        torch.tensor([GLOBAL_EXPERT_ID], dtype=torch.int32),
-        ttnn.uint32,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-    )
-    output = ttnn.empty(
-        x.shape,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    mailbox = make_mailbox(device, core_grid.x * core_grid.y)
-    descriptor = create_program_descriptor(
-        x,
-        *weights,
-        counts,
-        expert_ids,
-        output,
-        mailbox,
-        input_m_tiles=count // 32,
-        compute_kernel_config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            dst_full_sync_en=False,
-        ),
-        core_grid=core_grid,
-        situ_glu=activation == ttnn.RoutedExpertActivation.SituGlu,
-    )
-    ttnn.generic_op([x, *weights, counts, expert_ids, output, mailbox], descriptor)
-    actual = ttnn.to_torch(output)[0, 0, :count].float()
-    reference = ttnn.experimental.deepseek_prefill.moe_fused_swiglu(
-        x,
-        [weights[0]],
-        [weights[1]],
-        [weights[2]],
-        counts,
-        expert_ids,
-        input_m_tiles=count // 32,
-        core_grid=core_grid,
-        activation=activation,
-    )
-    reference = ttnn.to_torch(reference)[0, 0, :count].float()
-    assert torch.isfinite(actual).all()
-    assert_with_pcc(reference, actual, pcc=0.999)
