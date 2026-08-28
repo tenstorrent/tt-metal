@@ -14,6 +14,23 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_chunk_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
+// Factory define: 1 = interior TU, 2 = edge TU, 0 = unsplit. Must be a preprocessor value so
+// classify is absent from the interior ELF (if constexpr on path_mode was DCE'd).
+#ifndef NA_PATH_KIND
+#define NA_PATH_KIND 0
+#endif
+// Factory -DNA_PATH_KIND=1/2 is the reliable skip switch: wrapper #defines were not
+// enough (the included reader still walked every brick). 2 = skip edges, 3 = skip interiors.
+#ifndef NA_SKIP_IF
+#if NA_PATH_KIND == 1
+#define NA_SKIP_IF 2u
+#elif NA_PATH_KIND == 2
+#define NA_SKIP_IF 3u
+#else
+#define NA_SKIP_IF 0u
+#endif
+#endif
+
 // Feeds one query CHUNK at a time: the Q tiles of every brick in the chunk, then the context
 // window's K and V tiles in chunks, with a matching additive mask.
 //
@@ -38,8 +55,10 @@ constexpr uint32_t MAX_TILES_PER_KV_CHUNK = 8;
 
 using layout::BrickCoordinate;
 
-// The key brick a gather slot names, and where it starts in sites. Lifted out of the gather loop
-// so the coverage cache can be filled with exactly the same decode the gather uses.
+// The key brick a gather slot names, and where it starts in sites. W fastest, then H, then T --
+// the same raster the planner uses. The hot gather loop must NOT call this per slot: those
+// divides are ~64 ns each and dominate the op. Decode the chunk start once, then
+// `advance_gather_raster`.
 FORCE_INLINE BrickCoordinate gather_slot_brick(
     const BrickCoordinate& gather_origin_brick, uint32_t slot, const kernel_args::AxisExtents& gather_bricks) {
     const uint32_t per_time_slice = gather_bricks.height * gather_bricks.width;
@@ -48,6 +67,28 @@ FORCE_INLINE BrickCoordinate gather_slot_brick(
         gather_origin_brick.time + slot / per_time_slice,
         gather_origin_brick.height + within / gather_bricks.width,
         gather_origin_brick.width + within % gather_bricks.width};
+}
+
+// Next brick in gather raster. Along W the bricked tensor is contiguous, so the brick index is
+// just +1; H/T wraps recompute. Used by the hot loop so it never divides a slot index.
+FORCE_INLINE void advance_gather_raster(
+    BrickCoordinate& key_brick,
+    uint32_t& key_brick_index,
+    const BrickCoordinate& gather_origin_brick,
+    const kernel_args::AxisExtents& gather_bricks,
+    const kernel_args::AxisExtents& volume_bricks) {
+    key_brick.width += 1;
+    if (key_brick.width != gather_origin_brick.width + gather_bricks.width) {
+        key_brick_index += 1;
+        return;
+    }
+    key_brick.width = gather_origin_brick.width;
+    key_brick.height += 1;
+    if (key_brick.height == gather_origin_brick.height + gather_bricks.height) {
+        key_brick.height = gather_origin_brick.height;
+        key_brick.time += 1;
+    }
+    key_brick_index = layout::brick_index(key_brick, volume_bricks);
 }
 
 FORCE_INLINE mask_gen::SiteInBrick gather_slot_origin(
@@ -251,7 +292,246 @@ chunk_regime(const mask_gen::SiteInBrick& chunk_origin_site, const kernel_args::
     return regime;
 }
 
+// Out of kernel_main so the interior gather loop does not share an I-cache working set with
+// classify/fill_mask_tile. Compiling both in one function was 64 ns/slot (416 ms) even when
+// the host bit admitted 73% interior; compiling the interior path alone was 20 ns/slot (130 ms).
+#if NA_PATH_KIND != 1
+template <typename KeyReader, typename ValueReader, typename MaskReader>
+__attribute__((noinline, noclone)) void gather_edge_flash_chunk(
+    Noc& noc,
+    const KeyReader& key_reader,
+    const ValueReader& value_reader,
+    const MaskReader& interior_mask_reader,
+    kernel_args::NeighborhoodExtents& extents,
+    const BrickCoordinate& gather_origin_brick,
+    const layout::BrickCoordinate& chunk_origin,
+    const mask_gen::SiteInBrick& chunk_origin_site,
+    const kernel_args::AxisExtents& gather_bricks,
+    const kernel_args::AxisExtents& volume_bricks,
+    const kernel_args::AxisExtents& query_chunk_bricks,
+    const kernel_args::AxisExtents& query_origin_bricks,
+    CircularBuffer& cb_key,
+    CircularBuffer& cb_value,
+    CircularBuffer& cb_mask,
+    uint32_t kv_chunk_index,
+    uint32_t batch_index,
+    uint32_t head_index,
+    uint32_t brick_count,
+    uint32_t head_count,
+    uint32_t head_dim_tiles,
+    uint32_t tiles_per_kv_chunk,
+    uint32_t kv_chunk_count,
+    uint32_t gather_brick_count,
+    uint32_t bricks_per_query_chunk,
+    uint32_t tile_bytes,
+    uint32_t skip_kv,
+    uint32_t per_brick_mask,
+    uint32_t mask_memset_only,
+    uint32_t relative_mask,
+    uint32_t table_always,
+    uint32_t use_uploaded_mask,
+    uint32_t regime) {
+    const uint32_t key_base_pointer = cb_key.get_write_ptr();
+    uint32_t value_write_pointer = cb_value.get_write_ptr();
+    uint32_t mask_write_pointer = cb_mask.get_write_ptr();
+
+    mask_gen::BrickCoverage coverage[MAX_TILES_PER_KV_CHUNK];
+    mask_gen::SiteInBrick key_origins[MAX_TILES_PER_KV_CHUNK];
+
+    BrickCoordinate key_brick;
+    if (tiles_per_kv_chunk == gather_bricks.width && kv_chunk_count == gather_bricks.time * gather_bricks.height) {
+        key_brick = BrickCoordinate{
+            gather_origin_brick.time + kv_chunk_index / gather_bricks.height,
+            gather_origin_brick.height + kv_chunk_index % gather_bricks.height,
+            gather_origin_brick.width};
+    } else {
+        const uint32_t start_slot = kv_chunk_index * tiles_per_kv_chunk;
+        key_brick = start_slot >= gather_brick_count
+                        ? gather_origin_brick
+                        : gather_slot_brick(gather_origin_brick, start_slot, gather_bricks);
+    }
+    uint32_t key_brick_index = layout::brick_index(key_brick, volume_bricks);
+
+    for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+        const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+        const bool slot_is_padding = gather_slot >= gather_brick_count;
+        const BrickCoordinate& slot_brick = slot_is_padding ? gather_origin_brick : key_brick;
+        const uint32_t slot_brick_index =
+            slot_is_padding ? layout::brick_index(gather_origin_brick, volume_bricks) : key_brick_index;
+
+        key_origins[slot] = mask_gen::SiteInBrick{
+            slot_brick.time * extents.brick_sites.time,
+            slot_brick.height * extents.brick_sites.height,
+            slot_brick.width * extents.brick_sites.width};
+        coverage[slot] = slot_is_padding ? mask_gen::BrickCoverage::NoneVisible
+                                         : mask_gen::classify_brick(chunk_origin_site, key_origins[slot], extents);
+
+        const uint32_t key_first_tile =
+            layout::tile_offset(batch_index, slot_brick_index, head_index, brick_count, head_count, head_dim_tiles);
+        if (skip_kv == 0) {
+            for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                const uint32_t key_write_pointer =
+                    key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes;
+                noc.async_read(
+                    key_reader,
+                    CoreLocalMem<uint32_t>(key_write_pointer),
+                    tile_bytes,
+                    {.page_id = key_first_tile + head_dim_tile},
+                    {});
+                noc.async_read(
+                    value_reader,
+                    CoreLocalMem<uint32_t>(value_write_pointer),
+                    tile_bytes,
+                    {.page_id = key_first_tile + head_dim_tile},
+                    {});
+                value_write_pointer += tile_bytes;
+            }
+        } else {
+            value_write_pointer += head_dim_tiles * tile_bytes;
+        }
+        if (slot + 1 < tiles_per_kv_chunk && !slot_is_padding) {
+            advance_gather_raster(key_brick, key_brick_index, gather_origin_brick, gather_bricks, volume_bricks);
+        }
+    }
+
+    if (per_brick_mask != 0) {
+        for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
+            const layout::BrickCoordinate query_brick =
+                layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
+            const mask_gen::SiteInBrick query_origin_site{
+                (query_brick.time + query_origin_bricks.time) * extents.brick_sites.time,
+                (query_brick.height + query_origin_bricks.height) * extents.brick_sites.height,
+                (query_brick.width + query_origin_bricks.width) * extents.brick_sites.width};
+            const uint32_t brick_base = mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
+            const bool brick_takes_table = relative_mask != 0 && use_uploaded_mask != 0 &&
+                                           (table_always != 0 || brick_window_is_unclamped(query_origin_site, extents));
+            for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+                if (mask_memset_only != 0) {
+                    volatile tt_l1_ptr uint32_t* zero_destination =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
+                    for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                        zero_destination[word] = 0x00000000u;
+                    }
+                    continue;
+                }
+                const mask_gen::BrickCoverage brick_coverage =
+                    gather_slot >= gather_brick_count
+                        ? mask_gen::BrickCoverage::NoneVisible
+                        : mask_gen::classify_brick(query_origin_site, key_origins[slot], extents);
+                if (brick_coverage == mask_gen::BrickCoverage::Mixed) {
+                    if (brick_takes_table) {
+                        const uint32_t table_index =
+                            relative_table_index(query_origin_site, key_origins[slot], extents);
+                        if (table_index != NO_REGIME) {
+                            noc.async_read(
+                                interior_mask_reader,
+                                CoreLocalMem<uint32_t>(brick_base + slot * tile_bytes),
+                                tile_bytes,
+                                {.page_id = table_index},
+                                {});
+                            continue;
+                        }
+                    }
+                    mask_gen::fill_mask_tile(
+                        brick_base + slot * tile_bytes, query_origin_site, key_origins[slot], extents);
+                    continue;
+                }
+                const uint32_t fill = brick_coverage == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
+                volatile tt_l1_ptr uint32_t* destination =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
+                for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                    destination[word] = fill;
+                }
+            }
+        }
+        noc.async_read_barrier();
+        cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
+        cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
+        cb_mask.push_back(per_brick_mask != 0 ? bricks_per_query_chunk * tiles_per_kv_chunk : tiles_per_kv_chunk);
+        return;
+    }
+
+    for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+        if (coverage[slot] == mask_gen::BrickCoverage::Mixed) {
+            continue;
+        }
+        const uint32_t fill = coverage[slot] == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
+        volatile tt_l1_ptr uint32_t* destination =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_write_pointer + slot * tile_bytes);
+        for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+            destination[word] = fill;
+        }
+    }
+
+    if (use_uploaded_mask != 0 && relative_mask == 0) {
+        for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+            if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
+                continue;
+            }
+            const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
+            const uint32_t page = regime * gather_brick_count + gather_slot;
+            noc.async_read(
+                interior_mask_reader,
+                CoreLocalMem<uint32_t>(mask_write_pointer + slot * tile_bytes),
+                tile_bytes,
+                {.page_id = page},
+                {});
+        }
+    } else {
+        for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+            if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
+                continue;
+            }
+            mask_gen::fill_mask_tile(
+                mask_write_pointer + slot * tile_bytes, chunk_origin_site, key_origins[slot], extents);
+        }
+    }
+
+    noc.async_read_barrier();
+    cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
+    cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
+    cb_mask.push_back(tiles_per_kv_chunk);
+}
+#endif  // NA_PATH_KIND != 1
+
 }  // namespace
+
+#ifndef NA_HAS_PATH_SKIP
+// Unsplit path_mode 0: process every chunk. Split wrappers define NA_SKIP_IF before including us.
+__attribute__((noinline, noclone)) bool na_path_skips_chunk(uint32_t) { return false; }
+#endif
+
+#ifdef NA_SKIP_IF
+template <uint32_t SkipIf>
+__attribute__((noinline, noclone)) bool na_skip_kind(uint32_t packed_width) {
+    return (2u + (packed_width >> 31)) == SkipIf;
+}
+#endif
+
+__attribute__((noinline, noclone)) bool na_should_skip(uint32_t packed_width, uint32_t skip_if) {
+    return (2u + (packed_width >> 31)) == skip_if;
+}
+
+__attribute__((noinline, noclone)) void handshake_skip_work_item(
+    CircularBuffer& cb_key,
+    CircularBuffer& cb_value,
+    CircularBuffer& cb_mask,
+    CircularBuffer& cb_gather_origin,
+    uint32_t kv_chunk_count,
+    uint32_t kv_pages,
+    uint32_t mask_pages) {
+    for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
+        cb_key.reserve_back(kv_pages);
+        cb_value.reserve_back(kv_pages);
+        cb_mask.reserve_back(mask_pages);
+        cb_key.push_back(kv_pages);
+        cb_value.push_back(kv_pages);
+        cb_mask.push_back(mask_pages);
+    }
+    cb_gather_origin.push_back(1);
+    cb_gather_origin.pop_front(1);
+}
 
 void kernel_main() {
     constexpr uint32_t head_count = get_compile_time_arg_val(kernel_args::reader_arg::head_count);
@@ -328,6 +608,8 @@ void kernel_main() {
     constexpr uint32_t per_brick_mask = get_compile_time_arg_val(kernel_args::reader_arg::per_brick_mask);
     constexpr uint32_t mask_memset_only = get_compile_time_arg_val(kernel_args::reader_arg::mask_memset_only);
     constexpr uint32_t skip_kv = get_compile_time_arg_val(kernel_args::reader_arg::skip_kv);
+    constexpr uint32_t skip_unowned = get_compile_time_arg_val(kernel_args::reader_arg::skip_unowned);
+    constexpr uint32_t skip_if_bit = get_compile_time_arg_val(kernel_args::reader_arg::skip_if_bit);
     constexpr uint32_t relative_mask = get_compile_time_arg_val(kernel_args::reader_arg::relative_mask);
     constexpr uint32_t table_always = get_compile_time_arg_val(kernel_args::reader_arg::table_always);
     constexpr auto origin_accessor_args = TensorAccessorArgs<value_accessor_args.next_compile_time_args_offset()>();
@@ -360,8 +642,23 @@ void kernel_main() {
     // there is no compile arg for the mode. Adding one is not free either -- the reader's five
     // TensorAccessorArgs chain off reader_arg::COUNT, and moving it by one ran the last accessor
     // off the end of the compile-arg vector.
-    const bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 && per_brick_mask == 0;
+    constexpr bool interior_table_supported = relative_mask != 0 && has_interior_mask != 0 && per_brick_mask == 0;
+    constexpr uint32_t path_mode = get_compile_time_arg_val(kernel_args::reader_arg::path_mode);
+    // Classify and the tight gather MUST NOT share a binary: that I-cache mix is 64 ns/slot.
+    // NA_PATH_KIND is the wrapper TU / factory define, not a path_mode compile-arg compare --
+    // those were DCE'd and both programs compiled the same loop.
+#if NA_PATH_KIND == 2
+    constexpr bool compile_interior = false;
+#elif NA_PATH_KIND == 1
+    constexpr bool compile_interior = true;
+#else
+    // path 0 matches the old single program (interior-only when a relative table is in play).
+    constexpr bool compile_interior = interior_table_supported && path_mode != 2;
+#endif
+    constexpr bool compile_edge = !compile_interior;
     bool mask_pages_hold_table = false;
+    constexpr uint32_t mask_tiles_per_kv_chunk =
+        per_brick_mask != 0 ? bricks_per_query_chunk * tiles_per_kv_chunk : tiles_per_kv_chunk;
 
     uint32_t argument_index = 0;
     const uint32_t query_address = get_arg_val<uint32_t>(argument_index++);
@@ -371,7 +668,9 @@ void kernel_main() {
     const uint32_t interior_mask_address = get_arg_val<uint32_t>(argument_index++);
     const uint32_t work_item_start = get_arg_val<uint32_t>(argument_index++);
     const uint32_t work_item_count = get_arg_val<uint32_t>(argument_index++);
-    const uint32_t tile_bytes = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t tile_and_skip = get_arg_val<uint32_t>(argument_index++);
+    const uint32_t tile_bytes = tile_and_skip & 0xffffu;
+    const uint32_t skip_if_runtime = tile_and_skip >> 16;
 
     const auto query_reader = TensorAccessor(query_accessor_args, query_address);
     const auto key_reader = TensorAccessor(key_accessor_args, key_address);
@@ -439,16 +738,55 @@ void kernel_main() {
             {.page_id = chunk_index},
             {});
         noc.async_read_barrier();
+#ifdef NA_HAS_PATH_SKIP
+        // Same L1 dest the NOC just filled. A later origin_row[2] load ran after a1 was reused,
+        // so the skip compared the wrong word and both programs walked (~530 ms).
+        {
+            CoreLocalMem<volatile uint32_t> origin_mem(origin_write_pointer);
+            volatile uint32_t edge_token = origin_mem[kernel_args::gather_origin_column::skip_edge_token];
+            if constexpr (compile_interior) {
+                if (edge_token == 0xFFFFFFFFu) {
+                    cb_query.push_back(head_dim_tiles * bricks_per_query_chunk);
+                    handshake_skip_work_item(
+                        cb_key,
+                        cb_value,
+                        cb_mask,
+                        cb_gather_origin,
+                        kv_chunk_count,
+                        tiles_per_kv_chunk * head_dim_tiles,
+                        mask_tiles_per_kv_chunk);
+                    mask_pages_hold_table = false;
+                    continue;
+                }
+            } else {
+                if (edge_token != 0xFFFFFFFFu) {
+                    cb_query.push_back(head_dim_tiles * bricks_per_query_chunk);
+                    handshake_skip_work_item(
+                        cb_key,
+                        cb_value,
+                        cb_mask,
+                        cb_gather_origin,
+                        kv_chunk_count,
+                        tiles_per_kv_chunk * head_dim_tiles,
+                        mask_tiles_per_kv_chunk);
+                    mask_pages_hold_table = false;
+                    continue;
+                }
+            }
+        }
+#endif
         cb_query.push_back(head_dim_tiles * bricks_per_query_chunk);
 
         const volatile tt_l1_ptr uint32_t* origin_row =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(origin_write_pointer);
         namespace column = kernel_args::gather_origin_column;
+        const uint32_t gather_width_packed = origin_row[column::gather_width];
         // Origins are rounded down to a brick boundary by the planner, so this division is exact.
+        // Low 31 bits of gather_width are the origin; the high bit is the interior flag.
         const BrickCoordinate gather_origin_brick{
             origin_row[column::gather_time] / extents.brick_sites.time,
             origin_row[column::gather_height] / extents.brick_sites.height,
-            origin_row[column::gather_width] / extents.brick_sites.width};
+            (gather_width_packed & 0x7fffffffu) / extents.brick_sites.width};
 
         // Where this device sits in the global volume. Addressing above is LOCAL; window
         // placement below is GLOBAL, and this is what converts between them.
@@ -474,12 +812,13 @@ void kernel_main() {
         // loop body -- the instruction-cache mix the mask loops are split three ways to avoid.
         // That alone was 32.3 s against 15.6 s at 145 frames, on a gate that admits 75% of bricks
         // and a plan where only 20% of mask tiles ever generated.
-        const bool use_interior_table =
-            interior_table_supported &&
-            gather_is_canonical(gather_origin_brick, chunk_origin_site, gather_bricks, extents) &&
-            (table_always != 0 || brick_window_is_unclamped(chunk_origin_site, extents));
+        (void)table_always;
+        (void)skip_unowned;
+        (void)skip_if_bit;
+        (void)skip_if_runtime;
+        (void)compile_edge;
         // The pages already hold exactly these tiles, so there is nothing to write.
-        const bool refill_mask = use_interior_table && !mask_pages_hold_table;
+        const bool refill_mask = compile_interior && !mask_pages_hold_table;
 
         uint32_t resident_mask_pointer = 0;
         if (use_uploaded_mask && relative_mask == 0) {
@@ -502,174 +841,105 @@ void kernel_main() {
         for (uint32_t kv_chunk_index = 0; kv_chunk_index < kv_chunk_count; ++kv_chunk_index) {
             cb_key.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
             cb_value.reserve_back(tiles_per_kv_chunk * head_dim_tiles);
-            constexpr uint32_t mask_tiles_per_kv_chunk =
-                per_brick_mask != 0 ? bricks_per_query_chunk * tiles_per_kv_chunk : tiles_per_kv_chunk;
             cb_mask.reserve_back(mask_tiles_per_kv_chunk);
 
-            // K and V are laid out DIFFERENTLY in their circular buffers, and it matters.
-            //
-            // matmul_blocks walks in1 as `in1_index += N` over the inner dimension, so in1 is
-            // always a [K, N] grid of tiles -- the `transpose` flag transposes each TILE, not the
-            // grid. For QK^T that means K must be stored head-dim-major, [head_dim_tiles][slots];
-            // for the PV matmul the inner dimension is the slot, so V is [slots][head_dim_tiles],
-            // which is the order the gather naturally produces.
-            //
-            // At head_dim_tiles == 1 the two layouts are the same buffer, which is why a wrong K
-            // layout survived every test until one used a 64-wide head.
-            const uint32_t key_base_pointer = cb_key.get_write_ptr();
-            uint32_t value_write_pointer = cb_value.get_write_ptr();
-            uint32_t mask_write_pointer = cb_mask.get_write_ptr();
-
-            // Three passes, deliberately. Mixing the constant fills with fill_mask_tile in one
-            // loop body puts a large function (nested loops, divisions) next to a memset in the
-            // same instruction cache and measured WORSE than either alone -- 7498 ms against
-            // 2761 ms for generating everywhere. Keeping each loop tight avoids that.
-            mask_gen::BrickCoverage coverage[MAX_TILES_PER_KV_CHUNK];
-            mask_gen::SiteInBrick key_origins[MAX_TILES_PER_KV_CHUNK];
-
-            for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
-                const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                const bool slot_is_padding = gather_slot >= gather_brick_count;
-                const uint32_t within_time_slice = gather_slot % (gather_bricks.height * gather_bricks.width);
-                const BrickCoordinate key_brick{
-                    gather_origin_brick.time +
-                        (slot_is_padding ? 0u : gather_slot / (gather_bricks.height * gather_bricks.width)),
-                    gather_origin_brick.height + (slot_is_padding ? 0u : within_time_slice / gather_bricks.width),
-                    gather_origin_brick.width + (slot_is_padding ? 0u : within_time_slice % gather_bricks.width)};
-
-                key_origins[slot] = mask_gen::SiteInBrick{
-                    key_brick.time * extents.brick_sites.time,
-                    key_brick.height * extents.brick_sites.height,
-                    key_brick.width * extents.brick_sites.width};
-                // The resident table already holds the right tile for every slot, uniform ones
-                // included, so classifying is 175 divisions per chunk spent on an answer nothing
-                // reads. `coverage` is dead on that path.
-                coverage[slot] = (slot_is_padding || use_interior_table)
-                                     ? mask_gen::BrickCoverage::NoneVisible
-                                     : mask_gen::classify_brick(chunk_origin_site, key_origins[slot], extents);
-
-                const uint32_t key_first_tile = layout::tile_offset(
-                    batch_index,
-                    layout::brick_index(key_brick, volume_bricks),
-                    head_index,
-                    brick_count,
-                    head_count,
-                    head_dim_tiles);
-                // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all, leaving whatever the buffers
-                // held. WRONG OUTPUT -- it exists to split the gather's DMA cost from the compute
-                // kernel's, which no other probe here separates, and which decides whether a
-                // bigger query chunk (fewer slots per query, more matmul per slot) can pay.
-                if (skip_kv != 0) {
-                    value_write_pointer += head_dim_tiles * tile_bytes;
-                    continue;
-                }
-                for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
-                    const uint32_t key_write_pointer =
-                        key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes;
-                    noc.async_read(
-                        key_reader,
-                        CoreLocalMem<uint32_t>(key_write_pointer),
-                        tile_bytes,
-                        {.page_id = key_first_tile + head_dim_tile},
-                        {});
-                    noc.async_read(
-                        value_reader,
-                        CoreLocalMem<uint32_t>(value_write_pointer),
-                        tile_bytes,
-                        {.page_id = key_first_tile + head_dim_tile},
-                        {});
-                    value_write_pointer += tile_bytes;
-                }
-            }
-
-            // Per-brick masks: every query brick in the chunk gets its own tile per slot, laid
-            // out [brick][slot] so the compute kernel can advance by tiles_per_kv_chunk per in0
-            // subblock. Generated rather than copied from the uploaded set: the upload is keyed on
-            // the CHUNK's window regime, which is the wrong window for every brick but the first.
-            if (per_brick_mask != 0) {
-                for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
-                    const layout::BrickCoordinate query_brick =
-                        layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
-                    // Into RESIDENT-local sites: the key origins this is compared against come
-                    // from the gather table, which addresses the resident tensor. Without the
-                    // shift a query sub-region would place every window a halo too low.
-                    const mask_gen::SiteInBrick query_origin_site{
-                        (query_brick.time + query_origin_bricks.time) * extents.brick_sites.time,
-                        (query_brick.height + query_origin_bricks.height) * extents.brick_sites.height,
-                        (query_brick.width + query_origin_bricks.width) * extents.brick_sites.width};
-                    const uint32_t brick_base = mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
-                    // Resolved per brick, not per slot: the table describes a window that centres
-                    // on its query, which stops being true once the window clamps at a volume edge.
-                    const bool brick_takes_table =
-                        relative_mask != 0 && use_uploaded_mask &&
-                        (table_always != 0 || brick_window_is_unclamped(query_origin_site, extents));
-                    for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
-                        const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                        // DIFFVAE_NA_MASK_MEMSET_ONLY: write every tile as a constant, skipping
-                        // classify_brick AND fill_mask_tile. WRONG OUTPUT -- it exists to split
-                        // "writing N tiles costs X" from "deciding what is in them costs X", which
-                        // no other experiment here separates.
-                        if (mask_memset_only != 0) {
-                            volatile tt_l1_ptr uint32_t* zero_destination =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
-                            for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
-                                zero_destination[word] = 0x00000000u;
-                            }
-                            continue;
-                        }
-                        const mask_gen::BrickCoverage brick_coverage =
-                            gather_slot >= gather_brick_count
-                                ? mask_gen::BrickCoverage::NoneVisible
-                                : mask_gen::classify_brick(query_origin_site, key_origins[slot], extents);
-                        if (brick_coverage == mask_gen::BrickCoverage::Mixed) {
-                            // The uploaded RELATIVE tile, fetched by DMA, replaces ~1024 elements
-                            // of window arithmetic per tile. Everything about the pattern is in
-                            // (key_brick - query_brick), so no gather origin or shard origin
-                            // enters and one table serves every chunk on every shard.
-                            if (brick_takes_table) {
-                                const uint32_t table_index =
-                                    relative_table_index(query_origin_site, key_origins[slot], extents);
-                                if (table_index != NO_REGIME) {
-                                    noc.async_read(
-                                        interior_mask_reader,
-                                        CoreLocalMem<uint32_t>(brick_base + slot * tile_bytes),
-                                        tile_bytes,
-                                        {.page_id = table_index},
-                                        {});
-                                    continue;
-                                }
-                            }
-                            mask_gen::fill_mask_tile(
-                                brick_base + slot * tile_bytes, query_origin_site, key_origins[slot], extents);
-                            continue;
-                        }
-                        const uint32_t fill =
-                            brick_coverage == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
-                        volatile tt_l1_ptr uint32_t* destination =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
-                        for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
-                            destination[word] = fill;
-                        }
-                    }
-                }
-                noc.async_read_barrier();
+            // Probe 7/8: keep the CB handshake (reserve/push the same counts) but skip classify,
+            // tile_offset, mask fill and K/V noc. Drain/qk could not isolate this walk because they
+            // still waited on these CBs after the reader filled them.
+            if (skip_kv == 2) {
                 cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
                 cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
                 cb_mask.push_back(mask_tiles_per_kv_chunk);
                 continue;
             }
 
-            // An unclamped brick reads the relative table straight into cb_mask -- but only when
-            // the pages do not already hold it, which after the first such brick in a run they
-            // do. Refills are rare enough that the per-slot page arithmetic and the fallback
-            // below cost nothing, so neither is hoisted or cached.
-            if (use_interior_table) {
+            // Interior: the relative mask is already in cb_mask (or about to be refilled).
+            // Classify / key_origins / coverage are dead. Keep this loop a handful of
+            // async_reads -- sharing a body with fill_mask_tile is what made the 147-slot
+            // walk 64 ns/slot (skip_slots is 26 ms for the same handshake + compute).
+#if NA_PATH_KIND != 2
+            if constexpr (compile_interior) {
+                if (skip_kv == 0) {
+                    constexpr uint32_t page_stride = head_count * head_dim_tiles;
+                    const uint32_t key_base_pointer = cb_key.get_write_ptr();
+                    uint32_t value_write_pointer = cb_value.get_write_ptr();
+                    if constexpr (
+                        tiles_per_kv_chunk == gather_bricks.width &&
+                        kv_chunk_count == gather_bricks.time * gather_bricks.height) {
+                        const BrickCoordinate row{
+                            gather_origin_brick.time + kv_chunk_index / gather_bricks.height,
+                            gather_origin_brick.height + kv_chunk_index % gather_bricks.height,
+                            gather_origin_brick.width};
+                        uint32_t page = layout::tile_offset(
+                            batch_index,
+                            layout::brick_index(row, volume_bricks),
+                            head_index,
+                            brick_count,
+                            head_count,
+                            head_dim_tiles);
+                        for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                            for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                                noc.async_read(
+                                    key_reader,
+                                    CoreLocalMem<uint32_t>(
+                                        key_base_pointer + (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes),
+                                    tile_bytes,
+                                    {.page_id = page + head_dim_tile},
+                                    {});
+                                noc.async_read(
+                                    value_reader,
+                                    CoreLocalMem<uint32_t>(value_write_pointer),
+                                    tile_bytes,
+                                    {.page_id = page + head_dim_tile},
+                                    {});
+                                value_write_pointer += tile_bytes;
+                            }
+                            page += page_stride;
+                        }
+                    } else {
+                        const uint32_t start_slot = kv_chunk_index * tiles_per_kv_chunk;
+                        BrickCoordinate key_brick =
+                            start_slot >= gather_brick_count
+                                ? gather_origin_brick
+                                : gather_slot_brick(gather_origin_brick, start_slot, gather_bricks);
+                        uint32_t key_brick_index = layout::brick_index(key_brick, volume_bricks);
+                        uint32_t page = layout::tile_offset(
+                            batch_index, key_brick_index, head_index, brick_count, head_count, head_dim_tiles);
+                        for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
+                            if (kv_chunk_index * tiles_per_kv_chunk + slot < gather_brick_count) {
+                                for (uint32_t head_dim_tile = 0; head_dim_tile < head_dim_tiles; ++head_dim_tile) {
+                                    noc.async_read(
+                                        key_reader,
+                                        CoreLocalMem<uint32_t>(
+                                            key_base_pointer +
+                                            (head_dim_tile * tiles_per_kv_chunk + slot) * tile_bytes),
+                                        tile_bytes,
+                                        {.page_id = page + head_dim_tile},
+                                        {});
+                                    noc.async_read(
+                                        value_reader,
+                                        CoreLocalMem<uint32_t>(value_write_pointer),
+                                        tile_bytes,
+                                        {.page_id = page + head_dim_tile},
+                                        {});
+                                    value_write_pointer += tile_bytes;
+                                }
+                            }
+                            if (slot + 1 < tiles_per_kv_chunk) {
+                                advance_gather_raster(
+                                    key_brick, key_brick_index, gather_origin_brick, gather_bricks, volume_bricks);
+                                page = layout::tile_offset(
+                                    batch_index, key_brick_index, head_index, brick_count, head_count, head_dim_tiles);
+                            }
+                        }
+                    }
+                }
+                const uint32_t mask_write_pointer = cb_mask.get_write_ptr();
                 if (refill_mask) {
                     for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
                         const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
                         const uint32_t destination_address = mask_write_pointer + slot * tile_bytes;
                         if (gather_slot < gather_brick_count) {
-                            // Canonical gather, so the table page IS the slot.
                             noc.async_read(
                                 interior_mask_reader,
                                 CoreLocalMem<uint32_t>(destination_address),
@@ -678,8 +948,6 @@ void kernel_main() {
                                 {});
                             continue;
                         }
-                        // A ragged slot past the gather has no keys; mask it out rather than
-                        // leaving whatever the pages held.
                         volatile tt_l1_ptr uint32_t* destination =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(destination_address);
                         for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
@@ -693,62 +961,50 @@ void kernel_main() {
                 cb_mask.push_back(tiles_per_kv_chunk);
                 continue;
             }
-
-            // Uniform bricks: one word repeated, no window arithmetic at all.
-            for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
-                if (coverage[slot] == mask_gen::BrickCoverage::Mixed) {
-                    continue;
-                }
-                const uint32_t fill = coverage[slot] == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
-                volatile tt_l1_ptr uint32_t* destination =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_write_pointer + slot * tile_bytes);
-                for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
-                    destination[word] = fill;
-                }
+#endif
+#if NA_PATH_KIND != 1
+            if constexpr (compile_edge) {
+                gather_edge_flash_chunk(
+                    noc,
+                    key_reader,
+                    value_reader,
+                    interior_mask_reader,
+                    extents,
+                    gather_origin_brick,
+                    chunk_origin,
+                    chunk_origin_site,
+                    gather_bricks,
+                    volume_bricks,
+                    query_chunk_bricks,
+                    query_origin_bricks,
+                    cb_key,
+                    cb_value,
+                    cb_mask,
+                    kv_chunk_index,
+                    batch_index,
+                    head_index,
+                    brick_count,
+                    head_count,
+                    head_dim_tiles,
+                    tiles_per_kv_chunk,
+                    kv_chunk_count,
+                    gather_brick_count,
+                    bricks_per_query_chunk,
+                    tile_bytes,
+                    skip_kv,
+                    per_brick_mask,
+                    mask_memset_only,
+                    relative_mask,
+                    table_always,
+                    use_uploaded_mask ? 1u : 0u,
+                    regime);
             }
-
-            // Bricks the window boundary cuts through, on a chunk the resident table does not
-            // describe: either a GNA regime (uploaded, keyed on the chunk's window) or a stride-1
-            // brick whose window clamps at a volume edge, which generates.
-            //
-            // The relative table is NOT consulted here. It only ever applies to an unclamped
-            // brick, and those took the resident path above -- asking again would put a DRAM read
-            // and fill_mask_tile in one loop body, and that instruction-cache mix is exactly what
-            // made the gated run (32.3 s) cost as much as generating everywhere (34.1 s) when only
-            // 20% of its tiles ever generated.
-            if (use_uploaded_mask && relative_mask == 0) {
-                for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
-                    if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
-                        continue;
-                    }
-                    const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                    const uint32_t page = regime * gather_brick_count + gather_slot;
-                    noc.async_read(
-                        interior_mask_reader,
-                        CoreLocalMem<uint32_t>(mask_write_pointer + slot * tile_bytes),
-                        tile_bytes,
-                        {.page_id = page},
-                        {});
-                }
-            } else {
-                for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
-                    if (coverage[slot] != mask_gen::BrickCoverage::Mixed) {
-                        continue;
-                    }
-                    mask_gen::fill_mask_tile(
-                        mask_write_pointer + slot * tile_bytes, chunk_origin_site, key_origins[slot], extents);
-                }
-            }
-
-            noc.async_read_barrier();
-            cb_key.push_back(tiles_per_kv_chunk * head_dim_tiles);
-            cb_value.push_back(tiles_per_kv_chunk * head_dim_tiles);
-            cb_mask.push_back(tiles_per_kv_chunk);
+#endif
         }
 
         // An edge brick wrote generated tiles over the pages, so the next unclamped one must
         // put the table back.
-        mask_pages_hold_table = use_interior_table;
+        mask_pages_hold_table = compile_interior;
 
         cb_gather_origin.push_back(1);
         cb_gather_origin.pop_front(1);

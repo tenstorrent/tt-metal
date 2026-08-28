@@ -205,6 +205,10 @@ struct NeighborhoodPlan {
     // starting here covers the region. Constant size, because the clamping rule keeps every
     // gather the same extent -- which is also why core load balancing is trivial.
     std::vector<Site> gather_origin_by_chunk;
+
+    // Per chunk: 1 if the reader may use the relative interior mask table (canonical gather
+    // and unclamped query brick). Rides the gather-origin table so each W-shard can differ.
+    std::vector<uint32_t> use_interior_table_by_chunk;
 };
 
 // Pick the brick shape minimising the gathered union for a given context window. A function

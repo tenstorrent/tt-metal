@@ -47,6 +47,23 @@ from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_b
 _PLAN_CACHE: dict = {}
 
 
+def softmax_k_bound(k_norm_weight) -> float:
+    """``sqrt(head_dim) * max|k_norm_weight|`` -- the ``||k||`` cap the softmax offset uses.
+
+    Matches ``ltx_kernels.vae.softmax_bound.softmax_row_bound``. Cauchy–Schwarz plus RMSNorm
+    (which RoPE preserves) give ``q·k ≤ ||q|| * this``; subtracting ``||q||`` times it is
+    exactly softmax. Not a tolerance: K that was not RMS-normed with this weight overflows.
+    """
+    head_dim = int(k_norm_weight.shape[-1])
+    return float(k_norm_weight.detach().float().abs().amax() * (head_dim**0.5))
+
+
+def _configured_k_norm_bound(bound: float | None) -> float | None:
+    if bound is None or os.environ.get("DIFFVAE_NA_SOFTMAX_BOUND", "1") == "0":
+        return None
+    return bound
+
+
 def _deep_prof(device, key: str, *, category: str | None = None):
     """The same span helper the reference executor uses, so both break down side by side in the
     decode tree. Inert unless DIFFVAE_BLOCK_PROF is set: each span costs two device syncs."""
@@ -360,6 +377,7 @@ def neighborhood_attention_3d_bricked(
     kernel_size: tuple[int, int, int],
     stride: tuple[int, int, int] | None = None,
     scale: float | None = None,
+    k_norm_bound: float | None = None,
 ) -> ttnn.Tensor:
     batch, time_extent, height_extent, width_extent, head_count, head_dim = tuple(query.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
@@ -423,6 +441,8 @@ def neighborhood_attention_3d_bricked(
         f"gather={plan['gather_brick_count']} kv_tiles={_tiles_per_kv_chunk(plan['gather_brick_count'])}",
     )
     with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
+        # path_mode 0 auto-splits stride-1 + relative table into interior then edge
+        # programs: classify cannot share a kernel with the tight gather.
         attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
             query_op,
             key_op,
@@ -437,6 +457,7 @@ def neighborhood_attention_3d_bricked(
             head_count=head_count,
             scale=scale,
             tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
+            k_norm_bound=_configured_k_norm_bound(k_norm_bound),
         )
 
     with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
@@ -602,6 +623,11 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
     stacked = torch.tensor([plan["gather_origin_table"] for plan in plans], dtype=torch.uint32).reshape(
         shard_count, 1, first["chunk_count"], columns
     )
+    interior_col = 6  # kernel_args.gather_origin_column.use_interior_table
+    interior_fracs = [
+        float(stacked[shard_index, 0, :, interior_col].sum()) / first["chunk_count"]
+        for shard_index in range(shard_count)
+    ]
     first["gather_origin_tensor"] = from_torch(
         stacked,
         device=device,
@@ -620,7 +646,8 @@ def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_
         f"window={context_window} stride={stride} brick={brick} chunk={query_chunk_bricks} bricks "
         f"({first['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
         f"gather={first['gather_brick_count']} tiles "
-        f"({first['gather_brick_count'] / first['bricks_per_query_chunk']:.2f} keys/query)"
+        f"({first['gather_brick_count'] / first['bricks_per_query_chunk']:.2f} keys/query) "
+        f"interior-table={min(interior_fracs):.0%}-{max(interior_fracs):.0%}"
     )
     # The REGIME sets cannot be uploaded here: they are enumerated against a single shard origin
     # and every shard has its own, so the sharded path has always generated every tile on device.
@@ -708,6 +735,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     heads_presharded: bool = False,
     already_bricked: bool = False,
     brick: tuple[int, int, int] | None = None,
+    k_norm_bound: float | None = None,
 ) -> ttnn.Tensor:
     """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
 
@@ -923,6 +951,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
             _tp_trace(device, f"q: bricked owned region -> {tuple(query_op.shape)}")
 
     with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
+        # path_mode 0 auto-splits stride-1 + relative table into interior then edge
+        # programs: classify cannot share a kernel with the tight gather.
         attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
             query_op,
             key_op,
@@ -946,6 +976,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             head_count=head_count,
             scale=scale,
             tiles_per_kv_chunk=_tiles_per_kv_chunk(plan["gather_brick_count"]),
+            k_norm_bound=_configured_k_norm_bound(k_norm_bound),
         )
 
     _tp_trace(device, f"op returned -> {tuple(attended.shape)}")

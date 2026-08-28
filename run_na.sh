@@ -19,6 +19,9 @@
 #             10s, drowning the log, and it slows every op. Turn it on to debug a hang.
 #   -t SECS   timeout, default 120. A device-side deadlock sits forever otherwise, holding
 #             CHIP_IN_USE_0_PCIe and blocking every later run.
+#   -s SECS   stall watchdog, default 40. After the test body starts (compile/warmup), if the
+#             log shows no probe-time / PASSED / FAILED for this long, kill the job. These
+#             NA hangs show up in ~40s; do not sit on -t. 0 disables.
 #
 # Watcher waypoints, when a hang is dumped:
 #   CWFW = waiting on a circular buffer front      CRBW = waiting to reserve a CB
@@ -31,20 +34,22 @@ cd "$(dirname "$0")"
 LOG=generated/na_run.log
 TEST=models/tt_dit/tests/unit/test_neighborhood_sdpa.py
 TIMEOUT=120
+STALL=40
 SELECTOR=""
 REBUILD=0
 WATCHER=0
 SCRIPT=""
 
-while getopts "bk:t:f:p:w" option; do
+while getopts "bk:t:f:p:ws:" option; do
     case $option in
         b) REBUILD=1 ;;
         k) SELECTOR="$OPTARG" ;;
         t) TIMEOUT="$OPTARG" ;;
+        s) STALL="$OPTARG" ;;
         f) TEST="$OPTARG" ;;
         p) SCRIPT="$OPTARG" ;;
         w) WATCHER=1 ;;
-        *) echo "usage: $0 [-b] [-k EXPR] [-t SECS]" >&2; exit 2 ;;
+        *) echo "usage: $0 [-b] [-k EXPR] [-t SECS] [-s STALL]" >&2; exit 2 ;;
     esac
 done
 
@@ -57,7 +62,7 @@ exec > >(stdbuf -oL tee -a "$LOG") 2>&1
 echo "=== $(date '+%H:%M:%S')  neighborhood attention run ==========================="
 echo "target   : ${SCRIPT:-$TEST}"
 [ -n "$SELECTOR" ] && echo "selector : $SELECTOR"
-echo "timeout  : ${TIMEOUT}s     rebuild: $REBUILD     watcher: $WATCHER"
+echo "timeout  : ${TIMEOUT}s     stall: ${STALL}s     rebuild: $REBUILD     watcher: $WATCHER"
 echo
 
 if fuser -s /dev/tenstorrent/0 2>/dev/null; then
@@ -84,8 +89,8 @@ rm -rf generated/watcher   # so the summary below can only describe THIS run
 
 if [ -n "$SCRIPT" ]; then
     echo "--- python $SCRIPT (full output, nothing filtered) ---"
-    PYTHONUNBUFFERED=1 stdbuf -oL -eL timeout "$TIMEOUT" ./python_env/bin/python "$SCRIPT"
-    STATUS=$?
+    PYTHONUNBUFFERED=1 stdbuf -oL -eL timeout "$TIMEOUT" ./python_env/bin/python "$SCRIPT" &
+    CHILD=$!
 else
     echo "--- pytest (full output, nothing filtered) ---"
     # -s disables pytest's output capture, so device logs stream live instead of appearing
@@ -93,13 +98,29 @@ else
     PYTEST_ARGS=(-q -s --no-header -p no:cacheprovider)
     [ -n "$SELECTOR" ] && PYTEST_ARGS+=(-k "$SELECTOR")
     PYTHONUNBUFFERED=1 \
-        stdbuf -oL -eL timeout "$TIMEOUT" ./python_env/bin/python -m pytest "$TEST" "${PYTEST_ARGS[@]}"
-    STATUS=$?
+        stdbuf -oL -eL timeout "$TIMEOUT" ./python_env/bin/python -m pytest "$TEST" "${PYTEST_ARGS[@]}" &
+    CHILD=$!
+fi
+
+WATCHDOG=""
+if [ "$STALL" != "0" ]; then
+    python3 ./na_stall_watchdog.py --log "$LOG" --pid "$CHILD" --stall "$STALL" &
+    WATCHDOG=$!
+fi
+wait "$CHILD"
+STATUS=$?
+if [ -n "$WATCHDOG" ]; then
+    kill "$WATCHDOG" 2>/dev/null || true
+    wait "$WATCHDOG" 2>/dev/null || true
 fi
 
 echo
-if [ "$STATUS" = "124" ]; then
-    echo "!!! TIMED OUT after ${TIMEOUT}s -- device-side deadlock."
+if [ "$STATUS" = "124" ] || [ "$STATUS" = "137" ] || [ "$STATUS" = "143" ]; then
+    if [ "$STATUS" = "124" ]; then
+        echo "!!! TIMED OUT after ${TIMEOUT}s -- device-side deadlock."
+    else
+        echo "!!! KILLED (exit $STATUS) -- stall watchdog or signal; treating as device deadlock."
+    fi
     WATCHER=generated/watcher/watcher.log
     if [ -f "$WATCHER" ]; then
         echo "--- kernels in this program ---"

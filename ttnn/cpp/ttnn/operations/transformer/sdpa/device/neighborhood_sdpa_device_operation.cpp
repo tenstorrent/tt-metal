@@ -7,6 +7,9 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <optional>
+#include <string_view>
 
 #include <tt-metalium/constants.hpp>
 
@@ -17,6 +20,58 @@
 namespace ttnn::prim {
 
 namespace neighborhood = ttnn::transformer::neighborhood;
+
+namespace {
+
+uint32_t probe_from_name(std::string_view name) {
+    if (name == "full" || name == "0") {
+        return 0;
+    }
+    if (name == "skip_kv" || name == "1") {
+        return 1;
+    }
+    if (name == "mask_memset" || name == "2") {
+        return 2;
+    }
+    if (name == "drain" || name == "3") {
+        return 3;
+    }
+    if (name == "qk" || name == "4") {
+        return 4;
+    }
+    if (name == "qk_softmax" || name == "5") {
+        return 5;
+    }
+    if (name == "qk_pv" || name == "6") {
+        return 6;
+    }
+    if (name == "skip_slots" || name == "7") {
+        return 7;
+    }
+    if (name == "skip_slots_drain" || name == "8") {
+        return 8;
+    }
+    return 0;
+}
+
+uint32_t resolve_probe(std::optional<uint32_t> probe) {
+    if (probe.has_value()) {
+        return *probe;
+    }
+    if (const char* env = std::getenv("DIFFVAE_NA_SDPA_PROBE")) {
+        return probe_from_name(env);
+    }
+    // Older decode knobs: same ablations, now hashed through `probe` so they actually recompile.
+    if (const char* env = std::getenv("DIFFVAE_NA_SKIP_KV"); env != nullptr && env[0] == '1') {
+        return 1;
+    }
+    if (const char* env = std::getenv("DIFFVAE_NA_MASK_MEMSET_ONLY"); env != nullptr && env[0] == '1') {
+        return 2;
+    }
+    return 0;
+}
+
+}  // namespace
 
 void NeighborhoodSDPAOperation::validate_on_program_cache_miss(
     const NeighborhoodSDPAParams& attributes, const NeighborhoodSDPAInputs& tensors) {
@@ -132,6 +187,16 @@ void NeighborhoodSDPAOperation::validate_on_program_cache_miss(
         "neighborhood_sdpa: head_dim {} must be a multiple of {}",
         head_dim,
         tt::constants::TILE_WIDTH);
+    if (attributes.k_norm_bound.has_value()) {
+        TT_FATAL(
+            *attributes.k_norm_bound > 0.f,
+            "neighborhood_sdpa: k_norm_bound must be positive (sqrt(head_dim)*max|k_norm_weight|); got {}",
+            *attributes.k_norm_bound);
+    }
+    TT_FATAL(
+        attributes.path_mode <= 2,
+        "neighborhood_sdpa: path_mode must be 0 (auto), 1 (interior), or 2 (edge); got {}",
+        attributes.path_mode);
 }
 
 NeighborhoodSDPAOperation::spec_return_value_t NeighborhoodSDPAOperation::compute_output_specs(
@@ -178,7 +243,11 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
         config.query_origin.by_axis,
         attributes.head_count,
         attributes.scale,
+        attributes.k_norm_bound.has_value(),
         attributes.tiles_per_kv_chunk,
+        attributes.probe,
+        attributes.path_mode,
+        tensors.interior_mask.has_value(),
         tensors.query_tensor.logical_shape(),
         tensors.query_tensor.dtype(),
         tensors.query_tensor.memory_config(),
@@ -199,25 +268,54 @@ Tensor neighborhood_sdpa(
     uint32_t tiles_per_kv_chunk,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     DeviceComputeKernelConfig compute_kernel_config,
-    const std::optional<Tensor>& output_tensor) {
+    const std::optional<Tensor>& output_tensor,
+    std::optional<float> k_norm_bound,
+    std::optional<uint32_t> probe,
+    uint32_t path_mode) {
     using OperationType = ttnn::prim::NeighborhoodSDPAOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .config = config,
-            .head_count = head_count,
-            .scale = scale,
-            .tiles_per_kv_chunk = tiles_per_kv_chunk,
-            .compute_kernel_config = compute_kernel_config,
-            .output_memory_config = output_memory_config,
-        },
-        OperationType::tensor_args_t{
-            .query_tensor = query_tensor,
-            .key_tensor = key_tensor,
-            .value_tensor = value_tensor,
-            .gather_origin_table = gather_origin_table,
-            .interior_mask = interior_mask,
-            .output_tensor = output_tensor,
-        });
+    const uint32_t resolved_probe = resolve_probe(probe);
+
+    // Classify and the tight gather cannot share a kernel (64 ns/slot). Stride-1 with an
+    // uploaded relative table therefore launches two programs: interior (tight, skip edges)
+    // then edge (classify, skip interiors). Writer of each launch only DRAM-writes its set.
+    const bool relative_mask = config.stride.time() == 1 && config.stride.height() == 1 && config.stride.width() == 1;
+    const uint32_t query_tile_rows = config.bricks_per_query_chunk();
+    const bool chunk_exceeds_stride = query_tile_rows > 1 && !(config.query_chunk_sites() == config.stride);
+    const char* per_brick_env = std::getenv("DIFFVAE_NA_PER_BRICK_MASK");
+    const bool per_brick_mask = per_brick_env != nullptr ? per_brick_env[0] == '1' : chunk_exceeds_stride;
+    const char* always_env = std::getenv("DIFFVAE_NA_TABLE_ALWAYS");
+    const bool table_always = always_env != nullptr && always_env[0] == '1';
+    const bool split = path_mode == 0 && resolved_probe == 0 && relative_mask && interior_mask.has_value() &&
+                       !per_brick_mask && !table_always;
+
+    auto launch_with_mode = [&](uint32_t mode, const std::optional<Tensor>& out) {
+        return ttnn::device_operation::launch<OperationType>(
+            OperationType::operation_attributes_t{
+                .config = config,
+                .head_count = head_count,
+                .scale = scale,
+                .k_norm_bound = k_norm_bound,
+                .tiles_per_kv_chunk = tiles_per_kv_chunk,
+                .probe = resolved_probe,
+                .path_mode = mode,
+                .compute_kernel_config = compute_kernel_config,
+                .output_memory_config = output_memory_config,
+            },
+            OperationType::tensor_args_t{
+                .query_tensor = query_tensor,
+                .key_tensor = key_tensor,
+                .value_tensor = value_tensor,
+                .gather_origin_table = gather_origin_table,
+                .interior_mask = interior_mask,
+                .output_tensor = out,
+            });
+    };
+
+    if (split) {
+        Tensor interior = launch_with_mode(1, output_tensor);
+        return launch_with_mode(2, interior);
+    }
+    return launch_with_mode(path_mode, output_tensor);
 }
 
 }  // namespace ttnn::prim

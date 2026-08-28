@@ -151,6 +151,11 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
         kernel_args::cb_output, tile_bytes, head_dim_tiles * query_tile_rows * DOUBLE_BUFFERED, data_format);
     add_circular_buffer(
         kernel_args::cb_gather_origin, kernel_args::GATHER_ORIGIN_ROW_BYTES, DOUBLE_BUFFERED, tt::DataFormat::UInt32);
+    // Writer-private copy of the same origin row. Reader and writer run in parallel, so they
+    // cannot share cb_gather_origin; the writer needs the host-stamped interior bit to skip
+    // bricks this launch does not own.
+    add_circular_buffer(
+        kernel_args::cb_writer_origin, kernel_args::GATHER_ORIGIN_ROW_BYTES, DOUBLE_BUFFERED, tt::DataFormat::UInt32);
     // Holds ONE regime's whole mask set. Every chunk in a regime wants the same patterns, so
     // fetching them per chunk re-reads the same tiles from DRAM thousands of times; this keeps
     // them on the core and turns the per-chunk cost into a local copy.
@@ -179,11 +184,11 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[kernel_args::reader_arg::volume_chunks_width] = plan.volume_chunks.width();
     reader_compile_args[kernel_args::reader_arg::tiles_per_kv_chunk] = tiles_per_kv_chunk;
     reader_compile_args[kernel_args::reader_arg::per_brick_mask] = per_brick_mask ? 1u : 0u;
-    const char* memset_env = std::getenv("DIFFVAE_NA_MASK_MEMSET_ONLY");
-    reader_compile_args[kernel_args::reader_arg::mask_memset_only] =
-        (memset_env != nullptr && memset_env[0] == '1') ? 1u : 0u;
-    const char* skip_kv_env = std::getenv("DIFFVAE_NA_SKIP_KV");
-    reader_compile_args[kernel_args::reader_arg::skip_kv] = (skip_kv_env != nullptr && skip_kv_env[0] == '1') ? 1u : 0u;
+    reader_compile_args[kernel_args::reader_arg::mask_memset_only] = attributes.probe == 2 ? 1u : 0u;
+    // 1 = skip K/V DMA (probe 1). 2 = skip the whole gather-slot loop (probes 7/8).
+    reader_compile_args[kernel_args::reader_arg::skip_kv] = attributes.probe == 1                              ? 1u
+                                                            : (attributes.probe == 7 || attributes.probe == 8) ? 2u
+                                                                                                               : 0u;
     reader_compile_args[kernel_args::reader_arg::kv_chunk_count] = kv_chunk_count;
     reader_compile_args[kernel_args::reader_arg::gather_brick_count] = plan.gather_brick_count;
     reader_compile_args[kernel_args::reader_arg::volume_bricks_time] = plan.volume_bricks.time();
@@ -225,6 +230,15 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // staging is what forced the per-slot fill to be a word loop in the first place.
     reader_compile_args[kernel_args::reader_arg::has_interior_mask] =
         (tensors.interior_mask.has_value() && (relative_mask || uses_resident_mask)) ? 1u : 0u;
+    reader_compile_args[kernel_args::reader_arg::path_mode] = attributes.path_mode;
+    // Same compare as skip_kv (if == 1): path_mode equality was DCE'd and skip never ran.
+    const bool split_path = attributes.path_mode == 1 || attributes.path_mode == 2;
+    reader_compile_args[kernel_args::reader_arg::skip_unowned] = split_path ? 1u : 0u;
+    // 2/3, not 0/1: na_should_skip is `(2 + bit) == skip_if`. 0/1 never matches, so both
+    // programs walked. Also changes the compile-arg hash so JIT cannot reuse a stale ELF.
+    reader_compile_args[kernel_args::reader_arg::skip_if_bit] = attributes.path_mode == 2   ? 3u
+                                                                : attributes.path_mode == 1 ? 2u
+                                                                                            : 0u;
 
     // Accessor args come after the named block, in the order the reader constructs them.
     tt::tt_metal::TensorAccessorArgs(tensors.query_tensor.buffer()).append_to(reader_compile_args);
@@ -249,7 +263,13 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     writer_compile_args[kernel_args::writer_arg::volume_bricks_time] = plan.query_bricks.time();
     writer_compile_args[kernel_args::writer_arg::volume_bricks_height] = plan.query_bricks.height();
     writer_compile_args[kernel_args::writer_arg::volume_bricks_width] = plan.query_bricks.width();
+    writer_compile_args[kernel_args::writer_arg::path_mode] = attributes.path_mode;
+    writer_compile_args[kernel_args::writer_arg::skip_unowned] = split_path ? 1u : 0u;
+    writer_compile_args[kernel_args::writer_arg::skip_if_bit] = attributes.path_mode == 2   ? 3u
+                                                                : attributes.path_mode == 1 ? 2u
+                                                                                            : 0u;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(tensors.gather_origin_table.buffer()).append_to(writer_compile_args);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_enabled, packer_l1_accumulate, dst_full_sync_enabled] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attributes.compute_kernel_config);
@@ -278,18 +298,44 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // ---- kernels ----
     const std::string kernel_directory = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
 
+    // Separate translation units for interior vs edge skip. Factory KernelDescriptor.defines
+    // and compile-arg compares did not produce a new JIT kernel (1484/1484 hits).
+    std::string reader_source = kernel_directory + "dataflow/neighborhood_reader.cpp";
+    std::string writer_source = kernel_directory + "dataflow/neighborhood_writer.cpp";
+    if (attributes.path_mode == 1) {
+        reader_source = kernel_directory + "dataflow/neighborhood_reader_interior.cpp";
+        writer_source = kernel_directory + "dataflow/neighborhood_writer_interior.cpp";
+    } else if (attributes.path_mode == 2) {
+        reader_source = kernel_directory + "dataflow/neighborhood_reader_edge.cpp";
+        writer_source = kernel_directory + "dataflow/neighborhood_writer_edge.cpp";
+    }
+
     tt::tt_metal::KernelDescriptor reader_descriptor;
-    reader_descriptor.kernel_source = kernel_directory + "dataflow/neighborhood_reader.cpp";
+    reader_descriptor.kernel_source = reader_source;
     reader_descriptor.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_descriptor.core_ranges = worker_core_range;
     reader_descriptor.compile_time_args = reader_compile_args;
+    reader_descriptor.defines = {
+        {"NA_PATH_KIND", std::to_string(attributes.path_mode)},
+        {"NA_SKIP_IF",
+         attributes.path_mode == 2   ? "3"
+         : attributes.path_mode == 1 ? "2"
+                                     : "0"},
+    };
     reader_descriptor.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor writer_descriptor;
-    writer_descriptor.kernel_source = kernel_directory + "dataflow/neighborhood_writer.cpp";
+    writer_descriptor.kernel_source = writer_source;
     writer_descriptor.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_descriptor.core_ranges = worker_core_range;
     writer_descriptor.compile_time_args = writer_compile_args;
+    writer_descriptor.defines = {
+        {"NA_PATH_KIND", std::to_string(attributes.path_mode)},
+        {"NA_SKIP_IF",
+         attributes.path_mode == 2   ? "3"
+         : attributes.path_mode == 1 ? "2"
+                                     : "0"},
+    };
     writer_descriptor.config = tt::tt_metal::WriterConfigDescriptor{};
 
     tt::tt_metal::KernelDescriptor compute_descriptor;
@@ -301,7 +347,17 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     // including kernel has to be told about them here.
     // compute_common.hpp defines REDUCE_OP and REDUCE_DIM itself, but reads EXP_APPROX_MODE as
     // a macro the including build has to supply.
-    compute_descriptor.defines = {{"EXP_APPROX_MODE", std::to_string(static_cast<int>(math_approx_mode))}};
+    // Probes 1/2/7 only change the reader; TRISC stays the shipped flash. Probe 8 is skip_slots
+    // plus drain, so compute can show up once the slot walk is gone.
+    uint32_t compute_probe = attributes.probe;
+    if (attributes.probe == 1 || attributes.probe == 2 || attributes.probe == 7) {
+        compute_probe = 0u;
+    } else if (attributes.probe == 8) {
+        compute_probe = 3u;
+    }
+    compute_descriptor.defines = {
+        {"EXP_APPROX_MODE", std::to_string(static_cast<int>(math_approx_mode))},
+        {"NEIGHBORHOOD_SDPA_PROBE", std::to_string(compute_probe)}};
     compute_descriptor.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_enabled,
@@ -322,6 +378,8 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
             worker_index * work_items_per_core + std::min(worker_index, cores_with_one_extra);
         const uint32_t core_work_item_count = work_items_per_core + (worker_index < cores_with_one_extra ? 1u : 0u);
 
+        const uint32_t skip_if_packed = reader_compile_args[kernel_args::reader_arg::skip_if_bit];
+        const uint32_t writer_skip_if = writer_compile_args[kernel_args::writer_arg::skip_if_bit];
         reader_descriptor.emplace_runtime_args(
             worker_core,
             {query_buffer,
@@ -331,9 +389,14 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
              interior_mask_buffer,
              work_item_start,
              core_work_item_count,
-             tile_bytes});
+             tile_bytes | (skip_if_packed << 16)});
         writer_descriptor.emplace_runtime_args(
-            worker_core, {output_buffer, work_item_start, core_work_item_count, tile_bytes});
+            worker_core,
+            {output_buffer,
+             gather_origin_buffer,
+             work_item_start,
+             core_work_item_count,
+             tile_bytes | (writer_skip_if << 16)});
         compute_descriptor.emplace_runtime_args(worker_core, {core_work_item_count});
     }
 

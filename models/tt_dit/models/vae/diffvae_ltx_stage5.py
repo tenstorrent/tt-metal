@@ -861,6 +861,7 @@ class _NeighborhoodAttention3D(Module):
         # runs on heads/tp of the heads per chip, gathered back before the output projection.
         self.tp_axis = tp_axis
         self.scale = config.head_dim**-0.5
+        self.softmax_k_bound: float | None = None
 
         # DIFFVAE_TP_PROJ=1: make the qkv projections COLUMN-PARALLEL over the TP axis (shard the
         # weight on the head-output dim). Each chip then computes only its heads' q/k/v -- a local
@@ -923,6 +924,11 @@ class _NeighborhoodAttention3D(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Checkpoints ship one Linear(dim, 3*dim) under qkv.*; the split is [q | k | v]
         # along the output dim.
+        k_w = state.get("k_norm.weight")
+        if k_w is not None:
+            from ...layers.neighborhood_attention import softmax_k_bound as k_bound
+
+            self.softmax_k_bound = k_bound(k_w)
         if self.fused_qkv:
             # Kept fused, but regrouped: a contiguous column shard must be one device's own heads of
             # all three of q, k and v, where the shipped order would give device 0 nothing but q.
@@ -1116,6 +1122,7 @@ class _NeighborhoodAttention3D(Module):
                 heads_presharded=self.tp_proj,
                 already_bricked=brick is not None,
                 brick=brick,
+                k_norm_bound=self.softmax_k_bound,
             )
         elif sharded:
             out = neighborhood_attention_3d_op_sp_w_sharded(
@@ -1141,6 +1148,7 @@ class _NeighborhoodAttention3D(Module):
                 scale=1.0,
                 ccl_manager=self.ccl_manager,
                 backend=self.na3d_backend,
+                k_norm_bound=self.softmax_k_bound,
             )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)

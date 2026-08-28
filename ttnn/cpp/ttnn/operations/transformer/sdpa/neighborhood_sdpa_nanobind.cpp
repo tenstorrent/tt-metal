@@ -5,6 +5,8 @@
 #include "neighborhood_sdpa_nanobind.hpp"
 
 #include <array>
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -101,8 +103,8 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                 query_origin));
 
             // Flattened gather origin table, GATHER_ORIGIN_COLUMNS wide so each chunk's entry is
-            // one DRAM-aligned page. Columns carry this chunk's gather origin (local sites) and
-            // this device's shard origin (global sites) -- see kernel_args::gather_origin_column.
+            // one DRAM-aligned page. Columns: local gather origin, signed shard origin, and the
+            // host-stamped interior-table bit -- see kernel_args::gather_origin_column.
             std::vector<uint32_t> gather_origin_table(
                 static_cast<size_t>(plan.chunk_count) * kernel_args::GATHER_ORIGIN_COLUMNS, 0u);
             for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
@@ -111,7 +113,9 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                 namespace column = kernel_args::gather_origin_column;
                 gather_origin_table[row + column::gather_time] = origin.time();
                 gather_origin_table[row + column::gather_height] = origin.height();
-                gather_origin_table[row + column::gather_width] = origin.width();
+                const uint32_t interior = plan.use_interior_table_by_chunk[chunk_index];
+                // High bit rides gather_width so the reader loads it with a word it already uses.
+                gather_origin_table[row + column::gather_width] = origin.width() | (interior << 31);
                 // Signed, reinterpreted bit-for-bit: the table is uint32 but a low-edge halo
                 // makes this negative, and the kernel reads it back as int32.
                 gather_origin_table[row + column::shard_origin_time] =
@@ -120,6 +124,8 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                     static_cast<uint32_t>(plan.config.shard_origin.height());
                 gather_origin_table[row + column::shard_origin_width] =
                     static_cast<uint32_t>(plan.config.shard_origin.width());
+                gather_origin_table[row + column::use_interior_table] = interior;
+                gather_origin_table[row + column::skip_edge_token] = interior ? 0u : 0xFFFFFFFFu;
             }
 
             nb::dict result;
@@ -191,7 +197,11 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
            float scale,
            uint32_t tiles_per_kv_chunk,
            const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-           std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+           std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+           std::optional<float> k_norm_bound,
+           std::optional<uint32_t> probe,
+           const std::optional<ttnn::Tensor>& output_tensor,
+           uint32_t path_mode) {
             return ttnn::prim::neighborhood_sdpa(
                 query_tensor,
                 key_tensor,
@@ -212,7 +222,11 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
                 scale,
                 tiles_per_kv_chunk,
                 memory_config.value_or(query_tensor.memory_config()),
-                compute_kernel_config.value_or(DeviceComputeKernelConfig{}));
+                compute_kernel_config.value_or(DeviceComputeKernelConfig{}),
+                output_tensor,
+                k_norm_bound,
+                probe,
+                path_mode);
         },
         nb::arg("query_tensor"),
         nb::arg("key_tensor"),
@@ -234,12 +248,29 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
         nb::arg("tiles_per_kv_chunk") = 8,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("k_norm_bound") = nb::none(),
+        nb::arg("probe") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("path_mode") = 0,
         R"doc(
         3D neighborhood attention. Query, key and value are in BRICKED site order --
         `[batch, 1, brick_count * 32, head_count * head_dim]`, TILE layout -- so one tile row is
         one compact 3D box of the volume rather than a pencil along width. Heads are the COLUMN
         axis, not a leading dimension, so nothing has to transpose heads against sites. Use
         `models.tt_dit.layers.neighborhood_permute` to get in and out of that order.
+
+        `k_norm_bound` is `sqrt(head_dim) * max|k_norm_weight|`. When set, softmax uses
+        `exp(s - ||q|| * bound)` instead of an online row max. Legal only when K was RMS-normed
+        with that weight; otherwise `exp` of a positive argument overflows.
+
+        `probe` is a diagnostic ablation (WRONG output except 0): 0 full, 1 skip_kv, 2
+        mask_memset, 3 drain, 4 qk, 5 qk_softmax, 6 qk_pv, 7 skip_slots (no gather-slot
+        walk; still handshakes), 8 skip_slots_drain. Also `DIFFVAE_NA_SDPA_PROBE`.
+
+        `path_mode` selects which reader binary to compile. Classify and the tight gather
+        cannot share a kernel (64 ns/slot). 0 auto-splits stride-1 + relative table into
+        interior (1) then edge (2) writing into the same output. 1 is interior-only (wrong
+        edges unless the caller also launches 2). 2 is edge-only.
         )doc");
 }
 

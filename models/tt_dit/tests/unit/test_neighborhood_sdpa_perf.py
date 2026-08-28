@@ -6,6 +6,9 @@
 Not a pass/fail test -- it prints a table. The question it answers is the one the plan says
 must be settled before any performance work: is this kernel compute-bound or memory-bound?
 
+For a breakdown *inside* one call (QK vs softmax vs PV vs reader), see
+``test_neighborhood_sdpa_components.py``.
+
 The prediction, from the plan's arithmetic: at stage-5 dimensions a naive per-query-group
 DRAM gather moves ~1.4 MB per work item, which should put us DRAM-bound by roughly an order
 of magnitude. If that shows up here, L1 residency (plan step 4) is the right next move and

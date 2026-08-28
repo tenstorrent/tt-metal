@@ -12,7 +12,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.layers.neighborhood_attention import _query_chunk_bricks
+from models.tt_dit.layers.neighborhood_attention import _query_chunk_bricks, softmax_k_bound
 from models.tt_dit.layers.neighborhood_reference import neighborhood_attention_3d
 
 SITES_PER_BRICK = 32
@@ -173,6 +173,80 @@ def test_matches_torch_reference(mesh_device, volume, context_window, stride, ch
 
     correlation = pearson(actual, expected)
     assert correlation > 0.99, f"PCC {correlation:.5f} against the torch reference"
+
+
+def _rms_norm(tensor, weight, eps=1e-6):
+    return tensor * torch.rsqrt(tensor.pow(2).mean(dim=-1, keepdim=True) + eps) * weight
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("chunking", ["widest_chunk", "narrow_chunk"])
+def test_fixed_softmax_bound_matches_torch(mesh_device, chunking):
+    """RMS-normed Q/K plus k_norm_bound must match online-softmax torch, including the rescale path.
+
+    Subtracting ||q|| * sqrt(d) * max|w| is exactly softmax when K was RMS-normed with w.
+    narrow_chunk forces several KV chunks so the no-rescale add is exercised.
+    """
+    torch.manual_seed(0)
+    volume, context_window, stride = (4, 8, 8), (3, 3, 3), (1, 1, 1)
+    head_count, head_dim = 2, 64
+    brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    query_chunk_bricks = _query_chunk_bricks(stride, brick)
+    plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
+    )
+
+    site_count = volume[0] * volume[1] * volume[2]
+    weight = 1.0 + 0.05 * torch.randn(head_dim)
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    query = _rms_norm(query, weight)
+    key = _rms_norm(key, weight)
+    bound = softmax_k_bound(weight)
+
+    expected = neighborhood_attention_3d(
+        query, key, value, volume=volume, context_window=context_window, stride=stride, brick=brick, scale=1.0
+    )
+
+    gather_brick_count = plan["gather_brick_count"]
+    widest_chunk = min(gather_brick_count, 8)
+    tiles_per_kv_chunk = widest_chunk if chunking == "widest_chunk" else max(1, widest_chunk // 3)
+    table = bricked_index_table(volume, brick)
+
+    def upload(tensor):
+        bricked = to_bricked(tensor, table).contiguous()
+        bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+        return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+        1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+    )
+    origin_on_device = ttnn.from_torch(
+        origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+
+    actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+        upload(query),
+        upload(key),
+        upload(value),
+        origin_on_device,
+        volume=volume,
+        context_window=context_window,
+        stride=stride,
+        brick=brick,
+        query_chunk_bricks=query_chunk_bricks,
+        head_count=head_count,
+        scale=1.0,
+        tiles_per_kv_chunk=tiles_per_kv_chunk,
+        k_norm_bound=bound,
+    )
+
+    actual_bricked = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
+    present = table >= 0
+    actual = torch.zeros_like(expected)
+    actual[:, table[present]] = actual_bricked[:, present]
+
+    correlation = pearson(actual, expected)
+    assert correlation > 0.99, f"PCC {correlation:.5f} against the torch reference with k_norm_bound={bound:.5f}"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])

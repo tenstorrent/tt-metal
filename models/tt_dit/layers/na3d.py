@@ -1381,6 +1381,7 @@ def neighborhood_attention_3d(
     ccl_manager=None,
     backend: str = "gather",
     sp_axis: int | None = None,
+    k_norm_bound: float | None = None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention on device.
 
@@ -1412,7 +1413,9 @@ def neighborhood_attention_3d(
         # Our op: tokens in bricked site order, one tile row per 3D brick.
         from .neighborhood_attention import neighborhood_attention_3d_bricked
 
-        return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale)
+        return neighborhood_attention_3d_bricked(
+            q, k, v, kernel_size=kernel_size, scale=scale, k_norm_bound=k_norm_bound
+        )
     if backend == "op":
         return neighborhood_attention_3d_op(q, k, v, kernel_size=kernel_size, scale=scale)
     if backend == "fused":

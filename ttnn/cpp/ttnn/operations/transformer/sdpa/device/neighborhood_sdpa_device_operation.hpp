@@ -52,6 +52,9 @@ Tensor neighborhood_sdpa(
     uint32_t tiles_per_kv_chunk,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     DeviceComputeKernelConfig compute_kernel_config,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    std::optional<float> k_norm_bound = std::nullopt,
+    std::optional<uint32_t> probe = std::nullopt,
+    uint32_t path_mode = 0);
 
 }  // namespace ttnn::prim

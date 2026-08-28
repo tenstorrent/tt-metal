@@ -39,6 +39,8 @@ enum CircularBufferId : uint32_t {
     cb_gather_origin,  // reader-internal scratch: one row of the host-built origin table
     cb_resident_mask,  // reader-internal scratch: one regime's whole uploaded mask set, kept
                        // across work items so a shared pattern is fetched once, not per chunk
+    cb_writer_origin,  // writer-internal: same origin row, so it can skip bricks this program
+                       // does not own (interior vs edge launches must not overwrite each other)
     CB_COUNT
 };
 
@@ -49,6 +51,9 @@ namespace gather_origin_column {
 enum : uint32_t {
     gather_time = 0,  // where this chunk's gather starts, in LOCAL sites
     gather_height,
+    // Low 31 bits: local gather origin on W. High bit: host-stamped interior-table flag
+    // (same as use_interior_table). Packed here because the reader already consumes this
+    // word for addressing; column 6 was never producing a skip.
     gather_width,
 
     // Where this device's tensor starts in the GLOBAL volume, as a SIGNED site offset -- a halo
@@ -60,6 +65,15 @@ enum : uint32_t {
     shard_origin_time,
     shard_origin_height,
     shard_origin_width,
+
+    // 1 when this chunk's gather is the canonical relative-table mapping AND the query brick
+    // is unclamped. Stamped by the host planner -- the reader used to recompute this and the
+    // device predicate was false for every brick (416 ms classify vs 130 ms interior).
+    use_interior_table,
+
+    // 0xFFFFFFFF if this chunk is an EDGE (skip in the interior program). 0 if INTERIOR
+    // (skip in the edge program). Not 0/1: those compares are DCE'd on this toolchain.
+    skip_edge_token,
 };
 }
 constexpr uint32_t GATHER_ORIGIN_COLUMNS = 16;
@@ -104,8 +118,10 @@ enum : uint32_t {
     // the interior pattern, so the frame is wrong there, but it shows what the gate is costing.
     table_always,
 
-    // DIFFVAE_NA_SKIP_KV: issue no K/V reads at all. Diagnostic with WRONG output; it separates
-    // the gather's cost from the compute kernel's, which is 80 ms of 947 -- see FINDINGS 10.
+    // Reader ablation, hashed through NeighborhoodSDPAParams::probe so it recompiles.
+    // 0 = shipped. 1 = skip K/V DRAM (probe 1). 2 = skip the gather-slot loop entirely
+    // (probes 7/8): still reserve/push the K/V/mask CBs so compute does not deadlock, but
+    // do no classify / tile_offset / mask / noc. That is the walk drain/qk could not skip.
     skip_kv,
 
     // The volume and the gather span, measured in bricks -- one brick is one tile row, so
@@ -162,6 +178,21 @@ enum : uint32_t {
     // reference gets by broadcasting one mask over a whole group of query tiles.
     has_interior_mask,
 
+    // 0 = auto (interior-only if a relative table is in play, else the edge generator).
+    // 1 = interior reader: tight gather, no classify in the binary. Skip-slots handshake
+    //     on edge chunks so compute does not deadlock.
+    // 2 = edge reader: classify / fill_mask_tile, no tight gather in the binary.
+    // Classify and the tight loop MUST NOT share a kernel: that I-cache mix is 64 ns/slot.
+    path_mode,
+
+    // Same compare shape as skip_kv (if (skip_unowned == 1)): that form survives this
+    // toolchain. path_mode == 1 / if constexpr / NA_PATH_MODE were DCE'd, so both split
+    // programs walked every brick (1018 ms n=2). Skip itself is na_path_skips_chunk in the
+    // interior/edge wrapper TUs. skip_if_bit is 2 (interior, skip edges) or 3 (edge, skip
+    // interiors) so `(2 + (gather_width>>31)) == skip_if_bit` can match; 0/1 never does.
+    skip_unowned,
+    skip_if_bit,
+
     COUNT
 };
 }  // namespace reader_arg
@@ -212,6 +243,16 @@ enum : uint32_t {
     volume_bricks_time,
     volume_bricks_height,
     volume_bricks_width,
+
+    // Same encoding as reader_arg::path_mode. The writer reads the host-stamped interior bit
+    // and only DRAM-writes bricks this launch owns. Skip is na_should_write(packed, skip_if)
+    // with skip_if 2 (interior) or 3 (edge) -- a 0/1 bool is DCE'd on this toolchain.
+    path_mode,
+
+    // Same encoding as reader_arg::skip_unowned / skip_if_bit.
+    skip_unowned,
+    skip_if_bit,
+
     COUNT
 };
 }  // namespace writer_arg

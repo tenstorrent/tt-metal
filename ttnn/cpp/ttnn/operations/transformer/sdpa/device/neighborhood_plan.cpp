@@ -412,6 +412,69 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         plan.gather_origin_by_chunk.push_back(gather_origin);
     }
 
+    // Stamp the interior-table bit here, not on the RISC. The reader used to call
+    // gather_is_canonical + brick_window_is_unclamped per chunk; on device that conjunction
+    // was false for every brick, so the 147-slot classify path ran everywhere (416 ms). The
+    // same predicates on the host admit ~73% of this geometry. Each shard's plan has its own
+    // origins, so a mesh-sharded table carries a per-device answer.
+    plan.use_interior_table_by_chunk.resize(plan.chunk_count, 0u);
+    const Extent3 resident = config.resident_extent();
+    auto relative_span_low = [](uint32_t window_extent, uint32_t brick_extent) -> int32_t {
+        const uint32_t half = window_extent / 2;
+        return -static_cast<int32_t>((half + brick_extent - 1) / brick_extent);
+    };
+    auto relative_span_high = [](uint32_t window_extent, uint32_t brick_extent) -> int32_t {
+        const uint32_t half = window_extent / 2;
+        return static_cast<int32_t>((window_extent - 1 - half + brick_extent - 1) / brick_extent);
+    };
+    for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
+        const Site query_region_origin = chunk_index_to_origin(chunk_index, plan);
+        const Site& gather_origin = plan.gather_origin_by_chunk[chunk_index];
+        bool canonical = true;
+        bool unclamped = true;
+        for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+            const uint32_t brick_extent = config.brick.by_axis[axis_index];
+            const uint32_t window_configured = config.context_window.by_axis[axis_index];
+            const uint32_t volume_extent = config.volume.by_axis[axis_index];
+            const uint32_t window = std::min(window_configured, volume_extent);
+            const uint32_t gather_bricks = plan.gather_bricks.by_axis[axis_index];
+            const uint32_t query_local =
+                query_region_origin.by_axis[axis_index] + config.query_origin.by_axis[axis_index];
+            const uint32_t query_brick = query_local / brick_extent;
+            const uint32_t gather_brick = gather_origin.by_axis[axis_index] / brick_extent;
+            const int32_t low = relative_span_low(window_configured, brick_extent);
+            const int32_t high = relative_span_high(window_configured, brick_extent);
+            if (static_cast<int32_t>(gather_brick) - static_cast<int32_t>(query_brick) != low ||
+                gather_bricks != static_cast<uint32_t>(high - low + 1)) {
+                canonical = false;
+            }
+            if (window >= volume_extent) {
+                unclamped = false;
+                continue;
+            }
+            if (query_local + brick_extent > resident.by_axis[axis_index]) {
+                unclamped = false;
+                continue;
+            }
+            const int32_t first = static_cast<int32_t>(query_local) + config.shard_origin.by_axis[axis_index];
+            const int32_t last = first + static_cast<int32_t>(brick_extent) - 1;
+            const int32_t half = static_cast<int32_t>(window / 2);
+            if (first < 0) {
+                unclamped = false;
+                continue;
+            }
+            const uint32_t origin_first =
+                window_origin_on_axis(static_cast<uint32_t>(first), 1u, window, volume_extent, 0u);
+            const uint32_t origin_last =
+                window_origin_on_axis(static_cast<uint32_t>(last), 1u, window, volume_extent, 0u);
+            if (origin_first != static_cast<uint32_t>(first - half) ||
+                origin_last != static_cast<uint32_t>(last - half)) {
+                unclamped = false;
+            }
+        }
+        plan.use_interior_table_by_chunk[chunk_index] = (canonical && unclamped) ? 1u : 0u;
+    }
+
     return plan;
 }
 
