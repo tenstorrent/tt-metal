@@ -143,6 +143,14 @@ KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 DFLASH_ENABLED = (
     ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
 )
+
+# KV dedup: also shard the KV/index caches across TP (1/(sp*tp) slice per device) instead of TP-replicating
+# them. Storage only, cache content bit-identical; sparse (DSA) path only.
+TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", "0") == "1"
+assert not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv, (
+    f"PREFILL_TP_SHARD_KV=1 is not supported by model {ADAPTER.name!r}: its allocate_kv_cache does not pass "
+    f"params.tp_shard_kv to the cache allocators, so writes would be TP-sharded into TP-replicated caches."
+)
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -161,6 +169,14 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
+
+# Traced writes go through the metadata tensors, which cannot supply the host kv_actual_global the
+# TP-sharded reader needs to pick its 1/tp source window. Unreachable today (trace is already rejected for
+# every sparse/DSA model, and tp_shard_kv is sparse-only), so this is the tripwire for when that lifts.
+assert not (TP_SHARD_KV and USE_TRACE), (
+    "PREFILL_TP_SHARD_KV=1 is not supported with PREFILL_USE_TRACE=1: the traced metadata write path has "
+    "no host kv_actual_global, so the TP-sharded reader and the writer would disagree on the chunk start."
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
@@ -541,6 +557,7 @@ def _print_config() -> None:
             f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
+        ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
         ("PREFILL_NUM_USERS", str(NUM_USERS)),
@@ -665,6 +682,7 @@ def main() -> None:
         # last-rank KV tail from is_last_rank.
         dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
+        tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",

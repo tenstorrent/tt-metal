@@ -36,9 +36,14 @@ struct UpdatePaddedKvCacheDeviceOperation {
         uint32_t kv_actual_global;  // scalar path only
         uint32_t layer_idx;
         uint32_t num_layers;
-        // Named mesh axis for the legacy SP cache, or nullopt when sequence shards span the
-        // complete 2D mesh in canonical row-major coordinate order.
+        // Named SP (sequence-parallel) mesh axis the cache is sharded on, or nullopt when sequence
+        // shards span the complete 2D mesh in canonical row-major coordinate order. Row-major over the
+        // full mesh IS the sp*tp linearization below, which is why the two modes share the offset math.
         std::optional<uint32_t> cluster_axis;
+        // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
+        // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
+        // Mutually exclusive with complete-mesh mode, which already spans both axes.
+        std::optional<uint32_t> tp_axis;
     };
 
     struct tensor_args_t {
@@ -122,6 +127,7 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    std::optional<uint32_t> cluster_axis);
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::prim

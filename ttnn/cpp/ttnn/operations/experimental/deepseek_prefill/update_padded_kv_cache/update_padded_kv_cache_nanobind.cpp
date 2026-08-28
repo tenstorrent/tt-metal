@@ -5,6 +5,7 @@
 #include "update_padded_kv_cache_nanobind.hpp"
 
 #include <cstdint>
+#include <optional>
 
 #include <nanobind/nanobind.h>
 
@@ -63,9 +64,13 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     cached program per layer is reused across users and chunks.
                 num_layers (int): Total layers folded into the cache batch dim. Structural —
                     fixed for the lifetime of the workload.
-                cluster_axis (Optional[int]): Cluster axis along which the cache is sharded (0 or 1).
+                cluster_axis (Optional[int]): SP cluster axis along which the cache is sharded (0 or 1).
                     Explicit None means that sequence shards span the complete 2D mesh in canonical
                     row-major coordinate order.
+                tp_axis (int, optional): Second axis to also shard the cache across (KV dedup).
+                    ``input`` must then be TP-replicated and single-head, and each chip persists only
+                    its own ``1/tp`` seq window. Must differ from ``cluster_axis``, and must be unset
+                    when ``cluster_axis`` is None -- complete-mesh mode already spans both axes.
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -79,6 +84,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 uint32_t,
+                std::optional<uint32_t>,
                 std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
@@ -86,7 +92,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("layer_idx"),
             nb::arg("num_layers"),
             nb::arg("kv_actual_global"),
-            nb::arg("cluster_axis")),
+            nb::arg("cluster_axis"),
+            nb::arg("tp_axis") = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -96,6 +103,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 const Tensor&,
                 uint32_t,
                 uint32_t,
+                std::optional<uint32_t>,
                 std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
@@ -103,7 +111,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("kv_actual_global").noconvert(),
             nb::arg("layer_idx"),
             nb::arg("num_layers"),
-            nb::arg("cluster_axis")));
+            nb::arg("cluster_axis"),
+            nb::arg("tp_axis") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

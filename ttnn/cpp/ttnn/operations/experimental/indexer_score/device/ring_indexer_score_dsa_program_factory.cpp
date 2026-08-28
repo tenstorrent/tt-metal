@@ -101,6 +101,9 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     if (!args.kv_len.has_value() || !args.block_cyclic.has_value()) {
         return std::nullopt;
     }
+    if (args.key_stripe_split > 1) {
+        return std::nullopt;
+    }
     const uint32_t chunk_local = args.block_cyclic->chunk_local;
     const uint32_t chunk_global = args.block_cyclic->sp * chunk_local;
     const uint32_t valid_slabs = (*args.kv_len + chunk_global - 1) / chunk_global;
@@ -421,8 +424,11 @@ ProgramDescriptor build_ring_program_descriptor(
         if (!args.has_block_cyclic()) {
             return ct;
         }
-        const uint32_t sp = args.block_cyclic->sp;
-        ct = {1, cl_t, sp, (Tt / sp) - cl_t, cl_t * (sp - 1)};
+        // KV dedup stripes the KEYS tp-times finer than the queries, so key off key_stripes()/
+        // key_stripe_chunk() (== sp/chunk_local when key_stripe_split == 1, so unsplit stays byte-identical).
+        const uint32_t sp = args.key_stripes();
+        const uint32_t stripe_t = args.key_stripe_chunk() / tt::constants::TILE_WIDTH;
+        ct = {1, stripe_t, sp, (Tt / sp) - stripe_t, stripe_t * (sp - 1)};
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());

@@ -804,11 +804,156 @@ def test_glm_kv_cache_table(
     )
 
 
+# sp x tp -- GLM-5.2 KV-dedup (TP-sharded) chunk address table. Same shape as test_kimi_kv_cache_mock
+# above: build the block-cyclic cache on the host, build the table over it, read every 32-token chunk
+# back. Only the sharding differs -- linear chip L = s*tp + t owns tokens [c*5120 + L*(5120/(sp*tp)), +),
+# so each device holds a DISTINCT sub-slice instead of a whole row replicated across its tp columns.
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(2, 4), (8, 4)],
+    ids=["2x4", "8x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024, 25 * 1024], ids=["seq5k", "seq10k", "seq25k"])
+@pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
+@pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+@pytest.mark.parametrize("compacted_layers", [False, True], ids=["dense_layers", "compacted_layers"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.2 DSA / TP-dedup is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm52_tp_sharded_kv_cache_mock(
+    mesh_device,
+    seq_len,
+    num_users,
+    num_layers,
+    compacted_layers,
+    device_params,
+):
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp_factor = mesh_shape[sp_axis]
+    tp_factor = mesh_shape[tp_axis]
+    linear_factor = sp_factor * tp_factor
+    kvpe_cache_head_dim = 576  # qk_rope_head_dim(64) + kv_lora_rank(512); same for Kimi and DeepSeek
+    num_kvpe_cache_layers = num_users * num_layers
+
+    chunk_tokens = PREFILL_CHUNK_OUTPUT_TOKENS
+    tokens_per_chunk_per_device = chunk_tokens // linear_factor  # 160 on sp=8/tp=4 (vs 640 SP-only)
+    num_seq_chunks = seq_len // chunk_tokens
+    assert chunk_tokens % linear_factor == 0, f"5k chunk must divide evenly across sp*tp={linear_factor}"
+    assert tokens_per_chunk_per_device % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0
+
+    torch.manual_seed(42)
+    reference = torch.randn(num_kvpe_cache_layers, 1, seq_len, kvpe_cache_head_dim).to(torch.bfloat16)
+
+    # For 10k on sp=2/tp=4: chip (0,0) holds tokens [0-639, 5120-5759], chip (0,1) holds [640-1279, ...],
+    # ... chip (1,3) holds [4480-5119, 9600-10239]. The host tensor is laid out [batch, tp, seq/tp, head]
+    # so ShardTensor2dMesh can split dim 2 across SP and dim 1 across TP -- handing each (s, t) its own.
+    rows_per_device = num_seq_chunks * tokens_per_chunk_per_device
+    host_stacked = torch.zeros(
+        num_kvpe_cache_layers, tp_factor, seq_len // tp_factor, kvpe_cache_head_dim, dtype=torch.bfloat16
+    )
+    for s in range(sp_factor):
+        for t in range(tp_factor):
+            lo = (s * tp_factor + t) * tokens_per_chunk_per_device  # linear chip offset within the chunk
+            slices = [
+                reference[:, 0, c * chunk_tokens + lo : c * chunk_tokens + lo + tokens_per_chunk_per_device, :]
+                for c in range(num_seq_chunks)
+            ]
+            host_stacked[:, t, s * rows_per_device : (s + 1) * rows_per_device, :] = torch.cat(slices, dim=1)
+
+    # 32-token shards round-robined over the dram banks.
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+    ]
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
+            grid=ttnn.CoreRangeSet(core_ranges),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+    shard_dims = [None, None]
+    shard_dims[sp_axis] = -2  # SP-shard the seq dim
+    shard_dims[tp_axis] = 1  # ...and TP-shard dim 1, so each column gets a distinct sub-slice
+    tt_kvpe_cache = ttnn.from_torch(
+        host_stacked,
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+
+    # create_kv_chunk_address_table_kimi has no tp_axis (and always builds a stage_layout, which the
+    # TP-sharded path rejects), so build the table and populate it directly.
+    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
+    # Compacted: publish on a GLOBAL layer axis strictly wider than the cache's dense rows, mapped
+    # non-contiguously (dense d -> global 2*d + 1), exactly what the merged builder does for a compacted
+    # index cache. Dense: identity, row == layer.
+    layer_rows = [2 * d + 1 for d in range(num_layers)] if compacted_layers else None
+    global_layers = (max(layer_rows) + 1) if compacted_layers else num_layers
+    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+    lookup_table_config.num_layers = global_layers
+    lookup_table_config.max_sequence_length = seq_len
+    lookup_table_config.num_slots = num_users
+    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
+    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(lookup_table_config)
+    populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=lookup_table_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=CHUNK_SIZE_BYTES,
+        num_users=num_users,
+        tp_axis=tp_axis,
+        layer_rows=layer_rows,
+    )
+
+    reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
+        torch.bfloat16
+    )
+
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
+    for slot in range(num_users):
+        for layer in range(num_layers):
+            batch_idx = slot * num_layers + layer  # cache batch index
+            # Compacted: dense row `layer` was published at its MAPPED global row, so read it back there.
+            table_row = layer_rows[layer] if layer_rows is not None else layer
+            for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+                raw_bytes = lookup_table.read_device_chunk(layer=table_row, position=position, slot=slot)
+                chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+                chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+                expected_chunk = reference_bf8[batch_idx : batch_idx + 1, :, position:pos_end, :]
+                assert_equal(chunk_torch, expected_chunk)
+
+
 # sp x tp -- STANDARD (SP-only, TP-replicated) GLM-5.2 merged KV chunk address table.
 # main has a model-driven table readback for glm_5_1 (test_glm_kv_cache_table) but none for glm_5.2;
 # this is the missing SP-only baseline. It runs the real GLM-5.2 DSA MLA (layer 0 = a "full" layer, so
 # the indexer runs and fills the index-key cache), fills both the KVPE and indexer caches, builds the
-# merged 2-config kimi table (config 0 = KVPE, config 1 = index), and reads every 32-token chunk back.
+# merged 2-config kimi table (config 0 = KVPE, config 1 = index) with tp_axis=None, and reads every
+# 32-token chunk back. test_glm52_tp_sharded_kv_cache_mock above covers the tp_axis=1 layout.
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [

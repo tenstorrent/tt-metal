@@ -980,3 +980,193 @@ def test_update_padded_kv_cache_metadata_matches_scalar(mesh_device, dtype, layo
         f"{mesh_device.num_program_cache_entries()}"
     )
     logger.info(f"program cache stable at {entries_after_first} entries across {len(cases)} metadata-path chunks")
+
+
+# KV dedup: the op gets a TP-REPLICATED input and each chip persists only its own 1/tp window, so the two
+# mesh axes linearize into one block-cyclic axis of sp*tp with per-chip chunk Cl = chunk_local/tp.
+@pytest.mark.parametrize(
+    "mesh_device", [(1, 2), (1, 4), (2, 2), (2, 4)], ids=["1x2", "1x4", "2x2", "2x4"], indirect=True
+)
+@pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
+@pytest.mark.parametrize(
+    "config_name, num_users, num_layers, cl_tiles_per_dev, cache_tokens_per_dev",
+    [
+        ("small", 2, 3, 2, 512),  # 2 users x 3 layers, 2-tile per-chip written chunk (Cl=64), 512 cache/dev
+    ],
+    ids=["small"],
+)
+@pytest.mark.parametrize("scenario", ["non_padded", "padded_partial"], ids=["non_padded", "padded_partial"])
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_tp_sharded(
+    mesh_device,
+    config_name,
+    num_users,
+    num_layers,
+    cl_tiles_per_dev,
+    cache_tokens_per_dev,
+    scenario,
+    dtype,
+    layout,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    """SP x TP -sharded (deduplicated) KV cache, multi-iteration, multi-user / multi-layer.
+
+    The cache is sharded across BOTH mesh axes: each of the F = sp*tp chips stores a distinct 1/(sp*tp)
+    slice, versus the SP-only path where every TP chip replicates its SP row. The op is fed the same
+    TP-REPLICATED [1,1,chunk_local,D] input on every TP chip and slices its own 1/tp window internally.
+
+    The CACHE is single-axis block-cyclic over F = sp*tp chips with per-chip chunk Cl = chunk_local/tp, so
+    the readback inverts on (F, Cl). The INPUT is rotated coarsely at (sp, chunk_local) -- those two
+    granularities are the whole subtlety here, and they coincide only when kv_actual is stripe-aligned.
+
+    non_padded: two chunk-aligned iterations (no rotation). padded_partial: three iterations with a
+    whole-tile boundary offset, so the boundary chip's write straddles a slab. Bit-EXACT, not PCC (the op
+    is a pure copy, so the reference is the input read back through the same dtype encode/decode)."""
+    if dtype == ttnn.fp8_e4m3 and not is_blackhole():
+        pytest.skip("FP8_E4M3 is Blackhole-only")
+    if (is_ci_env or is_ci_v2_env) and scenario != "padded_partial":
+        pytest.skip("CI runs only the padded_partial case; non_padded is a subset of it")
+    sp_axis, tp_axis = 0, 1
+    sp = mesh_device.shape[sp_axis]
+    tp = mesh_device.shape[tp_axis]
+    assert tp > 1, "this test exercises the TP-sharded path; tp must be > 1"
+    F = sp * tp  # linearized block-cyclic chip count
+    tile = ttnn.TILE_SIZE
+
+    Cl = cl_tiles_per_dev * tile  # tokens each chip actually WRITES per chunk (= chunk_local / tp)
+    chunk_local = Cl * tp  # per-SP-chip input rows (TP-replicated across the tp chips of that row)
+    chunk_global = Cl * F  # one global chunk = one block-cyclic slab across all F chips
+    cache_global = cache_tokens_per_dev * F
+
+    if scenario == "non_padded":
+        new_actual_isls = [chunk_global, chunk_global]
+    else:  # padded_partial: whole-tile boundary_offset != 0; boundary chip write straddles a slab
+        new_actual_isls = [(F - 1) * Cl + tile, 2 * Cl, F * Cl]
+    assert all(
+        isl <= chunk_global for isl in new_actual_isls
+    ), f"each new_isl must be <= chunk_global ({chunk_global}); got {new_actual_isls}"
+    cum_total = sum(new_actual_isls)
+    assert cum_total <= cache_global, f"valid tokens ({cum_total}) must fit the cache ({cache_global})"
+
+    logger.info(
+        f"sp={sp} tp={tp} F={F} Cl={Cl} chunk_local={chunk_local} chunk_global={chunk_global} "
+        f"cache_global={cache_global}; new_isl per iter={new_actual_isls} (cum_total={cum_total})"
+    )
+
+    torch.manual_seed(0)
+    sent = {
+        (u, l): torch.randn(cum_total, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+        for u in range(num_users)
+        for l in range(num_layers)
+    }
+
+    # init_kvpe_cache divides seq_len by sp only, so seq_len = cache_tokens_per_dev * sp lands exactly
+    # cache_tokens_per_dev rows per PHYSICAL device -- the 1/(sp*tp) slab we want, no tp_axis needed.
+    kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=KVPE_HEAD_DIM,
+        mesh_device=mesh_device,
+        seq_len=cache_tokens_per_dev * sp,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_users * num_layers,
+        dtype=dtype,
+        layout=layout,
+    )
+
+    # Input is sharded across SP (chunk_local rows per SP chip) and REPLICATED across TP.
+    input_shard_dims = [None, None]
+    input_shard_dims[sp_axis] = 2
+
+    # Concat SP on the seq dim but KEEP every TP shard on dim 1 -- they are distinct now, not copies. So
+    # gathered[b, tp_coord, sp_coord*cache_tokens_per_dev + local_row, :] is device (sp_coord, tp_coord)'s.
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape)
+
+    mesh_device.enable_program_cache()
+    entries_after_init = mesh_device.num_program_cache_entries()
+
+    expected = {
+        (u, l): torch.zeros(cum_total, KVPE_HEAD_DIM, dtype=torch.bfloat16)
+        for u in range(num_users)
+        for l in range(num_layers)
+    }
+
+    kv_actual = 0
+    for it, new_actual_isl in enumerate(new_actual_isls):
+        # Input rotation is COARSE (sp, chunk_local) -- the caller's contract, since hidden states are
+        # seq-sharded across SP only. Deliberately NOT the fine (F, Cl) rotation: no real caller produces
+        # that, and assuming it mis-assigns rows whenever kv_actual is not stripe-aligned (was PCC 0.62).
+        positions = _rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = [positions[j][r] for j in range(sp) for r in range(chunk_local)]  # SP-shard order
+        valid_end = kv_actual + new_actual_isl
+        logger.info(
+            f"  iter {it}: kv_actual={kv_actual} new_isl={new_actual_isl} valid_end={valid_end} "
+            f"boundary_chip={(valid_end // Cl) % F}"
+        )
+        gather_idx = torch.tensor([min(g, cum_total - 1) for g in flat], dtype=torch.long)
+        pad_mask = torch.tensor([g >= valid_end for g in flat])
+        valid_rows = (~pad_mask).nonzero(as_tuple=True)[0]
+        flat_t = torch.tensor(flat, dtype=torch.long)
+        for u in range(num_users):
+            for l in range(num_layers):
+                chunk = sent[(u, l)][gather_idx].clone()  # [chunk_global, KVPE_HEAD_DIM]
+                chunk[pad_mask] = 0.0  # server pad rows
+                tt_input = _make_input(
+                    chunk.reshape(1, 1, chunk_global, KVPE_HEAD_DIM),
+                    dtype,
+                    layout,
+                    mesh_device,
+                    ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims),
+                )
+                # Read the input back in chip-concat order (one TP copy; replicated) and scatter its
+                # valid rows into the natural-order reference.
+                inp_rb = ttnn.to_torch(tt_input, mesh_composer=composer).to(torch.bfloat16)[0, 0]
+                expected[(u, l)][flat_t[valid_rows]] = inp_rb[valid_rows]
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    kv_cache,
+                    tt_input,
+                    slot_idx=u,
+                    layer_idx=l,
+                    num_layers=num_layers,
+                    kv_actual_global=kv_actual,
+                    cluster_axis=sp_axis,
+                    tp_axis=tp_axis,
+                )
+        kv_actual = valid_end
+
+    ttnn.synchronize_device(mesh_device)
+
+    # One cached program per layer, reused across iterations/users (layer_idx is hashed, tp_axis is
+    # structural but constant). Skip fp8: its typecast inputs add programs and pollute the count.
+    if dtype != ttnn.fp8_e4m3:
+        assert mesh_device.num_program_cache_entries() == entries_after_init + num_layers, (
+            f"op must reuse one cached program per layer; expected {entries_after_init + num_layers} "
+            f"entries, got {mesh_device.num_program_cache_entries()}"
+        )
+
+    # gathered: [users*layers, tp, sp*cache_tokens_per_dev, KVPE_HEAD_DIM]
+    gathered = ttnn.to_torch(kv_cache, mesh_composer=composer).to(torch.bfloat16)
+
+    # Invert the linearized layout: natural position p lives on logical chip L = (p % chunk_global)//Cl,
+    # i.e. physical (L//tp, L%tp), at local cache row (p//chunk_global)*Cl + (p%Cl).
+    p = torch.arange(cum_total)
+    L = (p % chunk_global) // Cl
+    sp_coord = L // tp
+    tp_coord = L % tp
+    local_row = (p // chunk_global) * Cl + (p % Cl)
+    dim2_idx = sp_coord * cache_tokens_per_dev + local_row
+
+    for u in range(num_users):
+        for l in range(num_layers):
+            batch_idx = u * num_layers + l
+            recon = gathered[batch_idx, tp_coord, dim2_idx, :]  # [cum_total, KVPE_HEAD_DIM]
+            assert torch.equal(recon, expected[(u, l)]), (
+                f"user {u} layer {l}: TP-sharded cache valid prefix does not byte-match the inputs sent "
+                f"(max abs diff {(recon.float() - expected[(u, l)].float()).abs().max().item()})"
+            )
+            logger.info(f"  user {u} layer {l}: exact match")
+
+    logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
