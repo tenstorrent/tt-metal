@@ -141,7 +141,12 @@ ALWI void sampling_recip_tile_scalar(uint32_t idst) {
     // vConstFloatPrgm0; compile-time no-op on the legacy path used here.
     ckernel::sfpu::sampling_recip_init<legacy_compat>();
     SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_recip_scalar,
+        (legacy_compat, DST_ACCUM_MODE),
+        idst,
+        VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {

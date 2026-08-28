@@ -190,7 +190,7 @@ jobs:
         uses: ./.github/actions/find-changed-files
 
   runtime-smoke-tests:
-    needs: [asan-build, find-changed-files]
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -201,6 +201,10 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      # github_hosted_cpu runs on ubuntu-latest (external runner) — no harbor access.
+      # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from
+      # asan-build (same as build-docs below).
+      cpu-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate

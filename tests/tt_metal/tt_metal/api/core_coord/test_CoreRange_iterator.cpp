@@ -12,7 +12,7 @@ using std::vector;
 
 namespace basic_tests::CoreRange {
 
-TEST_F(CoreCoordFixture, TestCoreRangeIterator) {
+TEST_F(CoreCoordFixture, CPU_TestCoreRangeIterator) {
     vector<tt::tt_metal::CoreCoord> cores_in_core_range;
 
     vector<tt::tt_metal::CoreCoord> cores_iterated;

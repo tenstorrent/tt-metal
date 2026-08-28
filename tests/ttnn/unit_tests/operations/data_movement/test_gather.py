@@ -154,6 +154,8 @@ def test_gather_datatype_cases(
         ([1, 1, 32, 256 * TILE_HEIGHT], [1, 1, 32, 256 * TILE_HEIGHT], -1),
         ([1, 151936], [1, 151936], -1),
         ([1, 128256], [1, 128256], -1),
+        # Wt_input=8193 -> bitmap_words=257 > BITMAP_WORDS_MAX=256; exercises use_bitmap=false fallback.
+        ([1, 262176], [1, 32], -1),
     ],
 )
 def test_gather_long_tensor(input_shape, index_shape, dim, device):

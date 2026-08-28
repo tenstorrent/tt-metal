@@ -307,6 +307,11 @@ public:
     virtual std::vector<std::string> srcs(const Params& params) const = 0;
     // Returns a string of common flags to be added to compiler and linker command lines.
     virtual std::string common_flags(const Params& params) const = 0;
+    // Returns the compiler flags that enable RISC-V Vector (Zve32f) code generation for an
+    // opt-in kernel compile on this processor (see ComputeConfig::enable_trisc2_rvv), or an
+    // empty string when the processor has no vector unit / the arch does not support it.
+    // Applied per kernel at recipe-export time, never to firmware or default kernel builds.
+    virtual std::string rvv_compile_flags(const Params& /*params*/) const { return {}; }
     // Returns the path to the linker script, relative to the tt-metal root.
     virtual std::string linker_script(const Params& params) const = 0;
     // Returns a string of linker flags to be added to linker command line.
@@ -925,24 +930,3 @@ template <>
 struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
     std::size_t operator()(const tt::tt_metal::HalProcessorIdentifier&) const;
 };
-
-#define HAL_MEM_L1_BASE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_L1_SIZE                                          \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::TENSIX, ::tt::tt_metal::HalL1MemAddrType::BASE)
-
-#define HAL_MEM_ETH_BASE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_ETH_SIZE                                         \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
-
-#define HAL_MEM_DRAM_L1_BASE                                     \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
-        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)
-#define HAL_MEM_DRAM_L1_SIZE                                     \
-    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
-        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)

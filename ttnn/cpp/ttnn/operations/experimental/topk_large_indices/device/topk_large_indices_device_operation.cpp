@@ -99,7 +99,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
         grid.x,
-        grid.y);
+        grid.y,
+        static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
 }
 
 spec_return_value_t TopkLargeIndicesDeviceOperation::compute_output_specs(

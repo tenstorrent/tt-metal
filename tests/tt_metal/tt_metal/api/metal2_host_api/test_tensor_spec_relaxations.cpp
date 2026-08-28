@@ -28,7 +28,7 @@ TensorSpec make_spec(Shape shape, Layout layout = Layout::TILE, DataType dtype =
 }
 
 // Strict (default-constructed) relaxation demands an exact TensorSpec match.
-TEST(TensorSpecRelaxations, StrictRequiresExactMatch) {
+TEST(TensorSpecRelaxations, CPU_StrictRequiresExactMatch) {
     const TensorSpecRelaxations strict{};
     const auto a = make_spec(Shape{1, 1, 32, 32});
     const auto same = make_spec(Shape{1, 1, 32, 32});
@@ -46,7 +46,7 @@ TEST(TensorSpecRelaxations, StrictRequiresExactMatch) {
 }
 
 // Strict match is exactly TensorSpec equality.
-TEST(TensorSpecRelaxations, StrictEqualsTensorSpecEquality) {
+TEST(TensorSpecRelaxations, CPU_StrictEqualsTensorSpecEquality) {
     const TensorSpecRelaxations strict{};
     const auto a = make_spec(Shape{1, 1, 32, 32});
     const auto b = make_spec(Shape{1, 1, 32, 64});
@@ -56,7 +56,7 @@ TEST(TensorSpecRelaxations, StrictEqualsTensorSpecEquality) {
 
 // dynamic_tensor_shape: same layout and rank, differing per-dim shape values -> match + equal hash.
 // Differing rank or layout still breaks the match.
-TEST(TensorSpecRelaxations, DynamicToleratesShapeWithinRank) {
+TEST(TensorSpecRelaxations, CPU_DynamicToleratesShapeWithinRank) {
     const TensorSpecRelaxations dyn{.dynamic_tensor_shape = true};
     const auto a = make_spec(Shape{1, 1, 32, 32});
     const auto b = make_spec(Shape{1, 1, 64, 128});  // same rank(4) + layout, different values
@@ -74,7 +74,7 @@ TEST(TensorSpecRelaxations, DynamicToleratesShapeWithinRank) {
 }
 
 // match_padded_shape_only: same layout and padded_shape, differing logical_shape -> match + equal hash.
-TEST(TensorSpecRelaxations, PaddedShapeOnlyToleratesLogicalWithinPadding) {
+TEST(TensorSpecRelaxations, CPU_PaddedShapeOnlyToleratesLogicalWithinPadding) {
     const TensorSpecRelaxations padded{.match_padded_shape_only = true};
     // TILE pads the last two dims up to the 32x32 tile: {..,5,5} and {..,30,30} both pad to {..,32,32}.
     const auto a = make_spec(Shape{1, 1, 5, 5});
@@ -92,7 +92,7 @@ TEST(TensorSpecRelaxations, PaddedShapeOnlyToleratesLogicalWithinPadding) {
 }
 
 // Precedence: dynamic_tensor_shape subsumes match_padded_shape_only when both are set.
-TEST(TensorSpecRelaxations, DynamicSubsumesPaddedShapeOnly) {
+TEST(TensorSpecRelaxations, CPU_DynamicSubsumesPaddedShapeOnly) {
     const auto a = make_spec(Shape{1, 1, 32, 32});
     const auto b = make_spec(Shape{1, 1, 64, 64});  // same rank+layout, DIFFERENT padded_shape
     ASSERT_NE(a.padded_shape(), b.padded_shape());
@@ -109,7 +109,7 @@ TEST(TensorSpecRelaxations, DynamicSubsumesPaddedShapeOnly) {
 // (match => equal-hash is guaranteed by construction; the reverse holds here absent a 64-bit
 // collision, which won't occur across this small fixed set — so the biconditional is a strong check
 // that the hash is neither too fine nor too coarse relative to the match.)
-TEST(TensorSpecRelaxations, HashConsistentWithMatch) {
+TEST(TensorSpecRelaxations, CPU_HashConsistentWithMatch) {
     const std::vector<TensorSpec> specs = {
         make_spec(Shape{1, 1, 32, 32}),
         make_spec(Shape{1, 1, 64, 64}),

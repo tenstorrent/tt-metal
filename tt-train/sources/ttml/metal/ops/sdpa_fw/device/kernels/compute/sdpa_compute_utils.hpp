@@ -42,8 +42,10 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void recip_tile_first_column(uint32_t idst) {
-    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_recip_first_column, (is_fp32_dest_acc_en), idst, VectorMode::C);
 }
 #endif  // TRISC_MATH
 
@@ -156,7 +158,7 @@ void update_cur_row_max_value(
 //
 // DST budget: Sk_chunk_t registers are held live across sub_tiles_bcast_cols + exp_tile +
 // (two) pack passes. With fp32_dest_acc_en=true the DST has 4 tiles, so Sk_chunk_t <= 4.
-template <uint32_t scaler_fp32, uint32_t Sk_chunk_t = 1U>
+template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t = 1U>
 void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
     cb_wait_front(cb_attention_weights, Sk_chunk_t);
     cb_wait_front(cb_cur_max, onetile);
@@ -170,7 +172,7 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
         sub_tiles_bcast_cols(
             cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
-        sdpa_exp_tile_scaled<scaler_fp32>(n);
+        sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(n);
     }
     tile_regs_commit();
 
@@ -265,7 +267,7 @@ void matmul_qk_by_v(
     cb_push_back(cb_cur_mm_out, Wt);
 }
 
-template <uint32_t scaler_fp32>
+template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff) {
     cb_wait_front(cb_prev_max_value, onetile);
     cb_wait_front(cb_cur_max_value, onetile);
@@ -286,7 +288,7 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
     // First-column scaled exp: exp(scale * (prev_max - cur_max)).
     // Both max values are column vectors, so the result is a column vector —
     // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
-    sdpa_exp_tile_first_column_scaled<scaler_fp32>(exp_max_diff_dst_idx);
+    sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(exp_max_diff_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
