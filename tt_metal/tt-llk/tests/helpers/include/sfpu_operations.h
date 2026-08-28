@@ -57,6 +57,7 @@
 #include "llk_sfpu/ckernel_sfpu_lcm.h"
 #include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_log.h"
+#include "llk_sfpu/ckernel_sfpu_logaddexp.h"
 #include "llk_sfpu/ckernel_sfpu_logical_not.h"
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_mask.h"
@@ -1624,6 +1625,14 @@ void call_binary_sfpu_operation_init()
         // fmod uses the reciprocal path; init loads the reciprocal polynomial.
         SFPU_BINARY_INIT_FN(add1, fmod_binary_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2)
+    {
+        // logaddexp and logaddexp2 log1p reads its polynomial coefficients from the program
+        // constant registers; the coefficient set differs by destination precision,
+        // so the init is templated on DST_ACCUM_MODE. Baseline (add1) addrmod setup,
+        // like fmod/remainder. Mirrors logaddexp_binary_tile_init() and logaddexp2_binary_tile_init().
+        SFPU_BINARY_INIT_FN(add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE));
+    }
     else if constexpr (BINOP == BinaryOp::REMAINDER)
     {
         // remainder_binary_init loads the reciprocal polynomial (Wormhole) or
@@ -1789,6 +1798,34 @@ void call_binary_sfpu_operation(
             DST_ACCUM_MODE,
             calculate_sfpu_binary_div,
             (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP)
+    {
+        // The fused overflow-safe kernel from ckernel_sfpu_logaddexp.h; DST_ACCUM_MODE
+        // (is_fp32_dest_acc_en) selects the fp32 vs bf16 log1p coefficient set that the
+        // paired init loaded, and the bf16 round-to-nearest-even on store.
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_logaddexp,
+            (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::LOGADDEXP2)
+    {
+        // The fused overflow-safe kernel for base-2 from ckernel_sfpu_logaddexp.h
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_logaddexp2,
+            (APPROXIMATION_MODE, DST_ACCUM_MODE, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

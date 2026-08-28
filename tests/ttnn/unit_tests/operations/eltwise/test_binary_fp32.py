@@ -433,3 +433,94 @@ def test_binary_div_edge_case_ttnn(fast_and_approximate_mode, rounding_mode, dev
             torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
         )
     assert_with_ulp(golden_tensor, output_tensor, 0, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (100.0, 0.0),  # exact answer is 100; exp(100) overflows in naive formula
+        (89.0, 0.0),  # just past log(FLT_MAX) = 88.72
+        (90.0, 89.0),
+        (200.0, 199.0),
+        (1000.0, 999.0),
+        (100.0, 100.0),
+        (-100.0, -100.0),  # both exponentials underflow to zero
+        (-1000.0, -1000.0),
+        (5.0, 3.0),  # inside currently-working band
+        (0.0, 0.0),
+    ],
+)
+def test_logaddexp_beyond_exp_range_fp32(device, a, b):
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), (
+        f"logaddexp({a}, {b}) returned {tt_out.flatten()[0].item()}; "
+        f"the exact result is {z_torch.flatten()[0].item()}"
+    )
+    assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (150.0, 0.0),  # exp2(150) overflows in naive formula (> 128)
+        (129.0, 0.0),  # just past log2(FLT_MAX) = 128.0
+        (130.0, 129.0),
+        (300.0, 299.0),
+        (1000.0, 999.0),
+        (1e5, 1e5),
+        (-130.0, -130.0),
+        (-1000.0, -1000.0),
+        (5.0, 3.0),
+        (0.0, 0.0),
+    ],
+)
+def test_logaddexp2_beyond_exp_range_fp32(device, a, b):
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp2)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), (
+        f"logaddexp2({a}, {b}) returned {tt_out.flatten()[0].item()}; "
+        f"the exact result is {z_torch.flatten()[0].item()}"
+    )
+    assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("op", [ttnn.logaddexp, ttnn.logaddexp2])
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (float("inf"), float("inf")),
+        (float("-inf"), float("-inf")),
+        (float("inf"), float("-inf")),
+        (float("-inf"), float("inf")),
+        (float("inf"), 0.0),
+        (float("-inf"), 0.0),
+    ],
+)
+def test_logaddexp_equal_infinities_fp32(device, op, a, b):
+    torch_op = torch.logaddexp if op == ttnn.logaddexp else torch.logaddexp2
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    z_torch = torch_op(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(op(x_tt, y_tt))
+
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert got == want, f"{op.__name__}({a}, {b}) returned {got}; exact result is {want}"

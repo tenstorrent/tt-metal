@@ -249,17 +249,25 @@ OpConfig::OpConfig(
             break;
         // log( exp(a) + exp(b) )
         case BinaryOpType::LOGADDEXP:
-            process_lhs = unary::UnaryOpType::EXP;
-            process_rhs = unary::UnaryOpType::EXP;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP;
+            } else {
+                process_lhs = unary::UnaryOpType::EXP;
+                process_rhs = unary::UnaryOpType::EXP;
+                binary_op = EnumT::ADD;
+                postprocess = unary::UnaryOpType::LOG;
+            }
             break;
         // log2( 2**a + 2**b )
         case BinaryOpType::LOGADDEXP2:
-            process_lhs = unary::UnaryOpType::EXP2;
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::LOG2;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGADDEXP2;
+            } else {
+                process_lhs = unary::UnaryOpType::EXP2;
+                process_rhs = unary::UnaryOpType::EXP2;
+                binary_op = EnumT::ADD;
+                postprocess = unary::UnaryOpType::LOG2;
+            }
             break;
         case BinaryOpType::BITWISE_AND:
             if (is_sfpu_op()) {
@@ -557,6 +565,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                                                                      : "Float16_b";
             return {"where_tile_init();", fmt::format("where_tile<DataFormat::{}>", data_format)};
         }
+        case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
+        case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }

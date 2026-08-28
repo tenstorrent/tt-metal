@@ -77,6 +77,8 @@ enum class BinaryOp : std::uint8_t
     REQUANT,
     DEQUANT,
     ATAN2,
+    LOGADDEXP,
+    LOGADDEXP2,
 };
 
 // For instructions that address lower/upper 16 bits of a register

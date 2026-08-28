@@ -79,6 +79,8 @@ struct OpConfig {
         MINIMUM,
         XLOGY,
         ATAN2,
+        LOGADDEXP,
+        LOGADDEXP2,
         LT,
         GT,
         GE,
