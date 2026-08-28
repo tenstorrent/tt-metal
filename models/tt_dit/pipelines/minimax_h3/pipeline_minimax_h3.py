@@ -56,7 +56,11 @@ from PIL import Image, ImageOps
 
 import ttnn
 
-from ...encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder, build_minimax_h3_vision_tower
+from ...encoders.qwen3vl.loader_minimax_h3 import (
+    MINIMAX_H3_TEXT_ENCODER_LAYER,
+    build_minimax_h3_text_encoder,
+    build_minimax_h3_vision_tower,
+)
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
@@ -355,8 +359,17 @@ class MiniMaxH3Pipeline:
         self._tokenizer = None
         self._text_encoder = None
         self._text_config = None
+        # The released Qwen3-VL conditioner on the host, for `encode_prompt_host` -- a debug twin of
+        # the device encode, lazily loaded because it is a large read only wanted when comparing.
+        self._host_text_encoder = None
         self._transformer = None
         self._vae = None
+        # The released video VAE on the host, for `_encode_keyframes_host` / `_decode_video_host` --
+        # debug twins of the device keyframe encode and video decode. Lazily built and loaded per half
+        # (encoder / decoder) because it is a large read only wanted when comparing against the device.
+        self._host_vae = None
+        self._host_vae_encoder_loaded = False
+        self._host_vae_decoder_loaded = False
         self._encoder_state_loaded = False
         self._image_processor = None
         # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
@@ -892,6 +905,123 @@ class MiniMaxH3Pipeline:
 
         return embeds, tags
 
+    def _prepare_host_text_encoder(self):
+        """The released Qwen3-VL conditioner on the host (CPU), loaded once, for `encode_prompt_host`.
+
+        The full 64-layer checkpoint in its native bf16 -- not the TAP-truncated device build -- so
+        `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]` is exactly the reference tensor. Large read, so
+        it is lazy: only a comparison against the device encode wants it.
+        """
+        if self._host_text_encoder is None:
+            from transformers import Qwen3VLForConditionalGeneration
+
+            self._host_log("building the Qwen3-VL conditioner on the HOST (reference encode)")
+            hf = Qwen3VLForConditionalGeneration.from_pretrained(
+                str(self.weights_dir / "text_encoder"), dtype=torch.bfloat16
+            )
+            # `.model` is the conditioner without the language-model head: MiniMax-H3 reads
+            # `hidden_states[50]` and never uses the vocabulary projection, exactly as the reference does.
+            self._host_text_encoder = hf.model.eval()
+        return self._host_text_encoder
+
+    def _split_host_vision_inputs(self, pixel_values, grid_thw, vision_kinds, dtype):
+        """Split the presentation's concatenated vision patches into the conditioner's per-modality
+        inputs -- `pixel_values`/`image_grid_thw` and `pixel_values_videos`/`video_grid_thw`.
+
+        The device path concatenates every reference's patches in presentation order for one fused
+        tower call (see `_build_ref2va_presentation`), but the HF conditioner takes each modality as
+        its own batch, each ordered as its runs appear -- exactly `encoders.py::_gather_vision_features`.
+        Splitting the *shared* patches here rather than re-running the processors keeps the pixels the
+        host sees bit-identical to the ones the device saw, so only the encoder differs. Pixels are
+        cast to the conditioner's dtype; grids stay integer.
+        """
+        if grid_thw is None:
+            return {}
+        counts = [int(grid.prod()) for grid in grid_thw]
+        assert (
+            sum(counts) == pixel_values.shape[0]
+        ), f"{sum(counts)} patches expected from the grids, presentation carries {pixel_values.shape[0]}"
+        chunks, cursor = [], 0
+        for count in counts:
+            chunks.append(pixel_values[cursor : cursor + count])
+            cursor += count
+
+        def gather(kind: str):
+            selected = [(chunks[i], grid_thw[i]) for i, entry in enumerate(vision_kinds) if entry == kind]
+            if not selected:
+                return None, None
+            return torch.cat([p for p, _ in selected]), torch.stack([g for _, g in selected])
+
+        vision_kwargs = {}
+        image_pixels, image_grids = gather("image")
+        if image_pixels is not None:
+            vision_kwargs["pixel_values"] = image_pixels.to(dtype)
+            vision_kwargs["image_grid_thw"] = image_grids
+        video_pixels, video_grids = gather("video")
+        if video_pixels is not None:
+            vision_kwargs["pixel_values_videos"] = video_pixels.to(dtype)
+            vision_kwargs["video_grid_thw"] = video_grids
+        return vision_kwargs
+
+    def encode_prompt_host(
+        self,
+        prompt: str,
+        *,
+        keyframes: Sequence[Image.Image] = (),
+        references: Sequence[MiniMaxH3PreparedReference] = (),
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Host/reference twin of `encode_prompt`, for isolating device-encode issues.
+
+        A drop-in swap: it builds the **identical** presentation `encode_prompt` builds -- same
+        tokenizer, same image / video processors, so `input_ids`, the per-row `tags` and Qwen's
+        `mm_token_type_ids` all match -- then runs the released Qwen3-VL conditioner on the host (CPU)
+        and reads `hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER]`. That is exactly the tensor the
+        reference `encoders.py::get_qwen3vl_prompt_embeds` returns and the same tap the device build
+        targets, so any PCC gap against `encode_prompt` is the on-device encode alone.
+
+        Returns the same `(prompt_embeds [1, L, 5120], text_token_tags [L])` as `encode_prompt`.
+
+        This is a debugging aid, not a served path: it loads the full 64-layer conditioner onto the
+        host and runs a CPU forward, which is slow and memory-hungry. `keyframes` (fl2va) and
+        `references` (ref2va) are mutually exclusive, as in `encode_prompt`.
+        """
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValueError("prompt must be a non-empty string")
+        if keyframes and references:
+            raise ValueError("keyframes (fl2va) and references (ref2va) are different tasks; pass one or neither")
+
+        # The exact presentation the device path builds -- the whole point of the twin is that only the
+        # encoder differs, so the tokens, tags and mm-type-ids are shared, not rebuilt differently.
+        if references:
+            input_ids, tags, type_ids, pixel_values, grid_thw, vision_kinds = self._build_ref2va_presentation(
+                prompt, references
+            )
+        else:
+            input_ids, tags, type_ids, pixel_values, grid_thw = self._build_presentation(prompt, keyframes)
+            # An fl2va keyframe is an image, and t2va has no vision entries at all.
+            vision_kinds = ["image"] * (0 if grid_thw is None else len(grid_thw))
+
+        seq_len = input_ids.shape[1]
+        self._log(f"encoding {seq_len} presentation tokens on HOST (reference conditioner)")
+
+        encoder = self._prepare_host_text_encoder()
+        vision_kwargs = self._split_host_vision_inputs(pixel_values, grid_thw, vision_kinds, encoder.dtype)
+
+        # `mm_token_type_ids` is Qwen's own per-row modality (0 text, 1 image, 2 video), which the
+        # presentation builders already produce as `type_ids`; it drives the conditioner's per-modality
+        # rotary grid. No chat template and no special tokens, so the attention mask is all ones.
+        with torch.no_grad():
+            outputs = encoder(
+                input_ids=input_ids,
+                attention_mask=torch.ones_like(input_ids),
+                mm_token_type_ids=type_ids,
+                use_cache=False,
+                output_hidden_states=True,
+                **vision_kwargs,
+            )
+        embeds = outputs.hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER].float()
+        return embeds, tags
+
     # ------------------------------------------------------------------ denoiser
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1239,6 +1369,74 @@ class MiniMaxH3Pipeline:
             self.vae_config.latents_std,
             self.patch_size,
         )
+
+    def _prepare_host_vae(self, *, want_encoder: bool = False, want_decoder: bool = False):
+        """The released MiniMax-H3 video VAE on the host (CPU), built once and loaded per half on
+        demand, for `_encode_keyframes_host` / `_decode_video_host`.
+
+        The reference diffusers `AutoencoderKLMiniMaxH3` in its native fp32. Its two halves load
+        separately -- `encoder.*`/`quant_conv.*` for the keyframe encode, `decoder.*`/
+        `post_quant_conv.*` for the video decode -- mirroring the device `_prepare_vae`, so a run that
+        only encodes (or only decodes) on the host never pays for the other half's weights. Its
+        default tiling is the geometry the device build matches (gated by `test_encode_clip_tiled` /
+        `test_decode_clip_tiled`), so nothing about the tiling is configured here. Large read, so it
+        is lazy: only a comparison against the device VAE wants it.
+        """
+        if self._host_vae is None:
+            from diffusers.models.autoencoders.autoencoder_kl_minimax_h3 import AutoencoderKLMiniMaxH3
+
+            self._host_log("building the video VAE on the HOST (reference encode/decode)")
+            self._host_vae = AutoencoderKLMiniMaxH3(**self._read_config("vae")).eval()
+        state = None
+        if want_encoder and not self._host_vae_encoder_loaded:
+            state = self._read_safetensors("vae")
+            self._load_host_vae_half(state, ("encoder.", "quant_conv."))
+            self._host_vae_encoder_loaded = True
+        if want_decoder and not self._host_vae_decoder_loaded:
+            state = state if state is not None else self._read_safetensors("vae")
+            self._load_host_vae_half(state, ("decoder.", "post_quant_conv."))
+            self._host_vae_decoder_loaded = True
+        return self._host_vae
+
+    def _load_host_vae_half(self, state: dict[str, torch.Tensor], prefixes: tuple[str, ...]) -> None:
+        """Copy one half of the checkpoint into the host VAE. `load_state_dict` only writes the keys
+        it is handed, so the two halves accumulate across calls rather than clobbering each other.
+
+        The other half's tensors are deliberately absent, so `missing` is expected and unchecked;
+        `unexpected` is not -- a renamed key would land there and must fail rather than leave part of
+        the module at its random init.
+        """
+        half = {k: v for k, v in state.items() if k.startswith(prefixes)}
+        _, unexpected = self._host_vae.load_state_dict(half, strict=False)
+        assert not unexpected, f"unexpected {prefixes[0]} keys loading the host VAE: {sorted(unexpected)[:5]}"
+
+    def _encode_keyframes_host(self, vae: MiniMaxH3Vae, keyframes: Sequence[Image.Image]) -> torch.Tensor:
+        """Host/reference twin of `_encode_keyframes`, for isolating device keyframe-encode issues.
+
+        A drop-in swap at the fl2va call site: it runs the **identical** conditioning math
+        `_encode_keyframes` runs -- `encode_keyframes` normalizes with the same ImageNet statistics,
+        samples the posterior under the same seed-42 generator, does the same fp16 round trip and the
+        same patchify -- but feeds the released VAE's `_encode_clip` on the host instead of the
+        device encoder. The moments contract is identical (`[mean, logvar]`, `2 * latent_channels`),
+        so the only thing that differs is where the keyframe is encoded, and any change in the anchor
+        frames against `_encode_keyframes` is the on-device keyframe encode alone.
+
+        Returns the same packed conditioning rows as `_encode_keyframes`. `vae` (the device encoder)
+        is accepted for signature parity so the swap is a one-word change, and is otherwise unused.
+
+        This is a debugging aid, not a served path: it loads the full VAE encoder onto the host and
+        runs a CPU forward, which is slow and memory-hungry.
+        """
+        reference = self._prepare_host_vae(want_encoder=True)
+        self._log(f"encoding {len(keyframes)} keyframe(s) on HOST (reference VAE encoder)")
+        with torch.no_grad():
+            return encode_keyframes(
+                keyframes,
+                reference._encode_clip,
+                self.vae_config.latents_mean,
+                self.vae_config.latents_std,
+                self.patch_size,
+            )
 
     def decode_unit_shape(self) -> tuple[int, int, int]:
         """The `(T, H, W)` of one decoder work unit: one temporal chunk of one spatial tile.
@@ -2100,6 +2298,47 @@ class MiniMaxH3Pipeline:
         # The VAE emits ImageNet-normalized RGB.
         video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
         return video
+
+    def _decode_video_host(
+        self,
+        vae: MiniMaxH3Vae,
+        rows: torch.Tensor,
+        num_latent_frames: int,
+        latent_height: int,
+        latent_width: int,
+        num_condition_video_rows: int,
+    ) -> torch.Tensor:
+        """Host/reference twin of `_decode_video`, for isolating device-decode issues.
+
+        A drop-in swap at the decode call site: it does the **identical** host-side unpatchify and
+        latent de-normalization `_decode_video` does -- same `latents_mean`/`latents_std`, same
+        dropping of the leading condition rows -- then runs the released VAE's `decode` on the host
+        (CPU) and applies the same ImageNet pixel de-normalization and `[0, 1]` clamp the `"float"`
+        device path applies. So the only thing that differs is where the latents are decoded, and any
+        change in the frames against `_decode_video` is the on-device decode alone.
+
+        Returns `(1, 3, F, H, W)` float in `[0, 1]`, matching the `vae_output_type="float"` device
+        path -- and always that, regardless of `vae_output_type`: the reference decoder has no
+        on-device colour fold, so the `"yuv420"`/`"uint8"` variants have no host counterpart; compare
+        in float space. `vae` (the device decoder) is accepted for signature parity and is unused.
+
+        This is a debugging aid, not a served path: it loads the full 36-layer ViT decoder onto the
+        host and runs a CPU forward, which is slow and memory-hungry.
+        """
+        latents = unpatchify_video_tokens(
+            rows[num_condition_video_rows:],
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            self.vae_config.latent_channels,
+            self.patch_size,
+        )
+        latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
+        reference = self._prepare_host_vae(want_decoder=True)
+        self._log(f"decoding {num_latent_frames} latent frame(s) on HOST (reference VAE decoder)")
+        with torch.no_grad():
+            video = reference.decode(latents).sample
+        return self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
 
     def _decode_audio(
         self,
