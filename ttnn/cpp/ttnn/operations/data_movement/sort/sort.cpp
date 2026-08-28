@@ -7,11 +7,14 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 #include <numeric>
@@ -218,16 +221,63 @@ std::vector<Tensor> post_sort_transform_tensor(
     return result;
 }
 
-bool validate_optional_output_tensors_for_early_exit(
-    const std::optional<std::tuple<Tensor, Tensor>>& optional_output_tensors, const Shape& original_lshape) {
+// Mirrors the device op's preallocated-output rules (sort_device_operation.cpp) so the
+// composite early exits enforce the same contract as the dispatched path. Layout is
+// deliberately not checked: the main path converts a mismatched layout instead.
+void validate_preallocated_output_tensors(
+    const std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors,
+    const Shape& original_lshape,
+    const DataType input_dtype) {
     if (!optional_output_tensors.has_value()) {
-        return false;
+        return;
     }
 
-    auto output_tensor_0 = std::get<0>(optional_output_tensors.value());
-    auto output_tensor_1 = std::get<1>(optional_output_tensors.value());
+    const auto& values = std::get<0>(*optional_output_tensors);
+    const auto& indices = std::get<1>(*optional_output_tensors);
 
-    return output_tensor_0.logical_shape() == original_lshape && output_tensor_1.logical_shape() == original_lshape;
+    TT_FATAL(ttnn::is_device_tensor(values), "Preallocated sort values tensor must be on device");
+    TT_FATAL(ttnn::is_device_tensor(indices), "Preallocated sort indices tensor must be on device");
+
+    TT_FATAL(
+        values.logical_shape() == original_lshape,
+        "Preallocated sort output tensors must match the input shape {}, got values shape {}",
+        original_lshape,
+        values.logical_shape());
+    TT_FATAL(
+        indices.logical_shape() == original_lshape,
+        "Preallocated sort output tensors must match the input shape {}, got indices shape {}",
+        original_lshape,
+        indices.logical_shape());
+
+    TT_FATAL(
+        values.dtype() == input_dtype,
+        "Preallocated sort values tensor dtype must match the input dtype {}, got {}",
+        input_dtype,
+        values.dtype());
+    TT_FATAL(
+        indices.dtype() == DataType::UINT16 || indices.dtype() == DataType::UINT32,
+        "Preallocated sort indices tensor dtype must be UINT16 or UINT32, got {}",
+        indices.dtype());
+    if (input_dtype == DataType::FLOAT32 || input_dtype == DataType::UINT16) {
+        TT_FATAL(
+            indices.dtype() == DataType::UINT32,
+            "Preallocated sort indices tensor dtype must be UINT32 when input dtype is FLOAT32 or UINT16, got {}",
+            indices.dtype());
+    }
+}
+
+// Fills a validated preallocated output pair for the early-exit paths: the input copied
+// into the caller's values buffer, zeros into the caller's indices buffer.
+std::vector<Tensor> fill_preallocated_early_exit_outputs(
+    const Tensor& input_tensor, std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors) {
+    auto& values = std::get<0>(*optional_output_tensors);
+    auto& indices = std::get<1>(*optional_output_tensors);
+    // ttnn::copy requires matching layouts; the main path likewise converts rather than rejecting.
+    const Tensor source =
+        input_tensor.layout() == values.layout() ? input_tensor : ttnn::to_layout(input_tensor, values.layout());
+    ttnn::copy(source, values);
+    ttnn::zeros_like(input_tensor, indices.dtype(), indices.layout(), std::nullopt, indices.memory_config(), indices);
+    return {values, indices};
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -253,23 +303,27 @@ std::vector<Tensor> sort(
     const bool idx_is_uint32 = (input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::UINT16);
     const DataType index_dtype = idx_is_uint32 ? DataType::UINT32 : DataType::UINT16;
 
-    // Check for early exit for scalar or empty tensors tensors
-    if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
-        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
-        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
-                optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors) = input_tensor;
-            std::get<1>(*optional_output_tensors) = indices;
-            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
-        }
-        return {input_tensor, indices};
-    }
+    operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_preallocated_output_tensors(
+        optional_output_tensors, original_lshape, input_tensor.dtype());
 
+    // Rank 0 admits only dim 0/-1; the generic range check degenerates to always-false there.
     TT_FATAL(
-        dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank),
+        (dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank)) ||
+            (rank == 0 && (dim == 0 || dim == -1)),
         "Sort dim {} is out of range for rank-{} tensor",
         dim,
         rank);
+
+    // Check for early exit for scalar tensors
+    if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
+        if (optional_output_tensors.has_value()) {
+            return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::fill_preallocated_early_exit_outputs(
+                input_tensor, optional_output_tensors);
+        }
+        return {
+            ttnn::clone(input_tensor, std::nullopt, memory_config, std::nullopt),
+            ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config)};
+    }
 
     const int32_t normalized_dim = dim < 0 ? static_cast<int32_t>(rank) + dim : dim;
 
@@ -280,31 +334,23 @@ std::vector<Tensor> sort(
     // after the dim-range validation above so an out-of-range dim still
     // raises, matching torch.
     if (original_lshape.volume() == 0) {
+        // Zero volume: nothing to write into a preallocated pair.
         if (optional_output_tensors.has_value()) {
-            TT_FATAL(
-                std::get<0>(*optional_output_tensors).logical_shape() == original_lshape &&
-                    std::get<1>(*optional_output_tensors).logical_shape() == original_lshape,
-                "Preallocated sort output tensors must match the input shape {}",
-                original_lshape);
             return {std::get<0>(*optional_output_tensors), std::get<1>(*optional_output_tensors)};
         }
-        const Tensor values =
-            memory_config.has_value()
-                ? ttnn::zeros_like(input_tensor, std::nullopt, std::nullopt, std::nullopt, memory_config)
-                : input_tensor;
-        const Tensor indices = ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config);
-        return {values, indices};
+        return {
+            ttnn::clone(input_tensor, std::nullopt, memory_config, std::nullopt),
+            ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config)};
     }
 
     if (original_lshape[normalized_dim] == 1) {
-        auto indices = ttnn::zeros_like(input_tensor, index_dtype);
-        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
-                optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors) = input_tensor;
-            std::get<1>(*optional_output_tensors) = indices;
-            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+        if (optional_output_tensors.has_value()) {
+            return operations::data_movement::CMAKE_UNIQUE_NAMESPACE::fill_preallocated_early_exit_outputs(
+                input_tensor, optional_output_tensors);
         }
-        return {input_tensor, indices};
+        return {
+            ttnn::clone(input_tensor, std::nullopt, memory_config, std::nullopt),
+            ttnn::zeros_like(input_tensor, index_dtype, std::nullopt, std::nullopt, memory_config)};
     }
 
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);

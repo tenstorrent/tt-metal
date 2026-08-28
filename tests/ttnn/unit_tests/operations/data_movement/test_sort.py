@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import threading
 
@@ -1299,6 +1300,160 @@ def test_sort_zero_size_dim_mismatched_out_raise(device, expect_error):
 
     with expect_error(RuntimeError, "must match the input shape"):
         ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+
+# ---------------------------------------------------------------------------
+# Composite early-exit contract (scalar / zero-volume / dim-size-1).
+#
+# The out= dtype rules live in the device op, which the early exits never reach.
+# They are enforced up front in ttnn::sort so all three exits honour the same
+# contract as the dispatched path: a mismatched out= raises instead of being
+# silently discarded, the caller's buffers are written in place, the values
+# output is a copy rather than an alias of the input, and memory_config is
+# applied.
+# ---------------------------------------------------------------------------
+
+# (id, shape, dim) covering each early exit. Scalars are exercised at both
+# rank 0 and shape [1]; dim-size-1 uses a sort dim of extent 1.
+EARLY_EXIT_CASES = [
+    pytest.param((), -1, id="scalar_rank0"),
+    pytest.param((1,), -1, id="scalar_shape1"),
+    pytest.param((0, 4096), -1, id="zero_volume"),
+    pytest.param((32, 1), -1, id="dim_size_1"),
+]
+
+
+def _early_exit_input(shape, device, dtype=ttnn.bfloat16, torch_dtype=torch.bfloat16):
+    return ttnn.from_torch(torch.randn(shape).to(torch_dtype), dtype, layout=ttnn.Layout.TILE, device=device)
+
+
+def _early_exit_out_pair(shape, device, values_dtype=ttnn.bfloat16, indices_dtype=ttnn.uint16):
+    torch_values_dtype = torch.float32 if values_dtype == ttnn.float32 else torch.bfloat16
+    torch_indices_dtype = torch.int32 if indices_dtype == ttnn.uint32 else torch.uint16
+    values = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch_values_dtype), values_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+    indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch_indices_dtype), indices_dtype, layout=ttnn.Layout.TILE, device=device
+    )
+    return values, indices
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_wrong_values_dtype_raises(shape, dim, device, expect_error):
+    """out= values dtype must match the input dtype on every early-exit path."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair(shape, device, values_dtype=ttnn.float32)
+
+    with expect_error(RuntimeError, "values tensor dtype must match the input dtype"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_wrong_indices_dtype_raises(shape, dim, device, expect_error):
+    """out= indices must be UINT16 or UINT32 on every early-exit path."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, _ = _early_exit_out_pair(shape, device)
+    bad_indices = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device
+    )
+
+    with expect_error(RuntimeError, "indices tensor dtype must be UINT16 or UINT32"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, bad_indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_fp32_input_uint16_indices_raises(shape, dim, device, expect_error):
+    """FLOAT32 input forces UINT32 indices; the early exits enforce it like the device op."""
+    ttnn_input = _early_exit_input(shape, device, dtype=ttnn.float32, torch_dtype=torch.float32)
+    values, indices = _early_exit_out_pair(shape, device, values_dtype=ttnn.float32, indices_dtype=ttnn.uint16)
+
+    with expect_error(RuntimeError, "must be UINT32 when input dtype is FLOAT32"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_wrong_shape_raises(shape, dim, device, expect_error):
+    """A wrong-shape out= raises rather than being silently replaced by fresh tensors."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair((32, 64), device)
+
+    with expect_error(RuntimeError, "must match the input shape"):
+        ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_uint32_indices_accepted(shape, dim, device):
+    """Positive control: bf16 input with UINT32 indices is legal (the device op allows it),
+    so the up-front check must not demand equality with the default index dtype."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair(shape, device, indices_dtype=ttnn.uint32)
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+    assert list(out_values.shape) == list(shape)
+    assert out_indices.dtype == ttnn.uint32
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_out_written_in_place(shape, dim, device):
+    """The caller's preallocated buffers are written, not swapped for new tensors."""
+    ttnn_input = _early_exit_input(shape, device)
+    values, indices = _early_exit_out_pair(shape, device)
+    values_addr, indices_addr = values.buffer_address(), indices.buffer_address()
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=dim, out=(values, indices))
+
+    assert out_values.buffer_address() == values_addr
+    assert out_indices.buffer_address() == indices_addr
+    if math.prod(shape) > 0:
+        assert_equal(ttnn.to_torch(ttnn_input), ttnn.to_torch(out_values))
+        assert_equal(torch.zeros(shape, dtype=torch.int64), ttnn.to_torch(out_indices).to(torch.int64))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_values_do_not_alias_input(shape, dim, device):
+    """The values output is a copy; it must not hand back the input's buffer."""
+    ttnn_input = _early_exit_input(shape, device)
+
+    out_values, _ = ttnn.sort(ttnn_input, dim=dim)
+
+    if math.prod(shape) == 0:
+        pytest.skip("zero-volume tensors have no buffer, so addresses are not comparable")
+    assert out_values.buffer_address() != ttnn_input.buffer_address()
+    assert_equal(ttnn.to_torch(ttnn_input), ttnn.to_torch(out_values))
+
+
+@pytest.mark.parametrize("shape, dim", EARLY_EXIT_CASES)
+def test_sort_early_exit_memory_config_honored(shape, dim, device):
+    """An explicit memory_config applies to both outputs on every early-exit path."""
+    ttnn_input = _early_exit_input(shape, device)
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert out_values.memory_config().buffer_type == ttnn.BufferType.L1
+    assert out_indices.memory_config().buffer_type == ttnn.BufferType.L1
+
+
+def test_sort_scalar_out_of_range_dim_raises(device, expect_error):
+    """Scalar inputs are dim-range checked like every other rank, matching torch."""
+    ttnn_input = _early_exit_input((), device)
+
+    with expect_error(RuntimeError, "out of range"):
+        ttnn.sort(ttnn_input, dim=5)
+
+
+def test_sort_dim_size_1_row_major_out(device):
+    """ROW_MAJOR out= against a TILE input still works on the dim-size-1 exit."""
+    shape = (32, 1)
+    ttnn_input = _early_exit_input(shape, device)
+    values = ttnn.zeros(shape, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    indices = ttnn.zeros(shape, dtype=ttnn.uint16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    out_values, out_indices = ttnn.sort(ttnn_input, dim=-1, out=(values, indices))
+
+    assert list(out_values.shape) == list(shape)
+    assert_equal(ttnn.to_torch(ttnn_input), ttnn.to_torch(out_values))
 
 
 # ---------------------------------------------------------------------------
