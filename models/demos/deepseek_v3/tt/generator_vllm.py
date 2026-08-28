@@ -176,6 +176,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 reset_sampling_state=True,
                 user_slots=sampling_user_slots,
                 prompt_tokens=prompt_history,
+                preserve_unlisted_slots=True,
             )
 
         user_outputs = []

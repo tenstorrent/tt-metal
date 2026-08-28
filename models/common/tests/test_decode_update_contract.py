@@ -19,8 +19,8 @@ def _fake_sampling_generator():
     fake = SimpleNamespace(
         tt_sampling=SimpleNamespace(max_batch_size=4),
         reset_sampling_params=lambda params: calls.append(("params", params)),
-        reset_prompt_tokens=lambda tokens: calls.append(("prompt", tokens)),
-        reset_output_state=lambda tokens: calls.append(("output", tokens)),
+        reset_prompt_tokens=lambda tokens, slots=None: calls.append(("prompt", tokens, slots)),
+        reset_output_state=lambda tokens, slots=None: calls.append(("output", tokens, slots)),
     )
     return fake, calls
 
@@ -37,7 +37,71 @@ def test_sampling_state_can_reset_without_reloading_params():
         output_tokens="output",
     )
 
-    assert calls == [("prompt", "prompt"), ("output", "output")]
+    assert calls == [("prompt", "prompt", None), ("output", "output", None)]
+
+
+def test_sampling_state_reset_can_preserve_unlisted_slots():
+    fake, calls = _fake_sampling_generator()
+
+    SamplingGenerator.apply_decode_state(
+        fake,
+        [object()],
+        reload_sampling_params=False,
+        reset_sampling_state=True,
+        prompt_tokens="prompt",
+        output_tokens=None,
+        sampling_state_slots=[1, 3],
+    )
+
+    assert calls == [("prompt", "prompt", [1, 3]), ("output", None, [1, 3])]
+
+
+def test_output_penalty_reset_masks_only_selected_slots(monkeypatch):
+    from models.common.sampling import tt_penalties
+
+    class FakeTensor:
+        def __init__(self, name):
+            self.name = name
+            self.deallocated = False
+
+        def deallocate(self):
+            self.deallocated = True
+
+    allocated = []
+    multiplies = []
+    penalty_state = SimpleNamespace(
+        _total_batch=4,
+        _shard_dims_gathered=(0, None),
+        _op_kwargs={},
+        output_mask=FakeTensor("mask"),
+        output_counts=FakeTensor("counts"),
+        output_counts_gathered=FakeTensor("gathered"),
+    )
+
+    def allocate(*, host, shard_dims):
+        result = FakeTensor("keep")
+        allocated.append((host.clone(), shard_dims, result))
+        return result
+
+    penalty_state._alloc_int_buffer = allocate
+    monkeypatch.setattr(
+        tt_penalties.ttnn,
+        "mul",
+        lambda value, keep, *, output_tensor, **kwargs: multiplies.append((value, keep, output_tensor))
+        or output_tensor,
+    )
+
+    tt_penalties.TTPenalties.reset_output_tokens(penalty_state, slots=[3, 1])
+
+    assert allocated[0][0].reshape(-1).tolist() == [1, 0, 1, 0]
+    assert allocated[0][1] == (0, None)
+    keep = allocated[0][2]
+    assert [(value.name, mask is keep, output.name) for value, mask, output in multiplies] == [
+        ("mask", True, "mask"),
+        ("counts", True, "counts"),
+        ("gathered", True, "gathered"),
+    ]
+    assert keep.deallocated
 
 
 def test_no_sampling_updates_is_a_true_noop():
@@ -262,6 +326,34 @@ def test_lfm_demo_supplies_every_decode_update_command():
         assert required <= {keyword.arg for keyword in call.keywords}
 
 
+def test_all_known_shared_generator_callers_supply_every_decode_update_command():
+    required = {
+        "reload_inputs",
+        "reload_page_table",
+        "reload_sampling_params",
+        "reset_sampling_state",
+    }
+    expected_calls = {
+        Path("tt-train/sources/examples/grpo_remote_rollout/utils/ttt_generation_worker.py"): 1,
+        Path("models/experimental/ops/quasar/gpt_oss/demo/text_demo.py"): 2,
+        Path("models/experimental/ops/quasar/gpt_oss/tests/accuracy/test_model.py"): 1,
+        Path("models/experimental/ops/quasar/qwen3_vl/demo/demo.py"): 1,
+    }
+
+    for source_path, expected_count in expected_calls.items():
+        tree = ast.parse(source_path.read_text())
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "decode_forward"
+        ]
+        assert len(calls) == expected_count, source_path
+        for call in calls:
+            assert required <= {keyword.arg for keyword in call.keywords}, (source_path, call.lineno)
+
+
 def test_gemma4_override_uses_only_explicit_decode_update_commands():
     source_path = Path("models/demos/gemma4/tt/generator.py")
     tree = ast.parse(source_path.read_text())
@@ -293,6 +385,13 @@ def test_gemma4_override_uses_only_explicit_decode_update_commands():
     assert "_prev_on_device_sampling" not in source
     assert "_tt_vllm_always_refresh_decode_trace_inputs" not in source
     assert "torch.equal" not in source
+
+
+def test_gemma4_pli_explicitly_disables_decode_token_feedback():
+    source = Path("models/demos/gemma4/tt/model.py").read_text()
+
+    assert "_tt_supports_decode_token_feedback = False" in source
+    assert "self._tt_supports_decode_token_feedback = not self._tt_vllm_always_refresh_decode_trace_inputs" in source
 
 
 def test_galaxy_reset_only_formats_seed_slots(monkeypatch):
@@ -384,6 +483,35 @@ def test_galaxy_generator_routes_slot_remap_to_exactly_one_sampling_owner():
     assert host_events == ["decode", "read", "process", ("host-remap", [0])]
     assert device_events == ["decode", ("sample", [0]), "read", "process"]
     assert deferred_events == ["decode"]
+
+
+def test_galaxy_slot_remap_moves_parameter_shadow_with_seed_state():
+    from models.demos.llama3_70b_galaxy.tt.generator import Generator
+
+    seed_remaps = []
+    fake = SimpleNamespace(
+        model=SimpleNamespace(
+            sampling=SimpleNamespace(
+                seed_manager=SimpleNamespace(
+                    max_batch_size=4,
+                    apply_slot_remap=lambda remap: seed_remaps.append(remap),
+                )
+            )
+        ),
+        model_args=SimpleNamespace(max_batch_size=4),
+        _slot_sampling_params={
+            "temperature": [0.1, 0.2, 0.3, 0.4],
+            "top_k": [1, 2, 3, 4],
+        },
+    )
+
+    Generator._apply_sampling_slot_remap(fake, [2, 0, 1, 3])
+
+    assert seed_remaps == [[2, 0, 1, 3]]
+    assert fake._slot_sampling_params == {
+        "temperature": [0.3, 0.1, 0.2, 0.4],
+        "top_k": [3, 1, 2, 4],
+    }
 
 
 def test_unseeded_decode_reset_loads_fresh_device_seed(monkeypatch):

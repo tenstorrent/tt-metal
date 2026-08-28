@@ -308,6 +308,7 @@ def test_deepseek_prefill_sampling_state_uses_nonidentity_stable_slots():
         reset_sampling_state=True,
         user_slots=stable_slots,
         prompt_tokens=stable_history,
+        preserve_unlisted_slots=True,
     )
 
     [(seeds, active_slots)] = generator.sampling_generator.seed_manager.reset_calls
@@ -317,6 +318,8 @@ def test_deepseek_prefill_sampling_state_uses_nonidentity_stable_slots():
     [(_, commands)] = generator.sampling_generator.decode_state_calls
     assert commands["prompt_tokens"][33].tolist() == [10, 11]
     assert commands["prompt_tokens"][0].tolist() == [20, -1]
+    assert commands["sampling_state_slots"] == [33, 0]
+    assert generator.sampling_generator.seed_manager.deactivate_calls == []
 
 
 def test_deepseek_prefill_preserves_live_slots_when_admitting_new_request():
@@ -481,6 +484,7 @@ def test_deepseek_sampling_update_obeys_explicit_commands_without_value_comparis
                 "positions": None,
                 "prompt_tokens": None,
                 "output_tokens": None,
+                "preserve_unlisted_slots": False,
             },
         )
     ]

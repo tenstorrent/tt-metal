@@ -1616,7 +1616,25 @@ class Generator(WarmupForwardMixin):
             return
         seed_manager = sampling_module.seed_manager
         sm_bs = seed_manager.max_batch_size
-        seed_manager.apply_slot_remap(slot_remap[0:sm_bs])
+        shadow_bs = self.model_args.max_batch_size
+        required_size = max(sm_bs, shadow_bs)
+        if len(slot_remap) < required_size:
+            raise ValueError(f"Sampling slot remap has {len(slot_remap)} entries; expected at least {required_size}")
+        seed_remap = [int(slot) for slot in slot_remap[0:sm_bs]]
+        if any(slot < 0 or slot >= sm_bs for slot in seed_remap):
+            raise ValueError(f"Seed slot remap must stay within [0, {sm_bs}), got {seed_remap}")
+        shadow_remap = [int(slot) for slot in slot_remap[0:shadow_bs]]
+        if any(slot < 0 or slot >= shadow_bs for slot in shadow_remap):
+            raise ValueError(f"Sampling slot remap must stay within [0, {shadow_bs}), got {shadow_remap}")
+
+        # Use snapshots because a remap can swap or duplicate sources. These
+        # vectors are the source of truth for later partial-prefill uploads and
+        # must move with the same requests as the seed manager.
+        remapped_params = {
+            name: [values[source] for source in shadow_remap] for name, values in self._slot_sampling_params.items()
+        }
+        seed_manager.apply_slot_remap(seed_remap)
+        self._slot_sampling_params.update(remapped_params)
 
     def sample_decode_on_device(
         self,

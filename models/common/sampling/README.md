@@ -181,10 +181,15 @@ token, position, and page table every step.
 Stable-slot adapters must also preserve unscheduled rows when admitting a
 prefill. DeepSeek starts from its cached full-batch sampling parameters and
 scatters only the incoming requests into their assigned slots; filling every
-other row from an incoming request silently changes live decodes. Reset-only
-sampling commands still need slot-indexed seeds: Galaxy formats/pads the
-request-ordered parameters whenever either `reload_sampling_params` or
-`reset_sampling_state` needs their seed values.
+other row from an incoming request silently changes live decodes. Its partial
+prefill also resets prompt/output penalty history and seed state only for the
+incoming slots. Those slots are not the full live set, so continuing seeds are
+not retired. Reset-only sampling commands still need slot-indexed seeds:
+Galaxy formats/pads the request-ordered parameters whenever either
+`reload_sampling_params` or `reset_sampling_state` needs their seed values.
+When Galaxy condenses slots during host sampling, it remaps its cached
+per-slot parameter vectors with the same snapshot as its seed state so a later
+partial prefill starts from the current layout.
 
 `model_capabilities["supports_async_decode"]` is separate from contract
 versioning. It certifies that a vLLM wrapper supports split async readback and

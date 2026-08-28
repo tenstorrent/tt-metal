@@ -468,6 +468,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         positions: torch.Tensor | list[int] | None = None,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        preserve_unlisted_slots: bool = False,
     ) -> None:
         if enable_mtp and sample_on_device:
             raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
@@ -528,6 +529,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     positions=positions,
                     prompt_tokens=prompt_tokens,
                     output_tokens=output_tokens,
+                    preserve_unlisted_slots=preserve_unlisted_slots,
                 )
 
         if reload_sampling_params or not sample_on_device:
@@ -974,6 +976,7 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         positions: torch.Tensor | list[int] | None = None,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        preserve_unlisted_slots: bool = False,
     ) -> None:
         sampling_dp = self.sampling_generator.tt_sampling._sampling_dp
         sampling_param_chunks = chunk_sampling_params(sampling_params, sampling_dp)
@@ -994,21 +997,27 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             )
         )
         output_tokens_device = self._sampling_device_history(output_tokens) if output_tokens is not None else None
+        seed_manager = self.sampling_generator.seed_manager
+        active_seed_slots = self._sampling_device_slots(user_slots)
+        if active_seed_slots is None:
+            if preserve_unlisted_slots:
+                raise ValueError("Partial DeepSeek sampling updates require explicit user_slots")
+            active_seed_slots = list(range(seed_manager.max_batch_size))
         self.sampling_generator.apply_decode_state(
             sampling_param_chunks,
             reload_sampling_params=reload_sampling_params,
             reset_sampling_state=reset_sampling_state,
             prompt_tokens=prompt_tokens_device,
             output_tokens=output_tokens_device,
+            sampling_state_slots=active_seed_slots if preserve_unlisted_slots else None,
         )
-        seed_manager = self.sampling_generator.seed_manager
-        active_seed_slots = self._sampling_device_slots(user_slots)
-        if active_seed_slots is None:
-            active_seed_slots = list(range(seed_manager.max_batch_size))
         # A request finishing at the batch tail produces no non-identity
         # remap, so retire seed/salt state that no longer belongs to a live
-        # row before assigning salts to newly admitted requests.
-        seed_manager.deactivate_slots_except(active_seed_slots)
+        # row before assigning salts to newly admitted requests. A prefill
+        # only lists new requests, not the full live set, so it must not retire
+        # any unlisted slots.
+        if not preserve_unlisted_slots:
+            seed_manager.deactivate_slots_except(active_seed_slots)
         if reset_sampling_state:
             # This must be unconditional: when both requested and cached seeds
             # are None, a conditional reset would skip the fresh device upload.

@@ -178,10 +178,10 @@ class SamplingGenerator:
             return
         self.tt_penalties.reset_prompt_tokens(prompt_tokens, slots=slots)
 
-    def reset_output_state(self, tokens=None):
+    def reset_output_state(self, tokens=None, slots: list[int] | None = None):
         if not self._penalties_active:
             return
-        self.tt_penalties.reset_output_tokens(tokens)
+        self.tt_penalties.reset_output_tokens(tokens, slots=slots)
 
     # ---------------------------------------------------------------------
     # Prefill / decode state helpers
@@ -216,6 +216,7 @@ class SamplingGenerator:
         reset_sampling_state: bool,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        sampling_state_slots: list[int] | None = None,
     ):
         """Apply the explicitly requested parts of decode sampling state.
 
@@ -226,6 +227,8 @@ class SamplingGenerator:
             reset_sampling_state: Rebuild prompt/output penalty state.
             prompt_tokens: Prompt tokens for penalty tracking.
             output_tokens: Output tokens for penalty tracking.
+            sampling_state_slots: If provided, reset penalty history only for
+                these device slots and preserve every other slot.
 
         Does NOT call ``seed_manager.get_new_values()`` — callers manage seed
         advancement separately since generators call it at different points.
@@ -255,8 +258,8 @@ class SamplingGenerator:
                 self.reset_sampling_params(formatted_params)
 
         if reset_sampling_state:
-            self.reset_prompt_tokens(prompt_tokens)
-            self.reset_output_state(output_tokens)
+            self.reset_prompt_tokens(prompt_tokens, slots=sampling_state_slots)
+            self.reset_output_state(output_tokens, slots=sampling_state_slots)
 
     # ---------------------------------------------------------------------
     # Sampling helpers
