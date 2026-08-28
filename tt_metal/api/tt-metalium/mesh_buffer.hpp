@@ -207,7 +207,9 @@ class AnyBuffer {
 public:
     AnyBuffer() = default;
     static AnyBuffer create(
-        const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
+        const tt::tt_metal::ShardedBufferConfig& config,
+        std::optional<uint64_t> address = std::nullopt,
+        std::optional<bool> bottom_up = std::nullopt);
     static AnyBuffer create(
         const tt::tt_metal::InterleavedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
