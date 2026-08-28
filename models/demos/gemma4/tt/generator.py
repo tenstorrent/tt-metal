@@ -350,9 +350,15 @@ class ChunkedPrefillPageTableGuardMixin:
                 m.update_persistent_per_layer_page_tables(sliced)
 
     def _clear_sequential_batch_page_tables(self) -> None:
+        """Put the full-batch per-layer tables back after sequential prefill."""
         for m in self.model:
-            if hasattr(m, "_sequential_batch_page_tables"):
-                del m._sequential_batch_page_tables
+            batch_host = getattr(m, "_sequential_batch_page_tables", None)
+            if batch_host is None:
+                continue
+            m._active_page_tables_per_layer = batch_host
+            if hasattr(m, "update_persistent_per_layer_page_tables"):
+                m.update_persistent_per_layer_page_tables(batch_host)
+            del m._sequential_batch_page_tables
 
     def _effective_paged_block_size(self, kv_cache):
         """Effective block_size the paged ops address this model's K/V cache with.
@@ -1365,6 +1371,10 @@ class ChunkedPrefillPageTableGuardMixin:
         OOB ``slot_remap`` fall back instead of ``IndexError``.
         """
         del kwargs  # Generator accepts extras; Gemma4 path ignores them.
+        # Sequential per-user prefill narrows the per-layer tables to one row and
+        # not every prefill entry point unwinds it; decode always needs the full
+        # batch back or paged_update_cache TT_FATALs (1 row vs B users).
+        self._clear_sequential_batch_page_tables()
         mode_switched = False
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
