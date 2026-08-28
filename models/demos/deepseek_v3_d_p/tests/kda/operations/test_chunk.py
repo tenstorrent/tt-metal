@@ -25,7 +25,7 @@ def test_chunk_scan_strategy_policy(device: ttnn.Device) -> None:
     cases = (
         (159, None, ops._DirectScan),
         (160, None, ops._LocalGroupedScan),
-        (161, None, ops._DirectScan),
+        (161, None, ops._LocalGroupedScan),
         (8, 0, ops._DistributedGroupedScan),
         (9, 0, ops._DistributedGroupedScan),
     )
@@ -280,7 +280,7 @@ def test_grouped_summary_preserves_weak_decay(device: ttnn.Device) -> None:
 
 
 def test_chunk_recurrence_determinism(device: ttnn.Device) -> None:
-    sequence, heads, dim = 64, 2, 32
+    sequence, heads, dim = 256, 2, 32
     generator = torch.Generator().manual_seed(1401)
     shape = (1, sequence, heads)
     flat_shape = (1, sequence, heads * dim)
