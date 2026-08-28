@@ -12,21 +12,21 @@
     "repetitions": 10
   },
   "provenance": {
-    "measured_at_commit": "09419e3dd635028a2ab7ad3319216f61fe223d63",
-    "measured_at_utc": "2026-08-06",
-    "method": "first of five warm synchronized trace replay averages, 10 replays per sample"
+    "measured_at_commit": "225796c130038d0f9f745a504e109bf495dc8566",
+    "measured_at_utc": "2026-08-28",
+    "method": "median first sample across five independent sessions; five warm synchronized trace replay averages per session, 10 replays per sample"
   },
   "targets": {
     "SP1xTP8": {
-      "reference_ms": 9.784,
+      "reference_ms": 9.659,
       "max_regression_pct": 1.0
     },
     "SP2xTP4": {
-      "reference_ms": 9.732,
+      "reference_ms": 9.601,
       "max_regression_pct": 1.0
     },
     "SP4xTP2": {
-      "reference_ms": 10.190,
+      "reference_ms": 10.043,
       "max_regression_pct": 1.0
     }
   }
