@@ -812,6 +812,7 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
     // identical lengths), so it is logged.
     std::set<int> visited;
     std::queue<IDevice*> q;
+    eth_sync_root_chip_ = static_cast<uint32_t>(devices.front()->id());
     visited.insert(devices.front()->id());
     q.push(devices.front());
     const auto t_start = std::chrono::steady_clock::now();
@@ -880,6 +881,9 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
                     eth_sync::status_name(r.receiver_status),
                     ls.receiver_chip);
             }
+            if (ls.valid) {
+                eth_sync_parent_edge_[ls.receiver_chip] = link_syncs_.size();
+            }
             link_syncs_.push_back(ls);
         }
     }
@@ -893,6 +897,45 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
         ms,
         cfg.n_samples,
         cfg.gap_us);
+}
+
+// Walk chip -> root collecting edges, then apply them forward from the root. Each edge says: at sender
+// clock y the receiver reads (ref + offset) + rate * (y - ref); chaining those IS the composition.
+bool PerfDebugProfiler::eth_sync_anchor_for(
+    uint32_t chip, uint64_t root_clock, uint64_t& chip_clock, double& rate_vs_root) const {
+    if (chip == eth_sync_root_chip_) {
+        chip_clock = root_clock;
+        rate_vs_root = 1.0;
+        return true;
+    }
+    std::vector<size_t> path;
+    uint32_t cur = chip;
+    while (cur != eth_sync_root_chip_) {
+        const auto it = eth_sync_parent_edge_.find(cur);
+        if (it == eth_sync_parent_edge_.end()) {
+            return false;  // no measured route to the root
+        }
+        const auto& e = link_syncs_[it->second];
+        if (!e.valid) {
+            return false;
+        }
+        path.push_back(it->second);
+        cur = e.sender_chip;
+        if (path.size() > link_syncs_.size()) {
+            return false;  // cycle guard; a tree should make this unreachable
+        }
+    }
+    double y = static_cast<double>(root_clock);
+    double rate = 1.0;
+    for (auto rit = path.rbegin(); rit != path.rend(); ++rit) {
+        const auto& e = link_syncs_[*rit];
+        const double ref = static_cast<double>(e.ref_mid);
+        y = (ref + static_cast<double>(e.offset)) + e.rate * (y - ref);
+        rate *= e.rate;
+    }
+    chip_clock = y <= 0.0 ? 0u : static_cast<uint64_t>(y);
+    rate_vs_root = rate;
+    return true;
 }
 
 void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -933,17 +976,51 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         if (freq <= 0.0) {
             freq = 1.0;
         }
+        // ONE HOST ANCHOR FOR THE WHOLE MESH. Only the root fits the host; every other device is placed
+        // on the root's timeline through the ethernet-measured transform. Before this each device fitted
+        // the host independently, so any two devices were separated by the SUM of two independent fits --
+        // the dominant term in cross-device alignment. The eth path replaces it with one link measurement
+        // whose residual is a couple of cycles.
+        uint64_t derived_clock = 0;
+        double derived_rate = 1.0;
+        bool derived = false;
+        if (ctx.chip_id != eth_sync_root_chip_ && root_sync_valid_ &&
+            eth_sync_anchor_for(ctx.chip_id, root_dev_at_anchor_, derived_clock, derived_rate)) {
+            ctx.clock_synced = true;
+            ctx.freq_ghz = root_freq_ghz_ * derived_rate;
+            tracy_->AddDevice(
+                ctx.chip_id, root_host_anchor_, static_cast<double>(derived_clock), ctx.freq_ghz);
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] Device {} anchored via eth to root {}: device clock {} at the root's "
+                "host anchor, {:.6f} GHz ({:+.2f} ppm vs root)",
+                ctx.chip_id,
+                eth_sync_root_chip_,
+                derived_clock,
+                ctx.freq_ghz,
+                (derived_rate - 1.0) * 1e6);
+            derived = true;
+        }
+
         PerfDebugSync sync;
-        if (!ctx.core_virt.empty()) {
+        if (!derived && !ctx.core_virt.empty()) {
             const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
             // LONG BASELINE, deliberately: 100 samples x 500 us spans ~50 ms instead of ~360 us, cutting the
             // fitted-frequency error by the baseline ratio (~140x). This is the ONE frequency every context on
             // this chip will use (see below), so it is worth 50 ms of a 9-12 s device open to measure it well.
             sync = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/500);
         }
-        if (sync.valid) {
+        if (derived) {
+            // already anchored from the root above
+        } else if (sync.valid) {
             ctx.clock_synced = true;
             ctx.freq_ghz = sync.frequency;
+            if (ctx.chip_id == eth_sync_root_chip_) {
+                root_sync_valid_ = true;
+                root_host_anchor_ = sync.host_anchor;
+                root_dev_at_anchor_ = sync.device_at_anchor;
+                root_freq_ghz_ = sync.frequency;
+            }
             tracy_->AddDevice(
                 ctx.chip_id, sync.host_anchor, static_cast<double>(sync.device_at_anchor), sync.frequency);
             log_info(
@@ -954,7 +1031,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                 sync.frequency,
                 freq,
                 sync.device_at_anchor);
-        } else {
+        } else if (!derived) {
             log_warning(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} clock sync FAILED; falling back to first-marker anchoring "
@@ -975,7 +1052,11 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         // MEASURED per core. Reset discipline cannot fix it: device open (9-12 s) exceeds the workload window
         // (~753 ms). BOARD-DEPENDENT -- on bh-26 it is +0.003 ms, so do not judge this on a part where it no-ops.
         // Prerequisite verified separately (--clkprobe): a DRAM tile DOES answer RISCV_DEBUG_REG_WALL_CLOCK.
-        if (sync.valid && tracy_ != nullptr) {
+        // The WORKER-domain anchor and slope this device is rendered with, whichever way it was obtained:
+        // its own host fit, or the root's fit carried over the ethernet links.
+        const double chip_freq_ghz = ctx.freq_ghz;
+        const uint64_t chip_worker_anchor = derived ? derived_clock : sync.device_at_anchor;
+        if ((sync.valid || derived) && tracy_ != nullptr) {
             for (uint32_t d = 0; d < ctx.n_drisc; d++) {
                 // Keyed on NOC0, like every other context lookup; drisc_virtual is the VIRTUAL space, and the
                 // register read needs the virtual pair. Absent mapping means self-profiling is off, so this
@@ -1014,18 +1095,18 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                     nit->second.second,
                     ds.host_anchor,
                     static_cast<double>(ds.device_at_anchor),
-                    sync.frequency);
+                    chip_freq_ghz);
                 // Log the OFFSET, not just the anchor: it is the board-dependence tell. Microseconds means the
                 // part shares an origin and this changed nothing; minutes means it just fixed the capture.
                 // Divided by the SHARED slope -- the one this row is actually rendered with, so the reported
                 // offset cannot disagree with the mapping in force.
                 const double off_ms =
-                    (static_cast<double>(ds.device_at_anchor) - static_cast<double>(sync.device_at_anchor)) /
-                    (sync.frequency > 0.0 ? sync.frequency : 1.0) / 1e6;
+                    (static_cast<double>(ds.device_at_anchor) - static_cast<double>(chip_worker_anchor)) /
+                    (chip_freq_ghz > 0.0 ? chip_freq_ghz : 1.0) / 1e6;
                 // The core's own fit is REPORTED but never applied: its spread is the diagnostic that identified
                 // this error term (measured -79.6 to +71.7 ppm across 9 runs on 2 parts).
                 const double fit_ppm =
-                    sync.frequency > 0.0 ? (ds.frequency - sync.frequency) / sync.frequency * 1e6 : 0.0;
+                    chip_freq_ghz > 0.0 ? (ds.frequency - chip_freq_ghz) / chip_freq_ghz * 1e6 : 0.0;
                 log_info(
                     tt::LogMetal,
                     "[perf-debug profiler] Device {} DRISC {} NOC0 ({},{}) clock sync: frequency={:.6f} GHz "
@@ -1035,7 +1116,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
                     d,
                     nit->second.first,
                     nit->second.second,
-                    sync.frequency,
+                    chip_freq_ghz,
                     ds.frequency,
                     fit_ppm,
                     ds.device_at_anchor,

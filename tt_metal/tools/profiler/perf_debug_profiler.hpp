@@ -199,6 +199,27 @@ private:
     };
     std::vector<LinkSync> link_syncs_;
     void sync_devices_over_eth(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+
+    // The spanning tree the links were measured over: chip -> index into link_syncs_ of the edge reaching
+    // it from its parent. The root has no entry.
+    std::unordered_map<uint32_t, size_t> eth_sync_parent_edge_;
+    uint32_t eth_sync_root_chip_ = 0;
+
+    // The ROOT's host<->device fit, kept so every other device can hang off it instead of measuring its
+    // own. Plain fields rather than the PerfDebugSync struct, which is .cpp-local.
+    bool root_sync_valid_ = false;
+    int64_t root_host_anchor_ = 0;
+    uint64_t root_dev_at_anchor_ = 0;
+    double root_freq_ghz_ = 0.0;
+
+    // Map a ROOT-clock instant onto `chip`'s own clock by walking the tree, and report how much faster
+    // that chip ticks than the root. False if `chip` has no measured route to the root, in which case the
+    // caller falls back to giving that device its own host sync.
+    //
+    // Composed in DIFFERENCES from each edge's reference instant, never as an absolute intercept: the
+    // clocks sit near 1e13 cycles, where a double resolves only ~0.001 cycle, so an intercept form would
+    // spend its precision representing the epoch rather than the answer.
+    bool eth_sync_anchor_for(uint32_t chip, uint64_t root_clock, uint64_t& chip_clock, double& rate_vs_root) const;
     // Read the drainer's LIVE state (done word, heartbeat, phase) mid-run and log it. Distinguishes
     // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
     // states the end-of-run results block cannot tell apart because it is only published on exit.
