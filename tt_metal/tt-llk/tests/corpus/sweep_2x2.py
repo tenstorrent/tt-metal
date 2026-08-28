@@ -955,6 +955,34 @@ KNOBS = {
     # at plain ON-36 (fix cc1plus byte-inert knobs-off).
     "crossrow-2datum": "-mtt-tensix-optimize-hoisted-prgm-reuse "
     "-mtt-tensix-optimize-crossrow-pairing-stall-words",
+    # II (crossrow-shared-reload, lane II 2026-08-28): lane IC's named
+    # successor — the 4 duplicated in-loop coefficient loadi words per
+    # 2-datum tanh pair (both halves materialize C3 and C1 through the
+    # SAME reload register in identical two-word definition groups;
+    # hand shares ONE reload register sequentially across the rows).
+    # -mtt-tensix-optimize-crossrow-shared-reload Init(0) rides inside
+    # the cross-row pairing transaction: a NAIVE dedupe is wrong code
+    # BEFORE any scheduling (the copy's surviving consumer's nearest
+    # preceding definition becomes the first half's NEXT-epoch loadi —
+    # tanh: row B's C3-mad would read row A's C1 — because
+    # ls_dependence derives value flow from position alone), so the
+    # sound form RE-SEQUENCES the pairing's original order epoch by
+    # epoch after deleting the copy half's definition groups: position
+    # becomes value-correct again and the established name-based
+    # vocabulary derives exactly the sharing constraints (RAW def_e ->
+    # consumers_e, WAR consumers_e -> def_e+1).  Byte-identity of the
+    # two halves' groups is RE-VERIFIED (rtx_equal_p; refusals
+    # copy-shape/web-mutated), the shared register must be dead in/out
+    # with every consumer after its group's last member, reordered
+    # cross-half pairs must interact through NO register but the
+    # shared one (crossrow-interference), CC atoms and seeded rows
+    # refuse, the deduped candidate must not exceed the duplicated
+    # candidate's modeled II (ii-regression), and an independent
+    # value-oracle belt re-walks the committed order
+    # (crossrow-pairing-shared-reload-final-order).  Composed with
+    # crossrow-2datum (+ stochrnd-store-fold) the tanh paired record
+    # drops 30 -> 26 words; measured note follows the silicon legs.
+    "crossrow-shared-reload": "-mtt-tensix-optimize-crossrow-shared-reload",
     # ID (loop-prgm-reclaim, lane ID 2026-08-27): the trigonometry
     # loadi-gap attack (HW row A7; GV's named PRGM/LREG capacity
     # ceiling).  -mtt-tensix-optimize-loop-prgm-reclaim Init(0) offers
@@ -1414,6 +1442,12 @@ KNOB_MODES = {
     # ceremony.
     "crossrow-pairing-seed": "on-plus",
     "crossrow-2datum": "on-plus",
+    # II crossrow-shared-reload: default-off Init(0) booking knob; a
+    # dedupe riding only inside an admitted cross-row pairing (its
+    # booking arm composes with crossrow-2datum on the tanh rows).
+    # on-plus while a booking knob; promotion requires an R9 witness
+    # and ON-vs-ON attribution ceremony.
+    "crossrow-shared-reload": "on-plus",
     "loop-prgm-reclaim": "on-plus",
     # IF dst-autoincr-load-carrier: default-off Init(0) booking knob;
     # an exact-counting unlock for the dst-autoincr shadow/issue-word
