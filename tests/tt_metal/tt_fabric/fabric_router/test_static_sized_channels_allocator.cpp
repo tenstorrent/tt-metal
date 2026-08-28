@@ -55,8 +55,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
 }
 
 TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) {
-    // ChannelBufferPointer computes 2 * NUM_BUFFERS in a uint8_t, so the granted depth must
-    // stay bounded no matter how much buffering space is available.
+    // Worker injection depth stays capped at 127 no matter how much buffering space is available.
     constexpr size_t channel_buffer_size = 14432;
     constexpr size_t available_space = channel_buffer_size * 10000;
     constexpr std::array<size_t, builder_config::MAX_NUM_VCS> sender_channels = {4, 3, 0};

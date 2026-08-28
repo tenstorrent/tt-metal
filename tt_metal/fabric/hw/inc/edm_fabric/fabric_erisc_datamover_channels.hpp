@@ -43,21 +43,15 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
-// Slot addresses are tabulated so that a lookup is a shift-indexed load off a base register that is
-// already live, rather than a multiply. The table lives in the router's stack frame, which Blackhole
-// erisc0 in 2-erisc mode bounds via -Werror=stack-usage, so only the first MAX_TABULATED_SLOTS
-// entries are kept and deeper slots fall back to arithmetic off slot 0.
-//
-// Sizing this at 16 leaves every channel fully tabulated on Wormhole, where the allocator hands out
-// at most 11 slots outside of the worker injection channel. Those channels keep the plain lookup
-// with no residual test, because the bound and the slot count are both compile-time constants.
+// Upper bound on how many slot addresses a channel tabulates. The table is a channel member and the
+// channels are locals of the router kernel, so this caps their contribution to its stack frame.
 constexpr uint8_t MAX_TABULATED_SLOTS = 16;
 
 template <uint8_t NUM_BUFFERS>
 inline constexpr uint8_t tabulated_slot_count = NUM_BUFFERS < MAX_TABULATED_SLOTS ? NUM_BUFFERS : MAX_TABULATED_SLOTS;
 
-// Slot stride, carried only by channels deep enough to need the fallback. Empty otherwise, so
-// fully tabulated channels keep their original layout.
+// Slot stride, stored only by channels deeper than the table. Empty otherwise, so that with
+// [[no_unique_address]] fully tabulated channels keep their original layout.
 template <bool Needed>
 struct SlotStride {
     FORCE_INLINE void set(size_t) {}
@@ -94,7 +88,7 @@ public:
                 }
             }
         } else {
-            // Past the table there is no address to read back, so walk the slots instead.
+            // Slots past the table have no stored address, so walk a cursor instead.
             size_t slot_addr = channel_base_address;
             for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
                 if (i < TABULATED_SLOTS) {
@@ -230,7 +224,7 @@ public:
                 }
             }
         } else {
-            // Past the table there is no address to read back, so walk the slots instead.
+            // Slots past the table have no stored address, so walk a cursor instead.
             size_t slot_addr = channel_base_address;
             for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
                 if (i < TABULATED_SLOTS) {
@@ -292,7 +286,7 @@ public:
 private:
     static constexpr uint8_t TABULATED_SLOTS = tabulated_slot_count<NUM_BUFFERS>;
 
-    // The stride is already carried for get_max_eth_payload_size, so deep slots need no extra state.
+    // Reuses max_eth_payload_size_in_bytes as the stride, so needs no SlotStride member.
     [[nodiscard]] FORCE_INLINE size_t address_of_slot(uint8_t slot) const {
         if constexpr (NUM_BUFFERS <= MAX_TABULATED_SLOTS) {
             return this->buffer_addresses[slot];
