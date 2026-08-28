@@ -371,7 +371,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t chunk_local_tiles,
     uint32_t kv_cache_num_layers,
     uint32_t kv_cache_layer_idx,
-    uint32_t window_radius = 0) {
+    uint32_t window_radius) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
