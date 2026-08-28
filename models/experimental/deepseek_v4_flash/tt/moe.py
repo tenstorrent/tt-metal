@@ -3,7 +3,7 @@ from typing import NamedTuple, Optional
 import ttnn
 import torch
 
-from .common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, _region
+from .common import DeepSeekV4Module, _profile, _region
 from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
 from .layers import Linear, LinearDecode
 from .l1_weights import packed_weight_spec
@@ -94,6 +94,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         # is ``[I, H]`` (row-parallel: shard K).
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None
         down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None
+        tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
         if packed_weights is not None:
             tensor, layout, slot = packed_weights
 
@@ -122,21 +123,21 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             self.gate_proj = Linear(
                 weights[f"{prefix}.gate_proj.weight"],
                 device,
-                cache.file(f"{prefix}.gate_proj"),
+                cache.file(f"{prefix}.gate_proj{tp_tag}"),
                 dtype=weight_dtype,
                 mesh_mapper=gate_up_mapper,
             )
             self.up_proj = Linear(
                 weights[f"{prefix}.up_proj.weight"],
                 device,
-                cache.file(f"{prefix}.up_proj"),
+                cache.file(f"{prefix}.up_proj{tp_tag}"),
                 dtype=weight_dtype,
                 mesh_mapper=gate_up_mapper,
             )
             self.down_proj = Linear(
                 weights[f"{prefix}.down_proj.weight"],
                 device,
-                cache.file(f"{prefix}.down_proj"),
+                cache.file(f"{prefix}.down_proj{tp_tag}"),
                 dtype=weight_dtype,
                 mesh_mapper=down_mapper,
             )
@@ -149,7 +150,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         self.gate_proj = LinearDecode(
             weights[f"{prefix}.gate_proj.weight"],
             device,
-            cache.file(f"{prefix}.gate_proj"),
+            cache.file(f"{prefix}.gate_proj{tp_tag}"),
             dtype=weight_dtype,
             **check_decode_layout("shared_gate_proj", hidden, inter),
             global_cb=prefetch_buffers["shared_gate_proj"],
@@ -158,7 +159,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         self.up_proj = LinearDecode(
             weights[f"{prefix}.up_proj.weight"],
             device,
-            cache.file(f"{prefix}.up_proj"),
+            cache.file(f"{prefix}.up_proj{tp_tag}"),
             dtype=weight_dtype,
             **check_decode_layout("shared_up_proj", hidden, inter),
             global_cb=prefetch_buffers["shared_up_proj"],
@@ -167,7 +168,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         self.down_proj = LinearDecode(
             weights[f"{prefix}.down_proj.weight"],
             device,
-            cache.file(f"{prefix}.down_proj"),
+            cache.file(f"{prefix}.down_proj{tp_tag}"),
             dtype=weight_dtype,
             **check_decode_layout("shared_down_proj", inter, hidden),
             global_cb=prefetch_buffers["shared_down_proj"],
@@ -350,6 +351,7 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
+            mesh_mapper=(ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None),
         )
         return SparseRouting(scores=scores, indices=self._select(ids_tt, t))
 
@@ -613,9 +615,11 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             # [H, 2I] / [I, H] (memoized so each is materialized at most once).
             if self.tp_size > 1:
                 gu_il = _materialize(
-                    (lambda gw=gate_up_w: _interleave_gate_up_tp(gw, self.tp_size, swiglu_cols))
-                    if gate_up_w is not None
-                    else (lambda: None),
+                    (
+                        (lambda gw=gate_up_w: _interleave_gate_up_tp(gw, self.tp_size, swiglu_cols))
+                        if gate_up_w is not None
+                        else (lambda: None)
+                    ),
                     cache.file(gu_f_name),
                     dtype,
                 )
@@ -665,7 +669,6 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         """
         indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
         scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
-        x_tok = ttnn.tilize(x_tok, tile=SINGLE_USER_TILE)
         out = ttnn.experimental.deepseek.moe.fused_experts(
             x_tok,
             routing_indices=indices,
@@ -680,7 +683,6 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             routing_eps=self.routing_eps,
             experts_block_size=self.experts_block_size,
         )  # [1, 1, H]
-        out = ttnn.tilize(out, tile=FULL_TILE)
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
     def _token_routing(self, routing: SparseRouting, i: int) -> SparseRouting:

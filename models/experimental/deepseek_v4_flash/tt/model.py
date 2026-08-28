@@ -218,6 +218,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         use_prefetcher: Optional[bool] = None,
         num_prefetch_pages: Optional[int] = None,
         system_config: Optional[SystemConfig] = None,
+        tp_size: int = 1,
     ):
         """Build the V4-Flash model off the checkpoint.
 
@@ -241,6 +242,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
         weight on it (see :func:`make_decode_prefetch_buffers`), so the cost is 288 KB of L1 per
         receiver core for the whole model rather than per layer.
 
+        ``tp_size`` groups adjacent chips into ``1 x tp_size`` pipeline stages and
+        forwards it to attention and MoE. Their outputs are replicated, so every
+        rank-to-rank pipeline socket carries the corresponding copy to the next stage.
+        TP is incompatible with packed L1 weights; callers should also disable the
+        prefetcher to select the latency-tuned attention path.
+
         ``system_config`` is the per-machine tuning profile (see
         :mod:`.system_config`); it defaults to the one matching ``full_device``'s device
         count, and supplies every hardware knob left unset here -- pipeline group size,
@@ -252,6 +259,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         self.config = config
         self.loader = loader
+        self.device = full_device
+        if tp_size < 1:
+            raise ValueError(f"tp_size must be >= 1, got {tp_size}")
+        if full_device.get_num_devices() % tp_size:
+            raise ValueError(
+                f"mesh device count {full_device.get_num_devices()} must be divisible by tp_size {tp_size}"
+            )
+        self.tp_size = tp_size
         if system_config is None:
             system_config = load_system_config(mesh_device=full_device).log()
         self.system_config = system_config
@@ -262,7 +277,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if use_prefetcher is None:
             use_prefetcher = system_config.prefetcher.resolve_enabled(full_device)
         self.use_prefetcher = use_prefetcher
-        self.use_packed_l1_weights = system_config.decode.resolve_packed_l1_weights(use_prefetcher)
+        self.use_packed_l1_weights = system_config.decode.resolve_packed_l1_weights(use_prefetcher) and tp_size == 1
         if self.use_packed_l1_weights and weight_dtype != ttnn.bfloat4_b:
             raise ValueError("packed L1 decoder weights require weight_dtype=ttnn.bfloat4_b")
         if num_prefetch_pages is None:
@@ -282,7 +297,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         self.use_submeshes = use_submeshes
         self.mesh_devices = full_device.get_num_devices()
-        self.num_submeshes = system_config.pipeline.resolve_num_devices(self.mesh_devices)
+        pipeline_devices = system_config.pipeline.resolve_num_devices(self.mesh_devices)
+        if pipeline_devices % tp_size:
+            raise ValueError(f"pipeline uses {pipeline_devices} devices, which is not divisible by tp_size {tp_size}")
+        self.pipeline_devices = pipeline_devices
+        self.num_submeshes = pipeline_devices // tp_size
 
         # Layer -> submesh placement is set by the *pipeline group size* (PGS, see
         # :func:`plan_layer_placement`): the devices are cut into groups of PGS
@@ -315,16 +334,24 @@ class DeepSeekV4Model(DeepSeekV4Module):
         )
 
         if use_submeshes:
-            idle = self.mesh_devices - self.num_submeshes
+            idle = self.mesh_devices - self.pipeline_devices
             logger.info(
-                f"Using submeshes: {self.num_submeshes} of {self.mesh_devices}"
+                f"Using submeshes: {self.num_submeshes} x TP{tp_size} over {self.pipeline_devices} of "
+                f"{self.mesh_devices} chips"
                 f"{f' ({idle} left idle by pipeline.max_devices)' if idle else ''} (pipeline group size "
                 f"{pipeline_group_size or self.num_submeshes}, {self.pipeline_stages} populated)"
             )
-            full_device.reshape(ttnn.MeshShape(1, self.mesh_devices))
             self.submeshes = []
-            for i in range(self.num_submeshes):
-                self.submeshes.append(full_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, i)))
+            if tp_size == 1:
+                full_device.reshape(ttnn.MeshShape(1, self.mesh_devices))
+                for i in range(self.num_submeshes):
+                    self.submeshes.append(full_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, i)))
+            else:
+                full_device.reshape(ttnn.MeshShape(self.mesh_devices // tp_size, tp_size))
+                for i in range(self.num_submeshes):
+                    self.submeshes.append(
+                        full_device.create_submesh(ttnn.MeshShape(1, tp_size), ttnn.MeshCoordinate(i, 0))
+                    )
             self.first_device = self.submeshes[0]
             self.last_device = self.submeshes[-1]
 
@@ -426,6 +453,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 current_device,
                 dtype=weight_dtype,
                 cache=layer_cache.sub("mlp"),
+                tp_size=tp_size,
             )
             self.layers.append(
                 DeepSeekV4DecoderLayer(
@@ -440,6 +468,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     use_prefetcher=self.use_prefetcher,
                     prefetch_buffers=self._prefetch_buffers_for(current_device, weight_dtype, num_prefetch_pages),
                     packed_weights=packed_entry,
+                    tp_size=tp_size,
                 )
             )
             _profile(current_device)
@@ -1115,7 +1144,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
         _profile(device)
 
-        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.tp_size > 1 else None,
+        )
 
     def _rope_rows_decode(
         self, rope: dict, pos: int, layer_type: str, compress_rate: Optional[int], cache: dict, device: ttnn.MeshDevice
@@ -1179,7 +1214,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ascending positions, so the cache holds positions ``0 .. pos - 1``."""
         ids = torch.tensor([[token_id]], dtype=torch.long)
         ids_tt = ttnn.from_torch(
-            ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.first_device
+            ids.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.first_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.first_device) if self.tp_size > 1 else None,
         )
         with _region("EMBED"):
             inputs_embeds = self.embed_tokens(ids_tt)  # [B, 1, D]
@@ -1830,6 +1869,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 # page (which the host may well have done already).
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
+                if self.tp_size > 1:
+                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1)
             elif recv:
                 # Receive the residual streams + fused packet from the submesh holding
                 # the previous layer into the persistent buffers. Captured inside the

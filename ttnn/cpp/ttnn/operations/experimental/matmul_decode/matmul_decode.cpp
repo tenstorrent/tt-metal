@@ -17,7 +17,8 @@ Tensor matmul_decode(
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t global_cb_k_blocks,
     const std::optional<PackedWeightSpec>& packed_weight,
-    bool all_gather) {
+    bool all_gather,
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -27,7 +28,8 @@ Tensor matmul_decode(
         global_cb,
         global_cb_k_blocks,
         packed_weight,
-        all_gather);
+        all_gather,
+        mesh_coords);
 }
 
 }  // namespace ttnn::experimental

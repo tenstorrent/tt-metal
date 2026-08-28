@@ -5,9 +5,11 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/experimental/matmul_decode/packed_weight_spec.hpp"
 #include <tt-metalium/global_circular_buffer.hpp>
 
@@ -39,6 +41,7 @@ Tensor matmul_decode(
     const std::optional<tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb = std::nullopt,
     uint32_t global_cb_k_blocks = 1,
     const std::optional<PackedWeightSpec>& packed_weight = std::nullopt,
-    bool all_gather = false);
+    bool all_gather = false,
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
 
 }  // namespace ttnn::experimental

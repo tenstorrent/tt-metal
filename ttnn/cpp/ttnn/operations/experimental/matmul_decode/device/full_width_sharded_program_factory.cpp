@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <algorithm>
 #include <array>
 #include <set>
 #include <vector>
@@ -48,6 +49,14 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    if (operation_attributes.mesh_coords.has_value() &&
+        (!mesh_dispatch_coordinate.has_value() ||
+         std::find(
+             operation_attributes.mesh_coords->begin(),
+             operation_attributes.mesh_coords->end(),
+             *mesh_dispatch_coordinate) == operation_attributes.mesh_coords->end())) {
+        return {};
+    }
     // Ring gather covers the L1-resident weight paths (plain and packed_weight) whenever the
     // source grid and the compute grid are disjoint. Two cases still route to the two-hub
     // gather:

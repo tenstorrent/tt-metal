@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/matmul_decode/matmul_decode.hpp"
@@ -52,7 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -120,6 +121,11 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 the same program. Every device then holds `[..., M, N_local * ring_size]`,
                 where the ring is the full mesh of `input_tensor_a`. Requires a multi-device
                 mesh. Not supported with `global_cb` or the batched factory. Defaults to False.
+            mesh_coords (list[ttnn.MeshCoordinate], optional): dispatch the matmul only on
+                these mesh coordinates while retaining output storage on the complete mesh.
+                Intended for an explicit point-to-point broadcast of the selected rank's
+                result. Not supported with `global_cb`, `all_gather`, or the batched factory.
+                Defaults to None (all coordinates).
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -134,7 +140,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("global_cb") = nb::none(),
         nb::arg("global_cb_k_blocks") = 1,
         nb::arg("packed_weight") = nb::none(),
-        nb::arg("all_gather") = false);
+        nb::arg("all_gather") = false,
+        nb::arg("mesh_coords") = nb::none());
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring

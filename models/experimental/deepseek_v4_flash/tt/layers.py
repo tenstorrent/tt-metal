@@ -694,7 +694,7 @@ class LinearDecode(DeepSeekV4Module):
         )
         return a_memory_config
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, mesh_coords=None) -> ttnn.Tensor:
         if self.packed_weight_tensor is not None:
             # Packed placement is the source of truth: a preceding packed projection may
             # have left this activation on a different zone/core count.
@@ -730,6 +730,7 @@ class LinearDecode(DeepSeekV4Module):
                 partial_width_sharded=self.partial_width_sharded,
                 output_mem_config=output_memory_config,
                 packed_weight=self.packed_weight_spec,
+                mesh_coords=mesh_coords,
             )
         if self.use_prefetcher:
             if not x.is_sharded():
@@ -749,6 +750,7 @@ class LinearDecode(DeepSeekV4Module):
                     global_cb=self.global_cb,
                     global_cb_k_blocks=self.gcb_k_blocks,
                     output_mem_config=self._prefetch_output_memory_config(m_padded),
+                    mesh_coords=mesh_coords,
                 )
             except Exception:
                 # The request is already with the DRISC senders, and matmul_decode does most
@@ -794,7 +796,11 @@ class LinearDecode(DeepSeekV4Module):
         if not x.is_sharded():
             x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
-            x, self.l1_weights, partial_width_sharded=self.partial_width_sharded, output_mem_config=output_memory_config
+            x,
+            self.l1_weights,
+            partial_width_sharded=self.partial_width_sharded,
+            output_mem_config=output_memory_config,
+            mesh_coords=mesh_coords,
         )
         if not self.keep_weights_in_l1:
             self.l1_weights.deallocate()

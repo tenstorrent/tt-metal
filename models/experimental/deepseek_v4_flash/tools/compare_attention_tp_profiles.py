@@ -41,7 +41,7 @@ from pathlib import Path
 csv.field_size_limit(sys.maxsize)
 
 _MATMUL = "MatmulDecodeDeviceOperation"
-_PROJECTION_ORDER = ("q_a", "q_b", "kv", "o_a", "o_b")
+_PROJECTION_ORDER = ("q_a", "q_a+kv", "q_b", "kv", "o_a", "o_b")
 _ATTR_PATTERN = re.compile(r"'(?P<key>K|M|N|batch)': '(?P<value>\d+)'")
 
 
@@ -85,17 +85,19 @@ def _matmul_attributes(row: dict[str, str]) -> dict[str, int]:
     return {match.group("key"): int(match.group("value")) for match in _ATTR_PATTERN.finditer(row["ATTRIBUTES"])}
 
 
-def _projection_name(k: int, n: int, batch: int) -> str | None:
+def _projection_name(k: int, n: int, batch: int, has_fused_qkv: bool) -> str | None:
+    if batch == 1 and (k, n) in ((4096, 1536), (1024, 6144)):
+        return "q_a+kv"
     if k == 1024 and batch == 1:
         return "q_b"
-    if k == 8192 and batch == 1:
+    if batch == 1 and ((k == 8192 and n in (1024, 4096)) or (k, n) == (2048, 4096)):
         return "o_b"
     if k == 4096 and batch > 1:
         return "o_a"
     if k == 4096 and n == 512 and batch == 1:
         return "kv"
     if k == 4096 and n == 1024 and batch == 1:
-        return "q_a"
+        return "o_a" if has_fused_qkv else "q_a"
     return None
 
 
@@ -106,6 +108,7 @@ def _is_collective(code: str) -> bool:
 def read_profile(path: Path) -> Profile:
     projections: dict[str, dict[str, list[MatmulSample]]] = defaultdict(lambda: defaultdict(list))
     collectives: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    matmuls: list[MatmulSample] = []
     devices: set[str] = set()
 
     with path.open(newline="") as file:
@@ -121,20 +124,24 @@ def read_profile(path: Path) -> Profile:
                 attrs = _matmul_attributes(row)
                 if not all(name in attrs for name in ("K", "M", "N", "batch")):
                     continue
-                name = _projection_name(attrs["K"], attrs["N"], attrs["batch"])
-                if name is not None:
-                    projections[name][device].append(
-                        MatmulSample(
-                            device=device,
-                            duration_ns=duration,
-                            k=attrs["K"],
-                            m=attrs["M"],
-                            n=attrs["N"],
-                            batch=attrs["batch"],
-                        )
+                matmuls.append(
+                    MatmulSample(
+                        device=device,
+                        duration_ns=duration,
+                        k=attrs["K"],
+                        m=attrs["M"],
+                        n=attrs["N"],
+                        batch=attrs["batch"],
                     )
+                )
             elif _is_collective(code):
                 collectives[code][device].append(duration)
+
+    has_fused_qkv = any((sample.k, sample.n) in ((4096, 1536), (1024, 6144)) for sample in matmuls)
+    for sample in matmuls:
+        name = _projection_name(sample.k, sample.n, sample.batch, has_fused_qkv)
+        if name is not None:
+            projections[name][sample.device].append(sample)
 
     return Profile(
         path=path,
@@ -171,23 +178,52 @@ def _critical_path(
     return _aggregate(critical, method), len(critical)
 
 
+def _profile_steps(profile: Profile) -> int:
+    q_b = profile.projections.get("q_b", {})
+    return min((len(samples) for samples in q_b.values()), default=1)
+
+
+def _critical_path_per_step(
+    by_device: dict[str, list[float]],
+    devices: tuple[str, ...],
+    method: str,
+    skip_first: int,
+    steps: int,
+) -> tuple[float, int, int]:
+    """Aggregate each step's sum of sequential calls, each call using max-rank time."""
+    present = [device for device in devices if device in by_device]
+    if not present:
+        return 0.0, 0, 0
+    count = min(len(by_device[device]) for device in present)
+    calls_per_step = count // steps
+    if calls_per_step < 1 or calls_per_step * steps != count:
+        return 0.0, 0, 0
+    critical = [max(by_device[device][index] for device in present) for index in range(count)]
+    per_step = [sum(critical[step * calls_per_step : (step + 1) * calls_per_step]) for step in range(skip_first, steps)]
+    return _aggregate(per_step, method), calls_per_step, len(per_step)
+
+
 def _projection_critical(
-    profile: Profile, name: str, method: str, skip_first: int
-) -> tuple[float, int, MatmulSample | None]:
+    profile: Profile, name: str, method: str, skip_first: int, steps: int
+) -> tuple[float, int, int, MatmulSample | None]:
     by_device = profile.projections.get(name, {})
     durations = {device: [sample.duration_ns for sample in samples] for device, samples in by_device.items()}
-    duration, count = _critical_path(durations, profile.devices, method, skip_first)
+    duration, calls, count = _critical_path_per_step(durations, profile.devices, method, skip_first, steps)
     representative = next((samples[0] for samples in by_device.values() if samples), None)
-    return duration, count, representative
+    return duration, calls, count, representative
 
 
 def _partition_status(base: MatmulSample, tp: MatmulSample, tp_size: int, name: str) -> str:
+    if name == "q_a+kv":
+        return "fused"
     if base.k != tp.k or base.m != tp.m:
+        if name == "o_b" and tp.k * tp_size == base.k and tp.n == base.n:
+            return "K-split"
         return "MISMATCH"
     if name in ("q_b", "o_b"):
         return "N-split" if tp.n * tp_size == base.n and tp.batch == base.batch else "MISMATCH"
     if name == "o_a":
-        return "groups-split" if tp.batch * tp_size == base.batch and tp.n == base.n else "MISMATCH"
+        return "groups-split" if tp.n == base.n else "MISMATCH"
     return "replicated" if (tp.n, tp.batch) == (base.n, base.batch) else "MISMATCH"
 
 
@@ -201,6 +237,10 @@ def _fmt_speedup(base_ns: float, tp_ns: float) -> str:
 
 def compare(base: Profile, tp: Profile, method: str, skip_first: int) -> None:
     tp_size = len(tp.devices)
+    base_steps = _profile_steps(base)
+    tp_steps = _profile_steps(tp)
+    fused_qkv = "q_a+kv" in tp.projections
+    projection_order = ("q_a+kv", "q_b", "o_a", "o_b") if fused_qkv else _PROJECTION_ORDER
     print()
     print("=" * 108)
     print(f"baseline: {base.path}  devices={','.join(base.devices) or 'none'}")
@@ -215,9 +255,29 @@ def compare(base: Profile, tp: Profile, method: str, skip_first: int) -> None:
 
     base_projection_total = 0.0
     tp_projection_total = 0.0
-    for name in _PROJECTION_ORDER:
-        base_ns, base_count, base_sample = _projection_critical(base, name, method, skip_first)
-        tp_ns, tp_count, tp_sample = _projection_critical(tp, name, method, skip_first)
+    for name in projection_order:
+        if name == "q_a+kv":
+            q_ns, _, base_count, q_sample = _projection_critical(base, "q_a", method, skip_first, base_steps)
+            kv_ns, _, _, kv_sample = _projection_critical(base, "kv", method, skip_first, base_steps)
+            base_ns = q_ns + kv_ns
+            base_calls = 2
+            base_sample = (
+                MatmulSample(
+                    device=q_sample.device,
+                    duration_ns=base_ns,
+                    k=4096,
+                    m=q_sample.m,
+                    n=(q_sample.n + kv_sample.n),
+                    batch=1,
+                )
+                if q_sample is not None and kv_sample is not None
+                else None
+            )
+        else:
+            base_ns, base_calls, base_count, base_sample = _projection_critical(
+                base, name, method, skip_first, base_steps
+            )
+        tp_ns, tp_calls, tp_count, tp_sample = _projection_critical(tp, name, method, skip_first, tp_steps)
         if base_sample is None or tp_sample is None:
             missing = "baseline" if base_sample is None else "TP"
             print(f"{name:<12}{f'missing in {missing}':<61}")
@@ -226,7 +286,7 @@ def compare(base: Profile, tp: Profile, method: str, skip_first: int) -> None:
         print(
             f"{name:<12}{base_sample.shape:<23}{tp_sample.shape:<23}{status:<15}"
             f"{_fmt_us(base_ns):>11}{_fmt_us(tp_ns):>14}{_fmt_speedup(base_ns, tp_ns):>10}"
-            f"{f'{base_count}/{tp_count}':>10}"
+            f"{f'{base_calls}:{tp_calls}':>10}"
         )
         base_projection_total += base_ns
         tp_projection_total += tp_ns
@@ -244,9 +304,9 @@ def compare(base: Profile, tp: Profile, method: str, skip_first: int) -> None:
     if not tp.collectives:
         print("none")
     for code, by_device in sorted(tp.collectives.items()):
-        duration, count = _critical_path(by_device, tp.devices, method, skip_first)
+        duration, calls, count = _critical_path_per_step(by_device, tp.devices, method, skip_first, tp_steps)
         tp_collective_total += duration
-        print(f"{code:<48}{_fmt_us(duration):>16}{count:>12}")
+        print(f"{code:<48}{_fmt_us(duration):>16}{f'{calls}x{count}':>12}")
     print("-" * 76)
     print(f"{'COLLECTIVES':<48}{_fmt_us(tp_collective_total):>16}")
 
