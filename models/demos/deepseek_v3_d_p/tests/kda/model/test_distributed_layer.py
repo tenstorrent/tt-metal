@@ -65,7 +65,8 @@ def test_sp_layer_matches_serial_reference(
         norm_eps=1e-5,
     )
     weights = random_weights(config)
-    sequence = 1024
+    # SP2 produces 20 local chunks; configured group size 8 falls back to divisor 5.
+    sequence = 1280
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(937)).to(
         torch.bfloat16
     )

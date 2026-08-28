@@ -340,6 +340,14 @@ def _validate_grouped_scan_capacity(
         raise ValueError(f"grouped KDA needs {group_heads} summary owners, but only {capacity} are supported")
 
 
+def _effective_summary_group_chunks(num_chunks: int, configured_group_chunks: int) -> int:
+    """Return the largest configured-or-smaller group size that divides the local chunk count."""
+    for group_chunks in range(min(num_chunks, configured_group_chunks), 0, -1):
+        if num_chunks % group_chunks == 0:
+            return group_chunks
+    raise AssertionError("positive chunk counts always have divisor 1")
+
+
 class _RecurrenceScan(ABC):
     def __init__(
         self,
@@ -384,7 +392,10 @@ class _GroupedScan(_RecurrenceScan):
         initial_state: ttnn.Tensor,
         geometry: _RecurrenceGeometry,
     ) -> _ScanResult:
-        group_chunks = self._program_config.summary_group_chunks
+        group_chunks = _effective_summary_group_chunks(
+            geometry.num_chunks,
+            self._program_config.summary_group_chunks,
+        )
         if geometry.key_dim != geometry.value_dim:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
         _validate_grouped_scan_capacity(
@@ -552,9 +563,7 @@ def _uses_grouped_scan(
     sequence_parallel_axis: int | None,
 ) -> bool:
     """Return the single canonical grouped-versus-direct scan decision."""
-    return sequence_parallel_axis is not None or (
-        num_chunks >= program_config.grouped_scan_min_chunks and num_chunks % program_config.summary_group_chunks == 0
-    )
+    return sequence_parallel_axis is not None or num_chunks >= program_config.grouped_scan_min_chunks
 
 
 def _select_scan(
