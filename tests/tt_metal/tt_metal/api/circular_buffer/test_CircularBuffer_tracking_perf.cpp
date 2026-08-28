@@ -40,6 +40,7 @@
 #include "circular_buffer_test_utils.hpp"
 #include "device_fixture.hpp"
 #include "command_queue_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include "gtest/gtest.h"
 
 // Internal APIs under measurement.
@@ -55,6 +56,16 @@ namespace basic_tests::circular_buffer {
 namespace {
 
 constexpr uint32_t kCbsPerProgram = 4;
+
+// The stock mesh fixtures all take DEFAULT_TRACE_REGION_SIZE, which is 0, and the trace
+// fixtures in command_queue_fixture.hpp open one unit (1x1) mesh per card. Neither can host a
+// trace whose programs run on overlapping, unequal device ranges. This opens the whole
+// SystemMesh -- every cabled card as one MeshDevice -- with room to capture into.
+class MultiDeviceMeshTraceFixture : public tt::tt_metal::MeshDeviceFixtureBase {
+protected:
+    MultiDeviceMeshTraceFixture() :
+        MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = 90000000}) {}
+};
 
 // Tracking is unusable either because Device built no provider (TT_METAL_SHM_TRACKING_DISABLED)
 // or because the provider could not attach. Both must skip: the second is a property of the
@@ -1053,6 +1064,96 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixGlobalOnlyCircularBufferDispatc
         // And back: the zero entry must not have poisoned the per-program footprint cache either.
         EXPECT_EQ(dispatch(*workload_a), after_a) << "re-dispatching A after the global-only program";
     }
+}
+
+// Trace peaks are stored per MeshCoordinateRange, keyed by exact equality. Two workloads in one
+// trace may run on ranges that overlap without being equal -- overlap is forbidden only within a
+// single MeshWorkload -- so a device can appear in more than one entry. Replay must give such a
+// device the largest of them, not whichever entry happened to be applied last.
+TEST_F(MultiDeviceMeshTraceFixture, TensixCircularBufferTracePeakMergesOverlappingRanges) {
+    auto mesh_device = this->get_mesh_device();
+    if (mesh_device->shape().mesh_size() < 2) {
+        GTEST_SKIP() << "needs a mesh of at least 2 devices for two ranges to overlap without being equal";
+    }
+    auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
+    ASSERT_NE(device, nullptr);
+    if (!tracking_available(device)) {
+        GTEST_SKIP() << kTrackingUnavailable;
+    }
+
+    const CoreCoord grid = device->compute_with_storage_grid_size();
+    const CoreRange cr(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1));
+    const CoreRangeSet cr_set({cr});
+    const CBConfig cb_config;
+    const uint32_t num_cores = grid.x * grid.y;
+    auto& cq = mesh_device->mesh_command_queue();
+
+    // Two ranges that both contain device 0: the whole mesh, and device 0 alone.
+    const auto zero = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+    const distributed::MeshCoordinateRange whole_mesh(mesh_device->shape());
+    const distributed::MeshCoordinateRange just_first(zero, zero);
+    ASSERT_NE(whole_mesh, just_first);
+
+    auto make_workload = [&](const distributed::MeshCoordinateRange& range, uint32_t mult, uint64_t& bytes_per_core) {
+        auto workload = std::make_shared<distributed::MeshWorkload>();
+        Program p;
+        workload->add_program(range, std::move(p));
+        auto& prog = workload->get_programs().at(range);
+        bytes_per_core = 0;
+        for (uint32_t cb_id = 0; cb_id < 2; cb_id++) {
+            const uint32_t total_size = cb_config.page_size * mult;
+            CircularBufferConfig config = CircularBufferConfig(total_size, {{cb_id, cb_config.data_format}})
+                                              .set_page_size(cb_id, cb_config.page_size);
+            CreateCircularBuffer(prog, cr_set, config);
+            bytes_per_core += total_size;
+        }
+        initialize_program(prog, cr_set);
+        return workload;
+    };
+
+    // The big one runs mesh-wide and is captured FIRST; the small one runs on device 0 only and is
+    // captured second. Device 0 is in both, so "last entry applied" is the small one while the peak
+    // it must accommodate is the big one.
+    uint64_t big_bytes_per_core = 0;
+    uint64_t small_bytes_per_core = 0;
+    auto workload_big = make_workload(whole_mesh, 8, big_bytes_per_core);
+    auto workload_small = make_workload(just_first, 1, small_bytes_per_core);
+    ASSERT_GT(big_bytes_per_core, small_bytes_per_core);
+
+    // Trace capture cannot load new binaries, so both must have run once already.
+    distributed::EnqueueMeshWorkload(cq, *workload_big, false);
+    distributed::EnqueueMeshWorkload(cq, *workload_small, false);
+    distributed::Finish(cq);
+
+    const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    distributed::EnqueueMeshWorkload(cq, *workload_big, false);
+    distributed::EnqueueMeshWorkload(cq, *workload_small, false);
+    mesh_device->end_mesh_trace(cq.id(), tid);
+
+    mesh_device->replay_mesh_trace(cq.id(), tid, true);
+    distributed::Finish(cq);
+
+    const uint64_t tracked = device->get_total_cb_allocated();
+    const uint64_t expected_peak = big_bytes_per_core * num_cores;
+    const uint64_t last_applied = small_bytes_per_core * num_cores;
+
+    log_info(
+        tt::LogTest,
+        "mesh {}: device 0 in two overlapping trace ranges, tracked={} peak={} last-applied={} ({} cores)",
+        mesh_device->shape(),
+        tracked,
+        expected_peak,
+        last_applied,
+        num_cores);
+
+    EXPECT_EQ(tracked, expected_peak)
+        << "device 0 is covered by two overlapping trace entries and reports " << tracked << "; the larger of them "
+        << "needs " << expected_peak << ", which is what that device must accommodate";
+    EXPECT_NE(tracked, last_applied)
+        << "the reported total is whichever range entry was applied last (" << last_applied
+        << "), so overlapping entries are overwriting each other instead of being merged";
+
+    mesh_device->release_mesh_trace(tid);
 }
 
 // Ground truth for the NON-CB columns. Everything else in this file validates circular
