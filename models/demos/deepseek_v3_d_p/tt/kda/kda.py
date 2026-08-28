@@ -110,33 +110,6 @@ class KdaState:
 class ttKDA:
     """Prefill-only KDA layer with immutable, caller-owned logical state."""
 
-    @staticmethod
-    def check_cache_complete(
-        cache_path: Path | None,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
-        config: KDAConfig,
-        layer_idx: int,
-        *,
-        tp_axis: int = 1,
-    ) -> bool:
-        return KDAWeights.check_cache_complete(
-            cache_path, f"layer_{layer_idx}.kda", config, mesh_device, tensor_parallel_axis=tp_axis
-        )
-
-    @staticmethod
-    def build_ttnn_cache(
-        state_dict: Mapping[str, torch.Tensor],
-        cache_path: Path,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
-        config: KDAConfig,
-        layer_idx: int,
-        *,
-        tp_axis: int = 1,
-    ) -> None:
-        KDAWeights.build_ttnn_cache(
-            state_dict, cache_path, f"layer_{layer_idx}.kda", config, mesh_device, tensor_parallel_axis=tp_axis
-        )
-
     def __init__(
         self,
         mesh_device: ttnn.Device | ttnn.MeshDevice,

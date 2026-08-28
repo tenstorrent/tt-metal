@@ -9,17 +9,14 @@ import torch
 from safetensors.torch import save_file
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kda.weights import required_kda_weight_names, validate_kda_weights
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     kda_layer_prefix,
     load_kda_layer_state_dict,
     resolve_kda_layer_shards,
 )
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_equal, random_weights
-from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import (
-    normalize_kda_state_dict,
-    required_kda_weight_names,
-    validate_kda_weights,
-)
+from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_state_dict
 
 
 def _full_rank_config(*, num_heads: int = 2) -> KDAConfig:
