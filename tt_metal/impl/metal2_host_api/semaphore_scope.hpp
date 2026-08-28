@@ -17,7 +17,7 @@
 // Semaphore mechanism solver
 // ============================================================================
 //
-// Decides how each semaphore is accessed. The answer is a SemScope, which codegen bakes 
+// Decides how each semaphore is accessed. The answer is a SemScope, which codegen bakes
 // into every binding's token, so the kernel receives it as a compile-time property.
 //
 // Two steps:
@@ -25,7 +25,7 @@
 //      how many hart instances that adds up to, and which nodes they cover.
 //   2. ResolveSemaphoreScopes() reads the census and picks, per semaphore, the fastest access
 //      path that keeps its operations atomic.
-// Callers need the name -> scope map, plus the binder hart count that the cached-pool seed 
+// Callers need the name -> scope map, plus the binder hart count that the cached-pool seed
 // protocol carries in each binding handle.
 //
 // The mechanism depends on the target device, not just the ProgramSpec: emule has no cached
