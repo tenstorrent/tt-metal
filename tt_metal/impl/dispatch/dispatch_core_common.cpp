@@ -47,6 +47,19 @@ DispatchCoreAxis resolve_dispatch_core_axis(
     return DispatchCoreAxis::ROW;
 }
 
+DispatchCoreConfig resolve_dispatch_core_config(
+    tt::ARCH arch,
+    tt_fabric::FabricTensixConfig fabric_tensix_config,
+    std::optional<DispatchCoreType> type,
+    std::optional<DispatchCoreAxis> axis) {
+    const auto resolved_type = type.value_or(DispatchCoreType::WORKER);
+    const auto resolved_axis = axis.value_or(
+        arch == tt::ARCH::BLACKHOLE && fabric_tensix_config == tt_fabric::FabricTensixConfig::DISABLED
+            ? DispatchCoreAxis::COL
+            : DispatchCoreAxis::ROW);
+    return DispatchCoreConfig{resolved_type, resolved_axis};
+}
+
 CoreType get_core_type_from_config(const DispatchCoreConfig& config) {
     switch (config.get_dispatch_core_type()) {
         case DispatchCoreType::WORKER: return CoreType::WORKER;

@@ -91,6 +91,10 @@ public:
     /// @return Human-readable name of the architecture of this environment.
     std::string get_arch_name() const;
 
+    /// Resolve a complete dispatch core configuration for this environment.
+    DispatchCoreConfig get_dispatch_core_config(
+        std::optional<DispatchCoreType> type = std::nullopt, std::optional<DispatchCoreAxis> axis = std::nullopt) const;
+
     /// @return Total number of PCIe devices in this environment.
     uint32_t get_num_pcie_devices() const;
 

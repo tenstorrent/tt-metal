@@ -12,6 +12,7 @@
 #include "context/context_descriptor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "tt_cluster.hpp"
 #include "impl/device/mock_device_util.hpp"
 
@@ -21,6 +22,25 @@ class MetalContextTest : public ::testing::Test {
 protected:
     void TearDown() override { MetalContext::destroy_all_instances(); }
 };
+
+TEST(DispatchCoreConfigTest, ResolvesPlatformDefaults) {
+    EXPECT_EQ(
+        resolve_dispatch_core_config(tt::ARCH::WORMHOLE_B0, tt_fabric::FabricTensixConfig::DISABLED),
+        DispatchCoreConfig(DispatchCoreType::WORKER, DispatchCoreAxis::ROW));
+    EXPECT_EQ(
+        resolve_dispatch_core_config(tt::ARCH::BLACKHOLE, tt_fabric::FabricTensixConfig::DISABLED),
+        DispatchCoreConfig(DispatchCoreType::WORKER, DispatchCoreAxis::COL));
+    EXPECT_EQ(
+        resolve_dispatch_core_config(tt::ARCH::BLACKHOLE, tt_fabric::FabricTensixConfig::MUX),
+        DispatchCoreConfig(DispatchCoreType::WORKER, DispatchCoreAxis::ROW));
+}
+
+TEST(DispatchCoreConfigTest, PreservesExplicitPreferences) {
+    EXPECT_EQ(
+        resolve_dispatch_core_config(
+            tt::ARCH::BLACKHOLE, tt_fabric::FabricTensixConfig::DISABLED, DispatchCoreType::ETH, DispatchCoreAxis::ROW),
+        DispatchCoreConfig(DispatchCoreType::ETH, DispatchCoreAxis::ROW));
+}
 
 TEST_F(MetalContextTest, CreateSiliconInstance) {
     MetalEnv env;

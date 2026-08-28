@@ -275,7 +275,7 @@ class RunTimeOptions {
     // This option will enable this feature to help flush out whether there is a missing cache invalidation
     bool enable_hw_cache_invalidation = false;
 
-    tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    std::optional<tt_metal::DispatchCoreType> dispatch_core_type_override;
 
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
@@ -735,6 +735,9 @@ public:
     bool get_relaxed_memory_ordering_disabled() const { return this->disable_relaxed_memory_ordering; }
     bool get_gathering_enabled() const { return this->enable_gathering; }
 
+    std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
+        return dispatch_core_type_override;
+    }
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }

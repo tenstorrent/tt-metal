@@ -18,6 +18,7 @@
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_state_manager.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
@@ -620,6 +621,13 @@ const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_d
 
 tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
 std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
+DispatchCoreConfig MetalEnv::get_dispatch_core_config(
+    std::optional<DispatchCoreType> type, std::optional<DispatchCoreAxis> axis) const {
+    if (!type.has_value()) {
+        type = impl_->get_rtoptions().get_dispatch_core_type_override();
+    }
+    return resolve_dispatch_core_config(get_arch(), impl_->get_fabric_tensix_config(), type, axis);
+}
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
 uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
 uint32_t MetalEnv::get_l1_size() const {
