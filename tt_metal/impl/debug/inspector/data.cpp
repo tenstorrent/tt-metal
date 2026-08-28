@@ -686,12 +686,9 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     // DispatchCoreConfig
     {
         static const char* dispatch_core_types[] = {"WORKER", "ETH"};
-        static const char* dispatch_core_axes[] = {"ROW", "COL"};
-        auto config = rt.get_dispatch_core_config();
-        auto type_idx = static_cast<int>(config.get_dispatch_core_type());
-        auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
+        auto type_idx = static_cast<int>(
+            rt.get_dispatch_core_type_override().value_or(tt::tt_metal::DispatchCoreType::WORKER));
         RT_CUSTOM("dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx));
-        RT_CUSTOM("dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx));
     }
 
     // FabricTelemetrySettings
