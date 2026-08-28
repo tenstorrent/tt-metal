@@ -30,7 +30,8 @@
     32926104552,
     32936855493,
     32926101915,
-    "33040738562"
+    "33040738562",
+    "33158955938"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -225,7 +226,17 @@
       "dispatch_model": "llama3.1-8b",
       "status": "open-pr",
       "note": "New PR opened this run. Deduplicated warning using std::set<tuple> log-once pattern matching physical_system_discovery.cpp's warned_mobo_names. models-t2-e2e-tests (llama3.1-8b) dispatched on branch for validation. Awaiting outcome next run."
+    },
+    {
+      "branch": "silencer/matmul-tensor-accessor-args-unused-warning",
+      "status": "open-pr",
+      "number": null,
+      "source_run_id": "33158955938",
+      "source_job_id": "98810775872",
+      "workflow": "models-t3-unit-tests.yaml",
+      "dispatched_model": "bert-large",
+      "note": "PR opened to silence -Wunused-but-set-variable for in0_args/out_args TensorAccessorArgs in matmul reader/writer kernels (only read on the un-sharded preprocessor branch). Marked [[maybe_unused]] matching existing moe_compute/moe_gpt precedent. Dispatched models-t3-unit-tests (bert-large) on this branch for CI validation; needs reconciliation next run."
     }
   ],
-  "backlog_cursor": "models-t2-e2e-tests.yaml scanned (run 33040738562) - opened PR for fabric packet-size warning dedupe; next: continue rotation to next untracked workflow (e.g. models-t3-e2e-tests.yaml, perf-device-models.yaml)"
+  "backlog_cursor": "continue rotation to next untracked workflow after models-t3-unit-tests.yaml, e.g. models-t3-e2e-tests.yaml or perf-device-models.yaml"
 }
