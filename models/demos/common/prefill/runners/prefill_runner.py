@@ -830,7 +830,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
             rank_scoped_device_map_path,
-            remove_stale_device_map_sidecars,
         )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
