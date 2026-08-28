@@ -60,8 +60,6 @@ PRODUCER_SETTLE_BEFORE_RECOVER_S = 300.0
 # the visible index is final. NFS close-to-open attribute-cache lag can hide the producer's last
 # write from another client for up to ~60s (acregmax default); add 30s margin.
 PRODUCER_EXIT_INDEX_SETTLE_S = 90.0
-# Poll cadence inside the post-exit settle window.
-PRODUCER_EXIT_INDEX_POLL_INTERVAL_S = 3.0
 
 
 def _short_id(sid: str) -> str:
@@ -1067,55 +1065,38 @@ class SolutionConsumer:
                     break
                 continue
 
-            # Nothing new to consume yet.
-            # Final-index short-circuit: once the index content says enumeration is over and every
-            # listed solution has been swept, the stream is done -- regardless of whether the
-            # producer PROCESS has exited. This is what ends the sweep when a rank wedges in device
-            # teardown and keeps mpirun alive forever (otherwise the heartbeat below spins for good,
-            # e.g. "generating: 0 swept, 0 found" on a 0-solution enumeration).
-            if (
-                self.producer is not None
-                and len(avail) == len(consumed)
-                and _index_enumeration_complete(self.cfg.sol_dir)
-            ):
+            # Nothing new to consume yet -- decide whether the stream can still grow.
+            if self.producer is None:
+                break  # fixed --solutions-dir list, fully consumed
+            # The index's FINAL write is the authoritative end-of-stream signal (mid-stream rewrites
+            # always say truncated=true). Once it is visible and fully swept, we are done even if the
+            # producer PROCESS lingers (e.g. a rank wedged in device teardown keeps mpirun alive).
+            if _index_enumeration_complete(self.cfg.sol_dir) and len(avail) == len(consumed):
                 if self.producer.alive():
-                    self.log.line(
-                        f"■ enumeration complete per final index ({len(avail)} solution(s), all swept) "
-                        f"but the producer process is still running (likely wedged in teardown); stopping it."
-                    )
+                    self.log.line("■ enumeration complete (final index visible); stopping lingering producer.")
                     self.producer.stop()
                     self.producer_finalized = True
                 break
-            if self.producer is not None and self.producer.alive():
-                if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
-                    self.log.line(f"… generating: {len(consumed)} swept, {len(avail)} found so far")
-                    last_heartbeat = time.time()
-                time.sleep(POLL_INTERVAL_S)
-                continue
-            # Producer-exit settle: the producer may run on a different NFS client than this consumer,
-            # and an index read right after its exit can be served from a stale attribute cache
-            # (close-to-open consistency lag, up to ~60s) -- hiding trailing solutions, or wrongly
-            # concluding 0. Keep polling (through the normal loop) until the settle window from
-            # producer exit expires, clipped to --sweep-timeout. Fast path: if the freshest read
-            # shows every enumerated solution consumed, the stream is complete -- no wait.
-            if self.producer is not None:
-                if consumed and len(avail) == len(consumed):
-                    break  # index fully consumed as of the freshest read
-                if producer_exited_at is None:
-                    producer_exited_at = time.time()
-                settle_deadline = producer_exited_at + PRODUCER_EXIT_INDEX_SETTLE_S
+            # Producer exited but the index does not read as final yet: NFS close-to-open lag can
+            # serve a stale index for up to ~60s after the producer's last write. Keep polling until
+            # the settle window (clipped to --sweep-timeout) expires, then take the freshest read.
+            if not self.producer.alive():
+                producer_exited_at = producer_exited_at or time.time()
+                deadline = producer_exited_at + PRODUCER_EXIT_INDEX_SETTLE_S
                 if cfg.sweep_timeout is not None:
-                    settle_deadline = min(settle_deadline, self.sweep_start + cfg.sweep_timeout)
-                if time.time() < settle_deadline:
-                    time.sleep(PRODUCER_EXIT_INDEX_POLL_INTERVAL_S)
-                    continue
-                if not consumed:
-                    self.log.line(
-                        f"⚠ producer exited and the solutions index stayed empty through the "
-                        f"{PRODUCER_EXIT_INDEX_SETTLE_S:.0f}s settle window; reporting 0 solutions. "
-                        f"If the producer log shows solutions were found, this is NFS index-visibility lag."
-                    )
-            break  # producer finished (or none) and nothing new left to consume
+                    deadline = min(deadline, self.sweep_start + cfg.sweep_timeout)
+                if time.time() >= deadline:
+                    if not consumed:
+                        self.log.line(
+                            f"⚠ producer exited and the index never became final within the "
+                            f"{PRODUCER_EXIT_INDEX_SETTLE_S:.0f}s settle window; reporting "
+                            f"{len(avail)} solution(s) from the freshest read."
+                        )
+                    break
+            if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
+                self.log.line(f"… generating: {len(consumed)} swept, {len(avail)} found so far")
+                last_heartbeat = time.time()
+            time.sleep(POLL_INTERVAL_S)
         return self.results
 
 
