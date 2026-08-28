@@ -48,8 +48,8 @@ Reference notes
 
 Measured (Wormhole, bf16 HF reference, 128-token prompt, 5 decode steps)
 -----------------------------------------------------------------------
-* 9B  / N300 (TP=2), 32 layers: prefill 0.9913; decode 0.9914 0.9929 0.9827
-  0.9897 0.9910 (min 0.9827, mean 0.9896)
+* 9B  / N300 (TP=2), 32 layers: see README-N300-9B.md's "PCC results" table for current numbers
+  (this docstring's own copy drifted stale against it — don't duplicate the numbers here again).
 * 27B / T3K  (TP=8), 64 layers: prefill 0.9957; decode 0.9922 0.9595 0.9876
   0.9909 0.9801 (min 0.9595, mean 0.9821)
 
