@@ -1,0 +1,87 @@
+label,commit,date,benchmark,config,us
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt1/ct1,3.40
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt1/ct4,6.32
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt1/ct8,10.10
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt4/ct1,6.40
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt4/ct4,12.66
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt4/ct8,21.44
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt8/ct1,10.26
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt8/ct4,21.07
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt8/rt8/ct8,36.56
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt1/ct1,8.26
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt1/ct4,18.52
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt1/ct8,32.09
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt4/ct1,18.77
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt4/ct4,40.37
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt4/ct8,71.39
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt8/ct1,32.94
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt8/ct4,70.03
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,dst/kb1/kt32/rt8/ct8,123.64
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt1/ct1,3.67
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt1/ct4,6.83
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt1/ct8,10.90
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt4/ct1,6.91
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt4/ct4,13.52
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt4/ct8,23.09
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt8/ct1,11.10
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt8/ct4,22.71
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt8/rt8/ct8,39.85
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt1/ct1,8.49
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt1/ct4,19.04
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt1/ct8,32.96
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt4/ct1,19.30
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt4/ct4,41.21
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt4/ct8,73.07
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt8/ct1,33.75
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt8/ct4,71.71
+pre-metal2,8bb48ab0f1d,2026-08-28,matmul,l1/kb1/kt32/rt8/ct8,127.01
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,Llama 3.2 1B/d64/S512,176.8
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,Qwen2.5 0.5B/d64/S512,176.8
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,TinyLlama 1.1B/d64/S512,176.8
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,Phi-3 mini 3.8B/d96/S512,198.7
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,Qwen3 0.6B/d128/S512,220.0
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,Llama 3.2 3B/d128/S512,219.9
+pre-metal2,8bb48ab0f1d,2026-08-28,llama_prefill,Gemma 3 1B/d256/S512,307.5
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt1/ct1,3.36
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt1/ct4,6.24
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt1/ct8,10.02
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt4/ct1,6.30
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt4/ct4,12.63
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt4/ct8,21.33
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt8/ct1,10.20
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt8/ct4,20.98
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt8/rt8/ct8,36.43
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt1/ct1,8.17
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt1/ct4,18.48
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt1/ct8,32.02
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt4/ct1,18.71
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt4/ct4,40.26
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt4/ct8,71.27
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt8/ct1,32.86
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt8/ct4,69.92
+stage1-done,af928a542da,2026-08-28,matmul,dst/kb1/kt32/rt8/ct8,123.57
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt1/ct1,3.61
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt1/ct4,6.74
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt1/ct8,10.89
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt4/ct1,6.81
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt4/ct4,13.49
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt4/ct8,23.04
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt8/ct1,11.06
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt8/ct4,22.62
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt8/rt8/ct8,39.72
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt1/ct1,8.38
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt1/ct4,18.96
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt1/ct8,32.83
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt4/ct1,19.22
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt4/ct4,41.13
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt4/ct8,72.96
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt8/ct1,33.73
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt8/ct4,71.65
+stage1-done,af928a542da,2026-08-28,matmul,l1/kb1/kt32/rt8/ct8,126.92
+stage1-done,af928a542da,2026-08-28,llama_prefill,Llama 3.2 1B/d64/S512,176.5
+stage1-done,af928a542da,2026-08-28,llama_prefill,Qwen2.5 0.5B/d64/S512,176.4
+stage1-done,af928a542da,2026-08-28,llama_prefill,TinyLlama 1.1B/d64/S512,176.4
+stage1-done,af928a542da,2026-08-28,llama_prefill,Phi-3 mini 3.8B/d96/S512,198.2
+stage1-done,af928a542da,2026-08-28,llama_prefill,Qwen3 0.6B/d128/S512,219.0
+stage1-done,af928a542da,2026-08-28,llama_prefill,Llama 3.2 3B/d128/S512,219.0
+stage1-done,af928a542da,2026-08-28,llama_prefill,Gemma 3 1B/d256/S512,307.5
