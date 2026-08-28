@@ -129,21 +129,27 @@ FORCE_INLINE void compute_value_new(
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
-    kd.wait_front(chunk_key_tiles);
+    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
+        kd.wait_front(chunk_key_tiles);
+    }
     current_state.wait_front(key_value_tiles);
     matrix_multiply<Ct, Kt, Vt>(kd, current_state, state_projection);
     state_projection.wait_front(chunk_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         kd.pop_front(chunk_key_tiles);
     }
-    v_beta.wait_front(chunk_value_tiles);
+    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
+        v_beta.wait_front(chunk_value_tiles);
+    }
     elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles>(v_beta, state_projection, difference);
     difference.wait_front(chunk_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         v_beta.pop_front(chunk_value_tiles);
     }
     state_projection.pop_front(chunk_value_tiles);
-    t_inv.wait_front(chunk_chunk_tiles);
+    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
+        t_inv.wait_front(chunk_chunk_tiles);
+    }
     matrix_multiply<Ct, Ct, Vt>(t_inv, difference, corrected_value);
     corrected_value.wait_front(chunk_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
@@ -192,14 +198,18 @@ FORCE_INLINE void update_state(
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
-    k_decay_transposed.wait_front(key_chunk_tiles);
+    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
+        k_decay_transposed.wait_front(key_chunk_tiles);
+    }
     matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, corrected_value, state_update);
     state_update.wait_front(key_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         k_decay_transposed.pop_front(key_chunk_tiles);
     }
     corrected_value.pop_front(chunk_value_tiles);
-    final_decay.wait_front(Kt);
+    if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
+        final_decay.wait_front(Kt);
+    }
     multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
     state_temporary.wait_front(key_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
@@ -242,6 +252,11 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
         DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
         const bool last = chunk == num_chunks - 1;
 
+        kd.wait_front(chunk_key_tiles);
+        v_beta.wait_front(chunk_value_tiles);
+        t_inv.wait_front(chunk_chunk_tiles);
+        k_decay_transposed.wait_front(key_chunk_tiles);
+        final_decay.wait_front(Kt);
         compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             current_b, kd, v_beta, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
@@ -254,9 +269,6 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
             state_temporary);
         compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             current_ab, kd, v_beta, t_inv, scratch, value_new, scratch);
-        kd.pop_front(chunk_key_tiles);
-        v_beta.pop_front(chunk_value_tiles);
-        t_inv.pop_front(chunk_chunk_tiles);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, Vt>(
             current_ab,
             last ? summary_raw : summary_ring,
@@ -265,6 +277,9 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
             final_decay,
             state_update,
             state_temporary);
+        kd.pop_front(chunk_key_tiles);
+        v_beta.pop_front(chunk_value_tiles);
+        t_inv.pop_front(chunk_chunk_tiles);
         k_decay_transposed.pop_front(key_chunk_tiles);
         final_decay.pop_front(Kt);
     }
