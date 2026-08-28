@@ -606,9 +606,9 @@ targets:
             seq_len: 712
             status: active
             perf:
-              # Same fast-path as wh_n150 above. Measured 33.04-33.13 t/s/u over 4 CI runs,
-              # was 20.3; TTFT 53.31-53.35 ms, was 75.
-              decode_t/s/u: 33.0
+              # Blackhole DRAM-sharded matmul auto-selection measured 39.91 t/s/u in
+              # matched P150 E2E CI; the one-reader main baseline measured 32.71.
+              decode_t/s/u: 40.0
               prefill_time_to_first_token: 53
             accuracy: {}
       bh_p300:
