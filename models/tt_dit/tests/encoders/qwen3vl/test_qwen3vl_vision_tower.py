@@ -14,10 +14,11 @@ import transformers
 
 import ttnn
 
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
 from ....utils import tensor
 from ....utils.check import assert_quality
 from .common import (
+    FABRIC,
     HIDDEN_ACT,
     HIDDEN_SIZE,
     INTERMEDIATE_SIZE,
@@ -150,17 +151,17 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         # --- prep: host build + host->device upload ---
         cos, sin = tower.prepare_rope(grid)
         pos = tower.prepare_pos_embeds(grid)
-        tt_patches = _shard(patches, submesh, sp_axis)
-        tt_pos = _shard(pos, submesh, sp_axis)
-        tt_cos, tt_sin = _shard(cos, submesh, sp_axis), _shard(sin, submesh, sp_axis)
+        tt_patches = sp_shard(patches, submesh, sp_axis)
+        tt_pos = sp_shard(pos, submesh, sp_axis)
+        tt_cos, tt_sin = sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)
         ttnn.synchronize_device(submesh)  # uploads landed on device
         t_prep_done = time.time()
 
         # --- op: the tower forward ---
         tokens, deepstack = tower.forward(
-            sp_shard(patches, submesh, sp_axis),
-            pos_embeds=sp_shard(pos, submesh, sp_axis),
-            rope=(sp_shard(cos, submesh, sp_axis), sp_shard(sin, submesh, sp_axis)),
+            tt_patches,
+            pos_embeds=tt_pos,
+            rope=(tt_cos, tt_sin),
             cu_seqlens=cu_seqlens,
         )
         ttnn.synchronize_device(submesh)  # forward complete
@@ -195,3 +196,67 @@ def test_tower_on_device(reference, mesh_device, submesh_shape, tp_axis, sp_axis
         assert not torch.allclose(
             features[i], features[i + 1], atol=1e-2
         ), f"deepstack features {i} and {i + 1} are identical; layer routing is wrong"
+
+
+# 26,944 patches: 64 short of every SP alignment on this galaxy (%128 == %256 == 64), so both configs
+# below exercise pad_patches_for_sp rather than skipping. h/w stay even for the 2x2 merge.
+_MISALIGNED_GRID = [[1, 128, 128], [1, 110, 96]]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
+    [
+        pytest.param((8, 4), (8, 4), 0, 1, 2, FABRIC, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, 1, 2, FABRIC, id="tp4_sp8"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_tower_sp_padding(reference, mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
+    """A patch count that does NOT divide `sp * 32` runs via [`pad_patches_for_sp`]: the pad rows ride
+    in a phantom attention window and the merged garbage is trimmed after the SP gather, so the output
+    matches the reference on the REAL patches exactly as if nothing was padded.
+
+    This is the multi-galaxy (e.g. 4x32, alignment 1024) enablement, tested on one galaxy: alignment
+    is a property of `total % (sp * 32)` alone, so a grid misaligned at sp=4/8 exercises the identical
+    path -- phantom window, isolated garbage rows, post-gather trim -- that two_refs (38,144 % 1024
+    != 0) hits at SP=32.
+    """
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    grid = torch.tensor(_MISALIGNED_GRID, dtype=torch.long)
+    total = sum(t * h * w for t, h, w in _MISALIGNED_GRID)
+    sp_factor = tuple(submesh.shape)[sp_axis]
+    assert total % (sp_factor * 32) != 0, "grid is aligned; this test would not exercise the pad path"
+
+    torch.manual_seed(0)
+    patch_dim = 3 * 2 * 16 * 16
+    patches = torch.randn(total, patch_dim)
+    with torch.no_grad():
+        ref_out = reference(patches, grid_thw=grid, return_dict=True)
+    golden_tokens = ref_out.pooler_output.float()
+    golden_deepstack = [f.float() for f in ref_out.deepstack_features]
+
+    tower = _tower(reference, submesh, *resolve_parallel(submesh, tp_axis, sp_axis, num_links))
+    cos, sin = tower.prepare_rope(grid)
+    pos = tower.prepare_pos_embeds(grid)
+    p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+        patches, pos, (cos, sin), vision_cu_seqlens(grid), sp_factor=sp_factor
+    )
+    assert logical == total and p_patches.shape[0] % (sp_factor * 32) == 0
+    assert len(p_cu) == len(vision_cu_seqlens(grid)) + 1, "expected one phantom window for the pad"
+
+    tokens, deepstack = tower.forward(
+        sp_shard(p_patches, submesh, sp_axis),
+        pos_embeds=sp_shard(p_pos, submesh, sp_axis),
+        rope=(sp_shard(p_cos, submesh, sp_axis), sp_shard(p_sin, submesh, sp_axis)),
+        cu_seqlens=p_cu,
+        logical_patches=logical,
+    )
+
+    merged = total // SPATIAL_MERGE_SIZE**2
+    actual_tokens = tensor.to_torch(tokens, mesh_axes=[None, None])
+    assert actual_tokens.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(actual_tokens.shape)}"
+    assert_quality(golden_tokens, actual_tokens, pcc=0.99)
+    for golden_feature, feature_tt in zip(golden_deepstack, deepstack):
+        feature = tensor.to_torch(feature_tt, mesh_axes=[None, None])
+        assert feature.shape[-2:] == (merged, OUT_HIDDEN_SIZE), f"{tuple(feature.shape)}"
+        assert_quality(golden_feature, feature, pcc=0.99)
