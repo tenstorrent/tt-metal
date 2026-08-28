@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
@@ -54,8 +55,8 @@ FORCE_INLINE void read_value_slice(
 template <uint32_t Kt, uint32_t Vt>
 FORCE_INLINE void seed_identity(DataflowBuffer& buffer, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
-    constexpr uint32_t face_elements = 16 * 16;
-    constexpr uint32_t tile_elements = 4 * face_elements;
+    constexpr uint32_t face_elements = tt::constants::FACE_HW;
+    constexpr uint32_t tile_elements = tt::constants::TILE_HW;
     constexpr uint32_t tile_count = Kt * Vt;
 
     buffer.reserve_back(tile_count);
