@@ -33,8 +33,7 @@ namespace {
 // WriteToBuffer issues by design). Resolved here, behind the enabled-check, so
 // it never runs on the production host path.
 uint32_t host_alignment_requirement(const IDevice* device, uint32_t size) {
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    return metal_ctx.get_cluster().get_alignment_requirements(device->id(), size);
+    return MetalContext::instance().get_cluster().get_alignment_requirements(device->id(), size);
 }
 }  // namespace
 
@@ -82,7 +81,7 @@ void check_program_metadata_size(Program& program) {
     // The CB/L1 validators only fire when an L1 tensor pins
     // lowest_occupied_compute_l1_address; on a freshly-initialized device a
     // program can still statically exceed the reserved KERNEL_CONFIG window.
-    const auto& hal = MetalContext::instance(program.impl().get_context_id()).hal();
+    const auto& hal = MetalContext::instance().hal();
     const auto& metadata_sizes = program.impl().get_program_config_sizes();
     for (uint32_t pct_index = 0; pct_index < hal.get_programmable_core_type_count(); pct_index++) {
         HalProgrammableCoreType pct = hal.get_programmable_core_type(pct_index);
