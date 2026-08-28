@@ -248,7 +248,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t kc = Kt * Ct;
 
-    compute_kernel_hw_startup(kd.get_id(), v_beta.get_id(), output.get_id());
+    compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
         DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
@@ -310,7 +310,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
 
-    compute_kernel_hw_startup(kd.get_id(), v_beta.get_id(), output.get_id());
+    compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
