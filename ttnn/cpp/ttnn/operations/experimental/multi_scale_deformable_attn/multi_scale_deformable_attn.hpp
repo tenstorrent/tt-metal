@@ -23,6 +23,9 @@ namespace ttnn::experimental {
 //   grid:   (N, Q, 1, P*2)     ROW_MAJOR bfloat16, (x, y) per point, normalized to [-1, 1]
 //                              (N, Q*P, 1, 2) also accepted, at P NoC reads per query instead of 1
 //   attn:   (N, Q, P)          ROW_MAJOR bfloat16
+//           with num_heads > 1 it may instead be (B, Q, num_heads*stride), a head's
+//           run starting at h*stride and this call reading P points from
+//           point_offset into it. num_points is then required.
 //
 // Output:
 //   (N, Q, D) ROW_MAJOR bfloat16
@@ -36,6 +39,8 @@ ttnn::Tensor multi_scale_deformable_attn(
     const ttnn::Tensor& attn,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     bool align_corners = false,
-    uint32_t num_heads = 1);
+    uint32_t num_heads = 1,
+    uint32_t num_points = 0,
+    uint32_t point_offset = 0);
 
 }  // namespace ttnn::experimental

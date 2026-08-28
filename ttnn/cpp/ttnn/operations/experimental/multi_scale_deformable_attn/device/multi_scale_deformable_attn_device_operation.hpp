@@ -23,6 +23,11 @@ struct MSDAOperation {
         // Heads packed into value's last dimension. The reader picks head n % num_heads
         // out of a stick by byte offset, so value is never copied head-major.
         uint32_t num_heads = 1;
+        // Points this call samples per query, and how far into a head's run they start.
+        // Both are only needed when an input packs more than this call's points into a row;
+        // num_points = 0 means take it from attn's last dimension.
+        uint32_t num_points = 0;
+        uint32_t point_offset = 0;
     };
 
     struct tensor_args_t {
@@ -58,6 +63,8 @@ ttnn::Tensor multi_scale_deformable_attn(
     const Tensor& attn,
     const std::optional<MemoryConfig>& memory_config,
     bool align_corners,
-    uint32_t num_heads);
+    uint32_t num_heads,
+    uint32_t num_points,
+    uint32_t point_offset);
 
 }  // namespace ttnn::prim

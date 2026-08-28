@@ -54,14 +54,12 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     TT_FATAL(gs.rank() == 4, "grid rank must be 4 (N, Q, 1, P*2) or (N, Q*P, 1, 2), got {}", gs);
     TT_FATAL(as.rank() == 3, "attn rank must be 3 (N, Q, P), got {}", as);
     TT_FATAL(gs[-2] == 1, "grid 3rd dim must be 1 (single sample row per query)");
+    const uint32_t n_total = static_cast<uint32_t>(vs[0]) * attrs.num_heads;
     TT_FATAL(
-        static_cast<uint32_t>(vs[0]) * attrs.num_heads == static_cast<uint32_t>(gs[0]) &&
-            static_cast<uint32_t>(gs[0]) == static_cast<uint32_t>(as[0]),
-        "value's batch (= {}) times num_heads (= {}) must equal grid and attn N (= {}, {})",
-        static_cast<uint32_t>(vs[0]),
-        attrs.num_heads,
+        static_cast<uint32_t>(gs[0]) == n_total,
+        "grid's first dim (= {}) must equal value's batch times num_heads (= {})",
         static_cast<uint32_t>(gs[0]),
-        static_cast<uint32_t>(as[0]));
+        n_total);
 
     // Reject zero-sized inputs: split_work_to_cores(grid, 0) and zero-page
     // CB creation are undefined; we'd rather fail loudly than crash deep in
@@ -69,7 +67,7 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     TT_FATAL(vs[0] > 0, "N must be > 0");
     TT_FATAL(vs[1] > 0 && vs[2] > 0, "h_in and w_in must be > 0");
     TT_FATAL(as[1] > 0, "Q must be > 0");
-    TT_FATAL(as[2] > 0, "P must be > 0");
+    TT_FATAL(as[2] > 0, "attn's last dim must be > 0");
 
     const uint32_t nh = attrs.num_heads;
     TT_FATAL(nh > 0, "num_heads must be > 0");
@@ -86,7 +84,39 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     TT_FATAL(d > 0 && d % 16 == 0, "value's per-head D (= {}) must be a positive multiple of 16", d);
 
     const uint32_t q = static_cast<uint32_t>(as[1]);
-    const uint32_t p = static_cast<uint32_t>(as[2]);
+    // attn is either (N, Q, P) — the head is already in the batch index — or
+    // (B, Q, num_heads*stride), where the head is a byte offset into the row and this
+    // call reads num_points of it starting at point_offset. The row width tells them apart:
+    // the batch dim cannot, because num_heads == 1 makes N and B the same number.
+    const uint32_t p = attrs.num_points > 0 ? attrs.num_points : static_cast<uint32_t>(as[2]);
+    TT_FATAL(p > 0, "P must be > 0");
+    const bool attn_wide = static_cast<uint32_t>(as[2]) != p;
+    if (attn_wide) {
+        TT_FATAL(
+            static_cast<uint32_t>(as[2]) % nh == 0,
+            "attn's last dim (= {}) must be divisible by num_heads (= {})",
+            static_cast<uint32_t>(as[2]),
+            nh);
+        TT_FATAL(
+            static_cast<uint32_t>(as[0]) * nh == n_total,
+            "packed attn's first dim (= {}) times num_heads (= {}) must equal N (= {})",
+            static_cast<uint32_t>(as[0]),
+            nh,
+            n_total);
+    } else {
+        TT_FATAL(
+            static_cast<uint32_t>(as[0]) == n_total,
+            "attn's first dim (= {}) must equal N (= {})",
+            static_cast<uint32_t>(as[0]),
+            n_total);
+    }
+    const uint32_t attn_head_stride = attn_wide ? static_cast<uint32_t>(as[2]) / nh : p;
+    TT_FATAL(
+        attrs.point_offset + p <= attn_head_stride,
+        "point_offset (= {}) plus P (= {}) overruns attn's per-head run (= {})",
+        attrs.point_offset,
+        p,
+        attn_head_stride);
     const uint32_t gw = static_cast<uint32_t>(gs[-1]);
     // A ROW_MAJOR page is the last dimension, so the point axis is left to the caller: folded into
     // the page it is one NoC read per query, spelled out it is P reads of four bytes and a rewrite
@@ -139,12 +169,16 @@ ttnn::Tensor multi_scale_deformable_attn(
     const Tensor& attn,
     const std::optional<MemoryConfig>& memory_config,
     bool align_corners,
-    uint32_t num_heads) {
+    uint32_t num_heads,
+    uint32_t num_points,
+    uint32_t point_offset) {
     using OperationType = ttnn::operations::experimental::multi_scale_deformable_attn::MSDAOperation;
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .align_corners = align_corners,
         .num_heads = num_heads,
+        .num_points = num_points,
+        .point_offset = point_offset,
     };
     auto args = OperationType::tensor_args_t{
         .value = value,

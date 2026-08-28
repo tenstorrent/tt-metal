@@ -62,7 +62,11 @@ def multi_scale_deformable_attn_ttnn(
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
     bs, _, embed_dims = value.shape
-    _, num_queries, num_heads, num_levels, num_points = attention_weights.shape
+    num_levels = len(value_spatial_shapes)
+    # attn packs (head, level, point) into one row, so the head and point counts come from the
+    # grid, which still spells the head axis out.
+    _, num_heads, num_queries, level_point_width = sampling_grids.shape
+    num_points = level_point_width // (num_levels * 2)
     head_dim = embed_dims // num_heads
 
     if ENABLE_LOGGING:
@@ -71,12 +75,10 @@ def multi_scale_deformable_attn_ttnn(
     # Split value into a list of tensors for each level
     value_list = ttnn.split(value, [H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
 
-    # The fused op takes all three inputs ROW_MAJOR, so the head-major permute runs there rather
-    # than on a tiled tensor.
+    # The fused op takes all three inputs ROW_MAJOR. attn keeps every head and level in the row:
+    # the op reaches a head's level run by byte offset, so the head-major permute and the
+    # spelled-out (num_levels, num_points) — whose (4, 4) tail padded to a whole tile — are gone.
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
-    attention_weights = ttnn.permute(
-        attention_weights, (0, 2, 1, 3, 4)
-    )  # [bs, num_heads, num_queries, num_levels, num_points]
 
     # ``ttnn.experimental.multi_scale_deformable_attn`` implements the num_levels == 1 case, so the
     # levels are summed here. The split is exact rather than an approximation: attention_weights is
@@ -99,12 +101,16 @@ def multi_scale_deformable_attn_ttnn(
             (bs * num_heads, num_queries, 1, num_points * 2),
         )  # [N, Q, 1, P*2] = [bs*num_heads, num_queries, 1, num_points*2]
 
-        attn_l_ = ttnn.reshape(attention_weights[:, :, :, level, :], (bs * num_heads, num_queries, num_points))
-
         # value (bs, H_, W_, embed_dims), grid (N, num_queries, 1, num_points*2), attn
-        # (N, num_queries, num_points) -> (N, num_queries, head_dim), with N = bs * num_heads.
+        # (bs, num_queries, num_heads*num_levels*num_points) -> (N, num_queries, head_dim),
+        # with N = bs * num_heads.
         output_l_ = ttnn.experimental.multi_scale_deformable_attn(
-            value_l_, sampling_grid_l_, attn_l_, num_heads=num_heads
+            value_l_,
+            sampling_grid_l_,
+            attention_weights,
+            num_heads=num_heads,
+            num_points=num_points,
+            point_offset=level * num_points,
         )
         output = output_l_ if output is None else ttnn.add(output, output_l_)
 
@@ -278,12 +284,15 @@ class TTMSDeformableAttention:
             query, self.params.attention_weights.weight, bias=self.params.attention_weights.bias
         )
 
+        # The head axis is spelled out only for the softmax, which normalises over each head's
+        # (level, point) run, and folded straight back. The core attention reaches a head's level
+        # by byte offset, so it never wants the axes materialised.
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_queries, self.num_heads, self.num_levels * self.num_points)
         )
         attention_weights = ttnn.softmax(attention_weights, dim=-1)
         attention_weights = ttnn.reshape(
-            attention_weights, (bs, num_queries, self.num_heads, self.num_levels, self.num_points)
+            attention_weights, (bs, num_queries, self.num_heads * self.num_levels * self.num_points)
         )
 
         if ENABLE_LOGGING:

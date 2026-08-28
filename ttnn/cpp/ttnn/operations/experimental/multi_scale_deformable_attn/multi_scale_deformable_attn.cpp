@@ -16,8 +16,11 @@ ttnn::Tensor multi_scale_deformable_attn(
     const ttnn::Tensor& attn,
     const std::optional<MemoryConfig>& memory_config,
     bool align_corners,
-    uint32_t num_heads) {
-    return ttnn::prim::multi_scale_deformable_attn(value, grid, attn, memory_config, align_corners, num_heads);
+    uint32_t num_heads,
+    uint32_t num_points,
+    uint32_t point_offset) {
+    return ttnn::prim::multi_scale_deformable_attn(
+        value, grid, attn, memory_config, align_corners, num_heads, num_points, point_offset);
 }
 
 }  // namespace ttnn::experimental

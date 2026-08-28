@@ -55,7 +55,14 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t w_in = vs[2];
     const uint32_t D = vs[3] / num_heads;
     const uint32_t Q = as[1];
-    const uint32_t P = as[2];
+    const uint32_t P = operation_attributes.num_points > 0 ? operation_attributes.num_points : as[2];
+    // attn either carries the head in its batch index or packs every head into the row. In the
+    // packed form the batch picks the page and the head picks a point range inside it, which is
+    // what spares the caller a head-major copy and the tile padding of a spelled-out (L, P).
+    const bool attn_wide = static_cast<uint32_t>(as[2]) != P;
+    const uint32_t attn_n_div = attn_wide ? num_heads : 1;
+    const uint32_t attn_head_stride_pts = attn_wide ? static_cast<uint32_t>(as[2]) / num_heads : 0;
+    const uint32_t attn_point_offset = operation_attributes.point_offset;
     const uint32_t reduction_size = 4 * P;
 
     constexpr uint32_t TILE_MAX_ROWS = 32;
@@ -91,12 +98,17 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // spares the caller a ROW_MAJOR rewrite down to a 4-byte page.
     const uint32_t grid_pts_per_stick = static_cast<uint32_t>(grid.logical_shape()[-1]) / 2u;
     const uint32_t grid_stick_raw = 2u * grid_pts_per_stick * grid.element_size();
-    const uint32_t attn_stick_raw = P * attn.element_size();
+    // The reader rounds a run's byte offset down to the 32-byte NoC boundary and indexes the
+    // wanted points from there, so a scratch row carries the worst-case lead-in as well.
+    // Kernel-side ATTN_READ_NBYTES derives the same number from P.
+    const uint32_t attn_stick_raw = (32u - 2u) + P * attn.element_size();
+    const uint32_t attn_page_raw = static_cast<uint32_t>(as[2]) * attn.element_size();
     const uint32_t output_stick_raw = D * output.element_size();
 
     const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.buffer()->buffer_type());
     const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.buffer()->buffer_type());
     const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
+    const uint32_t attn_page_aligned = aligned_page_size(attn_page_raw, attn.buffer()->buffer_type());
     const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.buffer()->buffer_type());
 
     // Tile size (bf16): 32 * 32 * 2 = 2048 bytes.
@@ -185,6 +197,10 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         attn_stick_aligned,
         grid_pts_per_stick,
         num_heads,
+        attn_page_aligned,
+        attn_n_div,
+        attn_head_stride_pts,
+        attn_point_offset,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);
