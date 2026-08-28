@@ -57,6 +57,29 @@ def test_ternary_addcdiv_ttnn(input_shapes, value, device):
     assert comp_pass
 
 
+@pytest.mark.parametrize("value", [2.75, 0.5, 10.0])
+def test_ternary_addcdiv_overflow_avoidance(device, value):
+    """Regression test for #54055: intermediate input_b * value must not overflow
+    when the final quotient is finite."""
+    input_shapes = torch.Size([1, 1, 32, 32])
+
+    in_data1 = torch.randn(input_shapes, dtype=torch.float32) * 100
+    in_data2 = torch.full(input_shapes, 1e30, dtype=torch.float32)
+    in_data3 = torch.full(input_shapes, 1e28, dtype=torch.float32)
+
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor2 = ttnn.from_torch(in_data2, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor3 = ttnn.from_torch(in_data3, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+
+    output_tensor = ttnn.addcdiv(input_tensor1, input_tensor2, input_tensor3, value=value)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden = torch.addcdiv(in_data1, in_data2, in_data3, value=value)
+
+    assert not torch.any(torch.isinf(output_tensor)), "addcdiv produced inf; intermediate overflow not fixed"
+    assert torch.allclose(output_tensor, golden, atol=1e-2, rtol=1e-3)
+
+
 def create_full_range_tensor(input_shape, dtype, value_ranges):
     """Create a tensor with values spanning multiple ranges."""
     num_elements = torch.prod(torch.tensor(input_shape)).item()

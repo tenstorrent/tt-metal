@@ -48,9 +48,11 @@ Tensor _addcdiv(
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
-    Tensor t_factor = ttnn::multiply(input_b, value, std::nullopt, output_mem_config);
-    Tensor t_div = ttnn::div(t_factor, input_c, false, std::nullopt, std::nullopt, output_mem_config);
-    Tensor result = ttnn::add(input_a, t_div, std::nullopt, output_mem_config);
+    // Divide before scaling to avoid intermediate overflow (see addcmul fix above).
+    Tensor t_div = ttnn::div(input_b, input_c, false, std::nullopt, std::nullopt, output_mem_config);
+    Tensor t_scaled = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
+    t_div.deallocate();
+    Tensor result = ttnn::add(input_a, t_scaled, std::nullopt, output_mem_config);
 
     if (result.dtype() == DataType::FLOAT32) {
         return result;
