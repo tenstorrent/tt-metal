@@ -52,6 +52,49 @@ DTYPE_TILE_BYTES = {
 MCAST_SEMAPHORES = 6
 
 
+def _stable(value):
+    """A rendering of `value` that depends on its CONTENT and not on where it lives.
+
+    repr() is the fallback, and repr() of a plain object embeds its address -- which would make
+    every key unique and the cache miss forever, silently. So the known argument types are
+    rendered by hand and _cache_key_of refuses anything that still looks like an address.
+    """
+    if isinstance(value, Dfb):
+        return ("dfb", value.name, value.num_pages, str(value.dtype), value.kind, value.thread)
+    if isinstance(value, (list, tuple)):
+        return tuple(_stable(v) for v in value)
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _stable(v)) for k, v in value.items()))
+    if isinstance(value, ttnn.Tensor):
+        # The SPEC, not the tensor: the ProgramSpec uses only the layout, and the address
+        # arrives per launch as a tensor argument. Keying on identity would never hit. And the
+        # spec's own repr is an address too, so it is spelled out field by field -- these four
+        # are what TensorParameter is built from.
+        spec = value.spec
+        return ("tensor_spec", str(spec.shape), str(spec.dtype), str(spec.layout), str(spec.memory_config))
+    return repr(value)
+
+
+def _cache_key_of(args):
+    """The cache key for a set of unified_program_spec arguments.
+
+    Built from EVERY argument rather than a list someone maintains: a key that misses a field
+    is a silent wrong-program hit, which is the worst failure a cache can have, and the way not
+    to miss one is never to enumerate them.
+    """
+    key = repr(sorted((name, _stable(value)) for name, value in args.items() if name != "ps"))
+    # An address in the key means some argument fell through to repr() and the cache would miss
+    # on every call -- which is safe, useless, and invisible. Better to say so.
+    assert "object at 0x" not in key, f"unstable cache key; a value needs a _stable() case: {key}"
+    return key
+
+
+# spec object -> the cache key unified_program_spec derived for it. A side table rather than an
+# attribute because ProgramSpec is a bound C++ type with no room for one. Keyed by id(), which
+# is safe only while the spec is alive; every caller holds its spec across the run that uses it.
+_CACHE_KEYS = {}
+
+
 def single_core():
     """The (0,0) core, as (core_ranges, cores)."""
     c = ttnn.CoreCoord(0, 0)
@@ -350,6 +393,17 @@ def unified_program_spec(
     """
     ps = ttnn.program_spec
 
+    # THE CACHE KEY, derived from every argument this function was handed rather than from a
+    # list someone maintains. A key that misses a field is a silent wrong-program hit -- the
+    # worst failure the cache can have -- and the way to not miss one is to never enumerate
+    # them. locals() here is exactly the parameter list, taken before anything below mutates
+    # it.
+    #
+    # Tensors reduce to their SPEC, not their identity: the ProgramSpec uses only the layout
+    # (TensorParameter), and the addresses arrive per launch as tensor arguments. Keying on
+    # the tensors themselves would miss on every call and cache nothing.
+    cache_key = _cache_key_of(locals())
+
     # The slot prediction. Kept in one place so the assumption is stated once rather than in
     # every kernel, and so the kernel-side check has something to check against.
     slots = {d.name: i for i, d in enumerate(dfbs)}
@@ -524,6 +578,7 @@ def unified_program_spec(
     spec.semaphores = sem_specs
     spec.tensor_parameters = [ps.TensorParameter(n, t.spec) for n, t in tensors.items()]
     spec.work_units = [wu]
+    _CACHE_KEYS[id(spec)] = cache_key
     return spec
 
 
@@ -561,4 +616,4 @@ def run_unified_spec(device, spec, tensors, runtime_args=None, nodes=None):
 
     run_args = ps.ProgramRunArgs()
     run_args.kernel_run_args = per_kernel
-    ps.run_program_spec(device, spec, run_args, list(tensors.items()))
+    ps.run_program_spec(device, spec, run_args, list(tensors.items()), cache_key=_CACHE_KEYS.get(id(spec), ""))
