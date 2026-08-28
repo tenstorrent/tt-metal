@@ -25,6 +25,7 @@ import pytest
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    fabric_1d_device_params,
     torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
@@ -166,11 +167,14 @@ ALL_MESH_CONFIGS = [
 
 def fabric_to_device_params(fabric_cfg):
     assert fabric_cfg in (
+        ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricConfig.FABRIC_2D,
         ttnn.FabricConfig.FABRIC_2D_TORUS_X,
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     )
+    if fabric_cfg == ttnn.FabricConfig.FABRIC_1D:
+        return fabric_1d_device_params()
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D:
         return fabric2d_device_params()
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_X:

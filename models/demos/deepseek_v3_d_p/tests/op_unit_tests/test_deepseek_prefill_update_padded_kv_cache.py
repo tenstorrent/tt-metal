@@ -11,6 +11,7 @@ around the boundary write at different offsets so new tokens overwrite the prior
 cache's trailing pad cells before spilling into the next slab.
 """
 
+
 from types import SimpleNamespace
 
 import pytest
@@ -68,7 +69,15 @@ def _make_input(torch_chunk, dtype, layout, mesh_device, mesh_mapper):
     )
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
     """The update op preserves the complete 656-byte mixed-format row as one FP8-typed stream."""
@@ -122,7 +131,15 @@ def test_update_padded_kv_cache_scaled_fp8_packed_row(mesh_device):
     assert torch.count_nonzero(result[1, 0, chunk_tokens:].float()) == 0
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (1, 1), marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 1), topology="mesh-1x1"), id="1x1"
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_single_device(mesh_device, dtype, layout):
@@ -442,7 +459,21 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
     return positions
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(
+            (2, 2), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"), id="2x2"
+        ),
+        pytest.param(
+            (2, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"), id="2x4"
+        ),
+        pytest.param(
+            (8, 4), marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), id="8x4"
+        ),
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",

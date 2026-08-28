@@ -175,7 +175,7 @@ class TttGenerationWorker:
             kv_cache=self.tt_kv_cache,
             prompt_lens=prompt_lens,
             sampling_params=self._sampling_params,
-            warmup_prefill=False,
+            warmup_prefill=True,
             enable_trace=enable_trace,
         )
         prefilled_token = (prefill_out[0] if isinstance(prefill_out, tuple) else prefill_out).reshape(-1)

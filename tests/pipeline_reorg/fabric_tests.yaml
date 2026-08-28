@@ -185,8 +185,7 @@
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric stability nightly tests
-  # TT_METAL_OPERATION_TIMEOUT_SECONDS=0 disables hang detection for the long-running
-  # stability suite (matches pre-refactor tm-fabric-tests-impl inline cmd).
+  # TT_METAL_OPERATION_TIMEOUT_SECONDS=0 disables hang detection for the long-running stability suite.
   cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml --filter 'name.*_short'
   skus:
     bh_loudbox:

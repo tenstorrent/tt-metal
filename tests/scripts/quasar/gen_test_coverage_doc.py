@@ -232,7 +232,7 @@ def render():
     for req in rows_out:
         hits = by_req.get(req["key"], [])
         live = any(f in gating for f, _ in hits)
-        evidence = req.get("_evidence", "wired into the gating yaml")
+        evidence = req.get("evidence", "wired into the gating yaml")
         out.append(
             f"| **{req['key']}** — {req.get('summary', '')} | {req.get('milestone', '?')} "
             f"| {req.get('owner', '?')} | {len(hits)} | {'yes' if live else 'no'} "

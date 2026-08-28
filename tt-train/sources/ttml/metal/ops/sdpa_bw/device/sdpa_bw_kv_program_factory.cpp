@@ -48,8 +48,8 @@ constexpr auto kGradValueAccumCbIndex = tt::CBIndex::c_8;
 constexpr auto kGradKeyAccumCbIndex = tt::CBIndex::c_9;
 constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
 constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_11;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_12;
-constexpr auto kTransposeWhCbIndex = tt::CBIndex::c_13;
+constexpr auto kGradScoresTransposedCbIndex = tt::CBIndex::c_12;   // dS^T, packed directly from DST
+constexpr auto kAttnWeightsTransposedCbIndex = tt::CBIndex::c_13;  // P^T, packed directly from DST
 constexpr auto kUScalarRowCbIndex = tt::CBIndex::c_14;
 constexpr auto kGradKeyCbIndex = tt::CBIndex::c_15;
 constexpr auto kGradValueCbIndex = tt::CBIndex::c_16;
@@ -355,10 +355,10 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
         program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, kWt);
 
-    [[maybe_unused]] auto cb_transpose_wh = create_circular_buffer(
+    [[maybe_unused]] auto cb_attn_weights_transposed = create_circular_buffer(
         program,
         all_cores,
-        kTransposeWhCbIndex,
+        kAttnWeightsTransposedCbIndex,
         precise_data_format,
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
@@ -379,14 +379,13 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_scores =  // CBIndex::c_15
-        create_circular_buffer(
-            program,
-            all_cores,
-            kGradScoresCbIndex,
-            precise_data_format,
-            float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+    [[maybe_unused]] auto cb_grad_scores_transposed = create_circular_buffer(
+        program,
+        all_cores,
+        kGradScoresTransposedCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
         create_circular_buffer(
@@ -493,6 +492,12 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         mode[tt::CBIndex::c_8] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradValueAccumCbIndex
         mode[tt::CBIndex::c_9] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kGradKeyAccumCbIndex
+        // P (c_10) is consumed only via copy-to-dest in the compute kernel (never through a
+        // Src-register unpack), so unpack-to-dest keeps it at full FP32 through the
+        // elementwise dS chain. dS never leaves DST untransposed: P^T and dS^T are produced
+        // by in-DST transpose_dest and packed directly to c_13/c_12, which stay Default —
+        // they feed matmul Src registers, where Float32 unpack is not supported.
+        mode[tt::CBIndex::c_10] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;  // kAttentionWeightsCbIndex
         return mode;
     };
 
