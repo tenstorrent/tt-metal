@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_accurate, assert_bit_identical
 from models.demos.deepseek_v3_d_p.tt.kda import ops
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_RECURRENT_STATE_DTYPE, KDARecurrenceProgramConfig
 
 pytestmark = [
     run_for_blackhole(),
@@ -152,7 +152,6 @@ def test_distributed_affine_prefix_matches_serial(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
-            program_config=program_config,
             compute_config=compute_config,
         )
     cache_entries = mesh_device.num_program_cache_entries()
@@ -162,7 +161,6 @@ def test_distributed_affine_prefix_matches_serial(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
-            program_config=program_config,
             compute_config=compute_config,
         )
     ttnn.synchronize_device(mesh_device)
@@ -175,7 +173,6 @@ def test_distributed_affine_prefix_matches_serial(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
-            program_config=program_config,
             compute_config=compute_config,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -192,8 +189,8 @@ def test_distributed_affine_prefix_matches_serial(
     traced_final = _replicated_sp_to_torch(traced_final_tt, mesh_device, sp_axis, tensor_parallel_axis)
     ttnn.release_trace(mesh_device, trace_id)
 
-    assert entry_tt.dtype == program_config.recurrent_state_dtype
-    assert final_tt.dtype == program_config.recurrent_state_dtype
+    assert entry_tt.dtype == KDA_RECURRENT_STATE_DTYPE
+    assert final_tt.dtype == KDA_RECURRENT_STATE_DTYPE
 
     assert_accurate(expected_entries, actual_entries, name=f"tp_axis={tensor_parallel_axis} production entries")
     assert_accurate(expected_final.squeeze(0), actual_final, name=f"tp_axis={tensor_parallel_axis} production final")
@@ -241,7 +238,6 @@ def test_distributed_affine_prefix_determinism(
             b_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
-            program_config=program_config,
             compute_config=compute_config,
         )
         ttnn.synchronize_device(mesh_device)

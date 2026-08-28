@@ -72,9 +72,9 @@ def test_composed_layer_pcc(device: ttnn.Device) -> None:
         ),
         dim=-1,
     )
-    assert_accurate(golden_output, actual_output, name=f"T={sequence} output", pcc_threshold=0.98)
-    assert_accurate(golden_state.recurrent, actual_recurrent, name=f"T={sequence} recurrent state", pcc_threshold=0.98)
-    assert_accurate(golden_convolution, actual_convolution, name=f"T={sequence} convolution state", pcc_threshold=0.98)
+    assert_accurate(golden_output, actual_output, name=f"T={sequence} output", pcc_threshold=0.999)
+    assert_accurate(golden_state.recurrent, actual_recurrent, name=f"T={sequence} recurrent state", pcc_threshold=0.999)
+    assert_accurate(golden_convolution, actual_convolution, name=f"T={sequence} convolution state", pcc_threshold=0.999)
 
 
 def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
@@ -93,7 +93,7 @@ def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: P
     cached_weights = KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
     layer = ttKDA(device, config, weights=cached_weights)
     actual_output, _ = _forward(layer, hidden, layer.allocate_state())
-    assert_accurate(golden_output, actual_output, name="cache-only output", pcc_threshold=0.98)
+    assert_accurate(golden_output, actual_output, name="cache-only output", pcc_threshold=0.999)
 
 
 def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
@@ -111,15 +111,6 @@ def test_program_config_controls_tp_topology(device: ttnn.Device) -> None:
     program_config = replace(make_program_config(), tp_ccl_topology=ttnn.Topology.Ring)
     layer = ttKDA(device, config, random_weights(config), program_config=program_config)
     assert layer.tp_ccl_topology == ttnn.Topology.Ring
-
-    overridden = ttKDA(
-        device,
-        config,
-        random_weights(config),
-        topology=ttnn.Topology.Linear,
-        program_config=program_config,
-    )
-    assert overridden.tp_ccl_topology == ttnn.Topology.Linear
 
 
 def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error) -> None:
@@ -169,10 +160,10 @@ def test_segmented_prefill_cache_continuity(device: ttnn.Device) -> None:
         ),
         dim=-1,
     )
-    assert_accurate(golden_first, actual_first, name="first prefill segment output", pcc_threshold=0.98)
-    assert_accurate(golden_second, actual_second, name="second prefill segment output", pcc_threshold=0.98)
-    assert_accurate(golden_state.recurrent, actual_recurrent, name="cache recurrent state", pcc_threshold=0.98)
-    assert_accurate(golden_convolution, actual_convolution, name="cache convolution state", pcc_threshold=0.98)
+    assert_accurate(golden_first, actual_first, name="first prefill segment output", pcc_threshold=0.999)
+    assert_accurate(golden_second, actual_second, name="second prefill segment output", pcc_threshold=0.999)
+    assert_accurate(golden_state.recurrent, actual_recurrent, name="cache recurrent state", pcc_threshold=0.999)
+    assert_accurate(golden_convolution, actual_convolution, name="cache convolution state", pcc_threshold=0.999)
 
 
 def test_explicit_fp32_state_is_replaced_without_mutating_input(device: ttnn.Device) -> None:
@@ -216,18 +207,18 @@ def test_explicit_fp32_state_is_replaced_without_mutating_input(device: ttnn.Dev
         ),
         dim=-1,
     )
-    assert_accurate(golden_output, actual_output, name="external FP32 output", pcc_threshold=0.98)
+    assert_accurate(golden_output, actual_output, name="external FP32 output", pcc_threshold=0.999)
     assert_accurate(
         golden_state.recurrent,
         actual_recurrent,
         name="external FP32 recurrent state",
-        pcc_threshold=0.98,
+        pcc_threshold=0.999,
     )
     assert_accurate(
         golden_convolution,
         actual_convolution,
         name="external BF16 convolution state",
-        pcc_threshold=0.98,
+        pcc_threshold=0.999,
     )
 
 
