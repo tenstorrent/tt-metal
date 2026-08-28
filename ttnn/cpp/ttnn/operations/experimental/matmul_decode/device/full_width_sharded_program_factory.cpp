@@ -6,6 +6,7 @@
 #include "ring_walk.hpp"
 #include "all_gather_writer.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/shape.hpp"
@@ -18,6 +19,8 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <array>
+#include <set>
 #include <vector>
 
 namespace ttnn::operations::experimental::matmul_decode {
@@ -900,6 +903,59 @@ ProgramDescriptor create_descriptor_ring_gather_full(
 
     if (all_gather) {
         const auto route = make_all_gather_fabric_route(input_tensor_a, *mesh_dispatch_coordinate);
+        const auto available_cores =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, device->get_sub_device_ids().at(0));
+        const auto available_core_list = corerange_to_cores(available_cores, std::nullopt, true);
+        const auto output_core_list = corerange_to_cores(output_core_range_set, std::nullopt, true);
+        const std::set<CoreCoord> ring_core_set(S_or_C.begin(), S_or_C.end());
+        std::set<CoreCoord> output_core_set(output_core_list.begin(), output_core_list.end());
+        std::vector<CoreCoord> mux_cores;
+        for (const auto& core : available_core_list) {
+            if (!output_core_set.contains(core) && !ring_core_set.contains(core)) {
+                mux_cores.push_back(core);
+            }
+        }
+        const bool use_mux = C_cores.size() > 1;
+        std::array<std::vector<uint32_t>, 2> mux_links_by_dir;
+        uint32_t dst_index = 0;
+        const auto sender_node = input_tensor_a.device()->get_fabric_node_id(*mesh_dispatch_coordinate);
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            const uint32_t range = dir == 0 ? route.range_fwd : route.range_bwd;
+            if (range == 0) {
+                continue;
+            }
+            const auto valid_links =
+                tt::tt_fabric::get_forwarding_link_indices(sender_node, route.dst_nodes[dst_index++]);
+            TT_FATAL(!valid_links.empty(), "matmul_decode all_gather: no forwarding link for mux direction {}", dir);
+            mux_links_by_dir[dir] = valid_links;
+        }
+        const uint32_t required_mux_cores =
+            static_cast<uint32_t>(mux_links_by_dir[0].size() + mux_links_by_dir[1].size());
+        TT_FATAL(
+            C_cores.size() <= 1 || mux_cores.size() >= required_mux_cores,
+            "matmul_decode all_gather needs {} free mux cores, but only {} are available",
+            required_mux_cores,
+            mux_cores.size());
+        std::array<std::vector<CoreCoord>, 2> mux_core_groups;
+        uint32_t next_mux_core = 0;
+        uint32_t max_clients_per_mux = 0;
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            for (uint32_t mux_idx = 0; mux_idx < mux_links_by_dir[dir].size(); ++mux_idx) {
+                mux_core_groups[dir].push_back(mux_cores[next_mux_core++]);
+            }
+            if (!mux_links_by_dir[dir].empty()) {
+                max_clients_per_mux = std::max(
+                    max_clients_per_mux,
+                    div_up(static_cast<uint32_t>(C_cores.size()), static_cast<uint32_t>(mux_links_by_dir[dir].size())));
+            }
+        }
+        tt::tt_fabric::FabricMuxConfig mux_config(
+            /*num_full_size_channels=*/max_clients_per_mux,
+            /*num_header_only_channels=*/0,
+            /*num_buffers_full_size_channel=*/2,
+            /*num_buffers_header_only_channel=*/0,
+            /*buffer_size_bytes_full_size_channel=*/tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(),
+            /*base_l1_address=*/device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
         KernelDescriptor writer;
         writer.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/matmul_decode/device/kernels/dataflow/"
@@ -921,26 +977,130 @@ ProgramDescriptor create_descriptor_ring_gather_full(
             /*ag_rt_arg_base=*/0,
             /*num_shards=*/1,
             /*shard_sem_id=*/0,
-            /*staging_cb_id=*/0);
+            /*staging_cb_id=*/0,
+            use_mux,
+            mux_config.get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL),
+            mux_config.get_buffer_size_bytes(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL),
+            mux_config.get_status_address(),
+            mux_config.get_termination_signal_address(),
+            max_clients_per_mux);
         writer.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_1,
         };
         const KernelHandle writer_id = static_cast<KernelHandle>(desc.kernels.size());
         desc.kernels.push_back(std::move(writer));
+        CoreRangeSet mux_core_range;
+        if (use_mux) {
+            std::vector<CoreRange> active_mux_ranges;
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                for (const auto& mux_core : mux_core_groups[dir]) {
+                    active_mux_ranges.emplace_back(mux_core);
+                }
+            }
+            mux_core_range = CoreRangeSet(active_mux_ranges);
+            KernelDescriptor mux_kernel;
+            mux_kernel.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+            mux_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            mux_kernel.core_ranges = mux_core_range;
+            mux_kernel.compile_time_args = mux_config.get_fabric_mux_compile_time_args();
+            mux_kernel.config =
+                DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+            mux_kernel.runtime_args.reserve(required_mux_cores);
+            uint32_t route_dst_index = 0;
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                if ((dir == 0 && route.range_fwd == 0) || (dir == 1 && route.range_bwd == 0)) {
+                    continue;
+                }
+                const auto dst = route.dst_nodes[route_dst_index++];
+                for (uint32_t mux_idx = 0; mux_idx < mux_core_groups[dir].size(); ++mux_idx) {
+                    const auto mux_core = mux_core_groups[dir][mux_idx];
+                    mux_kernel.runtime_args.emplace_back(
+                        mux_core,
+                        mux_config.get_fabric_mux_run_time_args(
+                            input_tensor_a.device()->get_fabric_node_id(*mesh_dispatch_coordinate),
+                            dst,
+                            mux_links_by_dir[dir][mux_idx],
+                            desc,
+                            mux_core));
+                }
+            }
+            desc.kernels.push_back(std::move(mux_kernel));
+        }
+        const uint32_t gathered_n_tiles = inB_N_tiles_per_core * operation_attributes.ring_size;
+        const uint32_t local_n_tiles = inB_N_tiles_per_core * static_cast<uint32_t>(C_cores.size());
         for (uint32_t i = 0; i < C_cores.size(); ++i) {
+            // The gathered tensor remains WIDTH_SHARDED across C_cores. A local result from
+            // compute core i belongs at global N tile
+            //   ring_index * N_local_tiles + i * N_tiles_per_core.
+            // Convert that global tile to the destination output shard and its in-shard offset.
+            const uint32_t global_n_tile = route.ring_index * local_n_tiles + i * inB_N_tiles_per_core;
+            const uint32_t output_core_idx = global_n_tile / gathered_n_tiles;
+            const uint32_t output_tile_offset = global_n_tile % gathered_n_tiles;
+            TT_FATAL(
+                output_core_idx < C_cores.size() && output_tile_offset + inB_N_tiles_per_core <= gathered_n_tiles,
+                "matmul_decode all_gather output placement is invalid: source core {}, global tile {}, "
+                "destination core {}, offset {}, shard width {}",
+                i,
+                global_n_tile,
+                output_core_idx,
+                output_tile_offset,
+                gathered_n_tiles);
+            const CoreCoord output_core = C_cores[output_core_idx];
             const auto forwarding_links =
                 all_gather_forwarding_links(input_tensor_a, *mesh_dispatch_coordinate, route, i);
-            set_all_gather_writer_runtime_args(
-                desc,
-                writer_id,
-                C_cores[i],
-                device,
-                input_tensor_a,
-                *mesh_dispatch_coordinate,
-                output_tensor,
-                route,
-                forwarding_links);
+            if (use_mux) {
+                std::array<CoreCoord, 2> mux_core_by_dir{};
+                std::array<CoreCoord, 2> termination_masters{};
+                std::array<uint32_t, 2> mux_worker_ids{};
+                std::array<uint32_t, 2> mux_client_counts{};
+                for (uint32_t dir = 0; dir < 2; ++dir) {
+                    if ((dir == 0 && route.range_fwd == 0) || (dir == 1 && route.range_bwd == 0)) {
+                        continue;
+                    }
+                    const uint32_t mux_group = i % static_cast<uint32_t>(mux_core_groups[dir].size());
+                    const uint32_t mux_group_start = mux_group;
+                    const uint32_t mux_group_count = div_up(
+                        static_cast<uint32_t>(C_cores.size()) - mux_group_start,
+                        static_cast<uint32_t>(mux_core_groups[dir].size()));
+                    mux_core_by_dir[dir] = mux_core_groups[dir][mux_group];
+                    termination_masters[dir] = C_cores[mux_group_start];
+                    mux_worker_ids[dir] = i / static_cast<uint32_t>(mux_core_groups[dir].size());
+                    mux_client_counts[dir] = mux_group_count;
+                }
+                set_all_gather_writer_runtime_args(
+                    desc,
+                    writer_id,
+                    C_cores[i],
+                    device,
+                    input_tensor_a,
+                    *mesh_dispatch_coordinate,
+                    output_tensor,
+                    route,
+                    output_core,
+                    output_tile_offset,
+                    {},
+                    {},
+                    {},
+                    mux_config,
+                    mux_core_by_dir,
+                    termination_masters,
+                    mux_worker_ids,
+                    mux_client_counts);
+            } else {
+                set_all_gather_writer_runtime_args(
+                    desc,
+                    writer_id,
+                    C_cores[i],
+                    device,
+                    input_tensor_a,
+                    *mesh_dispatch_coordinate,
+                    output_tensor,
+                    route,
+                    output_core,
+                    output_tile_offset,
+                    forwarding_links);
+            }
         }
     }
 

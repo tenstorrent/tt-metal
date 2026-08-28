@@ -5,9 +5,11 @@
 #pragma once
 
 #include <optional>
+#include <array>
 #include <variant>
 #include <vector>
 
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -37,7 +39,13 @@ inline tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs all_gather_named_com
     uint32_t ag_rt_arg_base,
     uint32_t num_shards = 1,
     uint32_t shard_sem_id = 0,
-    uint32_t staging_cb_id = 0) {
+    uint32_t staging_cb_id = 0,
+    bool use_mux = false,
+    uint32_t mux_num_buffers = 0,
+    uint32_t mux_buffer_size = 0,
+    uint32_t mux_status_address = 0,
+    uint32_t mux_termination_address = 0,
+    uint32_t mux_num_clients = 0) {
     return {
         {"cb_out", cb_out_index},
         {"ag_M_tiles", M_tiles},
@@ -54,6 +62,12 @@ inline tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs all_gather_named_com
         {"ag_num_shards", num_shards},
         {"ag_shard_sem_id", shard_sem_id},
         {"ag_staging_cb", staging_cb_id},
+        {"ag_use_mux", use_mux ? 1u : 0u},
+        {"ag_mux_num_buffers", mux_num_buffers},
+        {"ag_mux_buffer_size", mux_buffer_size},
+        {"ag_mux_status", mux_status_address},
+        {"ag_mux_termination", mux_termination_address},
+        {"ag_mux_num_clients", mux_num_clients},
     };
 }
 
@@ -130,37 +144,80 @@ inline void set_all_gather_writer_runtime_args(
     const ttnn::MeshCoordinate& sender_coord,
     Tensor& output,
     const AllGatherFabricRoute& route,
+    const tt::tt_metal::CoreCoord& output_core,
+    uint32_t output_tile_offset,
     const std::vector<uint32_t>& link_indices = {},
     const std::vector<uint32_t>& prefix_args = {},
-    const std::vector<tt::tt_metal::CoreCoord>& extra_shard_phys = {}) {
-    const auto phys = device->worker_core_from_logical_core(core);
-    std::vector<uint32_t> rt = prefix_args;
-    // Placeholder for the output Buffer* that emplace_runtime_args will splice in at this index.
-    const size_t out_addr_idx = rt.size();
-    rt.push_back(0);
-    rt.push_back(static_cast<uint32_t>(phys.x));
-    rt.push_back(static_cast<uint32_t>(phys.y));
-    for (const auto& shard_phys : extra_shard_phys) {
-        rt.push_back(static_cast<uint32_t>(shard_phys.x));
-        rt.push_back(static_cast<uint32_t>(shard_phys.y));
-    }
-    rt.push_back(static_cast<uint32_t>(route.dst_nodes.size()));
+    const std::vector<tt::tt_metal::CoreCoord>& extra_shard_phys = {},
+    const std::optional<tt::tt_fabric::FabricMuxConfig>& mux_config = std::nullopt,
+    const std::array<tt::tt_metal::CoreCoord, 2>& mux_cores = {},
+    const std::array<tt::tt_metal::CoreCoord, 2>& termination_masters = {},
+    const std::array<uint32_t, 2>& mux_worker_ids = {},
+    const std::array<uint32_t, 2>& mux_client_counts = {}) {
+    const auto output_phys = device->worker_core_from_logical_core(output_core);
+    const auto worker_phys = device->worker_core_from_logical_core(core);
 
-    const auto sender_node = tensor_a.device()->get_fabric_node_id(sender_coord);
-    tt::tt_metal::KernelHandle writer_id_mut = writer_id;
-    tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
-        sender_node, route.dst_nodes, link_indices, desc, writer_id_mut, core, rt);
-
-    std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> var;
-    var.reserve(rt.size());
-    for (size_t i = 0; i < rt.size(); ++i) {
-        if (i == out_addr_idx) {
-            var.emplace_back(output.buffer());
-        } else {
-            var.emplace_back(rt[i]);
+    if (mux_config.has_value()) {
+        tt::tt_metal::KernelDescriptor::RTArgList rt;
+        rt.reserve(prefix_args.size() + 3 + 2 * extra_shard_phys.size() + 36);
+        for (const auto arg : prefix_args) {
+            rt.push_back(arg);
         }
+        rt.push_back(output.buffer());
+        rt.push_back(static_cast<uint32_t>(output_phys.x));
+        rt.push_back(static_cast<uint32_t>(output_phys.y));
+        rt.push_back(output_tile_offset);
+        rt.push_back(static_cast<uint32_t>(worker_phys.x));
+        rt.push_back(static_cast<uint32_t>(worker_phys.y));
+        for (const auto& shard_phys : extra_shard_phys) {
+            rt.push_back(static_cast<uint32_t>(shard_phys.x));
+            rt.push_back(static_cast<uint32_t>(shard_phys.y));
+        }
+        const auto append_mux_args = [&](uint32_t dir) {
+            const bool valid = dir == 0 ? route.range_fwd != 0 : route.range_bwd != 0;
+            ttnn::experimental::ccl::append_fabric_mux_connection_rt_args(
+                valid,
+                device->worker_core_from_logical_core(mux_cores[dir]),
+                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+                mux_config.value(),
+                core,
+                mux_worker_ids[dir],
+                mux_worker_ids[dir] == 0,
+                device->worker_core_from_logical_core(termination_masters[dir]),
+                desc,
+                rt);
+            rt.push_back(mux_client_counts[dir]);
+        };
+        append_mux_args(0);
+        append_mux_args(1);
+        desc.kernels[writer_id].emplace_runtime_args(core, rt);
+    } else {
+        std::vector<uint32_t> rt = prefix_args;
+        const size_t out_addr_idx = rt.size();
+        rt.push_back(0);
+        rt.push_back(static_cast<uint32_t>(output_phys.x));
+        rt.push_back(static_cast<uint32_t>(output_phys.y));
+        rt.push_back(output_tile_offset);
+        rt.push_back(static_cast<uint32_t>(worker_phys.x));
+        rt.push_back(static_cast<uint32_t>(worker_phys.y));
+        for (const auto& shard_phys : extra_shard_phys) {
+            rt.push_back(static_cast<uint32_t>(shard_phys.x));
+            rt.push_back(static_cast<uint32_t>(shard_phys.y));
+        }
+        rt.push_back(static_cast<uint32_t>(route.dst_nodes.size()));
+        const auto sender_node = tensor_a.device()->get_fabric_node_id(sender_coord);
+        tt::tt_metal::KernelHandle writer_id_mut = writer_id;
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args<tt::tt_metal::ProgramDescriptor>(
+            sender_node, route.dst_nodes, link_indices, desc, writer_id_mut, core, rt);
+        std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> var;
+        var.reserve(rt.size());
+        for (size_t i = 0; i < rt.size(); ++i) {
+            var.emplace_back(
+                i == out_addr_idx ? std::variant<uint32_t, tt::tt_metal::Buffer*>(output.buffer())
+                                  : std::variant<uint32_t, tt::tt_metal::Buffer*>(rt[i]));
+        }
+        desc.kernels[writer_id].emplace_runtime_args(core, var);
     }
-    desc.kernels[writer_id].emplace_runtime_args(core, var);
 }
 
 }  // namespace ttnn::operations::experimental::matmul_decode

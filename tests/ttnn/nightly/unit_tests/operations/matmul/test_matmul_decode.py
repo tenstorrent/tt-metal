@@ -731,16 +731,37 @@ def _1x4_line_submesh(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_matmul_decode_all_gather_full_width(mesh_device):
-    """Column-parallel matmul_decode with fused all-gather along N (full-width L1 path)."""
+@pytest.mark.parametrize("fused_all_gather", [True, False], ids=["fused", "explicit"])
+@pytest.mark.parametrize(
+    "m,k,n_full,num_inputA_cores,num_inputB_cores",
+    [
+        # Original mux/remapping regression with two output tiles per compute core.
+        pytest.param(32, 1024, 16384, 4, 64, id="mux-remap-m32"),
+        # DeepSeek-V4-Flash decode projections. N is the post-all-gather global width;
+        # every device owns N/4 columns before the fused collective. Use the model's
+        # usual 64-column B shards where the device core count permits it.
+        pytest.param(1, 4096, 1024, 32, 4, id="deepseek-q-a-compressor"),
+        pytest.param(1, 1024, 32768, 32, 64, id="deepseek-q-b"),
+        pytest.param(1, 4096, 512, 32, 2, id="deepseek-kv-hca"),
+        pytest.param(1, 4096, 1536, 32, 6, id="deepseek-fused-qa-kv"),
+        pytest.param(1, 8192, 4096, 32, 16, id="deepseek-o-b"),
+        pytest.param(1, 4096, 2048, 32, 8, id="deepseek-shared-gate-up"),
+        pytest.param(1, 2048, 4096, 32, 16, id="deepseek-shared-down"),
+        pytest.param(1, 4096, 256, 32, 1, id="deepseek-router-gate-direct"),
+    ],
+)
+def test_matmul_decode_all_gather_full_width(
+    mesh_device, fused_all_gather, m, k, n_full, num_inputA_cores, num_inputB_cores
+):
+    """Compare fused and explicit all-gather on DeepSeek-V4-Flash decode shapes."""
     torch.manual_seed(0)
     mesh_device = _1x4_line_submesh(mesh_device)
 
-    m, k, n_local = 32, 128, 64
     ring_size = mesh_device.get_num_devices()
-    n_full = n_local * ring_size
-    num_inputA_cores = 4
-    num_inputB_cores = n_local // 64
+    assert n_full % ring_size == 0
+    n_local = n_full // ring_size
+    assert k % (num_inputA_cores * 32) == 0
+    assert n_local % (num_inputB_cores * 32) == 0
     grid = mesh_device.compute_with_storage_grid_size()
     if grid.x * grid.y < max(num_inputA_cores, num_inputB_cores):
         pytest.skip(f"device grid {grid.x}x{grid.y} is too small")
@@ -768,6 +789,7 @@ def test_matmul_decode_all_gather_full_width(mesh_device):
     input_tensor_a = ttnn.from_torch(
         torch_a,
         layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((get_tile_height(m), 32)),
         device=mesh_device,
         memory_config=in0_memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -780,8 +802,24 @@ def test_matmul_decode_all_gather_full_width(mesh_device):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
 
-    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, all_gather=True)
+    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, all_gather=fused_all_gather)
+    if not fused_all_gather:
+        all_gather_memory_config = ttnn.create_sharded_memory_config(
+            (get_tile_height(m), n_full // num_inputB_cores),
+            core_grid=input_b_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        output_tensor = ttnn.all_gather(
+            output_tensor,
+            dim=-1,
+            memory_config=all_gather_memory_config,
+        )
     assert tuple(output_tensor.shape)[-2:] == (m, n_full)
 
-    out = ttnn.to_torch(ttnn.get_device_tensors(output_tensor)[0]).float()
-    assert_with_pcc(ref, out, 0.99)
+    device_outputs = ttnn.get_device_tensors(output_tensor)
+    assert len(device_outputs) == ring_size
+    for device_output in device_outputs:
+        actual = ttnn.to_torch(device_output).float()
+        assert_with_pcc(ref, actual, 0.99)

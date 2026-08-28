@@ -13,6 +13,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -32,20 +33,85 @@
 //
 // Runtime args starting at ag_rt_arg_base:
 //   [0] output buffer address
-//   [1] this core's noc0 x
-//   [2] this core's noc0 y
-//   [3 .. 2+2*(num_shards-1)] extra shard dest noc x,y  (num_shards > 1)
+//   [1] primary output shard's noc0 x
+//   [2] primary output shard's noc0 y
+//   [3] tile offset within the primary output shard
+//   [4] this worker's noc0 x
+//   [5] this worker's noc0 y
+//   [6 .. 5+2*(num_shards-1)] extra shard dest noc x,y  (num_shards > 1)
 //   next: num_connections
 //   then: fabric RoutingPlaneConnectionManager args
 //
 // Open EDM as soon as the sender writer starts. Opening after K-reduce drops
 // start-barrier incs that already arrived at this chip's ethernet.
+template <uint32_t NumBuffers>
+struct AllGatherMuxConnection {
+    bool valid = false;
+    bool termination_master = false;
+    uint32_t mux_x = 0, mux_y = 0;
+    uint32_t channel_base = 0, connection_info = 0, handshake = 0, flow_control = 0, buffer_index = 0, channel_id = 0;
+    uint32_t termination_sync = 0, mux_status = 0, local_flow_control = 0, local_teardown = 0, local_buffer_index = 0;
+    uint32_t termination_master_x = 0, termination_master_y = 0, num_clients = 0;
+    tt::tt_fabric::WorkerToFabricMuxSender<NumBuffers> sender;
+};
+
+template <uint32_t NumBuffers>
+inline AllGatherMuxConnection<NumBuffers> all_gather_parse_mux_connection(uint32_t& arg_idx) {
+    AllGatherMuxConnection<NumBuffers> c;
+    c.valid = get_arg_val<uint32_t>(arg_idx++) != 0;
+    c.termination_master = get_arg_val<uint32_t>(arg_idx++) != 0;
+    c.mux_x = get_arg_val<uint32_t>(arg_idx++);
+    c.mux_y = get_arg_val<uint32_t>(arg_idx++);
+    c.channel_base = get_arg_val<uint32_t>(arg_idx++);
+    c.connection_info = get_arg_val<uint32_t>(arg_idx++);
+    c.handshake = get_arg_val<uint32_t>(arg_idx++);
+    c.flow_control = get_arg_val<uint32_t>(arg_idx++);
+    c.buffer_index = get_arg_val<uint32_t>(arg_idx++);
+    c.channel_id = get_arg_val<uint32_t>(arg_idx++);
+    c.termination_sync = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    c.mux_status = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    c.local_flow_control = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    c.local_teardown = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    c.local_buffer_index = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    c.termination_master_x = get_arg_val<uint32_t>(arg_idx++);
+    c.termination_master_y = get_arg_val<uint32_t>(arg_idx++);
+    c.num_clients = get_arg_val<uint32_t>(arg_idx++);
+    return c;
+}
+
+template <uint32_t NumBuffers>
+inline void all_gather_open_mux_connections(AllGatherMuxConnection<NumBuffers>* connections) {
+    for (uint32_t dir = 0; dir < 2; ++dir) {
+        auto& c = connections[dir];
+        if (!c.valid) {
+            continue;
+        }
+        c.sender = tt::tt_fabric::build_connection_to_fabric_endpoint<NumBuffers>(
+            c.mux_x,
+            c.mux_y,
+            c.channel_id,
+            NumBuffers,
+            get_named_compile_time_arg_val("ag_mux_buffer_size"),
+            c.channel_base,
+            c.connection_info,
+            c.handshake,
+            c.flow_control,
+            c.buffer_index,
+            c.local_flow_control,
+            c.local_teardown,
+            c.local_buffer_index);
+        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            c.mux_x, c.mux_y, get_named_compile_time_arg_val("ag_mux_status"), c.mux_status);
+        tt::tt_fabric::fabric_client_connect(c.sender);
+    }
+}
+
 inline void all_gather_open_connections(tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection) {
     using namespace tt::tt_fabric::linear::experimental;
 
     constexpr uint32_t ag_rt_arg_base = get_named_compile_time_arg_val("ag_rt_arg_base");
     constexpr uint32_t num_shards = get_named_compile_time_arg_val("ag_num_shards");
-    uint32_t arg_idx = ag_rt_arg_base + 1 + 2 * num_shards;
+    uint32_t arg_idx = ag_rt_arg_base + 4 + 2 * num_shards;
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t fabric_arg_idx = arg_idx;
     DPRINT("[AGW] before open_connections nconn={}\n", num_connections);
@@ -53,7 +119,10 @@ inline void all_gather_open_connections(tt::tt_fabric::RoutingPlaneConnectionMan
     DPRINT("[AGW] after open_connections\n");
 }
 
-inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection) {
+template <uint32_t NumBuffers>
+inline void all_gather_local_output(
+    tt::tt_fabric::RoutingPlaneConnectionManager& fabric_connection,
+    AllGatherMuxConnection<NumBuffers>* mux_connections = nullptr) {
     using namespace tt::tt_fabric::linear::experimental;
 
     constexpr uint32_t cb_out_id = get_named_compile_time_arg_val("cb_out");
@@ -71,6 +140,8 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     constexpr uint32_t num_shards = get_named_compile_time_arg_val("ag_num_shards");
     constexpr uint32_t shard_sem_id = get_named_compile_time_arg_val("ag_shard_sem_id");
     constexpr uint32_t staging_cb_id = get_named_compile_time_arg_val("ag_staging_cb");
+    constexpr bool use_mux = get_named_compile_time_arg_val("ag_use_mux") != 0;
+    constexpr uint32_t mux_buffer_size = get_named_compile_time_arg_val("ag_mux_buffer_size");
     constexpr uint32_t gathered_n_tiles = N_tiles_per_core * ring_size;
     constexpr uint32_t block_num_tiles = M_tiles * N_tiles_per_core;
 
@@ -80,13 +151,21 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     std::array<uint32_t, num_shards> shard_noc_y{};
     shard_noc_x[0] = get_arg_val<uint32_t>(arg_idx++);
     shard_noc_y[0] = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_tile_offset = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_noc_y = get_arg_val<uint32_t>(arg_idx++);
     if constexpr (num_shards > 1) {
         for (uint32_t s = 1; s < num_shards; ++s) {
             shard_noc_x[s] = get_arg_val<uint32_t>(arg_idx++);
             shard_noc_y[s] = get_arg_val<uint32_t>(arg_idx++);
         }
     }
-    const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t num_connections = 0;
+    if constexpr (use_mux) {
+        arg_idx += 2 * 17;
+    } else {
+        num_connections = get_arg_val<uint32_t>(arg_idx++);
+    }
 
     CircularBuffer out_cb(cb_out_id);
     const uint32_t tile_size = out_cb.get_tile_size();
@@ -112,24 +191,66 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     std::array starts = {
         static_cast<uint8_t>(start_distance_in_hops_forward), static_cast<uint8_t>(start_distance_in_hops_backward)};
     std::array ranges = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
-    if (ranges[0] == 0) {
-        starts[0] = starts[1];
-        ranges[0] = ranges[1];
+    if constexpr (!use_mux) {
+        if (ranges[0] == 0) {
+            starts[0] = starts[1];
+            ranges[0] = ranges[1];
+        }
     }
 
-    auto write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    uint8_t write_route_id = 0;
+    uint8_t sem_route_id = 0;
+    if constexpr (!use_mux) {
+        write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+        sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    }
+    std::array<volatile PACKET_HEADER_TYPE*, 2> mux_write_headers{};
+    std::array<volatile PACKET_HEADER_TYPE*, 2> mux_sem_headers{};
+    if constexpr (use_mux) {
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            mux_write_headers[dir] = PacketHeaderPool::allocate_header();
+            mux_sem_headers[dir] = PacketHeaderPool::allocate_header();
+        }
+    }
+    auto send_atomic_inc = [&](uint32_t dir, uint64_t dest) {
+        if constexpr (use_mux) {
+            if (mux_connections[dir].valid) {
+                // A multicast packet injected through a worker mux can be
+                // replicated only on the first forwarding hop. Send one
+                // unicast packet for each hop so every remote writer receives
+                // exactly one barrier increment.
+                for (uint32_t hop = 1; hop <= ranges[dir]; ++hop) {
+                    fabric_unicast_noc_unicast_atomic_inc(
+                        &mux_connections[dir].sender,
+                        mux_sem_headers[dir],
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest, 1},
+                        static_cast<uint8_t>(hop));
+                    // The packet header is reused for the next hop. Wait until
+                    // the NOC has copied it into the mux staging slot before
+                    // changing its route fields.
+                    noc_async_writes_flushed();
+                }
+            }
+        } else {
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest, 0});
+        }
+    };
 
-    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, write_route_id, starts.data(), ranges.data(), nullptr, static_cast<uint16_t>(tile_size));
+    if constexpr (!use_mux) {
+        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            fabric_connection, write_route_id, starts.data(), ranges.data(), nullptr, static_cast<uint16_t>(tile_size));
+    }
 
-    fabric_multicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        fabric_connection,
-        sem_route_id,
-        starts.data(),
-        ranges.data(),
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+    if constexpr (!use_mux) {
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            fabric_connection,
+            sem_route_id,
+            starts.data(),
+            ranges.data(),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+    }
 
     // Fabric packets always carry a NOC_0 address (remote EDM writes on NOC_0). Local
     // noc_async_write / noc_semaphore_inc must use this kernel's NOC (the writer is on
@@ -137,16 +258,23 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     // Two semaphores (same split as broadcast_rm_writer): a fast chip can send its
     // completion inc while others are still on the start barrier. Sharing one sem
     // means that inc is counted as a start signal and then wiped by the reset.
-    const uint64_t fabric_barrier_noc_addr = safe_get_noc_addr(shard_noc_x[0], shard_noc_y[0], barrier_sem_addr, 0);
-    const uint64_t fabric_ready_noc_addr = safe_get_noc_addr(shard_noc_x[0], shard_noc_y[0], out_ready_sem_addr, 0);
-    const uint64_t local_ready_noc_addr = safe_get_noc_addr(shard_noc_x[0], shard_noc_y[0], out_ready_sem_addr);
+    const uint64_t fabric_barrier_noc_addr = safe_get_noc_addr(worker_noc_x, worker_noc_y, barrier_sem_addr, 0);
+    const uint64_t fabric_ready_noc_addr = safe_get_noc_addr(worker_noc_x, worker_noc_y, out_ready_sem_addr, 0);
+    const uint64_t local_ready_noc_addr = safe_get_noc_addr(worker_noc_x, worker_noc_y, out_ready_sem_addr);
     volatile tt_l1_ptr uint32_t* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr);
     volatile tt_l1_ptr uint32_t* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
 
     constexpr uint32_t num_remote_targets = range_hops_forward + range_hops_backward;
     DPRINT("[AGW] start_barrier mcast-inc remotes={} sem={}\n", num_remote_targets, *barrier_ptr);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_barrier_noc_addr, 0});
+    if constexpr (use_mux) {
+        send_atomic_inc(0, fabric_barrier_noc_addr);
+        send_atomic_inc(1, fabric_barrier_noc_addr);
+    } else {
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_connection,
+            sem_route_id,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_barrier_noc_addr, 0});
+    }
     DPRINT("[AGW] before start_barrier wait_min need={} sem={}\n", num_remote_targets, *barrier_ptr);
     noc_semaphore_wait_min(barrier_ptr, num_remote_targets);
     DPRINT("[AGW] after start_barrier wait_min sem={}\n", *barrier_ptr);
@@ -155,7 +283,7 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     Noc noc;
     auto send_column = [&](uint32_t l1_read_addr, uint32_t dest_x, uint32_t dest_y, uint32_t bw, bool do_local) {
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
-            const uint32_t tile_id = mt * gathered_n_tiles + ring_index * N_tiles_per_core + bw;
+            const uint32_t tile_id = mt * gathered_n_tiles + output_tile_offset + bw;
             const uint32_t dest_l1 = out_addr + tile_id * tile_size;
             const uint64_t fabric_dest_noc_addr = safe_get_noc_addr(dest_x, dest_y, dest_l1, 0);
             if (do_local) {
@@ -163,12 +291,35 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
                 noc_async_write(l1_read_addr, local_dest_noc_addr, tile_size);
                 noc.async_writes_flushed();
             }
-            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                fabric_connection,
-                write_route_id,
-                l1_read_addr,
-                tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
-                static_cast<uint16_t>(0u));
+            if constexpr (use_mux) {
+                for (uint32_t dir = 0; dir < 2; ++dir) {
+                    if (mux_connections[dir].valid) {
+                        // A worker mux has one outgoing fabric connection.
+                        // Explicit unicast packets make each remote chip's
+                        // destination deterministic and avoid relying on
+                        // multicast replication after mux injection.
+                        for (uint32_t hop = 1; hop <= ranges[dir]; ++hop) {
+                            fabric_unicast_noc_unicast_write(
+                                &mux_connections[dir].sender,
+                                mux_write_headers[dir],
+                                l1_read_addr,
+                                tile_size,
+                                tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
+                                static_cast<uint8_t>(hop));
+                            // Protect the reused header and source tile until
+                            // their copies into the mux staging slot complete.
+                            noc.async_writes_flushed();
+                        }
+                    }
+                }
+            } else {
+                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    fabric_connection,
+                    write_route_id,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
+                    static_cast<uint16_t>(0u));
+            }
             l1_read_addr += tile_size;
         }
         noc.async_writes_flushed();
@@ -203,8 +354,13 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     }
 
     DPRINT("[AGW] completion mcast-inc sem={}\n", *ready_ptr);
-    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-        fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_ready_noc_addr, 0});
+    if constexpr (use_mux) {
+        send_atomic_inc(0, fabric_ready_noc_addr);
+        send_atomic_inc(1, fabric_ready_noc_addr);
+    } else {
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_ready_noc_addr, 0});
+    }
     noc_semaphore_inc(local_ready_noc_addr, 1);
     DPRINT("[AGW] before completion wait_min need={} sem={}\n", ring_size, *ready_ptr);
     noc_semaphore_wait_min(ready_ptr, ring_size);
@@ -212,7 +368,35 @@ inline void all_gather_local_output(tt::tt_fabric::RoutingPlaneConnectionManager
     noc_semaphore_set(ready_ptr, 0);
 
     DPRINT("[AGW] before close_connections\n");
-    close_connections(fabric_connection);
+    if constexpr (use_mux) {
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            if (!mux_connections[dir].valid) {
+                continue;
+            }
+            tt::tt_fabric::fabric_client_disconnect(mux_connections[dir].sender);
+            if (mux_connections[dir].termination_master) {
+                auto* sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_connections[dir].termination_sync);
+                noc_semaphore_wait(sync_ptr, mux_connections[dir].num_clients - 1);
+                noc_inline_dw_write(
+                    safe_get_noc_addr(
+                        mux_connections[dir].mux_x,
+                        mux_connections[dir].mux_y,
+                        get_named_compile_time_arg_val("ag_mux_termination")),
+                    tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+                noc_async_write_barrier();
+            } else {
+                noc_semaphore_inc(
+                    safe_get_noc_addr(
+                        mux_connections[dir].termination_master_x,
+                        mux_connections[dir].termination_master_y,
+                        mux_connections[dir].termination_sync),
+                    1);
+                noc_async_atomic_barrier();
+            }
+        }
+    } else {
+        close_connections(fabric_connection);
+    }
     noc.async_write_barrier();
     DPRINT("[AGW] done\n");
 }
