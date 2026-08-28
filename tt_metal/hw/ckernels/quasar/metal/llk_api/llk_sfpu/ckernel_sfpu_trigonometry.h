@@ -255,11 +255,10 @@ inline void calculate_cosine() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
-    sfpi::vFloat C3, C2, C1, C0;
+    sfpi::vFloat C2, C1, C0;
 
     if constexpr (is_fp32_dest_acc_en) {
         // Constants for sin(a) = a + a^3 (C0 + a^2 (C1 + a^2 (C2 + a^2 C3))) on [0, PI/2].
-        C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
         C1 = 0x1.110edap-7f;
         C0 = -0x1.55554cp-3f;
@@ -268,6 +267,7 @@ inline void calculate_cosine() {
         C1 = 0x1.10c2a2p-7f;
         C0 = -0x1.5554a4p-3f;
     }
+    sfpi::vFloat C3 = sfpi::vConstFloatPrgm3;
 
     const float ROUNDING_BIAS = 12582912.0f;
     const float NEG_ROUNDING_BIAS = -12582912.0f;
@@ -805,6 +805,7 @@ void cosine_init() {
     sfpi::vConstFloatPrgm1 = -0x1.0b4612p-34f;
 
     sfpi::vConstFloatPrgm2 = FRAC_1_PI;
+    sfpi::vConstFloatPrgm3 = 0x1.5dc908p-19f;  // C3
 }
 
 template <bool APPROXIMATION_MODE>
