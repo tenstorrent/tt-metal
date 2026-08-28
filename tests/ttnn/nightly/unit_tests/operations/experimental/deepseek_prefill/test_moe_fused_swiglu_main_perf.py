@@ -18,16 +18,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import weight_memory_configs
-
-USE_PYTHON_DESCRIPTOR = os.environ.get("MOE_FUSED_SWIGLU_PYTHON_DESCRIPTOR", "0") == "1"
-TRANSPOSE_GRID = os.environ.get("MOE_FUSED_SWIGLU_TRANSPOSE_GRID", "0") == "1"
-if USE_PYTHON_DESCRIPTOR:
-    from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_program_descriptor import (
-        create_program_descriptor,
-        make_mailbox,
-        weight_memory_configs as descriptor_weight_memory_configs,
-    )
 
 TILE = 32
 EXPERTS_PER_TOKEN = 8
@@ -83,10 +73,7 @@ INPUT_CASES = (
     (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "row-major-bf16"),
     (ttnn.bfloat8_b, ttnn.TILE_LAYOUT, "tile-bf8"),
 )
-WEIGHT_LAYOUT_CASES = (
-    (ttnn.TensorMemoryLayout.INTERLEAVED, "interleaved"),
-    (ttnn.TensorMemoryLayout.ND_SHARDED, "nd-sharded"),
-)
+WEIGHT_LAYOUT_CASES = ((ttnn.TensorMemoryLayout.INTERLEAVED, "interleaved"),)
 if os.environ.get("MOE_FUSED_SWIGLU_TUNING_ONLY", "0") == "1":
     default_tuning_model = (
         "k3-situ" if os.environ.get("MOE_FUSED_SWIGLU_TUNING_ACTIVATION", "silu") == "situ" else "k3-silu"
@@ -103,7 +90,6 @@ if os.environ.get("MOE_FUSED_SWIGLU_TUNING_ONLY", "0") == "1":
         raise ValueError(f"unknown MOE_FUSED_SWIGLU_TUNING_INPUT={tuning_input_name!r}")
     tuning_input = tuning_inputs[tuning_input_name]
     INPUT_CASES = INPUT_CASES[tuning_input : tuning_input + 1]
-    WEIGHT_LAYOUT_CASES = WEIGHT_LAYOUT_CASES[1:]
 
 
 def to_device(tensor, dtype, layout, device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -149,15 +135,7 @@ def test_5k_cpp_binding_perf_matrix(
         input_layout,
         device,
     )
-    if weight_memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED:
-        if USE_PYTHON_DESCRIPTOR:
-            gate_up_memory_config, down_memory_config = descriptor_weight_memory_configs(
-                device, k, n, core_grid=core_grid, transpose_grid=TRANSPOSE_GRID
-            )
-        else:
-            gate_up_memory_config, down_memory_config = weight_memory_configs(device, k, n, core_grid=core_grid)
-    else:
-        gate_up_memory_config = down_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    gate_up_memory_config = down_memory_config = ttnn.DRAM_MEMORY_CONFIG
     weights = [
         to_device(host, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device, memory_config)
         for host, memory_config in zip(
@@ -189,56 +167,20 @@ def test_5k_cpp_binding_perf_matrix(
     activation = (
         ttnn.RoutedExpertActivation.SituGlu if model_config is KimiK3SituConfig else ttnn.RoutedExpertActivation.Silu
     )
-    if USE_PYTHON_DESCRIPTOR:
-        output = ttnn.empty(
-            x.shape,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+
+    def run_op(count):
+        op(
+            x,
+            [weights[0]],
+            [weights[1]],
+            [weights[2]],
+            count_tensors[count],
+            ids,
+            input_m_tiles=CAPACITY // TILE,
+            compute_kernel_config=config,
+            core_grid=core_grid,
+            activation=activation,
         )
-        mailbox = make_mailbox(device, core_grid.x * core_grid.y)
-        descriptor_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
-            dst_full_sync_en=False,
-        )
-        descriptors = {
-            count: create_program_descriptor(
-                x,
-                *weights,
-                count_tensor,
-                ids,
-                output,
-                mailbox,
-                input_m_tiles=CAPACITY // TILE,
-                compute_kernel_config=descriptor_config,
-                core_grid=core_grid,
-                transpose_grid=TRANSPOSE_GRID,
-                situ_glu=activation == ttnn.RoutedExpertActivation.SituGlu,
-            )
-            for count, count_tensor in count_tensors.items()
-        }
-
-        def run_op(count):
-            ttnn.generic_op([x, *weights, count_tensors[count], ids, output, mailbox], descriptors[count])
-
-    else:
-
-        def run_op(count):
-            op(
-                x,
-                [weights[0]],
-                [weights[1]],
-                [weights[2]],
-                count_tensors[count],
-                ids,
-                input_m_tiles=CAPACITY // TILE,
-                compute_kernel_config=config,
-                core_grid=core_grid,
-                activation=activation,
-            )
 
     # Compile/cache warmup is deliberately excluded from the reported matrix.
     run_op(512 if 512 in count_tensors else COUNTS[0])

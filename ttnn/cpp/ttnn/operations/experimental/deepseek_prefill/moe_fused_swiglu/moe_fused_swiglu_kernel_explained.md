@@ -2,8 +2,7 @@
 
 This document explains the current C++ implementation of
 `ttnn.experimental.deepseek_prefill.moe_fused_swiglu`. The source of truth is the C++ program
-factory and the three device kernels in `device/kernels/`. The Python geometry and descriptor under
-`ttnn/ttnn/operations/moe_fused_swiglu/` mirror the implementation for diagnostics and tuning.
+factory and the three device kernels in `device/kernels/`.
 
 The kernel computes one routed expert:
 
