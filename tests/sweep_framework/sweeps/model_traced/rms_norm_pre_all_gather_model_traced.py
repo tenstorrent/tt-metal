@@ -45,42 +45,42 @@ if model_traced_params:
 
 
 def invalidate_vector(test_vector) -> tuple:
-    """Reject traced configs whose recorded arguments cannot be what the model ran.
+    """Reject traced configs that reproduce a real model-side L1 limitation.
 
-    Nine traced configs (every width-4096 one, from Llama-3.3-70B on P300) record the
-    combination INTERLEAVED input + no program_config + fp32_dest_acc_en=True. That
-    combination cannot be allocated on ANY current arch:
+    Nine traced configs (every width-4096 one) record INTERLEAVED input + no
+    program_config + fp32_dest_acc_en=True, and throw before the op runs:
 
-        default grid:  1684672 B on one core   (wormhole L1 1499136 B, blackhole 1572864 B)
-        use_2d_core_grid=True: 1725632 B       -- worse, not a workaround
+        default grid:          1684672 B on one core
+        use_2d_core_grid=True: 1725632 B
+        L1 budget:             1499136 B (wormhole) / 1572864 B (blackhole)
 
-    Measured directly, not inferred. Since traces are only kept from tests that PASSED,
-    the model cannot have executed this combination, so some recorded field does not
-    correspond to the call that actually ran:
+    The trace is FAITHFUL and so is this module's replay. Reproduced through the
+    model's own code (models/common/rmsnorm.py RMSNorm, whose HiFi2 / approx=False /
+    packer_l1_acc=True / fp32_dest_acc_en=True config object matches the trace field
+    for field), on a 2-device mesh:
 
-      - ttnn.rms_norm_pre_all_gather passes a supplied compute_kernel_config through
-        unchanged (init_device_compute_kernel_config returns it as-is), and its own
-        default is fp32_dest_acc_en=False -- so the recorded True came from a real
-        config object, not from op defaults.
-      - The model's own norm path sets fp32_dest_acc_en=False (distributed_norm.py
-        ln_cfg), and for a width-sharded input it passes a LayerNormShardedMultiCore
-        program_config (ccl.py:443). A sharded input WITHOUT a program_config does not
-        even reach the allocation check ("std::get: wrong index for variant").
-      - The recorded width is per-chip and is faithful (8192 hidden / 2 devices = 4096),
-        so this is not a mesh or placement artifact.
+        Llama-3.3-70B (hidden 8192) -> per-chip 4096 -> same L1 failure
+        Llama-3.1-8B  (hidden 4096) -> per-chip 2048 -> runs fine
 
-    Which field is wrong cannot be determined from the trace alone, and the sweep cannot
-    reconstruct what was never recorded, so these are reported invalid rather than failed.
-    This needs a tracer-fidelity fix, not a sweep fix.
+    So this is a genuine limitation of running that norm at 4096 per chip, not a
+    sweep artifact: RMSNorm defaults to fp32_dest_acc_en=True, and the guard that
+    turns it off (tt_transformers/tt/decoder.py) only covers Qwen2.5-7B and a
+    Galaxy 1x8 submesh -- its name, use_galaxy_row_submesh_rmsnorm_l1_workaround,
+    shows the failure mode is already known, but the condition does not cover a
+    70B-class model on a 2-device mesh. The traced widths that pass (1024, 640)
+    are the same models sharded over 8 chips.
 
-    Note the config is not merely unrunnable as recorded: run with the model's real
-    fp32_dest_acc_en=False it executes, but the device accumulates sum(x^2) in bfloat16
-    while this module's golden accumulates in fp32, giving PCC 0.87 directly (0.72 through
-    the golden reconciliation) against thresholds of 0.95/0.80. So making these vectors
-    pass would need the golden to model bfloat16 accumulation as well.
+    Invalidated here so the suite reports it once, as a known model-side issue,
+    rather than as nine op failures every run. It should be removed once the model
+    widens that guard (or the op's fp32 buffers shrink).
 
-    The bound below is expressed from the measured 1690624 B at width 4096 (~413 B per
-    element of width) rather than hardcoding 4096, and leaves the traced width-1024 and
+    Note this cannot be rescued by dropping fp32_dest_acc_en either: it then runs,
+    but the device accumulates sum(x^2) in bfloat16 while this module's golden uses
+    fp32, giving PCC 0.87 directly (0.72 through the golden reconciliation) against
+    thresholds of 0.95/0.80.
+
+    The bound is expressed from the measured 1690624 B at width 4096 (~413 B per
+    element of width) rather than hardcoding 4096, and leaves the width-1024 and
     width-640 configs (31 vectors, all passing) untouched.
     """
     ckc = test_vector.get("compute_kernel_config")
