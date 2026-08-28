@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
@@ -13,6 +15,8 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_state_dict
+
+_CACHE_SCHEMA_VERSION = 2
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -43,8 +47,12 @@ def _cache_stem(
     mesh_shape: tuple[int, int],
     tensor_parallel_axis: int,
 ) -> str:
-    del config, mesh_shape, tensor_parallel_axis
-    return f"{cache_name_prefix}.{name}"
+    config_payload = json.dumps(asdict(config), sort_keys=True, separators=(",", ":"))
+    config_digest = hashlib.sha256(config_payload.encode("utf-8")).hexdigest()[:16]
+    return (
+        f"{cache_name_prefix}.{name}.v{_CACHE_SCHEMA_VERSION}.{config_digest}."
+        f"mesh{mesh_shape[0]}x{mesh_shape[1]}.tpaxis{tensor_parallel_axis}"
+    )
 
 
 @dataclass(frozen=True)
