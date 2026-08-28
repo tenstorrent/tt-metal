@@ -33,7 +33,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <regex>
 #include <semaphore>
 #include <set>
 #include <sstream>
@@ -975,21 +974,8 @@ static std::function<void()> jit_compile_kernel(
     // (mhartid, fence) and raw L1 arg-val pointer casts. -I kernel_dir (below)
     // keeps relative includes in the patched file resolvable.
     std::string patched_kernel_path = dir + "/patched_kernel.cpp";
-    // Kernel include roots (ttnn/, tt_metal/) parsed from the JIT -I flags so the patcher
-    // can reach + patch shared kernel helpers that live in another directory (the raw-L1-deref
-    // idioms in e.g. kernel_lib/*.inl). The emule shadow roots are checked first, so jit_hw
-    // headers are never patched.
-    std::vector<std::string> kernel_inc_roots;
-    {
-        static const std::regex inc_flag_re(R"RE(-I"([^"]+)")RE");
-        for (std::sregex_iterator it(extra_include_flags.begin(), extra_include_flags.end(), inc_flag_re), end;
-             it != end;
-             ++it) {
-            kernel_inc_roots.push_back((*it)[1].str());
-        }
-    }
     const std::vector<std::string> emule_inc_roots = {jit_inc, parent_inc};
-    tt::emule::patch_kernel_source(abs_kernel, patched_kernel_path, kernel_inc_roots, emule_inc_roots);
+    tt::emule::patch_kernel_source(abs_kernel, patched_kernel_path, extra_include_flags, emule_inc_roots);
 
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
