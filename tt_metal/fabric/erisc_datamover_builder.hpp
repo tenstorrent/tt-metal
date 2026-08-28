@@ -420,8 +420,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 
-// VC0 worker path: teardown and the producer cursor come from the conn table entry for
-// this channel.
+// VC0 worker path: the kernel looks the connection up in the conn table by eth channel.
 void append_worker_to_fabric_edm_sender_rt_args(
     tt::tt_fabric::chan_id_t eth_channel, std::vector<uint32_t>& args_out);
 

@@ -39,8 +39,7 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Compute fabric connection RT args without any PD mutation.
-// Pure computation — resolves routing and assembles RT args. Teardown and the producer
-// cursor come from the conn table, so only [direction, eth_channel] is emitted.
+// Pure computation — resolves routing and emits [direction, eth_channel] per connection.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,

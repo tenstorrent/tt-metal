@@ -698,8 +698,7 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Emits [direction, eth_channel] per connection; the kernel reads teardown and the producer
-// cursor from the conn table.
+// Emits [direction, eth_channel] per connection.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,

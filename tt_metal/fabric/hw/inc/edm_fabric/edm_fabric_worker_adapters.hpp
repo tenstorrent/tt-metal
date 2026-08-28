@@ -134,6 +134,13 @@ struct WorkerToFabricEdmSenderBase {
             worker_teardown_raw = reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore);
             worker_buffer_index_semaphore_addr =
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_producer_cursor[0]);
+            // must be in the fabric conn table
+            ASSERT(
+                worker_teardown_raw >= FABRIC_CONNECTIONS_BASE &&
+                worker_teardown_raw < FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE);
+            ASSERT(
+                worker_buffer_index_semaphore_addr >= FABRIC_CONNECTIONS_BASE &&
+                worker_buffer_index_semaphore_addr < FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE);
         } else {
             // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
@@ -156,6 +163,9 @@ struct WorkerToFabricEdmSenderBase {
             // VC2: no conn table, so these are program-semaphore ids read from rt args.
             worker_teardown_raw = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
             worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+            // must be in kernel semaphore space, not an unresolved id
+            ASSERT(worker_teardown_raw >= MEM_MAP_END);
+            ASSERT(worker_buffer_index_semaphore_addr >= MEM_MAP_END);
         }
 
         // DEAD CODE
@@ -163,11 +173,6 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        // is_l1_address() is an UPPER bound only, so a stale id (0..15) passes it and would be
-        // dereferenced inside the mailbox region. Bound below as well: every real address here
-        // is >= MEM_MAP_END, and the two ranges are disjoint by orders of magnitude.
-        ASSERT(worker_teardown_raw >= MEM_MAP_END);
-        ASSERT(worker_buffer_index_semaphore_addr >= MEM_MAP_END);
         auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(worker_teardown_raw);
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
