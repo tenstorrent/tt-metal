@@ -4344,12 +4344,44 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         )
         return 1.0 if bool(close) else 0.0
 
+    # The threshold `calculate_logsigmoid` switches to its exp branch at. Written here rather
+    # than imported from sfpu_dispatch_constants because it is not a dispatch constant -- it is
+    # a literal inside the kernel's own `v_if`, with no host-side counterpart to import.
+    _LOGSIGMOID_EXP_BRANCH = 4.0
+
     def _logsigmoid(self, t1, t2):
-        # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
-        # exp(-x) as its second operand (t2), which the test bakes into the paired
-        # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
-        # so it is matched under the PCC tolerance. Evaluated in fp32.
-        return torch.nn.functional.logsigmoid(t1.to(torch.float32))
+        """logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1 and exp(-x) = t2.
+
+        Three branches in `calculate_logsigmoid`, and the golden models exactly one of them:
+
+          x < -4    passthrough, the kernel returns x unchanged (there is no `else` arm, so
+                    `result` keeps the value it was seeded with). torch gives
+                    logsigmoid(-8) = -8.000335 against the kernel's -8, which is 4e-5
+                    relative and well inside the tolerance, so this stays on torch.
+          -4 <= x <= 4
+                    a ninth-degree polynomial. Modelling it would mean transcribing nine
+                    coefficients that have no host-side home to import from, which is the
+                    drift bug sfpu_dispatch_constants exists to prevent. Matched under PCC,
+                    as it always has been.
+          x > 4     the kernel returns `-t2`, and this one *is* modelled -- because it is the
+                    only branch whose result depends on operand B at all. A golden that reads
+                    only t1 here cannot tell the difference between a kernel that used the
+                    operand it was handed and one that ignored it, which is precisely the
+                    coverage this branch was missing. It also cannot be left on torch: the
+                    kernel's -exp(-x) differs from -log1p(exp(-x)) by up to 0.9% relative just
+                    above the threshold, so a mathematical golden would report the kernel's
+                    own documented approximation as a failure.
+
+        The caller is responsible for supplying t2 = exp(-t1); see
+        _logsigmoid_stimuli_specs, which builds both operands from one position ramp so they
+        cannot drift apart. test_sfpu_domains pins the approximation quality separately, so
+        modelling the branch does not quietly stop asserting that -exp(-x) is a logsigmoid at
+        all.
+        """
+        x = t1.to(torch.float32)
+        if float(x) > self._LOGSIGMOID_EXP_BRANCH:
+            return -t2.to(torch.float32)
+        return torch.nn.functional.logsigmoid(x)
 
     def _add_top_row(
         self,

@@ -496,14 +496,49 @@ def _comparison_stimuli_specs():
     return _face_spec(a_face), _face_spec(b_face)
 
 
-def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 (exp(-x)) is only read in the x > 4 branch, so
-    # restrict x to [-8, 3.9] (never uses in1) and sweep the passthrough (x < -4) and
-    # polynomial (-4 < x < 4) branches. The distribution is invoked per 16x16 face (size 256).
-    def dist(size, dtype, generator):
-        return torch.linspace(-8.0, 3.9, size).to(dtype)
+# The three branches of `calculate_logsigmoid`, and the one that reads operand B.
+#
+#   x < -4       passthrough: the kernel has no `else` arm, so `result` keeps the x it was
+#                seeded with.
+#   -4 <= x <= 4 ninth-degree polynomial.
+#   x > 4        `result = -in1`, the only branch that reads operand B at all.
+#
+# The sweep used to stop at 3.9 and say so: "in1 (exp(-x)) is only read in the x > 4 branch,
+# so restrict x to [-8, 3.9] (never uses in1)". That is true and it is why the branch was
+# never executed -- and why SfpuLogsigmoid was excused from cat B as "effectively unary".
+#
+# B is not a free operand: the kernel's contract is in1 == exp(-in0), so it has to be built
+# *from* A rather than drawn independently. Both operands come from one position ramp here,
+# the shape _isclose_stimuli_specs() and _comparison_stimuli_specs() already use, so they
+# cannot drift apart.
+_LOGSIGMOID_EXP_BRANCH = 4.0
 
-    return StimuliSpec(distribution=dist, seed=0)
+
+def _logsigmoid_x(size, low, high):
+    """The x ramp both operands are built from. Deterministic, so the pairing is exact."""
+    return torch.linspace(low, high, size)
+
+
+def _logsigmoid_stimuli_specs(low=-8.0, high=12.0):
+    """Paired (x, exp(-x)) specs sweeping [*low*, *high*], invoked per 16x16 face.
+
+    The default crosses the exp branch: 12.0 puts about 40% of each face above the threshold,
+    enough for the branch to be non-vacuous without dominating the face.
+
+    exp(-x) is supplied on *every* lane rather than only above the threshold, because that is
+    the operand contract -- feeding something else on the lanes the kernel does not read would
+    make the tensor a lie about what was driven, and would hide a kernel that read in1 on a
+    branch it should not. At x = -8 that is exp(8) = 2981, comfortably inside every format
+    this sweep runs on.
+    """
+
+    def a_face(size, dtype, generator):
+        return _logsigmoid_x(size, low, high).to(dtype)
+
+    def b_face(size, dtype, generator):
+        return torch.exp(-_logsigmoid_x(size, low, high)).to(dtype)
+
+    return _face_spec(a_face), _face_spec(b_face)
 
 
 # =============================================================================
@@ -974,17 +1009,35 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
-    # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
-    # exp(-x) operand the shared harness can't provide, left to a future driver.
+    """logsigmoid(x) swept across all three branches, with exp(-x) paired into operand B."""
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
-    sfpu_binary(
-        formats,
-        dest_acc,
-        mathop,
-        spec_A=_logsigmoid_stimuli_spec(),
-    )
+    spec_A, spec_B = _logsigmoid_stimuli_specs()
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_exp_branch(formats, dest_acc, mathop):
+    """The x > 4 branch on its own, where operand B is the result.
+
+    Its own variant rather than trusting the swept one, because the branch is invisible inside
+    it: |logsigmoid(x)| is 8.0 at the bottom of the sweep and 6e-6 at the top, so PCC over
+    [-8, 12] is decided entirely by the passthrough lanes and every above-threshold lane could
+    be wrong without moving the verdict. Confined to (4, 12], the verdict is about this branch
+    and nothing else.
+
+    Starts just above the threshold rather than at it: the kernel takes the polynomial arm at
+    exactly 4.0 (its `v_elseif` is `>= -4 && < 4` on the negated operand), so including 4.0
+    would put two branches back in one tensor.
+    """
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+
+    spec_A, spec_B = _logsigmoid_stimuli_specs(low=4.25, high=12.0)
+    sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
 
 
 # =============================================================================

@@ -646,6 +646,38 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
             )
 
 
+def test_logsigmoid_exp_branch_is_a_logsigmoid():
+    """-exp(-x) has to *be* logsigmoid(x) above the threshold, or modelling it proves nothing.
+
+    BinarySFPUGolden._logsigmoid returns -t2 above 4.0, which makes the device test assert that
+    the kernel selected the right branch and used the operand it was handed -- and stops it
+    asserting anything about the mathematics. This is the other half: that the kernel's
+    approximation is a good one on the interval it is used on, and in particular that the
+    threshold sits where the approximation has already become good.
+
+    The bound is loose on purpose. It is not a tolerance the device test uses; it is a guard
+    that fails if the branch threshold ever moves down to where -exp(-x) is not a logsigmoid,
+    which is the change that would make the modelled golden quietly vacuous.
+    """
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    threshold = BinarySFPUGolden._LOGSIGMOID_EXP_BRANCH
+    x = torch.linspace(threshold, 40.0, 512, dtype=torch.float64)
+    approximation = -torch.exp(-x)
+    exact = torch.nn.functional.logsigmoid(x)
+    worst = float(((approximation - exact).abs() / exact.abs()).max())
+    assert worst < 0.02, (
+        f"-exp(-x) is {worst:.2%} off logsigmoid(x) at its worst on [{threshold}, 40]; the "
+        "golden models the kernel's branch verbatim, so this is the only thing asserting that "
+        "the branch computes a logsigmoid at all"
+    )
+    # And that the error is worst at the threshold and decays, which is what makes a single
+    # bound meaningful over an unbounded interval.
+    at_threshold = float(((approximation[0] - exact[0]) / exact[0]).abs())
+    assert at_threshold == pytest.approx(worst, rel=1e-6)
+
+
 @pytest.mark.parametrize(
     "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32]
 )

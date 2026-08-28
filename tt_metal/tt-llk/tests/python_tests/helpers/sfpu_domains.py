@@ -2674,11 +2674,22 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     # to say whether the golden or the kernel's inf path is wrong, before either is touched.
     MathOperation.SfpuIsclose: "golden and kernel both claim torch.isclose semantics and "
     "disagree at a non-finite operand; needs a per-cell read-back to say which is wrong.",
-    # (4) Not a binary op in the sense this probe assumes. The kernel reads in1 only on its x > 4
-    # branch and the golden ignores operand B outright -- verified: logsigmoid(1, y) is constant
-    # in y. A special injected into B is therefore not a stimulus for anything.
-    MathOperation.SfpuLogsigmoid: "effectively unary -- operand B is read only on the x > 4 "
-    "branch and the golden ignores it, so a cat-B probe in B asserts nothing.",
+    # (4) Operand B is *derived*, not free. This entry used to read "effectively unary -- operand
+    # B is read only on the x > 4 branch and the golden ignores it", which was true of the test
+    # rather than of the kernel: the sweep stopped at x = 3.9 so the branch never ran. It runs
+    # now, the golden models it, and the kernel was measured returning exactly -in1 there (max
+    # |hw - (-exp(-x))| = 0 over 256 lanes on Blackhole, and doubling in1 doubles the result).
+    #
+    # That does not make it a cat-B candidate, and the reason is structural. The kernel's
+    # contract is in1 == exp(-in0), so the two operands are not independent -- but cat B here is
+    # driven by edge_pair_values(), a cartesian *product* of two independently-chosen lists. A
+    # NaN placed in B against a finite A is not exp(-A) and so is not a stimulus the kernel has
+    # any contract about; the pair asserts nothing whichever way it comes out. Enrolling
+    # logsigmoid needs a probe that derives B from A, which is a different mechanism from the
+    # one this sweep has, not a different entry in this table.
+    MathOperation.SfpuLogsigmoid: "operand B is derived (in1 == exp(-in0)), and cat B here is "
+    "a product of two independently-chosen lists, so a special in B is not a stimulus the "
+    "kernel has a contract about. Needs a probe that derives B from A.",
 }
 
 assert not (

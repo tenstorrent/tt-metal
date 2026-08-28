@@ -27,14 +27,12 @@ the concrete steps to reach them.
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
 | [W3](#w3--integer-binary-ops-never-see-zero-negatives-or-the-uint32-upper-half) | Int binary ops: no `0`, no negatives, uint32 capped at 1e6 | binary | M | High | partly HW (sign-magnitude Dst) |
 | [W7](#w7--the-overflow-producing-ops-are-not-driven-at-their-ceiling) | Nothing asserts that a result too large for the output format saturates rather than wraps | unary, binary | M | High | — |
-| [W8](#w8--logsigmoids-x--4-branch-is-never-driven) | `SfpuLogsigmoid` never executes the only branch that reads operand B | binary | S | Medium | — |
 | [W9](#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | unary | M | Medium | needs a kernel-contract ruling |
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 | [W11](#w11--a-coverage-ledger-so-the-next-gap-is-visible) | No machine-checked record of which value classes each op has seen | infra | M | High | the items above |
 
-Suggested order: **W1 → W8** (small, unblocked, each independently mergeable), then
-**W3 → W11**, then **W7 → W9 → W10** (each needs a measurement pass, and W9 a
-kernel-contract ruling).
+Suggested order: **W1** (small, unblocked, independently mergeable), then **W3 → W11**,
+then **W7 → W9 → W10** (each needs a measurement pass, and W9 a kernel-contract ruling).
 
 **Already landed**, in the commit this document arrives with: the whole of the original W5
 (IEEE specials for the ternary family, including the `TernarySFPUGolden` and `WhereGolden`
@@ -43,8 +41,9 @@ Dest/pack modelling that blocked it), and all of the original W7 except its over
 `edge_values()`/`edge_spec()`, `EXTREMES_READY_OPS` with its first tranche enrolled, and one
 saturation test. Also the whole of W2 — `StimuliSpec.cycle`, honoured by `CustomStrategy`,
 on by default in `edge_spec()` — the whole of W4, whose cat-B half the ternary specials work
-had already closed, and the whole of W6. W7 below is what is left of it. The numbering is
-unchanged so
+had already closed, the whole of W6, and the whole of W8 — which also retired the "effectively
+unary" justification that kept `SfpuLogsigmoid` out of cat B, replacing it with the structural
+one. W7 below is what is left of it. The numbering is unchanged so
 that references from commit messages and reviews still resolve; the closed items are simply
 gone.
 
@@ -384,59 +383,6 @@ CHIP_ARCH=blackhole pytest test_eltwise_unary_sfpu.py -q -m nightly -k saturatio
 ```
 
 **Cost:** small per op, and the number of ops is the whole cost. Budget one PR each.
-
----
-
-## W8 — `SfpuLogsigmoid`'s `x > 4` branch is never driven
-
-### Problem
-
-`_logsigmoid_stimuli_spec()` (`test_sfpu_binary.py:484`) pins `x` to
-`linspace(-8.0, 3.9)`, and its own comment explains why: "in1 (`exp(-x)`) is only read in
-the `x > 4` branch, so restrict x to `[-8, 3.9]` (never uses in1)".
-
-So the only code path in the kernel that reads operand B is never executed. The same fact
-is then used to excuse the op from cat B — `_BINARY_SPECIALS_NOT_READY` records it as
-"effectively unary — operand B is read only on the `x > 4` branch and the golden ignores
-it, so a cat-B probe in B asserts nothing". That reasoning is correct *given* the stimulus
-restriction, but the restriction is the thing to remove.
-
-### Steps
-
-1. **Widen the sweep to cross the branch:**
-
-   ```python
-   def dist(size, dtype, generator):
-       return torch.linspace(-8.0, 12.0, size).to(dtype)
-   ```
-
-   `12.0` puts roughly a third of each face above the threshold, which is enough for the
-   branch to be non-vacuous without dominating the tolerance verdict.
-
-2. **Check what the golden does above 4.** `BinarySFPUGolden`'s logsigmoid currently
-   ignores operand B outright. If the kernel reads `in1 = exp(-x)` there, the golden has
-   to model the same composition — otherwise widening the sweep just produces a failure
-   that blames the kernel for the golden's simplification. Read
-   `ckernel_sfpu_logsigmoid.h` (or wherever the op lives for the target arch) and make the
-   golden match the branch structure before widening.
-
-3. **Confirm operand B is actually fed the right thing.** The driver supplies B from the
-   op's stimuli spec; if the kernel expects `in1 == exp(-in0)` specifically, then B is not
-   a free operand and the test needs a *paired* spec computing it from A — the shape
-   `_isclose_stimuli_specs()` and `_comparison_stimuli_specs()` already use.
-
-4. **Then revisit cat B.** Once B is genuinely read, the
-   `_BINARY_SPECIALS_NOT_READY[SfpuLogsigmoid]` reason stops being true and the op becomes
-   a cat-B candidate. Move it or rewrite the reason; leaving a stale justification is worse
-   than the gap.
-
-### Verify
-
-```bash
-CHIP_ARCH=blackhole pytest test_sfpu_binary.py -q -k logsigmoid
-```
-
-**Cost:** no new variants; one golden change.
 
 ---
 
