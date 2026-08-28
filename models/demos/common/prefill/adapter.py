@@ -205,6 +205,10 @@ class PrefillModelAdapter(ABC):
     mla_ref_cache_env: Optional[str] = None
     moe_pcc_threshold: float = 0.999
     mla_pcc_threshold: float = 0.999
+    # Gate hidden-state PCCs on the per-token RMS-normalised score instead of the raw one. Set True
+    # for a model with massive activation channels, where a raw whole-tensor PCC measures a few
+    # hundred outliers rather than the layer (Mistral Small 4: absmax/rms ~150 by layer 30).
+    gate_hidden_states_on_npcc: bool = False
     supports_pretrained: bool = True
     # Model layer whose ``self_attn.*`` holds the MLA weights; None if no checkpoint is reachable.
     pretrained_mla_layer: Optional[int] = 0

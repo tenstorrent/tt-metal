@@ -826,6 +826,67 @@
   sp_config: sc1
 
 
+# 56,320-token host-generated golden (torch/HF reference, not a vLLM recording), so it localises per
+# layer but is not independent of the reference. Read with the trace twin below: this row's decoder
+# gate is the only assertion in either row covering layers past GATED_LAYER_DEPTH (10) -- shorten it
+# before deleting it. Decoder outputs gate on nPCC (adapter.gate_hidden_states_on_npcc).
+# PREFILL_TRACE_DIR deliberately unexported, unlike the sibling rows: the adapter's default points at
+# the staged golden.
+- name: "Mistral-Small-4-119B chunked prefill padded accuracy 55k@5k (no trace)"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_padded -k "mistral4 and torus-xy-8x4 and L36 and full55k and notrace" -vvv --tb=short
+    '
+  test_type: mistral4_chunked_padded
+  test_tags: [mistral4, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 10.9 min on run 33425317777 at L36/full55k (18 chunks x 35 layers, each a host readback);
+      # 20 is ~1.8x.
+      timeout: 20
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+# Trace twin of the entry above: SAME splits, SAME golden, SAME KV bar -- the only difference is that
+# the padded forward is captured once and replayed per chunk. Its own entry, not a second -k term, so
+# a trace-only regression is attributed on the dashboard rather than hidden inside a two-case job.
+# Asserts KV only, gated to layers 0..10 -- the per-layer decoder readback cannot live inside a
+# capture -- and is the only Mistral row exercising ChunkMetadata.llama4_scale.
+- name: "Mistral-Small-4-119B chunked prefill padded accuracy 55k@5k (trace)"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_padded -k "mistral4 and torus-xy-8x4 and L36 and full55k and traced" -vvv --tb=short
+    '
+  test_type: mistral4_chunked_padded
+  test_tags: [mistral4, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 4.9 min on run 33425317777 vs the untraced twin's 10.9 (KV assert only); 10 is ~2x.
+      timeout: 10
+  owner_id: U08GEEEEC75 # ssalice
+  team: models
+  sp_config: sc1
+
+
 # ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
