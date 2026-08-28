@@ -42,8 +42,9 @@ constexpr std::uint32_t REDUCE_COL_EXTENT = TILE_R_DIM;  // rows a column reduce
 constexpr std::uint32_t REDUCE_COLS_PER_TILE = TILE_C_DIM;
 
 // Working registers. Only LREG0-7 are usable as destinations here: writing 12-15 captures the
-// instruction into a Load Macro register instead of executing it, and 9/10/11 are the read-only
-// constants 0.0, 1.0 and -1.0.
+// instruction into a Load Macro register instead of executing it, while 9/10/11 hold the constants
+// 0.0, 1.0 and -1.0 - no ordinary SFPU instruction writes those, but SFPCONFIG can reprogram them
+// (see @ref init_reduce).
 constexpr std::uint32_t REDUCE_ACC_REG = p_sfpu::LREG4;    // row reduce: running per-row total
 constexpr std::uint32_t REDUCE_ROT_REG = p_sfpu::LREG5;    // row reduce: rotated copy of the accumulator
 constexpr std::uint32_t REDUCE_RECIP_REG = p_sfpu::LREG6;  // row AVG: 1/num_cols, live for the whole block
@@ -97,6 +98,12 @@ inline constexpr bool reduce_is_int_format() {
     return FORMAT == DataFormat::Int32;
 }
 
+/** @brief Whether @p FORMAT occupies a full 32-bit Dest word. */
+template <DataFormat FORMAT>
+inline constexpr bool reduce_is_32_bit_format() {
+    return FORMAT == DataFormat::Float32 || FORMAT == DataFormat::Int32;
+}
+
 /** @brief Formats this kernel implements. */
 constexpr bool is_supported_reduce_format(DataFormat format) {
     return format == DataFormat::Float32 || format == DataFormat::Float16_b || format == DataFormat::Float16 ||
@@ -113,11 +120,9 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
  * The single step every reduce is built from. SUM and AVG both just add; AVG differs only in the
  * scaling its caller applies at the end.
  *
- * MAX and MIN are the same instruction. SFPSWAP puts the smaller operand in its lreg_dest and the
- * larger in its lreg_c, so the operand order alone decides which one @p DST keeps - Quasar has no
- * MIN compare mode and needs none. The comparison itself reads the operands in whichever domain
- * @ref REDUCE_SWAP_IMM12_INT32 / @ref REDUCE_SWAP_IMM12_FP32 selects, so both integer and float
- * operands are ordered correctly by the hardware.
+ * MAX and MIN are the same instruction: SFPSWAP puts the smaller operand in its lreg_dest and the
+ * larger in its lreg_c, so the operand order alone decides which @p DST keeps. The compare domain
+ * comes from @ref REDUCE_SWAP_IMM12_INT32 / @ref REDUCE_SWAP_IMM12_FP32.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam IS_INT: Whether the operands are integers (selects the adder and the compare domain)
@@ -265,10 +270,11 @@ template <PoolType POOL_TYPE, DataFormat FORMAT>
 inline void reduce_col_tile() {
     constexpr std::uint32_t MODE = reduce_sfpmem_mode<FORMAT>();
     constexpr bool IS_INT = reduce_is_int_format<FORMAT>();
+    constexpr std::uint32_t FACE_0 = 0;
     constexpr std::uint32_t FACE_1 = REDUCE_FACE_STRIDE;
 
-    reduce_col_group<POOL_TYPE, MODE, IS_INT, 0, p_sfpu::col_offset::EVEN_COL>();
-    reduce_col_group<POOL_TYPE, MODE, IS_INT, 0, p_sfpu::col_offset::ODD_COL>();
+    reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_0, p_sfpu::col_offset::EVEN_COL>();
+    reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_0, p_sfpu::col_offset::ODD_COL>();
     reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_1, p_sfpu::col_offset::EVEN_COL>();
     reduce_col_group<POOL_TYPE, MODE, IS_INT, FACE_1, p_sfpu::col_offset::ODD_COL>();
 }
@@ -292,11 +298,6 @@ inline void reduce_col_tile() {
  */
 template <PoolType POOL_TYPE, bool IS_INT>
 inline void reduce_row_fold_columns() {
-    // "unroll 1" is an unroll *factor* of one - it disables unrolling rather than asking for it.
-    // Both bounds are compile-time constants (distance runs 4, then 2, then 1), so GCC would
-    // otherwise flatten this into ~23 straight-line SFPU instructions instead of emitting the
-    // body once.
-#pragma GCC unroll 1
     for (std::uint32_t distance = REDUCE_SFPU_COLUMNS / 2; distance > 0; distance >>= 1) {
         TTI_SFPMOV(REDUCE_ACC_REG, REDUCE_ROT_REG, 0 /* instr_mod1: plain copy */);
         for (std::uint32_t step = 0; step < distance; step++) {
@@ -422,15 +423,18 @@ inline void reduce_row_load_reciprocal(const std::uint32_t num_cols) {
  * from the base @ref _llk_math_eltwise_sfpu_start_ programs, so they must start from zero.
  *
  * The rest - SFPU config register, ADDR_MOD_7 - is already set up by
- * @ref _llk_math_eltwise_sfpu_init_. No reduce path claims a programmable constant register or a
- * replay slot, so this cannot disturb a neighbouring op's setup, or be disturbed by one.
+ * @ref _llk_math_eltwise_sfpu_init_, and no reduce path claims a programmable constant register or
+ * a replay slot, so this cannot disturb a neighbouring op's setup.
+ *
+ * The reverse is not guaranteed. The folds read LCONST_0 / LCONST_1 (LREG9/10) at their reset
+ * defaults, and SFPCONFIG can overwrite those - gelu_init in approximate mode does - while
+ * @c _init_sfpu_config_reg_ restores only SFPU_CTRL and LREG11.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
- * @param block_ct_dim: Unused; nothing here depends on the block width. Present so the signature
- *        matches Blackhole/Wormhole, which the shared Compute API @c sfpu_reduce_init forwards a
- *        runtime argument to.
+ * @param block_ct_dim: Unused. Present so the signature matches Blackhole/Wormhole, which the
+ *        shared Compute API @c sfpu_reduce_init forwards a runtime argument to.
  * @note Call after @ref _llk_math_eltwise_sfpu_init_ and before @ref calculate_reduce.
  */
 template <PoolType POOL_TYPE, DataFormat FORMAT, bool IS_FP32_DEST_ACC_EN>
@@ -441,6 +445,13 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
         POOL_TYPE == PoolType::SUM || POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::MAX ||
             POOL_TYPE == PoolType::MIN,
         "Unsupported pool_type: expected SUM, AVG, MAX or MIN");
+
+    // One-directional: a 32-bit datum cannot fit a 16-bit Dest word. The converse is legal - a
+    // narrow format in a 32-bit Dest is what an FPU datacopy produces - so the reverse implication
+    // is deliberately not required.
+    static_assert(
+        !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
+        "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
 
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -458,13 +469,19 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
  * @tparam REDUCE_DIM: Axis to collapse, values = <REDUCE_COL/REDUCE_ROW>
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
+ * @tparam DST_SYNC: Dest sync mode; with @p IS_FP32_DEST_ACC_EN it gives the Dest tile capacity
  * @param block_ct_dim: Tiles per tile row; the width a row reduce spans (REDUCE_ROW only)
  * @param block_rt_dim: Tile rows in the block (REDUCE_ROW only)
  * @note Run under VectorMode::RC_custom. This kernel walks Dest itself instead of being invoked
  *       once per face, and REDUCE_ROW deliberately reaches past the tile the caller based it on.
  * @note Call @ref init_reduce before this.
  */
-template <PoolType POOL_TYPE, ReduceDim REDUCE_DIM, DataFormat FORMAT, bool IS_FP32_DEST_ACC_EN>
+template <
+    PoolType POOL_TYPE,
+    ReduceDim REDUCE_DIM,
+    DataFormat FORMAT,
+    bool IS_FP32_DEST_ACC_EN,
+    DstSync DST_SYNC = DstSync::SyncHalf>
 inline void calculate_reduce(
     [[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
     static_assert(
@@ -472,6 +489,9 @@ inline void calculate_reduce(
     static_assert(
         REDUCE_DIM == ReduceDim::REDUCE_COL || REDUCE_DIM == ReduceDim::REDUCE_ROW,
         "Unsupported reduce_dim: expected REDUCE_COL or REDUCE_ROW");
+    static_assert(
+        !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
+        "a 32-bit reduce format requires a 32-bit Dest (IS_FP32_DEST_ACC_EN)");
     // A column AVG always divides by 32, which an integer can do with a shift
     // (@ref reduce_int_average_col). A row AVG divides by the runtime column count - rarely a power
     // of two, and only the float reciprocal-multiply divides it exactly. So integer AVG is column-only.
@@ -483,6 +503,10 @@ inline void calculate_reduce(
     if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL) {
         reduce_col_tile<POOL_TYPE, FORMAT>();
     } else {
+        constexpr std::uint32_t MAX_DEST_TILES =
+            trisc::get_dest_max_tiles<DST_SYNC, IS_FP32_DEST_ACC_EN, trisc::DstTileShape::Tile32x32>();
+        LLK_ASSERT(block_ct_dim * block_rt_dim <= MAX_DEST_TILES, "row reduce block does not fit in Dest");
+
         if constexpr (POOL_TYPE == PoolType::AVG) {
             reduce_row_load_reciprocal(block_ct_dim * REDUCE_COLS_PER_TILE);
         }
