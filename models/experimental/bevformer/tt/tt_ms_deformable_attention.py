@@ -33,6 +33,43 @@ from loguru import logger
 ENABLE_LOGGING = False
 
 
+def _fused_msda_level(value_level, sampling_grids, attention_weights, level, H, W, shape):
+    """Run one pyramid level through the fused `multi_scale_deformable_attn` device op.
+
+    The op fuses grid_sample with the weighted sum over sampling points, so it returns
+    `(N, Q, D)` already reduced over `P` — there is no per-level tensor left to stack.
+
+    `value_level` is `(bs, H*W, num_heads, D)`; `sampling_grids` and `attention_weights`
+    carry all levels and are sliced here. All three op inputs must be ROW_MAJOR bfloat16
+    and INTERLEAVED, which the device op enforces with TT_FATAL rather than converting.
+    """
+    bs, num_heads, num_queries, num_points, head_dim = shape
+
+    # (bs, H*W, num_heads, D) -> (N, H, W, D). In ROW_MAJOR the trailing reshape is a
+    # view, so splitting H*W into H,W after the permute costs nothing.
+    value_l = ttnn.permute(value_level, (0, 2, 1, 3))
+    value_l = ttnn.to_layout(value_l, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_l = ttnn.reshape(value_l, (bs * num_heads, H, W, head_dim))
+
+    grid = sampling_grids[:, :, :, level]  # (bs, Q, num_heads, P, 2)
+    grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
+    grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
+
+    attn = attention_weights[:, :, :, level, :]  # (bs, Q, num_heads, P)
+    attn = ttnn.permute(attn, (0, 2, 1, 3))
+    attn = ttnn.reshape(attn, (bs * num_heads, num_queries, num_points))
+    attn = ttnn.to_layout(attn, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    if value_l.dtype != ttnn.bfloat16:
+        value_l = ttnn.typecast(value_l, ttnn.bfloat16)
+    if grid.dtype != ttnn.bfloat16:
+        grid = ttnn.typecast(grid, ttnn.bfloat16)
+    if attn.dtype != ttnn.bfloat16:
+        attn = ttnn.typecast(attn, ttnn.bfloat16)
+
+    return ttnn.experimental.multi_scale_deformable_attn(value_l, grid, attn)  # (N, Q, D)
+
+
 def multi_scale_deformable_attn_ttnn(
     value,
     value_spatial_shapes,
@@ -74,54 +111,28 @@ def multi_scale_deformable_attn_ttnn(
     sampling_grids = ttnn.mul(sampling_locations, 2.0)
     sampling_grids = ttnn.sub(sampling_grids, 1.0)
 
-    sampling_value_list = []
+    # `attention_weights` is softmaxed jointly over levels and points, so the joint
+    # weighted sum decomposes exactly into a sum of per-level weighted sums — each fused
+    # call reduces its own level's points and the levels are added. No renormalization.
+    sampling_grids = ttnn.to_layout(sampling_grids, layout=ttnn.ROW_MAJOR_LAYOUT)
+    shape = (bs, num_heads, num_queries, num_points, head_dim)
+    output = None
     for level, (H_, W_) in enumerate(value_spatial_shapes):
-        # [bs, H_*W_, num_heads, head_dim] -> [bs*num_heads, H_, W_, head_dim]
-        value_l_ = ttnn.to_layout(value_list[level], layout=ttnn.ROW_MAJOR_LAYOUT)
-        value_l_ = ttnn.permute(value_l_, (0, 2, 1, 3))  # Move heads to dimension 1
-        value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
+        level_out = _fused_msda_level(
+            value_list[level],
+            sampling_grids,
+            attention_weights,
+            level,
+            int(H_),
+            int(W_),
+            shape,
+        )
+        output = level_out if output is None else ttnn.add(output, level_out)
 
-        sampling_grid_l_ = sampling_grids[:, :, :, level, :, :]  # [bs, num_queries, num_heads, num_points, 2]
-        sampling_grid_l_ = ttnn.to_layout(sampling_grid_l_, layout=ttnn.ROW_MAJOR_LAYOUT)
-        sampling_grid_l_ = ttnn.permute(
-            sampling_grid_l_, (0, 2, 1, 3, 4)
-        )  # [bs, num_heads, num_queries, num_points, 2]
-        sampling_grid_l_ = ttnn.reshape(
-            sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2)
-        )  # [N, H_out, W_out, 2] = [bs*num_heads, num_queries*num_points, 1, 2]
-
-        # Input: (bs*num_heads, H_, W_, head_dim), Grid: (bs*num_heads, num_queries*num_points, 1, 2)
-        # Output: (bs*num_heads, num_queries*num_points, 1, head_dim)
-        sampling_value_l_ = ttnn.grid_sample(value_l_, sampling_grid_l_)
-
-        # (bs*num_heads, num_queries*num_points, 1, head_dim) -> (bs*num_heads, head_dim, num_queries, num_points)
-        sampling_value_l_ = ttnn.squeeze(
-            sampling_value_l_, 2
-        )  # Remove the 1 dimension: (bs*num_heads, num_queries*num_points, head_dim)
-        sampling_value_l_ = ttnn.reshape(sampling_value_l_, (bs * num_heads, num_queries, num_points, head_dim))
-        sampling_value_l_ = ttnn.permute(
-            sampling_value_l_, (0, 3, 1, 2)
-        )  # (bs*num_heads, head_dim, num_queries, num_points)
-
-        sampling_value_list.append(sampling_value_l_)
-
-    # [bs, num_queries, num_heads, num_levels, num_points] -> [bs*num_heads, 1, num_queries, num_levels*num_points]
-    attention_weights = ttnn.permute(attention_weights, (0, 2, 1, 3, 4))  # Move heads to dim 1
-    attention_weights = ttnn.reshape(attention_weights, (bs * num_heads, 1, num_queries, num_levels * num_points))
-
-    # Stack sampled values from all pyramid levels
-    stacked_values = ttnn.stack(
-        sampling_value_list, dim=-2
-    )  # (bs*num_heads, head_dim, num_queries, num_levels, num_points)
-    # Flatten level and point dimensions
-    stacked_values = ttnn.reshape(stacked_values, (bs * num_heads, head_dim, num_queries, num_levels * num_points))
-
-    output = ttnn.mul(stacked_values, attention_weights)
-    # Aggregate across all sampling points and levels
-    output = ttnn.sum(output, dim=-1)  # Final shape: (bs*num_heads, head_dim, num_queries)
-
-    output = ttnn.reshape(output, (bs, num_heads * head_dim, num_queries))
-    output = ttnn.permute(output, (0, 2, 1))  # [bs, num_queries, num_heads * head_dim]
+    output = ttnn.reshape(output, (bs, num_heads, num_queries, head_dim))
+    output = ttnn.to_layout(output, layout=ttnn.TILE_LAYOUT)
+    output = ttnn.permute(output, (0, 2, 1, 3))
+    output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
 
     if ENABLE_LOGGING:
         logger.info("MSDA End")
