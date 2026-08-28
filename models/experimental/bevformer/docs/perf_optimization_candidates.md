@@ -22,7 +22,8 @@ Numbers quoted below as *cost* come from the baseline profile
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | closed — deleted by 2 |
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
 | [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **−138.3 ms**, and it was never the op | L | med | **landed — [06](perf_reports/06-sfpu-geometry.md)** |
-| [7](#candidate-7--an-msda-head-reshape-op) | an MSDA head-reshape op | kernel | **~55 ms**, 44% of kernel | L | med | **next** |
+| [7](#candidate-7--an-msda-head-reshape-op) | an MSDA head-reshape op | kernel | — | L | med | closed — wrong shape, see 9 |
+| [9](#candidate-9--axes-as-addresses-not-data) | axes as addresses, not data | kernel | **~22 ms left** of ~45 | M | low | **in progress — [08](perf_reports/08-packed-value-heads.md)** |
 | [8](#candidate-8--the-grids-point-axis-in-its-page) | fold the grid's point axis into its page | kernel | **−12.9 ms**, and the page was the story | S | low | **landed — [07](perf_reports/07-folded-grid-page.md)** |
 
 Ordering rationale is at the [bottom](#ordering).
@@ -277,8 +278,12 @@ lifts.
 6. ~~**6**~~ — landed, −138.3 ms ([06](perf_reports/06-sfpu-geometry.md)). The premise was wrong:
    the op was not slow, the compute kernel was idle waiting on a reader doing soft-float geometry.
    Moving that onto the SFPU collapsed it 167.6 → 29.5 ms without touching the sampling kernel.
-7. **7** — the head-reshape op. Layout plumbing is now 57% of kernel and, unlike the residue stage
-   05 described, it has a shape worth fusing.
+7. ~~**7**~~ — closed unstarted. A fused head-reshape op still writes the head-major tensor it
+   exists to hand over; the cost was the page, not the call count.
+8. ~~**8**~~ — landed, −12.9 ms ([07](perf_reports/07-folded-grid-page.md)).
+9. **9** — the generalisation of 7 and 8: each of value, grid, attn and output stops being copied
+   into head-major or level-major form and is addressed by offset instead. Value landed
+   ([08](perf_reports/08-packed-value-heads.md), −20.5 ms); attn, grid and output remain.
 7. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
    refactor, no op risk.
 8. **1d** — move to `__init__` what is genuinely frame-invariant.
@@ -386,3 +391,35 @@ Stage 05 tried the Python half alone and correctly measured nothing: without the
 still reaches the op at width 2, so the 4-byte page is still written and only the op writing it
 moves. Any divisor of P per page is accepted, so `(N, Q*P, 1, 2)` still works and VADv2 is
 untouched.
+
+---
+
+## Candidate 9 — axes as addresses, not data
+
+**In progress.** Value landed in [stage 08](perf_reports/08-packed-value-heads.md), −20.5 ms of
+kernel. Attn, grid and output remain, together worth roughly 22 ms.
+
+Candidate 7 proposed the deformable member of the `nlp_create_qkv_heads` family. That was the wrong
+shape: a fused head-reshape op still has to **produce** the head-major tensor for MSDA to read —
+92.6 MB written, 92.6 MB read. It removes per-call overhead, and per-call overhead is not what this
+costs. The permute ran at 14 GB/s because both its pages were 64 bytes.
+
+The head is not data. It is a byte offset inside a stick, and the level is a byte offset too. Given
+`num_heads`, the op derives `b = n / num_heads` and `h = n % num_heads` and reads:
+
+| input | copied form | addressed form | offset |
+|---|---|---|---|
+| value | `(B*nh, H, W, D)` | `(B, H, W, nh*D)` | `h*D*2` — **landed, −20.5 ms** |
+| attn | `(B*nh, Q, P)` | `(B, Q, nh*L*P)` | `(h*L*P + l*P)*2` — **~15 ms** |
+| grid | `(B*nh, Q, 1, P*2)` | `(B, Q, nh*L*P*2)` | `(h*L*P + l*P)*2*2` — **~5 ms** |
+| output | `(B*nh, Q, D)` | `(B, Q, nh*D)` | `h*D*2` in the writer — **~2 ms** |
+
+Each input is independent: `N_work` is `B*num_heads` either way, so one can be widened while the
+others stay in the form the caller already produces. Every step is one stage, one measurement.
+
+`attn` is the largest remaining piece because its copied form carries a trailing `(L, P) = (4, 4)`
+that pads to a full `(32, 32)` tile — 64× — which is what the 3.6 ms untilize pays for.
+
+Not yet verified: the writer passes `{.offset_bytes = 0}` in its destination args
+(`writer_msda.cpp:87`). Whether the destination struct accepts an offset the way the source struct
+does needs checking before the output step.
