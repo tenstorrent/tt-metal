@@ -66,17 +66,13 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
+    const bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
+    const bool use_post_mul = (operation_attributes.scalar != 1.0f);
 
-    // For variance output (is_std=false) to bf16, the scratch CBs (c_19 for W-reduce,
-    // c_22 for HW-reduce) do not need to be wider than bf16: there is no math between
-    // the scratch read-back and the final pack to output, so bf16-rounding once at the
-    // pack to scratch vs once at the pack to output produces a bit-identical result.
-    // For std output, sqrt sits between the read-back and the output pack, so keep the
-    // scratch at the wider precision to avoid quantizing the variance before sqrt
-    // (which could shift the std output by up to one bf16-ULP on elements whose post-
-    // sqrt value straddles a bf16 rounding boundary).
-    bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
+    // Variance output to bf16 can use bf16 scratch only when no further math follows
+    // the scratch read-back. Std still needs sqrt, and scaled variance still needs its
+    // post-multiplier, so retain FP32 scratch for those paths to avoid premature rounding.
+    const bool narrow_scratch_to_bf16 = !is_std && !use_post_mul && dst_cb_data_format == tt::DataFormat::Float16_b;
 
     const tt::DataFormat w_scratch_cb_data_format =
         (fp32_dest_acc_en && !narrow_scratch_to_bf16) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -248,7 +244,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // precision and collapsed large-offset inputs to a constant before the multiply. The
     // post-multiplier follows var(s*x)=s^2 var(x) and std(s*x)=|s| std(x):
     //   var: scalar^2   std: |scalar|.
-    const bool use_post_mul = (operation_attributes.scalar != 1.0f);
     const float post_mul_scaler =
         is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(post_mul_scaler);

@@ -296,6 +296,26 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
     )
 
 
+@pytest.mark.parametrize("dim", [-1, (-2, -1)], ids=["W", "HW"])
+def test_var_bf16_scalar_applied_before_output_rounding(device, dim):
+    # Alternating 0 and 1.3125 has the exactly representable population variance
+    # 0.4306640625. With scalar=2.43, rounding that variance to BF16 before applying
+    # scalar**2 produces 2.53125 instead of the correctly rounded 2.546875.
+    scalar = 2.43
+    amplitude = 1.3125
+    torch_input = torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16)
+    torch_input[..., 1::2] = amplitude
+
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.var(tt_input, dim=dim, scalar=scalar, keepdim=True, correction=False)
+    actual = ttnn.to_torch(ttnn.from_device(tt_output))
+
+    variance = torch.tensor(amplitude * amplitude / 4, dtype=torch.float32)
+    scale = torch.tensor(scalar, dtype=torch.float32).square()
+    expected = (variance * scale).to(torch.bfloat16).expand_as(actual)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("correction", [False, True])
 # 10529 = 32 * 329 + 1: partial tail leaf, 8 carry levels, and 3 cross-level finalize_tree
 # merges, which neither 16385 (512 leaves) nor 131072 (4096 leaves) exercised, since both had a
