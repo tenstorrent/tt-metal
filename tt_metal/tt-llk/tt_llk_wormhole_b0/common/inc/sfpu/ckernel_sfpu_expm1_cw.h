@@ -29,8 +29,12 @@ constexpr float CW_NEG_LN2_LO = -3.19461832987e-05f;
 
 sfpi_inline sfpi::vFloat expm1_cw_clamped(sfpi::vFloat x)
 {
-    // Clamp to prevent exponent underflow (k < -127 wraps setexp)
+    // Clamp to prevent exponent field wraparound in setexp below: SFPSETEXP only writes
+    // the low 8 bits of the exponent, so an unclamped k (k = round(x/ln2)) outside
+    // [-127, 127] silently wraps instead of saturating to 0/inf. -87/+87 keep k within
+    // that range with margin (exp(87) and exp(-87) already saturate float32 range).
     x = sfpi::max(x, -87.0f);
+    x = sfpi::min(x, 87.0f);
 
     // Cody-Waite range reduction: x = k*ln(2) + r
     const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
