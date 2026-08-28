@@ -126,3 +126,42 @@ Attempt 2 rewrote both rather than leaving a green tautology:
 **The gate line "paged fill during prefill, then decode reading the same blocks,
 PCC ≥ 0.99 against the contiguous path" therefore cannot be met at this API**, and
 that is the honest verdict rather than a green tick from a tautology.
+
+**Where the contiguous path does exist**, for whoever fixes D-C4:
+`models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py` builds
+one with `_contiguous_kv_cache(...)` and `model.set_kv_cache(...)` directly, and
+`GalaxyDirectRunner` has a contiguous branch (`self.paged = False`, which then
+requires `active_slots == max_batch_size`). So the missing piece is only an
+adaptor argument — something like `paged=False` alongside
+`paged_attention_config` — not a new mechanism.
+
+### L1's remaining half is **Llama-specific at this tree**, not universal
+
+**New, and it contradicts an inherited claim.** `mb-qwen` attempt 2's handoff
+says of L1's remaining half — prefill after a decode — *"Untouched, inherited,
+**identical for both models**."* Measured here, it is not:
+
+| Test shape (two prefill phases with a decode between them) | Llama | Qwen |
+| --- | --- | --- |
+| `*_repeated_requests_and_deterministic_cleanup` | **FAIL**, `program 100` clashes on `[0-0 - 0-3]` (`a2_g6`) | **PASS**, no clash (`a2_g17`) |
+| `*_batch32_slots_are_isolated` | **FAIL**, same signature (`a2_g7`) | **PASS**, no clash (`a2_g18`) |
+| `demo.py::*_concat32_prefill_matches_sequential` | **FAIL**, `program 1552` clashes on `[0-0 - 6-9]` — the whole grid (`a2_g10`) | @@QWEN_CONCAT@@ |
+| `demo.py::*_device_sampling_matches_host_greedy` | **FAIL**, `program 100` (`a2_g11`) | @@QWEN_SAMPLING@@ |
+
+Both Qwen results were taken in fresh single-node-id processes and re-run to
+three (`a2_L1_qwen_*_run2/3`); the Llama failures are four independent
+reproductions in four different tests.
+
+**Why this matters more than a green tick.** The clash is an address collision —
+`L1 buffer allocated at 544832 and static circular buffer region ends at …` — and
+Qwen's decode placements are narrower than Llama's (residual on 10 cores against
+16, `local_dim` 1280 against 2048, and a 40-core LM-head reduction against 42).
+So the failure is a function of *how much L1 the decode mode leaves below the
+prefill program's static CB region*, not of the mechanism being absent. That
+gives Milestone C something it did not have: **a working reference configuration
+on the same silicon**, which turns "why does prefill-after-decode clash" from a
+one-sided debugging problem into a differential one.
+
+It also means the limitation cannot be stated as a property of the 2D modules. It
+is a property of a *resolved geometry*, and the next model added to this stack may
+land on either side of it with nothing in the contract to warn it.
