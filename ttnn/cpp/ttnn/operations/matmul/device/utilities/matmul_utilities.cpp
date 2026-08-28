@@ -334,7 +334,6 @@ void validate_matmul_reuse_work_split(
 
 }  // namespace ttnn::operations::matmul::utilities
 
-
 namespace ttnn::prim::dram_sharded_helpers {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank) {
@@ -342,6 +341,100 @@ void validate_num_workers_per_dram_bank(std::size_t workers_per_bank) {
         workers_per_bank >= 1 && workers_per_bank <= 3,
         "num_workers_per_dram_bank must be in [1, 3], got {}",
         workers_per_bank);
+}
+
+std::size_t resolve_num_workers_per_dram_bank(
+    const std::optional<std::size_t>& requested_workers_per_bank,
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b) {
+    if (requested_workers_per_bank.has_value()) {
+        validate_num_workers_per_dram_bank(requested_workers_per_bank.value());
+        return requested_workers_per_bank.value();
+    }
+
+    auto* device = input_tensor_a.device();
+    if (device == nullptr || device->arch() != tt::ARCH::BLACKHOLE ||
+        tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()) != tt::tt_metal::NOC::NOC_0) {
+        return 1;
+    }
+
+    const auto& input_b_shard_spec = input_tensor_b.shard_spec();
+    if (!input_b_shard_spec.has_value()) {
+        return 1;
+    }
+    if (input_tensor_b.dtype() != tt::tt_metal::DataType::BFLOAT4_B &&
+        input_tensor_b.dtype() != tt::tt_metal::DataType::BFLOAT8_B) {
+        return 1;
+    }
+    const auto& input_b_tile = input_tensor_b.tensor_spec().tile();
+    const uint32_t tile_height = input_b_tile.get_height();
+    const uint32_t tile_width = input_b_tile.get_width();
+    if (tile_height == 0 || tile_width == 0 || input_b_shard_spec->shape[1] % tile_width != 0) {
+        return 1;
+    }
+    const uint32_t shard_width_tiles = input_b_shard_spec->shape[1] / tile_width;
+    if (shard_width_tiles % 2 != 0) {
+        return 1;
+    }
+
+    // The assignment algorithm needs one additional core per bank outside the
+    // primary-reader set and the input-A storage grid. Count that capacity here
+    // so automatic mode falls back instead of failing during program creation.
+    const auto primary_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+    const uint32_t physical_bank_count = static_cast<uint32_t>(primary_workers.size());
+    const auto& input_b_shape = input_tensor_b.padded_shape();
+    // The automatic policy is measured on eight-bank Blackhole devices. Keep
+    // other bank topologies on the established path until they have equivalent
+    // model-level evidence; explicit reader counts remain available there.
+    if (physical_bank_count != 8 || input_b_shape[-1] % tile_width != 0) {
+        return 1;
+    }
+    const uint32_t logical_width_tiles = input_b_shape[-1] / tile_width;
+    const uint32_t storage_width_tiles = shard_width_tiles * physical_bank_count;
+    // Do not put a partially filled final reader into automatic mode. The existing
+    // multi-reader writeback path assigns every reader a complete storage interval;
+    // exact logical coverage makes that contract unambiguous and avoids introducing
+    // caller-visible padding or a special partial-reader path.
+    if (logical_width_tiles != storage_width_tiles) {
+        return 1;
+    }
+
+    // Two readers are a default only in the broad regime that was consistently
+    // faster across the Blackhole policy sweep: a large compressed weight,
+    // useful NoC transaction size per reader, and enough in0 multicast cores.
+    // Smaller or narrower programs retain one reader; callers can still request
+    // two or three explicitly after tuning their workload.
+    constexpr uint64_t min_weight_bytes = 8ULL * 1024 * 1024;
+    constexpr uint32_t min_reader_row_bytes = 4 * 1024;
+    constexpr uint32_t min_input_a_cores = 64;
+    if (input_b_shape[-2] % tile_height != 0) {
+        return 1;
+    }
+    const uint64_t tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    const uint64_t weight_bytes =
+        static_cast<uint64_t>(input_b_shape[-2] / tile_height) * logical_width_tiles * tile_bytes;
+    const uint64_t reader_row_bytes = static_cast<uint64_t>(shard_width_tiles / 2) * tile_bytes;
+    if (weight_bytes < min_weight_bytes || reader_row_bytes < min_reader_row_bytes) {
+        return 1;
+    }
+
+    const auto worker_grid = device->compute_with_storage_grid_size();
+    const auto& input_a_shard_spec = input_tensor_a.shard_spec();
+    if (!input_a_shard_spec.has_value() || input_a_shard_spec->grid.num_cores() < min_input_a_cores) {
+        return 1;
+    }
+    const auto& excluded_cores = input_a_shard_spec->grid;
+    const std::set<tt::tt_metal::CoreCoord> primary_worker_set(primary_workers.begin(), primary_workers.end());
+    std::size_t available_secondary_cores = 0;
+    for (uint32_t x = 0; x < worker_grid.x; ++x) {
+        for (uint32_t y = 0; y < worker_grid.y; ++y) {
+            const tt::tt_metal::CoreCoord candidate{x, y};
+            if (!primary_worker_set.contains(candidate) && !excluded_cores.contains(candidate)) {
+                ++available_secondary_cores;
+            }
+        }
+    }
+    return available_secondary_cores >= primary_workers.size() ? 2 : 1;
 }
 
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {

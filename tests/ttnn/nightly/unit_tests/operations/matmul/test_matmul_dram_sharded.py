@@ -79,10 +79,12 @@ def run_test_matmul_in1_dram_sharded(
     else:
         num_banks = 12
 
-    # Multi-reader kernels split each bank's width shard evenly. Pad the storage
-    # layout to banks * readers while keeping the tensor's logical N unchanged.
+    # Explicit multi-reader tests prepare storage for the requested count. Automatic
+    # tests retain the established bank-only padding so they exercise selection
+    # against the caller's existing layout.
+    storage_worker_count = num_workers_per_dram_bank if num_workers_per_dram_bank is not None else 1
     N_padded = (
-        pad_to_dram_banks(N, num_banks * num_workers_per_dram_bank) if N_padded_override is None else N_padded_override
+        pad_to_dram_banks(N, num_banks * storage_worker_count) if N_padded_override is None else N_padded_override
     )
 
     in0_shape = [1, 1, M, K]
@@ -258,6 +260,65 @@ def run_test_matmul_in1_dram_sharded(
     )
 
 
+def test_matmul_in1_dram_sharded_worker_count_default_is_auto():
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fused_activation=None,
+    )
+
+    assert program_config.num_workers_per_dram_bank is None
+    assert "num_workers_per_dram_bank=std::nullopt" in repr(program_config)
+
+
+@pytest.mark.parametrize(
+    "K,N,grid_size",
+    [
+        # The natural per-bank shard is even, but this small weight stays on the
+        # conservative one-reader path.
+        (2048, 2048, (8, 2)),
+        # A large compressed weight on 64 input cores exercises the two-reader
+        # automatic regime without caller-side padding or repacking.
+        (8192, 2048, (8, 8)),
+        # 33 logical tiles naturally pad to an odd shard width on p100, p150,
+        # and Wormhole. Automatic mode must retain one reader.
+        (2048, 1056, (1, 1)),
+        # Fifteen logical tiles occupy sixteen storage tiles on an eight-bank
+        # Blackhole. The shard is even, but a two-reader split would leave a
+        # partial final reader, so automatic mode must retain one reader.
+        (512, 480, (1, 1)),
+    ],
+    ids=[
+        "small_even_shard_falls_back",
+        "large_64_core_weight_uses_two_readers",
+        "natural_odd_shard_falls_back",
+        "partial_final_reader_falls_back",
+    ],
+)
+def test_matmul_in1_dram_sharded_auto_worker_count(device, K, N, grid_size, function_level_defaults):
+    torch.manual_seed(0)
+    run_test_matmul_in1_dram_sharded(
+        device=device,
+        in0_sharded=True,
+        out_sharded=True,
+        in1_in_dram=True,
+        M=32,
+        K=K,
+        N=N,
+        fidelity=ttnn.MathFidelity.HiFi2,
+        packer_l1_acc=True,
+        has_bias=False,
+        activation=None,
+        grid_size=grid_size,
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=ttnn.bfloat8_b,
+        out_dtype=ttnn.bfloat16,
+        function_level_defaults=function_level_defaults,
+        num_workers_per_dram_bank=None,
+    )
+
+
 @pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2, 3], ids=["one_worker", "two_workers", "three_workers"])
 @pytest.mark.parametrize(
     "N,fidelity,has_bias,activation,grid_size,in1_dtype",
@@ -345,6 +406,35 @@ def test_matmul_in1_dram_sharded_multi_workers_rejects_oversized_storage(
             # Keep the intentionally oversized shard tile-aligned for each
             # Blackhole variant. p150 has eight banks, while p100 has seven.
             N_padded_override=device.dram_grid_size().x * 32 * shard_width_tiles,
+        )
+
+
+def test_matmul_in1_dram_sharded_explicit_multi_worker_rejects_nondivisible_shard(
+    device, function_level_defaults, expect_error
+):
+    if not is_blackhole():
+        pytest.skip("Multiple DRAM-sharded matmul workers per bank are currently Blackhole-only")
+
+    with expect_error(RuntimeError, "must be divisible by workers_per_bank"):
+        run_test_matmul_in1_dram_sharded(
+            device=device,
+            in0_sharded=True,
+            out_sharded=True,
+            in1_in_dram=True,
+            M=32,
+            K=2048,
+            N=1056,
+            fidelity=ttnn.MathFidelity.HiFi2,
+            packer_l1_acc=True,
+            has_bias=False,
+            activation=None,
+            grid_size=(1, 1),
+            in0_dtype=ttnn.bfloat16,
+            in1_dtype=ttnn.bfloat8_b,
+            out_dtype=ttnn.bfloat16,
+            function_level_defaults=function_level_defaults,
+            num_workers_per_dram_bank=2,
+            N_padded_override=device.dram_grid_size().x * 32 * 5,
         )
 
 

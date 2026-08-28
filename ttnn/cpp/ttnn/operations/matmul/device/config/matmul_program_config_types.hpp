@@ -77,7 +77,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
-    std::size_t num_workers_per_dram_bank = 1;
+    std::optional<std::size_t> num_workers_per_dram_bank = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {

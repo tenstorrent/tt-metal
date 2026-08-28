@@ -357,6 +357,17 @@ struct DramBankReaderAssignment {
 
 void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 
+// Resolve the optional program-config setting without changing tensor storage.
+// An explicit value is returned unchanged and validated strictly. Automatic mode
+// uses two readers only for a large compressed weight on an eight-bank Blackhole,
+// with useful per-reader transaction size, at least 64 input multicast cores,
+// exact existing storage coverage, and enough legal reader cores. All other
+// cases retain one.
+std::size_t resolve_num_workers_per_dram_bank(
+    const std::optional<std::size_t>& requested_workers_per_bank,
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b);
+
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.

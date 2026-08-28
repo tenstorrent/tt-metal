@@ -583,7 +583,9 @@ void validate_matmul_nonzero_block_dims(
 // Mcast2D/Mcast1D also check the program grid is non-zero and fits the device (Mcast1D
 // gather_in0 skips that grid check — its grid comes from the input A shard grid).
 void validate_matmul_compute_grid_and_per_core_dims(
-    const Tensor& input_tensor_a, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     const CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
     const auto config_name = ttsl::get_active_type_name_in_variant(chosen_program_config);
     std::visit(
@@ -629,10 +631,10 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 if constexpr (std::is_same_v<
                                   ProgramConfigType,
                                   operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+                    const auto workers_per_bank = dram_sharded_helpers::resolve_num_workers_per_dram_bank(
+                        program_config.num_workers_per_dram_bank, input_tensor_a, input_tensor_b);
                     TT_FATAL(
-                        program_config.num_workers_per_dram_bank == 1 ||
-                            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                        workers_per_bank == 1 || input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
                         "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
                         config_name);
                 }
@@ -2271,7 +2273,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     // ---- universal checks, part 2: need the chosen program config ----
     // Config-based shared validators (each self-filters by config via std::visit).
     validate_matmul_tiny_tile_constraints(input_tensor_b, in0_tile, in1_tile, chosen_program_config);
-    validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
+    validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);

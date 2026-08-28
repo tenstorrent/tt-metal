@@ -247,7 +247,7 @@ def test_zeros_like_paged_cache():
     assert torch.all(result == 0)
 
 
-@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2])
+@pytest.mark.parametrize("num_workers_per_dram_bank", [None, 1, 2], ids=["auto", "one", "two"])
 def test_program_config_to_dict_with_to_json(num_workers_per_dram_bank):
     """Test program_config_to_dict for a config that has to_json (matmul configs)."""
     cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -265,7 +265,8 @@ def test_program_config_to_dict_with_to_json(num_workers_per_dram_bank):
     assert d["per_core_N"] == 2
     assert d["num_workers_per_dram_bank"] == num_workers_per_dram_bank
     assert "fused_activation" in d
-    assert f"num_workers_per_dram_bank={num_workers_per_dram_bank}" in repr(cfg)
+    repr_value = "std::nullopt" if num_workers_per_dram_bank is None else num_workers_per_dram_bank
+    assert f"num_workers_per_dram_bank={repr_value}" in repr(cfg)
 
     json_str = json.dumps(d, sort_keys=True)
     roundtrip = json.loads(json_str)

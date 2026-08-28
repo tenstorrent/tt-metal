@@ -944,7 +944,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     const auto& output_tensors = tensor_return_value;
 
     const auto& a = input_tensors.at(0);
-    const auto& b = input_tensors.at(1).mesh_tensor();
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& b = input_tensor_b.mesh_tensor();
     const auto& bias = optional_input_tensors.at(0);
     const auto& output = output_tensors.at(0);
     const auto& ashape = a.padded_shape();
@@ -1029,7 +1030,8 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     const auto& in0_block_w = program_config.in0_block_w;
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;
-    const auto& workers_per_bank = program_config.num_workers_per_dram_bank;
+    const auto workers_per_bank = dram_sharded_helpers::resolve_num_workers_per_dram_bank(
+        program_config.num_workers_per_dram_bank, a, input_tensor_b);
     const auto& fused_activation = program_config.fused_activation;
 
     const auto& untilize_out = operation_attributes.untilize_out;

@@ -561,13 +561,18 @@ void py_module(nb::module_& mod) {
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
         .def(
-            nb::init<std::size_t, std::size_t, std::size_t, std::optional<UnaryWithParam>, std::size_t>(),
+            nb::init<
+                std::size_t,
+                std::size_t,
+                std::size_t,
+                std::optional<UnaryWithParam>,
+                std::optional<std::size_t>>(),
             nb::kw_only(),
             nb::arg("in0_block_w").noconvert(),
             nb::arg("per_core_M").noconvert(),
             nb::arg("per_core_N").noconvert(),
             nb::arg("fused_activation") = nb::none(),
-            nb::arg("num_workers_per_dram_bank") = 1)
+            nb::arg("num_workers_per_dram_bank") = nb::none())
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
@@ -603,24 +608,14 @@ void py_module(nb::module_& mod) {
             R"doc(
             Number of Tensix reader/compute workers assigned to each DRAM bank.
 
-            The default of 1 preserves the established cross-architecture path. Values of 2 or 3
-            split each bank's width shard evenly across multiple workers on Blackhole. All readers
-            for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
-            width in tiles must equal this value times the reader width.
-        )doc")
-        .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
-            // Include fused_activation in the repr for full visibility during tracing/debugging.
-            std::string fused_activation_repr =
-                config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
-            return fmt::format(
-                "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w={}, per_core_M={}, per_core_N={}, "
-                "fused_activation={}, num_workers_per_dram_bank={})",
-                config.in0_block_w,
-                config.per_core_M,
-                config.per_core_N,
-                fused_activation_repr,
-                config.num_workers_per_dram_bank);
-        });
+            ``None`` selects two workers for large compressed weights on eight-bank Blackhole devices
+            when the existing per-bank shard splits evenly, each reader gets at least 4 KiB per weight
+            row, input A uses at least 64 multicast cores, the shard covers the logical width exactly,
+            and the device has enough legal reader cores. Otherwise it selects one. Automatic selection
+            does not pad or repack the tensor. Explicit values of 1, 2, or 3 are strict.
+            Multiple workers split each bank's width shard evenly. All readers for one bank use NOC0
+            and the same allocator-selected DRAM endpoint.
+        )doc");
 
     auto matmul_multi_core_reuse_multicast_batched_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>(
