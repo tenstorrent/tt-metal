@@ -17,6 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -43,7 +44,7 @@ class TtPrefillRuntimeConfig:
     capacity_factor: int = 2
     gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL
     routed_expert_activations_dtype: ttnn.DataType = ttnn.bfloat8_b
-    routed_expert_weights_dtype: ttnn.DataType = ttnn.bfloat4_b
+    routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
@@ -185,13 +186,28 @@ class TtPrefillRuntime:
                 # to look for the latent-projection cache files and would call an incomplete cache
                 # complete. model_cfg is already in hand two lines up.
                 model_cfg=model_cfg,
+                # Must be the dtype the experts will be BUILT at, or a cache at another dtype
+                # reports complete and the placeholder is loaded as the weights.
+                routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
+            elif not state_dict:
+                # Incomplete cache AND no source weights is the silent-corruption case this change
+                # exists to close: TtRoutedExpert falls back to torch.empty placeholders, as_tensor
+                # converts that uninitialized memory at the requested dtype, and the run produces
+                # fluent output with a meaningless PCC. Detecting the mismatch is not enough -- the
+                # production adapter passes state_dict={}, so there is nothing to rebuild from.
+                raise RuntimeError(
+                    f"TTNN weight cache at {self.config.weight_cache_path} is not complete for "
+                    f"routed_expert_weights_dtype={self.config.routed_expert_weights_dtype}, and no "
+                    f"source weights were supplied to rebuild it. Continuing would load uninitialized "
+                    f"placeholders as the expert weights. Populate the cache at this dtype first "
+                    f"(run the pretrained smoke test once)."
+                )
             else:
                 logger.warning(
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
-                    f"build will fail without a populated cache. "
-                    f"Run the pretrained smoke test once to populate it."
+                    f"it will be rebuilt from the supplied weights."
                 )
         self.model = TtPrefillTransformer(
             mesh_device=self.mesh_device,
