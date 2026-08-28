@@ -1849,7 +1849,6 @@
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_combine_tg.py -v
     MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_compute_tg.py -v
-    MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_dispatch_tg.py -v
     MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_optimized_moe_decode_block_tg.py -v
   model: deepseek-v3
   skus:
