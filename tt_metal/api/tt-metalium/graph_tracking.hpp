@@ -260,7 +260,7 @@ private:
 // The destructor closes the scope on both paths and tells them apart, so a failing operation is
 // reported as aborted instead of silently unbalancing the trace. Call end() on the success path to
 // report the operation's output; anything left unclosed is finished by the destructor.
-class ScopedTrackedFunction {
+class [[nodiscard]] ScopedTrackedFunction {
 public:
     template <class... Args>
     explicit ScopedTrackedFunction(std::string_view function_name, Args&&... args) :
