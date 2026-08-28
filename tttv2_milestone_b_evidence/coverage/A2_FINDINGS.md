@@ -135,7 +135,84 @@ requires `active_slots == max_batch_size`). So the missing piece is only an
 adaptor argument — something like `paged=False` alongside
 `paged_attention_config` — not a new mechanism.
 
-### L1's remaining half is **Llama-specific at this tree**, not universal
+### D-C5 — the column user selector cannot accept Qwen's decode logits: its matmul requires an INTERLEAVED input B
+
+**New, severity: correctness-blocking for device sampling on Qwen.** Added by
+`mb-coverage` attempt 3 from attempt 2's `a2_g23_qwen_demo_sampling.log`; attempt
+2 measured it and was cut off before writing it up.
+
+`GalaxyColumnUserSelector.__call__` (`models/common/models/galaxy/collectives.py:445`)
+is a single `ttnn.matmul(self.selector(), tensor, …)`: an identity-matrix selector
+against the decode logits. `ttnn.matmul` with the default (multi-core) program
+config requires **input B interleaved**
+(`matmul_device_operation.cpp:1233`), and Qwen's decode logits arrive
+**WIDTH_SHARDED**:
+
+```
+TT_FATAL: MatmulMultiCoreProgramConfig: Input B memory layout must be INTERLEAVED,
+          got: TensorMemoryLayout::WIDTH_SHARDED
+  models/common/models/qwen3_32b_galaxy/model.py:1810  in sample_decode
+  models/common/models/qwen3_32b_galaxy/model.py:1793  in select_decode_column_users
+  models/common/models/galaxy/collectives.py:445       in __call__
+```
+
+The selector's own `memory_config` default is `DRAM_MEMORY_CONFIG`, so the
+constraint is on the *incoming* tensor, which the selector neither checks nor
+converts. Its only guard is a shape check (`[1, 1, max_batch_size, W]`); memory
+layout is unvalidated, so the failure surfaces as a `TT_FATAL` from inside
+`ttnn` rather than as a contract error naming the caller.
+
+Two things make this a *2D-module* finding rather than a Qwen one:
+
+* the selector is shared Galaxy code (`collectives.py`), not model code, and its
+  contract is silent about the layout it accepts;
+* it is reached only through `model.sample_decode`, so **every** device-sampling
+  claim for Qwen is behind it — greedy-vs-host-argmax, the padded vocabulary, the
+  seeded slots and the heterogeneous controls alike.
+
+The host-sampling half of the same test ran first and passed, which localises the
+fault to the device path.
+
+**What it needs**, for whoever owns `collectives.py`: either the selector accepts
+a sharded input B (an `interleaved_to_sharded`/`sharded_to_interleaved` at the
+boundary, or a matmul program config that takes it), or `sample_decode` states the
+layout it requires and the model converts before the call. Both are runtime
+changes, so attempt 3 reports rather than makes them.
+
+### D-C6 — Qwen's concat-32 prefill program does not fit in L1 at all
+
+**New, severity: limitation, and it is a capacity result rather than an
+ownership one.** Added by attempt 3 from attempt 2's
+`a2_g22_qwen_demo_concat32.log`.
+
+```
+TT_THROW: Statically allocated circular buffers on core range [0-0 - 2-3]
+          grow to 1669312 B which is beyond max L1 size of 1499136 B
+  tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region
+  models/common/models/galaxy/direct_runner.py:484  in prefill_batched
+  models/common/models/galaxy/direct_demo.py:69     in run_direct_demo
+```
+
+This is **not** the L1 limitation L1/G-C\* family. Those are address collisions —
+"static circular buffers … *clash with* L1 buffers … L1 buffer allocated at
+544832" — which depend on what a previous phase left allocated. This one is the
+sum of the program's own static circular buffers exceeding the whole 1499136 B of
+L1 on a 3×4 core range, **by 170176 B (11%)**, which is a property of the resolved
+concat-32 prefill recipe alone and cannot be fixed by teardown ordering.
+
+The distinction matters for scheduling Milestone C: L1's ownership redesign will
+not make this case pass. Qwen's concat-32 prefill needs a smaller resolved recipe
+(fewer or smaller CBs, or a narrower core range per stream) before it can run at
+all, at any length.
+
+**One thing this leaves open**, and attempt 3 queued it: the failure was observed
+in the *second* `run_direct_demo` of the demo test, so it has not yet been
+separated from "after a decode". If `test_qwen_concat32_matches_sequential_prefill_at_each_length`
+fails the same way in a fresh model with no preceding decode, the finding is
+unconditional; if it passes, the capacity overflow is history-dependent after all
+and D-C6 collapses into the L1 family.
+
+### L1's **address clash** is Llama-specific at this tree; Qwen fails the same two demo shapes for two unrelated reasons
 
 **New, and it contradicts an inherited claim.** `mb-qwen` attempt 2's handoff
 says of L1's remaining half — prefill after a decode — *"Untouched, inherited,
@@ -145,12 +222,35 @@ says of L1's remaining half — prefill after a decode — *"Untouched, inherite
 | --- | --- | --- |
 | `*_repeated_requests_and_deterministic_cleanup` | **FAIL**, `program 100` clashes on `[0-0 - 0-3]` (`a2_g6`) | **PASS**, no clash (`a2_g17`) |
 | `*_batch32_slots_are_isolated` | **FAIL**, same signature (`a2_g7`) | **PASS**, no clash (`a2_g18`) |
-| `demo.py::*_concat32_prefill_matches_sequential` | **FAIL**, `program 1552` clashes on `[0-0 - 6-9]` — the whole grid (`a2_g10`) | @@QWEN_CONCAT@@ |
-| `demo.py::*_device_sampling_matches_host_greedy` | **FAIL**, `program 100` (`a2_g11`) | @@QWEN_SAMPLING@@ |
+| `demo.py::*_concat32_prefill_matches_sequential` | **FAIL**, `program 1552` clashes on `[0-0 - 6-9]` — the whole grid (`a2_g10`) | **FAIL**, but *not* an address clash: static CBs on `[0-0 - 2-3]` **grow to 1669312 B against a 1499136 B L1** (`a2_g22`) — a capacity overflow, **D-C6** |
+| `demo.py::*_device_sampling_matches_host_greedy` | **FAIL**, `program 100` (`a2_g11`) | **FAIL**, and not L1 at all: the column user selector matmul refuses a WIDTH_SHARDED input B (`a2_g23`) — **D-C5** |
 
 Both Qwen results were taken in fresh single-node-id processes and re-run to
 three (`a2_L1_qwen_*_run2/3`); the Llama failures are four independent
 reproductions in four different tests.
+
+**Read the last two rows before the first two.** This section was written at
+02:49 UTC against the first two rows only, when the heading said *"L1's remaining
+half is Llama-specific"*. The Qwen cells then completed, and both are failures —
+so the claim as first written is too strong and attempt 3 narrowed it, heading
+included. What survives is precise and still useful:
+
+* the **L1 address clash** — the `clash with L1 buffers on core range …, L1 buffer
+  allocated at 544832` signature — is **Llama-only at this tree**: 4 reproductions
+  in 4 Llama tests, 0 in 6 Qwen runs of the two shapes that reproduce it for
+  Llama;
+* but **Qwen is not clean on the two demo shapes**. It fails
+  `*_concat32_prefill_matches_sequential` on an L1 **capacity** overflow (D-C6) and
+  `*_device_sampling_matches_host_greedy` on a **matmul layout contract** (D-C5).
+  Neither is an address collision, neither depends on a preceding decode as far as
+  the evidence goes, and neither would be fixed by the teardown-ordering work L1
+  points at.
+
+So the honest one-line version is: *the address clash is a property of Llama's
+resolved geometry, and the two-prefill-phase demo shapes are unreliable on both
+models for three distinct reasons.* Qwen is still the differential reference L1
+needs — it runs the two `*_repeated_requests*` / `*_batch32_slots*` shapes clean
+3/3 — but it is not a clean bill of health for the concat-32 or sampling paths.
 
 **Why this matters more than a green tick.** The clash is an address collision —
 `L1 buffer allocated at 544832 and static circular buffer region ends at …` — and

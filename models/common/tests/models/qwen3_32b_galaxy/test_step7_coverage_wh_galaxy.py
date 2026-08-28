@@ -376,6 +376,50 @@ def test_qwen_a_prefix_cached_request_then_a_normal_one(mesh_device: ttnn.MeshDe
         _close(handle)
 
 
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_qwen_prefix_cached_and_plain_requests_mixed_across_slots(mesh_device: ttnn.MeshDevice):
+    """A mix of both in one batch, then one decode over all of them.
+
+    The Llama twin carries the reasoning. `mb-coverage` attempt 3 added this
+    case: attempt 2 left the Qwen half of the step-7 brief's "a mix of both in
+    the same batch" unwritten, so the claim had no Qwen measurement at all.
+    """
+
+    chunked_prompt = _prompt(256)
+    plain_prompt = _prompt(128)
+    handle = _load(
+        mesh_device,
+        prefill_sequence_lengths=(128,),
+        chunked_prefill_sequence_lengths=(128,),
+        paged_attention_config=_paged_config(context=2048, active_slots=32),
+    )
+    try:
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot in range(GALAXY_PHYSICAL_BATCH):
+                if slot % 2:
+                    runner.prefill_chunked(chunked_prompt, slot=slot, chunk_length=128)
+                else:
+                    runner.prefill_row(plain_prompt, slot=slot)
+
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [
+                len(plain_prompt) if slot % 2 == 0 else len(chunked_prompt) for slot in range(GALAXY_PHYSICAL_BATCH)
+            ]
+            logits = runner.decode_logits(tokens, positions)
+
+        even = [logits[slot] for slot in range(0, GALAXY_PHYSICAL_BATCH, 2)]
+        odd = [logits[slot] for slot in range(1, GALAXY_PHYSICAL_BATCH, 2)]
+        for index, row in enumerate(even[1:], start=1):
+            assert torch.equal(even[0], row), f"plain slot {2 * index} disagreed with plain slot 0"
+        for index, row in enumerate(odd[1:], start=1):
+            assert torch.equal(odd[0], row), f"cached slot {2 * index + 1} disagreed with cached slot 1"
+        assert not torch.equal(even[0], odd[0]), "the two request kinds produced identical logits"
+    finally:
+        _close(handle)
+
+
 # ---------------------------------------------------------------------------
 # Area 4: device sampling, including the padded vocabulary
 # ---------------------------------------------------------------------------
@@ -525,5 +569,51 @@ def test_qwen_a_seeded_slot_repeats_across_runs(mesh_device: ttnn.MeshDevice):
         assert torch.equal(observed[0], observed[1])
         assert torch.equal(observed[1], observed[2])
         assert torch.all(observed[0] < handle.model.vocab_size)
+    finally:
+        _close(handle)
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
+def test_qwen_per_slot_heterogeneous_sampling_controls(mesh_device: ttnn.MeshDevice):
+    """Serving mixes top-k, top-p and temperature; the greedy slots must stay greedy.
+
+    The Llama twin carries the reasoning. `mb-coverage` attempt 3 added this
+    case: the step-7 brief asks for per-slot heterogeneous controls for both
+    models and attempt 2 wrote only the Llama half.
+    """
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    greedy_slots = (0, 8, 16, 24)
+    top_k = [1 if slot in greedy_slots else 8 + (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)]
+    top_p = [1.0 if slot in greedy_slots else 0.5 + 0.1 * (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)]
+    temperature = [0.0 if slot in greedy_slots else 0.6 + 0.2 * (slot % 4) for slot in range(GALAXY_PHYSICAL_BATCH)]
+
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            host_logits = runner.decode_logits(tokens, positions)
+            expected = torch.argmax(host_logits[:, : handle.model.vocab_size], dim=-1)
+
+            sampled = handle.model.sample_decode(
+                runner._decode_device_logits(tokens, positions),
+                top_k=top_k,
+                top_p=top_p,
+                temperature=temperature,
+                seed=[20260827 + slot for slot in range(GALAXY_PHYSICAL_BATCH)],
+                slot_ids=list(range(GALAXY_PHYSICAL_BATCH)),
+            )
+            from models.common.auto_compose import to_torch_auto_compose
+
+            chosen = to_torch_auto_compose(sampled).reshape(-1)[:GALAXY_PHYSICAL_BATCH].to(torch.int64)
+
+        for slot in greedy_slots:
+            assert int(chosen[slot]) == int(expected[slot]), f"greedy slot {slot} did not take the host argmax"
+        assert torch.all(chosen < handle.model.vocab_size)
     finally:
         _close(handle)
