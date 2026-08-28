@@ -61,6 +61,10 @@
 #
 # For perf work, run the bench scripts directly and use NEITHER mode: every number in
 # unified_llama_prefill.md was taken with asserts off, and they stay comparable that way.
+#
+# A run begins with unified_selftest.cpp, on the host and before any device is touched:
+# three projections compiled -Wall -Wextra -Werror and traced. SKIP_SELFTEST=1 skips it,
+# SELFTEST_CXX names the compiler.
 
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -118,6 +122,53 @@ pass=0
 fail=0
 run=0
 failed_names=()
+
+# The host selftest, FIRST and before any device is touched. It compiles the headers with
+# -Wall -Wextra -Werror -- the only build that does, since the device build turns those off
+# -- and runs the example kernels once per thread projection, checking that every circular
+# buffer balances and that the free-function and method spellings emit identical traces.
+#
+# It is here because it was NOT here, and went unbuilt from stage 1b until the port was
+# finished: nothing referenced it, so four separate changes broke it a little more and no
+# run said so. Three seconds against nine minutes of device time also puts it in the right
+# order -- a header that does not compile should not cost a suite run to discover.
+#
+# SKIP_SELFTEST=1 skips it. It needs no device, so there is rarely a reason to.
+SELFTEST_CXX="${SELFTEST_CXX:-clang++-20}"
+if [ "${SKIP_SELFTEST:-0}" != "1" ]; then
+    if ! command -v "$SELFTEST_CXX" > /dev/null 2>&1; then
+        echo "  selftest: skipped, no ${SELFTEST_CXX} (set SELFTEST_CXX)"
+    else
+        selftest_rc=0
+        for spec in "DM0 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=0" \
+                    "DM1 -DIS_DM_THREAD=1 -DTT_DM_THREAD_ID=1" \
+                    "COMPUTE -DIS_COMPUTE_THREAD=1"; do
+            # shellcheck disable=SC2086
+            set -- $spec
+            label=$1
+            shift
+            log="/tmp/unified_selftest_${label}.log"
+            if ! "$SELFTEST_CXX" -std=c++17 -Wall -Wextra -Werror -I. "$@" \
+                -DTT_LABEL="\"${label}\"" unified_selftest.cpp -o "/tmp/u_${label}" \
+                > "$log" 2>&1; then
+                echo "  selftest ${label}: BUILD FAILED -- ${log}"
+                selftest_rc=1
+                continue
+            fi
+            if ! "/tmp/u_${label}" >> "$log" 2>&1; then
+                echo "  selftest ${label}: FAILED -- ${log}"
+                selftest_rc=1
+            fi
+        done
+        if [ $selftest_rc -eq 0 ]; then
+            echo "  selftest: ok (DM0, DM1, COMPUTE balanced; spellings agree)"
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+            failed_names+=("selftest")
+        fi
+    fi
+fi
 
 for suite in "${SUITES[@]}"; do
     if [ $have_reset -eq 1 ] && [ $run -gt 0 ] && [ $((run % RESET_EVERY)) -eq 0 ]; then

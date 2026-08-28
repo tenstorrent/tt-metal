@@ -250,6 +250,11 @@ inline void reconfig_data_format_srcb(uint32_t new_cb) { T("        reconfig_src
 inline void reconfig_data_format_srca(uint32_t new_cb) { T("      reconfig_srca(cb" + n(new_cb) + ")"); }
 inline void copy_tile_to_dst_init_short(uint32_t cb) { T("      copy_init(cb" + n(cb) + ")"); }
 inline void init_sfpu(uint32_t icb, uint32_t ocb) { T("  init_sfpu(cb" + n(icb) + " -> cb" + n(ocb) + ")"); }
+// pack_to's two forms: unconditional on the first pass, old -> new after that.
+inline void pack_reconfig_data_format(uint32_t new_cb) { T("  pack_reconfig(cb" + n(new_cb) + ")"); }
+inline void pack_reconfig_data_format(uint32_t old_cb, uint32_t new_cb) {
+    T("  pack_reconfig(cb" + n(old_cb) + " -> cb" + n(new_cb) + ")");
+}
 }  // namespace ckernel
 
 // A stand-in for L1. Almost every stub only hands an address to another stub, so a
@@ -283,6 +288,33 @@ inline uint32_t get_write_ptr(uint32_t) { return static_cast<uint32_t>(reinterpr
 inline uint32_t get_read_ptr(uint32_t) { return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(l1_base())); }
 inline uint32_t cb_page_bytes(uint32_t) { return kPageBytes; }
 
+// Metal 2.0's buffer handle. Every method traces EXACTLY what the free function it
+// replaced traced, which is the point: the balance checker below parses those strings,
+// and a trace recorded before the port has to keep comparing equal to one recorded
+// after. The port is supposed to be a change of spelling, and this is where that claim
+// is actually tested.
+class DataflowBuffer {
+public:
+    explicit DataflowBuffer(uint16_t cb) : cb_(cb) {}
+    void reserve_back(uint32_t p) const { cb_reserve_back(cb_, p); }
+    void push_back(uint32_t p) const { cb_push_back(cb_, p); }
+    void wait_front(uint32_t p) const { cb_wait_front(cb_, p); }
+    void pop_front(uint32_t p) const { cb_pop_front(cb_, p); }
+    uint32_t get_write_ptr() const { return ::get_write_ptr(cb_); }
+    uint32_t get_read_ptr() const { return ::get_read_ptr(cb_); }
+    uint32_t get_entry_size() const { return kPageBytes; }
+    // What the HOST configured. This harness has no host, so the number is a stand-in
+    // large enough never to be the binding constraint -- which does make Storage's
+    // capacity assert (hazard A1/A2) VACUOUS here. That check belongs to the device
+    // suites, which have a real host to disagree with.
+    uint32_t get_total_num_entries() const { return 1u << 16; }
+
+private:
+    uint16_t cb_;
+};
+inline DataflowBuffer buffer(uint32_t cb) { return DataflowBuffer(static_cast<uint16_t>(cb)); }
+inline uint32_t cb_num_pages(uint32_t cb) { return buffer(cb).get_total_num_entries(); }
+
 // An L1 pointer attribute on device (risc_attribs.h); nothing on the host.
 #define tt_l1_ptr
 
@@ -296,6 +328,9 @@ struct TensorAccessor {
     constexpr TensorAccessor(FakeArgs a, uint32_t) : id(a.id) {}
     // encode (tensor, page) into the fake address so traces stay readable
     uint64_t get_noc_addr(uint32_t page) const { return (uint64_t(id) << 32) | page; }
+    // D19's check compares this against cb_page_bytes; agreeing here keeps it quiet,
+    // which is right -- the mismatch it catches is a HOST configuration error.
+    uint32_t get_aligned_page_size() const { return kPageBytes; }
 };
 inline void noc_async_read(uint64_t src, uint32_t, uint32_t) {
     T2("noc_async_read (t" + n(uint32_t(src >> 32)) + ",page=" + n(uint32_t(src & 0xffffffffu)) + ")");
@@ -331,7 +366,18 @@ inline uintptr_t get_semaphore(uint32_t id) {
 class Noc {
 public:
     Noc() = default;
-    uint8_t get_noc_id() const { return 0; }
+    explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
+    uint8_t get_noc_id() const { return noc_id_; }
+    // Traced as the free functions were, for the same reason DataflowBuffer is: the
+    // handle carries which NOC it used, but on this harness there is one fake NOC, so
+    // printing the id would make every pre-port trace differ for no real difference.
+    void async_read_barrier() const { T2("noc_async_read_barrier()"); }
+    void async_writes_flushed() const { T2("noc_async_writes_flushed()"); }
+    void async_write_barrier() const { T2("noc_async_write_barrier()"); }
+    void async_atomic_barrier() const { T2("noc_async_atomic_barrier()"); }
+
+private:
+    uint8_t noc_id_ = 0;
 };
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
@@ -392,10 +438,25 @@ inline void pack_block(uint32_t dst, uint32_t cb, uint32_t count) {
 }
 }  // namespace ckernel
 
+// Metal's assert.h defines ASSERT unconditionally -- a no-op when asserts are off --
+// so code may use it without guarding. Match that, or every unguarded ASSERT in the
+// library is an undeclared identifier here and only here.
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
 #include <cassert>
-#define ASSERT(x) assert(x)
+#define ASSERT(x, ...) assert(x)
+#else
+#define ASSERT(x, ...) ((void)sizeof(!(x)))
 #endif
+
+// Device attributes and build defines the metal headers would supply.
+#define FORCE_INLINE inline
+// The NOC mode metal compiles into every kernel. Dedicated is the default everywhere
+// and the only mode with device coverage; impl.hpp reads it to decide whether a write
+// release owes a full barrier (hazard 30). Tracing the dedicated projection is the
+// right choice here -- it is what every shipping kernel builds as -- and it means this
+// harness does NOT exercise the dynamic-NOC branch.
+enum : uint8_t { DM_DEDICATED_NOC = 0, DM_DYNAMIC_NOC = 1 };
+#define NOC_MODE DM_DEDICATED_NOC
 
 #define TT_UNIFIED_CUSTOM_BINDING 1
 #include <tt/unified/core>
@@ -847,10 +908,27 @@ void example_matmul_acc() {
 // Runs two examples that should be indistinguishable and diffs their traces. A
 // different question from report()'s: not "is the protocol balanced" but "did
 // these two spellings emit the same thing".
+// Both spellings have to START from the same memoized state or they cannot emit the
+// same trace, however identical the code is. pack_to() remembers which buffer the
+// packer is programmed for -- per RISC, and deliberately so (see math.hpp) -- and that
+// memory outlives one example, so whichever spelling runs second sees the other's
+// leftovers and prints a different transition. It is the only such state in the
+// library; `static` in math.hpp, impl.hpp and expr.hpp finds exactly this one.
+//
+// Driving it to a fixed buffer before each side, untraced, makes the comparison about
+// the two spellings rather than about what ran before them.
+static constexpr uint32_t kPackProbeReset = 31;
+static void reset_memoized_state() {
+    tt::unified::pack_to(kPackProbeReset);
+    trace.clear();
+}
+
 static bool report_same(const char* title, void (*lhs)(), void (*rhs)()) {
+    reset_memoized_state();
     lhs();
     std::vector<std::string> a = trace;
     trace.clear();
+    reset_memoized_state();
     rhs();
     std::vector<std::string> b = trace;
     trace.clear();

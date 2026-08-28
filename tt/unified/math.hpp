@@ -1549,6 +1549,7 @@ struct Strategy<FPUFusion> {
         (void)node;
         (void)acc_cb;
         (void)out_cb;
+        (void)bias_cb;
 #endif
     }
 
@@ -1935,6 +1936,8 @@ struct Strategy<FPUFusion> {
         (void)out_cb;
         (void)reload;
         (void)finish;
+        (void)epi_bias_cb;
+        (void)kAccTiles;
 #endif
     }
 };
