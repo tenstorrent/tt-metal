@@ -21,7 +21,7 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3_refactor import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from .common import GALAXY_MESHES
 from .common_av import CALIBRATED_FOX_PROMPT, is_host, log_pipeline_perf, run_warm_generation, weights_dir
 
