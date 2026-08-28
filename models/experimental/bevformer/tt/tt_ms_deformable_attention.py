@@ -175,10 +175,54 @@ class TTMSDeformableAttention:
         self.num_points = config.num_points
         self.batch_first = config.batch_first
         self.device = device
-        self._offset_normalizer = {}
+        self._folded_sampling_offsets_cache = {}
         self.params = params
 
         self.head_dim = self.embed_dims // self.num_heads
+
+    def _folded_sampling_offsets(self, spatial_shapes):
+        """Pre-scale the `sampling_offsets` Linear by the reciprocal offset normalizer.
+
+        The normalizer is `[W, H]` per level, fixed by the feature-pyramid config, so
+        dividing the Linear's output by it is a static per-output-channel scale and folds
+        into the weight exactly: `s · (Wx + b) == (Wx + b) / normalizer`. That removes a
+        broadcast SFPU divide whose operands tile-pad an extent-2 axis to 32.
+
+        The Linear emits `num_heads * num_levels * num_points * 2` channels ordered
+        (head, level, point, xy) with xy innermost, which is what makes the scale vector
+        expressible; `preprocess_linear_weight` stores the weight transposed as
+        `(in, out)`, so one `(1, out)` row broadcasts over weight and bias alike.
+        """
+        key = tuple(spatial_shapes.flatten().tolist())
+        folded = self._folded_sampling_offsets_cache.get(key)
+        if folded is not None:
+            return folded
+
+        weight = self.params.sampling_offsets.weight
+        out_features = weight.shape[-1]
+        expected = self.num_heads * self.num_levels * self.num_points * 2
+        assert out_features == expected, f"sampling_offsets width {out_features} != {expected}"
+        assert (
+            spatial_shapes.shape[0] == self.num_levels
+        ), f"spatial_shapes has {spatial_shapes.shape[0]} levels, config says {self.num_levels}"
+
+        scale = torch.ones(self.num_heads, self.num_levels, self.num_points, 2, dtype=torch.float32)
+        for level, (h, w) in enumerate(spatial_shapes.tolist()):
+            scale[:, level, :, 0] = 1.0 / float(w)
+            scale[:, level, :, 1] = 1.0 / float(h)
+        scale_tt = ttnn.from_torch(
+            scale.reshape(1, out_features), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+
+        bias = self.params.sampling_offsets.bias
+        folded = (
+            ttnn.mul(weight, scale_tt),
+            ttnn.mul(bias, scale_tt) if bias is not None else None,
+        )
+        ttnn.deallocate(scale_tt)
+
+        self._folded_sampling_offsets_cache[key] = folded
+        return folded
 
     def forward(
         self,
@@ -258,11 +302,10 @@ class TTMSDeformableAttention:
         if ENABLE_LOGGING:
             logger.info("MSDA Sampling Offset Generation")
 
-        # Generate sampling offsets
+        # Generate sampling offsets, already normalized by the folded Linear
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
-        sampling_offsets = ttnn.linear(
-            query, self.params.sampling_offsets.weight, bias=self.params.sampling_offsets.bias
-        )
+        offsets_weight, offsets_bias = self._folded_sampling_offsets(spatial_shapes)
+        sampling_offsets = ttnn.linear(query, offsets_weight, bias=offsets_bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs * num_queries * self.num_heads, self.num_levels, self.num_points, 2)
         )
@@ -290,26 +333,6 @@ class TTMSDeformableAttention:
         if reference_points.shape[-1] == 2:
             # D represents the number of depth levels in 3D point sampling (e.g., 4 points per pillar)
             D = reference_points.shape[2]
-
-            # The feature-pyramid shapes come from the config, so the normalizer is identical on
-            # every call; cached on its contents rather than rebuilt per layer.
-            normalizer_key = tuple(spatial_shapes.flatten().tolist())
-            offset_normalizer = self._offset_normalizer.get(normalizer_key)
-            if offset_normalizer is None:
-                spatial_shapes_tt = ttnn.from_torch(
-                    spatial_shapes, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-                )
-
-                # Create offset normalizer to convert pixel-space offsets to normalized coordinates [0,1]
-                offset_normalizer = ttnn.stack([spatial_shapes_tt[..., 1], spatial_shapes_tt[..., 0]], dim=-1)
-
-                # sampling_offsets: [bs*num_queries*num_heads, num_levels, num_points, 2]
-                # offset_normalizer: [num_levels, 2] -> [1, num_levels, 1, 2] for broadcasting
-                offset_normalizer = ttnn.unsqueeze(offset_normalizer, 0)  # Add batch * query * head dimension
-                offset_normalizer = ttnn.unsqueeze(offset_normalizer, -2)  # Add point dimension
-                self._offset_normalizer[normalizer_key] = offset_normalizer
-
-            sampling_offsets = ttnn.div(sampling_offsets, offset_normalizer)
 
             # reference_points: [bs, num_queries, D, 2] -> [bs, num_queries, 1, 1, 1, D, 2]
             reference_points_expanded = ttnn.unsqueeze(reference_points, 2)  # Add head dimension
