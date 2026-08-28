@@ -339,9 +339,15 @@ from ttnn.types import (
     Mcast1D,
     Mcast1DShape,
     Mcast1DSenderPlacement,
+    Mcast1DFixedSenderConfig,
+    Mcast1DRotatingSenderConfig,
     Mcast2D,
+    Mcast2DSenderOrder,
+    Mcast2DFixedSenderConfig,
+    Mcast2DRotatingSenderConfig,
     McastConfig,
     McastDataReady,
+    MCAST_ACK_EQUALS_FANOUT,
 )
 
 from ttnn.device import (
