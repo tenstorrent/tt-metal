@@ -127,6 +127,21 @@ class CohereDecoderLayer(LightweightModule):
         else:
             h_attn = h
 
+        # MLP consumes the SAME normed input h (parallel), not the post-attention
+        # residual. HAZARD (observed on-box 2026-08-28 across three symptoms):
+        # BOTH Attention.forward (attention.py:616) and MLP.forward (mlp.py:171)
+        # ttnn.deallocate their input — with ONE shared normed tensor, whichever
+        # branch runs second gets a dead tensor. The stock TransformerBlock never
+        # hits this because its two branches norm separately (attn_norm / ff_norm).
+        # The copy MUST be taken BEFORE attention.forward consumes h: copying after
+        # the attention call operates on the already-deallocated tensor (ttnn.clone
+        # even SEGFAULTS natively on it; ttnn.add throws "Input Tensor is not
+        # allocated"). Zero-add always materializes a fresh DRAM tensor with
+        # bitwise-identical values (x + 0.0 == x for IEEE floats); ttnn.clone is
+        # avoided after the observed native crash. TODO(perf): trivial at seq<=128;
+        # revisit for long-prefill Stage-2 (dealloc-suppressed shared buffer).
+        h_mlp = ttnn.add(h, 0.0)
+
         attn_out = self.attention.forward(
             h_attn,
             current_pos,
@@ -140,20 +155,6 @@ class CohereDecoderLayer(LightweightModule):
         )
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
-        # MLP consumes the SAME normed input h (parallel), not the post-attention residual.
-        # HAZARD (observed on-box 2026-08-28): BOTH Attention.forward (attention.py:616)
-        # and MLP.forward (mlp.py:171) ttnn.deallocate their input — with ONE shared
-        # normed tensor, whichever branch runs second gets a dead tensor ("Operand to
-        # matmul must be on device" at mlp.py:145). The stock TransformerBlock never
-        # hits this because its two branches norm separately (attn_norm / ff_norm).
-        # Give the MLP branch its own copy. NOTE: ttnn.clone SEGFAULTS natively on
-        # this post-all-gather replicated mesh tensor in this build (observed on-box
-        # 2026-08-28: Fatal Python error at decorators.py:650 called from this line)
-        # — use a zero-add instead, which always materializes a fresh DRAM tensor
-        # with bitwise-identical values (x + 0.0 == x for IEEE floats).
-        # TODO(perf): single-copy is trivial at seq<=128; revisit for long-prefill
-        # Stage-2 (e.g. run both branches off one buffer with dealloc suppression).
-        h_mlp = ttnn.add(h, 0.0)
         mlp_out = self.feed_forward.forward(h_mlp, mode)
 
         # residual + attn + mlp.
