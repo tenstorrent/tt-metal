@@ -689,3 +689,129 @@ def test_llama_per_slot_heterogeneous_sampling_controls(mesh_device: ttnn.MeshDe
         assert torch.all(chosen < handle.model.vocab_size)
     finally:
         _close(handle)
+
+
+# ---------------------------------------------------------------------------
+# Area 1, across two processes: the paged-pool comparison the in-process case
+# cannot reach.
+#
+# `test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable`
+# builds both pools in one process and dies before it can compare them:
+# limitation L1. `mb-coverage` attempt 3 measured that on silicon
+# (`a3_q_two_pools`) - the *second* model's `activate("decode")` cannot create
+# its global circular buffer because the first model's L1 was not returned by
+# `close()`, with 923776 of 1393472 bytes per bank still allocated. Finding
+# D-C7.
+#
+# So the comparison is split: one process per pool records its logits, and a
+# host-only case compares them. Same claim, same PCC gate, no second model in
+# any one process. The artifact directory defaults to a fixed path under the
+# system temp dir so the two device processes and the comparison find each other
+# with no environment set up; override with STEP7_ARTIFACT_DIR.
+# ---------------------------------------------------------------------------
+
+#: One pool per process. The value is only a flag: `None` takes whatever
+#: `from_pretrained` installs by default (2048 blocks - D-C4), anything else
+#: asks for an explicit 4096-block pool, which changes every slot's run of
+#: block ids.
+_CROSS_PROCESS_POOLS = {"default2048": None, "explicit4096": "explicit"}
+
+
+def _artifact_dir() -> str:
+    import tempfile
+
+    return os.environ.get("STEP7_ARTIFACT_DIR", os.path.join(tempfile.gettempdir(), "tttv2_step7_artifacts"))
+
+
+def _artifact_path(pool: str) -> str:
+    return os.path.join(_artifact_dir(), "llama33_70b_galaxy_" + pool + ".pt")
+
+
+@_PARAMS
+@_GALAXY
+@pytest.mark.parametrize("pool", sorted(_CROSS_PROCESS_POOLS), ids=sorted(_CROSS_PROCESS_POOLS))
+@torch.no_grad()
+def test_llama_paged_pool_logits_are_recorded_for_cross_process_comparison(mesh_device: ttnn.MeshDevice, pool: str):
+    """Record one pool's prefill and decode logits, for the comparison below.
+
+    Exactly one model is built here, so nothing in this case depends on L1 being
+    returned. The recording is not itself the gate - the gate is
+    ``test_llama_two_paged_pools_agree_across_processes``, which fails loudly
+    if either recording is absent.
+    """
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    wants_explicit = _CROSS_PROCESS_POOLS[pool] is not None
+    paged = _paged_config(context=4096, active_slots=GALAXY_PHYSICAL_BATCH) if wants_explicit else None
+    handle = _load(mesh_device, max_seq_len=4096 if wants_explicit else 2048, paged_attention_config=paged)
+    try:
+        configs = {spec.paged_attention_config for spec in handle.model.kv_specs}
+        assert len(configs) == 1
+        resolved = next(iter(configs))
+        assert resolved is not None, (
+            "D-C4 has been fixed: from_pretrained now builds a contiguous cache. "
+            "Restore the paged-versus-contiguous comparison this case was written for."
+        )
+        print(f"[pool] {pool}: block_size={resolved.block_size} max_num_blocks={resolved.max_num_blocks}", flush=True)
+        with GalaxyDirectRunner(handle.model) as runner:
+            prefill = torch.cat([runner.prefill_row(row, slot=slot) for slot, row in enumerate(rows)], dim=0)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            decode = runner.decode_logits(tokens, positions).clone()
+        os.makedirs(_artifact_dir(), exist_ok=True)
+        target = _artifact_path(pool)
+        torch.save(
+            {
+                "pool": pool,
+                "block_size": int(resolved.block_size),
+                "max_num_blocks": int(resolved.max_num_blocks),
+                "prefill": prefill.clone().float(),
+                "decode": decode.float(),
+                "vocab_size": int(handle.model.vocab_size),
+            },
+            target,
+        )
+        print(f"[pool] wrote {target} prefill={tuple(prefill.shape)} decode={tuple(decode.shape)}", flush=True)
+    finally:
+        _close(handle)
+
+
+@torch.no_grad()
+def test_llama_two_paged_pools_agree_across_processes():
+    """The area-1 gate: two different paging geometries, the same logits.
+
+    Host only - it reads what the two recorder processes wrote. A missing
+    artifact is a **failure**, never a skip: a skip counted as green is exactly
+    the failure mode this project distrusts.
+    """
+
+    loaded = {}
+    missing = []
+    for pool in sorted(_CROSS_PROCESS_POOLS):
+        path = _artifact_path(pool)
+        if os.path.exists(path):
+            loaded[pool] = torch.load(path, weights_only=False)
+        else:
+            missing.append(path)
+    assert not missing, (
+        "the cross-process pool recordings are not both on disk: "
+        + ", ".join(missing)
+        + ". Run test_llama_paged_pool_logits_are_recorded_for_cross_process_comparison "
+        "for each pool id first, one node id per process."
+    )
+
+    first, second = loaded["default2048"], loaded["explicit4096"]
+    assert first["max_num_blocks"] != second["max_num_blocks"], (
+        "both recordings used the same pool geometry, so this compares a pool against itself: "
+        f"{first['max_num_blocks']} vs {second['max_num_blocks']}"
+    )
+    print(
+        f"[pool] comparing {first['max_num_blocks']}-block against {second['max_num_blocks']}-block, "
+        f"block_size {first['block_size']}",
+        flush=True,
+    )
+    for stage in ("prefill", "decode"):
+        for slot in range(GALAXY_PHYSICAL_BATCH):
+            passed, message = _pcc(first[stage][slot], second[stage][slot], _PAGED_VS_CONTIGUOUS_PCC)
+            assert passed, f"{stage} slot {slot}, 2048-block pool vs 4096-block pool: {message}"
+    print(f"[pool] all 32 slots agree at PCC >= {_PAGED_VS_CONTIGUOUS_PCC} for prefill and decode", flush=True)
