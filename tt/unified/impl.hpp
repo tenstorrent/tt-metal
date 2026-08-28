@@ -110,17 +110,6 @@ Semaphore<thread>::Semaphore(uint32_t semaphore_id) :
 }
 
 template <int thread>
-uintptr_t Semaphore<thread>::l1_addr() const {
-#if defined(IS_DM_THREAD) && IS_DM_THREAD
-    // Recomputed from the id rather than read out of the wrapped semaphore:
-    // metal keeps its own l1 address private. Same arithmetic it uses.
-    return get_semaphore<ProgrammableCoreType::TENSIX>(id);
-#else
-    return 0;
-#endif
-}
-
-template <int thread>
 Semaphore<thread>& Semaphore<thread>::wait(uint32_t value) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
@@ -935,7 +924,7 @@ NocAsyncMcastTx<thread, S> noc_load(
             }
 
             {
-                TT_U_ZONE("MCAST-DRAM");   // the reads issued by fn actually landing
+                TT_U_ZONE("MCAST-DRAM");     // the reads issued by fn actually landing
                 Noc().async_read_barrier();  // payload is in our L1 before we forward it
             }
 

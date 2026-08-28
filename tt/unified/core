@@ -8,28 +8,35 @@
 // once per baby RISC-V thread; each statement lowers to that thread's half of
 // the circular-buffer protocol. See tt/unified/api.h for the surface.
 //
-// This file is the version selector. Today there is one target -- Metal v1
-// (Wormhole / Blackhole) -- so it picks the v1 adaptor and implementation
-// unconditionally. As other metal versions arrive the choice happens here, and
-// nothing above it changes:
+// This file selects the BINDING -- what the model's intrinsics resolve to --
+// and there is exactly one implementation behind it:
 //
 //     tt/unified/
-//       core               -- this file: selects a backend + implementation
-//         adaptor_v1.hpp   -- binds the model's intrinsics to metal v1
-//         api.h            -- core API declarations (version-agnostic)
-//           math.hpp       -- leaves, ops, fusion kinds, strategies
-//             expr.hpp     -- op-agnostic tree, allocator, method syntax
-//         impl_v1.hpp      -- definitions for the v1 target
+//       core             -- this file: selects a binding, includes the implementation
+//         adaptor.hpp    -- binds the model's intrinsics to metal, and stands in for
+//                           the ones a given projection does not have
+//         api.h          -- the API: declarations, contracts, hazards
+//           math.hpp     -- leaves, ops, fusion kinds, strategies
+//             expr.hpp   -- op-agnostic tree, allocator, method syntax
+//         impl.hpp       -- the definitions
 //
-// To bind against something other than metal -- the host trace harness, say --
-// define TT_UNIFIED_CUSTOM_BINDING and provide the intrinsics yourself before
-// including this header.
+// It is deliberately NOT a metal-version selector. These files were once
+// adaptor_v1.hpp and impl_v1.hpp, named against a v2 pair that might sit beside
+// them; the Metal 2.0 port went THROUGH them instead, so the suffix named a
+// distinction that does not exist. See unified_metal2_spec.md 7.7. A new arch is
+// expected to be absorbed the same way -- api/compute/* already gates ARCH_QUASAR
+// internally rather than being swapped out -- so the thing to reach for is a
+// branch inside adaptor.hpp, not a second implementation beside it.
+//
+// The one real fork left is binding against something that is not metal -- the
+// host trace harness, say. Define TT_UNIFIED_CUSTOM_BINDING and provide the
+// intrinsics yourself before including this header.
 
 #pragma once
 
 #ifndef TT_UNIFIED_CUSTOM_BINDING
-#include <tt/unified/adaptor_v1.hpp>
+#include <tt/unified/adaptor.hpp>
 #endif
 
 #include <tt/unified/api.h>
-#include <tt/unified/impl_v1.hpp>
+#include <tt/unified/impl.hpp>

@@ -147,7 +147,7 @@ different checks for two different failures and neither subsumes the other.
   Fn form, and explicit-semaphore form.
 - **11 call sites** across `example_matmul`, `flash_attention`, `matmul_mcast`,
   `mcast_bcast`, `matmul_blocked` -- all compile unchanged.
-- **1 new type** in api.h + impl_v1.hpp; `NocAsyncReadTx` untouched, since the non-multicast
+- **1 new type** in api.h + impl.hpp; `NocAsyncReadTx` untouched, since the non-multicast
   loads keep using it.
 - The `receivers_ready.inc_remote()` on the receiver side stays in `noc_load`: it means "my
   buffer is free", which is true at that moment and not at `.wait()`.

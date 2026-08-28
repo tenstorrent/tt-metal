@@ -3,7 +3,7 @@
 // Gate B host: runs the unified library's own kernel shape (unary.cpp) under a
 // Metal 2.0 ProgramSpec, with tensor parameters and named compile-time args.
 //
-// Thread numbering is the KERNEL's, not the host's: tt/unified/adaptor_v1.hpp maps
+// Thread numbering is the KERNEL's, not the host's: tt/unified/adaptor.hpp maps
 // COMPILE_FOR_BRISC -> DM thread 0 and COMPILE_FOR_NCRISC -> DM thread 1. The kernel
 // does noc_load<0> (so thread 0 / BRISC / RISCV_0 produces `in`) and noc_store<1>
 // (so thread 1 / NCRISC / RISCV_1 consumes `out`). The DFB endpoint bindings below

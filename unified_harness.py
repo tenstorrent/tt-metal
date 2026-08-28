@@ -13,7 +13,7 @@ different files, so we emit three from one source:
     compute  ComputeGen1Config()              -> UCK_CHLKC_{UNPACK,MATH,PACK}
 
 No per-thread defines are passed from here. Metal already emits a thread identity define for
-every kernel build and tt/unified/adaptor_v1.hpp derives the projection from it, so the host
+every kernel build and tt/unified/adaptor.hpp derives the projection from it, so the host
 stays ignorant of the mechanism.
 
 All three get IDENTICAL compile-time args, runtime-argument schemas and tensor bindings,
@@ -172,7 +172,7 @@ def split_evenly(total, parts):
 # static_assert described in unified_kernels/unary.cpp is what closes the other half of it.
 # ---------------------------------------------------------------------------
 
-# Kernel DM thread number -> the RISC that runs it. This is adaptor_v1.hpp's mapping, read
+# Kernel DM thread number -> the RISC that runs it. This is adaptor.hpp's mapping, read
 # in the other direction: it derives the thread id from COMPILE_FOR_BRISC / COMPILE_FOR_NCRISC,
 # so the host has to place the KernelSpecs to match or `noc_load<0>` runs on the wrong core.
 DM_THREAD_PROCESSOR = {
@@ -486,7 +486,7 @@ def unified_program_spec(
         # Not a choice: Metal 2.0 refuses semaphore bindings on a compute kernel outright
         # (program_spec.cpp:1088). That turns out to agree with the model rather than fight
         # it -- tt/unified/api.h already says a Semaphore is projected onto one DM thread and
-        # is a no-op elsewhere, and impl_v1.hpp keeps metal's Semaphore behind an
+        # is a no-op elsewhere, and impl.hpp keeps metal's Semaphore behind an
         # IS_DM_THREAD guard, so compute has never touched one. The rule the model documented
         # is now the rule the host enforces.
         #
