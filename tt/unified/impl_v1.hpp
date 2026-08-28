@@ -745,8 +745,42 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
 // write pointer, the page size, and via the handle the read barrier and push --
 // exists in exactly one place, and the built-ins are held to the same contract
 // they document for callers.
+namespace detail {
+
+// Hazard D19: a buffer's data format against the tensor it carries.
+//
+// A page size follows the format -- 1088 bytes for bfloat8_b against 2048 for bfloat16 -- so a
+// buffer configured for one while its tensor holds the other reads the wrong bytes, with no
+// error anywhere. Not hypothetical: porting matmul_blocked's launcher left its weight buffer
+// at the bfloat16 default against a bfloat8_b tensor, and fifteen configurations came back
+// numerically wrong and silent.
+//
+// The two halves meet HERE and nowhere else. A buffer's format is declared on the host beside
+// the buffer; the tensor's is declared beside the tensor; the accessor form of a load or store
+// is the one place in the program that names both at once.
+//
+// EQUALITY, and the alignment question that gates it is settled rather than left open.
+// get_aligned_page_size() is align(page_size, alignment), so a format whose page needed padding
+// would report more than the buffer holds and this would fire falsely. Measured on every dtype
+// the model uses -- bfloat16 2048, float32 4096, bfloat8_b 1088 -- and all three are already
+// aligned, so page and aligned page are the same number. A future format that genuinely pads
+// would make this a false positive to revisit, not a bug it has found.
+//
+// Assertion-only, like the capacity check in Storage's constructor, so it costs nothing unless
+// the watcher or TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS is on. Data movement only: the compute
+// projection carries a stand-in accessor with no page size to ask for, and never reads DRAM.
+template <typename Accessor>
+inline void check_page_format(uint32_t cb_id, const Accessor& acc) {
+    ASSERT(cb_page_bytes(cb_id) == acc.get_aligned_page_size());
+}
+
+}  // namespace detail
+
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    detail::check_page_format(storage.cb_id, acc);
+#endif
     const uint32_t first = block_idx * storage.num_pages;
     return noc_load<thread>(storage, [&](L1Pages pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
@@ -798,6 +832,9 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
 // so consume() still runs exactly once, down there rather than here.
 template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    detail::check_page_format(block.cb_id, acc);
+#endif
     const uint32_t first = block_idx * block.num_pages;
     return noc_store<thread>(std::move(block), [&](L1Pages pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
@@ -934,6 +971,9 @@ NocAsyncMcastTx<thread, S> noc_load(
     Semaphore<thread>& data_sent,
     const Accessor& acc,
     uint32_t block_idx) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    detail::check_page_format(storage.cb_id, acc);
+#endif
     const uint32_t first = block_idx * storage.num_pages;
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, [&](L1Pages pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
