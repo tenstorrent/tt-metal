@@ -90,6 +90,7 @@ def test_sp_layer_matches_serial_reference(
     hidden_tt = _to_sp_input(hidden, mesh_device, sp_axis)
     with ttnn.manage_config("throw_exception_on_fallback", True):
         output_tt, state = layer.forward(hidden_tt, initial_state)
+    assert len(output_tt.shape) == 3
 
     actual_output = reconstruct_sp_tp_tensor(
         output_tt,

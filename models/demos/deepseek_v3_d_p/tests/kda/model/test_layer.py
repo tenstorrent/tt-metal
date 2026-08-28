@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Blackhole PCC tests for the composed TTNN KDA layer."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -103,6 +104,22 @@ def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path
 
     with expect_error(RuntimeError, "too small"):
         KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
+
+
+def test_program_config_controls_tp_topology(device: ttnn.Device) -> None:
+    config = make_config()
+    program_config = replace(make_program_config(), tp_ccl_topology=ttnn.Topology.Ring)
+    layer = ttKDA(device, config, random_weights(config), program_config=program_config)
+    assert layer.tp_ccl_topology == ttnn.Topology.Ring
+
+    overridden = ttKDA(
+        device,
+        config,
+        random_weights(config),
+        topology=ttnn.Topology.Linear,
+        program_config=program_config,
+    )
+    assert overridden.tp_ccl_topology == ttnn.Topology.Linear
 
 
 def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error) -> None:

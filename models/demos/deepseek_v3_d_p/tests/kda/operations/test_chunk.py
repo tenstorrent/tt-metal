@@ -13,7 +13,6 @@ from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_referen
 from models.demos.deepseek_v3_d_p.tests.kda.utils import assert_accurate, assert_bit_identical, compare_cpu_device
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.const_tiles import build_kda_identity_tile
 
 pytestmark = [
     run_for_blackhole(),
@@ -69,7 +68,6 @@ def _run_recurrence(
     return ops._chunk_recurrence(
         ops._FlatRecurrenceInputs(q=q, k=k, v=v, gate=gate, beta=beta),
         state,
-        build_kda_identity_tile(device),
         program_config=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
         compute_config=ops._RecurrenceComputeConfig(
             preparation=None,
@@ -93,19 +91,16 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
         "beta": _to_device(torch.randn(beta_shape), device, ttnn.float32),
     }
     valid_state = _to_device(torch.randn(state_shape), device, ttnn.float32)
-    chunk_identity = build_kda_identity_tile(device)
     program_config = KDARecurrenceProgramConfig()
     compute_config = ops._RecurrenceComputeConfig(None, None, None)
 
     def run(
         inputs: dict[str, ttnn.Tensor],
         state: ttnn.Tensor = valid_state,
-        identity: ttnn.Tensor = chunk_identity,
     ) -> None:
         ops._chunk_recurrence(
             ops._FlatRecurrenceInputs(**inputs),
             state,
-            identity,
             program_config=program_config,
             compute_config=compute_config,
             sequence_parallel_axis=None,
@@ -132,14 +127,6 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
     rank_four_q = _to_device(torch.randn(1, 1, sequence, heads * dim), device, ttnn.bfloat16)
     with expect_error(ValueError, "flat rank-3"):
         run({**valid_inputs, "q": rank_four_q})
-
-    invalid_identity = _to_device(
-        torch.eye(ttnn.TILE_SIZE).reshape(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-        device,
-        ttnn.bfloat16,
-    )
-    with expect_error(AssertionError, "^$"):
-        run(valid_inputs, identity=invalid_identity)
 
 
 @pytest.mark.parametrize(

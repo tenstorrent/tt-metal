@@ -325,7 +325,6 @@ class _RecurrenceScan(ABC):
         self,
         prepared: _PreparedChunks,
         initial_state: ttnn.Tensor,
-        identity_tile: ttnn.Tensor,
         geometry: _RecurrenceGeometry,
     ) -> _ScanResult:
         """Run the selected recurrence scan without changing the device operation order."""
@@ -336,15 +335,13 @@ class _DirectScan(_RecurrenceScan):
         self,
         prepared: _PreparedChunks,
         initial_state: ttnn.Tensor,
-        identity_tile: ttnn.Tensor,
         geometry: _RecurrenceGeometry,
     ) -> _ScanResult:
-        del identity_tile
         output, final_state = ttnn.experimental.kda.recurrent_chunk_scan(
             *prepared.as_kernel_args(),
             initial_state,
             memory_config=self._program_config.output_memory_config,
-            compute_kernel_config=self._compute_config.preparation,
+            compute_kernel_config=self._compute_config.grouped_scan,
         )
         assert output.dtype == self._program_config.scan_output_dtype
         assert final_state.dtype == self._program_config.recurrent_state_dtype
@@ -356,7 +353,6 @@ class _GroupedScan(_RecurrenceScan):
         self,
         prepared: _PreparedChunks,
         initial_state: ttnn.Tensor,
-        identity_tile: ttnn.Tensor,
         geometry: _RecurrenceGeometry,
     ) -> _ScanResult:
         group_chunks = self._program_config.summary_group_chunks
@@ -549,16 +545,9 @@ def _restore_recurrence_output(scan: _ScanResult, geometry: _RecurrenceGeometry)
     return _ScanResult(output=output, final_state=final_state)
 
 
-def _assert_chunk_identity(identity: ttnn.Tensor, chunk_size: int) -> None:
-    assert tuple(identity.shape) == (1, 1, chunk_size, chunk_size)
-    assert identity.dtype == ttnn.float32
-    assert identity.layout == ttnn.TILE_LAYOUT
-
-
 def _chunk_recurrence(
     inputs: _FlatRecurrenceInputs,
     initial_state: ttnn.Tensor,
-    chunk_identity: ttnn.Tensor,
     *,
     program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -585,7 +574,6 @@ def _chunk_recurrence(
         geometry.value_dim,
     )
     assert initial_state.memory_config() == program_config.output_memory_config
-    _assert_chunk_identity(chunk_identity, program_config.chunk_size)
 
     state = ttnn.reshape(
         initial_state,
@@ -604,7 +592,7 @@ def _chunk_recurrence(
         program_config=program_config,
         compute_config=compute_config,
     )
-    scan = scan_strategy.run(prepared, state, chunk_identity, geometry)
+    scan = scan_strategy.run(prepared, state, geometry)
     result = _restore_recurrence_output(scan, geometry)
     assert result.output.dtype == program_config.scan_output_dtype
     assert result.final_state.dtype == program_config.recurrent_state_dtype

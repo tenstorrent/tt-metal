@@ -15,7 +15,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda import ops
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.const_tiles import build_kda_identity_tile
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -150,11 +149,7 @@ class ttKDA:
         self.output_projection_out_block_w = program_config.output_projection_out_block_w
         output_grid = mesh_device.compute_with_storage_grid_size()
         self.output_projection_grid = (output_grid.x, output_grid.y)
-        self.tp_ccl_topology = (
-            topology
-            if topology is not None
-            else (ttnn.Topology.Ring if self.sequence_parallel_size == 1 else ttnn.Topology.Linear)
-        )
+        self.tp_ccl_topology = topology if topology is not None else program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
@@ -187,7 +182,6 @@ class ttKDA:
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
         self.tt_ccl = tt_ccl
-        self.chunk_identity = build_kda_identity_tile(mesh_device)
         # Ordinary matmuls (input and decay projections) keep packer L1 accumulation.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -389,11 +383,13 @@ class ttKDA:
     ) -> _KDAInputs:
         """Evaluate decay and write gates while preserving the output gate for the epilogue."""
         config, weights = self.config, self.weights
-        beta = ttnn.sigmoid(beta, memory_config=self.recurrence_config.output_memory_config)
-        # Precision boundary: the preparation leaf requires FP32 beta.
-        beta_for_recurrence = ttnn.typecast(
-            beta,
-            self.recurrence_config.beta_dtype,
+        # Preserve the sigmoid result at the FP32 precision required by chunk preparation.
+        beta_for_recurrence = ttnn.sigmoid(
+            ttnn.typecast(
+                beta,
+                self.recurrence_config.beta_dtype,
+                memory_config=self.recurrence_config.output_memory_config,
+            ),
             memory_config=self.recurrence_config.output_memory_config,
         )
         gate = ttnn.linear(
@@ -476,7 +472,6 @@ class ttKDA:
         result = ops._chunk_recurrence(
             recurrence_inputs,
             recurrent_state,
-            self.chunk_identity,
             program_config=self.recurrence_config,
             compute_config=self.recurrence_compute_config,
             sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
@@ -542,6 +537,7 @@ class ttKDA:
                 topology=self.tp_ccl_topology,
                 cluster_axis=cluster_axis,
             )
+            output = ttnn.reshape(output, (batch, sequence, output.shape[-1]))
         else:
             output = ttnn.linear(
                 output,
