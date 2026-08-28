@@ -26,6 +26,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import SHARD_HEIGHT
+from models.tt_transformers.tt.common import Mode
 
 
 class TtCohereLayerNorm(LightweightModule):
@@ -166,6 +167,39 @@ class TtCohereLayerNorm(LightweightModule):
         )
         return x
 
+    def _decode_fullwidth_layernorm(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Decode-mode distributed layernorm for Command-R.
+
+        The pre/post-all-gather layernorm op family is broken at decode shapes
+        in this build (TT_THROW dataflow_buffer.cpp:2581 CB-alloc at
+        [1,1,32,2048]/device, and ttnn.all_gather scrambles the layout to
+        [1,1,8,32768] with maxdiff 7.35 — all observed on-box 2026-08-28).
+        Mirror the stock DistributedNorm TG=False decode pattern instead:
+        all_gather_async the width shards to full width (the proven CCL op
+        every stock model decodes with), then a plain full-width layernorm
+        (probe-verified at [1,1,32,8192] on Blackhole, DRAM and L1).
+        """
+        x = ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=self.tt_ccl.get_num_links(1),
+            cluster_axis=1,
+            topology=ttnn.Topology.Linear,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        return ttnn.layer_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )
+
     def forward(
         self, x: ttnn.Tensor, mode="decode", norm_config=None, in_sharded=False, out_sharded=False
     ) -> ttnn.Tensor:
@@ -174,7 +208,10 @@ class TtCohereLayerNorm(LightweightModule):
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
 
         if self.distributed and not in_sharded:
-            x = self._distributed_layernorm(x)
+            if mode == Mode.DECODE or mode == "decode":
+                x = self._decode_fullwidth_layernorm(x)
+            else:
+                x = self._distributed_layernorm(x)
         else:
             # Single-device / sharded-input fallback only (see module docstring:
             # plain interleaved layernorm over-allocates L1 at dim 8192 on this
