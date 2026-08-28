@@ -544,7 +544,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
     [
-pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
+        pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
         pytest.param((4, 8), (4, 8), 0, 2, id="tp4_sp8"),
         pytest.param((4, 32), (4, 32), 0, 2, id="4x32"),
     ],
