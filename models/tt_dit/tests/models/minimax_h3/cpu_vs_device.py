@@ -17,10 +17,10 @@ Usage -- single device, shipping defaults:
 8-way T-shard on a 4x8 mesh with trace, all-fast levers (the sub-300 ms configuration):
 
     env CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 \
-        CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 CVD_PREFER_MAC=0 python .../cpu_vs_device.py
+        CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 python .../cpu_vs_device.py
 
 Env: CVD_MESH (default 1x1), CVD_T_FACTOR, CVD_MESH_AXIS, CVD_TRACED, CVD_SPLIT_MODE (off|weight|full),
-CVD_TAP_MATMUL, CVD_PREFER_MAC, CVD_MAX_C_IN_BLOCK, CVD_OUT_DIR, CVD_BASELINE_PSNR.
+CVD_TAP_MATMUL, CVD_MAX_C_IN_BLOCK, CVD_OUT_DIR, CVD_BASELINE_PSNR.
 
 Accuracy is scored against the CPU reference, i.e. an absolute number; the T-parallel test only scores
 sharded against unsharded, which is a looser bar. Unset levers keep the constructor default (accurate
@@ -58,10 +58,9 @@ MESH_AXIS = int(os.environ.get("CVD_MESH_AXIS", "1"))
 TRACED = os.environ.get("CVD_TRACED", "0") == "1"
 
 
-# The precision levers select a different operator set, not just a different speed: all-fast
-# measures 292 ms / 45.80 dB where `prefer_mac` alone is 841 ms / 49.45 dB. Quoting one row's latency
-# with another's PSNR is what produced the retired "281.6 ms at 49.45 dB" claim. `None` means "leave
-# the constructor default alone".
+# The precision levers select a different operator set, not just a different speed. Quoting one
+# row's latency with another's PSNR is what produced the retired "281.6 ms at 49.45 dB" claim.
+# `None` means "leave the constructor default alone".
 def _flag(name):
     raw = os.environ.get(name)
     return None if raw is None else raw not in ("0", "false", "False", "")
@@ -69,7 +68,6 @@ def _flag(name):
 
 SPLIT_MODE = os.environ.get("CVD_SPLIT_MODE")
 TAP_MATMUL = _flag("CVD_TAP_MATMUL")
-PREFER_MAC = _flag("CVD_PREFER_MAC")
 # conv3d's C_in_block cap. Moves accuracy on its own -- conv_pre's error falls as the block grows
 # (2.40e-03 at 32, 1.86e-03 at 128) -- but 256 buys 0.02 dB and 512 exceeds L1.
 MAX_C_IN_BLOCK = os.environ.get("CVD_MAX_C_IN_BLOCK")
@@ -78,7 +76,6 @@ LEVERS = {
     for k, v in (
         ("split_mode", SPLIT_MODE),
         ("tap_matmul", TAP_MATMUL),
-        ("prefer_mac", PREFER_MAC),
         ("max_c_in_block", int(MAX_C_IN_BLOCK) if MAX_C_IN_BLOCK else None),
     )
     if v is not None
@@ -88,9 +85,7 @@ IS_DEFAULT = MESH == (1, 1) and T_FACTOR == 1 and not TRACED and not LEVERS
 # Non-default runs get their config in the filename. Overwriting `{label}_2_device.wav` with a
 # differently-configured decode is how the stale `*_3_device_prefix.wav` confusion started.
 _lever_tag = "".join(
-    f"_{k}-{v}"
-    for k, v in (("sm", SPLIT_MODE), ("tap", TAP_MATMUL), ("mac", PREFER_MAC), ("cin", MAX_C_IN_BLOCK))
-    if v is not None
+    f"_{k}-{v}" for k, v in (("sm", SPLIT_MODE), ("tap", TAP_MATMUL), ("cin", MAX_C_IN_BLOCK)) if v is not None
 )
 TAG = "" if IS_DEFAULT else f"_{MESH[0]}x{MESH[1]}_f{T_FACTOR}ax{MESH_AXIS}{'_traced' if TRACED else ''}{_lever_tag}"
 
@@ -261,8 +256,8 @@ def main():
         mean_secs = sum(r[2] for r in rows) / n
         # The accuracy criterion is "no worse than the single-device path at the same levers", not a
         # fixed number: the decoder's constructed defaults are accurate mode (split_mode='full',
-        # tap_matmul, prefer_mac) and score ~67 dB, where all-fast scores ~45.8 dB. A bar that does not
-        # name its lever set is meaningless across that 21 dB spread.
+        # tap_matmul) and score ~67 dB, where all-fast scores far lower. A bar that does not name
+        # its lever set is meaningless across that spread.
         # So the baseline has to be *measured* on this branch -- run once without the CVD_* variables and
         # pass the mean back in via CVD_BASELINE_PSNR. Unset, this reports and asserts nothing on
         # accuracy, because a hard-coded bar from another configuration is worse than no bar.

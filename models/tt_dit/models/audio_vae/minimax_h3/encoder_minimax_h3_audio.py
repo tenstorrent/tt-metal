@@ -331,7 +331,6 @@ class MiniMaxH3AudioEncoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
         tap_matmul: bool = True,
-        prefer_mac: bool = True,
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     ) -> None:
         super().__init__()
@@ -343,11 +342,9 @@ class MiniMaxH3AudioEncoder(Module):
         # The precision levers default to accurate, same rationale as the decoder. H3-only: LTX
         # constructs the same conv classes with its own fast defaults. Kept as attributes so the
         # pipeline's device-weight cache key (`weights_variant`) reads the exact values this module
-        # was built with. `prefer_mac` is accepted for symmetry with the decoder; the DAC trunk has
-        # no depthwise resamplers, so nothing here consumes it.
+        # was built with.
         self.split_mode = split_mode
         self.tap_matmul = tap_matmul
-        self.prefer_mac = prefer_mac
         self.max_c_in_block = max_c_in_block
 
         # Every H3 audio conv shape misses _FP32_BLOCKINGS; seed stubs before any conv is built.

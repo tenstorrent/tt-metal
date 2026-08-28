@@ -275,24 +275,18 @@ def _t_neighbor_pad(
     )
 
 
-def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, prefer_mac: bool = False):
+def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
     Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
-    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``, or via the exact
-    shift-multiply-add form when ``prefer_mac``. The MAC form is structurally more accurate: it is a
-    sum of elementwise multiplies and adds, which are *exact* in fp32 on this hardware, whereas
-    conv1d's FPU multiply keeps ~11 significand bits -- measured ~29000x less error on one
-    anti-aliased downsampler (K=12, stride 2), at the cost of K passes over the tensor.
-    ``prefer_mac`` is an explicit opt-in (MiniMax-H3 passes it); the default keeps the fast conv1d
-    path for LTX call sites.
+    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``. For fp32 operands
+    conv1d's depthwise kernel accumulates on the SFPU (see compute_depthwise_conv1d.cpp), so it
+    matches the exact shift-multiply-add form bit-for-bit -- the MAC form survives only as the
+    fallback for shapes conv1d cannot find a valid configuration for.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
-
-    if prefer_mac:
-        return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 
     # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
     # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
@@ -369,7 +363,7 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, pref
             except RuntimeError:
                 continue
         # No chunking fits either: the shift-multiply-add form, which has no sharding constraint at
-        # all -- slower, but this is a correctness path (and MAC is the *more* accurate form).
+        # all -- slower, but bit-equal to the conv1d path in fp32, so purely an availability fallback.
         logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback ({exc})")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
 

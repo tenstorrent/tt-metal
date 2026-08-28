@@ -302,7 +302,7 @@ measured denoise 85.3 s / total 118.0 s. One run does not establish a direction.
 
 The audio row is **not** a like-for-like comparison and the total inherits that. The 4x8 column was
 taken with the audio precision levers off, which was their default when it was measured; they are now
-on by default (`split_mode="full"`, `tap_matmul=True`, `prefer_mac=True` on `MiniMaxH3AudioDecoder`),
+on by default (`split_mode="full"`, `tap_matmul=True` on `MiniMaxH3AudioDecoder`),
 which is an accuracy choice, not a regression -- the same levers cost the same on a single Galaxy.
 Denoise, the row the mesh actually changes, is 2.7-3.0x.
 
@@ -411,37 +411,25 @@ conditioner fidelity rather than output quality.
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
-`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True`, `prefer_mac=True`
-(and `max_c_in_block=128`) as constructor defaults, and register the H3 conv blockings themselves.
-That takes the decode from 10.5 % to **0.45 %** relative RMSE against the diffusers reference, for
-~3x the stage time. The three constructor levers are independent and each targets a different one of
-the three error sources the 10.5 % is made of. They are strongly complementary — the chain error is
-set by whichever source is worst, so enabling one moves the total far less than enabling all three:
+`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True` (and `max_c_in_block=128`) as
+constructor defaults, and register the H3 conv blockings themselves. Both levers answer the same
+hardware fact, that an fp32 **multiply** through SrcA/SrcB keeps only ~11 significand bits (the FPU
+takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is the ceiling), so the error is
+*flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher fidelity can help. Elementwise
+fp32 ops, by contrast, are exact.
 
-| `split_mode` | `prefer_mac` | `tap_matmul` | rel RMSE | PCC | PSNR | warm |
-|---|---|---|---|---|---|---|
-| `off` | 0 | 0 | 0.1046 | 99.5451 % | 40.29 dB | 4.03 s |
-| `full` | 0 | 0 | 0.0538 | 99.8950 % | 46.07 dB | 5.36 s |
-| `off` | 1 | 0 | 0.0920 | 99.6111 % | 41.41 dB | 8.72 s |
-| `full` | 1 | 0 | 0.0320 | 99.9522 % | 50.58 dB | 9.50 s |
-| `full` | 0 | 1 | 0.0371 | 99.9526 % | 49.31 dB | 9.97 s |
-| **`full`** | **1** | **1** | **0.0045** | **99.9990 %** | **67.53 dB** | **13.24 s** (default) |
-
-Why each exists — all three answer the same hardware fact, that an fp32 **multiply** on this hardware
-keeps only ~11 significand bits (the FPU takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is
-the ceiling), so the error is *flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher
-fidelity can help. Elementwise fp32 ops, by contrast, are exact.
-
-- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits an operand into `bf16 hi` plus its exact
-  residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
+- **`split_mode`** (`weight` = 2 convs, `full` = 3) splits a conv3d operand into `bf16 hi` plus its
+  exact residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`prefer_mac`** runs the anti-aliased resample filters as shift-multiply-add instead of
-  `ttnn.conv1d`. This targets the single largest source: one `Activation1d` injects 1.54e-03, *all* of
-  it from its downsampler, against ~7e-08 for `snake_beta` and the upsampler. MAC is elementwise, hence
-  exact — 1.5e-03 → 5.3e-08.
 - **`tap_matmul`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
   splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
   conv.
+
+The depthwise resample filters (`depthwise_tap_filter`) need no lever: their `ttnn.conv1d` kernel
+accumulates on the SFPU for fp32 operands (`compute_depthwise_conv1d.cpp`) and measures bit-equal to
+the exact shift-multiply-add form at every production shape, 2.1–4.1x faster. The retired
+`prefer_mac` lever selected that MAC form as a precision workaround; MAC survives only as the
+fallback for shapes conv1d cannot configure.
 
 Two things that look like levers and are not: widening `C_in_block` helps an isolated conv (1.48x) but
 **not** end to end, because the chain is dominated by the 126 narrow-channel AMP convs where it cannot

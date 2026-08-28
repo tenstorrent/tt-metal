@@ -87,7 +87,6 @@ class AMPBlock1(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
         tap_matmul: bool = False,
     ) -> None:
@@ -151,7 +150,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -171,7 +169,6 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
-                    prefer_mac=prefer_mac,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -236,7 +233,6 @@ class Vocoder(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
-        prefer_mac: bool = False,
         split_mode: str = "off",
         tap_matmul: bool = False,
     ) -> None:
@@ -330,7 +326,6 @@ class Vocoder(Module):
                         dtype=dtype,
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
-                        prefer_mac=prefer_mac,
                         split_mode=split_mode,
                         tap_matmul=tap_matmul,
                     )
@@ -351,7 +346,6 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            prefer_mac=prefer_mac,
         )
 
         self.conv_post = _AlignedOutConv1d(
