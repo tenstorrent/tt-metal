@@ -2148,6 +2148,16 @@ The PCC gate must pass for ALL {batch} samples: feed {batch} DISTINCT reference 
 sample to its OWN golden from the reference model. A pipeline that shape-supports B but emits {batch}
 identical outputs is WRONG. If the model genuinely has no axis over which {batch} independent samples
 can be batched, STOP and report it as a hole -- do NOT fake a batch axis.
+
+If a stage cannot hold {batch} at once, EXHAUST THE MECHANISMS THIS PIPELINE ALREADY HAS before you
+write the limit down: whatever it uses to run a wide input in pieces (chunking, streaming, staging a
+slice at a time) exists precisely for this, and a limit measured with those switched off is a limit
+you invented. Only after they genuinely fail may you record a per-stage ceiling, and then it must
+carry the measurement that forced it.
+A recorded ceiling changes what the pipeline DOES, never what the tests CLAIM. A test that runs a
+smaller batch than it says it runs is worse than one that fails: it reports coverage nobody has. So
+every test states the batch it actually drives -- read it from the pipeline rather than typing a
+number -- and no docstring may name a batch its body does not run.
 """
 
 

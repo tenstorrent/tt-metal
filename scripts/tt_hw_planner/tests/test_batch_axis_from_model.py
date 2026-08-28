@@ -127,3 +127,25 @@ def test_autoregressive_axis_still_describes_the_cache_contract():
     axis = _BATCH_AUTOREGRESSIVE_AXIS.format(batch=8)
     assert "one cache slot per batch row" in axis
     assert "[B, heads, C, head_dim]" in axis
+
+
+def test_rules_require_existing_mechanisms_before_recording_a_limit():
+    """A stage that cannot hold B must exhaust chunking/streaming before a ceiling is written.
+
+    Observed: a run measured one stage's ceiling with the pipeline's own chunking driver in
+    play only for compute, recorded the cap, and then lowered the end-to-end tests to match --
+    without first trying the mechanisms that already existed for exactly this.
+    """
+    rules = _BATCH_COMMON_RULES.format(batch=32)
+    assert "EXHAUST THE MECHANISMS THIS PIPELINE ALREADY HAS" in rules
+    assert "a limit you invented" in rules.replace("\n", " ")
+    assert "carry the measurement that forced it" in rules
+
+
+def test_rules_forbid_a_test_claiming_a_batch_it_does_not_run():
+    """The same run left `\"\"\"32 distinct prompts\"\"\"` above a test driving 16."""
+    rules = _BATCH_COMMON_RULES.format(batch=32)
+    flat = " ".join(rules.split())
+    assert "never what the tests CLAIM" in flat
+    assert "read it from the pipeline rather than typing a number" in flat
+    assert "no docstring may name a batch its body does not run" in flat

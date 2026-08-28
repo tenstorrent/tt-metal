@@ -48,6 +48,13 @@ def trace_policy(graduation):
         "all_graduated": all_graduated,
         "graduated_modules": graduated,
         "eager_eligible_modules": ungraduated,
+        # Whether the graduation state is KNOWN AT ALL. An empty mapping is not the same
+        # fact as "every module is ungraduated": `read_graduation` also returns {} when the
+        # demo dir carries no status file (a composite's e2e dir keeps its status per
+        # component, not at the top), when the JSON will not parse, and when the import it
+        # needs is unavailable. Collapsing those into the eager-eligible branch let the gate
+        # waive the trace requirement on NO evidence.
+        "known": bool(graduation),
     }
 
 
@@ -80,9 +87,19 @@ def classify_trace_verdict(trace_caps, policy, allow_no_trace=False, overflow_pr
             "trace did not engage but ALL modules graduated on-device -> eager not permitted; "
             "fix pipeline/glue to trace (or supply a verified overflow proof)"
         )
+    if not policy.get("known"):
+        # No graduation state was readable, so nothing here licenses skipping the trace. The
+        # waiver below is an argument from evidence -- "these named modules are still eager"
+        # -- and with no modules to name it degenerated into waiving by default, printing a
+        # bare "?" where the justification should be. Absence of evidence is not a proof.
+        return "FAIL", (
+            "trace did not engage and the graduation state could not be read, so eager "
+            "execution cannot be justified; make the bring-up status readable from this demo "
+            "dir, fix the pipeline/glue to trace, or supply a verified overflow proof"
+        )
     return "EAGER_WAIVED", (
         "trace not engaged; eager permitted because ungraduated module(s) present: "
-        + ", ".join(sorted(policy.get("eager_eligible_modules") or {"?"}))
+        + ", ".join(sorted(policy.get("eager_eligible_modules")))
     )
 
 
