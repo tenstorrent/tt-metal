@@ -218,30 +218,19 @@ enum : uint32_t {
 };
 }  // namespace writer_arg
 
-// The per-axis extents the mask generator needs. Passed as one struct rather than nine loose
-// arguments so a caller cannot transpose height and width without noticing.
-struct AxisExtents {
-    uint32_t time;
-    uint32_t height;
-    uint32_t width;
-
-    // For chunk_layout::linear_to_point3, which decodes both a size in chunks (this) and a ratio
-    // in bricks (ChunkShapeInBricks) and so reaches its axes generically. Named fields make this a branch
-    // chain rather than an array load, so it stays out of the per-element loops of fill_mask_tile
-    // -- those keep their hoists into plain arrays, and that is where the mask cost lives.
-    constexpr uint32_t operator[](Axis axis) const {
-        return axis == Axis::Time ? time : (axis == Axis::Height ? height : width);
-    }
-};
-
+// The per-axis shapes the mask generator needs. Passed as one struct rather than nine loose
+// arguments so a caller cannot transpose height and width without noticing. Every member is a
+// Shape from neighborhood_point3.hpp, so the unit each is measured in is part of its type -- a
+// brick grid cannot be handed where a site region belongs, and the two unit shapes cannot be
+// swapped for each other.
 struct NeighborhoodExtents {
-    BrickShapeInSites brick_sites;  // sites per brick -- a ratio, not a size; see UnitRatio
-    AxisExtents context_window;     // the unclamped window from the config
-    AxisExtents stride;             // query group extent
-    AxisExtents volume;             // the true GLOBAL volume, NOT the brick-padded one
-    AxisExtents query_chunk;        // one query chunk, in sites -- the unit that shares a window
+    BrickShapeInSites brick_sites;  // sites per brick -- a conversion factor, not a region
+    ShapeInSites context_window;    // the unclamped window from the config
+    ShapeInSites stride;            // query group extent
+    ShapeInSites volume;            // the true GLOBAL volume, NOT the brick-padded one
+    ShapeInSites query_chunk;       // one query chunk, in sites -- the unit that shares a window
     SiteOffset shard_origin;        // where this device's tensor starts in the global volume; signed
-    AxisExtents resident;           // how much of it this device holds (owned + halo)
+    ShapeInSites resident;          // how much of it this device holds (owned + halo)
 };
 
 }  // namespace ttnn::transformer::neighborhood::kernel_args

@@ -31,10 +31,14 @@ namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 namespace mask_gen = ttnn::transformer::neighborhood::mask_gen;
 namespace layout = ttnn::transformer::neighborhood::chunk_layout;
 
+using ttnn::transformer::neighborhood::ALL_AXES;
+using ttnn::transformer::neighborhood::Axis;
 using ttnn::transformer::neighborhood::BrickPoint;
 using ttnn::transformer::neighborhood::ChunkShapeInBricks;
 using ttnn::transformer::neighborhood::containing_brick;
 using ttnn::transformer::neighborhood::first_site_of;
+using ttnn::transformer::neighborhood::ShapeInBricks;
+using ttnn::transformer::neighborhood::ShapeInChunks;
 using ttnn::transformer::neighborhood::Site;
 using ttnn::transformer::neighborhood::SiteOffset;
 using ttnn::transformer::neighborhood::Unit;
@@ -72,24 +76,22 @@ FORCE_INLINE int32_t relative_span_high(uint32_t window_extent, uint32_t brick_e
 // the pair falls outside it. Mirrors the linearisation in _build_relative_masks.
 FORCE_INLINE uint32_t relative_table_index(
     const Site& query_origin_site, const Site& key_origin_site, const kernel_args::NeighborhoodExtents& extents) {
-    const uint32_t brick[3] = {extents.brick_sites.time(), extents.brick_sites.height(), extents.brick_sites.width()};
-    const uint32_t window[3] = {
-        extents.context_window.time, extents.context_window.height, extents.context_window.width};
+    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
+    // through `extents` per axis measured 9% slower at the stage-5 band.
+    const auto brick_sites = extents.brick_sites;
+    const auto context_window = extents.context_window;
     const BrickPoint key_brick = containing_brick(key_origin_site, extents.brick_sites);
     const BrickPoint query_brick = containing_brick(query_origin_site, extents.brick_sites);
-    const int32_t relative[3] = {
-        static_cast<int32_t>(key_brick.time()) - static_cast<int32_t>(query_brick.time()),
-        static_cast<int32_t>(key_brick.height()) - static_cast<int32_t>(query_brick.height()),
-        static_cast<int32_t>(key_brick.width()) - static_cast<int32_t>(query_brick.width())};
 
     uint32_t index = 0;
-    for (uint32_t axis = 0; axis < 3; ++axis) {
-        const int32_t low = relative_span_low(window[axis], brick[axis]);
-        const int32_t high = relative_span_high(window[axis], brick[axis]);
-        if (relative[axis] < low || relative[axis] > high) {
+    for (Axis axis : ALL_AXES) {
+        const int32_t relative = static_cast<int32_t>(key_brick[axis]) - static_cast<int32_t>(query_brick[axis]);
+        const int32_t low = relative_span_low(context_window[axis], brick_sites[axis]);
+        const int32_t high = relative_span_high(context_window[axis], brick_sites[axis]);
+        if (relative < low || relative > high) {
             return NO_REGIME;
         }
-        index = index * static_cast<uint32_t>(high - low + 1) + static_cast<uint32_t>(relative[axis] - low);
+        index = index * static_cast<uint32_t>(high - low + 1) + static_cast<uint32_t>(relative - low);
     }
     return index;
 }
@@ -109,23 +111,21 @@ FORCE_INLINE uint32_t relative_table_index(
 FORCE_INLINE bool gather_is_canonical(
     const BrickPoint& gather_origin_brick,
     const Site& query_origin_site,
-    const kernel_args::AxisExtents& gather_bricks,
+    ShapeInBricks gather_bricks,
     const kernel_args::NeighborhoodExtents& extents) {
-    const uint32_t brick[3] = {extents.brick_sites.time(), extents.brick_sites.height(), extents.brick_sites.width()};
-    const uint32_t window[3] = {
-        extents.context_window.time, extents.context_window.height, extents.context_window.width};
-    const uint32_t gather[3] = {gather_bricks.time, gather_bricks.height, gather_bricks.width};
-    const uint32_t origin[3] = {gather_origin_brick.time(), gather_origin_brick.height(), gather_origin_brick.width()};
+    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
+    // through `extents` per axis measured 9% slower at the stage-5 band.
+    const auto brick_sites = extents.brick_sites;
+    const auto context_window = extents.context_window;
     const BrickPoint query_brick = containing_brick(query_origin_site, extents.brick_sites);
-    const uint32_t query[3] = {query_brick.time(), query_brick.height(), query_brick.width()};
 
-    for (uint32_t axis = 0; axis < 3; ++axis) {
-        const int32_t low = relative_span_low(window[axis], brick[axis]);
-        const int32_t high = relative_span_high(window[axis], brick[axis]);
-        if (static_cast<int32_t>(origin[axis]) - static_cast<int32_t>(query[axis]) != low) {
+    for (Axis axis : ALL_AXES) {
+        const int32_t low = relative_span_low(context_window[axis], brick_sites[axis]);
+        const int32_t high = relative_span_high(context_window[axis], brick_sites[axis]);
+        if (static_cast<int32_t>(gather_origin_brick[axis]) - static_cast<int32_t>(query_brick[axis]) != low) {
             return false;
         }
-        if (gather[axis] != static_cast<uint32_t>(high - low + 1)) {
+        if (gather_bricks[axis] != static_cast<uint32_t>(high - low + 1)) {
             return false;
         }
     }
@@ -138,26 +138,25 @@ FORCE_INLINE bool gather_is_canonical(
 // brick per edge per axis.
 FORCE_INLINE bool brick_window_is_unclamped(
     const Site& query_origin_site, const kernel_args::NeighborhoodExtents& extents) {
-    const uint32_t brick[3] = {extents.brick_sites.time(), extents.brick_sites.height(), extents.brick_sites.width()};
-    const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
-    const uint32_t configured[3] = {
-        extents.context_window.time, extents.context_window.height, extents.context_window.width};
-    const int32_t shard[3] = {extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};
-    const uint32_t local[3] = {query_origin_site.time(), query_origin_site.height(), query_origin_site.width()};
-    const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
-
-    for (uint32_t axis = 0; axis < 3; ++axis) {
-        const uint32_t window = configured[axis] < volume[axis] ? configured[axis] : volume[axis];
+    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
+    // through `extents` per axis measured 9% slower at the stage-5 band.
+    const auto brick_sites = extents.brick_sites;
+    const auto volume = extents.volume;
+    const auto context_window = extents.context_window;
+    const auto resident = extents.resident;
+    const auto shard_origin = extents.shard_origin;
+    for (Axis axis : ALL_AXES) {
+        const uint32_t window = context_window[axis] < volume[axis] ? context_window[axis] : volume[axis];
         if (window >= volume[axis]) {
             return false;
         }
         // A brick hanging off what this shard holds carries ghost rows, which the table's
         // always-visible interior pattern does not describe.
-        if (local[axis] + brick[axis] > resident[axis]) {
+        if (query_origin_site[axis] + brick_sites[axis] > resident[axis]) {
             return false;
         }
-        const int32_t first = static_cast<int32_t>(local[axis]) + shard[axis];
-        const int32_t last = first + static_cast<int32_t>(brick[axis]) - 1;
+        const int32_t first = static_cast<int32_t>(query_origin_site[axis]) + shard_origin[axis];
+        const int32_t last = first + static_cast<int32_t>(brick_sites[axis]) - 1;
         const int32_t half = static_cast<int32_t>(window / 2);
         if (first < 0) {
             return false;  // a low-edge halo brick: below the volume, no window of its own
@@ -183,37 +182,36 @@ FORCE_INLINE bool brick_window_is_unclamped(
 // is the unit whose clamping behaviour decides the pattern. Scanning a brick would give the
 // right answer only when the chunk is one brick.
 FORCE_INLINE uint32_t chunk_regime(const Site& chunk_origin_site, const kernel_args::NeighborhoodExtents& extents) {
-    const uint32_t group[3] = {extents.query_chunk.time, extents.query_chunk.height, extents.query_chunk.width};
-    const uint32_t brick[3] = {extents.brick_sites.time(), extents.brick_sites.height(), extents.brick_sites.width()};
-    const uint32_t stride[3] = {extents.stride.time, extents.stride.height, extents.stride.width};
-    const uint32_t volume[3] = {extents.volume.time, extents.volume.height, extents.volume.width};
-    const int32_t shard[3] = {extents.shard_origin.time(), extents.shard_origin.height(), extents.shard_origin.width()};
-    const uint32_t resident[3] = {extents.resident.time, extents.resident.height, extents.resident.width};
-    const uint32_t configured[3] = {
-        extents.context_window.time, extents.context_window.height, extents.context_window.width};
-    const uint32_t local[3] = {chunk_origin_site.time(), chunk_origin_site.height(), chunk_origin_site.width()};
-
+    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
+    // through `extents` per axis measured 9% slower at the stage-5 band.
+    const auto brick_sites = extents.brick_sites;
+    const auto stride = extents.stride;
+    const auto volume = extents.volume;
+    const auto context_window = extents.context_window;
+    const auto resident = extents.resident;
+    const auto shard_origin = extents.shard_origin;
+    const auto query_chunk = extents.query_chunk;
     uint32_t regime = 0;
-    for (uint32_t axis = 0; axis < 3; ++axis) {
-        const uint32_t window = configured[axis] < volume[axis] ? configured[axis] : volume[axis];
+    for (Axis axis : ALL_AXES) {
+        const uint32_t window = context_window[axis] < volume[axis] ? context_window[axis] : volume[axis];
         if (window >= volume[axis]) {
             return NO_REGIME;
         }
         // A chunk that overhangs what is resident carries ghosts, which the shared patterns do
         // not describe.
-        if (local[axis] + group[axis] > resident[axis]) {
+        if (chunk_origin_site[axis] + query_chunk[axis] > resident[axis]) {
             return NO_REGIME;
         }
-        const uint32_t snap = ttnn::transformer::neighborhood::snap_extent_on_axis(stride[axis], brick[axis]);
+        const uint32_t snap = ttnn::transformer::neighborhood::snap_extent_on_axis(stride[axis], brick_sites[axis]);
         const uint32_t highest = volume[axis] - window;
 
         bool all_low = true;
         bool all_high = true;
         bool all_centred = true;
-        for (uint32_t offset = 0; offset < group[axis]; ++offset) {
+        for (uint32_t offset = 0; offset < query_chunk[axis]; ++offset) {
             // A brick in a low-edge halo sits below the volume; it has no window and is never
             // read, so clamping here just keeps the arithmetic in range.
-            const int32_t signed_global = static_cast<int32_t>(local[axis] + offset) + shard[axis];
+            const int32_t signed_global = static_cast<int32_t>(chunk_origin_site[axis] + offset) + shard_origin[axis];
             const uint32_t global = signed_global > 0 ? static_cast<uint32_t>(signed_global) : 0u;
             const uint32_t origin = ttnn::transformer::neighborhood::window_origin_on_axis(
                 global / stride[axis], stride[axis], window, volume[axis], snap);
@@ -243,35 +241,35 @@ void kernel_main() {
         get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_height),
         get_compile_time_arg_val(kernel_args::reader_arg::query_chunk_bricks_width));
-    constexpr kernel_args::AxisExtents volume_chunks{
+    constexpr ShapeInChunks volume_chunks = ShapeInChunks::of(
         get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_height),
-        get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_width)};
-    constexpr uint32_t chunk_count = volume_chunks.time * volume_chunks.height * volume_chunks.width;
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_chunks_width));
+    constexpr uint32_t chunk_count = volume_chunks.time() * volume_chunks.height() * volume_chunks.width();
     constexpr uint32_t tiles_per_kv_chunk = get_compile_time_arg_val(kernel_args::reader_arg::tiles_per_kv_chunk);
     constexpr uint32_t kv_chunk_count = get_compile_time_arg_val(kernel_args::reader_arg::kv_chunk_count);
     constexpr uint32_t gather_brick_count = get_compile_time_arg_val(kernel_args::reader_arg::gather_brick_count);
 
-    constexpr kernel_args::AxisExtents volume_bricks{
+    constexpr ShapeInBricks volume_bricks = ShapeInBricks::of(
         get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_height),
-        get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_width)};
+        get_compile_time_arg_val(kernel_args::reader_arg::volume_bricks_width));
     // Q lives on the query grid; K, V and the gather live on the resident grid above. Equal
     // unless the host asked for a query sub-region.
-    constexpr kernel_args::AxisExtents query_bricks{
+    constexpr ShapeInBricks query_bricks = ShapeInBricks::of(
         get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_height),
-        get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_width)};
+        get_compile_time_arg_val(kernel_args::reader_arg::query_bricks_width));
     constexpr uint32_t query_brick_count = get_compile_time_arg_val(kernel_args::reader_arg::query_brick_count);
     // A position, not a size: where the query grid starts inside the resident brick grid.
     constexpr BrickPoint query_origin_bricks = BrickPoint::at(
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_height),
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_width));
-    constexpr kernel_args::AxisExtents gather_bricks{
+    constexpr ShapeInBricks gather_bricks = ShapeInBricks::of(
         get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_height),
-        get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_width)};
+        get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_width));
     // Not constexpr: `shard_origin` is filled in per chunk from the gather origin table, because
     // it is the one geometric value that differs per device and the mesh runs one program.
     // Everything else here is a compile-time constant and still folds.

@@ -42,30 +42,11 @@ enum class Order : uint8_t { Natural, Bricked };
 // window's ORIGIN, never its validity -- see the clamping rule above.
 enum class Regime : uint8_t { Low, Interior, High };
 
-// A size, in sites. Distinct type from Site so a size cannot be passed where a position
-// belongs.
-struct Extent3 {
-    std::array<uint32_t, AXIS_COUNT> by_axis{0, 0, 0};
-
-    static constexpr Extent3 of(uint32_t time, uint32_t height, uint32_t width) {
-        return Extent3{{time, height, width}};
-    }
-    constexpr uint32_t time() const { return by_axis[0]; }
-    constexpr uint32_t height() const { return by_axis[1]; }
-    constexpr uint32_t width() const { return by_axis[2]; }
-    constexpr uint32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
-    constexpr uint32_t sites() const { return by_axis[0] * by_axis[1] * by_axis[2]; }
-
-    friend constexpr bool operator==(const Extent3& left, const Extent3& right) {
-        return left.by_axis == right.by_axis;
-    }
-};
-
 struct NeighborhoodConfig {
-    Extent3 volume;           // the GLOBAL token grid, in sites
-    Extent3 context_window;   // what one query group attends to, in sites
-    Extent3 stride;           // query group extent, in sites
-    BrickShapeInSites brick;  // layout unit: sites per brick; brick.product() == SITES_PER_BRICK
+    ShapeInSites volume;          // the GLOBAL token grid, in sites
+    ShapeInSites context_window;  // what one query group attends to, in sites
+    ShapeInSites stride;          // query group extent, in sites
+    BrickShapeInSites brick;      // layout unit: sites per brick; brick.count() == SITES_PER_BRICK
 
     // How many bricks one query CHUNK spans, per axis. A chunk is the set of queries that share
     // a single gather, so this is the knob that decides how far the gather amortises.
@@ -89,7 +70,7 @@ struct NeighborhoodConfig {
     //
     // `shard_origin` must be brick-aligned, so the local tensor bricks the same way the global
     // one would. It is SIGNED -- see SiteOffset.
-    Extent3 shard_extent{{0, 0, 0}};  // zero means "same as volume"
+    ShapeInSites shard_extent{{0, 0, 0}};  // zero means "same as volume"
     SiteOffset shard_origin{{0, 0, 0}};
 
     // The sub-box of the resident region this device actually produces OUTPUT for, and where it
@@ -104,26 +85,26 @@ struct NeighborhoodConfig {
     //
     // Both must be brick-aligned: the query region is addressed in whole bricks, and a sub-box
     // starting or ending mid-brick would put owned and neighbour sites in one tile row.
-    Extent3 query_extent{{0, 0, 0}};
+    ShapeInSites query_extent{{0, 0, 0}};
     Site query_origin{{0, 0, 0}};  // in RESIDENT-local sites, so always >= 0
 
     // The query chunk's extent in SITES.
-    Extent3 query_chunk_sites() const {
-        return Extent3::of(
+    ShapeInSites query_chunk_sites() const {
+        return ShapeInSites::of(
             query_chunk_bricks.time() * brick.time(),
             query_chunk_bricks.height() * brick.height(),
             query_chunk_bricks.width() * brick.width());
     }
-    uint32_t bricks_per_query_chunk() const { return query_chunk_bricks.product(); }
+    uint32_t bricks_per_query_chunk() const { return query_chunk_bricks.count(); }
 
-    Extent3 resident_extent() const { return shard_extent.sites() == 0 ? volume : shard_extent; }
-    bool is_sharded() const { return shard_extent.sites() != 0 && !(shard_extent == volume); }
+    ShapeInSites resident_extent() const { return shard_extent.count() == 0 ? volume : shard_extent; }
+    bool is_sharded() const { return shard_extent.count() != 0 && !(shard_extent == volume); }
 
     // The region queries are drawn from. Defaults to the whole resident region, so a config that
     // never sets query_extent behaves exactly as it did before the split existed.
-    Extent3 query_region() const { return query_extent.sites() == 0 ? resident_extent() : query_extent; }
+    ShapeInSites query_region() const { return query_extent.count() == 0 ? resident_extent() : query_extent; }
     bool has_query_subregion() const {
-        return query_extent.sites() != 0 && !(query_extent == resident_extent() && query_origin == Site{{0, 0, 0}});
+        return query_extent.count() != 0 && !(query_extent == resident_extent() && query_origin == Site{{0, 0, 0}});
     }
 };
 
@@ -131,7 +112,7 @@ struct NeighborhoodConfig {
 // than the window, where it is the whole axis.
 struct ContextWindow {
     Site origin;
-    Extent3 extent;
+    ShapeInSites extent;
 };
 
 // Built once per (volume, context_window, stride, brick) and cached: it uploads index
@@ -139,13 +120,13 @@ struct ContextWindow {
 struct NeighborhoodPlan {
     NeighborhoodConfig config;
 
-    Extent3 volume_bricks;  // the RESIDENT region measured in bricks (rounded up)
+    ShapeInBricks volume_bricks;  // the RESIDENT region measured in bricks (rounded up)
     uint32_t brick_count = 0;
 
     // The QUERY region measured in bricks, and where it starts inside the resident brick grid.
     // K, V and the gather address the resident grid above; Q and the output address this one.
     // They coincide unless the config asked for a query sub-region.
-    Extent3 query_bricks;
+    ShapeInBricks query_bricks;
     uint32_t query_brick_count = 0;
     BrickPoint query_origin_bricks;  // a position, not a size: config.query_origin in bricks
 
@@ -153,13 +134,13 @@ struct NeighborhoodPlan {
     // a gather, a mask and a flash pass. Chunks are counted over the query region, not the
     // resident one -- computing a chunk for a brick whose output is discarded is the waste this
     // whole split exists to remove.
-    Extent3 volume_chunks;
+    ShapeInChunks volume_chunks;
     uint32_t chunk_count = 0;
 
     // What ONE brick must gather: the union of the context windows of every query group it
     // contains. At stride == brick that is exactly one context window. At stride 1 the 32
     // queries have 32 distinct windows and the union is wider on every axis.
-    Extent3 gather_extent;
+    ShapeInSites gather_extent;
     uint32_t gather_sites = 0;
     uint32_t gather_tiles = 0;  // site-exact: ceil(gather_sites / SITES_PER_BRICK)
 
@@ -168,7 +149,7 @@ struct NeighborhoodPlan {
     // Larger than gather_tiles -- 175 against 74 for an 11^3 window at stride 1 -- because a
     // window whose half-extent is not a multiple of the brick straddles bricks on every axis.
     // That gap is what stride buys back: at stride == brick the two converge.
-    Extent3 gather_bricks;
+    ShapeInBricks gather_bricks;
     uint32_t gather_brick_count = 0;
 
     // Indexed by CHUNK index; each is rounded DOWN to a brick boundary so a whole-brick read
@@ -180,7 +161,7 @@ struct NeighborhoodPlan {
 // Pick the brick shape minimising the gathered union for a given context window. A function
 // rather than a constant: a window flat in time wants a brick flat in time. `11x11x11` and
 // `2x4x4` belong in a model config, never here and never in a kernel.
-BrickShapeInSites choose_brick(Extent3 context_window);
+BrickShapeInSites choose_brick(ShapeInSites context_window);
 
 // Which boundary regime one site sits in on one axis.
 Regime regime_for_axis(uint32_t site_index, uint32_t volume_extent_sites, uint32_t context_window_extent_sites);

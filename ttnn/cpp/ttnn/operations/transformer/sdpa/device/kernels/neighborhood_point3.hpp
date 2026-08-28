@@ -7,18 +7,30 @@
 #include <array>
 #include <cstdint>
 
-// A point in (time, height, width), the unit shapes that rescale one, and the conversions
-// between the units it can be measured in.
+// The (time, height, width) triples the neighborhood geometry is built from: POSITIONS, SHAPES,
+// and the conversions between the units either can be measured in.
 //
 // Included by BOTH the host planner (neighborhood_plan.hpp) and the device kernels
 // (neighborhood_kernel_args.hpp, neighborhood_chunk_layout.hpp, dataflow/neighborhood_mask_gen.hpp),
-// for the same reason neighborhood_window_rule.hpp is: a position was previously spelled five
-// different ways -- Site, Offset3, SignedAxisOffsets, SiteInBrick, BrickCoordinate -- which were
-// distinct types by NAME only. Nothing stopped a brick coordinate being written into a site, and
-// that mistake is silent: the mask attends to the wrong keys and still returns plausible video.
+// for the same reason neighborhood_window_rule.hpp is: a triple used to be spelled seven different
+// ways -- Site, Offset3, SignedAxisOffsets, SiteInBrick, BrickCoordinate, Extent3, AxisExtents --
+// which were distinct types by NAME only. Nothing stopped a brick coordinate being written into a
+// site, or a volume being used where a brick shape belonged, and those mistakes are silent: the
+// mask attends to the wrong keys and still returns plausible video.
 //
 // Hence no includes beyond <array> and <cstdint>, no dependency on ttnn or on the kernel API, and
 // `inline constexpr` rather than FORCE_INLINE, which does not exist host-side.
+//
+// A POSITION and a SHAPE are separate types, and a shape carries no origin. That is not an
+// omission. In this design the gathered region's extent is the SAME for every query chunk -- the
+// window slides inward at a boundary rather than truncating -- so the extent is a plan-wide
+// constant while only the origin varies per chunk. Keeping them apart is what collapses a
+// per-chunk 6-tuple of bounds into one shared shape plus a 3-word table row.
+//
+// The windowed SDPA path next door cannot do that: its chunks are flat token runs rather than 3D
+// boxes, so its box extent varies per chunk (H and W fall back to the whole axis when a chunk
+// straddles a frame or a row) and it must carry lo/hi bounds. See NeighborhoodBox in
+// windowed_loop_geometry.hpp -- a genuinely different concept despite the similar shape.
 
 namespace ttnn::transformer::neighborhood {
 
@@ -26,14 +38,22 @@ constexpr uint32_t AXIS_COUNT = 3;
 
 enum class Axis : uint32_t { Time = 0, Height = 1, Width = 2 };
 
-// What a coordinate COUNTS. Sites, bricks and chunks are all (T,H,W) triples and none of them is
-// interchangeable with another: one brick is 32 sites in some 3D arrangement, and one chunk is a
-// box of bricks. Assigning across units silently scales a position by the brick or the chunk
-// shape -- which is why this is a type and not a comment.
+// For `for (Axis axis : ALL_AXES)`. Both Point3 and Shape index by Axis straight off a std::array,
+// so a per-axis loop reads them directly instead of hoisting into a local uint32_t[3] first.
+constexpr std::array<Axis, AXIS_COUNT> ALL_AXES{Axis::Time, Axis::Height, Axis::Width};
+
+// What a triple COUNTS. Sites, bricks and chunks are all (T,H,W) triples and none is
+// interchangeable with another: one brick is 32 sites in some 3D arrangement, one chunk is a box of
+// bricks. Assigning across units silently scales by the brick or chunk shape -- which is why this
+// is a type parameter and not a comment.
 //
-// The tag is PHANTOM: it appears in the type and nowhere in the object. Every alias below is the
+// `None` is only ever the PER of a plain shape; see Shape.
+//
+// The tag is PHANTOM: it appears in the type and nowhere in the object, so everything below is the
 // same three-word aggregate the hand-written structs were, and folds at compile time the same way.
-enum class Unit : uint8_t { Sites, Bricks, Chunks };
+enum class Unit : uint8_t { Sites, Bricks, Chunks, None };
+
+// ---- positions ----
 
 template <typename Scalar, Unit UNIT>
 struct Point3 {
@@ -64,84 +84,85 @@ struct Point3 {
 using Site = Point3<uint32_t, Unit::Sites>;
 
 // A SIGNED position, in sites. Distinct from Site because a shard's origin can be NEGATIVE: a
-// symmetric halo puts the device at the low edge of the volume at -halo, and those columns are
-// real storage that simply lies outside the volume. Its queries never use them and its windows
-// never reach them, but the local -> global conversion still has to be able to say where it is.
+// symmetric halo puts the device at the low edge of the volume at -halo, and those columns are real
+// storage that simply lies outside the volume. Its queries never use them and its windows never
+// reach them, but the local -> global conversion still has to be able to say where it is.
 using SiteOffset = Point3<int32_t, Unit::Sites>;
 
-// A position, in bricks. One brick is 32 sites, so this is a position in the BRICKED tensor --
-// equivalently a tile row -- and it is a factor of the brick shape away from a Site.
+// A position, in bricks -- equivalently a tile row of the bricked tensor.
 using BrickPoint = Point3<uint32_t, Unit::Bricks>;
 
-// A position, in query chunks. One chunk is a box of bricks that shares a gather, a mask and a
-// flash pass.
+// A position, in query chunks.
 using ChunkPoint = Point3<uint32_t, Unit::Chunks>;
 
-// ---- unit ratios ----
+// ---- shapes ----
 //
-// How many FINE units make up one COARSE unit. The aliases below name both halves --
-// BrickShapeInSites is a brick measured in sites, ChunkShapeInBricks a chunk measured in bricks --
-// because at a call site the fine unit is what the conversion actually multiplies or divides by.
-// These are the SECOND argument to every conversion, and they are deliberately NOT Extent3.
+// MEASURED_IN is the unit the three numbers count. PER names the COARSER unit this is the shape of
+// exactly one of; `None` means a plain region shape rather than a conversion factor.
 //
-// An Extent3 is a SIZE -- "how big is this region". A ratio is a SCALE -- "what do I multiply by
-// to change units". They are the same three numbers, which is exactly the problem: while the
-// conversions took any extent-shaped type, `first_site_of(brick_point, config.volume)` and
-// `first_brick_of(chunk_point, config.brick)` both compiled, and both are wrong by a factor of
-// the whole volume or of the brick shape. A tagged POINT with an untyped extent checks only half
-// of each call, and the half it leaves open is the one that silently rescales a position.
-template <Unit COARSE, Unit FINE>
-struct UnitRatio {
-    std::array<uint32_t, AXIS_COUNT> by_axis{1, 1, 1};
+// That second parameter is what keeps `first_point_of(brick_point, config.volume)` from compiling:
+// the volume is a region (PER == None), not the shape of one brick. A tagged POSITION with an
+// untyped shape checks only half of each conversion, and the half left open is the one that
+// silently rescales a position.
+template <Unit MEASURED_IN, Unit PER = Unit::None>
+struct Shape {
+    std::array<uint32_t, AXIS_COUNT> by_axis{0, 0, 0};
 
-    static constexpr UnitRatio of(uint32_t time, uint32_t height, uint32_t width) {
-        return UnitRatio{{time, height, width}};
-    }
+    static constexpr Shape of(uint32_t time, uint32_t height, uint32_t width) { return Shape{{time, height, width}}; }
     constexpr uint32_t time() const { return by_axis[0]; }
     constexpr uint32_t height() const { return by_axis[1]; }
     constexpr uint32_t width() const { return by_axis[2]; }
     constexpr uint32_t operator[](Axis axis) const { return by_axis[static_cast<uint32_t>(axis)]; }
+    constexpr uint32_t& operator[](Axis axis) { return by_axis[static_cast<uint32_t>(axis)]; }
 
-    // FINE units per one COARSE unit -- 32 sites for a BrickShapeInSites, the bricks in one
-    // chunk for a ChunkShapeInBricks. Not spelled sites(), which would be a false claim on the
-    // second; the alias name already says which unit the answer is in.
-    constexpr uint32_t product() const { return by_axis[0] * by_axis[1] * by_axis[2]; }
+    // MEASURED_IN units spanned. True for every instantiation, which the old Extent3::sites() was
+    // not: on a brick grid it returned a brick count, on a chunk grid a chunk count.
+    constexpr uint32_t count() const { return by_axis[0] * by_axis[1] * by_axis[2]; }
 
-    friend constexpr bool operator==(const UnitRatio& left, const UnitRatio& right) {
-        return left.by_axis == right.by_axis;
-    }
+    friend constexpr bool operator==(const Shape& left, const Shape& right) { return left.by_axis == right.by_axis; }
 };
 
-// The layout unit: one brick is this many sites, so product() == SITES_PER_BRICK.
-using BrickShapeInSites = UnitRatio<Unit::Bricks, Unit::Sites>;
+// Plain region shapes.
+using ShapeInSites = Shape<Unit::Sites>;    // volume, context window, stride, gather extent
+using ShapeInBricks = Shape<Unit::Bricks>;  // volume_bricks, query_bricks, gather_bricks
+using ShapeInChunks = Shape<Unit::Chunks>;  // the chunk grid
 
-// One query chunk is this many bricks -- the knob deciding how far one gather amortises.
-using ChunkShapeInBricks = UnitRatio<Unit::Chunks, Unit::Bricks>;
+// Unit shapes: conversion factors, not regions. The layout unit holds SITES_PER_BRICK sites; the
+// chunk shape is the knob deciding how far one gather amortises.
+using BrickShapeInSites = Shape<Unit::Sites, Unit::Bricks>;
+using ChunkShapeInBricks = Shape<Unit::Bricks, Unit::Chunks>;
 
 // ---- unit conversions ----
 //
-// The ONLY route between units, and the only place the multiply or divide by a unit shape
-// appears. Both arguments are typed, so neither the position nor the scale can be the wrong
-// thing: these were six hand-written triples spread over the reader and the planner, each one an
-// opportunity to transpose height and width or to scale by the wrong extent entirely.
+// One pair, with BOTH units read off the unit shape, so these serve every level: brick -> site and
+// chunk -> brick are the same function. Replaces six hand-written triples spread over the reader
+// and the planner, each an opportunity to transpose height and width or to scale by the wrong shape.
 
-// Where a brick BEGINS, in sites.
+// Where one COARSE unit BEGINS, in FINE units.
+template <Unit FINE, Unit COARSE>
+inline constexpr Point3<uint32_t, FINE> first_point_of(Point3<uint32_t, COARSE> point, Shape<FINE, COARSE> unit_shape) {
+    return Point3<uint32_t, FINE>::at(
+        point.time() * unit_shape.time(), point.height() * unit_shape.height(), point.width() * unit_shape.width());
+}
+
+// Which COARSE unit contains this FINE position. Rounds DOWN, which is what a tile-granular read
+// needs: one brick is one tile row, and a read cannot start mid-row.
+template <Unit FINE, Unit COARSE>
+inline constexpr Point3<uint32_t, COARSE> containing_unit(
+    Point3<uint32_t, FINE> point, Shape<FINE, COARSE> unit_shape) {
+    return Point3<uint32_t, COARSE>::at(
+        point.time() / unit_shape.time(), point.height() / unit_shape.height(), point.width() / unit_shape.width());
+}
+
+// Named wrappers. The return unit in the name is worth keeping at a call site.
 inline constexpr Site first_site_of(BrickPoint brick, BrickShapeInSites brick_shape) {
-    return Site::at(
-        brick.time() * brick_shape.time(), brick.height() * brick_shape.height(), brick.width() * brick_shape.width());
+    return first_point_of(brick, brick_shape);
 }
-
-// Where a chunk BEGINS, in bricks.
 inline constexpr BrickPoint first_brick_of(ChunkPoint chunk, ChunkShapeInBricks chunk_shape) {
-    return BrickPoint::at(
-        chunk.time() * chunk_shape.time(), chunk.height() * chunk_shape.height(), chunk.width() * chunk_shape.width());
+    return first_point_of(chunk, chunk_shape);
 }
-
-// The brick holding a site. Rounds DOWN, which is what a tile-granular read needs: one brick is
-// one tile row, and a read cannot start mid-row.
 inline constexpr BrickPoint containing_brick(Site site, BrickShapeInSites brick_shape) {
-    return BrickPoint::at(
-        site.time() / brick_shape.time(), site.height() / brick_shape.height(), site.width() / brick_shape.width());
+    return containing_unit(site, brick_shape);
 }
 
 }  // namespace ttnn::transformer::neighborhood

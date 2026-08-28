@@ -63,7 +63,7 @@ static_assert(first_brick_of(ChunkPoint::at(2, 1, 0), ChunkShapeInBricks::of(4, 
 //
 // A tagged point with an untyped extent would check only half of each call, and the open half is
 // the one that silently rescales a position: `first_site_of(brick_point, config.volume)` once
-// compiled and multiplied a brick coordinate by the whole volume. A unit ratio is not an Extent3,
+// compiled and multiplied a brick coordinate by the whole volume. A unit ratio is not an ShapeInSites,
 // and the two ratios are not each other -- brick shape is sites-per-brick, chunk shape is
 // bricks-per-chunk, and they sit in the same argument slot of adjacent functions.
 template <typename PointT, typename ScaleT>
@@ -74,32 +74,59 @@ template <typename PointT, typename ScaleT>
 concept DividesToBrick = requires(PointT point, ScaleT scale) { containing_brick(point, scale); };
 
 static_assert(ScalesToSite<BrickPoint, BrickShapeInSites>);
-static_assert(!ScalesToSite<BrickPoint, Extent3>);             // a size is not a scale
+static_assert(!ScalesToSite<BrickPoint, ShapeInSites>);        // a size is not a scale
 static_assert(!ScalesToSite<BrickPoint, ChunkShapeInBricks>);  // bricks-per-chunk is not sites-per-brick
 static_assert(!ScalesToSite<ChunkPoint, BrickShapeInSites>);   // and a chunk is not a brick
 
 static_assert(ScalesToBrick<ChunkPoint, ChunkShapeInBricks>);
 static_assert(!ScalesToBrick<ChunkPoint, BrickShapeInSites>);
-static_assert(!ScalesToBrick<ChunkPoint, Extent3>);
+static_assert(!ScalesToBrick<ChunkPoint, ShapeInSites>);
 
 static_assert(DividesToBrick<Site, BrickShapeInSites>);
-static_assert(!DividesToBrick<Site, Extent3>);
+static_assert(!DividesToBrick<Site, ShapeInSites>);
 static_assert(!DividesToBrick<Site, ChunkShapeInBricks>);
 
-// product() rather than sites(), because on a ChunkShapeInBricks the answer is a BRICK count. Extent3
+// product() rather than sites(), because on a ChunkShapeInBricks the answer is a BRICK count. ShapeInSites
 // keeps sites() and is still used for every genuine size.
-static_assert(BrickShapeInSites::of(2, 4, 4).product() == SITES_PER_BRICK);
-static_assert(ChunkShapeInBricks::of(4, 2, 2).product() == 16);
+// count() rather than sites(): the old name asserted a unit it could not know, and was false at
+// every one of its non-site call sites -- volume_bricks.sites() returned a BRICK count.
+static_assert(BrickShapeInSites::of(2, 4, 4).count() == SITES_PER_BRICK);
+static_assert(ChunkShapeInBricks::of(4, 2, 2).count() == 16);
+static_assert(ShapeInBricks::of(3, 4, 5).count() == 60);
 
-// Same-unit arithmetic, which is how a query brick is offset into the resident grid.
-static_assert(BrickPoint::at(1, 2, 3) + BrickPoint::at(10, 20, 30) == BrickPoint::at(11, 22, 33));
-static_assert(BrickPoint::at(11, 22, 33) - BrickPoint::at(1, 2, 3) == BrickPoint::at(10, 20, 30));
+// ---- what unifying Extent3, AxisExtents and UnitRatio into Shape newly makes checkable ----
+//
+// A region shape now carries the unit it counts, so a brick grid cannot be handed where a site
+// region belongs. The old untagged Extent3 could not say this: gather_extent (sites) compared
+// equal to gather_bricks (bricks), and either could be passed to the other's function.
+static_assert(!std::is_assignable_v<ShapeInSites&, ShapeInBricks>);
+static_assert(!std::is_assignable_v<ShapeInBricks&, ShapeInSites>);
+static_assert(!std::is_assignable_v<ShapeInBricks&, ShapeInChunks>);
+static_assert(!std::is_assignable_v<ShapeInChunks&, ShapeInBricks>);
 
-// Axis indexing agrees with the named accessors, since both spellings are live.
-static_assert(Site::at(4, 5, 6)[Axis::Time] == 4);
-static_assert(Site::at(4, 5, 6)[Axis::Height] == 5);
-static_assert(Site::at(4, 5, 6)[Axis::Width] == 6);
-static_assert(Site::at(4, 5, 6).time() == Site::at(4, 5, 6)[Axis::Time]);
+// A region is not a unit shape, in either direction: PER distinguishes "how big is this" from
+// "what do I scale by".
+static_assert(!std::is_assignable_v<ShapeInSites&, BrickShapeInSites>);
+static_assert(!std::is_assignable_v<BrickShapeInSites&, ShapeInSites>);
+static_assert(!std::is_assignable_v<ShapeInBricks&, ChunkShapeInBricks>);
+static_assert(!std::is_assignable_v<BrickShapeInSites&, ChunkShapeInBricks>);
+
+// The PER tag is phantom: unifying three structs into one template costs no space.
+static_assert(sizeof(ShapeInSites) == AXIS_COUNT * sizeof(uint32_t));
+static_assert(sizeof(BrickShapeInSites) == sizeof(ShapeInSites));
+static_assert(sizeof(ShapeInChunks) == sizeof(ShapeInSites));
+static_assert(std::is_trivially_copyable_v<ShapeInSites>);
+static_assert(std::is_trivially_copyable_v<BrickShapeInSites>);
+
+// ONE conversion pair serves both levels, with both units read off the unit shape.
+static_assert(first_point_of(BrickPoint::at(3, 1, 2), BrickShapeInSites::of(2, 4, 4)) == Site::at(6, 4, 8));
+static_assert(first_point_of(ChunkPoint::at(2, 1, 0), ChunkShapeInBricks::of(4, 2, 2)) == BrickPoint::at(8, 2, 0));
+static_assert(containing_unit(Site::at(7, 5, 9), BrickShapeInSites::of(2, 4, 4)) == BrickPoint::at(3, 1, 2));
+
+// Axis indexing is a plain array load on shapes too, which is what retires the per-axis hoists
+// the mask generator used to need.
+static_assert(ShapeInSites::of(4, 5, 6)[Axis::Height] == 5);
+static_assert(ALL_AXES.size() == AXIS_COUNT);
 
 namespace {
 
@@ -128,7 +155,8 @@ uint32_t oracle_window_origin(uint32_t site_index, uint32_t volume_extent_sites,
     return best_origin;
 }
 
-NeighborhoodConfig make_config(Extent3 volume, Extent3 context_window, Extent3 stride, BrickShapeInSites brick) {
+NeighborhoodConfig make_config(
+    ShapeInSites volume, ShapeInSites context_window, ShapeInSites stride, BrickShapeInSites brick) {
     return NeighborhoodConfig{volume, context_window, stride, brick};
 }
 
@@ -136,12 +164,36 @@ NeighborhoodConfig make_config(Extent3 volume, Extent3 context_window, Extent3 s
 // the brick on every case, and one axis is shorter than the window.
 const std::vector<NeighborhoodConfig>& awkward_configs() {
     static const std::vector<NeighborhoodConfig> configs = {
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4)),
-        make_config(Extent3::of(7, 13, 11), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4)),
-        make_config(Extent3::of(3, 12, 12), Extent3::of(5, 7, 7), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4)),
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 4, 4), BrickShapeInSites::of(2, 4, 4)),
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 2, 2), BrickShapeInSites::of(2, 4, 4)),
-        make_config(Extent3::of(6, 8, 16), Extent3::of(3, 7, 7), Extent3::of(1, 1, 1), BrickShapeInSites::of(1, 4, 8)),
+        make_config(
+            ShapeInSites::of(8, 12, 12),
+            ShapeInSites::of(5, 5, 5),
+            ShapeInSites::of(1, 1, 1),
+            BrickShapeInSites::of(2, 4, 4)),
+        make_config(
+            ShapeInSites::of(7, 13, 11),
+            ShapeInSites::of(5, 5, 5),
+            ShapeInSites::of(1, 1, 1),
+            BrickShapeInSites::of(2, 4, 4)),
+        make_config(
+            ShapeInSites::of(3, 12, 12),
+            ShapeInSites::of(5, 7, 7),
+            ShapeInSites::of(1, 1, 1),
+            BrickShapeInSites::of(2, 4, 4)),
+        make_config(
+            ShapeInSites::of(8, 12, 12),
+            ShapeInSites::of(5, 5, 5),
+            ShapeInSites::of(2, 4, 4),
+            BrickShapeInSites::of(2, 4, 4)),
+        make_config(
+            ShapeInSites::of(8, 12, 12),
+            ShapeInSites::of(5, 5, 5),
+            ShapeInSites::of(2, 2, 2),
+            BrickShapeInSites::of(2, 4, 4)),
+        make_config(
+            ShapeInSites::of(6, 8, 16),
+            ShapeInSites::of(3, 7, 7),
+            ShapeInSites::of(1, 1, 1),
+            BrickShapeInSites::of(1, 4, 8)),
     };
     return configs;
 }
@@ -151,18 +203,18 @@ const std::vector<NeighborhoodConfig>& awkward_configs() {
 // ---------------------------------------------------------------------------
 
 TEST(NeighborhoodChooseBrick, MatchesExhaustiveSearch) {
-    const std::vector<Extent3> context_windows = {
-        Extent3::of(11, 11, 11),
-        Extent3::of(3, 7, 7),
-        Extent3::of(3, 5, 5),
-        Extent3::of(1, 11, 11),
-        Extent3::of(7, 7, 7),
-        Extent3::of(9, 3, 3),
+    const std::vector<ShapeInSites> context_windows = {
+        ShapeInSites::of(11, 11, 11),
+        ShapeInSites::of(3, 7, 7),
+        ShapeInSites::of(3, 5, 5),
+        ShapeInSites::of(1, 11, 11),
+        ShapeInSites::of(7, 7, 7),
+        ShapeInSites::of(9, 3, 3),
     };
 
-    for (const Extent3& context_window : context_windows) {
+    for (const ShapeInSites& context_window : context_windows) {
         const BrickShapeInSites chosen_brick = choose_brick(context_window);
-        ASSERT_EQ(chosen_brick.product(), SITES_PER_BRICK) << "brick must be exactly one tile";
+        ASSERT_EQ(chosen_brick.count(), SITES_PER_BRICK) << "brick must be exactly one tile";
 
         uint64_t chosen_union_sites = 1;
         for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
@@ -190,9 +242,9 @@ TEST(NeighborhoodChooseBrick, MatchesExhaustiveSearch) {
 
 TEST(NeighborhoodChooseBrick, FollowsWindowShape) {
     // A cubic window wants a cubic brick.
-    EXPECT_EQ(choose_brick(Extent3::of(11, 11, 11)), BrickShapeInSites::of(2, 4, 4));
+    EXPECT_EQ(choose_brick(ShapeInSites::of(11, 11, 11)), BrickShapeInSites::of(2, 4, 4));
     // A window flat in time wants a brick flat in time -- this is why it cannot be a constant.
-    EXPECT_EQ(choose_brick(Extent3::of(1, 11, 11)), BrickShapeInSites::of(1, 4, 8));
+    EXPECT_EQ(choose_brick(ShapeInSites::of(1, 11, 11)), BrickShapeInSites::of(1, 4, 8));
 }
 
 // ---------------------------------------------------------------------------
@@ -200,8 +252,11 @@ TEST(NeighborhoodChooseBrick, FollowsWindowShape) {
 // ---------------------------------------------------------------------------
 
 TEST(NeighborhoodContextWindow, MatchesOracleAtStrideOne) {
-    const NeighborhoodConfig config =
-        make_config(Extent3::of(7, 13, 11), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4));
+    const NeighborhoodConfig config = make_config(
+        ShapeInSites::of(7, 13, 11),
+        ShapeInSites::of(5, 5, 5),
+        ShapeInSites::of(1, 1, 1),
+        BrickShapeInSites::of(2, 4, 4));
 
     for (uint32_t site_time = 0; site_time < config.volume.time(); ++site_time) {
         for (uint32_t site_height = 0; site_height < config.volume.height(); ++site_height) {
@@ -286,14 +341,17 @@ TEST(NeighborhoodBrickedOrder, RoundTripsAndIsInjective) {
                 }
             }
         }
-        EXPECT_EQ(seen_bricked_indices.size(), config.volume.sites());
+        EXPECT_EQ(seen_bricked_indices.size(), config.volume.count());
     }
 }
 
 TEST(NeighborhoodBrickedOrder, PacksOneBrickContiguously) {
     // The whole point of bricking: 32 consecutive bricked indices are one compact 3D box.
-    const NeighborhoodConfig config =
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4));
+    const NeighborhoodConfig config = make_config(
+        ShapeInSites::of(8, 12, 12),
+        ShapeInSites::of(5, 5, 5),
+        ShapeInSites::of(1, 1, 1),
+        BrickShapeInSites::of(2, 4, 4));
 
     for (uint32_t brick_index = 0; brick_index < 6; ++brick_index) {
         const Site brick_origin = brick_index_to_origin(brick_index, config);
@@ -325,7 +383,7 @@ TEST(NeighborhoodPlanBuild, GatherCoversEveryQueryWindowInTheChunk) {
     // the thing it checks.
     for (const NeighborhoodConfig& config : awkward_configs()) {
         const NeighborhoodPlan plan = build_plan(config);
-        const Extent3 chunk_sites = config.query_chunk_sites();
+        const ShapeInSites chunk_sites = config.query_chunk_sites();
 
         for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
             const uint32_t chunks_per_time_slice = plan.volume_chunks.height() * plan.volume_chunks.width();
@@ -378,7 +436,7 @@ TEST(NeighborhoodPlanBuild, GatherStaysInBoundsAndIsConstantSize) {
     for (const NeighborhoodConfig& config : awkward_configs()) {
         const NeighborhoodPlan plan = build_plan(config);
 
-        EXPECT_EQ(plan.gather_sites, plan.gather_extent.sites());
+        EXPECT_EQ(plan.gather_sites, plan.gather_extent.count());
         EXPECT_EQ(plan.gather_origin_by_chunk.size(), plan.chunk_count);
 
         for (const Site& gather_origin : plan.gather_origin_by_chunk) {
@@ -398,40 +456,55 @@ TEST(NeighborhoodPlanBuild, GatherStaysInBoundsAndIsConstantSize) {
 
 TEST(NeighborhoodPlanBuild, StrideEqualToBrickGathersExactlyOneContextWindow) {
     // The payoff of striding: one window per brick, no union, nothing to mask.
-    const NeighborhoodConfig config =
-        make_config(Extent3::of(8, 12, 12), Extent3::of(5, 5, 5), Extent3::of(2, 4, 4), BrickShapeInSites::of(2, 4, 4));
+    const NeighborhoodConfig config = make_config(
+        ShapeInSites::of(8, 12, 12),
+        ShapeInSites::of(5, 5, 5),
+        ShapeInSites::of(2, 4, 4),
+        BrickShapeInSites::of(2, 4, 4));
     const NeighborhoodPlan plan = build_plan(config);
 
-    EXPECT_EQ(plan.gather_extent, Extent3::of(5, 5, 5));
+    EXPECT_EQ(plan.gather_extent, ShapeInSites::of(5, 5, 5));
     EXPECT_EQ(plan.gather_sites, 125u);
 }
 
 TEST(NeighborhoodPlanBuild, StrideOneGathersTheUnionOfTheBricksWindows) {
     // At stride 1 the 32 queries have 32 distinct windows: window + brick - 1 on each axis.
     const NeighborhoodConfig config = make_config(
-        Extent3::of(16, 24, 24), Extent3::of(5, 5, 5), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4));
+        ShapeInSites::of(16, 24, 24),
+        ShapeInSites::of(5, 5, 5),
+        ShapeInSites::of(1, 1, 1),
+        BrickShapeInSites::of(2, 4, 4));
     const NeighborhoodPlan plan = build_plan(config);
 
-    EXPECT_EQ(plan.gather_extent, Extent3::of(6, 8, 8));
+    EXPECT_EQ(plan.gather_extent, ShapeInSites::of(6, 8, 8));
 }
 
 TEST(NeighborhoodPlanBuild, RejectsUnbuildableConfigs) {
     // A brick that is not one tile.
     EXPECT_THROW(
         build_plan(make_config(
-            Extent3::of(8, 8, 8), Extent3::of(3, 3, 3), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 2, 2))),
+            ShapeInSites::of(8, 8, 8),
+            ShapeInSites::of(3, 3, 3),
+            ShapeInSites::of(1, 1, 1),
+            BrickShapeInSites::of(2, 2, 2))),
         std::invalid_argument);
 
     // A stride wider than the window would put a query outside its own context.
     EXPECT_THROW(
         build_plan(make_config(
-            Extent3::of(8, 8, 8), Extent3::of(3, 3, 3), Extent3::of(4, 1, 1), BrickShapeInSites::of(2, 4, 4))),
+            ShapeInSites::of(8, 8, 8),
+            ShapeInSites::of(3, 3, 3),
+            ShapeInSites::of(4, 1, 1),
+            BrickShapeInSites::of(2, 4, 4))),
         std::invalid_argument);
 
     // A zero extent.
     EXPECT_THROW(
         build_plan(make_config(
-            Extent3::of(8, 0, 8), Extent3::of(3, 3, 3), Extent3::of(1, 1, 1), BrickShapeInSites::of(2, 4, 4))),
+            ShapeInSites::of(8, 0, 8),
+            ShapeInSites::of(3, 3, 3),
+            ShapeInSites::of(1, 1, 1),
+            BrickShapeInSites::of(2, 4, 4))),
         std::invalid_argument);
 }
 

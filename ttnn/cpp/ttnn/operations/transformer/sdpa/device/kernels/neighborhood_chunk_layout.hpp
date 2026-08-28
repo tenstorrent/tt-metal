@@ -33,11 +33,11 @@ namespace ttnn::transformer::neighborhood::chunk_layout {
 // decoding a brick index within a chunk yields a BrickPoint directly. Naming the unit at the call
 // site is what stops those two being confused.
 //
-// GridT is whatever measures the grid: an AxisExtents when it is a size (the volume in chunks), a
-// ChunkShapeInBricks when it is a ratio (the bricks in one chunk). Both reach their axes through
-// operator[], so this needs neither an overload nor a conversion.
-template <Unit UNIT, typename GridT>
-FORCE_INLINE Point3<uint32_t, UNIT> linear_to_point3(uint32_t index, const GridT& grid) {
+// The grid must be measured in the SAME unit as the point being decoded, which the signature now
+// enforces. Its PER is free: decoding chunks over the volume uses a plain ShapeInChunks, decoding
+// bricks within a chunk uses the ChunkShapeInBricks, and both are legitimate brick/chunk grids.
+template <Unit UNIT, Unit PER>
+FORCE_INLINE Point3<uint32_t, UNIT> linear_to_point3(uint32_t index, Shape<UNIT, PER> grid) {
     const uint32_t width = grid[Axis::Width];
     const uint32_t per_time_slice = grid[Axis::Height] * width;
     const uint32_t time = index / per_time_slice;
@@ -46,8 +46,8 @@ FORCE_INLINE Point3<uint32_t, UNIT> linear_to_point3(uint32_t index, const GridT
 }
 
 // The brick coordinate of a chunk's first brick.
-FORCE_INLINE BrickPoint chunk_origin_brick(
-    uint32_t chunk_index, const kernel_args::AxisExtents& volume_chunks, ChunkShapeInBricks chunk_shape) {
+FORCE_INLINE BrickPoint
+chunk_origin_brick(uint32_t chunk_index, ShapeInChunks volume_chunks, ChunkShapeInBricks chunk_shape) {
     return first_brick_of(linear_to_point3<Unit::Chunks>(chunk_index, volume_chunks), chunk_shape);
 }
 
@@ -64,16 +64,16 @@ brick_within_chunk(uint32_t index_in_chunk, const BrickPoint& origin, ChunkShape
 // in the argument, not only in the return type. Nothing is lost by that -- handing this a
 // ChunkPoint where a BrickPoint belongs is already a type error, and `grid` says which space the
 // index lands in.
-template <Unit UNIT, typename GridT>
-FORCE_INLINE uint32_t point3_to_linear(Point3<uint32_t, UNIT> point, const GridT& grid) {
+template <Unit UNIT, Unit PER>
+FORCE_INLINE uint32_t point3_to_linear(Point3<uint32_t, UNIT> point, Shape<UNIT, PER> grid) {
     return (point.time() * grid[Axis::Height] + point.height()) * grid[Axis::Width] + point.width();
 }
 
 // Is this point inside the grid? A brick that runs past the volume holds only ghost sites, and
 // its queries are discarded. Generic for the same reason point3_to_linear is: the test is the
 // same on a chunk grid as on a brick grid, and the unit tag keeps the two apart.
-template <Unit UNIT, typename GridT>
-FORCE_INLINE bool point3_is_inside(Point3<uint32_t, UNIT> point, const GridT& grid) {
+template <Unit UNIT, Unit PER>
+FORCE_INLINE bool point3_is_inside(Point3<uint32_t, UNIT> point, Shape<UNIT, PER> grid) {
     return point.time() < grid[Axis::Time] && point.height() < grid[Axis::Height] && point.width() < grid[Axis::Width];
 }
 

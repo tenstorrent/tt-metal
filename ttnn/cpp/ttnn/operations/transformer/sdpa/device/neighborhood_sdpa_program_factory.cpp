@@ -211,7 +211,7 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[kernel_args::reader_arg::volume_time] = config.volume.time();
     reader_compile_args[kernel_args::reader_arg::volume_height] = config.volume.height();
     reader_compile_args[kernel_args::reader_arg::volume_width] = config.volume.width();
-    const neighborhood::Extent3 resident = config.resident_extent();
+    const neighborhood::ShapeInSites resident = config.resident_extent();
     reader_compile_args[kernel_args::reader_arg::resident_time] = resident.time();
     reader_compile_args[kernel_args::reader_arg::resident_height] = resident.height();
     reader_compile_args[kernel_args::reader_arg::resident_width] = resident.width();

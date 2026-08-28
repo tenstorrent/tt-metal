@@ -23,8 +23,12 @@
 namespace kernel_args = ttnn::transformer::neighborhood::kernel_args;
 namespace layout = ttnn::transformer::neighborhood::chunk_layout;
 
+using ttnn::transformer::neighborhood::ALL_AXES;
+using ttnn::transformer::neighborhood::Axis;
 using ttnn::transformer::neighborhood::BrickPoint;
 using ttnn::transformer::neighborhood::ChunkShapeInBricks;
+using ttnn::transformer::neighborhood::ShapeInBricks;
+using ttnn::transformer::neighborhood::ShapeInChunks;
 
 void kernel_main() {
     constexpr uint32_t head_count = get_compile_time_arg_val(kernel_args::writer_arg::head_count);
@@ -37,15 +41,15 @@ void kernel_main() {
         get_compile_time_arg_val(kernel_args::writer_arg::query_chunk_bricks_time),
         get_compile_time_arg_val(kernel_args::writer_arg::query_chunk_bricks_height),
         get_compile_time_arg_val(kernel_args::writer_arg::query_chunk_bricks_width));
-    constexpr kernel_args::AxisExtents volume_chunks{
+    constexpr ShapeInChunks volume_chunks = ShapeInChunks::of(
         get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_time),
         get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_height),
-        get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_width)};
-    constexpr kernel_args::AxisExtents volume_bricks{
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_chunks_width));
+    constexpr ShapeInBricks volume_bricks = ShapeInBricks::of(
         get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_time),
         get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_height),
-        get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_width)};
-    constexpr uint32_t chunk_count = volume_chunks.time * volume_chunks.height * volume_chunks.width;
+        get_compile_time_arg_val(kernel_args::writer_arg::volume_bricks_width));
+    constexpr uint32_t chunk_count = volume_chunks.time() * volume_chunks.height() * volume_chunks.width();
 
     constexpr auto output_accessor_args = TensorAccessorArgs<kernel_args::writer_arg::COUNT>();
 
