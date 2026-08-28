@@ -1804,3 +1804,56 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+
+- name: DeepSeek-V3 unit tests (Galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 10
+      tier: 2
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 module tests (Galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3/tests -x \
+      -m "not t3k_compat" \
+      --ignore=models/demos/deepseek_v3/tests/unit \
+      --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
+      --timeout 600 --durations=0
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 45
+      tier: 2
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: DeepSeek-V3 TG MoE tests (Galaxy)
+  cmd: |
+    unset TT_METAL_WATCHER  # tests self-skip under watcher: #36312, #36314
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_combine_tg.py -v
+    MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_compute_tg.py -v
+    MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_optimized_moe_decode_block_tg.py -v
+  model: deepseek-v3
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+      tier: 2
+  owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
