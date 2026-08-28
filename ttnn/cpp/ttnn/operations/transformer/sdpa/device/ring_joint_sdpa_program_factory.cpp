@@ -255,16 +255,64 @@ RingWorkPlan build_ring_work_plan(
     // kernels never reach, poisoning is_last_active_ring_iter (never-fires normalization -> deadlock).
     const uint32_t num_ring_iters = std::min<uint32_t>(
         derivation.ring_size, 1u + ring_write_plan.backward_writes_expected + ring_write_plan.forward_writes_expected);
+
+    // True spatial-work activeness for a ring_id, mirroring the main loop's ring_iter_does_work minus
+    // joint. Used to place the replicated joint under windowing (see below).
+    auto spatial_iter_active = [&](uint32_t rid) -> bool {
+        uint32_t vs = 0;
+        for (uint32_t k = 0; k < derivation.num_local_k_chunks; ++k) {
+            const uint32_t lts = k * derivation.k_chunk_tile_count;
+            if (lts >= derivation.kv_local_padded_Nt) {
+                continue;
+            }
+            if (kv_global_tile_for_host_ring_plan(
+                    derivation.kernel_chunked,
+                    rid,
+                    lts,
+                    derivation.q_chunk_group_tile_count,
+                    derivation.q_local_padded_Nt,
+                    derivation.kv_local_padded_Nt) < derivation.logical_nt) {
+                vs++;
+            }
+        }
+        const bool hkw = (derivation.kernel_chunked && !derivation.kv_pad_rotation_enabled) || vs > 0;
+        return hkw && !(derivation.kernel_is_causal && ring_write_plan.device_index < rid && !is_balanced);
+    };
+
+    // Under a windowed gather a device may never visit ring_size-1, so the replicated joint (delivered
+    // locally, iteration-independent) must ride the LAST active iteration instead -- matching the
+    // kernels' is_last_active_ring_iter. Since the joint only ever rides an already spatial-active iter,
+    // that is the last spatial-active iter, found here by a pre-scan. Full-ring keeps ring_size-1.
+    const bool is_windowed = num_ring_iters < derivation.ring_size;
+    const bool replicated_joint_windowed = is_windowed && derivation.num_joint_k_chunks > 0 &&
+                                           derivation.joint_seq_len != 0 && !derivation.joint_is_sharded;
+    uint32_t windowed_joint_iter = 0;
+    if (replicated_joint_windowed) {
+        RingIdSequencer pscan(
+            ring_write_plan.device_index,
+            derivation.ring_size,
+            ring_write_plan.backward_writes_expected,
+            ring_write_plan.forward_writes_expected);
+        for (uint32_t ri = 0; ri < num_ring_iters; ++ri) {
+            const uint32_t rid = pscan.get_next_ring_id(noop_sync);
+            if (spatial_iter_active(rid)) {
+                windowed_joint_iter = ri;  // keep the last active one
+            }
+        }
+    }
+
     for (uint32_t ring_iter = 0; ring_iter < num_ring_iters; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         // Sharded joint: each ring iteration delivers one L/P shard immediately, so process
         // joint K/V on every ring iteration (no need to wait for the full gather to complete).
-        // Replicated joint: process joint when ring_id == ring_size-1
+        // Replicated joint: full ring processes it at ring_id == ring_size-1; a windowed gather rides
+        // the last active iteration instead (windowed_joint_iter above), matching the kernels.
         const bool has_joint_work = derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
-        // Whether this ring iteration is a candidate to consume joint K/V at all (sharded: every iter;
-        // replicated: when ring_id == ring_size-1, matching the kernel's do_joint_kv condition).
         const bool joint_iter_selected =
-            has_joint_work && (derivation.joint_is_sharded || ring_id == derivation.ring_size - 1);
+            has_joint_work &&
+            (derivation.joint_is_sharded ? true
+                                         : (replicated_joint_windowed ? (ring_iter == windowed_joint_iter)
+                                                                      : (ring_id == derivation.ring_size - 1)));
         // Count only the joint K chunks that carry REAL tokens, mirroring the kernel's
         // kv_chunk_is_beyond_logical_l skip: a joint chunk whose global start tile
         // (ring_id * joint_local_padded_Nt + k * k_chunk_tile_count) is at/after logical_lt is pure
