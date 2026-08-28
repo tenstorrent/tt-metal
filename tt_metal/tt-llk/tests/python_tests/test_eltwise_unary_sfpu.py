@@ -1082,21 +1082,19 @@ def test_eltwise_unary_sfpu_saturation(
 # format sweep asks whether each block format quantizes as modelled, which is op-independent
 # and so uses one pass-through op as its instrument.
 #
-# ONE EXPECTATION DID NOT HOLD, and it is worth writing down rather than implying. The plan
-# expected the verdict here to come from `_bfp_block_aware_compare`'s lattice path rather than
-# from the tolerance -- "this work item is what makes it earn its keep". On a Bfp8_b *output*
-# it does not: measured over Exp, Gelu, Silu and Sqrt at every spread, torch.isclose accepts
-# all 4096 elements, so the lattice is never reached (passed_test only falls through to it when
-# the tolerance has rejected something). That is not a gap in the stimulus -- the block really
-# does span the shared exponent, and 2816 of 4096 elements are flushed to zero at 2**-24 -- it
-# is that golden and hardware agree closely once both have been through the same output
-# quantization. Reaching the lattice would take an op whose *approximation* error is large
-# relative to its block, which is an accuracy question and not something to engineer into a
-# stimulus.
+# WHERE THE VERDICT COMES FROM, corrected. An earlier version of this comment said the
+# Bfp8_b lattice path was "never reached" -- measured over Exp, Gelu, Silu and Sqrt at every
+# spread, torch.isclose accepted all 4096 elements, so passed_test never fell through to it.
+# That was true of *this variant* and false as a general claim, which is a distinction worth
+# keeping: counting calls to _bfp_block_aware_compare across the whole block-float half of this
+# file gives 370, of which 112 are Bfp8_b -- so the tolerance does reject on other stimuli and
+# the fallback behind it is live.
 #
-# The format variant does exercise it, by construction rather than by luck: for a Bfp4_b or
-# Bfp2_b output passed_test has no tolerance pre-check at all and the lattice is the only
-# verdict.
+# The block spread reaches it on the narrower formats by construction rather than by luck: for
+# a Bfp4_b or Bfp2_b output passed_test has no tolerance pre-check at all and the lattice is the
+# only verdict (255 and 3 of those calls). On Bfp8_b this variant's own elements stay inside
+# atol, because golden and hardware agree closely once both have been through the same output
+# quantization -- which says the stimulus is well modelled, not that the comparator is dead.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BLOCK_ELEMENTS = 16

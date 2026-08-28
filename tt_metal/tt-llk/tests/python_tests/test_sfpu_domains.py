@@ -42,6 +42,7 @@ from helpers.sfpu_domains import (
     nan_sign_is_unspecified,
     nan_survives_to_l1,
     narrowest_range_format,
+    op_edge_points,
     ops_with_singularity,
     probe_spacing_format,
     sfpu_unary_ops,
@@ -507,6 +508,44 @@ def test_every_float_binary_op_is_classified_for_cat_b():
         assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
 
 
+def test_exact_at_zero_ops_all_contain_zero_in_their_domain():
+    """Zero must be inside every enrolled op's registered domain, or the probe is out of bounds.
+
+    This is what keeps the gamma family out without a second list. Digamma, Lgamma and Polygamma
+    have poles at zero and domains starting at 0.1, 1.0 and 0.5, so adding one here would drive
+    a value the kernel never promised anything about -- the same mistake the note above
+    _OP_SINGULARITIES warns against for their poles. Asserted rather than trusted, because the
+    membership tuple is hand-written and the domains are not.
+    """
+    from helpers.sfpu_domains import _EXACT_AT_ZERO_OPS, for_op
+
+    out_of_domain = []
+    for op in _EXACT_AT_ZERO_OPS:
+        spec = for_op(op, DataFormat.Float32).spec_A
+        if spec.intervals is not None or not (spec.low <= 0.0 <= spec.high):
+            out_of_domain.append(
+                f"{op.name} (domain {spec.intervals or [spec.low, spec.high]})"
+            )
+    assert not out_of_domain, (
+        "these ops are enrolled for the exact-value-at-zero probe but zero is outside their "
+        f"registered domain: {out_of_domain}"
+    )
+
+
+def test_exact_at_zero_probe_reaches_the_edge_sweep():
+    """The enrolment has to actually produce a probe, not just sit in a tuple.
+
+    op_edge_points() is what the edge sweep reads, and an op joins by appearing in
+    _OP_EDGE_POINTS -- this checks the two are wired together rather than the tuple being
+    declared and never merged in.
+    """
+    from helpers.sfpu_domains import _EXACT_AT_ZERO_OPS
+
+    for op in _EXACT_AT_ZERO_OPS:
+        knees = op_edge_points(op)
+        assert 0.0 in knees, f"{op.name} has no zero probe: {knees}"
+
+
 def test_every_unary_op_is_classified_for_cat_b():
     """Enrolled or recorded-as-not-ready, for every unary op the sweep drives.
 
@@ -750,7 +789,9 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
                 op in ops_with_singularity()
             ), f"{op.name} has no registered singularity"
         if cells[EdgeClass.B] == COVERED:
-            assert op in ready, f"{op.name} is not in any *_SPECIALS_READY_OPS"
+            assert (
+                op in ready or op in suite.specials_derived
+            ), f"{op.name} is in no *_SPECIALS_READY_OPS and has no derived-operand variant"
         if cells[EdgeClass.D] == COVERED:
             assert op_edge_points(op) or any(
                 op_edge_points(op, operand) for operand in Operand
@@ -775,13 +816,13 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
 # Cat G is 0 on purpose and is the honest state: nothing delivers a -0.0 to a pole yet. It is
 # in the table so that the day something does, the floor is the thing that gets raised.
 _COVERAGE_FLOORS = {
-    "A": 20,
-    "B": 79,
-    "C": 20,
-    "D": 45,
+    "A": 23,
+    "B": 88,
+    "C": 24,
+    "D": 59,
     "E": 5,
     "F": 23,
-    "G": 14,
+    "G": 17,
 }
 
 
@@ -957,6 +998,7 @@ def test_suite_coverage_is_resolved_from_the_suites():
         "integer_driven",
         "operand_parameters",
         "integer_extremes_excluded",
+        "specials_derived",
         "saturation",
         "float_driven",
         "extra_ops",

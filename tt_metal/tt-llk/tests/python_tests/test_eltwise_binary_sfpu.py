@@ -34,11 +34,13 @@ from helpers.sfpu_domains import (
     BINARY_SPECIALS_READY_OPS,
     SHIFT_EDGE_AMOUNTS,
     edge_pair_values,
+    edge_values,
     exclude_undefined_pair,
     for_op,
     format_extremes,
     generated_nan_sign_is_asserted,
     integer_specials,
+    nan_survives_to_l1,
     negative_zero_delivered,
     op_edge_points,
     ops_with_singularity,
@@ -1017,6 +1019,115 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
 
     spec_A, spec_B = _logsigmoid_stimuli_specs()
     sfpu_binary(formats, dest_acc, mathop, spec_A=spec_A, spec_B=spec_B)
+
+
+def _logsigmoid_derived_pairs(formats, dest_acc):
+    """(x, exp(-x)) pairs at the IEEE specials, for the one op whose operand B is derived.
+
+    Cat B everywhere else in this suite is edge_pair_values(), a cartesian *product* of two
+    independently-chosen lists. That is the right shape for `div(a, b)`, where both operands
+    are free, and the wrong one here: logsigmoid's contract is in1 == exp(-in0), so a NaN
+    placed in B against a finite A is not exp(-A) and the pair asserts nothing whichever way it
+    comes out. This derives B instead, which is the only way the probe means anything.
+
+    A's values come from edge_values() rather than a list, so the op enrols by the usual
+    machinery -- it has no pole and no knee, so with specials on that call returns exactly the
+    delivered specials, and the -0.0 gate applies to it as it does everywhere else.
+
+    Every derived pair is coherent: exp(-inf) = 0 pairs with the branch that reads B,
+    exp(+inf) = inf with the passthrough branch that does not, exp(-NaN) = NaN with whatever
+    the NaN comparison does, and exp(-0) = 1 with the polynomial arm.
+    """
+    x_values = edge_values(
+        MathOperation.SfpuLogsigmoid,
+        formats.input_format,
+        formats.output_format,
+        specials=True,
+        dest_acc=dest_acc,
+    )
+    x = torch.tensor(x_values, dtype=torch.float32)
+    return list(zip(x.tolist(), torch.exp(-x).tolist()))
+
+
+# What the derived probe found, measured on a Blackhole p150. One pair of the five, and it is
+# the NaN.
+#
+# calculate_logsigmoid seeds `result = x`, then negates (`x = -x`) before its branch select. A
+# NaN reaches SFPSETCC, whose contract is stated only for inputs that are "neither negative zero
+# nor any kind of NaN", takes the polynomial arm, and comes out *negated* -- so the kernel's
+# answer at a NaN input is a NaN with its sign bit set. The golden canonicalises an emitted
+# NaN's sign to positive, as it must: IEEE leaves the sign of an invalid-operation result
+# unspecified and SFPMAD promises the canonical 0x7fc00000 on Blackhole.
+#
+# Two conditions, and both are needed -- deriving on the first alone marks three cells that
+# pass, which is how the second was found.
+#
+#   The pack must narrow. While a NaN survives to L1 both sides are NaN and the comparator's
+#   both-NaN clause accepts them; the sign only becomes observable once the packer substitutes
+#   a *signed* infinity for a NaN it cannot write. That is nan_survives_to_l1()'s question.
+#
+#   The datum must arrive by the datacopy. Measured: the flip appears on a Float16_b input and
+#   not on a Float32 one at dest_acc=Yes, which is the unpack-to-dest split -- the same
+#   partition that decides whether a -0.0 or a subnormal survives the trip to the LREG. What
+#   SrcA does to a NaN's sign on the way through is not something this measurement establishes;
+#   that it is the same boundary as the other two is what it establishes.
+#
+# The other four pairs agree everywhere: exp(-inf) = 0 into the branch that reads B,
+# exp(+inf) = inf into the passthrough that does not, and exp(-0) = 1 into the polynomial.
+_LOGSIGMOID_NAN_SIGN_REASON = (
+    "logsigmoid(NaN) returns a sign-flipped NaN -- the polynomial arm negates, and SFPSETCC's "
+    "contract excludes a NaN operand -- so where the pack substitutes a signed infinity the "
+    "kernel gives -inf against the golden's +inf. Only where the pack narrows *and* the datum "
+    "arrived by the datacopy; a 32-bit input at dest_acc=Yes agrees."
+)
+
+
+def _logsigmoid_nan_sign_cells():
+    """The cells where the pack turns logsigmoid's NaN sign into an observable infinity."""
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
+        and not nan_survives_to_l1(fmt.input_format, fmt.output_format, dest_acc)
+        # negative_zero_delivered() is "did this arrive by unpack-to-dest", asked of the
+        # input leg. Reused rather than restated: it is the same predicate, and a second copy
+        # would let the two drift while looking identical.
+        and not negative_zero_delivered(fmt.input_format, dest_acc)
+    )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=[MathOperation.SfpuLogsigmoid],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_logsigmoid_specials(request, formats, dest_acc, mathop):
+    """IEEE specials in x, with operand B derived from it rather than drawn against it."""
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    if not specials_safe(formats.input_format, formats.output_format, dest_acc):
+        pytest.skip(
+            reason="this pipeline does not deliver non-finites intact "
+            "(see sfpu_domains.specials_safe)"
+        )
+
+    if (
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+    ) in _logsigmoid_nan_sign_cells():
+        request.node.add_marker(
+            pytest.mark.xfail(reason=_LOGSIGMOID_NAN_SIGN_REASON, strict=False)
+        )
+
+    pairs = _logsigmoid_derived_pairs(formats, dest_acc)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, torch.float32),
+    )
 
 
 @parametrize(

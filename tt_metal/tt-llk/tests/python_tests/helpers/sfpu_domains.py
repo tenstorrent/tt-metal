@@ -1958,6 +1958,46 @@ _ZERO_EDGE_OPS = (
     MathOperation.Xielu,  # _xielu switches alpha_p/alpha_n at 0
 )
 
+# Ops whose value at exactly zero is known and exactly representable, so a fit that is off by a
+# constant at the origin is visible there and nowhere else.
+#
+# These are smooth at zero rather than piecewise, so this is not a knee in the sense the
+# comment above describes -- it is an *exact-value* probe, and it earns its place for the same
+# reason a knee does: the registered domains are symmetric uniforms of order 1 to 8, and a
+# random draw over one lands on exactly 0.0 essentially never. What it pins:
+#
+#   erf(+/-0) = +/-0     tanh(+/-0) = +/-0     gelu(+/-0) = +/-0     expm1(+/-0) = +/-0
+#   I1(+/-0) = +/-0      power(+/-0) = 0       cast(+/-0) = +/-0
+#   erfc(+/-0) = 1       sigmoid(+/-0) = 0.5   gelu_derivative(+/-0) = 0.5
+#   tanh_derivative(+/-0) = 1                  rpow(+/-0) = 1
+#
+# Measured on a Blackhole p150 before enrolling; all fourteen agree within tolerance on every
+# cell, and two of them do so with a constant error the probe now holds in place:
+# erfc(+0) = 0.99612 and erfc(-0) = 1.00388 against 1.0 -- sign-asymmetric at the origin, which
+# nothing else in the suite would show -- and tanh_derivative(+/-0) = 0.99920 against 1.0 on a
+# 32-bit dest. Both are inside atol today; if either fit drifts, this is what reports it.
+#
+# The gamma family is absent and excludes *itself*: Digamma, Lgamma and Polygamma have poles at
+# zero and registered domains that start above it (0.1, 1.0, 0.5), so the membership test below
+# leaves them out without a second list to maintain. That is the same reasoning recorded above
+# _OP_SINGULARITIES for their poles -- a probe there tests a value the kernel never promised.
+_EXACT_AT_ZERO_OPS = (
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Gelu,
+    MathOperation.GeluDerivative,
+    MathOperation.Sigmoid,
+    MathOperation.SigmoidAppx,
+    MathOperation.Tanh,
+    MathOperation.TanhDerivative,
+    MathOperation.TanhDerivativeLut,
+    MathOperation.Expm1Cw,
+    MathOperation.I1,
+    MathOperation.Rpow,
+    MathOperation.UnaryPower,
+    MathOperation.CastFp32ToFp16a,
+)
+
 _COMPARISON_EDGE_OPS = (
     MathOperation.UnaryGt,
     MathOperation.UnaryLt,
@@ -1992,6 +2032,7 @@ _INT_ZERO_KNEE_OPS = (
 
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
+    **{op: (0.0, -0.0) for op in _EXACT_AT_ZERO_OPS},
     **{op: (0.0, 1.0) for op in _INT_ZERO_KNEE_OPS},
     # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(). UnaryEq and UnaryNe do not
     # -- they are outside _OP_DOMAIN_REGISTRY, so their consumer is
@@ -2873,9 +2914,11 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     # any contract about; the pair asserts nothing whichever way it comes out. Enrolling
     # logsigmoid needs a probe that derives B from A, which is a different mechanism from the
     # one this sweep has, not a different entry in this table.
-    MathOperation.SfpuLogsigmoid: "operand B is derived (in1 == exp(-in0)), and cat B here is "
-    "a product of two independently-chosen lists, so a special in B is not a stimulus the "
-    "kernel has a contract about. Needs a probe that derives B from A.",
+    MathOperation.SfpuLogsigmoid: "operand B is derived (in1 == exp(-in0)), and cat B *here* "
+    "is a product of two independently-chosen lists, so a special in B is not a stimulus the "
+    "kernel has a contract about. It stays out of this sweep for that reason and is driven "
+    "instead by test_eltwise_binary_sfpu_logsigmoid_specials, which derives B from A -- so "
+    "read this as 'not ready for the product mechanism', not as 'has no cat B'.",
     # (5) Not element-wise, so the sweep's whole shape does not fit it. add_top_row reduces one
     # tile's first row across the other operand, and BinarySFPUGolden returns for it *before*
     # the Dest and pack modelling -- it raises rather than reporting a generated-NaN mask. A
@@ -3477,6 +3520,11 @@ class SuiteCoverage:
     float_driven: FrozenSet[MathOperation] = frozenset()
     #: Ops taking an operand as a parameter -- a shift amount, a compile-time scalar (cat E).
     operand_parameters: FrozenSet[MathOperation] = frozenset()
+    #: Ops whose cat B is driven by a purpose-built variant rather than by the shared
+    #: product-of-two-lists sweep -- logsigmoid, whose operand B has to be derived from A. The
+    #: *_SPECIALS_READY_OPS gate governs the shared sweep only, so without this the ledger
+    #: reports "explained" for an op that is in fact covered.
+    specials_derived: FrozenSet[MathOperation] = frozenset()
     #: Ops driven at a magnitude extreme by a purpose-built saturation sweep rather than
     #: through EXTREMES_READY_OPS (cat F). The two halves of cat F have different gates --
     #: enrolment for the ops that cannot overflow, a hand-chosen probe list for the ones whose
@@ -3562,7 +3610,7 @@ def coverage_ledger(
             else "smooth everywhere: no entry in _OP_SINGULARITIES"
         )
 
-        if op in _CAT_B_READY:
+        if op in _CAT_B_READY or op in suite.specials_derived:
             cells[EdgeClass.B] = COVERED
         elif op in _CAT_B_NOT_READY:
             cells[EdgeClass.B] = _CAT_B_NOT_READY[op]
@@ -3683,13 +3731,19 @@ def suite_coverage_from_tests() -> SuiteCoverage:
         operand_parameters=frozenset(unary._UNARY_SHIFT_OPS)
         | frozenset(binary._SHIFT_EDGE_OPS)
         | frozenset(ternary._SCALAR_OPS),
+        specials_derived=frozenset({MathOperation.SfpuLogsigmoid}),
         saturation=frozenset(unary._SATURATION_PROBES)
         | frozenset(binary._BINARY_SATURATION_PAIRS),
         float_driven=frozenset(binary._CLASSIFIED_STIMULI_OPS)
         - frozenset(binary._INT_DRIVEN_BINARY_OPS)
         | frozenset(unary._EDGE_SWEEP_OPS),
+        # _CLASSIFIED_STIMULI_OPS is the binary suite's own declaration of what reaches
+        # sfpu_binary(). Without it, an op with no _OP_DOMAIN_REGISTRY entry is absent from the
+        # ledger entirely rather than under-reported -- SfpuLogsigmoid was, which is worse than
+        # a wrong cell because nothing in the totality checks can see an op that is not there.
         extra_ops=frozenset(binary._INT_DRIVEN_BINARY_OPS)
-        | frozenset(binary._INT_BINARY_STIMULI),
+        | frozenset(binary._INT_BINARY_STIMULI)
+        | frozenset(binary._CLASSIFIED_STIMULI_OPS),
     )
 
 

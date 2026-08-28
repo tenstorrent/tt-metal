@@ -12,7 +12,7 @@ have listed: that plan was written by reading code, and several of the items bel
 no amount of reading would have found.
 
 Numbering continues the plan's series, so the two files share one namespace and a reference to
-"W15" is unambiguous. W1–W8 and W10–W14 are closed.
+"W16" is unambiguous. W1–W8 and W10–W15 are closed.
 
 **Regenerate the numbers before trusting them:**
 
@@ -28,16 +28,20 @@ Every count in this document came from that command. It needs no hardware.
 
 | # | Gap | Effort | Value | Blocked by |
 |---|---|---|---|---|
-| [W15](#w15--eighteen-float-ops-have-no-deliberate-edge-value-at-all) | 18 float ops are driven only by the random sweep | M | Medium | — |
 | [W16](#w16--sfpulogsigmoid-needs-a-derived-operand-probe-to-join-cat-b) | `SfpuLogsigmoid` cannot join cat B through a product of independent lists | M | Low | — |
 | [W17](#w17--the-bfp8_b-lattice-path-still-has-no-caller) | `_bfp_block_aware_compare` is never reached on a Bfp8_b output | S | Low | — |
 | [W18](#w18--cat-fs-remaining-tranches) | 85 float ops are outside `EXTREMES_READY_OPS` | L | Low | — |
 | [W9](sfpu_edge_coverage_plan.md#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | M | Medium | needs a kernel-contract ruling |
 
-Suggested order: **W15 → W16 → W17**, then **W18** and **W9** last — W18 for diminishing
-returns, W9 because it cannot start until someone rules on what the trig kernels promise.
+Suggested order: **W16 → W17**, then **W18** and **W9** last — W18 for diminishing returns,
+W9 because it cannot start until someone rules on what the trig kernels promise.
 
-Six of the seven classes now have nothing unrecorded. Cat F is the exception, and it is W18.
+Six of the seven classes have nothing unrecorded. Cat F is the exception, and it is W18.
+
+Four ops still have no *covered* class at all, and all four are explained rather than
+outstanding: `Digamma`, `Lgamma` and `Polygamma` have poles at zero and registered domains that
+start above it, so every probe the suite could place would be a value the kernel never promised;
+`SfpuAddTopRow` is not element-wise, so the sweeps' whole shape misses it.
 
 ---
 
@@ -47,7 +51,7 @@ Six of the seven classes now have nothing unrecorded. Cat F is the exception, an
 A singularities          covered  20  n/a 109  unrecorded   0
 B ieee_specials          covered  79  n/a  50  unrecorded   0
 C integer_extremes       covered  20  n/a 109  unrecorded   0
-D knees                  covered  45  n/a  84  unrecorded   0
+D knees                  covered  59  n/a  70  unrecorded   0
 E operand_parameters     covered   5  n/a 124  unrecorded   0
 F magnitude_extremes     covered  23  n/a  21  unrecorded  85
 G signed_zero_at_a_pole  covered  14  n/a 115  unrecorded   0
@@ -56,46 +60,6 @@ G signed_zero_at_a_pole  covered  14  n/a 115  unrecorded   0
 `unrecorded` is a distinct state from `n/a` on purpose: it means nothing records whether the
 class applies, which is a different problem from a class that does not apply. Most of the work
 below is turning `unrecorded` into one or the other.
-
----
-
-## W15 — Eighteen float ops have no deliberate edge value at all
-
-### Problem
-
-The ledger's most direct output: these ops have no `COVERED` cell in any of the seven classes,
-so nothing but the random sweep has ever driven them at a value chosen on purpose.
-
-```
-CastFp32ToFp16a, Digamma, Erf, Erfc, Expm1Cw, Gelu, GeluDerivative, I1, Lgamma,
-Polygamma, Rpow, SfpuAddTopRow, Sigmoid, SigmoidAppx, Tanh, TanhDerivative,
-TanhDerivativeLut, UnaryPower
-```
-
-Nothing here is known to be *wrong*. The point is that each one is covered by a uniform draw
-over a registered domain and by nothing else — no pole, no knee, no special, no extreme.
-
-### Steps
-
-1. **Read their cat-B verdicts first.** Every op on this list now has one in
-   `_UNARY_SPECIALS_NOT_READY`, and for most of them it is "a LUT or polynomial fit evaluated
-   at a non-finite" — a cause, not an omission. That is the class they are least likely to
-   gain, so start from what is left rather than from cat B.
-
-2. **Then ask, per op, whether it has a knee worth registering.** `Erf` and `Erfc` saturate;
-   `Sigmoid` and `Tanh` saturate at both ends; `GeluDerivative` and `TanhDerivative` have a
-   maximum. A `_OP_EDGE_POINTS` entry is all it takes to enrol one, because the edge sweep
-   derives its ops.
-
-3. **Leave the gamma family alone**, and record that it is deliberate — the plan's "What stays
-   uncovered" section already explains why a probe at their poles tests a value the kernel never
-   promised.
-
-4. **Treat `SfpuAddTopRow` separately.** It is not element-wise — it returns before
-   `BinarySFPUGolden`'s Dest modelling and cannot report a generated-NaN mask — so it needs its
-   own decision rather than a shared one.
-
-**Cost:** mostly W12's. Each knee after that is a table entry.
 
 ---
 
