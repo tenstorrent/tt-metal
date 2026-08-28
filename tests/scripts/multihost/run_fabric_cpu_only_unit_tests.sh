@@ -714,6 +714,18 @@ for entry in \
   done
 done
 
+# Multi-solution host-cap sweep on the same SC36 mock: enumerate --all-solutions for the 32-stage ring, then run
+# the host-count gtest (SweepConsumer_SolutionSpansExpectedHosts, asserts 8 galaxies) per solution. #49629 blocks
+# the 64-stage superpod on aisleD, so the ring is used. --recover-command 'true' is a no-op (mock, only run on fail).
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${RING_STRESS_TIMEOUT} python3 tools/scaleout/sweep_rank_binding_solutions.py \
+    --mesh-graph-descriptor "${MGD_BLITZ_32}" \
+    --mock-cluster-rank-binding "${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}" \
+    --mpi-args "--allow-run-as-root --oversubscribe" \
+    --max-solutions 5 \
+    --per-solution-timeout ${RING_STRESS_TIMEOUT} \
+    --recover-command 'true' \
+    -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.SweepConsumer_SolutionSpansExpectedHosts:${GTEST_SUBTORUS_2X4_PIPELINE}"
+
 fi # bh-ring-stress
 
 ######################################

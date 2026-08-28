@@ -325,12 +325,51 @@ jobs:
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
               export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
-              # 31B: with hybrid KV groups disabled every layer allocates a
-              # full-length KV buffer, and the default all-user pool OOMs DRAM
-              # on QB2/T3K. Cap the pool (the real DRAM lever, distinct from
-              # --max_model_len). See tt-metal #49257 / #49083.
-              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ]; then
-                export GEMMA4_MAX_TOKENS_ALL_USERS=32768
+              # Wormhole: force the async-decode capability OFF.
+              #
+              # Dropping --async-scheduling from additional-server-args is NOT
+              # enough. Gemma4 advertises supports_async_decode from
+              # GEMMA4_SUPPORTS_ASYNC_DECODE, which defaults to "1", and the TT
+              # platform then turns async scheduling on by itself — run
+              # 32375657713 removed the flag and the server still logged
+              # "Asynchronous scheduling is enabled". Unlike the
+              # tt-inference-server model specs, this pipeline launches
+              # server_example_tt.py directly and never picks up the spec env,
+              # so the kill-switch has to be set here.
+              #
+              # Async decode is implicated in the WH-T3K-only decode hang
+              # (#49494) and measures no throughput benefit on WH at
+              # concurrency 32, so WH legs run without it. Blackhole legs keep
+              # async on and are unaffected by this branch.
+              if [ "${{ matrix.test-group.arch }}" = "arch-wormhole_b0" ]; then
+                export GEMMA4_SUPPORTS_ASYNC_DECODE=0
+                echo "Gemma4 WH: GEMMA4_SUPPORTS_ASYNC_DECODE=0 (async decode disabled on Wormhole)"
+              fi
+              # 31B/12B: hybrid-OFF allocates a full-length KV buffer per layer, so
+              # the all-user pool must match the served max_model_len (BH 256k /
+              # WH-T3K 16k). Blindly pinning 262144 OOMs Wormhole T3K (run
+              # 30270375854). See tt-metal #49257 / #49083.
+              if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] || [ "$HF_MODEL" = "google/gemma-4-12B-it" ]; then
+                MAX_MODEL_LEN=""
+                for ((i = 0; i < ${#ADDITIONAL_SERVER_ARGS[@]}; i++)); do
+                  if [ "${ADDITIONAL_SERVER_ARGS[$i]}" = "--max_model_len" ] && [ $((i + 1)) -lt ${#ADDITIONAL_SERVER_ARGS[@]} ]; then
+                    MAX_MODEL_LEN="${ADDITIONAL_SERVER_ARGS[$((i + 1))]}"
+                    break
+                  fi
+                done
+                export GEMMA4_MAX_TOKENS_ALL_USERS="${MAX_MODEL_LEN:-262144}"
+                export GEMMA4_VLLM_SINGLE_CHUNK=0
+                export GEMMA4_DEMO_SINGLE_CHUNK=0
+                export GEMMA4_CHUNKED_PREFILL_TRACE=1
+                # WH T3K 31B: pin metal prefill chunk to 2048 (12 GB/ASIC headroom).
+                # Keep chunked-prefill *trace* on — sp0 capture hard-clears the
+                # sliding persistent ring so compile/capture match (see
+                # _release_sliding_prefill_tail(clear_persistent=True)).
+                if [ "$HF_MODEL" = "google/gemma-4-31B-it" ] && [ "${{ matrix.test-group.mesh-device }}" = "T3K" ]; then
+                  export GEMMA4_GEN_PREFILL_CHUNK=2048
+                  echo "Gemma4 WH-T3K: GEMMA4_GEN_PREFILL_CHUNK=$GEMMA4_GEN_PREFILL_CHUNK"
+                fi
+                echo "Gemma4 KV pool: GEMMA4_MAX_TOKENS_ALL_USERS=$GEMMA4_MAX_TOKENS_ALL_USERS (from max_model_len=${MAX_MODEL_LEN:-default})"
               fi
               ;;
           esac
