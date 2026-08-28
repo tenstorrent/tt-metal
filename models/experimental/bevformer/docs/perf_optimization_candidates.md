@@ -6,7 +6,8 @@ here becomes `landed` with a link to its report.
 
 Numbers quoted below as *cost* come from the baseline profile
 ([00-baseline.md](perf_reports/00-baseline.md)): one encoder layer, N150, 655.6 ms kernel +
-2416.5 ms host gap = 3072.1 ms wall. The layer today is 682 ms kernel + 8.9 ms of steady-state gap.
+2416.5 ms host gap = 3072.1 ms wall. The layer today is **489.5 ms kernel + 14.0 ms gap** after
+[stage 04](perf_reports/04-fused-msda.md); costs quoted against the baseline are historical.
 
 ## Candidates
 
@@ -17,10 +18,11 @@ Numbers quoted below as *cost* come from the baseline profile
 | [1b](#1b-bound-max_len-statically) | bound `max_len` statically | gap, trace | +129 ms kernel to unlock ~9 ms gap | M | high | **[rejected](perf_reports/DEAD_ENDS.md#3-a-static-bound-on-max_len)** |
 | [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
 | [1d](#1d-per-call-constant-uploads) | cache what is frame-invariant | gap | −56.4 ms encoder wall (−1.3%) | S | none | **landed — [03](perf_reports/03-constant-uploads-cached.md)** |
-| [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | up to 613 ms | M | med | todo |
-| [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel | ~60 ms | M | low | todo |
-| [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | todo |
+| [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
+| [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | ~24 ms | S | low | todo — **rescoped by 2** |
+| [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1b |
+| [6](#candidate-6--msdaoperation-itself) | `MSDAOperation` device time | kernel | **143 ms** | ? | ? | todo — upstream |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -82,8 +84,15 @@ full data in that entry.
 `max_len` is a data-dependent shape, so it forces the `bev_mask` readback that keeps the encoder from
 being trace-capturable. A bound is derivable — the coverage ratio is a stable camera-FOV property —
 but cost is exactly linear in it, the naive bound does not fit in DRAM at all, and a sensible one
-costs +129 ms of kernel against the ~9 ms of gap trace capture could return. Re-test after candidate
-2, which owns both the memory ceiling and most of the per-row cost.
+costs +129 ms of kernel against the ~9 ms of gap trace capture could return. This entry expected
+candidate 2 to relieve it, on the theory that 2 owned both the memory ceiling and most of the
+per-row cost.
+
+**It does not — tested, not assumed.** [Stage 04](perf_reports/04-fused-msda.md) left the ceiling
+exactly where it was: SCA at `bev_size=(200,200)` fails with the same
+`Out of Memory: … 2969567232 B DRAM buffer`, byte-for-byte identical before and after the fused op.
+The allocation is in the sampling-location math upstream of the op, which 2 never touched. 1b stays
+rejected on its original terms, and stays rejected for the same reason.
 
 **1b gates candidate 5**, and nothing else in candidate 1 needs it.
 
@@ -126,6 +135,24 @@ not a candidate.
 ---
 
 ## Candidate 2 — fused MSDA
+
+**Landed** — [stage 04](perf_reports/04-fused-msda.md), −191.6 ms kernel (−28.1%), −190.6 ms layer
+wall, PCC 0.999611 against 0.999608. `GridSample` and `Concat` are both gone from the profile.
+
+Two things the entry below got wrong, corrected by the measurement:
+
+- **SCA does not need a host-side weighted sum.** `attention_weights` is softmaxed jointly over
+  `L*P` and thereafter only summed, so the joint sum decomposes exactly into per-level sums. Four
+  fused calls plus an L-way `ttnn.add` on device, exact.
+- **The fused op is slower than the sampling it replaces** — 24.4 ms vs 16.8 ms at TSA, 143.3 ms
+  vs 99.2 ms at SCA. The entire win is deleting the `stack`/`mul`/`sum` tail it makes unnecessary.
+  That cost is now [candidate 6](#candidate-6--msdaoperation-itself).
+
+Prior art that would have saved the derivation: `models/experimental/vadv2/tt/tt_utils.py` already
+runs this op, with the tensor-shuffle recipe and a measured `N*Q >= 1024` floor below which the
+decomposition wins.
+
+What it was:
 
 Replace the hand-rolled multi-scale deformable attention with
 `ttnn.experimental.multi_scale_deformable_attn`
@@ -195,6 +222,21 @@ Hard constraints from
 
 ## Candidate 3 — tile padding waste
 
+**Rescoped by [stage 04](perf_reports/04-fused-msda.md): ~60 ms → ~24 ms, and the fix changed.**
+The two `Permute` sites below were inside the MSDA decomposition and no longer exist; `ReshapeView`
+dropped 157 → 77 ms for the same reason. What survives is the `BinaryNg` site — the `div` by
+`offset_normalizer`, 23.9 ms, profiler row 506 of `2026_08_27_23_24_32`. It sits *upstream* of the
+fused op, in the sampling-location math, which candidate 2 did not touch.
+
+**The better fix is already in the tree.** `fold_offset_normalizer_into_weight`
+(`models/experimental/vadv2/tt/tt_utils.py`) pre-scales the `sampling_offsets` Linear weight and
+bias by `1/[W, H]`, so the division never runs at all — rather than un-padding it as this entry
+proposes. Exact (`s·(Wx+b) == (Wx+b)/norm`), computed once. It is written for `num_levels == 1`, but
+the Linear output is laid out `(L, P, 2)`, so a per-`(level, axis)` static scale vector generalizes
+it to SCA.
+
+The original entry, for the record:
+
 Exposed by the baseline, not previously listed. Several TILE ops compute almost entirely on padding:
 
 | op | logical shape | padded to | waste | cost |
@@ -216,6 +258,16 @@ sites.
 Candidate 2 may delete some of these sites outright. Sequence 3 after 2.
 
 ## Candidate 4 — the MSDA concat
+
+**Moot — deleted by [stage 04](perf_reports/04-fused-msda.md).** The fused op returns `(N, Q, D)`
+already reduced over the sampling points, so there is no per-level list to stack. `Concat` went
+115.5 ms → **0**, and the 74.9 ms reshape that followed it went with it.
+
+This entry was ordered *before* candidate 2 on the grounds that it was cheap and self-contained.
+That was wrong: 2 subsumes it, and doing 4 first would have been discarded work. When one candidate
+rewrites the region another one lives in, sequence the rewrite first.
+
+What it was:
 
 The single most expensive op in the layer: **113.5 ms**, one `ConcatDeviceOperation` stacking four
 `[32, 2484, 1, 4]` ROW_MAJOR tensors into `[32, 2484, 4, 4]` on 64 cores. That is 1.27 MB of output
@@ -247,6 +299,32 @@ has measured it. Treat 5 as low-value, not as blocked high-value.
 Both perf harnesses document the current blocker in their module docstrings; update them when it
 lifts.
 
+## Candidate 6 — `MSDAOperation` itself
+
+New, created by [stage 04](perf_reports/04-fused-msda.md). The fused op is now **the single largest
+cost in the layer**: 167.6 ms total, 143.3 ms of it the four SCA calls at ~35.9 ms each.
+
+It is more expensive than the sampling it absorbed:
+
+| | old `GridSample` | new `MSDAOperation` |
+|---|---:|---:|
+| TSA (1 level) | 16.8 ms | 24.4 ms |
+| SCA (4 levels) | 99.2 ms | 143.3 ms |
+
++45% per sample. The op still wins because it deletes 215 ms of tail, but that says the tail was
+bad, not that the kernel is good. VADv2 independently measured a floor of `N*Q >= 1024` below which
+the decomposition beats it — consistent with a real launch/packing overhead.
+
+This is an **upstream** item, not a model-side one:
+
+- [ ] Standalone microbenchmark of `ttnn.experimental.multi_scale_deformable_attn` at BEVFormer's
+      SCA shapes (`N=48, Q=2496, P=4, D=32`) against a bare `ttnn.grid_sample` at the same shapes.
+- [ ] If the gap reproduces, file it against the op with the numbers.
+
+Also in the region and cheaper to attack from this side: **~103 ms of per-level layout prep**
+(`Untilize`/`Transpose`/`Slice`/`Permute`/`Tilize`, ×4). Some is genuinely per-level; the
+tilize↔untilize churn around each call is not obviously necessary and is model-side work.
+
 ---
 
 ## Ordering
@@ -256,16 +334,29 @@ lifts.
    to unlock ~9 ms of gap, and candidate 2 owns the memory ceiling that caps it.
 3. ~~**1c**~~ — landed, −94.6 ms encoder wall.
 4. ~~**1d**~~ — landed, −56.4 ms encoder wall. **Candidate 1 is complete.**
-5. **4** — one op, 113 ms, cheap to try.
-6. **2** — the big kernel lever; 613 ms of kernel is the two MSDA calls. Measure the fused op at TSA
-   shapes before committing to the rewrite.
-7. **3** — ~60 ms, but candidate 2 may delete some of the sites. Sequence after 2.
-8. **5** — needs 1b, and is worth ≤9 ms/layer rather than the 218 ms first claimed. Only revisit if
+5. ~~**2**~~ — landed, −191.6 ms kernel (−28.1%). **Was ordered after 4 and should not have been.**
+6. ~~**4**~~ — never run; [deleted by 2](perf_reports/04-fused-msda.md).
+7. **6** — 143 ms, the largest single cost now. Microbenchmark before anything else; the answer may
+   belong upstream rather than in this model.
+8. **3** — ~24 ms after rescoping, and the fix (fold the normalizer into the Linear weight) is
+   already written in `vadv2`. Cheapest remaining model-side win.
+9. **5** — needs 1b, and is worth ≤9 ms/layer rather than the 218 ms first claimed. Only revisit if
    an encoder-harness measurement shows per-forward host time the layer profile does not.
 
 The baseline settled what was previously a guess: host round-trips dominated wall clock 4:1 over
 kernel time, and within kernel time it is layout churn, not arithmetic — matmul is 0.7%. Nothing in
-the matmul-tuning playbook applies here. After stage 01 the ratio has inverted — kernel is 77% of
-wall clock — so 4 and 2 are the live levers and the rest of candidate 1 is cleanup. Re-measurement
-sharpens that: **kernel is 99% of layer wall clock**, steady-state gap is 8.9 ms. There is no
-host-gap lever left at the layer level.
+the matmul-tuning playbook applies here. Stage 01 inverted the ratio; stage 04 then took −28% of
+kernel by deleting the layout churn around the sampler rather than by making arithmetic faster.
+
+**Kernel is 97% of layer wall clock and the two MSDA calls are 88% of the kernel** — still the only
+region worth working, but the character has changed. The churn is largely gone and what remains is
+one expensive device op. That makes 6 the live question and it is an op-level one, which is a
+different kind of work than everything above it in this list.
+
+Two lessons this backlog got wrong and should not repeat:
+
+- **Sequence rewrites before the cleanups inside them.** 4 was ranked first for being cheap; 2
+  deleted it.
+- **Grep the tree for prior art before deriving an op contract.** `vadv2` had a working
+  `multi_scale_deformable_attn` call site, a measured shape floor, and the offset-normalizer fold —
+  all three relevant, none referenced here until stage 04.
