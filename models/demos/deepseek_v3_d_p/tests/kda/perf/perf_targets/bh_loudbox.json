@@ -14,9 +14,9 @@
   },
   "provenance": {
     "measured_at_commit": "003156d7b4a053876991ebe8e7de2a9ce15306ae",
-    "runtime_contract_reviewed_through_commit": "43cb43e9f07",
+    "runtime_source_sha256": "4e9ad55b33a8c6a446c5f9b27ff74912fd7bf42d6b000cf43d7b987632c1d352",
     "measured_at_utc": "2026-08-28",
-    "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample; later runtime commits through 43cb43e9f07 were reviewed as behavior-preserving"
+    "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample; the pinned runtime-source delta after measurement was reviewed as behavior-preserving"
   },
   "targets": {
     "SP1xTP8": {

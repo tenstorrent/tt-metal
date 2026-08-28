@@ -79,7 +79,7 @@ models/demos/deepseek_v3_d_p/reference/kda/tests/
 Hermetic and real-weight correctness, excluding perf:
 
 ```bash
-KIMI_K3_CKPT=/path/to/pinned/kimi-k3 KDA_PERF_SKU=bh_loudbox \
+KIMI_K3_CKPT=/path/to/pinned/kimi-k3 \
 scripts/run_safe_pytest.sh --run-all \
   models/demos/deepseek_v3_d_p/tests/kda \
   models/demos/deepseek_v3_d_p/reference/kda/tests \
@@ -97,7 +97,7 @@ scripts/run_safe_pytest.sh \
 Required performance matrix:
 
 ```bash
-KIMI_K3_CKPT=/path/to/pinned/kimi-k3 \
+KIMI_K3_CKPT=/path/to/pinned/kimi-k3 KDA_PERF_SKU=bh_loudbox \
 scripts/run_safe_pytest.sh --run-all \
   models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py -q -s
 ```

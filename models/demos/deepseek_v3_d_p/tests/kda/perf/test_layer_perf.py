@@ -65,6 +65,15 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
     return hashlib.sha256(memoryview(storage)).hexdigest()
 
 
+def _runtime_source_sha256() -> str:
+    runtime_dir = Path(__file__).parents[3] / "tt" / "kda"
+    fingerprint = hashlib.sha256()
+    for source_path in sorted(runtime_dir.glob("*.py")):
+        fingerprint.update(source_path.name.encode())
+        fingerprint.update(source_path.read_bytes())
+    return fingerprint.hexdigest()
+
+
 def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     reference_dir = Path(inspect.getfile(kda_forward_reference)).parent
     fingerprint = hashlib.sha256()
@@ -159,6 +168,8 @@ def kimi_k3_production_reference(
 
 def _load_perf_target(layout: str, *, sequence: int, repetitions: int, timing_samples: int) -> tuple[float, float]:
     targets = json.loads(_PERF_TARGETS_PATH.read_text(encoding="utf-8"))
+    if targets["provenance"]["runtime_source_sha256"] != _runtime_source_sha256():
+        raise ValueError("KDA runtime sources changed after LoudBox calibration review; rebaseline or review the delta")
     calibrated_sku = targets["sku"]
     if os.environ.get("KDA_PERF_SKU") != calibrated_sku:
         raise ValueError(f"set KDA_PERF_SKU={calibrated_sku} to opt in to this hardware-specific performance gate")

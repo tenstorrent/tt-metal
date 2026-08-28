@@ -13,11 +13,8 @@ import torch
 from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import (
-    normalize_kda_a_log,
-    required_kda_weight_names,
-    validate_kda_weights,
-)
+from models.demos.deepseek_v3_d_p.reference.kda.weights import required_kda_weight_names, validate_kda_weights
+from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_a_log
 
 KIMI_K3_FIRST_KDA_LAYER = 1
 KIMI_K3_HF_REVISION = "9f62e4e9fffbd0a83ddd60e1c209d828994b3569"

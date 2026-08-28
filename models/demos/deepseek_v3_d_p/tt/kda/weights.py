@@ -82,6 +82,8 @@ class KDAWeights:
         if cache_path is None:
             return False
         cache_path = Path(cache_path)
+        if not cache_path.is_dir():
+            return False
         checker = FastCacheChecker(cache_path)
         mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
         for name in _cache_artifact_names(config):
