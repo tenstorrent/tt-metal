@@ -1196,47 +1196,26 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 }
 
 #if defined(FABRIC_2D)
-// clang-format off
-/**
- * Splits one multicast operation across the root's output connections. The complete route is encoded
- * once into one shared header, then that immutable header is submitted through every selected output.
- *
- * Requires one direction-tagged connection per root output and exactly one header in the route.
- * Missing connections fail-stop rather than delivering to only part of the range.
- *
- * Source-local delivery is not part of this API: injection bypasses the source RX, and only the
- * Ethernet outputs in the root action are used.
- *
- * Return value: None
- *
- * | Argument                   | Description                             | Type                                       | Required |
- * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
- * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
- * | route_id                   | Route holding the shared packet header  | uint8_t                                    | True     |
- * | dst_dev_id                 | Range anchor device id                  | uint16_t                                   | True     |
- * | dst_mesh_id                | Range anchor mesh id                    | uint16_t                                   | True     |
- * | ranges                     | Multicast extents (E/W/N/S)             | const MeshMcastRange&                      | True     |
- * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
- * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
- * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
- */
-// clang-format on
-FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
-    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+namespace detail {
+
+struct PreparedMulticastRouteFanout {
+    volatile PACKET_HEADER_TYPE* packet_header;
+    uint8_t root_outputs;
+};
+
+// Acquires the route's single shared header and encodes a same-mesh multicast tree once, anchored at
+// the manager's source chip. Inter-mesh multicast retains its explicit anchor in the lower-level API.
+FORCE_INLINE PreparedMulticastRouteFanout prepare_multicast_route_fanout(
     uint8_t route_id,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const MeshMcastRange& ranges,
-    uint32_t src_addr,
-    uint32_t size,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
+    const tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    const MeshMcastRange& ranges) {
     auto [packet_header, num_headers] = PacketHeaderPool::header_table[route_id];
     ASSERT(num_headers == 1);
 
     const uint8_t root_action = fabric_set_2d_mcast_route(
         packet_header,
-        dst_dev_id,
-        dst_mesh_id,
+        connection_manager.my_chip_id,
+        connection_manager.my_mesh_id,
         ranges.e,
         ranges.w,
         ranges.n,
@@ -1245,9 +1224,16 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
         FABRIC_2D_MESH_X_SIZE);
     const uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
     ASSERT(root_outputs != 0);
+    return {packet_header, root_outputs};
+}
 
-    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    uint8_t pending_outputs = root_outputs;
+template <bool SendPayload>
+FORCE_INLINE void submit_multicast_route_fanout_impl(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    const PreparedMulticastRouteFanout& fanout,
+    [[maybe_unused]] uint32_t src_addr = 0,
+    [[maybe_unused]] uint32_t size = 0) {
+    uint8_t pending_outputs = fanout.root_outputs;
     connection_manager.for_each([&](auto& sender, uint32_t, uint32_t tag) {
         if (tag >= static_cast<uint32_t>(eth_chan_directions::COUNT)) {
             return;
@@ -1258,11 +1244,169 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
         }
         pending_outputs &= static_cast<uint8_t>(~output_bit);
         sender.wait_for_empty_write_slot();
-        sender.send_payload_without_header_non_blocking_from_address(src_addr, size);
+        if constexpr (SendPayload) {
+            sender.send_payload_without_header_non_blocking_from_address(src_addr, size);
+        }
         sender.send_payload_flush_non_blocking_from_address(
-            reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+            reinterpret_cast<uint32_t>(fanout.packet_header), sizeof(PACKET_HEADER_TYPE));
     });
     ASSERT(pending_outputs == 0);
+}
+
+FORCE_INLINE void submit_multicast_route_fanout_with_payload(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    const PreparedMulticastRouteFanout& fanout,
+    uint32_t src_addr,
+    uint32_t size) {
+    submit_multicast_route_fanout_impl<true>(connection_manager, fanout, src_addr, size);
+}
+
+FORCE_INLINE void submit_multicast_route_fanout_header_only(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager, const PreparedMulticastRouteFanout& fanout) {
+    submit_multicast_route_fanout_impl<false>(connection_manager, fanout);
+}
+
+}  // namespace detail
+
+// clang-format off
+/**
+ * Issues one multicast write across the root's output connections. The complete route is encoded
+ * once into one shared header, then that immutable header is submitted through every selected output.
+ * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ *
+ * Requires one direction-tagged connection per root output and exactly one header in the route.
+ * Missing connections fail-stop rather than delivering to only part of the range.
+ *
+ * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
+ * Ethernet outputs in the root action are used.
+ *
+ * Return value: None
+ *
+ * | Argument                   | Description                             | Type                                       | Required |
+ * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
+ * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
+ * | route_id                   | Route holding the shared packet header  | uint8_t                                    | True     |
+ * | ranges                     | Multicast extents (E/W/N/S)             | const MeshMcastRange&                      | True     |
+ * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
+ * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
+ * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
+    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    fanout.packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    detail::submit_multicast_route_fanout_with_payload(connection_manager, fanout, src_addr, size);
+}
+
+// clang-format off
+/**
+ * Issues one multicast atomic increment across the root's output connections. The complete route and
+ * atomic command are populated once in one shared header, then submitted through every selected output.
+ * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ *
+ * Requires one direction-tagged connection per root output and exactly one header in the route.
+ * Missing connections fail-stop rather than delivering to only part of the range.
+ *
+ * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
+ * Ethernet outputs in the root action are used.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                           | Required |
+ * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
+ * | route_id                              | Route holding the shared packet header  | uint8_t                                        | True     |
+ * | ranges                                | Multicast extents (E/W/N/S)             | const MeshMcastRange&                          | True     |
+ * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const MeshMcastRange& ranges,
+    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    fanout.packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
+    detail::submit_multicast_route_fanout_header_only(connection_manager, fanout);
+}
+
+// clang-format off
+/**
+ * Issues one fused multicast write and atomic increment across the root's output connections. The
+ * complete route and fused command are populated once in one shared header.
+ * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ *
+ * Requires one direction-tagged connection per root output and exactly one header in the route.
+ * Missing connections fail-stop rather than delivering to only part of the range.
+ *
+ * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
+ * Ethernet outputs in the root action are used.
+ *
+ * Return value: None
+ *
+ * | Argument                                    | Description                            | Type                                                   | Required |
+ * |---------------------------------------------|----------------------------------------|--------------------------------------------------------|----------|
+ * | connection_manager                          | Routing plane connection manager       | RoutingPlaneConnectionManager&                         | True     |
+ * | route_id                                    | Route holding the shared packet header | uint8_t                                                | True     |
+ * | ranges                                      | Multicast extents (E/W/N/S)            | const MeshMcastRange&                                  | True     |
+ * | src_addr                                    | Source L1 address                      | uint32_t                                               | True     |
+ * | size                                        | Payload size in bytes                  | uint32_t                                               | True     |
+ * | noc_fused_unicast_atomic_inc_command_header | Fused command header                   | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader  | True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
+    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    fanout.packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
+    detail::submit_multicast_route_fanout_with_payload(connection_manager, fanout, src_addr, size);
+}
+
+// clang-format off
+/**
+ * Issues one fused two-chunk multicast scatter write and atomic increment across the root's output
+ * connections. The complete route and fused command are populated once in one shared header.
+ * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ *
+ * Requires one direction-tagged connection per root output and exactly one header in the route.
+ * Missing connections fail-stop rather than delivering to only part of the range.
+ *
+ * Source-local delivery is not part of this API: the operation bypasses the source RX, and only the
+ * Ethernet outputs in the root action are used.
+ *
+ * Return value: None
+ *
+ * | Argument                                          | Description                            | Type                                                          | Required |
+ * |---------------------------------------------------|----------------------------------------|---------------------------------------------------------------|----------|
+ * | connection_manager                                | Routing plane connection manager       | RoutingPlaneConnectionManager&                                | True     |
+ * | route_id                                          | Route holding the shared packet header | uint8_t                                                       | True     |
+ * | ranges                                            | Multicast extents (E/W/N/S)            | const MeshMcastRange&                                         | True     |
+ * | src_addr                                          | Source L1 address                      | uint32_t                                                      | True     |
+ * | size                                              | Payload size in bytes                  | uint32_t                                                      | True     |
+ * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter and atomic header       | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader   | True     |
+ */
+// clang-format on
+FORCE_INLINE void fabric_multicast_source_inject_noc_fused_scatter_write_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    const MeshMcastRange& ranges,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header) {
+    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    fanout.packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
+        noc_unicast_scatter_atomic_inc_fused_command_header, size);
+    detail::submit_multicast_route_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 #endif
 
