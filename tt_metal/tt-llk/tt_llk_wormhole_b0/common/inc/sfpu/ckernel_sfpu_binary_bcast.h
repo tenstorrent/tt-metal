@@ -403,7 +403,7 @@ inline void _process_col_normalize_row_band_(
     const std::uint32_t slot2 = right_face_addr;
     const std::uint32_t slot3 = right_face_addr + ODD_COLS_OFFSET;
 
-    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, mean_col0_addr);
+    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, mean_col0_addr);
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
     _broadcast_stage3_with_data_prefetch_(data_tile_offset + slot0, data_tile_offset + slot1, data_tile_offset + slot2, data_tile_offset + slot3);
 
@@ -413,7 +413,7 @@ inline void _process_col_normalize_row_band_(
     TTI_SFPADD(LREG_DATA2, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA2, 0);
     TTI_SFPADD(LREG_DATA3, p_sfpu::LCONST_1, LREG_TMP, LREG_DATA3, 0);
 
-    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_7, inv_std_col0_addr);
+    TT_SFPLOAD(LREG_BCAST, IM, ADDR_MOD_3, inv_std_col0_addr);
     lltt::replay(REPLAY_SLOT_BROADCAST, REPLAY_LEN_BROADCAST);
     _broadcast_stage3_preserve_data_();
 
@@ -422,10 +422,10 @@ inline void _process_col_normalize_row_band_(
     TTI_SFPMUL(LREG_DATA2, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA2, 0);
     TTI_SFPMUL(LREG_DATA3, LREG_BCAST, p_sfpu::LCONST_0, LREG_DATA3, 0);
 
-    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_7, out_tile_offset + slot0);
-    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_7, out_tile_offset + slot1);
-    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_7, out_tile_offset + slot2);
-    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_7, out_tile_offset + slot3);
+    TT_SFPSTORE(LREG_DATA0, IM, ADDR_MOD_3, out_tile_offset + slot0);
+    TT_SFPSTORE(LREG_DATA1, IM, ADDR_MOD_3, out_tile_offset + slot1);
+    TT_SFPSTORE(LREG_DATA2, IM, ADDR_MOD_3, out_tile_offset + slot2);
+    TT_SFPSTORE(LREG_DATA3, IM, ADDR_MOD_3, out_tile_offset + slot3);
 }
 
 inline void _calculate_sfpu_normalize_bcast_col_full_tile_(
@@ -794,7 +794,7 @@ inline void _sfpu_binary_bcast_init_()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_3);
+        .set(ADDR_MOD_7);
 
     if constexpr (Dim == BroadcastType::COL)
     {
