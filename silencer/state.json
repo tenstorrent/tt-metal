@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-08-27",
+  "last_scan_date": "2026-08-28",
   "scanned_run_ids": [
     "30387358745",
     "30493606319",
@@ -224,18 +224,19 @@
       "category": "5-log-spam-dedupe",
       "validation_workflow_dispatched": "models-t2-e2e-tests",
       "dispatch_model": "llama3.1-8b",
-      "status": "open-pr",
-      "note": "New PR opened this run. Deduplicated warning using std::set<tuple> log-once pattern matching physical_system_discovery.cpp's warned_mobo_names. models-t2-e2e-tests (llama3.1-8b) dispatched on branch for validation. Awaiting outcome next run."
+      "status": "resolved",
+      "number": 54679,
+      "note": "Reconciled this run: validation run 33128101235 (models-e2e-tests, Llama 3.1-8B) job 98712383111 completed/success. Re-grepped last-5000-line sample: 3 occurrences of 'Fabric packet size' (down from 232 pre-fix), each an identical-value triple across separate process/test boundaries within the job - consistent with intended per-process dedup, not per-worker-iteration spam. Outcome commented (/codeowners ping) and marked ready for review (2026-08-28). No further Silencer action needed."
     },
     {
       "branch": "silencer/matmul-tensor-accessor-args-unused-warning",
-      "status": "open-pr",
-      "number": null,
+      "status": "reported-inconclusive",
+      "number": 54732,
       "source_run_id": "33158955938",
       "source_job_id": "98810775872",
       "workflow": "models-t3-unit-tests.yaml",
       "dispatched_model": "bert-large",
-      "note": "PR opened to silence -Wunused-but-set-variable for in0_args/out_args TensorAccessorArgs in matmul reader/writer kernels (only read on the un-sharded preprocessor branch). Marked [[maybe_unused]] matching existing moe_compute/moe_gpt precedent. Dispatched models-t3-unit-tests (bert-large) on this branch for CI validation; needs reconciliation next run."
+      "note": "Reconciled this run: validation run 33171870759 (models-t3-unit-tests) job 98852300426 completed/success. Re-grepped last-3488-line sample: 0 occurrences of in0_args/out_args/reader_bmm_tile_layout_in0/reader_writer_bmm_tile_layout_in1/unused-but-set-variable - but the tail-anchored sample likely does not cover the earlier JIT-compile step, so absence is not proof. Outcome commented (/codeowners ping) noting this gap; left PR in draft (not marked ready) pending a maintainer or future run checking the full (non-truncated) build log for the compile lines directly."
     }
   ],
   "backlog_cursor": "continue rotation to next untracked workflow after models-t3-unit-tests.yaml, e.g. models-t3-e2e-tests.yaml or perf-device-models.yaml"
