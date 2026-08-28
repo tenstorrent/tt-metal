@@ -23,15 +23,18 @@ for by name:
 * **device sampling** - slot stability, greedy against host argmax, and per-slot
   heterogeneous top-k/top-p/temperature.
 
-The padded-vocabulary claim is **not** here: Llama's 128256 is already a
-multiple of ``8 vocab shards * 32``, so ``padded_vocab_size == vocab_size`` and
-there is nothing to mask. See the Qwen file, and
-``models/common/tests/models/galaxy/test_step7_sampling.py``.
+* **the padded vocabulary can never be sampled.** This was written as "not
+  applicable to Llama", on the premise that 128256 is already a multiple of
+  ``8 vocab shards * 32``. That premise is **false at this tree**:
+  ``galaxy_padded_vocab_size(128256) == 129024``, because the width must also be
+  a whole number of 24-core ring rows per device (D-B19), so Llama carries **768**
+  invalid ids. The case is therefore live for Llama too, and it is below.
 
-**This file has never been executed.** It was written on 2026-08-27 with eleven
-of the mesh's 32 boards off the PCIe bus, so ``ttnn`` could not open a cluster
-at all. Every threshold is the plan's; every staging decision is a hypothesis.
-Treat a first run as bringup, not as a regression.
+This file was written on 2026-08-27 with eleven of the mesh's 32 boards off the
+PCIe bus, so ``ttnn`` could not open a cluster at all, and it was committed
+unexecuted. It was **first executed on 2026-08-27/28 by `mb-coverage` attempt
+2**; what each case measured is in
+``tttv2_milestone_b_evidence/coverage/REPORT.md`` §A2.
 
 Run::
 
@@ -118,12 +121,25 @@ def _prompt(length: int) -> list[int]:
 
 
 def _distinct_rows(length: int, count: int) -> list[list[int]]:
-    """``count`` distinct prompts of ``length`` tokens, from one reference text."""
+    """``count`` distinct prompts of ``length`` tokens, from one reference text.
+
+    The reference file holds 1024 tokens, so the straight window walk below runs
+    out at ``length + count > 1024`` - which is every concat-32 length at or
+    above 1024, exactly the lengths the step-7 brief asks for last. Rather than
+    *skip* those (a skip is not a result), fall back to cyclic windows: rotation
+    ``r`` of a 1024-token text is still real text and still distinct from
+    rotation ``r'``, and the property under test - that row ``i``'s KV and logits
+    do not depend on row ``j`` - does not care whether the rows share tokens.
+    `mb-coverage` attempt 2 added the fallback; the exact-window path is
+    unchanged, so every result taken before it is comparable.
+    """
 
     reference_tokens, _ = load_reference_tokens(_REFERENCE_NAME)
     source = [int(value) for value in reference_tokens]
     if len(source) < length + count:
-        pytest.skip(f"reference sequence has {len(source)} tokens, need {length + count}")
+        if len(source) < count:
+            pytest.skip(f"reference sequence has {len(source)} tokens, need at least {count}")
+        return [[source[(offset + index) % len(source)] for index in range(length)] for offset in range(count)]
     return [source[offset : offset + length] for offset in range(count)]
 
 
@@ -172,7 +188,7 @@ def test_llama_paged_and_contiguous_caches_agree(mesh_device: ttnn.MeshDevice):
 @_PARAMS
 @_GALAXY
 @torch.no_grad()
-def test_llama_paged_capacity_resolved_after_construction_serves_a_request(mesh_device: ttnn.MeshDevice):
+def test_llama_paged_capacity_resolved_after_construction_serves_a_request(mesh_device: ttnn.MeshDevice, expect_error):
     """Late capacity resolution, end to end.
 
     The model is built with no paged geometry at all; the block pool is chosen
@@ -191,7 +207,7 @@ def test_llama_paged_capacity_resolved_after_construction_serves_a_request(mesh_
         assert all(spec.paged_attention_config == pool for spec in model.kv_specs)
 
         with GalaxyDirectRunner(model) as runner:
-            with pytest.raises(RuntimeError, match="cannot be reconfigured"):
+            with expect_error(RuntimeError, "cannot be reconfigured"):
                 model.configure_paged_attention(block_size=32, max_num_blocks=pool.max_num_blocks + 32)
             logits = runner.prefill_row(prompt, slot=0)
             assert 0 <= int(torch.argmax(logits[0])) < model.vocab_size
@@ -449,6 +465,50 @@ def test_llama_device_greedy_sampling_equals_host_argmax(mesh_device: ttnn.MeshD
 
         mismatched = [slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(sampled[slot]) != int(expected[slot])]
         assert not mismatched, f"device greedy disagreed with host argmax in slots {mismatched}"
+    finally:
+        _close(handle)
+
+
+@_PARAMS
+@_GALAXY
+@pytest.mark.parametrize(
+    "policy",
+    [
+        pytest.param(GalaxySamplingPolicy(top_k=1, temperature=0.0, on_device=True), id="greedy"),
+        pytest.param(GalaxySamplingPolicy(top_k=32, top_p=1.0, temperature=1.5, seed=7, on_device=True), id="t1.5"),
+        pytest.param(GalaxySamplingPolicy(top_k=8, top_p=0.9, temperature=0.5, seed=7, on_device=True), id="t0.5"),
+    ],
+)
+@torch.no_grad()
+def test_llama_no_padded_vocabulary_id_is_ever_sampled(mesh_device: ttnn.MeshDevice, policy):
+    """Llama pads 128256 up to 129024; those 768 ids are not tokens.
+
+    Added by `mb-coverage` attempt 2. The file was written asserting the
+    opposite - that Llama has no padding at all - and at this tree that is
+    false: ``galaxy_padded_vocab_size`` rounds the *per-device* width up to a
+    whole number of 24-core ring rows (D-B19), which 128256 // 8 = 16032 is not.
+    An invalid id winning is a correctness bug, not a rounding issue, so this
+    runs at three policies. ``T == 1.0`` is skipped on purpose - it is its own
+    reciprocal and would hide a temperature inversion (defect D4).
+    """
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        vocab_size = handle.model.vocab_size
+        padded_vocab_size = handle.model.padded_vocab_size
+        assert padded_vocab_size > vocab_size, "this test is only meaningful for a padded vocabulary"
+        print(f"[vocab] llama vocab={vocab_size} padded={padded_vocab_size} invalid={padded_vocab_size - vocab_size}")
+
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            sampled = runner.decode_sampled(tokens, positions, policy)
+
+        invalid = [(slot, int(value)) for slot, value in enumerate(sampled) if int(value) >= vocab_size]
+        assert not invalid, f"padded vocabulary ids were sampled: {invalid}"
     finally:
         _close(handle)
 

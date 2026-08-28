@@ -8,23 +8,25 @@ The Llama counterpart is
 and it carries the reasoning for each case. This file covers the same gaps for
 Qwen plus the one claim that is Qwen-only:
 
-* **the padded vocabulary can never be sampled.** Qwen's 151936 is not a
-  multiple of ``8 vocab shards * 32``, so ``padded_vocab_size`` is 152064 and
-  128 ids are invalid. Llama's 128256 already is a multiple, so Llama has no
-  padding and its version of this gate is vacuous - the reason the case lives
-  here and not there.
+* **the padded vocabulary can never be sampled.** Qwen's 151936 pads to
+  ``galaxy_padded_vocab_size`` **153600** - the ring-exact width, 1664 invalid
+  ids, not the 128 of the minimal alignment (D-B19). The claim that Llama needs
+  no such case was **wrong**: 128256 pads to 129024, 768 invalid ids, for the
+  same ring-exactness reason. `mb-coverage` attempt 2 added the Llama twin.
 
-**Blocked upstream, and never executed.** As of 2026-08-27:
+**The two blockers in this banner are gone.** Both were true when the file was
+written on 2026-08-27 and neither is true now:
 
-* Qwen3-32B's weights are not on this machine. Only ``config.json`` is cached,
-  so ``hf_config_or_skip`` passes and ``from_pretrained`` then fails on the
-  safetensors. Roughly 65 GB has to be fetched into ``/proj_sw/user_dev/hf_data``
-  before any of this can run;
-* eleven of the mesh's 32 boards were off the PCIe bus, so ``ttnn`` could not
-  open a cluster at all.
+* the Qwen3-32B checkpoint **is** on this machine, under
+  ``HF_HOME=/localdev/ctr-apbernal/hf_data`` - not ``/proj_sw/user_dev/hf_data``,
+  which holds Llama only. `mb-qwen` attempt 2 qualified the whole model on
+  silicon from it;
+* the mesh is whole: ``ls /sys/class/tenstorrent | wc -l`` is 32 and an 8x4
+  cluster opens.
 
-No Qwen result from silicon exists in this tree, of any kind. Treat every
-threshold here as the plan's, and a first run as bringup.
+This file was **first executed on 2026-08-27/28 by `mb-coverage` attempt 2**;
+what each case measured is in
+``tttv2_milestone_b_evidence/coverage/REPORT.md`` §A2.
 
 Run::
 
@@ -119,10 +121,25 @@ def _prompt(length: int) -> list[int]:
 
 
 def _distinct_rows(length: int, count: int) -> list[list[int]]:
+    """``count`` distinct prompts of ``length`` tokens, from one reference text.
+
+    The reference file holds 1024 tokens, so the straight window walk below runs
+    out at ``length + count > 1024`` - which is every concat-32 length at or
+    above 1024, exactly the lengths the step-7 brief asks for last. Rather than
+    *skip* those (a skip is not a result), fall back to cyclic windows: rotation
+    ``r`` of a 1024-token text is still real text and still distinct from
+    rotation ``r'``, and the property under test - that row ``i``'s KV and logits
+    do not depend on row ``j`` - does not care whether the rows share tokens.
+    `mb-coverage` attempt 2 added the fallback; the exact-window path is
+    unchanged, so every result taken before it is comparable.
+    """
+
     reference_tokens, _ = load_reference_tokens(_REFERENCE_NAME)
     source = [int(value) for value in reference_tokens]
     if len(source) < length + count:
-        pytest.skip(f"reference sequence has {len(source)} tokens, need {length + count}")
+        if len(source) < count:
+            pytest.skip(f"reference sequence has {len(source)} tokens, need at least {count}")
+        return [[source[(offset + index) % len(source)] for index in range(length)] for offset in range(count)]
     return [source[offset : offset + length] for offset in range(count)]
 
 
@@ -162,7 +179,7 @@ def test_qwen_paged_and_contiguous_caches_agree(mesh_device: ttnn.MeshDevice):
 @_PARAMS
 @_GALAXY
 @torch.no_grad()
-def test_qwen_paged_capacity_resolved_after_construction_serves_a_request(mesh_device: ttnn.MeshDevice):
+def test_qwen_paged_capacity_resolved_after_construction_serves_a_request(mesh_device: ttnn.MeshDevice, expect_error):
     prompt = _prompt(128)
     handle = _load(mesh_device, paged_attention_config=None)
     try:
@@ -172,7 +189,7 @@ def test_qwen_paged_capacity_resolved_after_construction_serves_a_request(mesh_d
         model.configure_paged_attention(block_size=pool.block_size, max_num_blocks=pool.max_num_blocks)
 
         with GalaxyDirectRunner(model) as runner:
-            with pytest.raises(RuntimeError, match="cannot be reconfigured"):
+            with expect_error(RuntimeError, "cannot be reconfigured"):
                 model.configure_paged_attention(block_size=32, max_num_blocks=pool.max_num_blocks + 32)
             logits = runner.prefill_row(prompt, slot=0)
             assert 0 <= int(torch.argmax(logits[0])) < model.vocab_size
@@ -368,7 +385,7 @@ def test_qwen_device_greedy_sampling_equals_host_argmax(mesh_device: ttnn.MeshDe
 )
 @torch.no_grad()
 def test_qwen_no_padded_vocabulary_id_is_ever_sampled(mesh_device: ttnn.MeshDevice, policy):
-    """Qwen pads 151936 up to 152064; those 128 ids are not tokens.
+    """Qwen pads 151936 up to 153600; those 1664 ids are not tokens.
 
     An invalid id winning is a correctness bug, not a rounding issue, so this
     runs at three policies: greedy, and two temperatures either side of 1.0.
