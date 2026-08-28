@@ -145,8 +145,13 @@ pytest models/experimental/voxtral_tts/tests/test_request_path_repeatability.py
 # Per-stage timings and RTF, gated against per-stage ceilings
 pytest models/experimental/voxtral_tts/tests/test_perf.py
 
+# End-to-end intelligibility, one gate per language: the full request path, transcribed
+# back with whisper-large-v3 and scored against the prompt. ~35 min, 100 runs.
+pytest models/experimental/voxtral_tts/tests/test_wer_languages.py
+pytest models/experimental/voxtral_tts/tests/test_wer_languages.py -k hindi   # one language
+
 # All on-device tests are marked `slow`, at module level. `-m "not slow"` is the
-# host-only subset: 122 tests, ~45 s, no device and no checkpoint needed.
+# host-only subset: 136 tests, ~45 s, no device and no checkpoint needed.
 ```
 
 **Gate on real prompts, never random activations.** Random embeddings are off-manifold and read
