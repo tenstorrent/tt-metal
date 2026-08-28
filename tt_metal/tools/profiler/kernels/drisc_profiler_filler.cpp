@@ -332,7 +332,7 @@ void kernel_main() {
     uint64_t c_barrier = 0;  // write barrier before staging is reused
     // `write` sub-split: the chunked NoC write moves bytes (and can block on command-buffer
     // availability), push_pages is local bookkeeping, notify_receiver is a PCIe write.
-    uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see ship_batch)
+    uint64_t c_ph_head = 0;  // the per-core head write-back inside proc (see advance_heads)
     uint64_t c_wr_chunk = 0;
     uint64_t c_wr_push = 0;
     uint64_t c_wr_notify = 0;
@@ -1026,22 +1026,19 @@ void kernel_main() {
                     slot_core[sl] = static_cast<uint8_t>(c);
                 };
 
-                auto ship_batch = [&](uint32_t n, uint32_t g) {
+                // Heads go out the moment the batch's read barrier passes -- NOT with the frame emit.
+                // The emit is pipelined one batch behind (the egress overlaps the next gather), and a head
+                // that rides it hands every producer an extra batch of visible-head lag (~4-5 us of ring
+                // occupancy) for no reason: the payload is resident in staging once the read barrier has
+                // passed, so those ring slots are free regardless of when the frame reaches the host.
+                auto advance_heads = [&](uint32_t n, uint32_t g) {
                     const uint64_t t_p0 = kInstr != 0 ? get_timestamp() : 0;
-                    // c_self joins the nested term because self_publish RESTORES c_reserve/c_write, so without it a
-                    // mid-batch self publish would be charged to `proc`.
-                    const uint64_t flush_at = c_reserve + c_write + (kSelfZones != 0 ? c_self : 0);
-                    // PROC as an ordinary RAII scope over the whole batch, so its children (the credit wait and the
-                    // write inside emit_slots) nest under it.
                     kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PROC, SelfMarkPhase> z_proc(
                         self_mark_phase);
                     for (uint32_t i = 0; i < n; i++) {
                         const uint32_t sl = g * kGenSlots + i;
                         const uint32_t c = slot_core[sl];
                         uint32_t* mine = &head_mirror[c * kNumRisc];
-                        // HEAD WRITE-BACK: it releases the producer, and is safe at once -- the payload is
-                        // resident in staging (this generation's read barrier passed), so those ring slots
-                        // are free regardless of when the frame reaches the host.
                         uint64_t t_h0 = 0;
                         if constexpr (kSvcInstr != 0) {
                             t_h0 = get_timestamp();
@@ -1086,6 +1083,10 @@ void kernel_main() {
                         frames++;
                         total_words += live;
                     }
+                    c_proc += kInstr != 0 ? (get_timestamp() - t_p0) : 0;
+                };
+
+                auto ship_frames = [&](uint32_t n, uint32_t g) {
                     // A LISTED CORE is live by construction, so the batch having cores IS the work signal.
                     if constexpr (kSelfZones != 0) {
                         if (!self_on && n != 0) {
@@ -1096,25 +1097,8 @@ void kernel_main() {
                     if (!egress_dead) {
                         gen_shipped[g] = true;
                     }
-                    // SATURATING: the nested emit_slots time is subtracted so it is not double-counted, but an unsigned
-                    // wrap here once produced "proc 18727729111430.1%".
-                    {
-                        const uint64_t t_p1 = kInstr != 0 ? get_timestamp() : 0;
-                        const uint64_t span = t_p1 - t_p0;
-                        const uint64_t nested = (c_reserve + c_write + (kSelfZones != 0 ? c_self : 0)) - flush_at;
-                        c_proc += (span > nested) ? (span - nested) : 0;
-                    }
-                    // z_proc closes here: PROC spans the whole batch, i.e. c_proc plus its nested children, which is
-                    // what a Tracy parent is.
                 };
 
-                // A batch's FIRST frame may go WIDE (spill into the generation's second slot) when its
-                // core is genuinely backlogged, and the batch then carries that one frame. This is how a
-                // capture-onset backlog (every ring full) drains in one visit instead of trickling out
-                // over three capped sweeps that hold the already-blocked producers for a flat ~130 stalls.
-                // The trigger must sit well above the cap: per-sweep production RIDES the cap at the
-                // lowest workable delays, and a wide frame there would burn a whole generation on an
-                // ordinary core, halving the pipeline depth that bought the low-end knee.
                 uint32_t cur = 0;
                 while (cur < n_ship) {
 
@@ -1180,11 +1164,11 @@ void kernel_main() {
                     // The overlap: the previous batch's PCIe writes go out on NOC_INDEX while the gather reads
                     // above fly on kReadNoc.
                     if (have_pend) {
-                        ship_batch(pend_n, pend_gen);
+                        ship_frames(pend_n, pend_gen);
                     }
 
                     // Issue cost plus only the wait REMAINING after the concurrent ship. Timing to the barrier instead
-                    // would swallow ship_batch and double-count it against c_proc -- it did, and phases summed 133%.
+                    // would swallow the frame emit and double-count it against c_proc -- it did, and phases summed 133%.
                     const uint64_t t_after_proc = kInstr != 0 ? get_timestamp() : 0;
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ_WAIT, SelfMarkPhase> z_wait(
@@ -1192,6 +1176,7 @@ void kernel_main() {
                         noc.async_read_barrier();
                     }
                     const uint64_t t_read_end = kInstr != 0 ? get_timestamp() : 0;
+                    advance_heads(n, gen);
                     c_issue += t_issue - t_batch0;
                     c_read += (t_issue - t_batch0) + (t_read_end - t_after_proc);
 
@@ -1201,7 +1186,7 @@ void kernel_main() {
                     gen = gen + 1u == kNGens ? 0u : gen + 1u;
                 }
                 if (have_pend) {
-                    ship_batch(pend_n, pend_gen);
+                    ship_frames(pend_n, pend_gen);
                     have_pend = false;
                 }
             }
