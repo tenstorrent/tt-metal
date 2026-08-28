@@ -7,6 +7,7 @@
 #include "kernels/conv3d_gather_tuning.hpp"
 #include "kernels/conv3d_weight_share.hpp"
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -205,6 +206,10 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }}},
     });
 
+    // fp32-exact output path: whenever the conv computes in fp32 with fp32 dest, the tail
+    // (bias add, untilize, and -- with multiple C_in blocks -- the partial reduction) reads its
+    // fp32 tiles back through UnpackToDestFp32 + SFPU instead of the TF32-rounding Src path.
+    bool use_fp32_exact = fp32_dest_acc_en && data_format == tt::DataFormat::Float32;
     // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
     // This eliminates bf16 truncation between C_in block partial sums.
     bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
@@ -262,6 +267,24 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(cb_worker_ack_back_id),
                 .data_format = data_format,
                 .page_size = tile_size,
+            }}},
+        });
+    }
+
+    // fp32 running-partial accumulator for the exact reduction (see reduce_block_fp32_sfpu in the
+    // compute kernel). It, and cb_reduction_tiled, are the only CBs delivered UnpackToDestFp32 --
+    // their sole unpacker is the reduction loop -- so the bias/untilize consumers of the interm CB
+    // stay on the default unpack path.
+    uint32_t cb_reduction_acc_tiled_id = 32;
+    if (use_fp32_partials && use_fp32_exact) {
+        cb_reduction_acc_tiled_id = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = matmul_M_t * matmul_N_t * partial_tile_size,
+            .core_ranges = CoreRangeSet(core_grid),
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_reduction_acc_tiled_id),
+                .data_format = partial_data_format,
+                .page_size = partial_tile_size,
             }}},
         });
     }
@@ -826,9 +849,27 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         out_subblock_h,
         out_subblock_w,
         semaphore_id,
-        (uint32_t)use_fp32_partials,
+        (uint32_t)use_fp32_exact,
         // Stream final output rows only for many small output writes when there is a writer tail to overlap.
-        (uint32_t)(enable_streaming_output ? 1 : 0)};
+        (uint32_t)(enable_streaming_output ? 1 : 0),
+        cb_reduction_acc_tiled_id};
+
+    // Deliver the fp32 partial CBs UnpackToDestFp32: without it the unpacker rounds their tiles to
+    // TF32 on the way into DST, re-truncating the values the fp32 CBs exist to protect -- the
+    // reduction loop's running partial (acc/reduction CBs) and the finished output the untilize
+    // reads back (interm CB). Every consumer of these CBs on this path is flag-compatible: the
+    // reduction and bias adds are copy_tile/SFPU-based (add_bias_inplace_sfpu exists because the
+    // FPU bcast add cannot read a flagged CB), and untilize honors the flag. Empty (default) when
+    // partials are not fp32.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
+    if (use_fp32_exact) {
+        unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        unpack_to_dest_mode[cb_matmul_interm_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        if (use_fp32_partials) {
+            unpack_to_dest_mode[cb_reduction_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[cb_reduction_acc_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/compute.cpp";
@@ -839,6 +880,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 
