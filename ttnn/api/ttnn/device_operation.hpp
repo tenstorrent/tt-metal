@@ -330,6 +330,14 @@ void create_and_cache_mesh_workload(
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
+            if constexpr (requires {
+                              mesh_device_operation_t::validate_after_program_cache_miss(
+                                  operation_attributes, tensor_args, tensor_return_value, cached_workload.workload);
+                          }) {
+                mesh_device_operation_t::validate_after_program_cache_miss(
+                    operation_attributes, tensor_args, tensor_return_value, cached_workload.workload);
+            }
+
             // Don't cache programs during NO_DISPATCH graph capture mode because
             // buffer addresses are invalid (address=0). Caching such programs would
             // cause issues when later running in NORMAL mode.

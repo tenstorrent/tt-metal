@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -54,6 +55,10 @@ public:
 
     // Used in ops.
     std::vector<std::shared_ptr<CircularBuffer>> circular_buffers() const;
+
+    // Post-realization diagnostics for Metal 2.0 programs.
+    uint32_t total_local_dataflow_buffer_size() const;
+    uint32_t get_dataflow_buffer_entry_size(const std::string& name) const;
 
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }

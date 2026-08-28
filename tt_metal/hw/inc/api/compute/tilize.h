@@ -70,13 +70,14 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 #endif
 }
 
-#if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
 // clang-format off
 /**
  * Short initializes the tilize operation with reduction.
  *
  * | Param Type | Name             | Description                          | Type     | Valid Range | Required |
  * |------------|------------------|--------------------------------------|----------|-------------|----------|
+ * | Template   | reduce_op        | Reduction operation                  | PoolType | MAX/AVG     | True     |
+ * | Template   | reduce_dim       | Reduction dimension                  | ReduceDim | ROW/COL/SCALAR | True |
  * | Template   | neginf_srcA      | NegInf source A flag                 | bool     | true/false  | False    |
  * | Template   | zero_srcA_reduce | Zero source A for reduce flag        | bool     | true/false  | False    |
  * | Function   | icb0             | Input circular buffer A identifier   | uint32_t | 0 to 31     | True     |
@@ -87,15 +88,29 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
  * set_unpack_face_geometry / set_tile_dims on the host.
  */
 // clang-format on
-template <bool neginf_srcA = true, bool zero_srcA_reduce = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    PoolType reduce_op,
+    ReduceDim reduce_dim,
+    bool neginf_srcA = true,
+    bool zero_srcA_reduce = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tilizeA_B_reduce_init(
     uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1_scaler, call_line);
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
         icb0, icb1_scaler, block)));
-    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(icb0, icb1_scaler)));
+    MATH((llk_math_reduce_init<reduce_op, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb0, icb1_scaler)));
 }
-#endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
+
+#if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
+// Compatibility wrapper for kernels that have not yet migrated their reduction selection
+// from compiler defines to explicit constexpr template arguments.
+template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
+ALWI void tilizeA_B_reduce_init(
+    uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t call_line = __builtin_LINE()) {
+    tilizeA_B_reduce_init<REDUCE_OP, REDUCE_DIM, neginf_srcA, zero_srcA_reduce>(icb0, icb1_scaler, block, call_line);
+}
+#endif
 
 #ifndef ARCH_QUASAR
 // clang-format off

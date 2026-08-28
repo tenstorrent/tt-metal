@@ -129,6 +129,13 @@ struct DataflowBufferSpec {
     // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
 
+    // Byte offset from the borrowed memory object's per-node base address. This
+    // preserves legacy globally allocated CB views that occupy a subrange of a
+    // sharded tensor without allocating another DFB or copying data. A nonzero offset must be aligned
+    // both to entry_size (so the view begins on a DFB entry boundary) and to the backing buffer's
+    // L1/NoC address alignment (so the absolute base + offset remains a legal NoC address).
+    uint32_t borrowed_memory_offset = 0;
+
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////

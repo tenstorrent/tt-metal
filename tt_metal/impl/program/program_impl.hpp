@@ -35,6 +35,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
@@ -219,6 +220,8 @@ public:
     const std::vector<Semaphore>& semaphores() const;
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
         const;
+    uint32_t total_local_dataflow_buffer_size() const;
+    uint32_t get_dataflow_buffer_entry_size(const std::string& name) const;
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
@@ -426,8 +429,9 @@ public:
 
     // Metal 2.0: register that DFB `dfb_id` borrows its backing L1 memory from the MeshTensor
     // bound to `tensor_parameter_name`.
-    void register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name);
-    const std::vector<std::pair<uint32_t, std::string>>& get_dfb_borrowed_bindings() const;
+    void register_dfb_borrowed_binding(
+        uint32_t dfb_id, const std::string& tensor_parameter_name, uint32_t memory_offset);
+    const std::vector<std::tuple<uint32_t, std::string, uint32_t>>& get_dfb_borrowed_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
@@ -572,8 +576,8 @@ private:
         };
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
 
-        // Borrowed-memory DFB bindings: each entry is (dfb_id, tensor_parameter_name).
-        std::vector<std::pair<uint32_t, std::string>> dfb_borrowed_bindings;
+        // Borrowed-memory DFB bindings: (dfb_id, tensor_parameter_name, byte offset).
+        std::vector<std::tuple<uint32_t, std::string, uint32_t>> dfb_borrowed_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 
