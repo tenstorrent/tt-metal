@@ -14,7 +14,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-enum class ElementwiseOperation { ADD, SUBTRACT, MULTIPLY };
+enum class ElementwiseOperation { ADD, SUBTRACT };
 enum class ChunkInputPolicy { RETAIN, CONSUME };
 
 FORCE_INLINE constexpr uint32_t largest_divisor_at_most(uint32_t value, uint32_t limit) {
@@ -69,8 +69,6 @@ FORCE_INLINE void elementwise(uint32_t a_id, uint32_t b_id, uint32_t output_id, 
         add_init(a_id, b_id);
     } else if constexpr (Operation == ElementwiseOperation::SUBTRACT) {
         sub_init(a_id, b_id);
-    } else {
-        mul_init(a_id, b_id);
     }
     for (uint32_t block_start = 0; block_start < Count; block_start += dst_tiles) {
         const uint32_t remaining = Count - block_start;
@@ -80,8 +78,6 @@ FORCE_INLINE void elementwise(uint32_t a_id, uint32_t b_id, uint32_t output_id, 
             add_block(a_id, b_id, block_start, block_start, 0, block_tiles);
         } else if constexpr (Operation == ElementwiseOperation::SUBTRACT) {
             sub_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        } else {
-            mul_block(a_id, b_id, block_start, block_start, 0, block_tiles);
         }
         tile_regs_commit();
         tile_regs_wait();
