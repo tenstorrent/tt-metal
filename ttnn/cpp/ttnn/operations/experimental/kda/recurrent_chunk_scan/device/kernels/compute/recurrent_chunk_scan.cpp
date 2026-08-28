@@ -96,6 +96,7 @@ FORCE_INLINE void multiply_by_decay(
     output.reserve_back(count);
     reconfig_data_format(state_id, decay_id);
     mul_bcast_cols_init(state_id, decay_id);
+    // Batch independent tiles to amortize destination-register lifecycle overhead.
     for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
         const uint32_t remaining = count - block_start;
         const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
