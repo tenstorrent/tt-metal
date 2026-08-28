@@ -442,14 +442,14 @@ template <typename S>
 ComputeBlock<S>::ComputeBlock(Block<S> block) : cb_id(block.cb_id) {
     block.consume();
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    cb_wait_front(cb_id, num_pages);
+    buffer(cb_id).wait_front(num_pages);
 #endif
 }
 
 template <typename S>
 ComputeBlock<S>::~ComputeBlock() {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    cb_pop_front(cb_id, num_pages);
+    buffer(cb_id).pop_front(num_pages);
 #endif
 }
 
@@ -544,7 +544,7 @@ Block<S> NocAsyncReadTx<thread, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         noc_async_read_barrier();
-        cb_push_back(cb_id, num_pages);
+        buffer(cb_id).push_back(num_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
@@ -579,7 +579,7 @@ Block<S> NocAsyncMcastTx<thread, S>::wait() const {
         // inside noc_load; moving it here is the next step and a behaviour change, so it
         // is not smuggled into this one. `data_sent` and `sender` are carried for it.
         noc_async_read_barrier();
-        cb_push_back(cb_id, num_pages);
+        buffer(cb_id).push_back(num_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
@@ -603,7 +603,7 @@ NocAsyncWriteTx<thread, S>::~NocAsyncWriteTx() {
         // Writes have DEPARTED local L1 -- the release condition for the source
         // buffer. Not the same as having landed; see wait().
         noc_async_writes_flushed();
-        cb_pop_front(cb_id, num_pages);
+        buffer(cb_id).pop_front(num_pages);
     }
 #endif
 }
@@ -628,7 +628,7 @@ NocAsyncReadCoreTx<thread, D, S>::~NocAsyncReadCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         // The source is the peer's L1; the local Block is only a handle.
-        cb_pop_front(src_cb, src_pages);
+        buffer(src_cb).pop_front(src_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ASSERT(waited);
@@ -641,7 +641,7 @@ Block<D> NocAsyncReadCoreTx<thread, D, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         noc_async_read_barrier();  // landed HERE, which is all a pull needs
-        cb_push_back(dst_cb, dst_pages);
+        buffer(dst_cb).push_back(dst_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
@@ -672,7 +672,7 @@ NocAsyncWriteCoreTx<thread, D, S>::~NocAsyncWriteCoreTx() {
         // this kernel has finished, against whatever runs next. The watcher calls
         // it "kernel completing with pending NOC transactions".
         noc_async_atomic_barrier();
-        cb_pop_front(src_cb, src_pages);
+        buffer(src_cb).pop_front(src_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ASSERT(waited);
@@ -691,7 +691,7 @@ Block<D> NocAsyncWriteCoreTx<thread, D, S>::wait(uint32_t num_writers) const {
             // synchronize_cores() between them is enough. See noc_core_write.
             arrived.wait(num_writers).set(0);
         }
-        cb_push_back(dst_cb, dst_pages);
+        buffer(dst_cb).push_back(dst_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
@@ -711,10 +711,11 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
     static_assert(same_shape_v<S, Shape<1, 1>>, "a reduce scaler is exactly one tile -- Shape<1, 1>");
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_reserve_back(scaler.cb_id, 1);
+        buffer(scaler.cb_id).reserve_back(1);
 
         const uint32_t words = cb_page_bytes(scaler.cb_id) / sizeof(uint32_t);
-        volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(scaler.cb_id));
+        volatile tt_l1_ptr uint32_t* page =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer(scaler.cb_id).get_write_ptr());
 
         // Everything the reduction must not pick up has to read as zero.
         for (uint32_t w = 0; w < words; ++w) {
@@ -731,7 +732,7 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
             }
         }
 
-        cb_push_back(scaler.cb_id, 1);
+        buffer(scaler.cb_id).push_back(1);
     }
 #else
     (void)value_bits;
@@ -767,13 +768,13 @@ inline void issue_load(const Storage<S>& storage, Fn fn) {
             // Blocking here means the consumer has not freed a slot yet -- backpressure,
             // not work. Deeper CBs are what buy it down.
             TT_U_ZONE("LOAD-RESERVE");
-            cb_reserve_back(storage.cb_id, storage.num_pages);
+            buffer(storage.cb_id).reserve_back(storage.num_pages);
         }
         {
             // ISSUING the reads, not waiting for them: they are asynchronous and their
             // cost lands at the barrier.
             TT_U_ZONE("LOAD-ISSUE");
-            fn(L1Pages{get_write_ptr(storage.cb_id), cb_page_bytes(storage.cb_id), storage.num_pages});
+            fn(L1Pages{buffer(storage.cb_id).get_write_ptr(), cb_page_bytes(storage.cb_id), storage.num_pages});
         }
     }
 #else
@@ -810,8 +811,8 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn) {
     block.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(block.cb_id, block.num_pages);
-        fn(L1Pages{get_read_ptr(block.cb_id), cb_page_bytes(block.cb_id), block.num_pages});
+        buffer(block.cb_id).wait_front(block.num_pages);
+        fn(L1Pages{buffer(block.cb_id).get_read_ptr(), cb_page_bytes(block.cb_id), block.num_pages});
     }
 #else
     (void)fn;
@@ -1122,6 +1123,16 @@ void synchronize_cores() {
 }
 
 // --- Core-to-core movement ---
+//
+// GEN1 ONLY, and the reason is one line of arithmetic. These routines hand a buffer's L1
+// pointer straight to a NOC intrinsic, and DataflowBuffer::get_write_ptr() returns the
+// pointer PLUS L1_UNCACHED_OFFSET -- which is 0 on tt-1xx and MEM_L1_UNCACHED_BASE on a
+// Quasar data-movement core. Metal is explicit that "NOC APIs cannot accept uncached
+// addresses" (api/dataflow/noc.h), so on Gen2 these would address the wrong window.
+//
+// The 2.0 answer is not to take the pointer at all: noc.async_read(src, dfb, ...) takes the
+// BUFFER and lets noc_traits_t map it back to its cached view. That is the second half of
+// this migration; until it lands, everything below is correct on Gen1 and wrong on Gen2.
 
 template <int thread, typename D, typename S>
 NocAsyncReadCoreTx<thread, D, S> noc_core_read(
@@ -1129,11 +1140,11 @@ NocAsyncReadCoreTx<thread, D, S> noc_core_read(
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(src.cb_id, src.num_pages);
-        cb_reserve_back(dst.cb_id, dst.num_pages);
+        buffer(src.cb_id).wait_front(src.num_pages);
+        buffer(dst.cb_id).reserve_back(dst.num_pages);
         const uint32_t bytes = cb_page_bytes(dst.cb_id);
-        const uint64_t from = coord.get_noc_addr(get_read_ptr(src.cb_id) + byte_offset);
-        noc_async_read(from, get_write_ptr(dst.cb_id), bytes * dst.num_pages);
+        const uint64_t from = coord.get_noc_addr(buffer(src.cb_id).get_read_ptr() + byte_offset);
+        noc_async_read(from, buffer(dst.cb_id).get_write_ptr(), bytes * dst.num_pages);
     }
 #else
     (void)coord;
@@ -1148,12 +1159,12 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(src.cb_id, src.num_pages);
-        cb_reserve_back(dst.cb_id, dst.num_pages);
+        buffer(src.cb_id).wait_front(src.num_pages);
+        buffer(dst.cb_id).reserve_back(dst.num_pages);
         if (write_predicate) {
             const uint32_t bytes = cb_page_bytes(dst.cb_id);
-            const uint64_t to = coord.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
-            noc_async_write(get_read_ptr(src.cb_id), to, bytes * src.num_pages);
+            const uint64_t to = coord.get_noc_addr(buffer(dst.cb_id).get_write_ptr() + byte_offset);
+            noc_async_write(buffer(src.cb_id).get_read_ptr(), to, bytes * src.num_pages);
 
             Semaphore<thread> semaphore(kCopyArrivedSem<thread>);
             semaphore.inc_remote(coord);
@@ -1177,17 +1188,17 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(src.cb_id, src.num_pages);
-        cb_reserve_back(dst.cb_id, dst.num_pages);
+        buffer(src.cb_id).wait_front(src.num_pages);
+        buffer(dst.cb_id).reserve_back(dst.num_pages);
 
         if (write_predicate) {
             const uint32_t bytes = cb_page_bytes(dst.cb_id);
-            const uint64_t to = mcast.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
+            const uint64_t to = mcast.get_noc_addr(buffer(dst.cb_id).get_write_ptr() + byte_offset);
 
             // A core inside the rectangle needs its own copy, which plain
             // multicast skips -- unless src and dst are already the same L1
             // address, where that copy would be onto itself.
-            const bool same_local_addr = get_write_ptr(dst.cb_id) == get_read_ptr(src.cb_id);
+            const bool same_local_addr = buffer(dst.cb_id).get_write_ptr() == buffer(src.cb_id).get_read_ptr();
             const bool loopback = !same_local_addr && mcast.contains(PhysicalCoord::this_core());
 
             // The two primitives count differently: plain multicast never writes
@@ -1201,9 +1212,10 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
                 loopback ? mcast.volume() : mcast.num_dests_excluding(PhysicalCoord::this_core());
 
             if (loopback) {
-                noc_async_write_multicast_loopback_src(get_read_ptr(src.cb_id), to, bytes * src.num_pages, num_dests);
+                noc_async_write_multicast_loopback_src(
+                    buffer(src.cb_id).get_read_ptr(), to, bytes * src.num_pages, num_dests);
             } else {
-                noc_async_write_multicast(get_read_ptr(src.cb_id), to, bytes * src.num_pages, num_dests);
+                noc_async_write_multicast(buffer(src.cb_id).get_read_ptr(), to, bytes * src.num_pages, num_dests);
             }
 
             Semaphore<thread> semaphore(kCopyArrivedSem<thread>);

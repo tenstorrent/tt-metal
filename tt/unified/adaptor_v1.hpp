@@ -47,6 +47,14 @@
 #include <cstdint>
 #include <type_traits>
 
+// Metal 2.0's dataflow buffer, on EVERY projection. It is the one CB-protocol name that is
+// genuinely thread-polymorphic: its reserve/push route to PACK(llk_...) on a TRISC and to the
+// dataflow free functions on a data-movement core, which is exactly what the free functions
+// resolved to before -- byte for byte, see internal/tt-1xx/dataflow_buffer.inl against
+// api/compute/cb_api.h. So this is a change of spelling on Gen1 and the only correct spelling
+// on Gen2, where tile counters and implicit sync live behind the object.
+#include "api/dataflow/dataflow_buffer.h"
+
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 #include "api/compute/common.h"
 // Both binary headers, because add/sub/mul exist on both units: _sfpu.h has the
@@ -163,19 +171,22 @@ inline void noc_async_writes_flushed(uint8_t = 0) { ASSERT(false); }
 namespace tt {
 namespace unified {
 
-// The CB's *configured* page size, not the data format's tile size --
-// get_tile_size() is derived from unpack_tile_size[] and only coincides with the
-// page size when a page happens to hold exactly one tile.
+// A buffer's handle, by slot. Constructed where it is used rather than stored, because it
+// holds a REFERENCE to the interface and the model's movable types (Block, the Noc*Tx handles)
+// could not then be moved. It is an id and an array lookup, so the compiler folds it.
+inline DataflowBuffer buffer(uint32_t cb) { return DataflowBuffer(static_cast<uint16_t>(cb)); }
+
+// The buffer's *configured* entry size, not the data format's tile size -- get_tile_size() is
+// derived from unpack_tile_size[] and only coincides when an entry happens to hold one tile.
 //
-// fifo_page_size is stored pre-shifted by cb_addr_shift, which is 0 on a
-// data-movement build (bytes) and CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT on a TRISC
-// (16B words). The shift is written out so this stays right if it ever moves.
+// This used to read fifo_page_size and apply cb_addr_shift by hand, the shift being 0 on a
+// data-movement build (bytes) and CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT on a TRISC (16B words).
+// get_entry_size() does that conversion itself, so the arch detail is metal's again rather
+// than duplicated here.
 //
-// Defined on every projection, unlike the NOC intrinsics above: both names it
-// needs resolve on a TRISC too (api/compute/cb_api.h uses get_local_cb_interface,
-// and cb_addr_shift has a compute variant). A kernel converting a tile count to a
-// byte offset needs the answer in code shared by all five threads.
-inline uint32_t cb_page_bytes(uint32_t cb) { return get_local_cb_interface(cb).fifo_page_size << cb_addr_shift; }
+// Defined on every projection, unlike the NOC intrinsics above: a kernel converting a tile
+// count to a byte offset needs the answer in code shared by all five threads.
+inline uint32_t cb_page_bytes(uint32_t cb) { return buffer(cb).get_entry_size(); }
 
 // How many pages the HOST configured this circular buffer with.
 //
@@ -189,7 +200,7 @@ inline uint32_t cb_page_bytes(uint32_t cb) { return get_local_cb_interface(cb).f
 //
 // The value is the same fact on every projection regardless, since the host configures
 // one circular buffer for the core, which is what makes checking it on one thread enough.
-inline uint32_t cb_num_pages(uint32_t cb) { return get_local_cb_interface(cb).fifo_num_pages; }
+inline uint32_t cb_num_pages(uint32_t cb) { return buffer(cb).get_total_num_entries(); }
 
 }  // namespace unified
 }  // namespace tt
