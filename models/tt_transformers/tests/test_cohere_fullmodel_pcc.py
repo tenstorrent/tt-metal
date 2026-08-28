@@ -169,10 +169,15 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
             mode=Mode.PREFILL,
             page_table=None,
         )
-        hidden_full = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-        )[:, 0:1, :, : model_args.dim]  # [1, max_seq_len, 8192] — keep padding for the next layer
+        hidden_full = (
+            ttnn.to_torch(
+                tt_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape
+                ),
+            )[:, 0:1, :, : model_args.dim]
+            .reshape(1, max_seq_len, -1)  # [1, S_pad, 8192] 3-D — keep padding for the next layer
+        )
 
         passing, pcc_message, pcc_val = _pcc(ref_out, hidden_full[:, :seq_len].float())
         pccs.append((layer_idx, pcc_val, passing))
@@ -286,7 +291,12 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
     passing_n, pcc_msg_n, pcc_n = _pcc(ref_norm, normed_torch.float())
     logger.info(f"[cohere-head] final_norm pcc={pcc_n:.6f} gate={'PASS' if passing_n else 'FAIL'} ({pcc_msg_n})")
 
-    # logits PCC — feed the on-device normed tensor straight into the head (model.py path)
+    # logits PCC — mirror model.py prefill (model.py: lm_head_input_mem_cfg reshard
+    # before self.lm_head(x); the DRAM-sharded LM-head matmul rejects interleaved input
+    # with "bad optional access" — observed on-box 2026-08-28 run1)
+    lm_head_input_mem_cfg = model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
+    if lm_head_input_mem_cfg.is_sharded():
+        tt_normed = ttnn.interleaved_to_sharded(tt_normed, lm_head_input_mem_cfg)
     tt_logits = tt_head(tt_normed)
     logits_torch = ttnn.to_torch(
         tt_logits,
