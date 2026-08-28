@@ -43,6 +43,7 @@
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
+#include <internal/graph_tracking.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -660,11 +661,12 @@ bool Device::initialize(
         // Register process-wide, not on this thread's capture stack: buffers are allocated
         // from many threads, and a thread-local processor would silently miss every
         // allocation made on any other thread. Idempotent, so repeated device init is safe
-        // and tracking recovers rather than being lost forever behind a one-shot flag.
-        if (!tt::tt_metal::GraphTracker::instance().has_background_processor_of_type(
-                typeid(tt::tt_metal::ShmTrackingProcessor))) {
-            tt::tt_metal::GraphTracker::instance().push_background_processor(
-                std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose));
+        // and tracking recovers rather than being lost forever behind a one-shot flag --
+        // and idempotent atomically, so two devices initializing at once cannot both
+        // register one and have every buffer event counted twice.
+        if (tt::tt_metal::internal::register_background_processor_once(
+                typeid(tt::tt_metal::ShmTrackingProcessor),
+                [shm_verbose]() { return std::make_shared<tt::tt_metal::ShmTrackingProcessor>(shm_verbose); })) {
             log_debug(tt::LogMetal, "ShmTrackingProcessor registered with GraphTracker");
         }
     }

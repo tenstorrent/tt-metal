@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <graph_tracking.hpp>
+#include <internal/graph_tracking.hpp>
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
@@ -34,17 +35,37 @@ void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_pr
     processors.push_back(new_processor);
 }
 
-void GraphTracker::push_background_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
-    std::unique_lock lock(background_processors_mutex);
-    background_processors.push_back(new_processor);
+namespace internal {
+
+bool register_background_processor_once(
+    const std::type_info& type, const std::function<std::shared_ptr<IGraphProcessor>()>& factory) {
+    auto& tracker = GraphTracker::instance();
+    // One exclusive lock over both the lookup and the insertion. Two separate operations
+    // would let concurrent device initialization register the observer twice and double-count
+    // every buffer event.
+    std::unique_lock lock(tracker.background_processors_mutex);
+    const bool already_registered = std::any_of(
+        tracker.background_processors.begin(), tracker.background_processors.end(), [&](const auto& processor) {
+            return processor != nullptr && typeid(*processor) == type;
+        });
+    if (already_registered) {
+        return false;
+    }
+    auto processor = factory();
+    TT_FATAL(processor != nullptr, "register_background_processor_once: factory returned nullptr");
+    // Bound to a reference first: typeid() of a shared_ptr dereference is an operand with a
+    // side effect, which -Wpotentially-evaluated-expression rejects.
+    const IGraphProcessor& created = *processor;
+    TT_FATAL(
+        typeid(created) == type,
+        "register_background_processor_once: factory produced a {}, but the type asked about was {}",
+        typeid(created).name(),
+        type.name());
+    tracker.background_processors.push_back(std::move(processor));
+    return true;
 }
 
-bool GraphTracker::has_background_processor_of_type(const std::type_info& type) const {
-    std::shared_lock lock(background_processors_mutex);
-    return std::any_of(background_processors.begin(), background_processors.end(), [&](const auto& processor) {
-        return processor != nullptr && typeid(*processor) == type;
-    });
-}
+}  // namespace internal
 
 void GraphTracker::pop_processor() {
     TT_ASSERT(not processors.empty(), "No processor to pop");
