@@ -17,6 +17,12 @@
 // programs alive and asserts that a tracking query does not get more expensive as N grows;
 // it creates no kernels, since kernel compilation is disk-cached and not what is measured.
 //
+// The cost assertion is a ratio, not a wall-clock figure: the regression it guards is
+// asymptotic, and an absolute threshold tight enough to be meaningful would flake on shared
+// CI hardware. It carries one loose absolute bound alongside, purely to cover the case a
+// ratio cannot see -- a per-call recompute that is already slow at N=1 and so never grows.
+// The DISABLED_ characterisations below do report absolute wall-clock, but they only log it.
+//
 // Run just this file's tests:
 //   ./build/test/tt_metal/unit_tests_api --gtest_filter='*CircularBufferTracking*:*BufferTracking*'
 // The heavier perf characterisations are DISABLED_ and need --gtest_also_run_disabled_tests.
@@ -176,6 +182,19 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, TensixCircularBufferTrackingCostS
 
     ASSERT_GT(baseline_ms, 0.0) << "baseline query was unmeasurably fast even over " << kQueriesPerSample
                                 << " queries; raise kQueriesPerSample";
+
+    // The ratio below is the real assertion, and it is deliberately a ratio: the bug this
+    // guards is asymptotic, and a wall-clock threshold tight enough to catch a constant-factor
+    // regression would flake on shared CI hardware. It is blind in one place, though -- a
+    // recompute-per-call that is already slow at a single live program shows up as a flat
+    // curve, not a growing one. This covers that, and only that: get_total_cb_allocated() is
+    // one relaxed atomic load, so 10 us leaves roughly three orders of magnitude of headroom
+    // over any machine this runs on, and nothing but a genuine per-call walk can reach it.
+    constexpr double kMaxBaselineQueryMs = 0.01;
+    EXPECT_LT(baseline_ms, kMaxBaselineQueryMs)
+        << "a single tracking query took " << baseline_ms * 1000.0
+        << " us with one live program. Device::get_total_cb_allocated() must be an atomic load "
+           "on a maintained total, not a computation over the program's circular buffers.";
 
     // The tracked total is incrementally maintained, so a query is an atomic load and its
     // cost does not depend on how many programs are alive. Recomputing it per call instead
