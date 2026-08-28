@@ -182,7 +182,13 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
     sp, tp = mesh_device.shape
     assert (sp, tp) in RING_PERF_MESHES
     assert ttnn.get_num_devices() == sp * tp, "perf proxy must use the complete physical box"
-    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    # The control plane consolidates torus axes no mesh realizes (a wrapped dimension needs more than
+    # 2 devices), so the latched config may be a reduced torus flavor of the requested TORUS_XY.
+    assert ttnn.get_fabric_config() in (
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+    )
     assert kv_len % 32 == 0
     assert GLM52_Q_PER_SP_RANK == GLM52_Q_PER_CHIP * GLM52_TP
 

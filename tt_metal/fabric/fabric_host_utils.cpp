@@ -110,8 +110,10 @@ tt::tt_fabric::FabricConfig coerce_fabric_config_to_realized_ring_extents(
     };
     switch (fabric_config) {
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: {
+            // A 1D ring tours all chips of a mesh (wrap-around-mesh: a 2x2 is a genuine 4-cycle over
+            // ordinary mesh edges), so the ring length is the mesh size, not the longest dimension.
             const bool any_ring = std::any_of(mesh_shapes.begin(), mesh_shapes.end(), [](const MeshShape& shape) {
-                return std::max(shape[0], shape[1]) > 2;
+                return shape.mesh_size() > 2;
             });
             return any_ring ? fabric_config : downgrade(tt::tt_fabric::FabricConfig::FABRIC_1D);
         }

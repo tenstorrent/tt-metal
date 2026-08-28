@@ -51,7 +51,8 @@ inline bool has_genuine_torus_axis(FabricType fabric_type, const MeshShape& mesh
 // Returns the effective FabricConfig after dropping ring/torus requests that no mesh realizes: a
 // wrapped dimension needs more than 2 devices to form a ring. FABRIC_2D_TORUS_X/Y/XY keep a torus
 // axis only if some mesh has extent > 2 along it (TORUS_XY may downgrade to TORUS_X/TORUS_Y/2D);
-// FABRIC_1D_RING downgrades to FABRIC_1D when no mesh has a dimension larger than 2. Keeping an
+// FABRIC_1D_RING downgrades to FABRIC_1D when no mesh has more than 2 chips (the 1D ring tours all
+// chips of a mesh, so a 2x2 is a genuine 4-cycle and keeps its ring). Keeping an
 // unrealized torus axis in the config would enable deadlock avoidance (bubble flow / first-level
 // ACK) on links whose peer may label the axis differently, hanging inter-mesh traffic (#54650).
 tt::tt_fabric::FabricConfig coerce_fabric_config_to_realized_ring_extents(

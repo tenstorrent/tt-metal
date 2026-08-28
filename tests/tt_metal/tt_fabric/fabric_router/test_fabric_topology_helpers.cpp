@@ -86,10 +86,11 @@ TEST(FabricTopologyHelpers, CoercesUnrealizedRingAxesInFabricConfig) {
     EXPECT_EQ(
         coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_2D_TORUS_Y, {MeshShape{2, 2}, MeshShape{4, 4}}),
         FC::FABRIC_2D_TORUS_Y);
-    // 1D ring needs a dimension longer than 2 somewhere; 1x1 gateway meshes don't disable it.
+    // 1D ring tours all chips of a mesh: a 2x2 is a genuine 4-cycle (wrap-around-mesh) and keeps its
+    // ring; only meshes of <= 2 chips coerce. 1x1 gateway meshes don't disable it.
     EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{1, 8}}), FC::FABRIC_1D_RING);
     EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{1, 2}}), FC::FABRIC_1D);
-    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{2, 2}}), FC::FABRIC_1D);
+    EXPECT_EQ(coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{2, 2}}), FC::FABRIC_1D_RING);
     EXPECT_EQ(
         coerce_fabric_config_to_realized_ring_extents(FC::FABRIC_1D_RING, {MeshShape{1, 1}, MeshShape{8, 4}}),
         FC::FABRIC_1D_RING);
