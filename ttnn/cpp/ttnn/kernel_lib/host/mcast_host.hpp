@@ -45,6 +45,24 @@ struct McastConfig {
 // TODO: Find a better name and provide a fuller explanation of the optional multicast compile-time encoding.
 std::vector<uint32_t> skip_mcast_compile_time_args();
 
+namespace detail {
+
+template <typename Args>
+void append_args_to(Args& destination, const std::vector<uint32_t>& args) {
+    if constexpr (requires { destination.append(args); }) {
+        destination.append(args);
+    } else {
+        destination.insert(destination.end(), args.begin(), args.end());
+    }
+}
+
+}  // namespace detail
+
+template <typename Args>
+void append_skip_mcast_compile_time_args_to(Args& destination) {
+    detail::append_args_to(destination, skip_mcast_compile_time_args());
+}
+
 // Mcast1D-specific types.
 
 // Groups the receiver grid into independent row or column multicasts.
@@ -89,8 +107,18 @@ public:
     // Arguments consumed by McastArgs. pre_handshake overrides this kernel face only.
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const;
 
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination, std::optional<bool> pre_handshake = std::nullopt) const {
+        detail::append_args_to(destination, compile_time_args(pre_handshake));
+    }
+
     // Per-core runtime arguments consumed by McastArgs.
     std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const;
+
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
+        detail::append_args_to(destination, runtime_args(core));
+    }
 
     bool is_sender(const tt::tt_metal::CoreCoord& core) const;
 
@@ -191,8 +219,18 @@ public:
     // Arguments consumed by McastArgs. pre_handshake overrides this kernel face only.
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const;
 
+    template <typename Args>
+    void append_compile_time_args_to(Args& destination, std::optional<bool> pre_handshake = std::nullopt) const {
+        detail::append_args_to(destination, compile_time_args(pre_handshake));
+    }
+
     // Per-core runtime arguments consumed by McastArgs.
     std::vector<uint32_t> runtime_args(const tt::tt_metal::CoreCoord& core) const;
+
+    template <typename Args>
+    void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
+        detail::append_args_to(destination, runtime_args(core));
+    }
 
     bool is_sender(const tt::tt_metal::CoreCoord& core) const;
 

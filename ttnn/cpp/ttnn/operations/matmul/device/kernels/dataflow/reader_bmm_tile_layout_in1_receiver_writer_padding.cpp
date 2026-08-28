@@ -11,12 +11,10 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
-    // in1 mcast args
-    const uint32_t in1_mcast_sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
 
     // WRITER
     // out tensor args
@@ -35,11 +33,6 @@ void kernel_main() {
     const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(rt_args_idx++);
 
-#ifndef OUT_SHARDED
-    const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
-#endif
-
     // COMPILE TIME ARGS
     // READER
     // in1 block args
@@ -48,37 +41,45 @@ void kernel_main() {
     constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(1);
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
-    // in1 mcast args
     // batch args
-    constexpr uint32_t batch = get_compile_time_arg_val(6);
+    constexpr uint32_t batch = get_compile_time_arg_val(4);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(7);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(8);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(9);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(12);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(5);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(6);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(7);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(8);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(9);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(10);
 
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(13);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(15);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(13);
 
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(16);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(14);  // if 0
     // Don't need batch; same as batch from READER args
 
 #ifdef FUSE_BIAS
     // in3 block args
-    constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
+    constexpr uint32_t in3_block_w = get_compile_time_arg_val(15);
 
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
-    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(16);
 
-    constexpr auto out_args = TensorAccessorArgs<19>();
+    constexpr dataflow_kernel_lib::McastArgs<17, 11> in1_mcast_args;
+    rt_args_idx = in1_mcast_args.next_runtime_args_offset();
+
+#ifndef OUT_SHARDED
+    const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
+#endif
+
+    constexpr auto out_args = TensorAccessorArgs<in1_mcast_args.next_compile_time_args_offset()>();
+
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
         op_signaler = OpSignaler(rt_args_idx);
@@ -93,11 +94,11 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out0);
-    Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
+
+    auto weights_bias_pipe = in1_mcast_args.receiver(noc);
 
     // WRITER
     // single-tile
@@ -117,16 +118,7 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
                     dfb_in1.reserve_back(in1_block_num_tiles);
-
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
-
+                    weights_bias_pipe.receive();
                     dfb_in1.push_back(in1_block_num_tiles);
                 }
 
@@ -135,16 +127,7 @@ void kernel_main() {
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 2
                     dfb_in3.reserve_back(in3_block_w);
-
-                    // Set in1 semaphore value to INVALID
-                    receiver_sem.set(INVALID);
-
-                    // Atomic increment source core counter
-                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
-
-                    // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    receiver_sem.wait(VALID);
-
+                    weights_bias_pipe.receive();
                     dfb_in3.push_back(in3_block_w);
                 }
 #endif
