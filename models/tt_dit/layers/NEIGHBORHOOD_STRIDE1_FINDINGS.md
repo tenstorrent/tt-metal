@@ -294,3 +294,77 @@ as clamped. Instrumenting one chunk's shard_origin would settle it in a single r
 
 The prize is fixed and measured: `DIFFVAE_NA_TABLE_ALWAYS=1` (all bricks served) runs 17.5 s
 against 32.3 s gated, so the gate alone is worth ~15 s.
+
+## 9. After the relative table: the bound is the gather-slot walk, so two kernels
+
+The relative table and the host-stamped interior gate landed. Decode `neighborhood-sdpa` is still
+~737 ms for n=2 stage-5 calls (~370 ms each). The target for those two was ~400 ms **total**
+(~200–250 ms each). Softmax is not that gap.
+
+Measured on one W-shard of the stage-5 first band, host wall-clock,
+`test_neighborhood_sdpa_components.py` (volume `(84,272,480)`, owned `(84,272,60)`, brick
+`(2,8,2)`, window 11 → gather **147** bricks, **42840** query bricks). Origin stamp:
+**31104 interior / 11736 edge** (~73% interior).
+
+### Compute is ~20 ms. The reader walks 147 slots.
+
+| probe | what it skips | ms | ns/slot |
+|---|---|---|---|
+| window11 (full) | nothing | **528–532** | 84 |
+| skip_kv | K/V DRAM, still the 147-loop | 26 | 4 |
+| skip_slots | the 147-loop, still CB handshake | 26 | 4 |
+| skip_slots_drain | handshake only (compute drained) | 6–9 | 1 |
+
+`window11 - skip_slots` ≈ 505 ms is the slot walk. `skip_slots - skip_slots_drain` ≈ 20 ms is
+QK/softmax/PV. Drain/qk probes could not isolate this because they still waited on the reader
+filling those CBs.
+
+Windows 3 / 7 / 11 (query bricks fixed, gather 27 → 75 → 147) hold **76–84 ns/slot**. Slope is
+~3.7 ms per gather brick. Time is walking slots, not dispatch or Q.
+
+### Classify and the tight gather must not share a binary
+
+~73% of bricks are unclamped interiors: one DMA gather along the relative table, no
+`fill_mask_tile`. The other 27% are edges and need classify. Putting both loops in **one** ELF
+mixes them in the I-cache:
+
+| binary | what it walks | ms | ns/slot |
+|---|---|---|---|
+| mixed (classify + tight gather) | every brick | **~416** | 64 |
+| interior-only (`path_mode=1`, tight gather) | every brick, interior loop | **~130** | **20** |
+| edge-only (classify) | every brick, classify loop | **~400** | 64 |
+
+Interior is 3× faster per slot when classify is not in the working set. That is the whole reason
+for a second kernel: peel the two loops into two programs, skip-slots handshake the bricks the
+other program owns, write the same output.
+
+On paper, skip firing:
+
+    0.73 × 130 ms  +  0.27 × 400 ms  +  handshake on the rest  ≈  **210–250 ms**
+
+That is the ~200–250 ms per call the decode wanted.
+
+### Split without skip is slower than the mixed kernel
+
+`path_mode=0` already launches interior then edge. Each program still walks **every** brick
+unless the skip condition matches. Then you pay both full walks:
+
+    interior tight-all (~130) + edge classify-all (~400)  =  **~530 ms**
+
+Worse than one mixed kernel (~416). The skip **path** is live — forcing it drops the wall:
+
+| skip condition | window11 |
+|---|---|
+| none (current split) | **528–532 ms** |
+| `if (true)` in **both** programs | **52 ms** (handshake only, both launches) |
+| `if (true)` in **interior only** | **459 ms** (interior handshake + edge classifies all) |
+
+52 ms ≈ 2 × skip_slots. 459 ms is edge-only. So handshake/continue is compiled and taken; the
+**predicate** never matches the host-stamped interior bit / `skip_edge_token` (0 vs `0xFFFFFFFF`
+in origin-table column 7). Round-trip of that table from DRAM is correct (31104 / 11736); the
+kernel load at skip time is not seeing it. 0/1 compares and bool-returning helpers are DCE'd on
+this RISC toolchain — that is why the token is `0xFFFFFFFF` and skip polarity is `if (x == 2)`
+shaped like `skip_kv`, not `if (interior)`.
+
+Until skip fires, keep the mixed kernel for speed, or land the predicate. The second kernel is
+the I-cache split, not extra math.

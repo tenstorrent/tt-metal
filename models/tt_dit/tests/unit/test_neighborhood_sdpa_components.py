@@ -15,8 +15,9 @@ gather slot. This test changes THAT walk.
 WRONG output except the window-11 full row. Probes 5/6 deadlock; do not add them.
 
 path_mode 0 (the default) auto-splits stride-1 + relative table into interior then edge
-programs, so the window-11 full row is the quality path (~210 ms), not interior-only
-(~130 ms). Pass path_mode=1 to time the tight gather alone.
+programs. Skip must fire for the quality path to be ~210 ms rather than ~530 ms (both programs
+walking every brick). Pass path_mode=1 to time the tight gather alone (~130 ms). Why two
+kernels, and the measurements: ``models/tt_dit/layers/NEIGHBORHOOD_STRIDE1_FINDINGS.md`` §9.
 
     ./run_na.sh -b -f models/tt_dit/tests/unit/test_neighborhood_sdpa_components.py -t 180 -s 60
 
