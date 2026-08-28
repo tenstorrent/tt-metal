@@ -33,7 +33,7 @@ ScanWorkDistribution distribute_scan(
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(batch_heads <= num_cores, "KDA recurrent scan heads {} exceed compute cores {}", batch_heads, num_cores);
     uint32_t value_blocks = 1;
-    if (!summary && batch_heads <= 8) {
+    if (!summary) {
         for (uint32_t candidate = value_tiles; candidate >= 1; --candidate) {
             if (value_tiles % candidate == 0 && batch_heads * candidate <= num_cores) {
                 value_blocks = candidate;

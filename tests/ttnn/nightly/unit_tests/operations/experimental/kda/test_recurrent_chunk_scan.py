@@ -91,6 +91,16 @@ _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
             id="production-four-chunk",
         ),
         pytest.param(6, 2, 64, 32, frozenset(), ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="grouped-batch-heads"),
+        pytest.param(
+            9,
+            2,
+            32,
+            64,
+            frozenset(),
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
+            id="value-sharding-above-eight-heads",
+        ),
     ],
 )
 def test_recurrent_chunk_scan_contract_and_trace(
