@@ -13,8 +13,8 @@ import torch
 from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.reference.kda.weights import required_kda_weight_names, validate_kda_weights
-from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_a_log
+from models.demos.deepseek_v3_d_p.reference.kda.weights import required_kda_weight_names
+from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_state_dict
 
 KIMI_K3_FIRST_KDA_LAYER = 1
 KIMI_K3_HF_REVISION = "9f62e4e9fffbd0a83ddd60e1c209d828994b3569"
@@ -79,6 +79,4 @@ def load_kda_layer_state_dict(checkpoint_dir: Path, layer_idx: int, config: KDAC
     missing = [name for name in required if name not in state_dict]
     if missing:
         raise ValueError(f"layer {layer_idx} checkpoint shard(s) are missing KDA weights: {missing}")
-    state_dict["A_log"] = normalize_kda_a_log(state_dict["A_log"], config)
-    validate_kda_weights(state_dict, config)
-    return state_dict
+    return normalize_kda_state_dict(state_dict, config)

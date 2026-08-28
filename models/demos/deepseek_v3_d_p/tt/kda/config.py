@@ -18,8 +18,7 @@ KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 KDA_PREPARATION_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
-# The distributed prefix output goes to DRAM because SP carry composition already holds
-# sp_size L1 working buffers of the same size.
+# DRAM is the calibrated T=5120 distributed-scan placement; keep it distinct from the local L1 path.
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
