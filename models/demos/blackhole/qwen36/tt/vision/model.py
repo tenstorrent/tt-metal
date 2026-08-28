@@ -360,7 +360,6 @@ class DropInVisionTransformer(torch.nn.Module):
             # The slice/reshape args are GLOBAL shapes; the tensor is already
             # fractured along dim=3 and ttnn handles the per-device extents internally.
             final_output = ttnn.reshape(tt_out[:, 0:1, :, :out_hidden_size], (-1, out_hidden_size))
-            # ttnn.deallocate(tt_out)
 
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
@@ -368,12 +367,8 @@ class DropInVisionTransformer(torch.nn.Module):
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
-            # 2. The merger already produces a tensor fractured along the hidden
-            # dim (dim=3 in 4D / dim=1 in the 2D-reshaped view), which is the
+            # The merger already produces a tensor fractured along the hidden dim, which is the
             # desired output sharding.
-            # final_output_sharded = final_output
-
-            # 3. Aggregate in batched users list
             final_outputs.append(tt_out)
 
         # concatenate all the outputs. With a single image, ttnn.concat aliases

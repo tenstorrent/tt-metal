@@ -455,19 +455,12 @@ class TPAttention:
                 # consumes this carries half the bytes -- as the matmul's OUTPUT DTYPE, not a
                 # typecast afterwards, which would be a whole extra pass over [1,S,dim].
                 #
-                # This is the third instance of the same win in this layer; all three reduce-scatter
-                # a [1,1,2048,5120] row-parallel partial, and bf8 lands them all at the same floor:
-                #     MLP down-proj    bf8   589us
-                #     GDN out-proj     bf8   554us   (was 1,029 bf16)
-                #     attention wo     bf8   548us   (was 1,021 bf16)   <- this
-                # MEASURED (T3K TP=8, 27B, seq 2048, single-layer profile, layer3_fullattn):
-                #     wo matmul 2048x768x5120   419 -> 277us  (-142, writes half the bytes)
-                #     reduce-scatter            1021 -> 548us (-473)
-                #                                             = -610us/layer, block 4,146 -> 3,536
-                # ACCURACY, measured not assumed -- the RS sums num_devices partials and this op has a
-                # documented dtype cliff on Blackhole at TP=4 (see gdn/tp.py's fp32/bf16 history):
-                #     test_attention_tp_prefill (S=64)  bf16 0.9993245 -> bf8 0.9991838
-                # a 4th-decimal cost, matching what the GDN out-proj measured (0.9994 -> 0.9993).
+                # Third instance of the same win in this layer -- all three reduce-scatter a
+                # [1,1,2048,5120] row-parallel partial, and bf8 lands them at the same ~550-590us
+                # floor. MEASURED (T3K TP=8, 27B, seq 2048): wo matmul 419 -> 277us, reduce-scatter
+                # 1021 -> 548us = -610us/layer. Accuracy measured, not assumed, since this op has a
+                # dtype cliff on Blackhole at TP=4 (see gdn/tp.py): test_attention_tp_prefill
+                # 0.9993245 -> 0.9991838, matching the GDN out-proj's cost.
                 #
                 # Gated to the 27B because that cliff proves the safe dtype here is TP- and
                 # model-dependent, and TP=8/dim=5120 is the only configuration measured.

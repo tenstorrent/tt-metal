@@ -14,10 +14,10 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.gdn.conv_fir_wh import (
-    causal_conv1d_fir_dispatch as _causal_conv1d_fir,  # Upstream _causal_conv1d_fir on Blackhole; on Wormhole a local fork that builds the padded; input in ROW_MAJOR so the K shifted taps stop untilizing the whole tensor each; (UntilizeWithUnpadding 1,033us -> 15us at seq 2048). See conv_fir_wh.py.
+    causal_conv1d_fir_dispatch as _causal_conv1d_fir,  # Wormhole builds the shifted taps in ROW_MAJOR instead of untilizing per tap (1,033us -> 15us at seq 2048); see conv_fir_wh.py.
 )
 from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import (
-    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,  # Upstream on Blackhole; on Wormhole a local variant that skips q's dead-weight fp32 promotion (q never feeds the state write). See recurrent_decode_wh.py.
+    recurrent_gated_delta_rule_decode_dispatch as recurrent_gated_delta_rule_decode_ttnn,  # Wormhole skips q's fp32 promotion (q never feeds the state write); see recurrent_decode_wh.py.
 )
 from models.demos.blackhole.qwen36.tt.wh_compat import apply as _apply_wh_compat
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
@@ -28,12 +28,9 @@ from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq i
 _apply_wh_compat()  # Wormhole GDN L1 adjustments (see tt/wh_compat.py)
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
-# Wormhole prefill conv1d: swap the K-1 carry concat for a
-# patch conv. Implemented and verified BIT-EXACT (test_gdn_conv1d_splice_bitexact, 9/9 cases,
-# max|diff| == 0.0) but NET NEUTRAL in the real layer: the patch conv
-# costs ~160us on one core however few rows it emits, eating the 205us saving.
-# Measurements are in _conv1d_prefill, incl. why the MAC FIR patch fails.
-# Flip to True to re-test if slice_write or the patch step ever get cheaper.
+# Wormhole prefill conv1d: swap the K-1 carry concat for a patch conv. Verified bit-exact
+# (test_gdn_conv1d_splice_bitexact, 9/9) but net neutral -- the patch conv costs ~160us on one core
+# however few rows it emits, eating the 205us saving. See _conv1d_prefill for the measurements.
 _SPLICE_CARRY = False
 
 
@@ -239,12 +236,8 @@ class TPGatedDeltaNet:
         self._ab_gap = getattr(args, "gdn_ab_gap", 0)
         # Wormhole 9B ONLY: the TILE-preserving decode rework (concat GQA expand instead of
         # repeat_interleave, matmul-native recurrence output, L1-resident rec_state, beta/g left at
-        # their natural rank). MEASURED and validated on N300 + Qwen3.5-9B only, so Blackhole keeps
-        # its tuned path byte-for-byte and the 27B (dim 5120) keeps the geometry it was validated
-        # with. Uses wh_9b_n300 directly (not the is_blackhole()+dim<=4096 pair this used to be)
-        # so a hypothetical N150-9B doesn't inherit an N300-only-validated path by coincidence --
-        # the comment's own claim is now what the gate actually checks (Wormhole gating audit,
-        # item 4).
+        # their natural rank). Validated on N300 + Qwen3.5-9B only, so Blackhole keeps its tuned path
+        # byte-for-byte and the 27B keeps the geometry it was validated with.
         self._decode_tile_opt = tpc.wh_9b_n300(args)
         self.Dk = args.gdn_dk
         self.Dv = args.gdn_dv
@@ -285,45 +278,28 @@ class TPGatedDeltaNet:
         # In-place state updates for decode/prefill traces (set by model allocate_kv_caches)
         self._stable_state = False
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
-        # Native ttnn.conv1d depthwise prefill; L1_FULL slice keeps it trace-safe.
-        # Only used when valid_len is None (masked buckets keep the MAC FIR).
-        # Native depthwise ttnn.conv1d vs MAC FIR fallback. Native is pinned to L1
-        # slice_config=Conv2dL1FullSliceConfig (see _conv1d_prefill) — it deliberately avoids the
-        # DRAM-slicing path because that does host reads a trace capture rejects. On Wormhole that L1
-        # pinning is exactly what breaks: the conv's statically-allocated circular buffers collide with
-        # by resident L1 tensors ("clash with L1 buffers"). CBs are L1-only, so the
-        # conv itself must move, not just its inputs. The MAC FIR is the reference,
-        # already used for masked buckets, and runs from DRAM. On N300 it clears
-        # every CB clash in the GDN TP suite (11/11). Blackhole keeps native conv1d.
-        # Native on BOTH arches now. MEASURED (N300, seq 2048, single-layer profile): the 16-op MAC FIR
-        # (2,833us) collapses to ~970us of which the conv2d kernel itself is only 200us —
-        # 17,907us -> ~16,4xxus for the layer.
+        # Native depthwise ttnn.conv1d prefill, on both arches. Used when valid_len is None (masked
+        # buckets keep the MAC FIR). Pinned to slice_config=Conv2dL1FullSliceConfig (see
+        # _conv1d_prefill): the DRAM-slicing path does host reads a trace capture rejects.
+        # MEASURED (N300, seq 2048, single-layer): the 16-op MAC FIR's 2,833us collapses to ~970us,
+        # of which the conv2d kernel is only 200us.
         #
-        # This was long believed unshippable on WH: at B=8/B=32 the per-user prefill path died with
-        #   "clash with L1 buffers ... L1 buffer allocated at 809856 and
-        #    static circular buffer region ends at 892160"
-        # ROOT CAUSE (found 2026-08, fixed in forward_decode): the conv runs with only ~2% L1 headroom
-        # (its own buffers ~443KB/core + an ~871KB/core CB region against 1,337KB/core usable), so ANY
-        # sizeable L1-resident tensor tips it over. The culprit was
-        # recurrent_gated_delta_rule_decode_ttnn handing the recurrent state back L1-RESIDENT: the
-        # un-split decode branch assigned it straight to self.rec_state, parking Nv*Dk*Dv*4 = 1MB
-        # (16KB/bank) in L1 across the whole of the NEXT prefill call. It presented as
-        # nondeterministic (5th call, not the 2nd) only because it raced CPython GC of
-        # other shadowed tensors. See the spill in forward_decode.
+        # That L1 pinning leaves only ~2% headroom (its own ~443KB/core plus an ~871KB/core CB region
+        # against 1,337KB/core usable), so ANY sizeable L1-resident tensor trips it with
+        # "clash with L1 buffers". This is why forward_decode spills rec_state to DRAM: the recurrent
+        # kernel used to hand the state back L1-resident, parking ~1MB in L1 across the NEXT prefill
+        # call, which presented nondeterministically because it raced CPython GC.
         #
-        # Dead ends, for anyone re-tuning this (all measured):
-        #   * act_block_h_override=32/64  -> CB region end byte-IDENTICAL (892160).
-        #   * core_grid forced 8x8 / 8x2 -> same 892160 CB end, same 809856 L1 addr;
-        #                                    reported core range does change.
-        #   * config_tensors_in_dram=True -> HANGS the op and wedges the ETH cores.
-        #   * The conv alone on a bare device is FINE at T=128..2048, proving the issue
-        #     was resident L1 rather than anything shape-internal to the conv.
+        # Dead ends, all measured: act_block_h_override=32/64 and a forced 8x8 / 8x2 core grid both
+        # leave the CB region end byte-identical; config_tensors_in_dram=True HANGS the op and wedges
+        # the ETH cores. The conv alone on a bare device is fine at T=128..2048, which is what shows
+        # the problem is resident L1 and not the conv's own shape.
         #
-        # CAUTION when experimenting here: a mid-flight program failure inside the per-user prefill
-        # loop leaves the CCL fabric inconsistent, so the NEXT process hangs on its
-        # reports a misleading result. Recover with `tt-topology -l mesh` (this host is MESH; the tool's
-        # default is linear and flashing it breaks device discovery) and test one variant per reset.
-        # QWEN35_GDN_CONV1D=0 falls back to the MAC FIR (which masked buckets use regardless).
+        # CAUTION: a mid-flight program failure inside the per-user prefill loop leaves the CCL
+        # fabric inconsistent, so the next process hangs or reports a misleading result. Recover with
+        # `tt-topology -l mesh` (this host is MESH; the default is linear and flashing it breaks
+        # device discovery) and test one variant per reset.
+        # QWEN35_GDN_CONV1D=0 falls back to the MAC FIR.
         _conv1d_env = os.environ.get("QWEN35_GDN_CONV1D")
         self._gdn_conv1d = True if _conv1d_env is None else (_conv1d_env == "1")
         # Prepared depthwise conv weights, keyed by (input_width, padding) — the padded (from-scratch)
@@ -336,15 +312,12 @@ class TPGatedDeltaNet:
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
 
     # Usable L1 (bytes, whole device) left for the recurrent state once the decode kernel's own
-    # allocations are in place. On an 8x8 WH grid at B=32, before requesting
-    # the kernel already holds ~864KB of the ~1336KB usable per bank, leaving ~485KB/bank -> ~31MB
-    # across 64 banks. Blackhole has larger L1 and (at TP=4) smaller Nv, and
-    # batched decode is already validated there, so the split is Wormhole-only.
+    # allocations are in place: on an 8x8 WH grid at B=32 it already holds ~864KB of the ~1336KB
+    # usable per bank, leaving ~485KB/bank -> ~31MB across 64 banks. Blackhole has larger L1 and (at
+    # TP=4) smaller Nv, and batched decode is validated there, so the split is Wormhole-only.
     _DECODE_STATE_L1_BUDGET = 31 * (1 << 20)
-    # Approximate on-device bytes/element by rec_state dtype (bfloat8_b packs ~1 B/elem plus a small
-    # shared-exponent overhead, rounded down here since this budget is already a conservative
-    # estimate). Used by _decode_batch_split so the split threshold tracks whatever dtype
-    # reset_state actually allocated instead of assuming fp32.
+    # Approximate on-device bytes/element by rec_state dtype, so _decode_batch_split's threshold
+    # tracks the dtype reset_state actually allocated instead of assuming fp32.
     _STATE_BYTES_PER_ELEM = {ttnn.bfloat8_b: 1, ttnn.bfloat16: 2, ttnn.float32: 4}
 
     def _decode_batch_split(self, B):
@@ -358,9 +331,8 @@ class TPGatedDeltaNet:
             return B
         elem_bytes = self._STATE_BYTES_PER_ELEM.get(self.rec_state.dtype, 4)
         per_user = self.Nv * self.Dk * self.Dv * elem_bytes  # one user's state, actual dtype
-        # x2: the decode kernel holds the pre-decay state AND its freshly-decayed
-        # once (recurrent_gated_delta_rule_decode_ttnn's `h = ttnn.multiply(h, decay_bhkv, ...)` does
-        # copy live at once, so the budget must cover both copies.
+        # x2: the decode kernel's `h = ttnn.multiply(h, decay_bhkv, ...)` holds the pre-decay state
+        # and its freshly-decayed copy live at once, so the budget must cover both.
         max_b = max(1, self._DECODE_STATE_L1_BUDGET // (2 * max(1, per_user)))
         if max_b >= B:
             return B
@@ -413,28 +385,18 @@ class TPGatedDeltaNet:
         # fp32 recurrent state on Blackhole (QWEN35_GDN_STATE_BF16=1 reverts to bf16 there too).
         # Wormhole defaults to bfloat16 state.
         #
-        # A bfloat8_b state was tried here (smaller footprint, eases _decode_batch_split pressure, and
-        # a faster read/query matmul: BF16 x BF8 -> BF16 is ~44% faster than
-        # real production shape). It was reverted: the full test suite showed real accumulation-drift
-        # failures directly attributable to it (confirmed by rerunning against the pre-bf8 commit) --
-        # test_gdn_tp_fused_chunk_prefill (fused-chunk prefill vs 256-step decode PCC 0.9776 < 0.99) and
-        # test_model_tp_decode_batched B8/B32 (batched decode logits PCC 0.9519 < 0.97 for one user at
-        # len=128). bf16 state does not reproduce either failure.
-        # RE-VERIFIED (after the TILE-preserving GQA-expand/ab_gap decode rework) that the bf8-state
-        # revert above still stands, so do not retry it: test_gdn_tp.py passes clean with bf8 state
-        # (single-layer, <=2 decode steps is too short a window for the drift to show), but
-        # test_model_tp_decode_batched still fails at BOTH B8 and B32 with the same signature as the
-        # the original revert (user 1 step 3 logits PCC 0.9660 < 0.97), and no
-        # B=32: device time 2,917->1,933us (-33.7%, ops 111->66, since bf8's halved per-user bytes
-        # put max_b at 62 >= 32 so _decode_batch_split stops splitting) but op-to-op gap
-        # 5,473->7,903us (+44.4%), for a WORSE effective total (~9,836 vs ~8,390us) -- this step is
-        # dispatch-bound, so the split path's more-numerous launches actually schedule tighter.
-        # DELIBERATE narrowing (Wormhole gating audit, item 2): this used to be tpc.is_blackhole(),
-        # which gave T3K and N150 N300's bf16 state, unvalidated on either. Narrowed
-        # wh_9b_n300 on purpose, accepting that T3K/N150 now fall into the fp32-state branch below
-        # (matching Blackhole's dtype, not because they're Blackhole, but because fp32 is the safe
-        # default absent validation). If T3K measurements later justify bf16 state there too, add it
-        # to wh_9b_n300's definition in tp_common.py, not by reverting this to is_blackhole().
+        # DO NOT retry a bfloat8_b state. It is smaller, eases _decode_batch_split pressure and gives
+        # a ~44% faster read/query matmul, but it drifts: test_gdn_tp_fused_chunk_prefill (PCC 0.9776
+        # vs decode) and test_model_tp_decode_batched at B8/B32 (0.9519 for one user at len=128) both
+        # fail, and bf16 reproduces neither. Re-verified after the TILE-preserving decode rework --
+        # test_gdn_tp.py passes with bf8 (too few decode steps to show drift) while batched decode
+        # still fails with the same signature. It is not even a win: at B=32 device time drops 33.7%
+        # (the split stops firing) but the op-to-op gap grows 44.4%, for a worse total -- this step
+        # is dispatch-bound.
+        #
+        # Gated on wh_9b_n300, not is_blackhole: T3K/N150 fall into the fp32 branch because fp32 is
+        # the safe default absent validation there. If T3K measurements later justify bf16, widen
+        # wh_9b_n300 in tp_common.py rather than reverting this to is_blackhole().
         if not tpc.wh_9b_n300(self.args) and os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
             self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv), dtype=ttnn.float32)
         else:
@@ -494,37 +456,20 @@ class TPGatedDeltaNet:
             self.cfg,
             decode_progcfg,
             self.args.act_shard_hidden,
-            # PREFILL BLOCKING. This used to be the layer's worst matmul (2,151us at 36.6% of peak,
-            # output subblock 1x1): folded [qkv|z|a|b] width 6176 = 193 tiles, PRIME, so
-            # at 8 columns per_core_N=25 whose only divisors are 1/5/25. Under COMPUTE_HIFI2 the output
-            # subblock caps at 4, which 25 does not divide, so out_subblock_w fell to 1
-            # (out_block_w being a multiple of it) _safe_half_out_block_w could only reach 5 — five K
-            # passes, each re-reading the 16MB DRAM-resident in0. out_block_w=25 (one pass) overflowed
-            # L1: "circular buffers ... grow to 1683136 B" vs max 1499136 B.
+            # PREFILL BLOCKING. The one-K-pass progcfg and the no-fp32-acc compute config are a
+            # COUPLED PAIR and must be passed together -- the progcfg's blocking is illegal with
+            # fp32 dest acc on, which is what caps the output subblock at 4 and doubles the
+            # intermediate CB. Prefill only; decode keeps self.cfg. Worth -16.0% on this matmul at a
+            # PCC cost of 0.99997 -> 0.99992; see gdn_qkvzab_pad_tiles in model_config.py for the
+            # measurements and tests/perf/test_gdn_inproj_sweep.py for the ~200-point sweep.
             #
-            # Both of those limits come from fp32_dest_acc_en, not from the shape. Off, the subblock
-            # ceiling rises 4 -> 8 (so 25 -> out_subblock_w=5) and the intermediate CB halves (so
-            # out_block_w=25 fits). Hence the pair below: the one-K-pass progcfg AND the matching
-            # no-fp32-acc compute config, prefill only — decode keeps self.cfg. They are coupled and
-            # must be passed together; the progcfg's blocking is illegal with fp32 dest acc on.
+            # Also rejected: the subblock-maximizing create_prefill_mlp_matmul_program_config picks
+            # 7 columns (per_core_N=28) and is slower even at one K pass (1,309us) -- losing 8 of 64
+            # cores costs more than the subblock wins. An L1 output is impossible at this blocking;
+            # the full per_core_N-wide CBs clash with the L1 buffers.
             #
-            # MEASURED, device kernel duration, N150, M=2048 K=4096 (tests/perf/test_gdn_inproj_sweep.py
-            # sweeps ~200 points across blocking x compute cfg x N padding x grid width):
-            #     N=6912  sub_w=3 blk_w=9   fp32_acc ON   3 passes  1493us   <- previous config
-            #     N=6176  sub_w=5 blk_w=25  fp32_acc OFF  1 pass    1255us   -16.0%
-            # This also let the 6176 -> 6912 pad be reverted (see gdn_qkvzab_pad_tiles in
-            # model_config.py), so the shape is back to 11.9% fewer FLOPs as well. Costs PCC
-            # 0.99997 -> 0.99992 vs an fp32 reference.
-            #
-            # Also measured and rejected: routing this through the subblock-maximizing
-            # create_prefill_mlp_matmul_program_config picks 7 columns -> per_core_N=28, and even with
-            # one K pass that is slower (1,309us): losing 8 of 64 cores costs more
-            # subblock wins. Moving the output to L1 is impossible at this blocking: the full
-            # per_core_N-wide CBs leave no room ("statically allocated circular buffers clash with L1
-            # buffers ... L1 buffer allocated at 684032, static CB region ends at 939200").
-            #
-            # gdn_qkvzab_prefill_progcfg is None on Blackhole (it takes the fused AGMM path instead),
-            # so fall back to the shared factory + self.cfg there.
+            # gdn_qkvzab_prefill_progcfg is None on Blackhole (it takes the fused AGMM path), so
+            # fall back to the shared factory + self.cfg there.
             _kpass1 or self.args.prefill_progcfg,
             self.args.dim,
             decode_out_memory_config=out_memory_config,
@@ -615,36 +560,28 @@ class TPGatedDeltaNet:
         dev, K, C = self.mesh, self.K, self.qkv_dim_tp
         _dram = ttnn.DRAM_MEMORY_CONFIG
         Lin = (K - 1) + T
-        # From-scratch chunk: let ttnn.conv1d apply the K-1 causal zero pad instead of materialising it
-        # with ttnn.concat (197us at T=2048, a full 16MB pass). conv1d takes padding=[left, right] and
-        # prepare_conv_weights the 2D 4-tuple; both must describe the SAME asymmetric pad -- a
-        # symmetric prep pad silently produces wrong values (max|diff| 26.9 vs 0).
+        # From-scratch chunk: let ttnn.conv1d apply the K-1 causal zero pad instead of materialising
+        # it with ttnn.concat (197us at T=2048, a full 16MB pass). conv1d takes padding=[left, right]
+        # and prepare_conv_weights a 2D 4-tuple; both must describe the SAME asymmetric pad -- a
+        # symmetric prep pad SILENTLY produces wrong values (max|diff| 26.9 vs 0).
         #
-        # FROM-SCRATCH ONLY (conv_state is None): per-user prefill and the demo path. A carried chunk
-        # still needs the concat, since native padding only fills zeros. Upstream
-        # used concat unconditionally to keep ONE conv program. We now get two, so _conv1d_wprep is
-        # keyed by geometry below.
+        # From-scratch only (conv_state is None): a carried chunk still needs the concat, since
+        # native padding only fills zeros. That gives two conv geometries, so _conv1d_wprep is keyed
+        # by geometry below. Wormhole only -- the concat form is Blackhole's tuned default.
         #
         # NOT extended to _stable_state, though chunk 1 would qualify (after reset_state_inplace the
-        # carry provably holds zeros). Tried, 11/11 tests pass, REVERTED: the flag must be cleared at
-        # every site writing conv_carry, and getting that wrong substitutes zeros for a real carry
-        # (wrong output, no error). The perf harness cannot even show the gain --
-        # test_profile_single_layer_prefill runs a warmup first, so the carry is non-zero by then.
+        # carry provably holds zeros). Tried, 11/11 pass, reverted: the flag must be cleared at every
+        # site writing conv_carry, and getting that wrong substitutes zeros for a real carry -- wrong
+        # output, no error. The perf harness cannot even show the gain, since
+        # test_profile_single_layer_prefill warms up first and the carry is non-zero by then.
         #
-        # Wormhole only: this is Blackhole's tuned default conv path, so BH keeps the concat form.
+        # _conv_len also decides CORE COUNT via determine_parallel_config's divisor search: native
+        # pad gives T=2048=64 tiles -> 64 cores x 1 tile, while concat's 2051 -> 65 tiles has no
+        # divisor <=64 and lands on 33 cores x 2 tiles, half the grid idle. So the carry costs more
+        # than the 210us concat -- it also halves input-side parallelism.
         #
-        # _conv_len also decides CORE COUNT, and the forms differ. determine_parallel_config() uses
-        # find_closest_largest_divisor_with_num_padding_and_mult(nhw_ntiles, max_num_cores, ...):
-        #   _native_pad: _conv_len = T = 2048 = 64 tiles -> 64 cores x 1 tile.
-        #   concat: 2051 -> 65 tiles, no divisor <=64 -> 33 cores x 2
-        #                tiles, HALF the grid idle (profile confirms 33 cores).
-        # So the carry costs more than the 210us concat -- it also halves input-side parallelism.
-        #
-        # CARRY SPLICE (Wormhole, OFF -- measured negative result after the conv call below). When on,
-        # the big conv takes native-pad form even with a carry; the K-1 affected
-        # a second tiny conv, buying both wins at once. _force_concat is for
-        # test_gdn_conv1d_splice_bitexact (runs both forms in one process); _force_splice keeps that
-        # test covering the splice regardless of _SPLICE_CARRY.
+        # _force_concat/_force_splice exist for test_gdn_conv1d_splice_bitexact, which runs both
+        # forms in one process regardless of _SPLICE_CARRY.
         # T > TILE_SIZE is a CORRECTNESS guard, not perf: at T <= TILE_SIZE the
         # head slice covers all of qkv_rm, and a full-coverage ttnn.slice returns an ALIAS, so
         # deallocating it frees the big conv's own input ("Tensor is not allocated", caught at T=32).
@@ -734,20 +671,18 @@ class TPGatedDeltaNet:
         # activation block, which is what makes the profiled matmul shape 2048 x 16384 x 4096
         # (16384 = qkv_dim_tp * K). Auto-selected; already the fast path.
         #
-        # Knobs checked and deliberately NOT set (Conv2dConfig, conv2d_device_operation_types.hpp):
-        #   activation           -- SiLU folding drops PCC to ~0.84 on this depthwise (see below).
-        #   enable_activation_reuse -- reuses data across consecutive image ROWS; input_height=1 here.
-        #   force_split_reader   -- ignored unless the per-core act block height exceeds one tile,
-        #                           and it is exactly one tile at T=2048 on 64 cores.
-        #   deallocate_activation -- documented no-op when the input is in DRAM, which xin always is.
-        #   act_block_w_div      -- ignored for HEIGHT_SHARDED.
-        #   enable_act_double_buffer -- would double a 32x4096 bf16 activation CB (256KB -> 512KB per
-        #                           core). This path already runs within ~2% of WH L1 (see the
-        #                           nlp_concat_heads leak note in forward_prefill); not worth the cliff.
-        #   enable_weights_double_buffer -- the only remaining candidate: the depthwise weight is tiny
-        #                           (C x 1 x K), so the extra L1 is small. Unmeasured; A/B it before
-        #                           enabling.
-        # The real conv-side lever is _conv_len, not a config field.
+        # Knobs checked and deliberately NOT set (Conv2dConfig). The real conv-side lever is
+        # _conv_len, not a config field:
+        #   activation               -- SiLU folding drops PCC to ~0.84 on this depthwise.
+        #   enable_activation_reuse  -- reuses across image ROWS; input_height=1 here.
+        #   force_split_reader       -- ignored unless the act block exceeds one tile; it is exactly
+        #                               one at T=2048 on 64 cores.
+        #   deallocate_activation    -- no-op when the input is in DRAM, which xin always is.
+        #   act_block_w_div          -- ignored for HEIGHT_SHARDED.
+        #   enable_act_double_buffer -- would double a 256KB/core activation CB, and this path
+        #                               already runs within ~2% of WH L1.
+        #   enable_weights_double_buffer -- the one remaining candidate (the depthwise weight is
+        #                               tiny). Unmeasured; A/B before enabling.
         conv_cfg = ttnn.Conv1dConfig(
             weights_dtype=ttnn.bfloat16,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -808,51 +743,27 @@ class TPGatedDeltaNet:
             )
 
         out = _conv(xin, _conv_len, _conv_pad, _prep_pad)
-        # ---- Carry splice: IMPLEMENTED, BIT-EXACT, OFF because it does not pay. ----
-        # Correctness (held up): the conv is linear and causal with kernel K,
-        # so row t reads [t-K+1, t]. Only rows t < K-1 pass row 0, so
-        # under native pad every row t >= K-1 is already right. The big conv
-        # cores) and the first rows be overwritten:
-        #   1. big = conv1d(qkv_rm, padding=[K-1, 0])                    -> rows 0..K-2 wrong
-        #   2. fix = conv1d(concat([carry, qkv_rm[0:TILE]]), padding=0)  -> TILE correct rows
-        #   3. silu both, then slice_write(fix, big, ...)
-        # test_gdn_conv1d_splice_bitexact: torch.equal on `out` AND `new_state`, 9 cases
-        # (T=32/128/2048 x nonzero/zero/no carry), max|diff| exactly 0.0.
+        # ---- Carry splice: implemented, bit-exact, OFF because it does not pay. ----
+        # The conv is linear and causal with kernel K, so row t reads [t-K+1, t] and only rows
+        # t < K-1 see the carry. So: run the big conv under native pad (rows 0..K-2 wrong), run a
+        # tiny conv over concat([carry, qkv_rm[0:TILE]]), silu both, and slice_write the patch over
+        # the head.
         #
-        # Two design-sketch corrections: slice_write is ROW_MAJOR-only (fine -- the conv output already
-        # is, after sharded_to_interleaved); and a "tiny extra conv" is not tiny here.
+        # MEASURED (Tracy, T=2048, N300, 9B) against the concat form: the concat drops 205us -> 5us
+        # and the big conv chain 392 -> 321us (64 cores instead of 33), but the fix chain adds 260us,
+        # for a net -11us. The patch conv is 163us on ONE core and shrinking it does not help
+        # (161.4us for 3 rows, 194.0 for 32) -- act_block_w = in_channels * K = 16384 regardless of
+        # row count, so determine_parallel_config gives it a single core. Substituting the MAC FIR as
+        # the patch reaches -46us (~7%) at best, with slice_write's 67us for 256KB the next floor.
         #
-        # MEASURED (Tracy, T=2048, N300, 9B), splice ON vs concat form:
-        #     concat                     205us  ->    5us     (the win, as predicted)
-        #     big conv chain  33 cores  100+78+12+202 = 392us
-        #                     64 cores   96+11+12+202 = 321us (the other win)
-        #     fix chain  10+10+10+163+67 = +260us   <-- the killer
-        #     TOTAL                      597us  ->  586us    (-11us: noise)
+        # NOT taken: -46us is small next to the in-proj rework's -249us, costs 5 extra programs per
+        # layer, and a FIR patch is only PCC-equal, so the torch.equal gate would have to be weakened
+        # on exactly the rows most likely to hide an indexing bug. Left in place but off
+        # (_SPLICE_CARRY) because the correctness half is done: if those get cheap, flip the flag.
         #
-        # The fix conv is 163us on ONE core; shrinking the patch does not help:
-        # 161.4us for 3 rows, 166.9 for 8, 176.0 for 16, 194.0 for 32. Fixed
-        # overhead: act_block_w = in_channels * K = 16384 whatever the row count,
-        # tile, which determine_parallel_config gives one core.
-        #
-        # MAC FIR (_causal_conv1d_fir_wh) as the patch instead: also not enough. 141.8us for 32 rows
-        # + 16.2us to untilize for slice_write = 158us vs 191us for conv1d.
-        # small programs, each fixed-overhead-bound at ~12us. Best case for the whole splice:
-        #     5+321+141.8+16.2+67 = 551us vs 597us -> -46us (~7%)
-        # and slice_write alone is 67us for 256KB on one core, the next floor.
-        #
-        # NOT taken: -46us is small next to the in-proj rework's -249us, needs
-        # 5 extra programs/layer, and a FIR patch makes K-1 rows come from a
-        # bit-exact, only PCC-equal, so the torch.equal gate would have to be weakened on exactly the
-        # rows most likely to hide an indexing bug. Bad trade.
-        # Left in place but OFF (see _SPLICE_CARRY) rather than deleted, because the correctness half is
-        # done and bit-exact with the conv1d patch. If those ever get cheap,
-        # flipping the flag is the whole change.
-        #
-        # Verified bit-identical (torch.equal on both `out` and `new_state`) against the concat form by
-        # tests/perf/test_gdn_conv1d_splice_bitexact.py, which runs both arms in one process via
-        # _force_concat. That test is the gate this optimization was waiting on -- it is a
-        # silent-wrongness risk (a bad splice produces plausible numbers, not an error), so if you
-        # touch this block, re-run it.
+        # A bad splice produces plausible numbers rather than an error, so
+        # tests/perf/test_gdn_conv1d_splice_bitexact.py (torch.equal on `out` and `new_state`, 9
+        # cases, both arms in one process) is the gate. Re-run it if you touch this block.
         #
         # xin aliases qkv when the caller handed over ROW_MAJOR qkv and _native_pad skipped the
         # concat: freeing it here would free forward_prefill's qkv out from under its own
@@ -934,19 +845,12 @@ class TPGatedDeltaNet:
                 # afterwards -- a separate pass over this [S,dim] tensor costs ~175us and would eat
                 # most of the win.
                 #
-                # THIS OP HAS A DOCUMENTED DTYPE CLIFF (see forward_prefill's fp32/bf16 notes): the
-                # RS sums num_devices row-parallel partials, and dropping fp32->bf16 measured PCC
-                # ~0.69 at TP=4 on Blackhole. So this was measured, not reasoned by analogy with the
-                # MLP's down-proj:
-                #     MEASURED (T3K TP=8, 27B, T=128, test_gdn_tp_prefill)
-                #         bf16  PCC 0.9994457
-                #         bf8   PCC 0.9992864     <- 4th decimal, nothing like the TP=4 cliff
-                #     MEASURED (T3K TP=8, 27B, seq 2048, single-layer profile, device kernel time)
-                #         out-proj matmul 2048x768x5120   454 -> 315us  (-139, writes half the bytes)
-                #         reduce-scatter  [1,1,2048,5120] 1029 -> 553us  (-476)
-                #                                                       = -615us/layer
-                # 553us also matches the MLP's already-bf8 RS at the identical shape (581-587us),
-                # which is the cross-check that this is the expected floor and not a fluke.
+                # THIS OP HAS A DTYPE CLIFF (see forward_prefill's fp32/bf16 notes): the RS sums
+                # num_devices row-parallel partials, and fp32 -> bf16 measured PCC ~0.69 at TP=4 on
+                # Blackhole. So bf8 here was measured, not reasoned by analogy with the MLP:
+                # PCC 0.9994457 -> 0.9992864 at TP=8, and -615us/layer (out-proj 454 -> 315us,
+                # reduce-scatter 1029 -> 553us). That 553us matches the MLP's already-bf8 RS at the
+                # identical shape, the cross-check that it is the expected floor.
                 #
                 # Gated to the 27B because the cliff above proves the safe dtype here is TP- and
                 # model-dependent, and TP=8/dim=5120 is the only configuration measured. Blackhole
@@ -1099,23 +1003,16 @@ class TPGatedDeltaNet:
         # for a full chunk the None slice and the valid_len==T one-hot select the identical rows.
         #
         # ... and because those rows ARE identical, normalize the *unpadded* case to None here.
-        # valid_len >= T means "no padding in this chunk", which is what callers like model.py's
-        # prefill_tp (`valid_len = valid_len or T`) and the single-layer perf test pass. Taking the
-        # masked path for it is pure overhead with no effect on the result:
-        #   * conv FIR new_state: the one-hot picks x_padded rows [valid_len, valid_len+K-1) =
-        #     [T, T+K-1); the None path statically slices [total_len-(K-1), total_len) with
-        #     total_len = (K-1)+T — the same rows. Costs a [K-1,total_len]x[total_len,C] one-hot
-        #     matmul (95us of 21.7ms at T=2048) plus a host from_torch that blocks trace capture.
-        #     VERIFIED bit-identical (conv output AND new_state) at T=128/256/2048 on N300.
-        #   * fused chunk adapter: mask gated on `valid_len < T`, already a no-op.
-        # Net effect is the cheaper, trace-safe, better-tested path (every test_gdn_tp prefill test
-        # exercises valid_len=None) for byte-identical output.
+        # valid_len >= T means "no padding in this chunk", and taking the masked path for it is pure
+        # overhead: the conv FIR's one-hot picks exactly the rows the None path slices statically,
+        # for a [K-1,total_len]x[total_len,C] matmul (95us of 21.7ms at T=2048) plus a host
+        # from_torch that blocks trace capture, and the fused chunk adapter's mask is already a
+        # no-op at valid_len == T. Verified bit-identical (conv output and new_state) at
+        # T=128/256/2048 on N300.
         #
-        # WORMHOLE ONLY, deliberately. On Blackhole `_gdn_conv1d` is True, so the gate below
-        # (`self._gdn_conv1d and valid_len is None`) would additionally switch the conv from the MAC
-        # FIR to native ttnn.conv1d, a different kernel with different rounding.
-        # Possibly better there, but that is a Blackhole retune needing BH
-        # normalization stays off BH until then.
+        # WORMHOLE ONLY: on Blackhole `_gdn_conv1d` is True, so the gate below would additionally
+        # switch the conv from the MAC FIR to native ttnn.conv1d -- a different kernel with
+        # different rounding. Possibly better there, but it needs a Blackhole retune first.
         # (_normalize_valid_len / prefill_uses_native_conv1d implement this and the _use_native_conv1d
         # gate below; layer.py reads the same predicate to pick attention_norm's gather dtype.)
         valid_len = self._normalize_valid_len(valid_len, T)
@@ -1152,9 +1049,9 @@ class TPGatedDeltaNet:
         #     ttnn.synchronize_device(dev)   # <-- never returns
         # The tensor it returns has logical shape, padded_shape, layout and memory_config IDENTICAL
         # to the slice+to_layout it replaces, so the op is dispatched correctly and simply never
-        # completes. ttnn dispatch is async, so the hang surfaces at the next
-        # blocking call -- the fused chunk kernel -- so the stack trace blames the
-        # op entirely. Flip to True to re-test after a ttnn uplift.
+        # completes. ttnn dispatch is async, so the hang surfaces at the next blocking call -- the
+        # fused chunk kernel -- and the stack trace blames that instead. Flip to True to re-test
+        # after a ttnn uplift.
         _qkv_rm = False
         qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_proj_mc, qkv_row_major=_qkv_rm)
 
@@ -1183,29 +1080,21 @@ class TPGatedDeltaNet:
 
         # q/k/v: L1 on Wormhole up to T=2048, DRAM beyond. beta/g always DRAM.
         #
-        # The note this replaces said "q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes
-        # it". True then, stale once the in-proj rework dropped the 6912 pad: qkvzab
-        # 3MB smaller, which is enough headroom for q+k+v (4+4+8MB = 256KB/core total) AT T=2048.
-        # MEASURED in the real layer (Tracy, T=2048, N300 — perf14 -> perf16):
-        #     q  47 -> 34us     k  59 -> 33us     v  94 -> 65us      = -68us/layer
-        # matching the isolated sweep (192 -> 132us).
+        # Dropping the 6912 in-proj pad freed enough headroom for q+k+v (256KB/core) at T=2048.
+        # MEASURED in the real layer (Tracy, T=2048, N300): q 47 -> 34us, k 59 -> 33us, v 94 -> 65us
+        # = -68us/layer, matching the isolated sweep.
         #
-        # The T=2048 headroom does NOT extrapolate to longer prompts: q/k/v scale linearly with T, and
-        # test_model_tp_long_prefill (T=2304, full 8-layer model) hit "Statically allocated circular
-        # buffers in program 4416 clash with L1 buffers ... allocated at 1178496,
-        # circular buffer region ends at 1277120" in _row_proj's matmul -- the extra ~288KB/core of q/k/v
-        # at T=2304 (vs 256KB/core at T=2048) left too little L1 for that matmul's circular buffers.
-        # Gating on T<=2048 (the only size measured safe) avoids the crash for
-        # longer single-pass prefill while keeping the win for T<=2048 chunks/prompts.
+        # It does NOT extrapolate: q/k/v scale linearly with T, and at T=2304 the full model hits a
+        # CB clash in _row_proj's matmul -- the extra ~32KB/core leaves too little L1 for its
+        # circular buffers. Hence the T<=2048 gate, the only size measured safe.
         #
-        # z is NOT included: z in L1 fails the full layer with a
-        # scan-kernel CB clash (see the _z_mc note in _project_qkvzab). q/k/v are consumed by the chunk
-        # kernel's reader; z is multiplied in last, so it lives strictly longer.
+        # z is excluded: it is multiplied in last, so it lives strictly longer than q/k/v (which the
+        # chunk kernel's reader consumes), and z in L1 fails the full layer with a scan-kernel CB
+        # clash (see the _z_mc note in _project_qkvzab).
         #
         # If you widen this (raise the T threshold or re-include z), gate it on
-        # test_profile_single_layer_prefill AND test_model_tp_long_prefill, NOT on test_gdn_tp or
-        # test_prefill: those pass with z in L1 / no T cap; only the model at
-        # realistic T catches the clash.
+        # test_profile_single_layer_prefill AND test_model_tp_long_prefill -- test_gdn_tp and
+        # test_prefill pass either way; only the model at realistic T catches the clash.
         # Wormhole only: Blackhole's placement was tuned separately and is left byte-identical.
         kd = self.key_dim_tp
         # MODEL-GATED. The Wormhole L1 placement below was tuned for the 9B (dim 4096); it is NOT
@@ -1377,9 +1266,9 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_n)
         # gated stays DRAM. L1 is 262.3 -> 217.7us in ISOLATION yet fails the layer:
         # "statically allocated circular buffers clash with L1 buffers ... L1 buffer allocated at 949120".
-        # gated is 8MB and feeds the out-proj matmul, which runs one K pass and
-        # spends nearly all L1 on CBs -- the collision that rules out an L1 in-proj
-        # typecast and head-concat above pass the full layer, this one does not.
+        # gated is 8MB and feeds the out-proj matmul, which runs one K pass and spends nearly all
+        # L1 on its CBs -- the same collision that rules out an L1 in-proj. The typecast and
+        # head-concat above pass the full layer; this one does not.
         gated = _silu_mul(out_f, z, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_f)
         ttnn.deallocate(z)
@@ -1817,11 +1706,10 @@ class TPGatedDeltaNet:
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
         ttnn.deallocate(qkv)
-        # FIR over the K taps. The per-tap chain (multiply + K-1 mac) costs
-        # K*2-1 = 7 DEVICE ops at K=4: ttnn.mac does not fuse, it dispatches a
-        # multiply and an add (Tracy shows 7 BinaryNg ops for 4 calls). Stacking
-        # states into [K,B,C] and taps into [K,1,C] makes the FIR one broadcast
-        # ONE reduction: 3 device ops (concat + multiply + sum) instead of 7.
+        # FIR over the K taps. The per-tap chain (multiply + K-1 mac) costs K*2-1 = 7 DEVICE ops at
+        # K=4, because ttnn.mac does not fuse -- it dispatches a multiply and an add (Tracy shows 7
+        # BinaryNg ops for 4 calls). Stacking states into [K,B,C] and taps into [K,1,C] makes the
+        # FIR one broadcast multiply plus one reduction: 3 device ops (concat + multiply + sum).
         # MEASURED (WH, K=4 B=32 C=4096, full shift+FIR+silu step): 43.0us / 8 ops vs the per-tap
         # chain's 47.1us / 12 ops, with PCC 0.999997 vs 0.999995 (marginally BETTER, since the
         # reduction accumulates once instead of rounding after every mac).
