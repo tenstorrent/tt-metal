@@ -203,6 +203,13 @@ void MoeFusedSwiGluDeviceOperation::validate_on_program_cache_miss(
         "moe_fused_swiglu: input_m_tiles {} exceeds activation capacity {} tiles",
         operation_arguments.m_tiles,
         tensor_arguments.activations.padded_shape()[-2] / TILE);
+    // An inverted band drops every expert down the same count-0 path a genuine skip takes, so the
+    // op would run to completion and write nothing rather than fail.
+    TT_FATAL(
+        operation_arguments.min_active_tokens <= operation_arguments.max_active_tokens,
+        "moe_fused_swiglu: active-token band is inverted: min_active_tokens {} > max_active_tokens {}",
+        operation_arguments.min_active_tokens,
+        operation_arguments.max_active_tokens);
     TT_FATAL(
         operation_arguments.grid_x >= operation_arguments.grid_y && operation_arguments.grid_y >= 2,
         "moe_fused_swiglu: core grid must have columns >= rows >= 2, got {}x{}",

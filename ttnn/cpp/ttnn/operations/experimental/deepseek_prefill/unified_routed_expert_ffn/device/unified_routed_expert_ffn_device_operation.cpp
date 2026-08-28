@@ -157,6 +157,15 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         op.experts_per_chip,
         t.global_expert_idx_table.logical_shape()[-1]);
 
+    // An inverted band drops every expert down the same count-0 path a genuine skip takes, so the
+    // op would run to completion and write nothing rather than fail.
+    TT_FATAL(
+        op.min_active_tokens <= op.max_active_tokens,
+        "unified_routed_expert_ffn: active-token band is inverted: min_active_tokens {} > "
+        "max_active_tokens {}",
+        op.min_active_tokens,
+        op.max_active_tokens);
+
     // The kernels always read each expert's x slice at its region offset
     // (fusing ttnn::extract) and write that expert's output into `output` at the
     // same offset (fusing ttnn::insert), so expert_region_offsets is mandatory.
