@@ -1829,9 +1829,9 @@
     export MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     pytest models/demos/deepseek_v3/tests -x \
+      -m "not t3k_compat" \
       --ignore=models/demos/deepseek_v3/tests/unit \
       --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
-      --ignore=models/demos/deepseek_v3/tests/t3k_compat \
       --timeout 600 --durations=0
   model: deepseek-v3
   skus:
