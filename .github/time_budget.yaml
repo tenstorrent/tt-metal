@@ -166,6 +166,8 @@ ttsim:
   sanity:
     sim_wh_n150: 30
     sim_bh_p150: 30
+    # runtime_sim_quasar_cpp_unit_tests in runtime_sanity_tests.yaml (ttsim-owned list).
+    sim_quasar: 30
 
 shield:
   e2e_tier2:
