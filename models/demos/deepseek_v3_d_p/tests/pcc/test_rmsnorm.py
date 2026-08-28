@@ -19,7 +19,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_y_device_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -161,10 +161,10 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     "mesh_device, device_params",
     [
         pytest.param(
-            (8, 4),
-            torus_xy_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=7 * 1024),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
         ),
     ],
     indirect=True,
@@ -174,15 +174,15 @@ def test_rmsnorm_tp1(mesh_device, device_params, isl_per_chip, emb_dim, epsilon)
     Regression: the module must survive a cluster axis of length 1.
 
     ``ttnn.all_gather`` aborts at ``num_devices == 1`` rather than degenerating to a copy, so before
-    the TP=1 guard this module died on any single-column mesh. Runs on an ``(8,1)`` submesh carved
-    from the ``8x4`` galaxy -- the shape a PP=4 x TP=1 x SP=8 stage actually uses -- because a bare
-    ``(1,1)`` mesh is not feasible on this hardware and would only skip.
+    the TP=1 guard this module died on any single-column mesh. Runs on LoudBox as a native ``(8,1)``
+    mesh -- the same single-column shape a PP=4 x TP=1 x SP=8 galaxy stage uses -- so it needs no
+    galaxy time. A bare ``(1,1)`` mesh is not feasible on this hardware and would only skip.
     """
     torch.manual_seed(42)
 
-    sm = mesh_device.create_submeshes(ttnn.MeshShape(8, 1))[0]
+    sm = mesh_device
     mesh_shape = sm.shape
-    assert mesh_shape[1] == 1, f"expected a single-column stage submesh, got {tuple(mesh_shape)}"
+    assert mesh_shape[1] == 1, f"expected a single-column mesh, got {tuple(mesh_shape)}"
 
     torch_input = torch.randn((1, 1, isl_per_chip, emb_dim), dtype=torch.bfloat16).float()
     rmsnorm = torch.nn.RMSNorm(emb_dim, eps=epsilon)
