@@ -33,22 +33,16 @@ class Qwen36DecoderLayer:
 
         prefix = f"layers.{layer_num}"
 
-        # Zero-centered RMSNorm (Qwen3.5): output = x_normed * (1 + weight). The
-        # framework RMSNorm applies the +1 internally via add_unit_offset=True and
-        # is mesh-aware (replicates the weight across a MeshDevice).
+        # Zero-centered RMSNorm (Qwen3.5): output = x_normed * (1 + weight), with the +1 applied
+        # inside the framework RMSNorm via add_unit_offset=True.
         #
-        # Single device: plain RMSNorm on the full hidden state (validated path).
-        # TP (27B on a (1,4) mesh): the residual stream is fractured along the
-        # hidden dim, so each norm is wrapped in the framework DistributedNorm,
-        # which all-gathers (PREFILL: distributed rmsnorm + gather; DECODE:
-        # gather-then-norm) to hand the modules a replicated full-dim input —
-        # exactly as models/demos/qwen35_27b does via the framework decoder.
-        # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
-        # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
-        # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
-        # BH-only: the fused all_gather_minimal_matmul_async grid assumes BH's taller (9-10 row)
-        # compute grid (see tp_common.py all_gather_matmul_prefill); WH tops out at 8 rows, so this
-        # fusion is unvalidated there. Falls back to unfused AG + matmul on WH.
+        # Under TP the residual stream is fractured along the hidden dim, so each norm is wrapped in
+        # DistributedNorm, which all-gathers (prefill: distributed rmsnorm + gather; decode:
+        # gather-then-norm) to hand the modules a replicated full-dim input. Prefill fuses that
+        # gather into the in-proj matmul for GDN qkvzab and full-attn QKV, and attention_norm then
+        # skips its post-norm AG; these gates must match the module-side _fuse_agmm gates.
+        # BH-only -- the fused grid assumes BH's taller 9-10 row compute grid, so WH falls back to
+        # unfused AG + matmul.
         self._fuse_norm_agmm = (
             self.num_devices > 1
             and is_blackhole()
@@ -57,40 +51,24 @@ class Qwen36DecoderLayer:
                 or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
             )
         )
-        # bf8 attention_norm prefill all-gather. DONE for GDN layers (see _attn_gather_dtype in
-        # forward()); NOT DONE for full-attention layers.
+        # bf8 attention_norm prefill all-gather: done for GDN layers (see _attn_gather_dtype in
+        # forward()), NOT for full-attention layers -- paged_fill_cache rejects bf8 K/V against a
+        # bf16 cache, which needs a C++ change (see the contract note in attention/tp.py). That
+        # leaves 16 full-attention layers x 1,144us = 18.3ms/chunk on the table.
         #
-        # Two blockers were found (2026-08-17), one since dissolved:
-        #   1. KV cache -- paged_fill_cache rejects bf8 K/V against a bf16 cache,
-        #      impossible with today's paged_update_cache (see the contract note in attention/tp.py).
-        #      Needs a C++ change. Still open, so full-attention layers keep bf16.
-        #   2. GDN depthwise FIR -- ternary.cpp:268 needs all addcmul operands to
-        #      share a dtype. NOT a property of the layer but of the CALL: the FIR
-        #      runs only on masked/tail chunks; a full chunk takes native conv1d
-        #      call on the GDN native-conv predicate; FIR chunks keep bf16.
+        # The GDN blocker was ttnn.linear defaulting its out dtype to in0's, so a bf8 in0 silently
+        # made the whole qkvzab in-proj bf8 and the depthwise FIR's addcmul then rejected the mixed
+        # dtypes. The in-proj is now pinned to bf16 (gdn/tp.py _project_qkvzab), keeping the
+        # recurrent path bit-for-bit on its old dtypes.
         #
-        # The real reason (2) looked unfixable: ttnn.linear defaults its out dtype to in0's
-        # (matmul.cpp:72), so a bf8 in0 silently made the whole qkvzab in-proj bf8. The bf8 slice
-        # ternary.cpp rejected came from THAT, not the gather. In-proj is now pinned to bf16
-        # (gdn/tp.py _project_qkvzab), keeping the recurrent path bit-for-bit on its old dtypes.
+        # MEASURED (T3K TP=8, 27B, GDN layer, seq 2048): the gather 1,144 -> 698us, the whole layer
+        # 7,353 -> 6,889us (-6.3%), MLP control unchanged = -21.4ms per 2048-token chunk over 48 GDN
+        # layers. Cost: test_gdn_tp_prefill PCC 0.9992650 -> 0.9991681.
         #
-        # MEASURED (T3K TP=8, 27B, GDN layer, seq 2048, device kernel duration):
-        #     attention_norm all-gather   1,144 -> 698 us   -446   (BF16 -> BFP8, 10 cores both)
-        #     LayerNormPostAllGather         48 ->  39 us     -9
-        #     qkvzab in-proj 2048x5120x2112 567 -> 553 us    -14   (BF16xBFP8 -> BFP8xBFP8)
-        #     attention block             4,806 -> 4,336 us -470
-        #     whole layer                 7,353 -> 6,889 us -464   (-6.3%)
-        #     MLP block (control)         2,464 -> 2,470 us    +6   (noise)
-        # = -21.4ms per 2048-token chunk over 48 GDN layers x 31/32 chunks; model-level attn_norm
-        # gather 73.1ms (16.7% of prefill) -> ~51.8ms.
-        # Cost: test_gdn_tp_prefill PCC 0.9992650 -> 0.9991681 (-1e-4), same order as ff_norm's.
-        #
-        # The in-proj won only 14us, not the qkv matmul's -149us: at 59% FPU it
-        # is compute-bound (DRAM 71 -> 54 GB/s, FLOPs unchanged). That -149us was the output narrowing
-        # cascading downstream, which the pin declines. Unpinning is a real lever but lands on
-        # a/b -> sigmoid/softplus -> the recurrent decay, so it needs a demo-level accuracy gate.
-        #
-        # Blocker (1) leaves 16 full-attention layers x 1,144us = 18.3ms/chunk on the table.
+        # The in-proj itself won only 14us (at 59% FPU it is compute-bound, not DRAM-bound). Its
+        # larger -149us would come from letting the narrowing cascade downstream, which the pin
+        # declines -- a real lever, but it lands on a/b -> sigmoid/softplus -> the recurrent decay,
+        # so it needs a demo-level accuracy gate.
         self.attention_norm = self._make_norm(
             mesh_device,
             args,
