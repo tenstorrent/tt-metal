@@ -215,7 +215,12 @@ inline void tanh_init() {
         // that one knot value carried the whole 0.1447 error budget on both sides of it.
         // Preserves tanh(0) = 0 exactly, continuity at |x| = 1 and 2 (0.8125 and 1.0 from
         // both sides), monotonicity, and the exact 1.0 saturation.
-        // Max |err| 0.1447 -> 0.0506, measured on n300.
+        // Measured on n300: overall max |err| 0.144656 -> 0.056339 (2.57x), the new worst
+        // point sitting on [0, 1); on [1, 2) it is 0.144656 -> 0.050906.
+        // 0.056339 is what makes this mode testable: passed_test bounds each element at
+        // atol + rtol*|golden|, and at the worst point (|x| ~ 0.56, tanh ~ 0.51) that is
+        // 0.0755. So test_eltwise_unary_sfpu's blanket skip of Tanh/approx=Yes is gone --
+        // all 80 variants pass here, 56 of them fail on the pre-retune table.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1AFF);  // 0.8125*x
         sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x3814);  // 0.1875*x + 0.625
         sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1

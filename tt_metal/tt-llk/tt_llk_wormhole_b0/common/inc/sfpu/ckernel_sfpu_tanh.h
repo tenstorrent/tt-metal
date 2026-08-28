@@ -42,7 +42,8 @@ inline void _init_tanh_()
 {
     // Minimax knot placement; see the Wormhole metal copy of this table in
     // hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_tanh.h for the rationale.
-    // Max |err| 0.1447 -> 0.0506, measured on n300.
+    // Measured on n300: overall max |err| 0.144656 -> 0.056339 (2.57x), the new worst point
+    // sitting on [0, 1); on [1, 2) it is 0.144656 -> 0.050906.
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(static_cast<std::uint16_t>(0x1AFF)); // 0.8125*x
     sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(static_cast<std::uint16_t>(0x3814)); // 0.1875*x + 0.625
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(static_cast<std::uint16_t>(0xFF00)); // 1

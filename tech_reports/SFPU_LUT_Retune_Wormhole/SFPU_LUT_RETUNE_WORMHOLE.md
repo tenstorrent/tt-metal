@@ -1,13 +1,16 @@
 # Three zero-cost accuracy gains in the Wormhole SFPU LUT kernels
 
 PR #54602, branch `ldjurovic/sfpu_constants_retune`, branched off `main` at `22cd221b266`.
-Two commits: the kernel change, which edits nothing but `*_init()` immediates, and this writeup.
+The kernel change edits nothing but `*_init()` immediates; the rest of the tree is this writeup
+and the regression test that holds the immediates to what it claims for them.
 
-The tree is deliberately only those two things. The measurement harness, the three instrument
-drivers and the captured data are **not** committed — they are not product code, and the
-figures below are served from the `ldjurovic/sfpu-retune-assets` branch rather than added to
-this diff. *Reproducing all of it* says where each piece lives and how to regenerate every
-number here from scratch.
+The tree is deliberately small: the kernel change, this document with its five figures, and one
+regression test (`tt_metal/tt-llk/tests/python_tests/test_sfpu_wh_lut_retune.py`, §0.5) that
+bounds what the retune bought so the old tables cannot come back green. The measurement harness,
+the three instrument drivers and the captured data are **not** committed — they are not product
+code. The figures *are* committed, in `images/` beside this file and linked relatively, so the
+document does not depend on a branch anyone is free to delete. *Reproducing all of it* says
+where each remaining piece lives and how to regenerate every number here from scratch.
 
 Every number and every figure below is **measured on an n300 (Wormhole B0)**. Accuracy is
 Float32→Float32 with `dest_acc=Yes`, from a ladder of **250 samples per LUT segment** — 750
@@ -30,7 +33,7 @@ harness itself is not in this tree, by design.
 | 2 | `tanh` APPROXIMATION_MODE | whole table | 0.144656 → **0.056339** | **2.57×** |
 | 3 | `gelu_appx` | 5 of 6 segments | 0.023411 → **0.011604** | **2.02×** |
 
-![Worst error per LUT segment, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/ldjurovic/sfpu-retune-assets/fig1-segment-max-error.png)
+![Worst error per LUT segment, main vs retuned](images/fig1-segment-max-error.svg)
 
 Three segments are marked *unchanged* and are bit-identical by design — each is a saturating
 tail whose value is pinned for a reason given in its section. `sigmoid_appx`'s worst error lives
@@ -223,23 +226,54 @@ noise. That is the property that makes the before/after comparison worth anythin
 reason none of the captured data is archived in this PR: it is a pure function of the kernel,
 so it can be reproduced rather than stored.
 
-**The golden sweep passes unchanged on both sides.** `test_eltwise_unary_sfpu.py` restricted to
-the three kernels is 200 collected variants, and both states give the **same result: 97 passed,
-103 skipped, 0 failed**. No golden and no tolerance needed touching, which the three sections
-below each predicted from the `CUSTOM_TOLERANCES` already in place.
+**The golden sweep needed no golden and no tolerance change — and now discriminates.**
+`test_eltwise_unary_sfpu.py` restricted to the three kernels is 200 collected variants. On the
+retuned tables: **177 passed, 23 skipped, 0 failed**. With all four Wormhole headers checked out
+from `main` and nothing else changed: **56 failed, 121 passed, 23 skipped**. Every one of the 56
+is `tanh` in approximation mode. The remaining 23 skips are pre-existing format guards, unrelated
+to the retune.
 
-The skips are pre-existing and unrelated to the retune (format guards, plus the blanket
-`Metal tanh does not support approximation mode`). That last one is the honest gap in coverage
-here: **the standard sweep never runs retuned `tanh`**, so the only thing measuring that kernel is
-the instrument in `test_sfpu_wh_lut_accuracy.py`. See the `tanh` blast-radius notes in §2.
+That is a change from an earlier draft of this section, which reported 97 passed / 103 skipped on
+*both* sides. The 103 skips included 80 variants dropped by a blanket
+`pytest.skip("Metal tanh does not support approximation mode")` — a claim that was simply false:
+`calculate_tanh` has always had the `APPROXIMATION_MODE` branch. What the skip was really standing
+in for was accuracy, and it is the retune that fixes that:
 
-| instrument | what it produces | result |
-|---|---|---|
-| `test_sfpu_wh_lut_curves.py` | 250 pts × segment → `curves_<tag>.json` | 9 + 9 variants pass; output byte-identical to the prior capture |
-| `test_sfpu_wh_lut_accuracy.py` | per-segment max/mean \|err\| | 3 + 3 pass; output byte-identical |
-| `test_sfpu_wh_lut_probe.py` | raw results + slopes, per probe point | 3 + 3 pass; output identical |
-| `perf_eltwise_unary_sfpu.py` | `MATH_ISOLATE` cycles, 12 variants | 4 + 4 clean sessions, no retries (§0.2) |
-| `test_eltwise_unary_sfpu.py` | goldens + tolerances, 200 variants | 97 passed / 103 skipped / **0 failed**, both states |
+* `passed_test` gates on `atol + rtol·|golden|`, not `atol` alone. The retuned table's worst point
+  is `|x| ≈ 0.56`, where `tanh ≈ 0.51`, so the bound is `0.05 + 0.05×0.51 = 0.0755` against an
+  error of `0.0563` — it fits, with margin.
+* The pre-retune table's worst point is the `|x| = 1` knot, where the bound is only `0.088`
+  against `0.1447` — it does not fit, which is the 56 failures above.
+
+So the skip is deleted in this PR (Wormhole only — Blackhole still ships the pre-retune table, and
+is gated by arch with a reason that says so), and `Tanh` is enrolled in
+`accuracy/test_sfpu_accuracy.py`'s `APPROX_CAPABLE_OPS` so the error sweep instruments the LUT path
+on both arches. That sweep now reports the retuned table at max \|err\| 0.0566–0.0586 and max
+relative error 0.191 across the format pairs, against 0.0039 and 1 ULP for the accurate path.
+
+**The other two kernels are swept but still do not discriminate.** `sigmoid_appx` and `gelu_appx`
+run at `(atol, rtol) = (0.13, 0.05)` — the `CUSTOM_TOLERANCES` entries sized for the coarse LUT's
+~0.12 tail. The old `sigmoid_appx` defect measured `0.102936`, comfortably inside that, so the
+sweep was green on the bug and would be green again. Hence the one further thing this PR adds to
+the tree besides the coefficients and this document:
+
+`tt_metal/tt-llk/tests/python_tests/test_sfpu_wh_lut_retune.py` drives a dense ladder over each
+kernel's LUT domain on `Float32 → Float32 / dest_acc=Yes` and asserts a per-segment `max|err|`
+bound, plus the structural invariants each table is claimed to preserve (`tanh(0) = 0`,
+continuity at the knots, monotonicity, exact saturation, `gelu_appx(x) == x` for `x >= 3`). Every
+bound sits strictly between the retuned measurement and the pre-retune one, so restoring any of
+the three old tables fails it. That test *is* committed; the instruments below are not.
+
+| instrument | committed | what it produces | result |
+|---|---|---|---|
+| `test_sfpu_wh_lut_retune.py` | **yes** | per-segment `max\|err\|` bounds + invariants | 3 + 3 assertions; passes retuned, fails main |
+| `test_sfpu_wh_lut_curves.py` | no | 250 pts × segment → `curves_<tag>.json` | 9 + 9 variants pass; output byte-identical to the prior capture |
+| `test_sfpu_wh_lut_accuracy.py` | no | per-segment max/mean \|err\|, recorded not asserted | 3 + 3 pass; output byte-identical |
+| `test_sfpu_wh_lut_probe.py` | no | raw results + slopes, per probe point | 3 + 3 pass; output identical |
+| `perf_eltwise_unary_sfpu.py` | pre-existing | `MATH_ISOLATE` cycles, 12 variants | 4 + 4 clean sessions, no retries (§0.2) |
+| `test_eltwise_unary_sfpu.py` | pre-existing, skip deleted here | goldens + tolerances, 200 variants | retuned 177 passed / 23 skipped / 0 failed; `main` headers **56 failed** — all `tanh` approx |
+| `accuracy/test_sfpu_accuracy.py` | pre-existing, `Tanh` enrolled here | per-sample error + ULP, recorded not gated | retuned approx `tanh`: max \|err\| 0.0566–0.0586, max rel 0.191 |
+| `test_unary.py::test_unary_tanh_approx_ttnn` | pre-existing | public `ttnn.tanh` approx path, `atol = 0.15` | passes both states — executes the kernel, does not discriminate |
 
 ---
 
@@ -265,7 +299,7 @@ The middle segment's slope is **larger** than the first's. A concave target cann
 way, and the consequence is not subtle: over `[1, 2)` the shipped line runs away from `sigmoid`
 and reaches `0.9844` as `x → 2⁻`, where the truth is `0.8808`.
 
-![sigmoid_appx output and signed error, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/ldjurovic/sfpu-retune-assets/fig2-sigmoid-appx.png)
+![sigmoid_appx output and signed error, main vs retuned](images/fig2-sigmoid-appx.svg)
 
 The left panel is the whole story: main's middle segment climbs away from the exact curve, then
 snaps flat at 1.0. The retuned line tracks `sigmoid` closely to `x = 2` and then makes the same
@@ -325,8 +359,17 @@ Everything *else* improves, and nothing gets worse:
 
 * On `[0, 2)` the error drops 1.85× and 14.3× respectively, in **both max and mean**.
 * On `[2, ∞)` the result is bit-identical.
-* So the error is **pointwise non-increasing across the whole real line**. Every error norm —
-  max, mean, RMS, PCC — improves or stays equal.
+* So the error is **pointwise non-increasing across the whole real line**. Every error norm
+  that is monotone in the pointwise absolute error — max, mean, RMS — therefore improves or
+  stays equal, and that is a proof, not a measurement.
+
+  PCC is deliberately *not* in that list. It is a correlation, not an error norm, and it is not
+  monotone in `|err|`: shrinking the error at one point can lower the correlation if it moves
+  the residual's covariance with the target. No PCC figure is claimed here because none was
+  measured. What is measured is that the tt-llk sweep — which gates on PCC > 0.99 as well as on
+  `(atol, rtol)` — passes every `sigmoid_appx` variant on both sides, so the retune does not move
+  PCC across that gate for this kernel in either direction. That is a gate crossing, not a PCC
+  figure, and it is all the sweep licenses anyone to say.
 
 The one property that changes is smoothness at the `|x| = 2` knot: the jump there grows from
 0.0156 to 0.1133, because segment 1 now stops at the right place (0.8867, true value 0.8808)
@@ -362,7 +405,7 @@ exactly — all good — but `tanh(1) = 0.7616`, so the knot value `0.90625` is 
 single misplaced knot *is* the kernel's entire error budget: both of the first two segments hit
 `0.1447` at `x = 1`, from opposite sides.
 
-![tanh output and signed error, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/ldjurovic/sfpu-retune-assets/fig3-tanh.png)
+![tanh output and signed error, main vs retuned](images/fig3-tanh.svg)
 
 The right panel shows the mechanism from §0.3 cleanly. Main's error is a single one-sided spike
 that reaches `0.1447` at the knot. The retuned error dips to `−0.0563` around `x = 0.47`, comes
@@ -380,7 +423,8 @@ instead of one big one. That is Chebyshev equioscillation, and it is the whole 2
 +        // Continuous piecewise-linear tanh. The knot at |x| = 1 is placed to minimise the
 +        // worst error over both adjoining segments instead of at a round number.
 +        // Preserves tanh(0) = 0 exactly, continuity at |x| = 1 and 2, monotonicity, and
-+        // the exact 1.0 saturation. Max |err| 0.1447 -> 0.0506, measured on n300.
++        // the exact 1.0 saturation. Measured on n300: overall max |err| 0.144656 ->
++        // 0.056339 (2.57x); on [1, 2) it is 0.144656 -> 0.050906.
 +        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1AFF);  // 0.8125*x
 +        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x3814);  // 0.1875*x + 0.625
          sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
@@ -430,14 +474,37 @@ continuous table unless a caller is known not to care.
 
 Small, and that is the main caveat on this gain:
 
-* **ttnn never enables it.** `unary_op_utils.cpp` constructs `UnaryOpType::TANH` with the approx
-  flag hard-wired to `false`. The path is reachable only from hand-written kernels or from
-  tt-llk's `_calculate_tanh_`.
-* **The tt-llk sweep skips it** — `pytest.skip("Metal tanh does not support approximation mode")`
-  in `test_eltwise_unary_sfpu.py` — precisely *because* `0.1447` breaches the default
-  `atol = 0.05`. At `0.0563` it still breaches, narrowly; at the 3.22× variant (`0.0449`) it
-  would fit and the skip could be deleted. That is a real secondary argument for the
-  non-continuous variant if making the path testable matters more than smoothness at zero.
+* **This is a public ttnn path, not a hand-written-kernel-only one.** `ttnn.tanh` takes a
+  `fast_and_approximate_mode` argument and forwards it straight through: `unary.cpp`'s `tanh()`
+  builds `UnaryWithParam{UnaryOpType::TANH, static_cast<float>(approx)}`, and
+  `unary_op_utils.cpp:293-296` turns that param into the kernel's template argument
+  (`tanh_tile_init<param0>()`). So `ttnn.tanh(t, fast_and_approximate_mode=True)` runs exactly
+  the table this PR changes, and `tests/ttnn/unit_tests/operations/eltwise/test_unary.py`'s
+  `test_unary_tanh_approx_ttnn` already calls it that way on three dtypes.
+
+  The one place the flag *is* hard-wired to `false` is `unary_op_utils.cpp:1032-1034`, the
+  string-to-`UnaryWithParam` parser used for fused activations — so a fused `"tanh"` activation
+  never sees the approximate kernel. That is a narrow exception, not the general case, and an
+  earlier draft of this document generalised it wrongly.
+* **What the existing coverage does and does not catch.** `test_unary_tanh_approx_ttnn` executes
+  the path but bounds it at `atol = 0.15`, which the *pre-retune* `0.144656` also satisfies — it
+  proves the op runs, not that the table is the retuned one. On the LLK side the sweep used to
+  skip the mode outright — `pytest.skip("Metal tanh does not support approximation mode")` in
+  `test_eltwise_unary_sfpu.py`. **That skip is deleted in this PR**, because the retune is what
+  makes the mode fit the default tolerance: `passed_test` bounds each element at
+  `atol + rtol·|golden|`, and at the retuned table's worst point (`|x| ≈ 0.56`, `tanh ≈ 0.51`)
+  that is `0.0755` against `0.0563`. Measured: all 80 approx-mode variants pass on the retuned
+  table, and 56 of the 80 fail with `main`'s table restored. So the sweep is now the primary
+  regression on this gain, not a gap in it — and no `atol` was widened to get there.
+
+  An earlier draft of this section claimed `0.0563` "still breaches, narrowly", and used that to
+  argue for the non-continuous 3.22× variant on testability grounds. That was wrong: it compared
+  against `atol` alone and ignored the `rtol` term. The testability argument for that variant does
+  not exist.
+
+  `test_sfpu_wh_lut_retune.py` (§0.5) still earns its place: it is the only thing that
+  discriminates for `sigmoid_appx` and `gelu_appx`, whose `CUSTOM_TOLERANCES` are wide enough to
+  swallow the old tables.
 * **`tanh_derivative_init()` holds a second, independent copy of the old table**
   (`ckernel_sfpu_tanh_derivative.h`), and this branch **leaves it frozen on purpose**, with a
   comment saying so. The legacy `tanh_derivative_lut` computes `1 − lut(x)²` and its golden
@@ -466,7 +533,7 @@ interpolating rather than minimax: each segment's line is close to the chord thr
 endpoints, leaving the error one-sided and about twice the achievable minimum. Segment 0 is the
 worst offender at `0.0234`, an order of magnitude above the next segment.
 
-![gelu_appx output against exact gelu, and signed error, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/ldjurovic/sfpu-retune-assets/fig4-gelu-appx.png)
+![gelu_appx output against exact gelu, and signed error, main vs retuned](images/fig4-gelu-appx.svg)
 
 The left panel is windowed to `|x| ≤ 0.5` — segment 0, and the only place where a 0.0234 error is
 visible against outputs that reach 4 by the end of the sweep. On `[0, 4]` all three curves would
@@ -479,7 +546,7 @@ calls straddling. The right panel is the full swept domain.
 The per-segment breakdown, six independent fits each on its own vertical scale because the errors
 span 13× across the table:
 
-![gelu_appx signed error per LUT segment](https://raw.githubusercontent.com/tenstorrent/tt-metal/ldjurovic/sfpu-retune-assets/fig5-gelu-appx-segments.png)
+![gelu_appx signed error per LUT segment](images/fig5-gelu-appx-segments.svg)
 
 The `[0, 0.5)` panel is the textbook picture: main is a chord — pinned to zero at both ends,
 bulging to `+0.0234` in the middle — and the retuned line straddles the curve from `−0.0116` to
@@ -589,8 +656,8 @@ model-accuracy spot check (BERT eval) alongside the LLK test, not just the unit 
 
 ## Reproducing all of it
 
-**Nothing in this section is committed.** This PR's tree is deliberately just the kernel change
-and this document: the measurement harness, the three instrument drivers, the captured data and
+**Nothing in this section is committed.** This PR's tree is deliberately just the kernel change,
+this document with its figures, and the one regression test in §0.5: the measurement harness, the three instrument drivers, the captured data and
 the rendered figures are all out of tree, because none of them is product code and the parquet
 sessions in particular are binary blobs that would sit in git history forever.
 
@@ -598,7 +665,7 @@ Where they live instead:
 
 | artefact | where |
 |---|---|
-| the five figures above | orphan branch `ldjurovic/sfpu-retune-assets`, embedded here by raw URL |
+| the five figures above | committed beside this document in `images/`, linked relatively |
 | harness scripts + the three instrument drivers | full sources in the PR description, in collapsed blocks |
 | captured data (`curves_*.json`, `probe_*.txt`, `perf_*.json`, parquet sessions) | not kept — regenerable in ~6 minutes on any Wormhole host |
 
@@ -649,7 +716,8 @@ entirely unrelated older run.
 
 ### The instruments
 
-Three throwaway drivers, all marked `NOT FOR MERGE` and none of them merged here:
+Distinct from `test_sfpu_wh_lut_retune.py`, which *is* committed and *does* assert: these three
+are throwaway drivers, all marked `NOT FOR MERGE` and none of them merged here.
 
 * **`test_sfpu_wh_lut_probe.py`** — raw results at a ladder of probe points with the slope
   between consecutive points. This is what pins the breakpoints, the byte format, and the fact

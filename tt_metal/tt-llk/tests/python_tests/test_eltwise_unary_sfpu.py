@@ -437,8 +437,24 @@ def test_eltwise_unary_sfpu(
     if mathop == MathOperation.ReluMin:
         pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1120")
 
-    if mathop == MathOperation.Tanh and approx_mode == ApproximationMode.Yes:
-        pytest.skip(reason="Metal tanh does not support approximation mode")
+    # Tanh's APPROXIMATION_MODE path is the 3-entry SFPLUT, and calculate_tanh has always
+    # had it -- the blanket skip this replaces ("Metal tanh does not support approximation
+    # mode") was stale. What actually gated the coverage was accuracy: the table's max
+    # |err| has to fit the per-format default, and only Wormhole's retuned table (0.0563,
+    # worst point at |x| ~ 0.56, where the rtol term carries the rest) does. Blackhole
+    # still ships the pre-retune interpolant (0.1447 at the |x| = 1 knot, against a
+    # combined bound of 0.088) and 56 of these 80 variants fail on it. Gate on the arch
+    # rather than widening the bound for both, so Wormhole keeps the tight default.
+    if (
+        mathop == MathOperation.Tanh
+        and approx_mode == ApproximationMode.Yes
+        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(
+            reason="Blackhole's tanh LUT is still the pre-retune table (max |err| 0.1447), "
+            "which the default tolerance does not cover. Retune it as Wormhole's was, or "
+            "give BH its own atol, to enrol this arch."
+        )
 
     # Each profile has its own Blackhole dest_acc=No guard, measured against its own
     # format set: the broad profile runs everything except a Float16 input or

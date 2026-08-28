@@ -43,8 +43,11 @@ inline void sigmoid_appx_init() {
     //                                             LARGER than segment 0's, which a concave
     //                                             target cannot use; that was the defect)
     //   else    : 0.5, so sigmoid saturates at exactly 1.0 (unchanged)
-    // Max |err| on [1, 2) drops 0.1029 -> 0.0360 and on [0, 1) 0.0098 -> 0.0034, measured
-    // on n300. Error is pointwise non-increasing over the whole line; segment 2 is untouched.
+    // Measured on n300: max |err| on [1, 2) drops 0.102936 -> 0.007223 and on [0, 1)
+    // 0.009755 -> 0.005275. Segment 2 is untouched, so its 0.119203 is unchanged and remains
+    // the kernel's overall max: with the last breakpoint fixed at |x| = 2 that segment must be
+    // a constant, and sigmoid(inf) = 1.0 forces it to 0.5 against sigmoid(2) - 0.5 = 0.3808.
+    // Error is pointwise non-increasing over the whole line.
     l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x3EFF));
     l_reg[LRegs::LReg1] = vUInt(static_cast<std::uint16_t>(0x3347));
     l_reg[LRegs::LReg2] = vUInt(static_cast<std::uint16_t>(0xFF10));
