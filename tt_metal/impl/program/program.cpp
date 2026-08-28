@@ -1229,9 +1229,13 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         this->invalidate_circular_buffer_allocation();
     } else {
         circular_buffer->assign_global_address();
-        // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
-        // the program has to be laid out again.
+        // invalidate_circular_buffer_allocation() would have done both of these; adding a buffer
+        // still means the program has to be laid out again, and the cached CB footprint is stale
+        // even though a globally-allocated buffer contributes no bytes to it -- it can bring core
+        // ranges the program did not cover before, and those must be reported as holding zero
+        // locally-allocated bytes rather than be missing from the map.
         this->compile_and_allocate_needed_ = true;
+        this->cb_bytes_per_core_.reset();
     }
 
     // Mark which buffer indices are being used on each core the circular buffer is used on
@@ -1570,8 +1574,8 @@ std::shared_ptr<const std::map<CoreCoord, uint64_t>> detail::ProgramImpl::cb_byt
 
     auto per_core = std::make_shared<std::map<CoreCoord, uint64_t>>();
     for (const CoreRange& core_range : this->circular_buffers_unique_coreranges()) {
-        // Only locally-allocated CBs are counted here. Globally-allocated CBs are backed by
-        // real L1 Buffers and are already tracked through the buffer path (the L1 column).
+        // Only locally-allocated CBs contribute bytes here. Globally-allocated ones are backed
+        // by real L1 Buffers and are already tracked through the buffer path (the L1 column).
         std::vector<std::pair<uint64_t, uint64_t>> regions;
         for (const auto& cb : this->circular_buffers_on_corerange(core_range)) {
             if (cb->globally_allocated()) {
@@ -1580,28 +1584,34 @@ std::shared_ptr<const std::map<CoreCoord, uint64_t>> detail::ProgramImpl::cb_byt
             const uint64_t start = cb->address();
             regions.emplace_back(start, start + cb->size());
         }
-        if (regions.empty()) {
-            continue;
-        }
 
         // Merge overlapping ranges: CBs sharing a core may reuse addresses, and we want
         // physical bytes occupied, not the sum of CB sizes.
         std::sort(regions.begin(), regions.end());
-        std::vector<std::pair<uint64_t, uint64_t>> merged{regions.front()};
-        for (size_t i = 1; i < regions.size(); i++) {
-            auto& last = merged.back();
-            if (regions[i].first <= last.second) {
-                last.second = std::max(last.second, regions[i].second);
-            } else {
-                merged.push_back(regions[i]);
+        uint64_t bytes = 0;
+        if (!regions.empty()) {
+            std::vector<std::pair<uint64_t, uint64_t>> merged{regions.front()};
+            for (size_t i = 1; i < regions.size(); i++) {
+                auto& last = merged.back();
+                if (regions[i].first <= last.second) {
+                    last.second = std::max(last.second, regions[i].second);
+                } else {
+                    merged.push_back(regions[i]);
+                }
+            }
+            for (const auto& [start, end] : merged) {
+                bytes += end - start;
             }
         }
-        uint64_t bytes = 0;
-        for (const auto& [start, end] : merged) {
-            bytes += end - start;
-        }
 
-        // Every core in this range holds this program's CB config once it is dispatched.
+        // Recorded even when `bytes` is zero, which is the case for a range whose circular
+        // buffers are all globally allocated. Dispatch does not skip such a range: it builds a
+        // CB config payload for every range circular_buffers_unique_coreranges() reports --
+        // a globally-allocated CB occupies a local CB index like any other -- and writes it
+        // over whatever was in the CB config region before. So the cores are covered, and
+        // what is locally resident on them afterwards is zero. Omitting the entry would leave
+        // the previous program's local-CB bytes standing on those cores forever.
+        //
         // circular_buffers_unique_coreranges() returns non-overlapping ranges, so no core is
         // written twice here.
         for (uint32_t x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -1612,9 +1622,10 @@ std::shared_ptr<const std::map<CoreCoord, uint64_t>> detail::ProgramImpl::cb_byt
     }
 
     if (per_core->empty()) {
-        // No locally-allocated CBs. Left uncached: it is cheap to redo, and caching it would
-        // hand out an identity that claims this program is what is resident on the cores it
-        // covers, which it is not -- dispatching it overwrites nothing.
+        // The program has no circular buffers at all, so it covers no cores. Dispatch writes
+        // no CB config for it either (the kernel groups it does write for are the ones with
+        // remote CBs), so nothing it does changes what is resident anywhere. Left uncached:
+        // it is cheap to redo, and there is no footprint to hand out an identity for.
         return nullptr;
     }
     this->cb_bytes_per_core_ = std::move(per_core);

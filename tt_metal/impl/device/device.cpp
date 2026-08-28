@@ -1116,8 +1116,10 @@ void Device::record_dispatched_program_cbs(const detail::ProgramImpl& program) {
     // Cached on the program, so this is a shared_ptr copy rather than a walk of its CBs.
     std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
     if (footprint == nullptr) {
-        // No locally-allocated CBs: dispatching this program overwrites no CB config, so what
-        // is resident does not change.
+        // The program has no circular buffers, so it covers no cores and dispatching it
+        // overwrites no CB config. Note this is not the same as having no *locally* allocated
+        // ones: a program whose CBs are all globally allocated does rewrite the CB config on
+        // the cores it covers, and reports a footprint of zero bytes on them.
         return;
     }
 

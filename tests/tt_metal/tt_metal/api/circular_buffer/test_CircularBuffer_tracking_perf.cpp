@@ -32,6 +32,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -953,6 +954,104 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixCircularBufferTrackingFollowsPr
         EXPECT_EQ(after_resize, expected_after_resize * num_cores)
             << "resizing a circular buffer did not move the reported total; the footprint cached "
                "from the previous layout was not invalidated";
+    }
+}
+
+// A program whose circular buffers are ALL globally allocated reports a footprint of zero on
+// the cores it covers -- not "no footprint".
+//
+// Global CB bytes belong in the L1 column: they are backed by a real L1 Buffer and counted
+// through the buffer path. What is easy to get wrong is concluding from that that such a
+// program is invisible to CB residency. It is not: dispatch builds a CB config payload for
+// every range circular_buffers_unique_coreranges() reports -- a globally-allocated CB occupies
+// a local CB index like any other -- and writes it over the CB config region. So the previous
+// program's locally-allocated bytes stop being resident on those cores, and omitting the entry
+// leaves them recorded there for good.
+TEST_F(UnitMeshCQSingleCardProgramFixture, TensixGlobalOnlyCircularBufferDispatchClearsLocalResidency) {
+    for (auto& mesh_device : this->devices_) {
+        auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
+        ASSERT_NE(device, nullptr);
+        if (!tracking_available(device)) {
+            GTEST_SKIP() << kTrackingUnavailable;
+        }
+
+        // One core: a globally-allocated CB must fit inside a single bank of its backing
+        // buffer, which a replicated single-page L1 buffer gives us without a shard spec.
+        const CoreCoord core(0, 0);
+        const CoreRangeSet cr_set(CoreRange(core, core));
+        const CBConfig cb_config;
+        auto zero = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero, zero);
+        auto& cq = mesh_device->mesh_command_queue();
+
+        // A: two ordinary, locally-allocated CBs.
+        uint64_t local_bytes = 0;
+        auto workload_a = std::make_shared<distributed::MeshWorkload>();
+        {
+            Program p;
+            workload_a->add_program(device_range, std::move(p));
+            auto& prog = workload_a->get_programs().at(device_range);
+            for (uint32_t cb_id = 0; cb_id < 2; cb_id++) {
+                CircularBufferConfig config =
+                    CircularBufferConfig(cb_config.page_size, {{cb_id, cb_config.data_format}})
+                        .set_page_size(cb_id, cb_config.page_size);
+                CreateCircularBuffer(prog, cr_set, config);
+                local_bytes += cb_config.page_size;
+            }
+            initialize_program(prog, cr_set);
+        }
+        ASSERT_GT(local_bytes, 0u);
+
+        // B: one CB on the same core, backed by an L1 buffer, so it is globally allocated and
+        // contributes nothing to the CB column.
+        constexpr uint32_t kPages = 2;
+        const uint32_t backing_bytes = kPages * cb_config.page_size;
+        auto backing = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = backing_bytes},
+            {.page_size = backing_bytes, .buffer_type = BufferType::L1},
+            mesh_device.get());
+        auto workload_b = std::make_shared<distributed::MeshWorkload>();
+        {
+            Program p;
+            workload_b->add_program(device_range, std::move(p));
+            auto& prog = workload_b->get_programs().at(device_range);
+            CircularBufferConfig config = CircularBufferConfig(backing_bytes, {{0, cb_config.data_format}})
+                                              .set_page_size(0, cb_config.page_size)
+                                              .set_globally_allocated_address(*backing->get_reference_buffer());
+            CreateCircularBuffer(prog, cr_set, config);
+            initialize_program(prog, cr_set);
+        }
+
+        auto dispatch = [&](distributed::MeshWorkload& workload) {
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+            distributed::Finish(cq);
+            return device->get_total_cb_allocated();
+        };
+
+        // Assertions are on the CHANGE, not the absolute total. Both programs here cover a
+        // single core, and the device-wide figure legitimately includes whatever is still
+        // resident on the cores they do not touch -- earlier tests in this binary dispatch over
+        // the whole grid, and nothing since has overwritten those cores' CB config. Only core
+        // (0, 0) moves, and by exactly A's footprint.
+        const uint64_t after_a = dispatch(*workload_a);
+        const uint64_t after_b = dispatch(*workload_b);
+        log_info(
+            tt::LogTest,
+            "device {}: after local-CB program={} then global-only program={} (a drop of {} expected)",
+            device->id(),
+            after_a,
+            after_b,
+            local_bytes);
+
+        EXPECT_EQ(after_b + local_bytes, after_a)
+            << "the reported total went from " << after_a << " to " << after_b << " when it should have dropped by A's "
+            << local_bytes
+            << " bytes: dispatching a program whose circular buffers are all globally allocated has "
+               "overwritten the CB config on the core it covers, so none of A's local CB bytes are "
+               "resident there any more";
+
+        // And back: the zero entry must not have poisoned the per-program footprint cache either.
+        EXPECT_EQ(dispatch(*workload_a), after_a) << "re-dispatching A after the global-only program";
     }
 }
 
