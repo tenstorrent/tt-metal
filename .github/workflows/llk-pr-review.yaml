@@ -332,6 +332,51 @@ jobs:
             echo "${category}/${label}: ${count}"
           done <<< "$denial_summary"
 
+      # When the session ends with is_error:true, the result text is normally a
+      # bare API/transport error ("API Error: 429 ...", "overloaded", ...) and
+      # is the only clue to why the run died. Print it only when it matches a
+      # known API-error shape, truncated; anything else could be session
+      # content, so emit just its subtype and length and keep the text out of
+      # the public log.
+      - name: Report Claude error result
+        if: always() && steps.llk_code_review.outputs.execution_file != ''
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.llk_code_review.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "$CLAUDE_EXECUTION_FILE" ]; then
+            exit 0
+          fi
+
+          if ! error_entry="$(
+            jq -c '
+              [.[] | select(.type == "result")] | last // empty
+              | select(.is_error == true)
+              | {subtype: (.subtype // "unknown"), text: (.result // "")}
+            ' "$CLAUDE_EXECUTION_FILE"
+          )"; then
+            echo "::warning::Could not parse Claude result entry"
+            exit 0
+          fi
+
+          if [ -z "$error_entry" ]; then
+            echo "Claude result reported no error"
+            exit 0
+          fi
+
+          subtype="$(jq -r '.subtype' <<< "$error_entry")"
+          text="$(jq -r '.text' <<< "$error_entry")"
+          echo "Claude error result: subtype=${subtype}, text length=${#text}"
+
+          snippet="$(printf '%s' "$text" | head -c 400)"
+          if printf '%s' "$snippet" | grep -qiE '^(API Error|Error:)|overloaded|rate.?limit|too many (concurrent )?requests|credit balance|invalid x-api-key|authentication_error|billing|quota|prompt is too long|context window|request timed out|econnreset|fetch failed'; then
+            echo "Claude error result text (first 400 chars):"
+            printf '%s\n' "$snippet"
+          else
+            echo "Claude error result text withheld: does not match a known API error shape"
+          fi
+
       # Re-read GitHub instead of trusting process success. A session that exits
       # cleanly without executing its posting contract is a failed review; never
       # mask that failure by manufacturing a workflow-level "No issues found".
