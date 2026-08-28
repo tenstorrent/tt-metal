@@ -141,7 +141,17 @@ class CohereDecoderLayer(LightweightModule):
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         # MLP consumes the SAME normed input h (parallel), not the post-attention residual.
-        mlp_out = self.feed_forward.forward(h, mode)
+        # HAZARD (observed on-box 2026-08-28): BOTH Attention.forward (attention.py:616)
+        # and MLP.forward (mlp.py:171) ttnn.deallocate their input — with ONE shared
+        # normed tensor, whichever branch runs second gets a dead tensor ("Operand to
+        # matmul must be on device" at mlp.py:145). The stock TransformerBlock never
+        # hits this because its two branches norm separately (attn_norm / ff_norm).
+        # Give the MLP branch its own deep copy (ttnn.clone — used the same way in
+        # models/demos/deepseek_v3). TODO(perf): single-copy is trivial at seq<=128;
+        # revisit for long-prefill Stage-2 (e.g. run both branches off one buffer
+        # with dealloc suppression).
+        h_mlp = ttnn.clone(h)
+        mlp_out = self.feed_forward.forward(h_mlp, mode)
 
         # residual + attn + mlp.
         # TODO(PCC): HF computes (residual + attn) + mlp in fp32-accumulated bf16;
