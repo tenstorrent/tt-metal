@@ -209,7 +209,6 @@ def test_two_labelled_links_on_one_line_do_not_merge():
     ]
 
 
-
 def test_adf_renders_headings_and_bullets():
     """"### " and "- " give the RELEASE-7 shape without an ADF-aware producer."""
     from jira_client import _adf
@@ -229,3 +228,73 @@ def test_adf_links_render_inside_bullets_and_headings():
     assert heading_marks == {"type": "link", "attrs": {"href": "https://x.test/h"}}
     item_para = doc["content"][1]["content"][0]["content"][0]
     assert item_para["content"][0]["text"] == "job"
+
+
+def test_done_transition_prefers_the_conventional_name():
+    from jira_client import _pick_done_transition
+
+    ts = [
+        {"id": "1", "name": "Won't Do", "to": {"statusCategory": {"key": "done"}}},
+        {"id": "2", "name": "In Progress", "to": {"statusCategory": {"key": "indeterminate"}}},
+        {"id": "3", "name": "Done", "to": {"statusCategory": {"key": "done"}}},
+    ]
+    assert _pick_done_transition(ts)["id"] == "3"
+    assert _pick_done_transition(ts[:2])["id"] == "1"  # any done-category beats none
+    assert _pick_done_transition(ts[1:2]) is None
+
+
+def test_close_issues_comments_then_transitions(monkeypatch):
+    import jira_client
+
+    calls = []
+
+    def fake_api(base, email, token, method, path, body=None):
+        calls.append((method, path))
+        if path.startswith("/rest/api/3/search/jql"):
+            return {"issues": [{"key": "RELEASE-9"}]}
+        if path.endswith("/transitions") and method == "GET":
+            return {"transitions": [{"id": "31", "name": "Done", "to": {"statusCategory": {"key": "done"}}}]}
+        return {}
+
+    monkeypatch.setattr(jira_client, "_api", fake_api)
+    out = jira_client.close_issues("https://j.test", "e", "t", "RELEASE", "package-release-ref:stable", "green again")
+    assert out == ["closed RELEASE-9 (Done): https://j.test/browse/RELEASE-9"]
+    assert ("POST", "/rest/api/3/issue/RELEASE-9/comment") in calls
+    assert ("POST", "/rest/api/3/issue/RELEASE-9/transitions") in calls
+
+
+def test_close_issues_without_a_done_transition_keeps_the_issue_open(monkeypatch):
+    import jira_client
+
+    def fake_api(base, email, token, method, path, body=None):
+        if path.startswith("/rest/api/3/search/jql"):
+            return {"issues": [{"key": "RELEASE-9"}]}
+        if path.endswith("/transitions") and method == "GET":
+            return {"transitions": []}
+        return {}
+
+    monkeypatch.setattr(jira_client, "_api", fake_api)
+    out = jira_client.close_issues("https://j.test", "e", "t", "RELEASE", "lbl", "c")
+    assert out == ["commented on RELEASE-9 but found no Done transition; left open"]
+
+
+def test_close_action_is_selected_by_env(monkeypatch, capsys):
+    import jira_client
+
+    def fake_api(base, email, token, method, path, body=None):
+        if path.startswith("/rest/api/3/search/jql"):
+            return {"issues": []}
+        raise AssertionError(f"unexpected call {method} {path}")
+
+    monkeypatch.setattr(jira_client, "_api", fake_api)
+    for k, v in {
+        "JIRA_ACTION": "close",
+        "JIRA_BASE_URL": "https://j.test",
+        "JIRA_USER_EMAIL": "e",
+        "JIRA_API_TOKEN": "t",
+        "JIRA_PROJECT_KEY": "RELEASE",
+        "JIRA_DEDUP_LABEL": "package-release-ref:stable",
+    }.items():
+        monkeypatch.setenv(k, v)
+    jira_client.main()
+    assert "nothing to close" in capsys.readouterr().out

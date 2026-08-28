@@ -19,6 +19,10 @@ Environment:
                     (optional; when set, comment-instead-of-create is enabled)
   JIRA_DRY_RUN      when truthy, print the payload and exit without calling Jira
 
+With JIRA_ACTION=close the script closes instead of filing: every open issue
+carrying JIRA_DEDUP_LABEL is commented with JIRA_COMMENT (optional) and
+transitioned to Done. JIRA_SUMMARY/JIRA_ISSUE_TYPE/etc. are not read.
+
 Prints the resulting issue key and URL. Exit non-zero on API/config error.
 """
 import base64
@@ -133,11 +137,56 @@ def _adf(text):
     return {"type": "doc", "version": 1, "content": blocks or [{"type": "paragraph", "content": []}]}
 
 
-def _find_open_dupe(base, email, token, project, dedup_label):
-    jql = f'project = "{project}" AND labels = "{dedup_label}" AND statusCategory != Done ORDER BY created DESC'
-    path = "/rest/api/3/search/jql?" + urllib.parse.urlencode({"jql": jql, "maxResults": 1, "fields": "key"})
+def _find_open_issues(base, email, token, project, label, max_results=20):
+    jql = f'project = "{project}" AND labels = "{label}" AND statusCategory != Done ORDER BY created DESC'
+    path = "/rest/api/3/search/jql?" + urllib.parse.urlencode({"jql": jql, "maxResults": max_results, "fields": "key"})
     issues = _api(base, email, token, "GET", path).get("issues", [])
-    return issues[0]["key"] if issues else None
+    return [i["key"] for i in issues]
+
+
+def _find_open_dupe(base, email, token, project, dedup_label):
+    keys = _find_open_issues(base, email, token, project, dedup_label, max_results=1)
+    return keys[0] if keys else None
+
+
+def _pick_done_transition(transitions):
+    """The transition that lands in the Done status category, if any."""
+    done = [t for t in transitions if (t.get("to") or {}).get("statusCategory", {}).get("key") == "done"]
+    if not done:
+        return None
+    # Prefer the conventional names so boards with several done-ish states
+    # (e.g. Done and Won't Do) resolve rather than discard.
+    for name in ("done", "closed", "resolved", "resolve"):
+        for t in done:
+            if t.get("name", "").strip().lower() == name:
+                return t
+    return done[0]
+
+
+def close_issues(base, email, token, project, label, comment="", dry_run=False):
+    """Close every open issue carrying `label`, commenting `comment` first.
+
+    Returns a list of human-readable result strings, one per issue. An issue
+    whose workflow offers no transition into the Done category keeps the
+    comment but stays open -- better a stale-open ticket than a lost record.
+    """
+    keys = _find_open_issues(base, email, token, project, label)
+    if dry_run:
+        return [f"DRY RUN -- would close {k} with comment: {comment!r}" for k in keys] or [
+            f"DRY RUN -- no open issue carries label {label!r}"
+        ]
+    results = []
+    for key in keys:
+        if comment:
+            _api(base, email, token, "POST", f"/rest/api/3/issue/{key}/comment", {"body": _adf(comment)})
+        transitions = _api(base, email, token, "GET", f"/rest/api/3/issue/{key}/transitions").get("transitions", [])
+        chosen = _pick_done_transition(transitions)
+        if not chosen:
+            results.append(f"commented on {key} but found no Done transition; left open")
+            continue
+        _api(base, email, token, "POST", f"/rest/api/3/issue/{key}/transitions", {"transition": {"id": chosen["id"]}})
+        results.append(f"closed {key} ({chosen['name']}): {base.rstrip('/')}/browse/{key}")
+    return results or [f"no open issue carries label {label!r}; nothing to close"]
 
 
 def file_issue(
@@ -196,6 +245,18 @@ def file_issue(
 
 
 def main():
+    if _env("JIRA_ACTION", "file").strip().lower() == "close":
+        for line in close_issues(
+            base=_env("JIRA_BASE_URL", required=True),
+            email=_env("JIRA_USER_EMAIL", required=True),
+            token=_env("JIRA_API_TOKEN", required=True),
+            project=_env("JIRA_PROJECT_KEY", required=True),
+            label=_env("JIRA_DEDUP_LABEL", required=True),
+            comment=_env("JIRA_COMMENT", ""),
+            dry_run=_truthy(_env("JIRA_DRY_RUN")),
+        ):
+            print(line)
+        return
     labels = [l.strip() for l in (_env("JIRA_LABELS", "") or "").split(",") if l.strip()]
     print(
         file_issue(
