@@ -611,11 +611,12 @@ class LLVCModel:
         """Capture ``forward_chunk`` once, then replay it per chunk with no host dispatch.
 
         The streaming state is threaded naturally: chunk 0 runs eager (compiles the
-        kernels and pins the conv weights on device), chunk 1 is captured (advancing
-        the in-place ring buffers), and every later chunk copies its samples into the
-        persistent input tensor and replays the trace. Because the ring buffers live
-        at fixed addresses and are updated in place, replay reproduces the exact same
-        recurrence as the eager path. Only the replayed chunks are timed (steady state).
+        kernels and pins the conv weights on device), chunk 1 is captured and then
+        executed once (capture only records commands), and every later chunk copies
+        its samples into the persistent input tensor and replays the trace. Because
+        the ring buffers live at fixed addresses and are updated in place, replay
+        reproduces the exact same recurrence as the eager path. Only the replayed
+        chunks are timed (steady state).
         """
         dev = self.device
         batch, seq_len = int(prepped[0].shape[0]), int(prepped[0].shape[1])
@@ -629,7 +630,7 @@ class LLVCModel:
         wav0 = self.forward_chunk(in_dev, state)
         outputs.append(ops.to_torch(wav0).float().transpose(1, 2))
 
-        # chunk 1 — capture the trace (ring buffers advance in place as usual).
+        # chunk 1 — capture the trace (recording only; executed just below).
         # end_trace_capture must run even if forward_chunk raises, otherwise the
         # device is left mid-capture and every later synchronize/close fails.
         ttnn.copy_host_to_device_tensor(self._host_chunk(prepped[1]), in_dev)
@@ -638,10 +639,17 @@ class LLVCModel:
             traced_out = self.forward_chunk(in_dev, state)
         finally:
             ttnn.end_trace_capture(dev, tid, cq_id=0)
-        outputs.append(ops.to_torch(traced_out).float().transpose(1, 2))
 
-        # chunks 2..N — replay (time H2D + execute + D2H for e2e; execute alone for device)
         try:
+            # Capture only records the dispatch commands — nothing has executed yet.
+            # Run the trace once so chunk 1 actually computes (its output and the
+            # in-place ring-buffer updates); reading traced_out before this would
+            # return uninitialized memory and leave the streaming state a chunk
+            # behind the input.
+            ttnn.execute_trace(dev, tid, cq_id=0, blocking=True)
+            outputs.append(ops.to_torch(traced_out).float().transpose(1, 2))
+
+            # chunks 2..N — replay (time H2D + execute + D2H for e2e; execute alone for device)
             for chunk in prepped[2:]:
                 host = self._host_chunk(chunk)
                 ttnn.synchronize_device(dev)
