@@ -8,9 +8,12 @@ The tree is deliberately small: the kernel change, this document with its five f
 regression test (`tt_metal/tt-llk/tests/python_tests/test_sfpu_wh_lut_retune.py`, §0.5) that
 bounds what the retune bought so the old tables cannot come back green. The measurement harness,
 the three instrument drivers and the captured data are **not** committed — they are not product
-code. The figures *are* committed, in `images/` beside this file and linked relatively, so the
-document does not depend on a branch anyone is free to delete. *Reproducing all of it* says
-where each remaining piece lives and how to regenerate every number here from scratch.
+code, and neither are the rendered figures — they are documentation media, not something the
+product tree should carry. The five figures below are embedded from the orphan branch
+`ldjurovic/sfpu-retune-assets`, **pinned to commit `369ca16dc57`** rather than to the branch name,
+so a later commit there cannot change what this document shows. That branch is therefore retained,
+not disposable; its README says so. *Reproducing all of it* says where each remaining piece lives
+and how to regenerate every number here from scratch.
 
 Every number and every figure below is **measured on an n300 (Wormhole B0)**. Accuracy is
 Float32→Float32 with `dest_acc=Yes`, from a ladder of **250 samples per LUT segment** — 750
@@ -33,7 +36,7 @@ harness itself is not in this tree, by design.
 | 2 | `tanh` APPROXIMATION_MODE | whole table | 0.144656 → **0.056339** | **2.57×** |
 | 3 | `gelu_appx` | 5 of 6 segments | 0.023411 → **0.011604** | **2.02×** |
 
-![Worst error per LUT segment, main vs retuned](images/fig1-segment-max-error.svg)
+![Worst error per LUT segment, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/369ca16dc57296ff3c11904c4e714cc15f9955e7/fig1-segment-max-error.png)
 
 Three segments are marked *unchanged* and are bit-identical by design — each is a saturating
 tail whose value is pinned for a reason given in its section. `sigmoid_appx`'s worst error lives
@@ -299,7 +302,7 @@ The middle segment's slope is **larger** than the first's. A concave target cann
 way, and the consequence is not subtle: over `[1, 2)` the shipped line runs away from `sigmoid`
 and reaches `0.9844` as `x → 2⁻`, where the truth is `0.8808`.
 
-![sigmoid_appx output and signed error, main vs retuned](images/fig2-sigmoid-appx.svg)
+![sigmoid_appx output and signed error, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/369ca16dc57296ff3c11904c4e714cc15f9955e7/fig2-sigmoid-appx.png)
 
 The left panel is the whole story: main's middle segment climbs away from the exact curve, then
 snaps flat at 1.0. The retuned line tracks `sigmoid` closely to `x = 2` and then makes the same
@@ -405,7 +408,7 @@ exactly — all good — but `tanh(1) = 0.7616`, so the knot value `0.90625` is 
 single misplaced knot *is* the kernel's entire error budget: both of the first two segments hit
 `0.1447` at `x = 1`, from opposite sides.
 
-![tanh output and signed error, main vs retuned](images/fig3-tanh.svg)
+![tanh output and signed error, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/369ca16dc57296ff3c11904c4e714cc15f9955e7/fig3-tanh.png)
 
 The right panel shows the mechanism from §0.3 cleanly. Main's error is a single one-sided spike
 that reaches `0.1447` at the knot. The retuned error dips to `−0.0563` around `x = 0.47`, comes
@@ -533,7 +536,7 @@ interpolating rather than minimax: each segment's line is close to the chord thr
 endpoints, leaving the error one-sided and about twice the achievable minimum. Segment 0 is the
 worst offender at `0.0234`, an order of magnitude above the next segment.
 
-![gelu_appx output against exact gelu, and signed error, main vs retuned](images/fig4-gelu-appx.svg)
+![gelu_appx output against exact gelu, and signed error, main vs retuned](https://raw.githubusercontent.com/tenstorrent/tt-metal/369ca16dc57296ff3c11904c4e714cc15f9955e7/fig4-gelu-appx.png)
 
 The left panel is windowed to `|x| ≤ 0.5` — segment 0, and the only place where a 0.0234 error is
 visible against outputs that reach 4 by the end of the sweep. On `[0, 4]` all three curves would
@@ -546,7 +549,7 @@ calls straddling. The right panel is the full swept domain.
 The per-segment breakdown, six independent fits each on its own vertical scale because the errors
 span 13× across the table:
 
-![gelu_appx signed error per LUT segment](images/fig5-gelu-appx-segments.svg)
+![gelu_appx signed error per LUT segment](https://raw.githubusercontent.com/tenstorrent/tt-metal/369ca16dc57296ff3c11904c4e714cc15f9955e7/fig5-gelu-appx-segments.png)
 
 The `[0, 0.5)` panel is the textbook picture: main is a chord — pinned to zero at both ends,
 bulging to `+0.0234` in the middle — and the retuned line straddles the curve from `−0.0116` to
@@ -665,7 +668,7 @@ Where they live instead:
 
 | artefact | where |
 |---|---|
-| the five figures above | committed beside this document in `images/`, linked relatively |
+| the five figures above | orphan branch `ldjurovic/sfpu-retune-assets`, embedded by `raw.githubusercontent.com` URL pinned to commit `369ca16dc57`. `.png` is what the links use — GitHub serves raw `.svg` as `text/plain` and its image proxy refuses it — with the `.svg` originals beside them. **Retained, not deletable:** dropping that branch breaks the five images here |
 | harness scripts + the three instrument drivers | full sources in the PR description, in collapsed blocks |
 | captured data (`curves_*.json`, `probe_*.txt`, `perf_*.json`, parquet sessions) | not kept — regenerable in ~6 minutes on any Wormhole host |
 
