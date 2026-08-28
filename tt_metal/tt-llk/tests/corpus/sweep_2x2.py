@@ -1020,8 +1020,15 @@ KNOBS = {
     # same-thread SETC16 (tt-isa-documentation: WRCFG/CFGSHIFTMASK/
     # RMWCIB functional models each exclude ThreadConfig).  binopscalar
     # sem callee drops 27 -> 24 words/call with the program lifted 3
-    # loop levels to run_kernel entry; measured note follows the
-    # silicon legs.
+    # loop levels to run_kernel entry.  MEASURED (BH p150, 3-rep
+    # cycle-identical, corr-first, lane IK 2026-08-28): sem 21164.0 ->
+    # 20781.0 vs hand 20764.0 = vs-hand +1.93 -> +0.08 PARITY (causal
+    # -1.81); TILE_LOOP 159.98 < hand 160.04 < base sem 162.95 — the
+    # fired form beats both arms per tile; anchors 21164.0/20764.0
+    # EXACT; knob hand byte+cycle inert; paired CRAQ 2/2 both arms on
+    # the pinned bh sim; 70-leg loss+WIN screen exactly-one-changed;
+    # fill/copydest autoincr family byte-identical including the
+    # load-carrier composition.
     "crosscall-addrmod": "-mtt-tensix-optimize-crosscall-addrmod",
     # ID (loop-prgm-reclaim, lane ID 2026-08-27): the trigonometry
     # loadi-gap attack (HW row A7; GV's named PRGM/LREG capacity
