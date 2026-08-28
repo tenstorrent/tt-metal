@@ -386,8 +386,8 @@ class TtRoutedExpert(LightweightModule):
         # experts by load across BOTH ops in one forward: counts <= T go to moe_fused_swiglu,
         # counts > T to unified_routed_expert_moe. Each op reads the SAME device-resident
         # counts vector and drops the experts outside its band, so the split costs no extra
-        # tensor, no eltwise mask and no host sync. Measured crossover is per model -- see
-        # test_moe_fused_swiglu_vs_unified.py -- so the caller supplies the number.
+        # tensor, no eltwise mask and no host sync. Measured crossover is per model -- compare the
+        # two ops' perf gates at the shape -- so the caller supplies the number.
         if hybrid_token_threshold is not None:
             if not is_blackhole():
                 raise NotImplementedError("hybrid_token_threshold requires the Blackhole fused path")
