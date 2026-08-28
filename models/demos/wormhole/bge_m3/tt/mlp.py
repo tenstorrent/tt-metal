@@ -186,6 +186,11 @@ def _resolve_mlp_config(config: BgeM3MLPConfig) -> BgeM3MLPConfig:
     ]
     if param_devices and any(d != param_devices[0] for d in param_devices):
         raise ValueError("All MLP parameters must target the same device")
+    # resolve_lazy_weight fills empty fields only. Reject parameters that already
+    # target a different device, or the matmul reads the activations and the
+    # weights from two devices.
+    if config.mesh_device is not None and param_devices and param_devices[0] != config.mesh_device:
+        raise ValueError("All MLP parameters must target the configured mesh_device")
 
     mesh_device = config.mesh_device or (param_devices[0] if param_devices else ttnn.GetDefaultDevice())
     if mesh_device is None:

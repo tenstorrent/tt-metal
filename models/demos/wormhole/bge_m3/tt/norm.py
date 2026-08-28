@@ -173,6 +173,13 @@ def _resolve_1d_config(config: LayerNorm1DConfig) -> LayerNorm1DConfig:
     mesh_device = config.mesh_device or weight_device or bias_device or ttnn.GetDefaultDevice()
     if mesh_device is None:
         raise ValueError("Unable to resolve mesh_device")
+    # resolve_lazy_weight fills empty fields only. Reject a weight or bias that
+    # already targets a different device, or the LayerNorm reads the input and
+    # the affine tensors from two devices.
+    if weight_device is not None and weight_device != mesh_device:
+        raise ValueError("LayerNorm weight must target the resolved mesh_device")
+    if bias_device is not None and bias_device != mesh_device:
+        raise ValueError("LayerNorm bias must target the resolved mesh_device")
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
 
