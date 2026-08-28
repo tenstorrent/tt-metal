@@ -126,7 +126,7 @@ inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     o.reserve_back(n);
     pack_reconfig_data_format(o_id);
     reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     square_tile_init();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
@@ -152,7 +152,7 @@ inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n)
     o.reserve_back(n);
     pack_reconfig_data_format(o_id);
     reconfig_data_format_srca(in_id);  // unary: in_id->srcA
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     exp_tile_init();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
@@ -179,7 +179,7 @@ inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
     o.reserve_back(n);
     pack_reconfig_data_format(o_id);
     reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     binop_with_scalar_tile_init();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
@@ -205,7 +205,7 @@ inline void negated_exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uin
     o.reserve_back(n);
     pack_reconfig_data_format(o_id);
     reconfig_data_format_srca(in_id);
-    copy_tile_to_dst_init_short(in_id);
+    copy_init(in_id);
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
         tile_regs_acquire();
@@ -267,7 +267,7 @@ inline void copy_tile_to_buffer(DataflowBuffer& src, uint32_t src_tile, Dataflow
     o.reserve_back(1);
     pack_reconfig_data_format(o_id);
     reconfig_data_format_srca(src_id);
-    copy_tile_to_dst_init_short(src_id);
+    copy_init(src_id);
     tile_regs_acquire();
     copy_tile(src_id, src_tile, 0);
     tile_regs_commit();

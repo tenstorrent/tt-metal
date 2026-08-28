@@ -7,6 +7,10 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
+// This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
+// the program over the kernel-config buffer. Force it out-of-line here.
+#define LLK_ZEROFLAG_OUTLINE 1
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
