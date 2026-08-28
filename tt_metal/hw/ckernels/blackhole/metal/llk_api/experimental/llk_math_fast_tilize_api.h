@@ -11,15 +11,17 @@
  * LLK MATH FAST TILIZE (BH)
  *************************************************************************/
 
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_fast_tilize_init(const std::uint32_t operand) {
     // Default fast-tilize init configures DEST remap; use the skip-remap variant only when the caller hoists it.
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_math_fast_tilize_init_<DST_ACCUM_MODE>(unpack_dst_format[operand_id]);
+    _llk_math_fast_tilize_init_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
 }
 
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_fast_tilize_init_skip_remap(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    _llk_math_fast_tilize_init_<DST_ACCUM_MODE, false>(unpack_dst_format[operand_id]);
+    _llk_math_fast_tilize_init_<is_fp32_dest_acc_en, false>(unpack_dst_format[operand_id]);
 }
 
 template <bool is_fp32_dest_acc_en>
@@ -28,9 +30,10 @@ inline void llk_math_fast_tilize_uninit(const std::uint32_t operand) {
     _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(unpack_dst_format[operand_id]);
 }
 
+template <bool is_fp32_dest_acc_en>
 inline void llk_math_fast_tilize_block_(
     const std::uint32_t dst_index, const std::uint32_t operand, const std::uint32_t unit_dim) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_math_fast_tilize_block_<DST_ACCUM_MODE>(dst_index, unpack_dst_format[operand_id], unit_dim, num_faces);
+    _llk_math_fast_tilize_block_<is_fp32_dest_acc_en>(dst_index, unpack_dst_format[operand_id], unit_dim, num_faces);
 }

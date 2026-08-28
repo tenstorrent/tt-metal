@@ -99,7 +99,11 @@ jobs:
           else
             MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
               ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
-              | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
+              | [ .[] | . as $e | select(
+                    ($tokens | index($e.test_type))
+                    or ($tokens | index($e.test_group))
+                    or (($e.test_tags // []) | any(. as $f | $tokens | index($f)))
+                ) ]
             ')
             if [ "$MATRIX" = "[]" ]; then
               echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${{ env.TESTS_YAML_PATH }})."

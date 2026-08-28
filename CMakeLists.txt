@@ -36,6 +36,8 @@ project(
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+GenerateVersionHeader()
+AddVersionHeaderTarget()
 
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
@@ -299,8 +301,8 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(metal_common_pch)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(metal_common_pch)
 endif()
 
 ############################################################################################################################

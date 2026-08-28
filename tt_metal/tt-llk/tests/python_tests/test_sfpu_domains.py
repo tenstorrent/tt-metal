@@ -401,7 +401,7 @@ _QUASAR_INT_BINARY_ALIASES = {
     MathOperation.SfpuLeInt: MathOperation.SfpuElwLe,
     MathOperation.SfpuGeInt: MathOperation.SfpuElwGe,
     # The int multiply is spelled MUL on Quasar and reaches _mul_int32_; on WH/BH the same kernel
-    # is MUL_INT32, which SfpuMulInt32 drives (test_sfpu_binary_int_uniform).
+    # is MUL_INT32, which SfpuMulInt32 drives (test_eltwise_binary_sfpu_int_uniform).
     MathOperation.SfpuElwmulInt: MathOperation.SfpuMulInt32,
 }
 
@@ -444,9 +444,9 @@ def test_int_comparison_aliases_are_driven_at_int32():
     stop being driven on an integer format, the four Quasar members lose their proxy coverage
     silently.
     """
-    import test_sfpu_binary
+    import test_eltwise_binary_sfpu
 
-    driven = set(test_sfpu_binary._INT_COMPARISON_OPS)
+    driven = set(test_eltwise_binary_sfpu._INT_COMPARISON_OPS)
     expected = {
         MathOperation.SfpuElwLt,
         MathOperation.SfpuElwGt,
@@ -466,20 +466,20 @@ def test_int_comparison_aliases_are_driven_at_int32():
 def test_every_float_binary_op_is_classified_for_cat_b():
     """Enrolled or recorded-as-not-ready, for every float op the binary sweep can drive.
 
-    Totality, in the same spirit as test_sfpu_binary's three stimulus-source sets: an op that is in
+    Totality, in the same spirit as test_eltwise_binary_sfpu's three stimulus-source sets: an op that is in
     neither dict keeps cat B switched off while looking, to a reader, as though it had been
     considered. The count is not pinned -- only the partition -- so adding a binary op is a
     one-line decision rather than a test edit.
     """
-    import test_sfpu_binary
+    import test_eltwise_binary_sfpu
     from helpers.sfpu_domains import (
         _BINARY_SPECIALS_NOT_READY,
         BINARY_SPECIALS_READY_OPS,
     )
 
     candidates = (
-        test_sfpu_binary._CLASSIFIED_STIMULI_OPS
-        - test_sfpu_binary._INT_DRIVEN_BINARY_OPS
+        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS
+        - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
     )
     classified = set(BINARY_SPECIALS_READY_OPS) | set(_BINARY_SPECIALS_NOT_READY)
     unclassified = sorted(op.name for op in candidates - classified)
@@ -592,10 +592,10 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     If this fails because ExpWithBase joined the broad profile, that is the good outcome: the
     ceiling now fires, and what wants re-checking is the accurate path's own domain.
     """
-    import test_sfpu_unary
+    import test_eltwise_unary_sfpu
 
-    assert MathOperation.ExpWithBase in test_sfpu_unary.STANDARD_SWEEP_OPS
-    assert MathOperation.ExpWithBase not in test_sfpu_unary.BROAD_SWEEP_OPS
+    assert MathOperation.ExpWithBase in test_eltwise_unary_sfpu.STANDARD_SWEEP_OPS
+    assert MathOperation.ExpWithBase not in test_eltwise_unary_sfpu.BROAD_SWEEP_OPS
     accurate = for_op(
         MathOperation.ExpWithBase,
         DataFormat.Float32,
@@ -607,26 +607,15 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     )
 
 
-def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
-    """_hardtanh models a clamp, but its kernel is not one -- pin the agreement.
+def test_hardtanh_golden_matches_the_clamp_golden():
+    """Hardtanh's golden must stay Clamp's golden -- pin the identity.
 
-    `SfpuType::hardtanh` dispatches to `_calculate_hardtanh_`, three adds with two clamps-at-zero
-    and bf16 constants, where Clamp dispatches to `_calculate_clamp_` with fp16 min/max. They
-    agree on the finite range and at every special this op is enrolled for, but by arithmetic
-    rather than by sharing code, so the golden's use of sfpu_clamp is only sound while that holds.
+    Both ops bind metal kernels that are the same SFPSWAP max-then-min composition
+    (calculate_clamp's unary_max_min chain; calculate_hardtanh's sfpi::clamp), so one
+    golden -- sfpu_clamp -- models both. If either golden is ever remodelled
+    independently, the divergence surfaces here.
     """
-    from helpers.golden_generators import UnarySFPUGolden, sfpu_total_order_key
-
-    def kernel_chain(x: float, low: float, high: float) -> float:
-        # val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2
-        p0, p1, p2 = -low, -(high - low), high
-        val = x + p0
-        if sfpu_total_order_key(val) < 0:
-            val = 0.0
-        val = val + p1
-        if sfpu_total_order_key(val) >= 0:
-            val = 0.0
-        return val + p2
+    from helpers.golden_generators import UnarySFPUGolden
 
     golden = UnarySFPUGolden()
     low, high = -1.0, 1.0
@@ -643,11 +632,11 @@ def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
         float("nan"),
     ]
     for x in probes:
-        want = kernel_chain(x, low, high)
+        want = float(golden._clamp(x, low, high))
         got = float(golden._hardtanh(x, low, high))
         assert got == want or (got != got and want != want), (
-            f"hardtanh({x}) golden gives {got} but the kernel chain gives {want}. The golden "
-            "models _calculate_clamp_; if the two have stopped agreeing, model the chain."
+            f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}; "
+            "the two goldens must move together while both ops bind the same composition."
         )
 
 

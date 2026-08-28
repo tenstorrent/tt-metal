@@ -170,7 +170,7 @@ _E5M2_AND_FLOAT16 = (DataFormat.Float16, DataFormat.MxFp8R)
 #   * **Range** — exp overflows an 8-bit exponent near x = 88.7. True in both modes, so it
 #     lives in the registry entries below.
 #   * **Accuracy** — the *approximation* overshoots the golden by ~5.7% past ~8 (measured on
-#     Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_sfpu_unary). One mode only, so it
+#     Wormhole; see _APPROX_EXP_ACCURACY_XFAIL in test_eltwise_unary_sfpu). One mode only, so it
 #     lives in _APPROX_ACCURACY_MAX, applied by for_op() at ApproximationMode.Yes.
 #
 # The registry entry serves both modes, so an accuracy bound written there also withholds
@@ -1100,7 +1100,7 @@ _FPU_ELTWISE_OPS: FrozenSet[MathOperation] = frozenset(
 # all, so driving it through the unary test fails to compile.
 _PACKER_OPS: FrozenSet[MathOperation] = frozenset({MathOperation.Relu})
 
-# Binary SFPU ops (test_sfpu_binary.py). Registered ones only -- that suite also drives
+# Binary SFPU ops (test_eltwise_binary_sfpu.py). Registered ones only -- that suite also drives
 # ~30 int, comparison and bitwise ops that have no domain entry and so cannot be keys
 # here; they are declared in its own _UNREGISTERED_BINARY_OPS instead.
 _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
@@ -1796,7 +1796,7 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
     # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(). UnaryEq and UnaryNe do not
     # -- they are outside _OP_DOMAIN_REGISTRY, so their consumer is
-    # test_sfpu_unary._threshold_op_stimuli_spec, which reads op_edge_points() directly to
+    # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which reads op_edge_points() directly to
     # place the exact threshold in its stimuli, as the int32 comparison ops below do.
     **{op: (UNARY_COMP_THRESHOLD,) for op in _COMPARISON_EDGE_OPS},
     # logical_not(x) = (x == 0). Same shape as _ZERO_EDGE_OPS but it is a threshold op
@@ -1837,7 +1837,7 @@ _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     # Integer scalar comparisons against UnarySFPUGolden._int_maxmin_scalar. These four
     # are not in _OP_DOMAIN_REGISTRY, so sfpu_unary_ops() never puts them in an edge
     # sweep and edge_spec() never sees them: their consumer is
-    # test_sfpu_unary._int_unary_stimuli_spec, which reads op_edge_points() directly to
+    # test_eltwise_unary_sfpu._int_unary_stimuli_spec, which reads op_edge_points() directly to
     # place the exact comparison tie in its stimuli. Keep that call in mind before
     # editing — dropping these entries makes the tie untestable rather than merely
     # unlisted.
@@ -2102,12 +2102,12 @@ SPECIALS_READY_OPS.update(
         MathOperation.UnaryGe: "As UnaryGt.",
         MathOperation.UnaryMin: "min(x, 0.0) under the total order. +NaN is the maximum, so "
         "the minimum is the other operand -- which is why this diverged where UnaryMax did not.",
-        MathOperation.Clamp: "clamp(x, -1, 1) applied as the kernel applies it: `v_if (val < "
-        "min)` then `v_if (val > max)`, both total-order compares, so a NaN falls through the "
-        "first and lands on max.",
-        MathOperation.Hardtanh: "clamp(x, -1, 1), but via `_calculate_hardtanh_` rather than "
-        "Clamp's `_calculate_clamp_` -- a different kernel with differently formatted constants "
-        "that happens to agree at every special here. The agreement is pinned host-side.",
+        MathOperation.Clamp: "clamp(x, -1, 1) applied as metal `calculate_clamp` applies it: "
+        "max(x, min) then min(x, max), both SFPSWAP total-order folds, so a +NaN outranks "
+        "everything, survives the max, and lands on max via the min.",
+        MathOperation.Hardtanh: "clamp(x, -1, 1) via metal `calculate_hardtanh`, i.e. "
+        "`sfpi::clamp` -- the same SFPSWAP max-then-min composition as Clamp's kernel, so the "
+        "two share one golden by construction. The identity is pinned host-side.",
         MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
         "with the threshold, and the relu clamp then sees a finite value.",
         MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "

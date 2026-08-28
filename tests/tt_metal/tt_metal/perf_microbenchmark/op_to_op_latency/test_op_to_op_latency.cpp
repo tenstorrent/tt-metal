@@ -679,7 +679,7 @@ BuiltProgram build_program(
         core_list.assign(full_order.begin() + off, full_order.begin() + off + want);
     }
     if (cfg.log_core_map) {
-        const auto did = mesh_device->get_devices()[0]->id();
+        const auto did = mesh_device->get_device_ids()[0];
         const auto& sd = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(did);
         for (const auto& c : core_list) {
             const auto p = sd.get_physical_tensix_core_from_logical(c);  // matches profiler core_x/core_y

@@ -10,6 +10,9 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "untilize_codegen_supported.hpp"
+#include "untilize_codegen_cb_plan.hpp"
+
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::prim {
 
@@ -63,6 +66,30 @@ UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperati
 UntilizeCodegenDeviceOperation::tensor_return_value_t UntilizeCodegenDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
+}
+
+ttsl::hash::hash_t UntilizeCodegenDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto chosen = untilize_codegen_detail::choose_codegen_cb_plan(operation_attributes, tensor_args);
+    const auto native =
+        untilize_codegen_detail::native_cache_identity(operation_attributes, tensor_args, chosen.tier);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<UntilizeCodegenDeviceOperation>,
+        operation_attributes,
+        tensor_args,
+        chosen.tier,
+        native.enough_space_height,
+        native.split_valid,
+        native.ncores,
+        native.nblocks_per_core,
+        native.single_block_size,
+        native.single_block_size_cliff_row,
+        native.single_block_size_cliff_col,
+        native.has_cliff_row,
+        native.has_cliff_col,
+        native.full_cores_per_row,
+        native.full_cores_per_col,
+        native.single_sub_block_size);
 }
 
 Tensor untilize_codegen(const Tensor& input, tt::tt_metal::MemoryConfig output_mem_config) {

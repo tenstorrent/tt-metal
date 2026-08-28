@@ -55,6 +55,18 @@ DSV3 = get_adapter("deepseek_v3_d_p")
 PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "gate_fallback_mode",
     [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],

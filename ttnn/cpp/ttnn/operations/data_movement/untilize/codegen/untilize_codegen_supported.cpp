@@ -57,9 +57,11 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     constexpr uint64_t kWideChunkThreshold = 800'000;
 
     // Mirrors build_column_parallel + plan_cb_depths: that builder's CB plan is sized by the
-    // busiest core's tile count, not by Wt, and plan_cb_depths() TT_FATALs once even the
-    // single-buffer plan (cb_in + cb_out, one slot per tile each) exceeds the L1 budget. Reject
-    // here so "auto" falls back to native instead of aborting inside program creation.
+    // busiest core's tile count, not by Wt. A case whose single-buffer plan (cb_in + cb_out, one
+    // slot per tile each) cannot fit even an empty core's L1 is out of scope for every codegen
+    // builder no matter what else is resident, so reject it here and let "auto" pick native.
+    // This is a static bound only -- whether the plan fits the L1 that is actually free right now
+    // is decided once, inside the program factory (see UntilizeCodegenProgramFactory).
     auto column_parallel_plan_fits = [&](uint32_t wt) {
         auto* device = input.device();
         auto grid = device->compute_with_storage_grid_size();
@@ -86,10 +88,11 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
         return 2ull * wt_ceil * kTileSize <= kWideChunkThreshold;
     }
 
-    // Tile-aligned path: a multi-tile-row input wide enough that a single tile-row would overflow
-    // the chunking threshold (~800KB for two double-buffered CBs at 2048B/tile) needs a
-    // slice -> untilize -> concat cascade this implementation does not have, so it is out of scope
-    // here. Computed from the PADDED shape (Wt/Ht are physical, tile-grid
+    // Tile-aligned path: mirrors ops/untilize/untilize.py's wide-tensor guard for
+    // build_untilize_tile -- a multi-tile-row input wide enough that a single tile-row would
+    // overflow the slice+concat chunking threshold (~800KB for two double-buffered CBs at
+    // 2048B/tile) is routed to a slice -> untilize -> concat cascade over unrelated builder
+    // entries, out of scope here. Computed from the PADDED shape (Wt/Ht are physical, tile-grid
     // quantities), matching how the program factory itself derives Wt/total_tile_rows.
     const auto& padded_shape = input.padded_shape();
     uint32_t rank = padded_shape.rank();
