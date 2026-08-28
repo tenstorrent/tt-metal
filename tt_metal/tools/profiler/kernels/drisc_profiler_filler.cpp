@@ -259,12 +259,11 @@ void kernel_main() {
     const uint32_t pcie_xy_enc = kPcieEncOverride != 0 ? kPcieEncOverride : sender.d2h.pcie_xy_enc;
     const uint64_t pcie_base = (static_cast<uint64_t>(sender.d2h.data_addr_hi) << 32) | sender.downstream_fifo_addr;
     set_sender_socket_page_size(sender, kPageBytes);
-    // Spool mode: the pump's write cmd state, programmed ONCE. Nothing else in this build touches
-    // write_cmd_buf on the egress NoC -- heads ride the read NoC and frames ride the DMA engine -- and
-    // re-programming it per shipping pass was a third of the cost that priced the pump off the busy path.
-    if constexpr (kSpool) {
-        noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
-    }
+    // The egress write cmd state, programmed ONCE for both modes. Nothing else on this core touches
+    // write_cmd_buf on the egress NoC any more -- the head write-backs that used to share it ride the
+    // read NoC -- and re-programming it per push/shipping pass was a third of the cost that priced the
+    // pump off the busy path, and ~0.5 us a sweep on the direct path's knee.
+    noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
 
     volatile tt_l1_ptr uint32_t* stop = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStopAddr);
     *stop = 0;
@@ -823,9 +822,6 @@ void kernel_main() {
         }
         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
         *phase = kPhWrChunk;
-        // Not hoisted out of emit_slots: the head write-backs between pushes program the same command
-        // buffer, so the state must be re-established per push.
-        noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
         const uint32_t fifo_size = sender.downstream_fifo_curr_size;
         uint32_t wr = sender.write_ptr;
         // dst is a FIFO offset; socket_push_pages only wraps the pointer, it does not split a transfer, so
