@@ -644,8 +644,14 @@ void kernel_main() {
             continue;
         }
         // Sharded joint: one L/P shard per ring iteration — process joint K/V on every iteration.
-        // Replicated joint: process joint when ring_id == ring_size-1.
-        const bool do_joint_kv = has_gathered_joint_k ? true : (ring_id == ring_size - 1);
+        // Replicated joint: process joint once per device. Full ring visits ring_size-1; a windowed
+        // gather may not, so fire on the last active windowed iteration instead (all kernels agree via
+        // active_ring_iter_mask). Data is local (replicated), so the choice of iteration is free.
+        const bool do_joint_kv =
+            has_gathered_joint_k
+                ? true
+                : (sdpa_ring_iterations < ring_size ? is_last_active_ring_iter(active_ring_iter_mask, ring_iter)
+                                                    : (ring_id == ring_size - 1));
         uint32_t num_kv_chunks = num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {
