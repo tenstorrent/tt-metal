@@ -176,6 +176,223 @@ std::optional<tt::DataFormat> dfb_data_format(const m2::ProgramSpec& spec, const
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
+    const LayerNormParams& operation_attributes,
+    const LayerNormInputs& tensor_args,
+    const std::optional<CoreRangeSet>& core_range_set) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    const auto& input = tensor_args.input;
+    const auto& residual = tensor_args.residual_input_tensor;
+    const auto& gamma = tensor_args.weight;
+    const auto& beta = tensor_args.bias;
+    const bool rms_norm = operation_attributes.norm_type == LayerNormType::RMSNORM;
+    bool requested_use_welford = false;
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                requested_use_welford = program_config.use_welford;
+            }
+        },
+        operation_attributes.program_config);
+
+    IDevice* device = input.device();
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    const std::uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const bool input_is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const auto& padded_shape = input.padded_shape();
+    std::uint32_t padded_height = padded_shape[-2];
+    const std::uint32_t padded_width = padded_shape[-1];
+    if (padded_height == 0 || padded_width == 0 || tile_height == 0 || tile_width == 0) {
+        return {};
+    }
+    const std::uint32_t nc = input.physical_volume() / (padded_height * padded_width);
+    if (input_is_row_major) {
+        padded_height = tt::round_up(padded_height, TILE_HEIGHT);
+    }
+    const std::uint32_t width_tiles = padded_width / tile_width;
+    const std::uint32_t height_tiles = padded_height / tile_height;
+    const std::uint32_t num_tile_rows = nc * height_tiles;
+    if (width_tiles == 0 || num_tile_rows == 0) {
+        return {};
+    }
+    const std::uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+
+    const auto input_format = datatype_to_dataformat_converter(input.dtype());
+    const auto output_format = input_format;
+    const auto intermediate_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const auto gamma_format =
+        gamma.has_value() ? datatype_to_dataformat_converter(gamma->dtype()) : tt::DataFormat::Float16_b;
+    const auto beta_format =
+        beta.has_value() ? datatype_to_dataformat_converter(beta->dtype()) : tt::DataFormat::Float16_b;
+    const std::uint32_t input_tile_size = tt::tile_size(input_format);
+    const std::uint32_t output_tile_size = tt::tile_size(output_format);
+    const std::uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+    const std::uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t gamma_tile_size = tt::tile_size(gamma_format);
+    const std::uint32_t beta_tile_size = tt::tile_size(beta_format);
+    const std::uint32_t residual_tile_size =
+        residual.has_value() ? tt::tile_size(datatype_to_dataformat_converter(residual->dtype())) : 0;
+
+    const CoreRangeSet requested_cores = core_range_set.value_or(default_core_range(device));
+    const auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_group_1, rows_per_core_group_2] =
+        split_work_to_cores(requested_cores, num_tile_rows, true);
+
+    LayerNormInterleavedPlan plan;
+    plan.width_block_tiles = tt::round_up(width_tiles, block_size);
+    plan.input_tiles = plan.width_block_tiles;
+    plan.residual_tiles = block_size * 2;
+    plan.output_tiles = input_is_row_major ? plan.width_block_tiles : block_size * 2;
+    plan.centred_tiles = plan.width_block_tiles;
+    plan.squared_tiles = plan.width_block_tiles;
+    plan.gamma_tiles = plan.width_block_tiles;
+    plan.beta_tiles = plan.width_block_tiles;
+    plan.residual_value_tiles = residual.has_value() ? plan.width_block_tiles : block_size * 2;
+    if (residual.has_value()) {
+        plan.input_tiles = 2 * block_size;
+    }
+
+    const std::uint32_t affine_intermediate_tiles = 2 * block_size;
+    constexpr std::uint32_t final_intermediate_tiles = 8;
+    constexpr std::uint32_t mean_tiles = 2;
+    constexpr std::uint32_t scaler_tiles = 2;
+    constexpr std::uint32_t epsilon_tiles = 2;
+    constexpr std::uint32_t variance_tiles = 2;
+    const std::uint64_t row_major_staging =
+        input_is_row_major ? static_cast<std::uint64_t>(2 * block_size) * (input_tile_size + output_tile_size) : 0;
+    const std::uint64_t usable_l1 = ttnn::operations::core::usable_program_l1_capacity(device);
+    const auto footprint = [&](bool sfpu_statistics) {
+        return LayerNormCbFootprint{
+            .input = static_cast<std::uint64_t>(plan.input_tiles) * input_tile_size,
+            .residual_input =
+                residual.has_value() ? static_cast<std::uint64_t>(plan.residual_tiles) * residual_tile_size : 0,
+            .output = static_cast<std::uint64_t>(plan.output_tiles) * output_tile_size,
+            .centred_values = (!rms_norm || residual.has_value())
+                                  ? static_cast<std::uint64_t>(plan.centred_tiles) * intermediate_tile_size
+                                  : 0,
+            .squared_values =
+                sfpu_statistics ? 0 : static_cast<std::uint64_t>(plan.squared_tiles) * intermediate_tile_size,
+            .gamma = gamma.has_value() ? static_cast<std::uint64_t>(plan.gamma_tiles) * gamma_tile_size : 0,
+            .beta = beta.has_value() ? static_cast<std::uint64_t>(plan.beta_tiles) * beta_tile_size : 0,
+            .residual_values = residual.has_value() && !rms_norm
+                                   ? static_cast<std::uint64_t>(plan.residual_value_tiles) * intermediate_tile_size
+                                   : 0,
+            .affine_intermediate = gamma.has_value() || beta.has_value()
+                                       ? static_cast<std::uint64_t>(affine_intermediate_tiles) * intermediate_tile_size
+                                       : 0,
+            .final_intermediate = static_cast<std::uint64_t>(final_intermediate_tiles) * intermediate_tile_size,
+            .mean = rms_norm ? 0 : static_cast<std::uint64_t>(mean_tiles) * intermediate_tile_size,
+            .scaler = sfpu_statistics ? 0 : static_cast<std::uint64_t>(scaler_tiles) * bfloat16_tile_size,
+            .epsilon = static_cast<std::uint64_t>(epsilon_tiles) * bfloat16_tile_size,
+            .variance = static_cast<std::uint64_t>(variance_tiles) * intermediate_tile_size,
+            .row_major_staging = row_major_staging,
+        };
+    };
+
+    const bool tile_fits = footprint(false).fits(usable_l1);
+    const bool two_pass_fits = tensor_args.recip_tensor.has_value() && footprint(true).fits(usable_l1);
+    plan.use_welford =
+        layernorm::select_interleaved_statistics_backend(
+            requested_use_welford,
+            device->arch(),
+            rms_norm,
+            input_is_row_major,
+            fp32_dest_acc_en,
+            {.input_format = input_format,
+             .padded_width = padded_width,
+             .fuse_pre_add = residual.has_value(),
+             .has_gamma = gamma.has_value(),
+             .has_beta = beta.has_value(),
+             .compact_two_pass_fits_in_l1 = two_pass_fits}) == layernorm::StatisticsBackend::SFPU_TWO_PASS;
+    const bool fp32_finalizer_arch = device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
+    const bool fp32_sfpu_finalizer = fp32_finalizer_arch && plan.use_welford && !rms_norm && !input_is_row_major &&
+                                     input_format == tt::DataFormat::Float32 &&
+                                     output_format == tt::DataFormat::Float32 &&
+                                     !operation_attributes.fused_activation.has_value();
+    const bool selected_fits = plan.use_welford ? two_pass_fits : tile_fits;
+    const bool row_major_affine = (gamma.has_value() && gamma->layout() == Layout::ROW_MAJOR) ||
+                                  (beta.has_value() && beta->layout() == Layout::ROW_MAJOR);
+    const std::uint32_t with_weights_max = 56 * bfloat16_tile_size / intermediate_tile_size;
+    const std::uint32_t without_weights_max = 112 * bfloat16_tile_size / intermediate_tile_size;
+    if (!row_major_affine || input_is_row_major) {
+        if ((gamma.has_value() || beta.has_value() || input_format == tt::DataFormat::Float32) && !selected_fits) {
+            plan.large_tensor = true;
+            plan.width_block_tiles = std::min(plan.width_block_tiles, with_weights_max);
+        } else if (!selected_fits) {
+            plan.large_tensor = true;
+            plan.width_block_tiles = std::min(plan.width_block_tiles, without_weights_max);
+        }
+    }
+    plan.compact_fp32_finalizer =
+        device->arch() == tt::ARCH::BLACKHOLE && fp32_sfpu_finalizer && !residual.has_value() && !plan.large_tensor;
+    if (fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
+        plan.large_tensor = true;
+    }
+    const auto configure_large_buffers = [&]() {
+        plan.input_tiles = plan.width_block_tiles;
+        plan.centred_tiles = plan.width_block_tiles;
+        plan.squared_tiles = plan.width_block_tiles;
+        plan.gamma_tiles = plan.width_block_tiles;
+        plan.beta_tiles = plan.width_block_tiles;
+        if (residual.has_value()) {
+            plan.residual_value_tiles = plan.width_block_tiles;
+            plan.input_tiles = 2 * block_size;
+        }
+        if (input_is_row_major) {
+            plan.input_tiles = block_size;
+            plan.output_tiles = block_size;
+        }
+    };
+    if (plan.large_tensor) {
+        configure_large_buffers();
+        while (plan.width_block_tiles > block_size && !footprint(plan.use_welford).fits(usable_l1)) {
+            plan.width_block_tiles -= block_size;
+            configure_large_buffers();
+        }
+        const auto streaming_footprint = footprint(plan.use_welford);
+        TT_FATAL(
+            streaming_footprint.fits(usable_l1),
+            "LayerNorm streaming circular buffers require {} bytes, but only {} bytes of the allocator's L1 span "
+            "are available",
+            streaming_footprint.total(),
+            usable_l1);
+    }
+
+    if (device->arch() == tt::ARCH::BLACKHOLE && plan.use_welford && !rms_norm && plan.large_tensor &&
+        residual.has_value() && gamma.has_value() && beta.has_value() && !input_is_row_major &&
+        input_format == tt::DataFormat::Float32 && !operation_attributes.fused_activation.has_value()) {
+        const std::uint32_t full_row_tiles = tt::round_up(width_tiles, block_size);
+        auto replay_footprint = footprint(true);
+        replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * intermediate_tile_size;
+        if (replay_footprint.fits(usable_l1)) {
+            plan.residual_value_tiles = full_row_tiles;
+            plan.fused_pre_add_replay = true;
+        }
+    }
+    const bool affine_mcast_core_set_safe =
+        requested_cores == default_core_range(device) || all_cores.bounding_box().size() == num_cores;
+    plan.affine_mcast =
+        plan.fused_pre_add_replay && num_cores >= 20 && num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
+
+    if (plan.use_welford && !rms_norm && !plan.large_tensor) {
+        const std::uint32_t read_ahead_input = residual.has_value() ? 2 * plan.width_block_tiles : 3 * plan.input_tiles;
+        const std::uint32_t read_ahead_residual =
+            residual.has_value() ? 2 * plan.width_block_tiles : plan.residual_tiles;
+        auto read_ahead_footprint = footprint(true);
+        read_ahead_footprint.input = static_cast<std::uint64_t>(read_ahead_input) * input_tile_size;
+        read_ahead_footprint.residual_input =
+            residual.has_value() ? static_cast<std::uint64_t>(read_ahead_residual) * residual_tile_size : 0;
+        if (read_ahead_footprint.fits(usable_l1)) {
+            plan.input_tiles = read_ahead_input;
+            plan.residual_tiles = read_ahead_residual;
+        }
+    }
+    return plan;
+}
+
 ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::create_program_artifacts(
     const LayerNormParams& operation_attributes,
     const LayerNormInputs& tensor_args,
@@ -196,14 +413,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // Extract program config
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
-    bool requested_use_welford = false;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 legacy_reduction = program_config.legacy_reduction;
                 legacy_rsqrt = program_config.legacy_rsqrt;
-                requested_use_welford = program_config.use_welford;
             }
         },
         operation_attributes.program_config);
@@ -309,21 +524,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     auto use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or
                                 (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR);
-    // Size the small-kernel buffers to be a multiple of the block size
-    uint32_t Wt_next_block_up = tt::round_up(Wt, block_size);
-    uint32_t in0_t =
-        Wt_next_block_up;  // dfb_x for no pre-add variant, x=a+b for fused pre-add, extra space for some buffering
-    uint32_t in1_t = block_size * 2;  // buffer for fused pre-add b tensor
-    uint32_t out0_t = input_is_row_major ? Wt_next_block_up : block_size * 2;
-    uint32_t im0_t = Wt_next_block_up;  // buffer for saving xmm
-    uint32_t im3_t = Wt_next_block_up;  // buffer for xmm^2
-    uint32_t in5_t = Wt_next_block_up;  // buffer for gamma
-    uint32_t in6_t = Wt_next_block_up;  // buffer for beta
-    uint32_t im6_t = block_size * 2;    // x=a+b reuse for x-E[x] computation plus a bit extra for buffering
-    if (b) {
-        im6_t = Wt_next_block_up;
-        in0_t = 2 * block_size;
-    }
+    const LayerNormInterleavedPlan selected_plan = select_plan(operation_attributes, tensor_args, core_range_set);
+    const uint32_t in0_t = selected_plan.input_tiles;
+    const uint32_t in1_t = selected_plan.residual_tiles;
+    const uint32_t out0_t = selected_plan.output_tiles;
+    const uint32_t im0_t = selected_plan.centred_tiles;
+    const uint32_t im3_t = selected_plan.squared_tiles;
+    const uint32_t in5_t = selected_plan.gamma_tiles;
+    const uint32_t in6_t = selected_plan.beta_tiles;
+    const uint32_t im6_t = selected_plan.residual_value_tiles;
     std::uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     std::uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
     std::uint32_t im1_t = 2;
@@ -333,136 +542,23 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     // Double-buffered row-major staging for in-flight tilize and untilize.
     const std::uint32_t in_rm_tiles = input_is_row_major ? 2 * block_size : 0;
-    const std::uint32_t in_rm_size = in_rm_tiles * in_single_tile_size;
     const std::uint32_t out_rm_tiles = input_is_row_major ? 2 * block_size : 0;
-    const std::uint32_t out_rm_size = out_rm_tiles * out_single_tile_size;
 
-    const std::uint64_t usable_cb_l1_bytes = ttnn::operations::core::program_cache_l1_capacity(device);
-
-    // The reciprocal LUT is an externally bound L1 buffer, so the available capacity above
-    // already excludes it from the free buffer span. Counting it here would charge its storage twice.
-    const auto make_cb_footprint = [&](bool sfpu_statistics) {
-        return LayerNormCbFootprint{
-            .input = static_cast<std::uint64_t>(in0_t) * in_single_tile_size,
-            .residual_input = b.has_value() ? static_cast<std::uint64_t>(in1_t) * inb_single_tile_size : 0,
-            .output = static_cast<std::uint64_t>(out0_t) * out_single_tile_size,
-            .centred_values = (!rms_norm || b.has_value()) ? static_cast<std::uint64_t>(im0_t) * single_tile_size : 0,
-            .squared_values = sfpu_statistics ? 0 : static_cast<std::uint64_t>(im3_t) * single_tile_size,
-            .gamma = gamma.has_value() ? static_cast<std::uint64_t>(in5_t) * gamma_single_tile_size : 0,
-            .beta = beta.has_value() ? static_cast<std::uint64_t>(in6_t) * beta_single_tile_size : 0,
-            .residual_values = b.has_value() && !rms_norm ? static_cast<std::uint64_t>(im6_t) * single_tile_size : 0,
-            .affine_intermediate =
-                gamma.has_value() || beta.has_value() ? static_cast<std::uint64_t>(im5_t) * single_tile_size : 0,
-            .final_intermediate = static_cast<std::uint64_t>(im4_t) * single_tile_size,
-            .mean = rms_norm ? 0 : static_cast<std::uint64_t>(im1_t) * single_tile_size,
-            .scaler = sfpu_statistics ? 0 : static_cast<std::uint64_t>(in2_t) * scaler_tile_size,
-            .epsilon = static_cast<std::uint64_t>(in3_t) * bfloat16_tile_size,
-            .variance = static_cast<std::uint64_t>(im2_t) * single_tile_size,
-            .row_major_staging = in_rm_size + out_rm_size,
-        };
-    };
-    const bool tile_cb_fits_in_l1 = make_cb_footprint(false).fits(usable_cb_l1_bytes);
-    const bool two_pass_cb_fits_in_l1 =
-        tensor_args.recip_tensor.has_value() && make_cb_footprint(true).fits(usable_cb_l1_bytes);
-    const auto statistics_backend = layernorm::select_interleaved_statistics_backend(
-        requested_use_welford,
-        device->arch(),
-        rms_norm,
-        input_is_row_major,
-        fp32_dest_acc_en,
-        {.input_format = in_data_format,
-         .padded_width = Wp,
-         .fuse_pre_add = b.has_value(),
-         .has_gamma = gamma.has_value(),
-         .has_beta = beta.has_value(),
-         .compact_two_pass_fits_in_l1 = two_pass_cb_fits_in_l1});
-    const bool use_welford = statistics_backend == layernorm::StatisticsBackend::SFPU_TWO_PASS;
+    const bool use_welford = selected_plan.use_welford;
     const bool compensated_finalizer_arch =
         device->arch() == tt::ARCH::BLACKHOLE || device->arch() == tt::ARCH::WORMHOLE_B0;
     const bool fp32_sfpu_finalizer = compensated_finalizer_arch && use_welford && !rms_norm && !input_is_row_major &&
                                      in_data_format == tt::DataFormat::Float32 &&
                                      out_data_format == tt::DataFormat::Float32 &&
                                      !operation_attributes.fused_activation.has_value();
-    const bool selected_cb_fits_in_l1 = use_welford ? two_pass_cb_fits_in_l1 : tile_cb_fits_in_l1;
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_buffer_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
 
-    bool large_tensor_needed = false;
-    // The following constants were chosen empirically to
-    // maximize the buffer size while still fitting the
-    // largest cases (fused pre-add + gamma + beta) in L1.
-    // There is room for optimization here based on different
-    // conditions (like what buffers are actually used),
-    // but having two constants for all cases is simpler.
-    //
-    // The base values (56 / 112) are calibrated for bfloat16 intermediate tiles.
-    // When fp32_dest_acc_en is true, interm_data_format is Float32 so single_tile_size
-    // doubles (4096 B vs 2048 B). All intermediate buffers (im0_t, im3_t, im5_t, …) use
-    // single_tile_size, so the same number of tiles takes 2x the L1 space. Scaling
-    // by bfloat16_tile_size / single_tile_size keeps the total intermediate buffer
-    // footprint within the empirically validated L1 budget regardless of the
-    // accumulation data format.
-    const uint32_t with_weights_max_size = 56 * bfloat16_tile_size / single_tile_size;
-    const uint32_t without_weights_max_size = 112 * bfloat16_tile_size / single_tile_size;
-    // For input_is_row_major we also allow large_tensor_needed (same L1 logic applies).
-    // use_row_major_kernel (row-major gamma/beta) still skips large_tensor check as before.
-    if (!use_row_major_kernel || input_is_row_major) {
-        if ((gamma.has_value() or beta.has_value() or in_data_format == tt::DataFormat::Float32) and
-            !selected_cb_fits_in_l1) {
-            // In the case that the required space is larger than what can be handled by the single pass
-            large_tensor_needed = true;
-            Wt_next_block_up = std::min(Wt_next_block_up, with_weights_max_size);
-        } else if (!selected_cb_fits_in_l1) {
-            large_tensor_needed = true;
-            Wt_next_block_up = std::min(Wt_next_block_up, without_weights_max_size);
-        }
-    }
-    // The compact Blackhole kernel can keep compensated centring in DEST and
-    // multiply by the column-broadcast inverse standard deviation without an
-    // intermediate spill. Residual and oversized cases retain the streaming
-    // SFPU finaliser.
-    const bool compact_fp32_finalizer =
-        device->arch() == tt::ARCH::BLACKHOLE && fp32_sfpu_finalizer && !b.has_value() && !large_tensor_needed;
-    if (fp32_sfpu_finalizer && !compact_fp32_finalizer) {
-        large_tensor_needed = true;
-    }
-    const auto configure_large_tensor_buffers = [&]() {
-        in0_t = Wt_next_block_up;
-        im0_t = Wt_next_block_up;  // buffer for saving xmm
-        im3_t = Wt_next_block_up;  // buffer for xmm^2
-        in5_t = Wt_next_block_up;  // buffer for gamma
-        in6_t = Wt_next_block_up;  // buffer for beta
-        if (b) {
-            im6_t = Wt_next_block_up;
-            in0_t = 2 * block_size;
-        }
-        if (input_is_row_major) {
-            // layernorm_large_tensor.cpp interleaves tilize / compute / untilize per block, so
-            // dfb_in and dfb_out only ever hold one block at a time. Move the double-buffering to
-            // dfb_in_rm / dfb_out_rm so the reader prefetches the next DRAM block while compute
-            // processes the current one, and the writer drains concurrently.
-            in0_t = block_size;
-            out0_t = block_size;
-        }
-    };
-
-    if (large_tensor_needed) {
-        configure_large_tensor_buffers();
-        while (Wt_next_block_up > block_size && !make_cb_footprint(use_welford).fits(usable_cb_l1_bytes)) {
-            Wt_next_block_up -= block_size;
-            configure_large_tensor_buffers();
-        }
-        const auto streaming_cb_footprint = make_cb_footprint(use_welford);
-        TT_FATAL(
-            streaming_cb_footprint.fits(usable_cb_l1_bytes),
-            "LayerNorm streaming circular buffers require {} bytes, but only {} bytes of the allocator's L1 span "
-            "are available",
-            streaming_cb_footprint.total(),
-            usable_cb_l1_bytes);
-    }
+    const bool large_tensor_needed = selected_plan.large_tensor;
+    const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True. Without it, UNPACK's SRCA register file is 16-bit and
@@ -488,50 +584,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     ////////////////////////////////////////////////////////////////////////////
     const auto use_welford_and_not_rms_norm = use_welford && !rms_norm;
     const auto fuse_pre_add = b.has_value();
-    const bool two_pass_small = use_welford_and_not_rms_norm && !large_tensor_needed;
-    bool fused_pre_add_replay = false;
-
-    // The large fused path normally rereads both inputs for normalisation after
-    // materialising x = a + b for statistics. Retain the complete post-add row
-    // through an aliased CB view when the actual free L1 span can hold it.
-    if (device->arch() == tt::ARCH::BLACKHOLE && use_welford_and_not_rms_norm && large_tensor_needed && fuse_pre_add &&
-        gamma.has_value() && beta.has_value() && !input_is_row_major && in_data_format == tt::DataFormat::Float32 &&
-        !operation_attributes.fused_activation.has_value()) {
-        const std::uint32_t full_row_tiles = tt::round_up(Wt, block_size);
-        auto replay_footprint = make_cb_footprint(true);
-        replay_footprint.residual_values = static_cast<std::uint64_t>(full_row_tiles) * single_tile_size;
-        if (replay_footprint.fits(usable_cb_l1_bytes)) {
-            im6_t = full_row_tiles;
-            fused_pre_add_replay = true;
-        }
-    }
-
-    // Multicast uses the active-core bounding box. The default core pool owns
-    // inactive tail positions in that box; custom pools must be rectangular.
-    const bool affine_mcast_core_set_safe =
-        requested_cores == default_core_range(device) || all_cores.bounding_box().size() == num_cores;
-    const bool affine_mcast =
-        fused_pre_add_replay && num_cores >= 20 && num_tile_rows % num_cores == 0 && affine_mcast_core_set_safe;
-
-    // The two-pass kernel retains the current row until its mean, centered M2,
-    // and x-mean traversals are complete. When L1 permits, let the reader fill
-    // the next two rows instead of stalling on that longer retention interval.
-    // The non-fused c_29 FP32 alias shares cb_in's read-ahead storage. On the
-    // fused path the current a/b row has already been consumed into cb_x, so two
-    // rows in each input CB allow the reader to stay ahead of the longer compute
-    // phase.
-    if (two_pass_small) {
-        const std::uint32_t read_ahead_in0_t = fuse_pre_add ? 2 * Wt_next_block_up : 3 * in0_t;
-        const std::uint32_t read_ahead_in1_t = fuse_pre_add ? 2 * Wt_next_block_up : in1_t;
-        auto read_ahead_footprint = make_cb_footprint(true);
-        read_ahead_footprint.input = static_cast<std::uint64_t>(read_ahead_in0_t) * in_single_tile_size;
-        read_ahead_footprint.residual_input =
-            fuse_pre_add ? static_cast<std::uint64_t>(read_ahead_in1_t) * inb_single_tile_size : 0;
-        if (read_ahead_footprint.fits(usable_cb_l1_bytes)) {
-            in0_t = read_ahead_in0_t;
-            in1_t = read_ahead_in1_t;
-        }
-    }
+    const bool fused_pre_add_replay = selected_plan.fused_pre_add_replay;
+    const bool affine_mcast = selected_plan.affine_mcast;
 
     // For Float32 input on the Welford path: expose the input tile data under two buffer indices
     // backed by the same SRAM (aliased buffers). dfb_x retains the default unpack mode so

@@ -18,7 +18,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
-#include "ttnn/operations/core/program_cache_l1.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -352,30 +351,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     // traversals and final normalization. The cb_in0/cb_in0_welford aliases share
     // this allocation, so the full FP32 two-pass path then needs one input read
     // instead of three. Keep a 5% margin for non-CB L1 users.
-    const GroupNormInterleavedCbFootprint cb_footprint{
-        .output = out_CB_size_group_1,
-        .input_staging = in_CB_size_group_1,
-        .untilize_output = untilize_out ? in_CB_size_group_1 : 0,
-        .scaler = in2_CB_size,
-        .epsilon = in3_CB_size,
-        .column_scaler = in2_CB_size,
-        .gamma = gamma.has_value() ? in5_CB_size : 0,
-        .beta = beta.has_value() ? in6_CB_size : 0,
-        .input_mask = in_mask_CB_size,
-        .repack = reader_repack_output ? repack_CB_size : 0,
-        .x = x_CB_size_group_1,
-        .xmm = xmm_CB_size_group_1,
-        .xmm2 = xmm2_CB_size_group_1,
-        .xmm3 = xmm3_CB_size_group_1,
-        .partial_stats = ex_partial_CB_size,
-        .global_stats = ex_global_CB_size,
-        .normalisation_stats = ex2pe_CB_size,
-    };
-    const std::uint64_t usable_cb_l1_bytes = ttnn::operations::core::program_cache_l1_capacity(device);
     const std::uint32_t replay_input_tiles_group_1 = block_ht_group_1 * per_core_Nt;
     const std::uint32_t replay_input_size_group_1 = replay_input_tiles_group_1 * in_single_tile_size;
     const bool sfpu_two_pass_l1_replay =
-        use_welford && cb_footprint.total_with_input(replay_input_size_group_1) < usable_cb_l1_bytes;
+        GroupNormDeviceOperation::select_interleaved_plan(operation_attributes, tensor_args).replay_group_1;
     if (sfpu_two_pass_l1_replay) {
         in0_CB_size_group_1 = replay_input_size_group_1;
     }

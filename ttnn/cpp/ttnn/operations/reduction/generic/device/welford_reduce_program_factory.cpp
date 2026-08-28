@@ -16,6 +16,64 @@
 
 namespace ttnn::prim {
 
+bool WelfordReduceDeviceOperation::WelfordReduceProgramFactory::use_l1_replay(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_arg) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const Shape& padded_shape = tensor_arg.padded_shape();
+    const std::uint32_t tile_height = tensor_arg.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = tensor_arg.tensor_spec().tile().get_width();
+    if (padded_shape[-2] == 0 || padded_shape[-1] == 0 || tile_height == 0 || tile_width == 0 ||
+        operation_attributes.reduce_batch_size == 0) {
+        return false;
+    }
+    const std::uint32_t Wt = padded_shape[-1] / tile_width;
+    const std::uint32_t Ht = padded_shape[-2] / tile_height;
+    const std::uint32_t NC = tensor_arg.physical_volume() / (padded_shape[-2] * padded_shape[-1]);
+    const bool reduce_w = operation_attributes.reduce_dim == ReduceOpDim::W;
+    const bool reduce_hw = operation_attributes.reduce_dim == ReduceOpDim::HW;
+
+    const auto input_format = datatype_to_dataformat_converter(tensor_arg.dtype());
+    const auto output_format = datatype_to_dataformat_converter(operation_attributes.output_dtype);
+    const std::uint32_t input_tile_size = tile_size(input_format);
+    const std::uint32_t output_tile_size = tile_size(output_format);
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(tensor_arg.device()->arch(), operation_attributes.compute_kernel_config);
+    const bool is_std = operation_attributes.math_op == ReduceOpMath::STD;
+    const float post_mul_scaler =
+        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
+    const bool narrow_scratch_to_bf16 = !is_std && post_mul_scaler == 1.0f && output_format == DataFormat::Float16_b;
+    const DataFormat scratch_format =
+        fp32_dest_acc_en && !narrow_scratch_to_bf16 ? DataFormat::Float32 : DataFormat::Float16_b;
+    const DataFormat combined_format = narrow_scratch_to_bf16 ? DataFormat::Float16_b : DataFormat::Float32;
+
+    const std::uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
+    const std::uint32_t num_work_units = reduce_w ? NC * Ht : (reduce_hw ? NC / reduce_batch_size : NC * Wt);
+    if (num_work_units == 0) {
+        return false;
+    }
+    std::uint32_t num_cores;
+    CoreRangeSet all_cores, core_group_1, core_group_2;
+    std::uint32_t work_group_1, work_group_2;
+    if (operation_attributes.sub_core_grids.has_value()) {
+        std::tie(num_cores, all_cores, core_group_1, core_group_2, work_group_1, work_group_2) =
+            split_work_to_cores(*operation_attributes.sub_core_grids, num_work_units);
+    } else {
+        std::tie(num_cores, all_cores, core_group_1, core_group_2, work_group_1, work_group_2) =
+            split_work_to_cores(tensor_arg.device()->compute_with_storage_grid_size(), num_work_units);
+    }
+
+    const std::uint32_t replay_tiles = reduce_w ? Wt : Ht;
+    const std::uint32_t replay_min_tiles = work_group_1 > 1 || work_group_2 > 1 ? 8 : 24;
+    std::uint64_t footprint = static_cast<std::uint64_t>(replay_tiles) * input_tile_size + 2 * output_tile_size;
+    footprint += reduce_w ? tile_size(scratch_format) : 0;
+    footprint += reduce_hw ? 4 * tile_size(DataFormat::Float32) + tile_size(combined_format) : 0;
+
+    const auto usable_l1 = ttnn::operations::core::usable_program_l1_capacity(tensor_arg.device());
+    return replay_tiles >= replay_min_tiles && footprint < usable_l1;
+}
+
 tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_arg,
@@ -174,20 +232,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // off at 24 tiles; when any core processes multiple reductions, eliminating the
     // second DRAM traversal pays off from 8 tiles onward. Four or fewer tiles are
     // already retained entirely in DEST and never need replay.
-    const bool multiple_work_units_per_core =
-        num_work_units_per_core_group_1 > 1 || num_work_units_per_core_group_2 > 1;
-    const std::uint32_t two_pass_l1_replay_min_tiles = multiple_work_units_per_core ? 8 : 24;
     const std::uint32_t two_pass_l1_replay_tiles = reduce_w ? Wt : Ht;
-    const std::uint64_t replay_input_size =
-        static_cast<std::uint64_t>(two_pass_l1_replay_tiles) * input_single_tile_size;
     constexpr std::uint32_t two_pass_streaming_cb_tiles = 8;
-    std::uint64_t replay_cb_footprint = replay_input_size + 2 * dst_single_tile_size;
-    replay_cb_footprint += reduce_w ? w_scratch_single_tile_size : 0;
-    replay_cb_footprint += reduce_hw ? 4 * partial_single_tile_size + combined_single_tile_size : 0;
-
-    const std::uint64_t usable_cb_l1_bytes = ttnn::operations::core::program_cache_l1_capacity(device);
-    const bool two_pass_l1_replay =
-        two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles && replay_cb_footprint < usable_cb_l1_bytes;
+    const bool two_pass_l1_replay = use_l1_replay(operation_attributes, tensor_arg);
 
     ProgramDescriptor desc;
 

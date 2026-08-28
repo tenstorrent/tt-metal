@@ -18,6 +18,16 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 TEST_PADDING_VALUE = -42
 
 
+@pytest.fixture
+def enabled_program_cache(device):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    try:
+        yield
+    finally:
+        device.disable_and_clear_program_cache()
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])
@@ -198,11 +208,10 @@ def test_var_fp32_large_reduction_translation_stability(device, shape, dim):
     torch.testing.assert_close(actual, torch_ref, rtol=1e-3, atol=1e-3, check_dtype=False)
 
 
-def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device):
+def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device, enabled_program_cache):
     if not is_blackhole():
         pytest.skip("The near-capacity allocation is calibrated for Blackhole L1")
 
-    device.enable_program_cache()
     torch.manual_seed(20260731)
     # This FP32 row requires 512 KiB of replay storage.
     torch_input = (torch.randn((1, 1, 32, 4096), dtype=torch.float32) + 1e4).contiguous()
@@ -221,9 +230,9 @@ def test_std_var_fp32_w_l1_replay_respects_occupied_l1(device):
 
     # Reuse the same operation keys after allocator state changes. Without the
     # occupied-L1 cache discriminator, this resurrects the replay programs.
-    # Occupying 800 KiB/core leaves room for streaming, but not 512 KiB row replay.
+    # Occupying 1100 KiB/core leaves room for streaming, but not 512 KiB row replay.
     grid = device.compute_with_storage_grid_size()
-    pressure_tiles = (800 * 1024 * grid.x * grid.y + 2047) // 2048
+    pressure_tiles = (1100 * 1024 * grid.x * grid.y + 2047) // 2048
     l1_pressure = ttnn.allocate_tensor_on_device(
         ttnn.Shape((1, 1, 32, pressure_tiles * 32)),
         ttnn.bfloat16,

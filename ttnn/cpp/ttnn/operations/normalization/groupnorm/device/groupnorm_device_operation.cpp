@@ -9,6 +9,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
+#include "ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
 using namespace tt::tt_metal;
@@ -47,14 +48,155 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     return GroupNormDeviceOperation::GroupNormMcastProgramFactory{};
 }
 
+GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.input;
+    if (input.is_sharded() || !args.use_welford) {
+        return {};
+    }
+
+    const auto& config = std::get<GroupNormMultiCoreProgramConfig>(args.program_config);
+    const auto& shape = input.padded_shape();
+    const std::uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const std::uint32_t num_batches = shape[0];
+    const std::uint32_t height = shape[1] * shape[2] * num_batches;
+    const std::uint32_t width = shape[3];
+    const std::uint32_t num_groups = args.num_groups;
+    const auto grid = config.compute_with_storage_grid_size;
+    if (tile_height == 0 || tile_width == 0 || height == 0 || width == 0 || num_groups == 0 || grid.x == 0 ||
+        grid.y == 0) {
+        return {};
+    }
+    const std::uint32_t height_tiles = height / tile_height;
+
+    std::uint32_t num_virtual_cols = std::min<std::uint32_t>(grid.x, num_groups);
+    while (num_virtual_cols > 0 &&
+           ((width / num_virtual_cols) % tile_width != 0 || num_groups % num_virtual_cols != 0)) {
+        --num_virtual_cols;
+    }
+    if (num_virtual_cols == 0) {
+        return {};
+    }
+    const std::uint32_t num_virtual_rows = (grid.x / num_virtual_cols) * grid.y;
+    if (height_tiles < num_virtual_rows || height_tiles % num_virtual_rows != 0) {
+        return {};
+    }
+    std::uint32_t per_core_height_tiles = height_tiles / num_virtual_rows;
+    std::uint32_t per_core_height = per_core_height_tiles * tile_height;
+    const std::uint32_t per_core_width = width / num_virtual_cols;
+    const std::uint32_t per_core_width_tiles = (per_core_width + tile_width - 1) / tile_width;
+    const std::uint32_t channels_per_group = width / num_groups;
+    const std::uint32_t num_row_shards = height / per_core_height;
+    std::uint32_t batches_group_1 = num_batches > num_row_shards ? num_batches / num_row_shards : 1;
+    std::uint32_t batches_group_2 = batches_group_1;
+    const std::uint32_t num_col_shards = width / per_core_width;
+    const std::uint32_t groups_per_core = num_groups > num_col_shards ? num_groups / num_col_shards : 1;
+    const std::uint32_t block_width_tiles = find_max_tile_span(per_core_width, channels_per_group).first;
+    std::uint32_t block_height_group_1 = per_core_height_tiles / batches_group_1;
+    std::uint32_t block_height_group_2 = 0;
+
+    bool equal_batches_per_core = true;
+    if (num_batches >= num_row_shards) {
+        equal_batches_per_core = num_batches % num_row_shards == 0;
+    }
+    if (!equal_batches_per_core) {
+        batches_group_2 = num_batches / num_row_shards;
+        batches_group_1 = batches_group_2 + 1;
+        const std::uint32_t per_batch_tiles = height_tiles / num_batches;
+        block_height_group_1 = per_batch_tiles;
+        block_height_group_2 = per_batch_tiles;
+    }
+
+    std::uint32_t num_out_blocks = config.num_out_blocks;
+    if (num_out_blocks == static_cast<std::uint32_t>(-1)) {
+        num_out_blocks =
+            groupnorm_heuristic_num_out_blocks(shape[1] * shape[2] * shape[3], num_virtual_cols * num_virtual_rows);
+    }
+    if (num_out_blocks == 0 || num_out_blocks > block_height_group_1 ||
+        (block_height_group_2 > 0 && num_out_blocks > block_height_group_2)) {
+        return {};
+    }
+
+    const auto input_format = datatype_to_dataformat_converter(input.dtype());
+    const auto output_format = datatype_to_dataformat_converter(config.out_data_format);
+    const auto intermediate_format = datatype_to_dataformat_converter(config.im_data_format);
+    auto gamma_beta_format = tt::DataFormat::Float16_b;
+    if (tensor_args.gamma.has_value()) {
+        gamma_beta_format = datatype_to_dataformat_converter(tensor_args.gamma->dtype());
+    }
+    if (tensor_args.beta.has_value()) {
+        gamma_beta_format = datatype_to_dataformat_converter(tensor_args.beta->dtype());
+    }
+    const auto mask_format = tensor_args.input_mask.has_value()
+                                 ? datatype_to_dataformat_converter(tensor_args.input_mask->dtype())
+                                 : tt::DataFormat::Float16_b;
+    const std::uint32_t input_tile_size = tt::tile_size(input_format);
+    const std::uint32_t output_tile_size = tt::tile_size(output_format);
+    const std::uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+    const std::uint32_t gamma_beta_tile_size = tt::tile_size(gamma_beta_format);
+    const std::uint32_t mask_tile_size = tt::tile_size(mask_format);
+    const std::uint32_t epsilon_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const bool reader_repack_output = per_core_width % tile_width != 0;
+    const bool untilize_output = config.output_layout == Layout::ROW_MAJOR;
+    const std::uint32_t input_mask_size = block_width_tiles * groups_per_core * mask_tile_size;
+    const std::uint32_t repack_size = per_core_width_tiles * input_tile_size * 2;
+    const std::uint32_t gamma_size = per_core_width_tiles * gamma_beta_tile_size;
+    const std::uint32_t beta_size = per_core_width_tiles * gamma_beta_tile_size;
+    const std::uint32_t partial_stats_size = 2 * intermediate_tile_size;
+    const std::uint32_t global_stats_size = partial_stats_size * groups_per_core;
+    const std::uint32_t normalisation_stats_size = intermediate_tile_size * groups_per_core;
+
+    const auto fits_group = [&](std::uint32_t block_height) {
+        if (block_height == 0) {
+            return false;
+        }
+        const std::uint32_t block_tiles = block_height / num_out_blocks * block_width_tiles;
+        const std::uint32_t input_staging_size = block_tiles * input_tile_size;
+        const GroupNormInterleavedCbFootprint footprint{
+            .output = block_tiles * output_tile_size,
+            .input_staging = input_staging_size,
+            .untilize_output = untilize_output ? input_staging_size : 0,
+            .scaler = intermediate_tile_size,
+            .epsilon = epsilon_tile_size,
+            .column_scaler = intermediate_tile_size,
+            .gamma = tensor_args.gamma.has_value() ? gamma_size : 0,
+            .beta = tensor_args.beta.has_value() ? beta_size : 0,
+            .input_mask = input_mask_size,
+            .repack = reader_repack_output ? repack_size : 0,
+            .x = intermediate_tile_size,
+            .xmm = 2 * intermediate_tile_size,
+            .xmm2 = block_tiles * intermediate_tile_size,
+            .xmm3 = block_tiles * intermediate_tile_size,
+            .partial_stats = partial_stats_size,
+            .global_stats = global_stats_size,
+            .normalisation_stats = normalisation_stats_size,
+        };
+        const std::uint64_t replay_size =
+            static_cast<std::uint64_t>(block_height) * per_core_width_tiles * input_tile_size;
+        return footprint.total_with_input(replay_size) <
+               ttnn::operations::core::usable_program_l1_capacity(input.device());
+    };
+
+    return {
+        .replay_group_1 = fits_group(block_height_group_1),
+        .replay_group_2 = fits_group(block_height_group_2),
+    };
+}
+
 ttsl::hash::hash_t GroupNormDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::optional<std::uint64_t> l1_capacity;
-    if (!tensor_args.input.is_sharded()) {
-        l1_capacity = ttnn::operations::core::program_cache_l1_capacity(tensor_args.input.device());
+    if (tensor_args.input.is_sharded()) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<GroupNormDeviceOperation>, operation_attributes, tensor_args);
     }
+    const auto plan = select_interleaved_plan(operation_attributes, tensor_args);
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<GroupNormDeviceOperation>, operation_attributes, tensor_args, l1_capacity);
+        ttsl::hash::type_hash<GroupNormDeviceOperation>,
+        operation_attributes,
+        tensor_args,
+        plan.replay_group_1,
+        plan.replay_group_2);
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_miss(

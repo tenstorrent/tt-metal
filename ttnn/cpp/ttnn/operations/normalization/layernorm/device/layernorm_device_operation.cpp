@@ -6,7 +6,6 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
@@ -26,12 +25,29 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
 
 ttsl::hash::hash_t LayerNormDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::optional<std::uint64_t> l1_capacity;
-    if (!tensor_args.input.is_sharded()) {
-        l1_capacity = ttnn::operations::core::program_cache_l1_capacity(tensor_args.input.device());
+    if (tensor_args.input.is_sharded()) {
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<LayerNormDeviceOperation>, operation_attributes, tensor_args);
     }
+    const auto plan = LayerNormMultiCoreProgramFactory::select_plan(operation_attributes, tensor_args);
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<LayerNormDeviceOperation>, operation_attributes, tensor_args, l1_capacity);
+        ttsl::hash::type_hash<LayerNormDeviceOperation>,
+        operation_attributes,
+        tensor_args,
+        plan.use_welford,
+        plan.large_tensor,
+        plan.compact_fp32_finalizer,
+        plan.fused_pre_add_replay,
+        plan.affine_mcast,
+        plan.width_block_tiles,
+        plan.input_tiles,
+        plan.residual_tiles,
+        plan.output_tiles,
+        plan.centred_tiles,
+        plan.squared_tiles,
+        plan.gamma_tiles,
+        plan.beta_tiles,
+        plan.residual_value_tiles);
 }
 
 void LayerNormDeviceOperation::validate_on_program_cache_miss(

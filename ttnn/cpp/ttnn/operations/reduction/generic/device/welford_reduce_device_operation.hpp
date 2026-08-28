@@ -21,6 +21,8 @@ struct WelfordReduceDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct WelfordReduceProgramFactory {
+        static bool use_l1_replay(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
