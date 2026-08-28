@@ -119,24 +119,18 @@ class TtCohereLayerNorm(LightweightModule):
         the stats are all-gathered along cluster axis 1; post_all_gather combines
         them into the true row mean/variance and applies the per-device gamma shard.
         """
-        # Lazy import: ccl lives beside us in tt_transformers.tt; importing at module
-        # load would risk an import cycle for the family dispatch in model.py.
-        from models.tt_transformers.tt.ccl import tt_all_gather
-
-        num_links = self.tt_ccl.get_num_links(cluster_axis=1) if self.tt_ccl is not None else 1
-
+        # Proven pattern from the image's own tests
+        # (tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py):
+        # pre_all_gather output goes DIRECTLY into ttnn.all_gather — the reshape
+        # workaround in the rmsnorm path does NOT apply to layernorm (it fatals
+        # at reshape.cpp:637 in this build — observed on-box 2026-08-28).
         tt_stats = ttnn.layer_norm_pre_all_gather(
             x, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
         )
-        padded_shape = (1, 1, x.shape[-2], 32)
-        tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape))  # same workaround as rmsnorm path
-        tt_stats_gathered = tt_all_gather(
+        tt_stats_gathered = ttnn.all_gather(
             tt_stats,
-            mesh_device=self.device,
-            tt_ccl=self.tt_ccl,
             dim=3,
             cluster_axis=1,
-            num_links=num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         tt_stats.deallocate(True)
