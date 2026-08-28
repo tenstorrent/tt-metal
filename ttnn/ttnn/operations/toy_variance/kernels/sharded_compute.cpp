@@ -13,7 +13,8 @@
 //   round 2   sub<COL> against the mean, square, reduce<SUM,ROW>       -> dfb::partial
 //             (root) add the num_cores gathered partials, sqrt if std  -> dfb::out_tiles
 //
-// The scaler is 1/N over the FULL width, so a core's reduce already emits its share of the mean and
+// The AVG reduce normalizes by REDUCE_N (the FULL width), so a core's reduce already emits its share
+// of the mean and
 // each combine is a plain add of num_cores tiles -- no re-weighting, and no dependence on the cores
 // having equal slices beyond what the host already gates.
 //
@@ -100,6 +101,7 @@ void kernel_main() {
     constexpr uint32_t num_cores = get_arg(args::num_cores);
     constexpr uint32_t shard_tiles = get_arg(args::shard_tiles);
     constexpr bool COMPUTE_STD_DEV = get_arg(args::compute_std_dev) != 0;
+    constexpr uint32_t REDUCE_N = get_arg(args::reduce_n);  // full row width -> AVG scaler is 1/REDUCE_N
     const uint32_t is_root = get_arg(args::is_root);
 
     compute_kernel_hw_startup(dfb::in_shard, dfb::scaler, dfb::partial);
@@ -111,12 +113,22 @@ void kernel_main() {
     // WaitUpfrontNoPop: the shard is resident and gets read again in round 2, so the reduce indexes
     // into it rather than consuming it.
     ckl::reduce<
-        ckernel::PoolType::SUM,
+        ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
         dfb::in_shard,
         dfb::scaler,
         dfb::partial,
-        ckl::ReduceInputPolicy::WaitUpfrontNoPop>(reduce_shape);
+        ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Fast,
+        ckl::ReduceAlgorithm::Auto,
+        ckl::ReduceWithinTile::Collapse,
+        REDUCE_N>(
+        reduce_shape,
+        ckl::ReduceInputMemoryLayout::contiguous(),
+        ckl::NoAccumulation{},
+        ckl::NoOp{},
+        ckl::ReduceScaler::compute_managed());
 
     if (is_root) {
         combine_blocks<dfb::gather_mean, dfb::mean_src>(num_cores, Ht, [](uint32_t) {});
@@ -133,8 +145,23 @@ void kernel_main() {
 
     ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(block_shape);
 
-    ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::centered_sq, dfb::scaler, dfb::partial>(
-        reduce_shape);
+    ckl::reduce<
+        ckernel::PoolType::AVG,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dfb::centered_sq,
+        dfb::scaler,
+        dfb::partial,
+        ckl::ReduceInputPolicy::WaitAndPopPerTile,
+        ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Fast,
+        ckl::ReduceAlgorithm::Auto,
+        ckl::ReduceWithinTile::Collapse,
+        REDUCE_N>(
+        reduce_shape,
+        ckl::ReduceInputMemoryLayout::contiguous(),
+        ckl::NoAccumulation{},
+        ckl::NoOp{},
+        ckl::ReduceScaler::compute_managed());
 
     if (is_root) {
         if constexpr (COMPUTE_STD_DEV) {
@@ -152,8 +179,6 @@ void kernel_main() {
     // Release what was held across the two rounds.
     DataflowBuffer dfb_in(dfb::in_shard);
     DataflowBuffer dfb_mean(dfb::mean);
-    DataflowBuffer dfb_scaler(dfb::scaler);
     dfb_in.pop_front(shard_tiles);
     dfb_mean.pop_front(Ht);
-    dfb_scaler.pop_front(1);
 }

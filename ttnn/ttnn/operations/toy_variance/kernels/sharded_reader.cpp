@@ -6,18 +6,20 @@
 // It reads no tensor data at all -- the input shard is already resident in this core's L1 and the
 // DFB is bound to it with `borrowed_from`, so there is nothing to move. What this kernel owns is:
 //
-//   1. the scaler tile (1/N over the FULL row width, so each core's reduce emits its share of the
-//      mean directly and the root's combine is a plain add);
-//   2. crediting the borrowed shard;
-//   3. the mean broadcast -- the root sends, everyone else receives.
+//   1. crediting the borrowed shard;
+//   2. the mean broadcast -- the root sends, everyone else receives.
 //
-// (2) is the one shape here that is an artifact rather than a design choice. Every DFB must have
+// The reduce scaler is not in that list: reduce<> builds and owns it on the compute side via
+// ReduceScaler::compute_managed(), normalizing by the FULL row width so each core emits its share of
+// the mean directly and the root's combine stays a plain add.
+//
+// (1) is the one shape here that is an artifact rather than a design choice. Every DFB must have
 // exactly one producer instance on every node hosting it, and there is no "already filled" state a
 // DFB can be declared in, so resident data needs a producer that writes nothing. One
 // reserve_back/push_back pair over the whole shard is the whole cost: nothing has been pushed, so
 // every entry is free and it returns immediately.
 //
-// (3) is in this kernel, and not split with the writer, because `dfb::mean` may have only ONE
+// (2) is in this kernel, and not split with the writer, because `dfb::mean` may have only ONE
 // producer binding per node -- so the send half and the receive half have to be the same kernel,
 // selected at runtime.
 
@@ -31,12 +33,10 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe_spec.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     constexpr uint32_t Ht = get_arg(args::Ht);
     constexpr uint32_t shard_tiles = get_arg(args::shard_tiles);
-    constexpr uint32_t scaler_bits = get_arg(args::scaler_bits);
     const uint32_t is_root = get_arg(args::is_root);
 
     Noc noc;
@@ -44,10 +44,6 @@ void kernel_main() {
     DataflowBuffer dfb_mean_src(dfb::mean_src);
     DataflowBuffer dfb_mean(dfb::mean);
     constexpr auto mc = MCAST_ARGS(mean_bcast);
-
-    const float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-        scaler_f);
 
     // Credit the resident shard. No write -- the bytes are already there.
     dfb_in.reserve_back(shard_tiles);

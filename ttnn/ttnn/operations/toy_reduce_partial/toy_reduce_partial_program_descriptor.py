@@ -6,11 +6,10 @@ Program descriptor for toy_reduce_partial.
 
 A single set of kernels handles both REDUCE_ROW and REDUCE_COL via a
 compile-time arg (REDUCE_ROW_MODE). The partial dimension (partial_w or
-partial_h) is also passed as a compile-time arg so the reader and compute
-kernels can statically select between single and dual scaler tiles.
+partial_h) is passed to the compute kernel, which owns the scaler tiles via
+ReduceScaler::compute_managed(); the reader only streams input tiles.
 """
 
-import struct
 from pathlib import Path
 
 import ttnn
@@ -86,19 +85,11 @@ def create_program_descriptor(
     ]
 
     # --- Reader ---
-    scaler_float_bits = struct.unpack("I", struct.pack("f", 1.0))[0]
-
+    # The reader only streams input tiles; the scaler is compute-owned.
     reduce_row_mode = 1 if reduce_row else 0
     pool_type_sum = 1 if pool_type == "sum" else 0
 
-    reader_ct_args = [
-        input_num_pages,
-        scaler_float_bits,
-        has_partial,
-        partial if has_partial else TILE_DIM,
-        reduce_row_mode,
-        pool_type_sum,
-    ]
+    reader_ct_args = [input_num_pages]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
@@ -128,7 +119,7 @@ def create_program_descriptor(
     )
 
     # --- Compute ---
-    compute_ct_args = [Ht, Wt, NC, has_partial, reduce_row_mode, pool_type_sum]
+    compute_ct_args = [Ht, Wt, NC, partial if has_partial else 0, reduce_row_mode, pool_type_sum]
 
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "compute.cpp"),

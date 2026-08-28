@@ -3,40 +3,22 @@
 
 // Unified reader for toy_reduce_partial.
 //
-// Generates scaler tile(s) and reads input tiles. The pool-type-aware
-// overloads automatically select the correct scaler layout (col-0 for
-// matmul path, row-0 for reduce_tile path).
+// Streams input tiles only. The reduce scaler (including the partial-tile
+// scaler for non-tile-aligned reduce dimensions) is owned by the compute
+// kernel via ReduceScaler::compute_managed().
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t start_id = get_arg_val<uint32_t>(1);
 
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(1);
-    constexpr uint32_t has_partial = get_compile_time_arg_val(2);
-    constexpr uint32_t partial_dim = get_compile_time_arg_val(3);  // partial_w or partial_h
-    constexpr uint32_t reduce_row_mode = get_compile_time_arg_val(4);
-    constexpr uint32_t pool_type_sum = get_compile_time_arg_val(5);
-    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr auto src_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_in = 0;
-    constexpr uint32_t cb_scaler = 2;
-
-    constexpr auto reduce_dim = reduce_row_mode ? ckernel::ReduceDim::REDUCE_ROW : ckernel::ReduceDim::REDUCE_COL;
-    constexpr auto pool_type = pool_type_sum ? ckernel::PoolType::SUM : ckernel::PoolType::MAX;
-
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-
-    if constexpr (has_partial) {
-        dataflow_kernel_lib::prepare_partial_reduce_scalers<cb_scaler, pool_type, reduce_dim, partial_dim>(scaler_f);
-    } else {
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, pool_type, reduce_dim>(scaler_f);
-    }
 
     // Stream input tiles
     uint32_t tile_bytes = get_tile_size(cb_in);

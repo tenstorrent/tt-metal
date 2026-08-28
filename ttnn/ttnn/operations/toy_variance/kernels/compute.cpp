@@ -6,7 +6,8 @@
 // Computes per-row population variance via the proper two-pass algorithm:
 //   variance = E[(x - E[x])^2]
 //
-// With scaler = 1/N built into the SUM reduce, the helpers produce:
+// With an AVG reduce over REDUCE_N elements (scaler = 1/N, owned by this kernel), the helpers
+// produce:
 //   Pass 1: dfb::mean     = mean(x)              -- accumulating reduce over blocks
 //   Pass 2: dfb::variance = mean((x - mean)^2)   -- per-block: sub<COL> -> square_in_place ->
 //                                                  accumulating reduce
@@ -14,6 +15,9 @@
 // Both passes use the standard accumulate pattern: one reduce<> call per block with
 // Accumulate::at(dfb_acc, b), which reloads the running accumulator for b > 0. The partial scaler
 // (and, for std-dev, the sqrt finalizer) are routed to the LAST block only.
+//
+// The scaler tiles live in dfb::scaler but are built and reused by reduce<> itself via
+// ReduceScaler::compute_managed(); no reader writes them and nothing pops them here.
 //
 // compute_std_dev: when set, sqrt is applied as the post_reduce_op on the pass-2 last-block reduce,
 // so sqrt runs in DST after the final accumulation, before pack -- no extra pass over the data, and
@@ -44,28 +48,42 @@ void kernel_main() {
     constexpr uint32_t NUM_BLOCKS = get_arg(args::num_blocks);
     constexpr bool COMPUTE_STD_DEV = get_arg(args::compute_std_dev) != 0;
     constexpr bool HAS_PARTIAL_W = get_arg(args::has_partial_w) != 0;
+    constexpr uint32_t PARTIAL_W = get_arg(args::partial_w);  // valid positions in last W-tile
+    constexpr uint32_t REDUCE_N = get_arg(args::reduce_n);    // real W -> AVG scaler is 1/REDUCE_N
 
     compute_kernel_hw_startup(dfb::in_tiles, dfb::scaler, dfb::out_tiles);
 
     constexpr auto reduce_block_shape = ckl::ReduceInputBlockShape::of(Ht, BLOCK_SIZE, /*NC=*/1);
     constexpr auto bin_block_shape = ckl::IterationShape::of(Ht, BLOCK_SIZE);
 
-    // For non-tile-aligned W: select the partial scaler tile (idx 1) on the last W-tile. Only the
-    // LAST block holds that tile, so the partial scaler is passed on the last block and ::none() on
-    // every earlier one.
-    constexpr auto partial_scaler = HAS_PARTIAL_W ? ckl::ReduceScaler::with_partial() : ckl::ReduceScaler::none();
+    // For non-tile-aligned W: the last W-tile needs a scaler that zeros the padded positions. Only
+    // the LAST block holds that tile, so the partial variant is passed on the last block and the
+    // plain full-tile variant on every earlier one.
+    constexpr auto partial_scaler = ckl::ReduceScaler::compute_managed(HAS_PARTIAL_W ? PARTIAL_W : 0);
+    constexpr auto full_scaler = ckl::ReduceScaler::compute_managed(0);
 
     // ---------- Pass 1: streaming mean ----------
-    // Scaler = 1/N (with partial-scaler-zeroed padded positions) converts SUM into mean. One
+    // AVG over REDUCE_N (with partial-scaler-zeroed padded positions) yields the row mean. One
     // accumulating reduce<> per block into dfb::mean.
     for (uint32_t b = 0; b < NUM_BLOCKS; ++b) {
         const bool is_last = (b + 1 == NUM_BLOCKS);
-        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::in_tiles, dfb::scaler, dfb::mean>(
+        ckl::reduce<
+            ckernel::PoolType::AVG,
+            ckernel::ReduceDim::REDUCE_ROW,
+            dfb::in_tiles,
+            dfb::scaler,
+            dfb::mean,
+            ckl::ReduceInputPolicy::WaitAndPopPerTile,
+            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ReduceFp32Mode::Fast,
+            ckl::ReduceAlgorithm::Auto,
+            ckl::ReduceWithinTile::Collapse,
+            REDUCE_N>(
             reduce_block_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
             ckl::Accumulate::at(dfb::mean, b),
             ckl::NoOp{},
-            is_last ? partial_scaler : ckl::ReduceScaler::none());
+            is_last ? partial_scaler : full_scaler);
     }
 
     // ---------- Pass 2: streaming variance via (x - mean)^2 ----------
@@ -90,16 +108,22 @@ void kernel_main() {
         ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(bin_block_shape);
 
         const bool is_last = (b + 1 == NUM_BLOCKS);
-        const auto block_scaler = is_last ? partial_scaler : ckl::ReduceScaler::none();
+        const auto block_scaler = is_last ? partial_scaler : full_scaler;
 
         if constexpr (COMPUTE_STD_DEV) {
             if (is_last) {
                 ckl::reduce<
-                    ckernel::PoolType::SUM,
+                    ckernel::PoolType::AVG,
                     ckernel::ReduceDim::REDUCE_ROW,
                     dfb::centered_sq,
                     dfb::scaler,
-                    dfb::variance>(
+                    dfb::variance,
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                    ReduceFp32Mode::Fast,
+                    ckl::ReduceAlgorithm::Auto,
+                    ckl::ReduceWithinTile::Collapse,
+                    REDUCE_N>(
                     reduce_block_shape,
                     ckl::ReduceInputMemoryLayout::contiguous(),
                     ckl::Accumulate::at(dfb::variance, b),
@@ -113,11 +137,17 @@ void kernel_main() {
         }
 
         ckl::reduce<
-            ckernel::PoolType::SUM,
+            ckernel::PoolType::AVG,
             ckernel::ReduceDim::REDUCE_ROW,
             dfb::centered_sq,
             dfb::scaler,
-            dfb::variance>(
+            dfb::variance,
+            ckl::ReduceInputPolicy::WaitAndPopPerTile,
+            ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            ReduceFp32Mode::Fast,
+            ckl::ReduceAlgorithm::Auto,
+            ckl::ReduceWithinTile::Collapse,
+            REDUCE_N>(
             reduce_block_shape,
             ckl::ReduceInputMemoryLayout::contiguous(),
             ckl::Accumulate::at(dfb::variance, b),
@@ -126,7 +156,6 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_mean(dfb::mean);
-    DataflowBuffer dfb_scaler(dfb::scaler);
 
     // dfb::mean was held across pass 2 (Upfront wait, no pop) -- release it now.
     dfb_mean.pop_front(Ht);
@@ -135,6 +164,4 @@ void kernel_main() {
     // Per-tile streaming copy with input + output format reconfig (chain owns wait/pop on
     // dfb::variance and reserve/push on dfb::out_tiles).
     ckl::copy<ckl::input(dfb::variance), ckl::output(dfb::out_tiles)>(ckl::IterationShape::tiles(Ht));
-
-    dfb_scaler.pop_front(HAS_PARTIAL_W ? 2 : 1);
 }

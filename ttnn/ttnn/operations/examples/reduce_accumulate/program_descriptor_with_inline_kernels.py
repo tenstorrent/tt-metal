@@ -170,6 +170,7 @@ void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t dim = get_compile_time_arg_val(1);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(2);
+    constexpr uint32_t reduce_factor = get_compile_time_arg_val(3);
 
     using namespace compute_kernel_lib;
     using ckernel::PoolType;
@@ -182,47 +183,27 @@ void kernel_main() {
         cb_push_back(cb_in, num_tiles);
         if constexpr (dim == 0) {
             reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, num_tiles));
+                   ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                   ReduceFp32Mode::Fast, ReduceAlgorithm::Auto, ReduceWithinTile::Collapse, reduce_factor>(
+                ReduceInputBlockShape::of(1, num_tiles), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{},
+                ReduceScaler::compute_managed());
         } else if constexpr (dim == 1) {
             reduce<PoolType::AVG, ReduceDim::REDUCE_COL, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(num_tiles, 1));
+                   ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                   ReduceFp32Mode::Fast, ReduceAlgorithm::Auto, ReduceWithinTile::Collapse, reduce_factor>(
+                ReduceInputBlockShape::of(num_tiles, 1), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{},
+                ReduceScaler::compute_managed());
         } else {
             reduce<PoolType::AVG, ReduceDim::REDUCE_SCALAR, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, num_tiles));
+                   ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                   ReduceFp32Mode::Fast, ReduceAlgorithm::Auto, ReduceWithinTile::Collapse, reduce_factor>(
+                ReduceInputBlockShape::of(1, num_tiles), ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{},
+                ReduceScaler::compute_managed());
         }
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, 1);
             cb_pop_front(cb_out, 1);
         }
-    }
-}
-"""
-
-
-# =============================================================================
-# Scaler dataflow kernel (helper only) — fills the AVG scaler tile for the right dim + reduce factor.
-# CT args: [dim, reduce_factor]
-# =============================================================================
-_SCALER_KERNEL = r"""
-#include <cstdint>
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    constexpr uint32_t dim = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_factor = get_compile_time_arg_val(1);
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    if constexpr (dim == 0) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_ROW,
-                                                                 reduce_factor>();
-    } else if constexpr (dim == 1) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_COL,
-                                                                 reduce_factor>();
-    } else {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_SCALAR,
-                                                                 reduce_factor>();
     }
 }
 """
@@ -304,24 +285,17 @@ def create_program_descriptor(
         )
         return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs)
 
-    # helper path: needs the AVG scaler CB + the dataflow kernel that fills it.
+    # helper path: the AVG scaler CB is scratch space that reduce<> fills itself, so the compute
+    # kernel is the only kernel in the program.
     cbs.append(_scratch_cb(CB_SCALER, _dtype_of(accum)))
     compute = ttnn.KernelDescriptor(
         kernel_source=_HELPER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_single_core(),
-        compile_time_args=[num_tiles, dim_id, kernel_iters],
+        compile_time_args=[num_tiles, dim_id, kernel_iters, elements_reduced(dim, num_tiles)],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
-    scaler = ttnn.KernelDescriptor(
-        kernel_source=_SCALER_KERNEL,
-        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-        core_ranges=_single_core(),
-        compile_time_args=[dim_id, elements_reduced(dim, num_tiles)],
-        runtime_args=[],
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    return ttnn.ProgramDescriptor(kernels=[scaler, compute], semaphores=[], cbs=cbs)
+    return ttnn.ProgramDescriptor(kernels=[compute], semaphores=[], cbs=cbs)
 
 
 def run_op(input_tensor, *, variant, dim, num_tiles, accum="fp32", kernel_iters=1, math_fidelity=None):

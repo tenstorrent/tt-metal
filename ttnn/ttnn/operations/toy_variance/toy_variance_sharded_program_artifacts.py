@@ -34,7 +34,6 @@ from pathlib import Path
 import ttnn
 from ttnn.mcast_spec import McastFamily
 
-from .toy_variance_program_artifacts import fp32_bits
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 TILE_DIM = 32
@@ -142,9 +141,6 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
     tile_bytes = ttnn.tile_size(ttnn.bfloat16)
     output_page_size = output_tensor.buffer_page_size()
 
-    # 1/N over the FULL width: each core's reduce already emits its share of the mean.
-    inv_N_bits = fp32_bits(1.0 / float(origin_W))
-
     dfbs = [
         # The resident shard itself -- zero copy. Nothing reads it into L1 because it is already
         # there; the reader only credits it (see the reader kernel's note on the producer rule).
@@ -199,11 +195,10 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         hw_config=ttnn.create_reader_dm_config(),
         dfb_bindings=[
             ttnn.producer_of(DFB_IN_SHARD, DFB_IN_SHARD),
-            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
             ttnn.consumer_of(DFB_MEAN_SRC, DFB_MEAN_SRC),
             ttnn.producer_of(DFB_MEAN, DFB_MEAN),
         ],
-        compile_time_args={**shape_args, "scaler_bits": inv_N_bits},
+        compile_time_args={**shape_args},
         runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 
@@ -213,6 +208,8 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         hw_config=ttnn.ComputeGen1Config(),
         dfb_bindings=[
             ttnn.consumer_of(DFB_IN_SHARD, DFB_IN_SHARD),
+            # reduce<> builds and reuses the scaler tile itself (ReduceScaler::compute_managed).
+            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
             ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
             ttnn.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
             ttnn.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
@@ -223,7 +220,7 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
             ttnn.consumer_of(DFB_MEAN, DFB_MEAN),
             ttnn.producer_of(DFB_OUT, DFB_OUT),
         ],
-        compile_time_args={**shape_args, "compute_std_dev": int(std_dev)},
+        compile_time_args={**shape_args, "compute_std_dev": int(std_dev), "reduce_n": origin_W},
         runtime_arg_schema=ttnn.RuntimeArgSchema(runtime_arg_names=["is_root"]),
     )
 

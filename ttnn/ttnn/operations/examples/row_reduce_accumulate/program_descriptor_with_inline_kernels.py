@@ -122,6 +122,8 @@ void kernel_main() {
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(2);
     constexpr uint32_t dst_fp32 = get_compile_time_arg_val(3);       // 1 -> DEST is fp32, else bf16
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);    // float bits of 1/(width*32) (SFPU finalize)
+    // Elements folded into each output tile: the reduce library derives the AVG scaler (1/N) from it.
+    constexpr uint32_t mean_factor = width_tiles * 32;
 
     using namespace compute_kernel_lib;
     using ckernel::PoolType;
@@ -158,8 +160,11 @@ void kernel_main() {
             //      across the width in DEST) together with the within-tile column reduce.
             cb_reserve_back(cb_in, width_tiles);
             cb_push_back(cb_in, width_tiles);
-            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
-                   ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, width_tiles));
+            reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_in, cb_scaler, cb_out,
+                   ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                   ReduceFp32Mode::Fast, ReduceAlgorithm::Auto, ReduceWithinTile::Collapse, mean_factor>(
+                ReduceInputBlockShape::of(1, width_tiles), ReduceInputMemoryLayout::contiguous(),
+                NoAccumulation{}, NoOp{}, ReduceScaler::compute_managed());
         } else {
             // Re-establish the full accumulate hw config EVERY iteration. The previous iteration's
             // finalize reprogrammed unpack/math/pack; the short inits below (copy_tile_init /
@@ -199,8 +204,11 @@ void kernel_main() {
                     tile_regs_release();
                 }
                 cb_push_back(cb_interm, 1);
-                reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_interm, cb_scaler, cb_out,
-                       ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, 1));
+                reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_interm, cb_scaler, cb_out,
+                       ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                       ReduceFp32Mode::Fast, ReduceAlgorithm::Auto, ReduceWithinTile::Collapse, mean_factor>(
+                    ReduceInputBlockShape::of(1, 1), ReduceInputMemoryLayout::contiguous(),
+                    NoAccumulation{}, NoOp{}, ReduceScaler::compute_managed());
             } else {
                 // ---- dest_accum (2/4) / dest_accum_pairs (3/5): accumulate the row into DEST[0] via
                 //      add_tiles(acc_to_dest), then finalize on the FPU or the SFPU.
@@ -257,8 +265,11 @@ void kernel_main() {
                     pack_tile(0, cb_interm, 0);
                     cb_push_back(cb_interm, 1);
                     tile_regs_release();
-                    reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_interm, cb_scaler, cb_out,
-                           ReduceInputPolicy::BulkWaitBulkPop>(ReduceInputBlockShape::of(1, 1));
+                    reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_interm, cb_scaler, cb_out,
+                           ReduceInputPolicy::BulkWaitBulkPop, ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+                           ReduceFp32Mode::Fast, ReduceAlgorithm::Auto, ReduceWithinTile::Collapse, mean_factor>(
+                        ReduceInputBlockShape::of(1, 1), ReduceInputMemoryLayout::contiguous(),
+                        NoAccumulation{}, NoOp{}, ReduceScaler::compute_managed());
                 }
             }
         }
@@ -278,34 +289,19 @@ void kernel_main() {
 
 
 # =============================================================================
-# Dataflow kernel — fills the reduce scaler tile (1/(width_tiles*32)) for the FPU-reduce methods, and a
-# zero tile for the dest_accum methods. Both are pushed once per launch and never popped. The SFPU-
-# finalize methods use neither (they scale via an SFPU scalar-multiply), so needs_scaler is 0 there.
-# CT args: [width_tiles, needs_scaler, needs_zero]
+# Dataflow kernel — fills the zero tile the dest_accum methods add against. Pushed once per launch and
+# never popped. Only the dest_accum methods need it, so the other methods run compute-only.
+# The reduce scaler is NOT here: reduce<> builds it on the compute side (ReduceScaler::compute_managed).
+# CT args: []
 # =============================================================================
-_SCALER_KERNEL = r"""
+_ZERO_KERNEL = r"""
 #include <cstdint>
 #include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_scaler = 1, cb_zero = 2;
-    constexpr uint32_t width_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t needs_scaler = get_compile_time_arg_val(1);
-    constexpr uint32_t needs_zero = get_compile_time_arg_val(2);
-
-    // Mean over the full width = sum over (width_tiles * 32) elements, scaled by 1/N. For the
-    // power-of-two widths in the sweep, 1/N is exact in both bf16 and fp32, so the scaler adds no
-    // error and the accuracy comparison is purely the accumulation path.
-    if constexpr (needs_scaler) {
-        const float scaler = 1.0f / static_cast<float>(width_tiles * 32);
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scaler);
-    }
-    if constexpr (needs_zero) {
-        dataflow_kernel_lib::prepare_zero_tile<cb_zero>();
-    }
+    constexpr uint32_t cb_zero = 2;
+    dataflow_kernel_lib::prepare_zero_tile<cb_zero>();
 }
 """
 
@@ -393,14 +389,19 @@ def create_program_descriptor(
             math_fidelity=math_fidelity or ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=fp32_dest
         ),
     )
-    scaler = ttnn.KernelDescriptor(
-        kernel_source=_SCALER_KERNEL,
-        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-        core_ranges=_single_core(),
-        compile_time_args=[width_tiles, int(needs_scaler_cb), int(needs_zero)],
-        runtime_args=[],
-        config=ttnn.ReaderConfigDescriptor(),
-    )
+    kernels = [compute]
+    if needs_zero:
+        kernels.insert(
+            0,
+            ttnn.KernelDescriptor(
+                kernel_source=_ZERO_KERNEL,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=_single_core(),
+                compile_time_args=[],
+                runtime_args=[],
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+        )
 
     cbs = [
         ttnn.cb_descriptor_from_sharded_tensor(CB_IN, input_tensor),
@@ -413,7 +414,7 @@ def create_program_descriptor(
     if needs_interm:
         cbs.append(_scratch_cb(CB_INTERM, accum_format, 1))
 
-    return ttnn.ProgramDescriptor(kernels=[scaler, compute], semaphores=[], cbs=cbs)
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
 def run_op(input_tensor, *, method, precision, width_tiles, kernel_iters=1, math_fidelity=None):

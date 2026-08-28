@@ -92,10 +92,9 @@ def create_program_artifacts(
     BLOCK_SIZE = pick_block_size(Wt, block_size)
     NUM_BLOCKS = Wt // BLOCK_SIZE
 
-    # Variance reduces over the *real* W (= origin_W). With scaler = 1/N built into the reduce, SUM
-    # produces means directly. The partial scaler tile zeros out the contributions of the
+    # Variance reduces over the *real* W (= origin_W), so the compute kernel runs an AVG reduce with
+    # reduce_factor = origin_W. The partial scaler tile zeros out the contributions of the
     # (TILE_DIM - partial_w) padded positions in the last W-tile, so origin_W is the correct N.
-    inv_N_bits = fp32_bits(1.0 / float(origin_W))
 
     input_page_size = input_tensor.buffer_page_size()
     output_page_size = output_tensor.buffer_page_size()
@@ -170,15 +169,9 @@ def create_program_artifacts(
         hw_config=ttnn.create_reader_dm_config(),
         dfb_bindings=[
             ttnn.producer_of(DFB_IN, DFB_IN),
-            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
         ],
         tensor_bindings=[ttnn.TensorBinding(TP_IN, TP_IN)],
-        compile_time_args={
-            **shape_args,
-            "scaler_bits": inv_N_bits,
-            # Valid positions in the last W-tile; TILE_DIM when W is tile-aligned.
-            "partial_w": partial_w if has_partial_w else TILE_DIM,
-        },
+        compile_time_args={**shape_args},
     )
 
     compute = ttnn.KernelSpec(
@@ -187,6 +180,8 @@ def create_program_artifacts(
         hw_config=ttnn.ComputeGen1Config(),
         dfb_bindings=[
             ttnn.consumer_of(DFB_IN, DFB_IN),
+            # reduce<> builds and reuses the scaler tiles itself (ReduceScaler::compute_managed).
+            ttnn.producer_of(DFB_SCALER, DFB_SCALER),
             ttnn.consumer_of(DFB_SCALER, DFB_SCALER),
             ttnn.producer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
             ttnn.consumer_of(DFB_CENTERED_SQ, DFB_CENTERED_SQ),
@@ -196,7 +191,14 @@ def create_program_artifacts(
             ttnn.consumer_of(DFB_VARIANCE, DFB_VARIANCE),
             ttnn.producer_of(DFB_OUT, DFB_OUT),
         ],
-        compile_time_args={**shape_args, "compute_std_dev": int(std_dev)},
+        compile_time_args={
+            **shape_args,
+            "compute_std_dev": int(std_dev),
+            # Valid positions in the last W-tile; TILE_DIM when W is tile-aligned.
+            "partial_w": partial_w if has_partial_w else TILE_DIM,
+            # AVG reduces over the real W, so the managed scaler is 1/origin_W.
+            "reduce_n": origin_W,
+        },
     )
 
     writer = ttnn.KernelSpec(

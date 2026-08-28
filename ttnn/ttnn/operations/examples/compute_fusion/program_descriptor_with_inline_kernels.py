@@ -273,11 +273,14 @@ void kernel_main() {
                 shape,
                 ReduceInputMemoryLayout::contiguous(),
                 NoAccumulation{},
-                [](uint32_t dst) { recip_tile_init(); recip_tile(dst); });
+                [](uint32_t dst) { recip_tile_init(); recip_tile(dst); },
+                ReduceScaler::compute_managed());
         } else {
             { CF_PHASE("CF_REDUCE");
               reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, cb_x, cb_scaler, cb_s1,
-                     ReduceInputPolicy::WaitUpfrontNoPop>(shape); }
+                     ReduceInputPolicy::WaitUpfrontNoPop>(
+                  shape, ReduceInputMemoryLayout::contiguous(), NoAccumulation{}, NoOp{},
+                  ReduceScaler::compute_managed()); }
             { CF_PHASE("CF_RECIP");
               eltwise_chain(
                 IterationShape::tiles(1),
@@ -292,19 +295,6 @@ void kernel_main() {
 """
 )
 
-
-# Dataflow kernel: fill the reduce scaler tile once per launch (SUM -> 1.0). Never popped, so a
-# single push covers every kernel_iters reduce in the launch.
-_SCALER_KERNEL = r"""
-#include <cstdint>
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 2;
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-}
-"""
 
 _KERNEL_SOURCE = {
     "sfpu_chain": _SFPU_CHAIN_KERNEL,
@@ -379,16 +369,8 @@ def create_program_descriptor(
     cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
 
     if scenario == "reduce_recip":
+        # Scratch space only: reduce<> builds the scaler tile itself (ReduceScaler::compute_managed).
         cbs.append(_scratch_cb(CB_SCALER, 2))
-        scaler = ttnn.KernelDescriptor(
-            kernel_source=_SCALER_KERNEL,
-            source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-            core_ranges=_single_core(),
-            compile_time_args=[],
-            runtime_args=[],
-            config=ttnn.ReaderConfigDescriptor(),
-        )
-        kernels.append(scaler)
     if variant in _USES_S1:
         cbs.append(_scratch_cb(CB_S1, 1 if scenario == "reduce_recip" else num_tiles))
     if variant in _USES_S2:

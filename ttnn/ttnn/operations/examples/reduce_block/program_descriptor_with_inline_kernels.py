@@ -274,7 +274,7 @@ void kernel_main() {
 # static_asserts, breaking the reduce_tile kernel compile. In a template, the discarded branch is not
 # instantiated, so each build compiles only its own algo's reduce().
 # CT args: [Ht, Wt, NC, dim, kernel_iters, out_tiles, algo, partial_elems, policy_id, recfg, row_stride,
-#           n_reduced, avg_direct, skip_within]
+#           n_reduced, avg_direct, skip_within, avg_factor]
 # =============================================================================
 _HELPER_BLOCK_KERNEL = r"""
 #include <cstdint>
@@ -289,7 +289,8 @@ constexpr uint32_t cb_in = 0, cb_scaler = 1, cb_out = 16;
 
 // Templated so `if constexpr (algo)` discards the dead branch (see the header note). Each build instantiates
 // exactly one algo's reduce(), so a policy/dim invalid for the OTHER algo never trips its static_asserts.
-template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct, uint32_t skip_within>
+template <uint32_t algo, uint32_t dim, uint32_t policy_id, uint32_t avg_direct, uint32_t skip_within,
+          uint32_t avg_factor>
 ALWI void do_reduce_block(
     [[maybe_unused]] uint32_t iter,
     compute_kernel_lib::ReduceInputBlockShape shape,
@@ -334,8 +335,9 @@ ALWI void do_reduce_block(
                     shape, n_reduced, ml, NoAccumulation{}, ps);
         }
     } else {
-        // ReduceTile: AVG via the reader-computed 1/N scaler.
-        reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast, ALG>(
+        // ReduceTile: AVG via a compute-owned 1/N scaler (reduce<> builds and reuses the tile itself).
+        reduce<PoolType::AVG, RDIM, cb_in, cb_scaler, cb_out, POLICY, RECFG::INPUT_AND_OUTPUT, ReduceFp32Mode::Fast,
+               ALG, ReduceWithinTile::Collapse, avg_factor>(
             shape, ml, NoAccumulation{}, NoOp{}, ps);
     }
 }
@@ -356,14 +358,17 @@ void kernel_main() {
     constexpr uint32_t n_reduced = get_compile_time_arg_val(11);  // real elems/output = the AccumulateViaAdd mean 1/N
     constexpr uint32_t avg_direct = get_compile_time_arg_val(12);  // 1 = AccumulateViaAdd uses reduce<AVG> direct
     constexpr uint32_t skip_within = get_compile_time_arg_val(13);  // 1 = ReduceWithinTile::Skip (inputs pre-collapsed)
+    constexpr uint32_t avg_factor = get_compile_time_arg_val(14);  // elems/output for the ReduceTile AVG scaler
     constexpr uint32_t row_pitch = (row_stride > 0u) ? row_stride : Wt;
     constexpr uint32_t in_tiles = Ht * row_pitch * NC;  // resident block incl. padded rows
     constexpr bool pops_input = (policy_id <= 1u);  // Bulk + WaitAndPop pop the input; no-pop policies do not
 
     using namespace compute_kernel_lib;
-    // AccumulateViaAdd partial: one 0/1 mask tile at scaler-CB index 0.
+    // AccumulateViaAdd partial: one 0/1 mask tile at scaler-CB index 0, still reader-built (the library
+    // does not fold ragged masks into the compute-owned scaler lifecycle). Everything else -- notably the
+    // ReduceTile AVG scaler -- is compute-owned.
     const ReduceScaler PS =
-        (partial_elems > 0u) ? ReduceScaler::only_partial() : ReduceScaler::none();
+        (partial_elems > 0u) ? ReduceScaler::only_partial() : ReduceScaler::compute_managed();
     const auto SHAPE = ReduceInputBlockShape::of(Ht, Wt, NC);
     const auto ML = (row_stride > 0u) ? ReduceInputMemoryLayout::with_row_stride(row_stride)
                                       : ReduceInputMemoryLayout::contiguous();
@@ -389,7 +394,8 @@ void kernel_main() {
             cb_reserve_back(cb_in, in_tiles);
             cb_push_back(cb_in, in_tiles);  // resident sharded input -> re-arm each iter
         }
-        do_reduce_block<algo, dim, policy_id, avg_direct, skip_within>(iter, SHAPE, ML, PS, n_reduced, recfg);
+        do_reduce_block<algo, dim, policy_id, avg_direct, skip_within, avg_factor>(
+            iter, SHAPE, ML, PS, n_reduced, recfg);
         if (iter + 1 < kernel_iters) {
             cb_wait_front(cb_out, out_tiles);
             cb_pop_front(cb_out, out_tiles);
@@ -496,35 +502,6 @@ void kernel_main() {
             cb_wait_front(cb_out, out_tiles);
             cb_pop_front(cb_out, out_tiles);
         }
-    }
-}
-"""
-
-
-# =============================================================================
-# Scaler dataflow kernel (library paths only) — fills the AVG scaler tile for the dim + reduce factor.
-# CT args: [dim, reduce_factor]
-# =============================================================================
-_SCALER_KERNEL = r"""
-#include <cstdint>
-#include "api/dataflow/circular_buffer.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-void kernel_main() {
-    constexpr uint32_t cb_scaler = 1;
-    constexpr uint32_t dim = get_compile_time_arg_val(0);
-    constexpr uint32_t reduce_factor = get_compile_time_arg_val(1);
-    using ckernel::PoolType;
-    using ckernel::ReduceDim;
-    if constexpr (dim == 0) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_ROW,
-                                                                 reduce_factor>();
-    } else if constexpr (dim == 1) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_COL,
-                                                                 reduce_factor>();
-    } else {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::AVG, ReduceDim::REDUCE_SCALAR,
-                                                                 reduce_factor>();
     }
 }
 """
@@ -785,18 +762,26 @@ def create_program_descriptor(
             reduced_count(dim, Ht, Wt) if within_tile == "skip" else _mean_n(dim, Ht, Wt, partial_elems),
             int(avg_direct),
             int(within_tile == "skip"),
+            elements_reduced(dim, Ht, Wt),
         ],
         config=ttnn.ComputeConfigDescriptor(math_fidelity=fidelity, fp32_dest_acc_en=fp32_dest),
     )
-    reader = ttnn.KernelDescriptor(
-        kernel_source=_MASK_KERNEL if use_mask else _SCALER_KERNEL,
-        source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
-        core_ranges=_single_core(),
-        compile_time_args=[dim_id, partial_elems] if use_mask else [dim_id, elements_reduced(dim, Ht, Wt)],
-        runtime_args=[],
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    return ttnn.ProgramDescriptor(kernels=[reader, compute], semaphores=[], cbs=cbs)
+    # Only the AccumulateViaAdd ragged path still needs a dataflow kernel: its 0/1 mask is reader-built.
+    # The ReduceTile AVG scaler is compute-owned, so that path runs compute-only.
+    kernels = [compute]
+    if use_mask:
+        kernels.insert(
+            0,
+            ttnn.KernelDescriptor(
+                kernel_source=_MASK_KERNEL,
+                source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                core_ranges=_single_core(),
+                compile_time_args=[dim_id, partial_elems],
+                runtime_args=[],
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+        )
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
 def run_op(

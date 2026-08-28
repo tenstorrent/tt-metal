@@ -5,9 +5,9 @@
 //
 // Handles both REDUCE_ROW (W) and REDUCE_COL (H) via REDUCE_ROW_MODE
 // compile-time arg. Supports MAX and SUM pool types via POOL_TYPE_SUM arg.
-// The partial scaler mechanism works identically for both:
-// the reduce helper selects scaler tile 1 for the last tile in the reduced
-// dimension (last W tile for REDUCE_ROW, last H tile for REDUCE_COL).
+// The scaler tiles are owned by this kernel via ReduceScaler::compute_managed():
+// it emits a partial scaler for the last tile in the reduced dimension (last W
+// tile for REDUCE_ROW, last H tile for REDUCE_COL) when PARTIAL_DIM is set.
 
 #include <cstdint>
 
@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t has_partial = get_compile_time_arg_val(3);
+    constexpr uint32_t partial_dim = get_compile_time_arg_val(3);
     constexpr uint32_t reduce_row_mode = get_compile_time_arg_val(4);
     constexpr uint32_t pool_type_sum = get_compile_time_arg_val(5);
 
@@ -28,8 +28,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_scaler, cb_out);
 
-    constexpr auto partial_scaler =
-        has_partial ? compute_kernel_lib::ReduceScaler::with_partial() : compute_kernel_lib::ReduceScaler::none();
+    constexpr auto partial_scaler = compute_kernel_lib::ReduceScaler::compute_managed(partial_dim);
 
     constexpr auto block_shape = compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC);
 
@@ -94,7 +93,4 @@ void kernel_main() {
                 partial_scaler);
         }
     }
-
-    constexpr uint32_t num_scaler_tiles = has_partial ? 2 : 1;
-    cb_pop_front(cb_scaler, num_scaler_tiles);
 }
