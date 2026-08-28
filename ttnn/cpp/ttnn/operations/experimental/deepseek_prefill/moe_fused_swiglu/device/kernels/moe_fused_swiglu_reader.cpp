@@ -724,7 +724,11 @@ void kernel_main() {
             // Phase 1b' — W_down for ALL WD_AHEAD phase-2 K-blocks, ISSUED as one batch, so the
             // reads land under the reduce rendezvous instead of in front of the round that needs them.
             constexpr uint32_t WD_BLOCK_TILES = HN_PAD * WD_EC_MAX;
-            constexpr bool CAN_PREFETCH_X = HGROUPS >= M_BLOCK;
+            // Tiled x prefetches INTO cb_x_tiles (row-major stages via cb_x_in instead), so at
+            // DEPTH_X == 1 there is no second slot to aim at: reserving the sole slot ahead of phase 2
+            // deadlocks against compute, and skipping the reserve would leave the read pointing at
+            // next_x_base == 0. Fall back to the no-prefetch schedule small grids already use.
+            constexpr bool CAN_PREFETCH_X = HGROUPS >= M_BLOCK && !(INPUT_FORMAT != 0 && DEPTH_X == 1);
             const bool prefetch_next_x = kPrefetchNextX && CAN_PREFETCH_X && (block_idx + 1 < m_blocks);
             if (prefetch_next_x) {
                 // Transaction id zero is the untagged stream and cannot be waited through the
