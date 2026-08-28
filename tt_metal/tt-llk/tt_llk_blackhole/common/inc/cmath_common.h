@@ -139,6 +139,19 @@ inline void incr_counters(const std::uint32_t incr_a, const std::uint32_t incr_b
     TT_INCRWC(incr_cr, incr_d, incr_b, incr_a);
 }
 
+// MOVD2A/MOVD2B write SrcA/SrcB from Dest, so they fall outside the Src auto-wait, which covers
+// only instructions that read Src. Gate the row moves on the target bank's DVALID, and drain
+// in-flight math so the Dest values those moves read back have settled.
+inline void srca_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+}
+
+inline void srcb_bank_wait()
+{
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+}
+
 inline void move_d2a_fixed_face(const std::uint8_t addrmod)
 {
     // Drain preceding math instructions so their source-bank release is visible before testing
