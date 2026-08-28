@@ -27,6 +27,11 @@ on:
         description: "Package and release workflow run id to file a Jira issue for (manual testing)"
         required: true
         type: string
+      dry-run:
+        description: "Print the Jira payload in the log instead of filing"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -194,6 +199,9 @@ jobs:
           # Everything lands on one owner for triage, who reassigns. Override
           # with the repo variable rather than editing this file.
           JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
+          # False for workflow_run events: the expression only reads true on a
+          # manual dispatch that asked for it.
+          JIRA_DRY_RUN: ${{ inputs.dry-run && '1' || '' }}
           # While one issue is open for this pipeline, later failures comment on it.
           # Scope per commit: re-runs of the same release de-dupe onto one
           # ticket, a later release failure opens a new one.
