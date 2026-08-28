@@ -188,6 +188,25 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
             f"gate={'PASS' if passing else 'FAIL'}"
         )
 
+        # Optional per-position PCC profile (quality root-cause): env COHERE_POS_PCC=<layer>
+        # prints one PCC per real token position for that layer — discriminates
+        # position-dependent corruption (mask/KV/RoPE-slice) from uniform error.
+        pos_spec = os.environ.get("COHERE_POS_PCC", "").strip()
+        if pos_spec and int(pos_spec) == layer_idx:
+            tt_pos = hidden_full[:, :seq_len].float()[0]  # [S, 8192]
+            rf_pos = ref_out[0].float()  # [S, 8192]
+            per = []
+            for p in range(seq_len):
+                vx = tt_pos[p] - tt_pos[p].mean()
+                vy = rf_pos[p] - rf_pos[p].mean()
+                denom = vx.norm() * vy.norm()
+                per.append(float((vx @ vy) / denom) if float(denom) > 0 else 0.0)
+            logger.info(
+                f"[pos-pcc] layer={layer_idx:02d} per-position PCC: " + " ".join(f"{v:.4f}" for v in per)
+            )
+            first_bad = next((i for i, v in enumerate(per) if v < 0.99), -1)
+            logger.info(f"[pos-pcc] layer={layer_idx:02d} first position < 0.99: {first_bad}")
+
         # free device buffers before building the next layer (35B total does not fit)
         for t in (tt_input, tt_out):
             try:
