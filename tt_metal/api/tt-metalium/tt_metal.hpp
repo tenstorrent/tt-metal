@@ -160,8 +160,10 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
 
 // Launches all kernels on cores specified with kernels in the program.
 // All kernels on a given Tensix core must be launched.
+[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-21.")]]
 void LaunchProgram(
     IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
+[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-21.")]]
 void LaunchProgram(
     IDevice* device,
     const std::shared_ptr<Program>& program,
@@ -193,6 +195,9 @@ void WaitProgramDone(IDevice* device, Program& program, bool read_device_profile
  * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
  * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
  */
+[[deprecated(
+    "Program is compiled automatically by the runtime infrastructure; this API is unnecessary. "
+    "CompileProgram will be removed after 2026-09-21.")]]
 void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**

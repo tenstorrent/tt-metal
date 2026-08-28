@@ -12,7 +12,6 @@ import torch
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
-    DestAccumulation,
     DestSync,
     ImpliedMathFormat,
     MathOperation,
@@ -20,7 +19,8 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    is_invalid_quasar_sfpu_format_combination,
+    QuasarSfpuVariant,
+    generate_quasar_sfpu_format_variants,
     parametrize,
     runtime,
 )
@@ -60,28 +60,20 @@ def generate_sfpu_square_combinations(formats_list):
     dest_sync_modes = (DestSync.Half, DestSync.Full)
     implied_math_modes = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
     input_dimension_options = ([32, 32], [64, 64])
-    for fmt in formats_list:
-        in_fmt = fmt.input_format
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
-        for dest_acc in dest_acc_modes:
-            if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
-                continue
-            for dest_sync in dest_sync_modes:
-                for implied_math_format in implied_math_modes:
-                    for input_dimensions in input_dimension_options:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                implied_math_format,
-                                runtime(input_dimensions),
-                            )
+    for format_variant in generate_quasar_sfpu_format_variants(
+        MathOperation.Square, formats_list
+    ):
+        for dest_sync in dest_sync_modes:
+            for implied_math_format in implied_math_modes:
+                for input_dimensions in input_dimension_options:
+                    combinations.append(
+                        (
+                            format_variant,
+                            dest_sync,
+                            implied_math_format,
+                            runtime(input_dimensions),
                         )
+                    )
     return combinations
 
 
@@ -99,9 +91,12 @@ def test_sfpu_square_trisc3_quasar(
 
     Same parameter coverage as test_sfpu_square_quasar.
     """
-    formats, dest_acc, dest_sync_mode, implied_math_format, input_dimensions = (
+    format_variant, dest_sync_mode, implied_math_format, input_dimensions = (
         formats_dest_acc_sync_implied_math_dims[0]
     )
+    assert isinstance(format_variant, QuasarSfpuVariant)
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
 
     torch.manual_seed(42)
 
@@ -128,9 +123,7 @@ def test_sfpu_square_trisc3_quasar(
         input_dimensions,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = format_variant.unpack_to_dest
     configuration = TestConfig(
         "sources/quasar/sfpu_square_trisc3_quasar_test.cpp",
         formats,
@@ -163,6 +156,7 @@ def test_sfpu_square_trisc3_quasar(
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
     )
+    format_variant.apply_formats(configuration.formats_config)
 
     res_from_L1 = configuration.run().result
 

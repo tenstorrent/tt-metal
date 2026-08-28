@@ -55,6 +55,7 @@
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/jit_build_utils.hpp"  // format_named_ct_arg_map (shared with the silicon JIT path)
 #include "impl/buffers/circular_buffer.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/device.hpp>
@@ -539,6 +540,10 @@ struct KernelInfo {
     // Kernel source path; owns the string __emule_kernel_name points at during
     // this kernel's launch (used by the ASAN trace to name the offending kernel).
     std::string kernel_name;
+    // Count of unique (per-core) runtime-arg words = size of the rta_offset region.
+    // rt_arg_values is [unique..(this many).., common..]; used to bounds-check
+    // out-of-range per-core arg reads to 0 (silicon zero-pad).
+    uint32_t num_unique_rt_args = 0;
 };
 
 // Captures a Metal 2.0 kernel's named bindings. Drives both the JIT wrapper's
@@ -625,6 +630,7 @@ struct PendingKernelInfo {
     // Object-Intent uses them to find this kernel's I/O tensors (§12).
     std::vector<uint32_t> rt_arg_values;
     std::string kernel_name;  // kernel source path, for the ASAN trace
+    uint32_t num_unique_rt_args = 0;  // size of the per-core (rta) region; see KernelInfo
 };
 
 // DFB allocation info for a single DFB on a core. Only device_slot and base_addr
@@ -1030,6 +1036,14 @@ static std::function<void()> jit_compile_kernel(
                 f << "#define " << key << " " << value << "\n";
             }
         }
+        // KERNEL_COMPILE_TIME_ARG_MAP (read by api/compile_time_args.h) goes in the wrapper for the
+        // same reason the kernel defines above do -- emule shells out via std::system(), so it has
+        // the whole command as one argv string against MAX_ARG_STRLEN (128 KB), and this map alone
+        // can exceed that. Must precede every include so the consuming header sees it.
+        if (!named_compile_args.empty()) {
+            f << "#define KERNEL_COMPILE_TIME_ARG_MAP "
+              << tt::jit_build::utils::format_named_ct_arg_map(named_compile_args) << "\n";
+        }
         f << "#include \"jit_kernel_stubs.hpp\"\n";
         // Metal-2.0 `namespace args` (base).
         emit_metal2_namespaces(f, bindings, named_compile_args);
@@ -1064,21 +1078,8 @@ static std::function<void()> jit_compile_kernel(
     // rather than here, so they can be dynamically computed per-program.
     std::string define_flags = " -DTT_EMULE_USE_L1_POOL";
 
-    // 5b. Build -DKERNEL_COMPILE_TIME_ARG_MAP for named compile-time args
-    if (!named_compile_args.empty()) {
-        std::ostringstream ss;
-        ss << " \"-DKERNEL_COMPILE_TIME_ARG_MAP=";
-        bool first = true;
-        for (const auto& [name, value] : named_compile_args) {
-            if (!first) {
-                ss << ',';
-            }
-            ss << "{\\\"" << name << "\\\"," << value << "}";
-            first = false;
-        }
-        ss << "\"";
-        define_flags += ss.str();
-    }
+    // 5b. KERNEL_COMPILE_TIME_ARG_MAP is emitted as a #define at the top of wrapper.cpp (step 3),
+    // not as a -D flag here: it is far too large for one shell command. See that site.
 
     // 6. Compute the kernel's source directory for relative includes
     std::string kernel_dir = std::filesystem::path(abs_kernel).parent_path().string();
@@ -1937,8 +1938,10 @@ static void collect_kernels(
                         // core; the Object-Intent check uses them to find its I/O tensors
                         // (see ObjectIntentTracker::pre_launch_snapshot). Build once, copy.
                         std::vector<uint32_t> rt_arg_values;
+                        uint32_t num_unique_rt = 0;
                         if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
                             const auto& ra = kernel->runtime_args(logical_core);
+                            num_unique_rt = static_cast<uint32_t>(ra.size());
                             rt_arg_values.insert(rt_arg_values.end(), ra.begin(), ra.end());
                         }
                         const auto& cra = kernel->common_runtime_args();
@@ -1957,7 +1960,8 @@ static void collect_kernels(
                                 rta_off,
                                 crta_off,
                                 rt_arg_values,
-                                src_path});
+                                src_path,
+                                num_unique_rt});
                         }
                     }
                 }
@@ -3609,6 +3613,10 @@ static void launch_cores(
             ctx->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
                 ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
                 : nullptr;
+            // Bounds so out-of-range per-core/common arg reads return 0 (silicon zero-pads
+            // the RTA region; emule's mock L1 keeps stale bytes).
+            ctx->rt_args_count = ki.num_unique_rt_args;
+            ctx->common_rt_args_count = static_cast<uint32_t>(ki.rt_arg_values.size()) - ki.num_unique_rt_args;
             ctx->bridge_l1 = l1_data;
             ctx->l1_size = static_cast<uint32_t>(core->l1_size());
             ctx->bridge_dram = dram_data;
@@ -3800,6 +3808,7 @@ static std::shared_ptr<ResolvedProgram> prepare_program(IDevice* device, Program
                 ki.variants.push_back(resolved_fns.at(key));
             }
             ki.rt_arg_values = std::move(pk.rt_arg_values);
+            ki.num_unique_rt_args = pk.num_unique_rt_args;
             ki.kernel_name = std::move(pk.kernel_name);
             resolved.core_kernels[logical_core].push_back(std::move(ki));
         }

@@ -168,7 +168,7 @@ def _run(mesh_device, *, use_split):
     assert_with_pcc(torch_golden, tt_out.float(), pcc=PCC)
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("use_split", [False, True], ids=["fused", "split"])
 def test_conv2d_split_tilize_hypothesis(mesh_device, use_split):

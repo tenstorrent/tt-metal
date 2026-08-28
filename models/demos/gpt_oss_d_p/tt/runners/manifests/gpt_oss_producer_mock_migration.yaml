@@ -1,15 +1,16 @@
-# Producer manifest: GPT-OSS loopback migration (slot 0,1 -> 2,3) via migration_driver.
+# Producer manifest: GPT-OSS Gate 1 (mock migration) — prefill both slots, then PCC them; no copy.
 #
 # MODEL-SPECIFIC transport: SP=4 TP=8 (TP cols == num_kv_heads). Pair with
-# topology_configuration/pipeline_prefill_request_1rank_gpt_oss_migration.yaml.
+# gpt_oss_binding_mock_migration.yaml.
 #
-# Run (after endpoint + runner are up / WORKER_READY):
-#   export PREFILL_MIGRATION_CLIENT_DIR=<tt-llm-engine>/disaggregation/migration/build_RelWithDebInfo/python
+# Run it with prefill_producer, NOT migration_driver: `issue: false` is honoured only by the plain
+# producer — invoking the driver IS the opt-in to migrate, so it warns and migrates anyway.
 #   export PREFILL_TRACE_DIR=<golden trace dir>
-#   python -m models.demos.common.prefill.runners.migration_driver \
-#     --manifest models/demos/common/prefill/runners/producer_manifests/producer_manifest_gpt_oss_migration_loopback.yaml
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/gpt_oss_d_p/tt/runners/manifests/gpt_oss_producer_mock_migration.yaml
 #
-# Expect in the RUNNER log: [kv-migrate-validate] ... ALL <N> pair(s) dst==src PASSED
+# Every verdict is logged HERE — the runner validates nothing. check_pcc below is the whole signal;
+# this manifest issues no migration, so there is no destination to read back.
 
 transport:
   sp: 4

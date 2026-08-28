@@ -11,7 +11,7 @@ Assumes the model is already integrated — adapter registered, golden trace sta
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|
 | **1 — mock migration** | Prefill writes correct KV (precondition for everything) and the KV-chunk address table is correct, read device-lessly | tt-metal tree only |
-| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and migrated-KV accuracy | + tt-llm-engine binaries |
+| **2 — loopback migration** | The real DRAM → transport → DRAM copy, and the destination slots read back by the driver (`--verify-migration`, default `dst-bytes`) | + tt-llm-engine binaries |
 
 Gate 2 covers the same ground as the harness's own prefill-loopback stage. The difference is only that the
 harness drives it end to end instead of three terminals.
@@ -66,7 +66,7 @@ stays 32-token-block aligned).
 rank would publish a table covering just its own layer slice and a merged mock table is not implemented. So
 **Gate 1** needs a 1-rank binding. `PREFILL_ENABLE_MIGRATION=1` (Gate 2) has no such restriction: the real
 path merges the per-rank stage layouts through the worker
-(`deliver_device_map_and_gather_stage_layout`), so a pipelined runner publishes one table spanning every
+(`deliver_device_map_and_gather_stage_layouts`), so a pipelined runner publishes one table spanning every
 rank's layers. Gate 2 runs on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
 read-back side.
 
@@ -79,9 +79,8 @@ read-back side.
 { "env": { "PREFILL_MODEL": "my_model", "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32" } }
 ```
 
-The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. A manifest
-may also carry a `users[]` + `migration{}` block for the pairwise-validation path; a plain model-config
-manifest omits it.
+The `env:` map is applied verbatim by `setdefault`, so a rank binding's `global_env` still wins. It is the
+only block the runner reads.
 
 ## Rank binding
 
@@ -114,11 +113,9 @@ Nothing about validation appears here: the runner publishes the KV-chunk table a
 that is the whole of its involvement. Both read-backs — the source `check_pcc` and the destination
 `--verify-migration` — run out in the driver process against those two published artefacts.
 
-The runner does still carry its own optional on-device checks (`PREFILL_REQUEST_LOOP_PCC`,
-`PREFILL_VALIDATE_MIGRATION` + `PREFILL_MIGRATE_PAIRWISE`), and they predate the driver covering every rank.
-Do not run both sides: they duplicate the work, put two readers on the same DRAM, and
-`PREFILL_VALIDATE_MIGRATION` additionally bounds the request loop (see the last note under *Values that must
-agree*). Leave them unset in a binding whose verdicts come from the driver.
+The runner has no on-device check of its own to turn on, so there is no both-sides case to avoid: every
+verdict in either gate comes from the driver process. A binding that sets a runner-side validation or
+chunk-bound variable is carrying dead config — nothing reads it.
 
 ---
 
@@ -234,9 +231,28 @@ crossed slot→prompt wiring or a slot-index bug in the address table still pass
 `slot_lengths` is keyed by slot, so with `max_requests > num_users` a recycled slot replays the *same*
 prompt; set `max_requests == num_users` for one resident request per slot.
 
-Coverage: `tests/test_producer_slot_prompts.py` (device-free, host logic) and
-`tests/test_producer_runner_e2e.py::test_producer_runner_multiprompt_pcc` (on-device, opt-in via
-`PREFILL_CI_MULTIPROMPT_TRACES`).
+### Multi-turn conversations
+
+`PREFILL_PRODUCER_MULTI_TURN_PROB` (manifest: `workload.multi_turn_prob`, default `0.0`) is the probability
+that a recycled slot **continues** its conversation instead of starting a fresh one. A continued turn
+resumes writing at the previous turn's length **aligned down to 32** and replays the ≤31 dropped tokens as
+part of its first chunk; aligning up instead would leave a permanent unwritten hole mid-sequence, and a
+sub-tile write offset is rejected outright (`update_padded_kv_cache` asserts `kv_actual_global % 32 == 0`,
+and the kernel's staircase disagrees with the host mirror off-tile). The replay is PCC-idempotent because
+the rope table is keyed on absolute position, though it is not bit-idempotent.
+
+Every length the producer reports stays **absolute** — measured from cache position 0, never relative to
+the turn — because `actual_end` is a cache position. When a conversation no longer has room for another
+full chunk the slot restarts from 0 rather than overrunning the per-user cache.
+
+At the default `0.0` nothing draws from the rng and the schedule is byte-for-byte what it was before the
+knob existed, so existing legs are unaffected.
+
+Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
+host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
+closest existing coverage is the on-device producer/runner PCC gate
+`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
+fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
 
 ---
 
@@ -422,12 +438,12 @@ python -m models.demos.common.prefill.runners.prefill_producer --manifest $MANIF
 **not** use `migration_driver`.
 
 Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_PCC`, producer default
-`0.93` — note this differs from the runner's `0.88` default for the same variable).
+`0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
 serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
 `_migration_enabled` block, so **every rank on either path** publishes its own host-local sidecar. It has to
-be: `deliver_device_map_and_gather_stage_layout` hands the map to the co-located *worker* over the migration
+be: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the migration
 client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
 
 That call **had** regressed to living under `if _mock_migration:` only, and the symptom is exactly as quiet as
@@ -517,14 +533,14 @@ prefill→decode run needs the decode endpoint to publish its configs in the sam
 
 ## Runtime hooks each gate requires
 
-Validation is driven by the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
+Both gates run off the optional runtime hooks in `ADDING_A_PREFILL_MODEL.md` §2. Implement only what the
 gates you intend to run require.
 
 | Gate | Hook | Signature requirement |
 |------|------|-----------------------|
-| 0 | `kv_cache_pcc_check` | accepts `trace_dir`, `first_layer_idx` |
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
-| 2 | `kv_migration_base_address` | this rank's KV base DRAM address, for the cross-stage table merge |
+| 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
+| 2 | `kv_migration_base_address` | alternative to the above, for a model with a SINGLE cache: just that cache's base DRAM address |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 
@@ -558,10 +574,10 @@ The sentinel has no runner-side counterpart: the driver writes it for an externa
 nothing in the runner reads it. It also means "copied", not "verified" — the destination read-back runs
 after it is published.
 
-`PREFILL_STANDALONE_CHUNKED_NCHUNKS` is deliberately absent. It bounds the runner's request loop, but only
-when `PREFILL_VALIDATE_MIGRATION=1` — the runner-side post-loop validation. With validation living in the
-driver, the loop must stay **unbounded**, or the runner heads for teardown while the driver is still
-migrating and reading back. Set the pair together or not at all.
+`PREFILL_STANDALONE_CHUNKED_NCHUNKS` is absent because nothing reads it: the request loop no longer takes a
+bound and always runs until the stream closes. That is what the driver needs — a bounded runner would head
+for teardown while the driver was still migrating and reading back — but it means the driver must close the
+stream itself with `PREFILL_SEND_SHUTDOWN=1`, or terminal B sits in `recv` after the gate has passed.
 
 Deriving every row of this table from a single place is the main thing the harness buys. It also rejects
 attempts to set any of them by hand.

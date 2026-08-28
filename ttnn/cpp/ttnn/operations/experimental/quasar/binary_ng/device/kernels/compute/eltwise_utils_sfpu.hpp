@@ -32,7 +32,7 @@ ALWI void preprocess_sfpu_impl(
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_tile_to_dst_init_short(cb_pre.get_id());
+        copy_init(cb_pre.get_id());
         copy_tile(cb_pre.get_id(), i, i);
         process_activations(i);
     }

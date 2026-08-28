@@ -152,6 +152,7 @@ jobs:
             "${{ needs.resolve-skus.outputs.model }}"
   build-artifact:
     needs: [check-harbor, validate-filters]
+    if: ${{ !cancelled() && needs.validate-filters.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -236,6 +237,7 @@ jobs:
           popd
   vllm-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/vllm-model-tests-impl.yaml
     with:

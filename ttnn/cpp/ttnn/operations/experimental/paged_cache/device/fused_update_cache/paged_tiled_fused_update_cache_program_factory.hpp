@@ -7,6 +7,7 @@
 #include "paged_fused_update_cache_device_operation_types.hpp"
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 #include <cstdint>
@@ -35,6 +36,15 @@ struct PagedTiledFusedUpdateCacheProgramFactory {
     // index-tensor mode (positions read on-device).
     static std::vector<PerIndexOffsets> compute_tiled_fused_offsets(
         const PagedFusedUpdateCacheParams& operation_attributes, const PagedFusedUpdateCacheInputs& tensor_args);
+
+    // Cache-hit hook: patches the cached program's per-dispatch state in place (every buffer address
+    // plus the hash-excluded cache_start_id / tile_update_offset_B). No descriptor rebuild.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const PagedFusedUpdateCacheParams& operation_attributes,
+        const PagedFusedUpdateCacheInputs& tensor_args,
+        PagedFusedUpdateCacheResult& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 struct PagedTiledFusedUpdateCacheMeshWorkloadFactory {
@@ -47,6 +57,14 @@ struct PagedTiledFusedUpdateCacheMeshWorkloadFactory {
         const PagedFusedUpdateCacheInputs& tensor_args,
         PagedFusedUpdateCacheResult& tensor_return_value,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+
+    // Same program layout as the single-device factory, so it reuses that patch.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const PagedFusedUpdateCacheParams& operation_attributes,
+        const PagedFusedUpdateCacheInputs& tensor_args,
+        PagedFusedUpdateCacheResult& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

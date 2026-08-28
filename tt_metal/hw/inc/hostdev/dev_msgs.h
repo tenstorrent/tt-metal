@@ -29,6 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+#include "hostdev/debug_ring_buffer_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -70,6 +71,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #elif defined(COMPILE_FOR_DRISC)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::COUNT);
+#elif defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
@@ -307,12 +310,8 @@ struct debug_pause_msg_t {
 // Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
 static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
-constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
-constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
 struct debug_ring_buf_msg_t {
-    int16_t current_ptr;
-    uint16_t wrapped;
-    uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
+    uint8_t data[debug_ring_buf_size];
 };
 
 struct debug_stack_usage_per_cpu_t {
@@ -446,6 +445,9 @@ static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROC
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
+// debug_ring_buf is a byte array reinterpreted as 4-byte fields, and on Blackhole its head is the
+// target of an atomic, which traps if misaligned.
+static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 

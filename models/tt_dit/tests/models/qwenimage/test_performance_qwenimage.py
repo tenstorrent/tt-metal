@@ -14,6 +14,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -25,6 +26,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenIm
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
+        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
         pytest.param(
             (2, 4),
             (2, 0),
@@ -38,6 +40,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenIm
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
+        "2x2cfg2sp1tp2",
         "2x4cfg2sp1tp4",
         "4x8cfg2sp4tp4",
     ],
@@ -45,7 +48,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenIm
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 47000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": 47000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_qwenimage_pipeline_performance(
@@ -223,7 +227,16 @@ def test_qwenimage_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-    if tuple(mesh_device.shape) == (2, 4):
+    if tuple(mesh_device.shape) == (2, 2):
+        # BH QuietBox 2, calibrated from run 31845507029:
+        # encoding 0.1189s, denoising 47.1481s, vae 1.1045s, total 57.4226s.
+        expected_metrics = {
+            "total_encoding_time": 0.2,
+            "denoising_steps_time": 55.0,
+            "vae_decoding_time": 1.5,
+            "total_time": 68,
+        }
+    elif tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
             "total_encoding_time": 0.35,
             "denoising_steps_time": 80.0,
@@ -262,6 +275,7 @@ def test_qwenimage_pipeline_performance(
                     target=target,
                 )
         device_name_map = {
+            (2, 2): "BH_QB",
             (2, 4): "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }

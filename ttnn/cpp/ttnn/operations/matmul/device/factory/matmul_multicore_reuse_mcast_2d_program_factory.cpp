@@ -771,6 +771,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             {"cb_in0", tt::CBIndex::c_0},
             {"cb_in0_sharded", tt::CBIndex::c_2},
             {"cb_sparsity", tt::CBIndex::c_6},
+            // Indexed/gather mode is sparse-matmul-only; 0 disables it here. The reader reads this
+            // name unconditionally, so every factory building it must pass it.
+            {"num_active", 0},
         };
         in0_sender_kernel_desc.config =
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
@@ -787,6 +790,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_sparsity", tt::CBIndex::c_7},
+        {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
     };
     in1_sender_writer_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc};
@@ -2275,6 +2279,7 @@ create_program_mcast_in0_in1(
                     {"cb_in0", tt::CBIndex::c_0},
                     {"cb_in0_sharded", tt::CBIndex::c_2},
                     {"cb_sparsity", tt::CBIndex::c_6},
+                    {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
                 }});
     }
 
@@ -2292,6 +2297,7 @@ create_program_mcast_in0_in1(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
+                {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
             }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;

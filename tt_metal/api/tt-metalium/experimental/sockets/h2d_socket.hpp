@@ -270,6 +270,10 @@ private:
     void init_receiver_tlb(
         const std::shared_ptr<MeshDevice>& mesh_device, std::optional<uint32_t> device_id = std::nullopt);
 
+    // Mock owner only: alias bytes_acked_ptr_ to bytes_sent_ so the FIFO reads as drained.
+    // Connectors remain context-free and do not use this path.
+    void enable_mock_flow_control(const MeshDevice& mesh_device);
+
     void reserve_bytes(uint32_t num_bytes);
     void push_bytes(uint32_t num_bytes);
     void notify_receiver();

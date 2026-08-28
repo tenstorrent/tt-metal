@@ -25,8 +25,10 @@ struct HighBwAllGatherUnicastFactory {
         uint32_t device_idx{};
         uint32_t forward_iterations{};
         uint32_t backward_iterations{};
+        uint32_t num_dram_banks{};
         bool is_ring{};
         bool ring_even_split{};
+        bool output_bank_owned_schedule{};
     };
 
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
