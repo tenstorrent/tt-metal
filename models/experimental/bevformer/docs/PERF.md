@@ -39,6 +39,7 @@ reported for that reason.
 | 3 | [camera fold without tiling a batch-of-one](perf_reports/03-camera-fold.md) | Release | 450.6 ms | 33.2 ms | **483.8 ms** | **−41.5 ms** |
 | 4 | [flat, tile-clean sampling chain](perf_reports/04-flat-sampling-chain.md) | Release | 310.1 ms | 37.6 ms | **347.7 ms** | **−136.1 ms** |
 | 5 | [hoisted head permute, untilize before the head split](perf_reports/05-hoisted-layout-ops.md) | Release | 263.6 ms | 41.8 ms | **305.4 ms** | **−42.3 ms** |
+| 6 | [sampling geometry on the SFPU](perf_reports/06-sfpu-geometry.md) | Release | 125.3 ms | 44.1 ms | **169.4 ms** | **−136.0 ms** |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. the time the
 device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
@@ -51,20 +52,23 @@ re-measurement, and stage 2 onwards is measured against it.
 
 **Stage 1: −70.7% of wall clock**, trading kernel for −2198.2 ms of host gap.
 
-**Stages 2–5: 681.5 → 263.6 ms of kernel, −61.3%**, at a PCC gate held at 0.999611 throughout. All
-of it is device time. Kernel is **86%** of wall clock, so what remains of the host-round-trip work
-is bounded by 41.8 ms.
+**Stages 2–6: 681.5 → 125.3 ms of kernel, −81.6%**, at a PCC gate held at 0.9996 throughout. All of
+it is device time. Kernel is **74%** of wall clock, so what remains of the host-round-trip work is
+bounded by 44.1 ms.
 
 `200×200` spatial cross attention runs as of stage 4; it had been failing on an allocation of 2.97
 GB for a 23.2 MB tensor. The full `tests/pcc/` suite is 33 passed with nothing deselected.
 
-**MSDAOperation is now 64% of kernel** — 167.8 ms in 5 calls of one experimental op, running at
-roughly 1.3% of the DRAM roof. See [04](perf_reports/04-flat-sampling-chain.md) for the estimate.
-Nothing in Python reaches it, and everything else in the layer put together is 96 ms.
+**MSDAOperation is 29.5 ms, 23.5% of kernel.** Stage 05 read it as 167.8 ms and 78× above its DRAM
+roof, and concluded the fused kernel was slow. It was not: the compute kernel was idle for the whole
+call, waiting on a reader doing per-point float maths at ~140 cycles an operation on a core with no
+FPU. Moving that onto the SFPU collapsed the op to 29.5 ms without touching the sampling kernel —
+see [06](perf_reports/06-sfpu-geometry.md).
 
-The Python-side layout work is finished. What remains of it is ~52 ms spread across `Permute`,
-`ReshapeView`, `Slice` and `Untilize` with no common cause; stage 05 records the profile read that
-found no further target of that kind.
+**Layout plumbing is now the largest item** — `Reshape` + `Permute` + `Slice` + `Untilize` is 71.7
+ms, **57% of kernel**. Unlike the residue stage 05 described, it has an identifiable shape: ~24 ms
+turning `value` into per-level heads and ~31 ms preparing grid and attn. That is the same plumbing
+the 19 `nlp_*` head-reshape ops exist to fuse, minus a deformable-attention member.
 
 ## Where the baseline time is
 

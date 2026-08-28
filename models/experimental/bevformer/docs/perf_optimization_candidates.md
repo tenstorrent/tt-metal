@@ -21,7 +21,8 @@ Numbers quoted below as *cost* come from the baseline profile
 | [3](#candidate-3--tile-padding-waste) | kill tile padding on degenerate dims | kernel, DRAM | **−177.3 ms, and 200×200 now runs** | M | low | **landed — [03](perf_reports/03-camera-fold.md), [04](perf_reports/04-flat-sampling-chain.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | **114 ms** (single op) | S | low | closed — deleted by 2 |
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
-| [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **167.8 ms**, 64% of kernel | L | — | upstream |
+| [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **−138.3 ms**, and it was never the op | L | med | **landed — [06](perf_reports/06-sfpu-geometry.md)** |
+| [7](#candidate-7--an-msda-head-reshape-op) | an MSDA head-reshape op | kernel | **~55 ms**, 44% of kernel | L | med | **next** |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -272,8 +273,11 @@ lifts.
    ([05](perf_reports/05-hoisted-layout-ops.md)). Two per-level ops hoisted out of the level loop.
    What is left is ~52 ms with no common cause, and a profile read op by op found no further target
    of that kind. The Python-side layout work is closed.
-6. **6** — the fused op. 167.8 ms, **64%** of kernel, and the only remaining order of magnitude. Not
-   ours to write; raise it upstream with the roof estimate.
+6. ~~**6**~~ — landed, −138.3 ms ([06](perf_reports/06-sfpu-geometry.md)). The premise was wrong:
+   the op was not slow, the compute kernel was idle waiting on a reader doing soft-float geometry.
+   Moving that onto the SFPU collapsed it 167.6 → 29.5 ms without touching the sampling kernel.
+7. **7** — the head-reshape op. Layout plumbing is now 57% of kernel and, unlike the residue stage
+   05 described, it has a shape worth fusing.
 7. **1c** — hoist the index derivation to the encoder: one sync per frame instead of six. Pure
    refactor, no op risk.
 8. **1d** — move to `__init__` what is genuinely frame-invariant.
@@ -312,6 +316,51 @@ Two further observations point the same way:
 - ~4800 cycles per sampled point per core, for a bilinear fetch of 32 channels — 128 reads and 128
   multiplies.
 
-**This is not ours to write.** The action is to report it upstream with these numbers, not to design
-around it. Nothing in the Python layer reaches inside the op, and every remaining Python-side lever
-put together is worth less than half of it.
+**Landed** — [stage 06](perf_reports/06-sfpu-geometry.md), 167.6 → **29.5 ms**, PCC unchanged.
+
+Every number above is correct and every conclusion drawn from them was wrong. The op was 78× above
+its DRAM roof because it was not reading DRAM: `CB-COMPUTE-WAIT-FRONT` measured 36.1 ms on a 36.0 ms
+call, so the compute kernel was idle for the whole op. The reader was deriving the sampling geometry
+in floating point on a dataflow core that has **no FPU** — ~140 cycles an operation of soft-float
+emulation — which is also why cost tracked point count rather than data read, and why it was flat
+across levels.
+
+The fix was to move that arithmetic onto the SFPU and leave the sampling kernel alone. It needed no
+upstream change.
+
+**What to take from this.** A roofline says an op is not bound by the resource you modelled. It does
+not say which resource binds it. "78× above the DRAM roof" was read as *the kernel is slow* when it
+meant *this op is not doing memory work*. The distinction cost four stages of looking in the wrong
+place, and one CB-wait zone settled it.
+
+---
+
+## Candidate 7 — an MSDA head-reshape op
+
+`Reshape` + `Permute` + `Slice` + `Untilize` is **71.7 ms, 57% of kernel** — three times the fused
+op. Read against the stage-06 profile it is not shapeless:
+
+| group | ops | cost |
+|---|---|---:|
+| `value` → per-level heads | untilize, split embed_dims into (num_heads, head_dim), permute heads ahead of the spatial axis, slice the level | **~24 ms** |
+| grid and attn prep | reshape, untilize, head-major permute, per-level slice | **~31 ms** |
+| output concat heads | one permute back | ~1 ms |
+
+`ttnn/cpp/ttnn/operations/experimental/transformer/` already carries **19** ops that exist for
+exactly this: `nlp_create_qkv_heads` and `nlp_concat_heads` plus model-specific members (`_vit`,
+`_segformer`, `_falcon7b`, `_boltz`, `_decode`). Each fuses the layout plumbing that surrounds an
+attention op into one kernel because no generic op does it well. What is missing is the
+deformable-attention member of that family.
+
+The first group is the direct analogue of `nlp_create_qkv_heads`: one op taking `(B, L, embed_dims)`
+and the level shapes, emitting per-level `(B*num_heads, H, W, head_dim)` ready for the fused op. The
+second has no existing analogue — it is deformable-specific — but it is the larger half.
+
+**Two cheaper things to try first**, both Python-side and both measurable in an afternoon:
+
+- The largest single reshape, `1x1x119808x32 → 1x1x1916928x2` at **7.4 ms**, is a pure ROW_MAJOR
+  view that splits the last axis. ttnn materialises it.
+- The largest permute, **9.96 ms** moving 69.4 MB, is bandwidth-bound rather than per-call overhead.
+
+Stage 05 measured both as a wash and reverted them. It measured them against a kernel twice as slow,
+and against a critical path that has since moved.
