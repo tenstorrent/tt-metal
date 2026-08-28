@@ -199,6 +199,15 @@ def _default_infinitebench_cache_dir() -> str:
 INFINITEBENCH_CACHE_DIR = Path(_default_infinitebench_cache_dir())
 
 
+def _ref_attn_implementation():
+    """Attention backend for the reference forward; eager is what every PCC path assumes.
+
+    Golden generation past ~55k tokens sets PREFILL_REF_ATTN=sdpa -- eager's [heads, seq, seq] score
+    matrix does not fit. Same function, different summation order.
+    """
+    return os.environ.get("PREFILL_REF_ATTN", "eager")
+
+
 # --- HF model helpers ---
 
 
@@ -774,7 +783,7 @@ def load_and_compute_layer_by_layer(
     if compute_reference:
         test_config = deepcopy(config)
         test_config.num_hidden_layers = num_layers
-        test_config._attn_implementation = "eager"
+        test_config._attn_implementation = _ref_attn_implementation()
 
         logger.info(f"Creating empty {variant.reference_model_cls.__name__} for reference computation...")
         with no_init_weights():
@@ -801,7 +810,12 @@ def load_and_compute_layer_by_layer(
         hf_model.embed_tokens.weight.data = torch.empty(0)
         del embed_with_prefix
 
-    attention_mask = get_4d_causal_mask(attention_mask, causal_only=causal_only)
+    # Hand a non-eager backend no mask: transformers computes `is_causal = q_len > 1 and
+    # attention_mask is None`, so an explicit mask silently downgrades SDPA to the masked kernel --
+    # and costs [1, 1, seq, seq] fp32, 12.7 GB at isl 56320. Verified identical output.
+    attention_mask = (
+        None if _ref_attn_implementation() != "eager" else get_4d_causal_mask(attention_mask, causal_only=causal_only)
+    )
 
     if build_ttnn_cache:
         # Build embedding cache (device=None, no accumulation!)
