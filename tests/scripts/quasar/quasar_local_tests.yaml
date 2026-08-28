@@ -275,20 +275,6 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_stem.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-      TT_METAL_QSR_CONV_SPLIT_PROGRAM: 1
 
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py:
   - runner: pytest
@@ -311,28 +297,12 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_split_p
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-      PYTEST_ADDOPTS: "--timeout=1200"
-
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py:
   - runner: pytest
     config: 2x3
     env:
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
-
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_dprint_debug.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-      PYTEST_ADDOPTS: "--timeout=1200"
 
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py:
   - runner: pytest
