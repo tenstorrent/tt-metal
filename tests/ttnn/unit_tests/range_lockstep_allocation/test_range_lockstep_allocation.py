@@ -31,7 +31,16 @@ FREE_CORE = ttnn.CoreCoord(1, 0)
 
 
 def _num_cores(first_core, last_core):
-    """Cores in the inclusive rectangle first_core..last_core -- a CoreRange is an area, not a row."""
+    """Cores in the inclusive rectangle first_core..last_core -- a CoreRange is an area, not a row.
+
+    ttnn.CoreRange rejects a reversed range on its own, but only once the config is built, and
+    this runs first to size the tensor. A range reversed in both dimensions multiplies two
+    negatives back into a plausible count, so check here rather than rely on the order of the
+    two calls.
+    """
+    assert (
+        first_core.x <= last_core.x and first_core.y <= last_core.y
+    ), f"core range is reversed: ({first_core.x},{first_core.y})..({last_core.x},{last_core.y})"
     return (last_core.x - first_core.x + 1) * (last_core.y - first_core.y + 1)
 
 
