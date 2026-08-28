@@ -9,7 +9,9 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
@@ -6184,6 +6186,327 @@ TEST_F(TopologySolverTest, TopologySolver_SolveNextAndIncrementalSatSession) {
         EXPECT_LT(reuse_ms, fresh_ms);
         EXPECT_LT(reuse_ms * 2, fresh_ms);
     }
+}
+
+}  // namespace tt::tt_fabric
+
+// ============================================================================
+// Positional GlobalNode: (hostname, tray_id, asic_location) instead of AsicID
+//
+// The solver core is generic over GlobalNode -- topology_solver.tpp mentions ASICs only in two comments and
+// topology_solver_sat.cpp not at all, because GraphIndexData erases node identity to dense size_t indices before
+// any search runs. These tests establish that claim mechanically: they instantiate the whole solver (both
+// backends, trait constraints, same-rank groups, print paths, hashed containers) on a positional node type,
+// with no change to topology_solver.{hpp,tpp}, topology_solver_sat.cpp, or any library source.
+//
+// They are the cheap precondition for the larger question of whether the topology mapper should switch its
+// physical node identity from AsicID (an opaque uint64 from UMD chip_unique_ids, or synthesized in
+// physical_descriptor_builder.cpp) to the position tuple. Two properties they pin down are the actual payoff:
+//   - traits (tray_id / asic_location) come off the node itself, so the AsicPositionMap side table in
+//     TopologyMappingConfig::asic_positions and the global_tray_traits / global_location_traits maps in
+//     physical_grouping_descriptor_matching.cpp:1445-1483 have nothing left to translate;
+//   - host partitions come off the node itself, so TopologyMappingConfig::hostname_to_asics likewise does not.
+// ============================================================================
+
+namespace tt::tt_fabric::positional_node_test {
+
+// Candidate replacement for AsicID as the solver's GlobalNode: a position rather than an opaque id. This is
+// tt::tt_metal::ASICPosition (fabric_types.hpp:174) extended with host identity.
+//
+// Host identity is the hostname string, matching ASICDescriptor::host_name (physical_system_descriptor.hpp:55) --
+// the PSD has no numeric host id (that is an FSD concept, factory_system_descriptor.proto:20,30), so a string
+// needs no new plumbing to populate. Three costs it does carry, none of which this fixture can exercise:
+//   - the per-ASIC MPI broadcast record in topology_mapper.cpp:799-807 is fixed-width, and a string is not;
+//   - it puts string compares and allocations in the std::map / std::set paths that build the graph and
+//     constraints (the search itself is index-based, so it does not pay this);
+//   - hostname uniqueness is not guaranteed -- see all_hostnames_unique_, physical_system_descriptor.hpp:261 --
+//     so a duplicate hostname silently merges two hosts' ASICs into one node-identity space.
+//
+// The member set mirrors what FabricNodeId already provides (fabric_types.hpp:118-148) -- operator<, operator==,
+// operator<<, std::hash, fmt::formatter -- which is exactly the requirement set the solver imposes on a node type.
+struct AsicSlotId {
+    std::string hostname;
+    tt::tt_metal::TrayID tray_id{0};
+    tt::tt_metal::ASICLocation asic_location{0};
+
+    // Required: AdjacencyGraph::AdjacencyMap, MappingConstraints::valid_mappings_, MappingResult::global_to_target
+    // and the cardinality / forbidden pair sets are all std::map / std::set keyed on GlobalNode.
+    //
+    // Unlike AsicID's ordering (raw uint64 from StrongType's defaulted operator<=>), this order is structured:
+    // same host, then same tray, then ascending slot. See the ordering tests below for what that does and does
+    // not buy.
+    bool operator<(const AsicSlotId& o) const {
+        return std::tie(hostname, *tray_id, *asic_location) < std::tie(o.hostname, *o.tray_id, *o.asic_location);
+    }
+    bool operator==(const AsicSlotId& o) const {
+        return std::tie(hostname, *tray_id, *asic_location) == std::tie(o.hostname, *o.tray_id, *o.asic_location);
+    }
+};
+
+// Required by print_mapping_result (topology_solver.tpp:1498), the one path that streams a GlobalNode into a
+// std::stringstream rather than going through fmt.
+inline std::ostream& operator<<(std::ostream& os, const AsicSlotId& slot) {
+    return os << slot.hostname << "/T" << *slot.tray_id << "/A" << *slot.asic_location;
+}
+
+inline AsicSlotId make_slot(std::string hostname, uint32_t tray, uint32_t location) {
+    return AsicSlotId{std::move(hostname), tt::tt_metal::TrayID{tray}, tt::tt_metal::ASICLocation{location}};
+}
+
+// Reference physical system: 2 hosts x 2 trays x 2 slots, in positional order.
+inline std::vector<AsicSlotId> reference_slots() {
+    std::vector<AsicSlotId> slots;
+    for (const char* hostname : {"host0", "host1"}) {
+        for (uint32_t tray = 1; tray <= 2; ++tray) {
+            for (uint32_t location = 1; location <= 2; ++location) {
+                slots.push_back(make_slot(hostname, tray, location));
+            }
+        }
+    }
+    return slots;
+}
+
+// Cabled as one open chain in positional order, i.e.
+// host0/T1/A1 - host0/T1/A2 - host0/T2/A1 - host0/T2/A2 - host1/T1/A1 - ...
+// Single ethernet connection per link, so STRICT and RELAXED behave identically here.
+inline AdjacencyGraph<AsicSlotId> reference_physical_chain() {
+    const auto slots = reference_slots();
+    AdjacencyGraph<AsicSlotId>::AdjacencyMap adj;
+    for (const auto& slot : slots) {
+        adj[slot] = {};
+    }
+    for (size_t i = 0; i + 1 < slots.size(); ++i) {
+        adj[slots[i]].push_back(slots[i + 1]);
+        adj[slots[i + 1]].push_back(slots[i]);
+    }
+    return AdjacencyGraph<AsicSlotId>(adj);
+}
+
+// A logical chain of `num_devices` devices in mesh 0.
+inline AdjacencyGraph<FabricNodeId> logical_chain(uint32_t num_devices) {
+    AdjacencyGraph<FabricNodeId>::AdjacencyMap adj;
+    for (uint32_t i = 0; i < num_devices; ++i) {
+        adj[FabricNodeId(MeshId{0}, i)] = {};
+    }
+    for (uint32_t i = 0; i + 1 < num_devices; ++i) {
+        adj[FabricNodeId(MeshId{0}, i)].push_back(FabricNodeId(MeshId{0}, i + 1));
+        adj[FabricNodeId(MeshId{0}, i + 1)].push_back(FabricNodeId(MeshId{0}, i));
+    }
+    return AdjacencyGraph<FabricNodeId>(adj);
+}
+
+inline constexpr TopologyMappingSolverEngine kEngines[] = {
+    TopologyMappingSolverEngine::Dfs, TopologyMappingSolverEngine::Sat};
+
+inline const char* engine_name(TopologyMappingSolverEngine engine) {
+    return engine == TopologyMappingSolverEngine::Dfs ? "Dfs" : "Sat";
+}
+
+}  // namespace tt::tt_fabric::positional_node_test
+
+namespace std {
+// Required only by the mapper layer, not the solver: TopologyMapper::asic_id_to_mapping_
+// (topology_mapper.hpp:428) and PhysicalSystemDescriptor::asic_descriptors_
+// (physical_system_descriptor.hpp:257) are unordered_maps keyed on the node type. ttsl::StrongType forwards
+// std::hash to the underlying integer, but a composite node has to combine them by hand.
+template <>
+struct hash<tt::tt_fabric::positional_node_test::AsicSlotId> {
+    size_t operator()(const tt::tt_fabric::positional_node_test::AsicSlotId& slot) const noexcept {
+        size_t h = std::hash<std::string>{}(slot.hostname);
+        h ^= std::hash<uint32_t>{}(*slot.tray_id) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<uint32_t>{}(*slot.asic_location) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+}  // namespace std
+
+// Required by AdjacencyGraph::print_adjacency_map (topology_solver.tpp:109,119) and
+// ConstraintIndexData::print_resolved_mapping_constraint_maps, which use fmt::format("{}", node). Same shape as
+// fmt::formatter<AsicID> at fabric_types.hpp:188.
+template <>
+struct fmt::formatter<tt::tt_fabric::positional_node_test::AsicSlotId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::positional_node_test::AsicSlotId& slot, format_context& ctx) const
+        -> format_context::iterator {
+        return fmt::format_to(ctx.out(), "{}/T{}/A{}", slot.hostname, *slot.tray_id, *slot.asic_location);
+    }
+};
+
+namespace tt::tt_fabric {
+
+using namespace ::tt::tt_fabric::positional_node_test;
+
+// The core claim: a positional GlobalNode drives the full solver, on both backends, unmodified.
+TEST_F(TopologySolverTest, PositionalGlobalNode_SolvesOnBothEngines) {
+    const auto target_graph = logical_chain(4);
+    const auto global_graph = reference_physical_chain();
+    const MappingConstraints<FabricNodeId, AsicSlotId> constraints;
+
+    for (const auto engine : kEngines) {
+        const auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::STRICT, false, engine);
+
+        ASSERT_TRUE(result.success) << engine_name(engine)
+                                    << ": positional node mapping should succeed: " << result.error_message;
+        EXPECT_EQ(result.target_to_global.size(), 4u) << engine_name(engine);
+        EXPECT_EQ(result.global_to_target.size(), 4u) << engine_name(engine) << ": mapping must be a bijection";
+
+        // Every logical edge must land on a physical edge.
+        for (uint32_t i = 0; i + 1 < 4; ++i) {
+            const AsicSlotId a = result.target_to_global.at(FabricNodeId(MeshId{0}, i));
+            const AsicSlotId b = result.target_to_global.at(FabricNodeId(MeshId{0}, i + 1));
+            const auto& neighbors = global_graph.get_neighbors(a);
+            EXPECT_NE(std::find(neighbors.begin(), neighbors.end(), b), neighbors.end())
+                << engine_name(engine) << ": chip " << i << " -> " << a << " and chip " << (i + 1) << " -> " << b
+                << " are not physically connected";
+        }
+    }
+}
+
+// Payoff 1: tray_id and asic_location are read straight off the node, so the AsicPositionMap side table
+// (TopologyMappingConfig::asic_positions, topology_mapper_utils.hpp:98-100) and the global_tray_traits /
+// global_location_traits maps built in physical_grouping_descriptor_matching.cpp:1445-1483 become redundant.
+TEST_F(TopologySolverTest, PositionalGlobalNode_PositionTraitsNeedNoSideTable) {
+    const auto target_graph = logical_chain(2);
+    const auto global_graph = reference_physical_chain();
+
+    // Both logical devices must land on tray 1.
+    std::map<FabricNodeId, tt::tt_metal::TrayID> target_tray_traits;
+    for (const auto& node : target_graph.get_nodes()) {
+        target_tray_traits[node] = tt::tt_metal::TrayID{1};
+    }
+
+    // No PhysicalSystemDescriptor lookup and no precomputed position map: the trait *is* a node field.
+    std::map<AsicSlotId, tt::tt_metal::TrayID> global_tray_traits;
+    for (const auto& slot : global_graph.get_nodes()) {
+        global_tray_traits[slot] = slot.tray_id;
+    }
+
+    MappingConstraints<FabricNodeId, AsicSlotId> constraints;
+    ASSERT_TRUE(constraints.add_required_trait_constraint<tt::tt_metal::TrayID>(target_tray_traits, global_tray_traits))
+        << "tray-1 trait constraint should leave a non-empty candidate set";
+
+    for (const auto engine : kEngines) {
+        const auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::STRICT, false, engine);
+
+        ASSERT_TRUE(result.success) << engine_name(engine) << ": " << result.error_message;
+        for (const auto& [node, slot] : result.target_to_global) {
+            EXPECT_EQ(slot.tray_id, tt::tt_metal::TrayID{1})
+                << engine_name(engine) << ": " << node << " mapped off-tray to " << slot;
+        }
+    }
+}
+
+// Payoff 2: host partitions are derived from the node itself, so TopologyMappingConfig::hostname_to_asics
+// (topology_mapper_utils.hpp:114-117) has nothing left to carry -- it is literally a
+// std::map<std::string, std::set<AsicID>>, i.e. the grouping this test derives in four lines.
+TEST_F(TopologySolverTest, PositionalGlobalNode_SameRankGroupsDerivedFromHostname) {
+    const auto target_graph = logical_chain(4);
+    const auto global_graph = reference_physical_chain();
+
+    // One logical group: all four devices share a rank, so they must fit inside a single host partition.
+    std::set<FabricNodeId> rank_group;
+    for (const auto& node : target_graph.get_nodes()) {
+        rank_group.insert(node);
+    }
+
+    // Partition globals by hostname, read off the node -- no hostname_to_asics input required.
+    std::map<std::string, std::set<AsicSlotId>> by_host;
+    for (const auto& slot : global_graph.get_nodes()) {
+        by_host[slot.hostname].insert(slot);
+    }
+    std::vector<std::set<AsicSlotId>> global_groups;
+    for (const auto& [hostname, slots] : by_host) {
+        global_groups.push_back(slots);
+    }
+    ASSERT_EQ(global_groups.size(), 2u);
+
+    MappingConstraints<FabricNodeId, AsicSlotId> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint({rank_group}, global_groups));
+
+    for (const auto engine : kEngines) {
+        const auto result = solve_topology_mapping(
+            target_graph, global_graph, constraints, ConnectionValidationMode::STRICT, false, engine);
+
+        ASSERT_TRUE(result.success) << engine_name(engine) << ": " << result.error_message;
+        const std::string& host = result.target_to_global.begin()->second.hostname;
+        for (const auto& [node, slot] : result.target_to_global) {
+            EXPECT_EQ(slot.hostname, host)
+                << engine_name(engine) << ": rank group split across hosts (" << node << " -> " << slot << ")";
+        }
+    }
+}
+
+// Determinism: global node indices come from AdjacencyGraph::nodes_cache_, which is filled by iterating the
+// std::map (topology_solver.tpp:49-53). That order feeds SAT variable numbering and DFS candidate ordering, so it
+// decides which of several equally-valid mappings is returned. With AsicID that order is the raw uint64 magnitude
+// -- arbitrary for UMD chip_unique_ids, and an artifact of enumeration order for the ids synthesized in
+// physical_descriptor_builder.cpp:271-279. Positionally it is (hostname, tray, slot), stable by construction for
+// a given set of hostnames.
+//
+// Corollary for the migration: existing tests that assert a specific mapping will need re-baselining.
+TEST_F(TopologySolverTest, PositionalGlobalNode_NodeOrderIsPositionallyDeterministic) {
+    const auto global_graph = reference_physical_chain();
+    EXPECT_EQ(global_graph.get_nodes(), reference_slots())
+        << "global node index order should be lexicographic in (hostname, tray_id, asic_location)";
+}
+
+// The cost of a string host key: node order is lexicographic, not natural. With numeric ids "host2" precedes
+// "host10"; as strings it is the reverse. Determinism is unaffected -- the order is still a pure function of the
+// input -- but the order is no longer the physical/rack order a reader would assume, so it cannot be relied on for
+// locality-flavoured heuristics (e.g. the HOST_AFFINITY_WEIGHT packing bias in SearchHeuristic, or any future
+// "prefer adjacent hosts" ordering). Encoded here so the property is a decision rather than a surprise.
+TEST_F(TopologySolverTest, PositionalGlobalNode_HostnameOrderIsLexicographicNotNatural) {
+    const AsicSlotId host2 = make_slot("host2", 1, 1);
+    const AsicSlotId host10 = make_slot("host10", 1, 1);
+    EXPECT_LT(host10, host2) << "hostnames sort as strings; 'host10' precedes 'host2'";
+
+    AdjacencyGraph<AsicSlotId>::AdjacencyMap adj{{host2, {host10}}, {host10, {host2}}};
+    const AdjacencyGraph<AsicSlotId> graph(adj);
+    ASSERT_EQ(graph.get_nodes().size(), 2u);
+    EXPECT_EQ(graph.get_nodes()[0], host10) << "global index 0 goes to the lexicographically-first hostname";
+}
+
+// The remaining requirements a GlobalNode has to satisfy, none of which the solve path itself exercises:
+// hashed-container usability (needed by the mapper, not the solver) and the fmt / ostream print paths.
+TEST_F(TopologySolverTest, PositionalGlobalNode_SatisfiesMapperContainerRequirements) {
+    const auto slots = reference_slots();
+
+    // Mirrors TopologyMapper::asic_id_to_mapping_ and PhysicalSystemDescriptor::asic_descriptors_.
+    std::unordered_map<AsicSlotId, uint32_t> by_slot;
+    for (uint32_t i = 0; i < slots.size(); ++i) {
+        by_slot[slots[i]] = i;
+    }
+    EXPECT_EQ(by_slot.size(), slots.size()) << "distinct positions must hash distinctly enough to not collide-merge";
+    EXPECT_EQ(by_slot.at(make_slot("host1", 2, 1)), 6u);
+
+    EXPECT_EQ(fmt::format("{}", make_slot("host1", 2, 1)), "host1/T2/A1");
+
+    std::stringstream ss;
+    ss << make_slot("host0", 1, 2);
+    EXPECT_EQ(ss.str(), "host0/T1/A2");
+
+    // Exercise the print paths themselves; they are separate template instantiations from the solve path and are
+    // reached from the mapper, so a node type that solves but does not print is not actually sufficient.
+    const auto target_graph = logical_chain(2);
+    const auto global_graph = reference_physical_chain();
+    MappingConstraints<FabricNodeId, AsicSlotId> constraints;
+    constraints.add_preferred_constraint(FabricNodeId(MeshId{0}, 0), make_slot("host0", 1, 1));
+
+    global_graph.print_adjacency_map("Positional physical graph", /*quiet_mode=*/true);
+    constraints.print_mapping_constraint_maps("Positional constraints", /*quiet_mode=*/true);
+
+    const auto result = solve_topology_mapping(target_graph, global_graph, constraints);
+    ASSERT_TRUE(result.success) << result.error_message;
+    print_mapping_result(result);
+
+    const detail::GraphIndexData<FabricNodeId, AsicSlotId> graph_data(target_graph, global_graph);
+    const detail::ConstraintIndexData<FabricNodeId, AsicSlotId> constraint_data(constraints, graph_data);
+    graph_data.print_node_degrees();
+    graph_data.print_adjacency_maps();
+    constraint_data.print_resolved_mapping_constraint_maps(graph_data, "Positional resolved", /*quiet_mode=*/true);
 }
 
 }  // namespace tt::tt_fabric
