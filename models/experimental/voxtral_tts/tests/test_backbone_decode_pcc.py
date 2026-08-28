@@ -6,8 +6,9 @@
 Decode advances one position per audio frame off the KV cache. Everything here is teacher-forced on
 real frames, so both sides step on the same embedding and each frame is an independent measurement.
 
-  * horizon        -- the fixture's full 64 frames, with the per-step trend reported, since error
-    accumulates over steps and a short window cannot show it.
+  * horizon        -- 64 frames on every prompt, against one shared recording, so most prompts are
+    a mismatched pair: a stress case rather than a faithful one.
+  * full utterance -- a whole request, each prompt teacher-forced with its own trajectory.
   * determinism    -- a repeat must reproduce bit-identically.
   * cache writes   -- the entries decode appends, all 26 layers, against the reference's own cache.
   * prompt cache   -- decode must leave the prompt's positions exactly as prefill wrote them.
@@ -40,14 +41,21 @@ from models.experimental.voxtral_tts.tests.reference_helpers import (  # noqa: E
     backbone_state,
     case_ids,
     fixture_embeds,
+    long_frame_cases,
     real_frames,
+    real_frames_long,
 )
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # noqa: E402
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
-# The floor over the fixture's full 64-frame horizon. A wider window draws worse individual frames
-# without drifting: per case the last quarter is as good as the first.
+# Two gates, because the two horizon tests feed different things.
+#
+# The 64-frame sweep runs every prompt against ONE shared frame recording, so all but one prompt is
+# a mismatched pair -- a deliberate stress case, and the looser gate belongs to it.
 PCC_DECODE = 0.998
+# The full-utterance test gives each prompt its OWN recorded trajectory, which is what a real request
+# looks like, so it holds the tighter line.
+PCC_DECODE_MATCHED = 0.999
 CACHE_PCC = 0.998
 TILE = 32
 MAX_SEQ = 1024
@@ -87,9 +95,9 @@ def _prefill_both(gen, w, ci, n_layers=N_LAYERS):
     return inc, embeds.shape[1]
 
 
-def _steps(gen, inc, w, n):
+def _steps(gen, inc, w, n, frames=None):
     """-> (per-step pcc, per-step worst-sample). Teacher-forced on real frames."""
-    frames = real_frames()
+    frames = real_frames() if frames is None else frames
     pcs, wss = [], []
     for t in range(min(n, frames.shape[0])):
         emb = bref.embed_frame(w, frames[t])
@@ -228,3 +236,30 @@ def test_step_refuses_a_full_cache(dev, w):
     assert g.pos == small
     with pytest.raises(ValueError, match="cache full"):
         g.step(torch.zeros(1, DIM))
+
+
+LONG_CASES = tuple(c for c in long_frame_cases() if real_frames_long(c).shape[0] > 128)
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("ci", LONG_CASES, ids=lambda c: f"case{c}")
+def test_decode_pcc_over_a_full_utterance(gen, w, ci):
+    """A whole request's worth of frames, teacher-forced, with the trend reported by decile.
+
+    The short fixture covers the first few seconds; this walks the length a real utterance runs, so
+    any drift over that span has somewhere to show.
+    """
+    frames = real_frames_long(ci)          # this prompt's own trajectory
+    inc, P = _prefill_both(gen, w, ci)
+    pcs, wss = _steps(gen, inc, w, frames.shape[0], frames=frames)
+    d = max(1, len(pcs) // 10)
+    deciles = [sum(pcs[k * d : (k + 1) * d]) / len(pcs[k * d : (k + 1) * d])
+               for k in range(10) if pcs[k * d : (k + 1) * d]]
+    print(f"\n  case {ci} P={P}, {len(pcs)} frames ({len(pcs) / 12.5:.1f}s audio): "
+          f"min PCC {min(pcs):.6f}  worst-sample max {max(wss):.2f}%")
+    print("    mean PCC by decile: " + " ".join(f"{v:.6f}" for v in deciles))
+    assert min(pcs) > PCC_DECODE_MATCHED, (
+        f"case {ci} decode min PCC {min(pcs):.6f} over {len(pcs)} frames")
+    assert deciles[-1] > deciles[0] - 0.0005, (
+        f"decode degrades across the utterance: first decile {deciles[0]:.6f}, "
+        f"last {deciles[-1]:.6f}")

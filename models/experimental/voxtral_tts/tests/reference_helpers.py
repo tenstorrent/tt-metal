@@ -20,6 +20,7 @@ import torch
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURE = os.path.join(HERE, "tests", "prompt_fixture.json")
 FRAMES = os.path.join(HERE, "tests", "real_frames_fixture.pt")
+FRAMES_LONG = os.path.join(HERE, "tests", "real_frames_long_fixture.pt")
 
 
 @functools.lru_cache(maxsize=1)
@@ -128,3 +129,23 @@ def long_prompt_embeds(S, w=None, voice="ar_male"):
         if reps > 64:
             raise AssertionError(f"cannot reach {S} tokens from the fixture texts")
     return corpus_embeds(_fixture_text(reps), voice, w)[:, :S], reps > 1
+
+
+@functools.lru_cache(maxsize=1)
+def _long_frames_by_case():
+    return torch.load(FRAMES_LONG)
+
+
+def real_frames_long(case_idx):
+    """-> that prompt's OWN full utterance of real frames [T,37].
+
+    Per prompt, because teacher-forcing a prompt with another utterance's frames is a mismatched
+    pair and reads worse for that reason alone. Only prompts whose natural utterance is long have an
+    entry; short ones are covered by the 64-frame fixture.
+    """
+    return _long_frames_by_case()[case_idx].long()
+
+
+def long_frame_cases():
+    """-> the prompts that have a full-utterance frame capture, sorted."""
+    return tuple(sorted(_long_frames_by_case()))
