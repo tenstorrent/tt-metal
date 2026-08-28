@@ -1284,7 +1284,38 @@ assert set(_INT_ZERO_UNDEFINED_DIVISOR) <= set(_INT_BINARY_STIMULI), (
     f"{sorted(op.name for op in set(_INT_ZERO_UNDEFINED_DIVISOR) - set(_INT_BINARY_STIMULI))}"
 )
 
-# A composite and a prime to pair the knees against, so gcd and lcm results are not all
+# Cat C for the arithmetic integer ops, decided by measurement rather than by reading the
+# sub-range comments in _INT_BINARY_STIMULI.
+#
+# Reading them suggested most of these ops were out of range at the extremes -- div and fmod
+# below 2**24 for an exact int->fp32 reciprocal, lcm below 2**15, mul below ~46340. Driven on a
+# Blackhole p150, eight of the ten int32 ops pass at the full signed extremes, and the reason
+# the bounds do not bite is that they are *accuracy* bounds for the random sweep, which is a
+# different question from whether an extreme value round-trips. Every pair drawn from
+# integer_specials is degenerate for a divide -- x/1, x/x, 0/x -- so the quotient is exact
+# whatever the magnitude. Cat C asks about the values; _INT_BINARY_STIMULI's ranges are about
+# the bulk.
+#
+# So the exclusion table has one entry, not seven.
+_INT_EXTREMES_OUT_OF_RANGE: Dict[MathOperation, str] = {
+    MathOperation.SfpuLcm: "the kernel's binary-GCD stage assumes |a|, |b| < 2**15 and "
+    "truncates above it: measured, lcm(1, INT32_MAX) returns 65535 and "
+    "lcm(INT32_MAX, INT32_MAX) returns 8388607, against INT32_MAX for both. The bound is real "
+    "and an extreme operand is sixteen binades outside it.",
+}
+
+# Ops driven at the *non-negative* extremes only, and for a reason that is the golden's rather
+# than the kernel's.
+#
+# fmod's result follows the sign of the dividend, C-style; BinarySFPUGolden._fmod_int is Python
+# `%`, which follows the divisor, and its own comment says so -- "non-negative stimuli make it
+# equal to a % b". Measured: fmod(-1, INT32_MAX) returns -1 from the kernel, which is correct,
+# against 2147483646 from the golden, which is not. Restricting the probe keeps the op covered
+# where the reference is valid instead of recording a divergence the kernel does not own.
+# Remainder is unaffected: both it and Python `%` follow the divisor, and it passes signed.
+_INT_EXTREMES_NON_NEGATIVE = frozenset({MathOperation.SfpuFmodInt32})
+
+# A composite and a prime to pair the knees against# A composite and a prime to pair the knees against, so gcd and lcm results are not all
 # trivially 1 or equal. The knees themselves -- 0 and 1 -- come from _OP_EDGE_POINTS via
 # op_edge_points(), not from a list here: an op joins this probe by gaining a table entry, and
 # the coverage ledger then derives cat D from the same place rather than from a list it cannot
@@ -1352,8 +1383,12 @@ def test_eltwise_binary_sfpu_int_zero_operands(mathop, dest_acc):
 # "negative zero" and cannot round-trip, which is a documented hardware limitation with its own
 # xfail (test_eltwise_binary_sfpu_int_shift_int32_min_unsupported); 2**31 + 1 stands in for it,
 # as INT32_MIN + 1 does on the signed side.
+# 2**32 - 1 is integer_specials(UInt32)'s actual ceiling and was missing: the list stopped at
+# 2**32 - 2, one value short, so these ops were driven *near* the top of the range and never at
+# it. All bits set is also the pattern most likely to be misread by a sign-magnitude Dst, which
+# is exactly why it is worth having rather than approximating.
 _UINT32_SMALL = (0, 1, 1_000_000)
-_UINT32_LARGE = (2**31 + 1, 3_000_000_000, 2**32 - 2)
+_UINT32_LARGE = (2**31 + 1, 3_000_000_000, 2**32 - 2, 2**32 - 1)
 _UINT32_HIGH_PAIRS = [
     (a, b) for a in _UINT32_SMALL + _UINT32_LARGE for b in _UINT32_SMALL + _UINT32_LARGE
 ]
@@ -2086,13 +2121,40 @@ _INT_EXTREME_OPS = [
     MathOperation.SfpuEqInt,
     MathOperation.SfpuNeInt,
     *_INT_COMPARISON_OPS,
+    # The arithmetic ops whose documented range reaches the extremes. gcd and max/min take the
+    # non-negative half (see _INT_EXTREMES_NON_NEGATIVE); rsub takes the whole thing, having no
+    # documented sub-range at all -- out = in1 - in0 is exact integer subtraction.
+    # The arithmetic int32 ops, all measured at the extremes before being added here.
+    MathOperation.SfpuDivInt32,
+    MathOperation.SfpuDivInt32Floor,
+    MathOperation.SfpuFmodInt32,
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuMaxInt32,
+    MathOperation.SfpuMinInt32,
+    MathOperation.SfpuMulInt32,
+    MathOperation.SfpuRemainderInt32,
+    MathOperation.SfpuRsubInt32,
 ]
 
 
-def _build_int_extremes_src():
-    """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN."""
+def _build_int_extremes_src(mathop=None):
+    """Two-tile Int32 override walking the product of the int32 extremes, minus INT32_MIN.
+
+    INT32_MIN is excluded for every op: sign-magnitude Dst reads 0x80000000 as "negative zero"
+    and cannot round-trip it, which is hardware rather than a gap and has its own xfail.
+    INT32_MIN + 1 stands in.
+
+    *mathop* narrows the list two ways. _INT_EXTREMES_NON_NEGATIVE drops the negatives for the
+    one op whose *golden* is only valid there, and _INT_ZERO_UNDEFINED_DIVISOR drops a zero
+    divisor for the ops that have no defined answer at one. Passing None keeps everything,
+    which is what the bitwise and comparison ops want -- they document no sub-range and have no
+    divisor.
+    """
     vals = [v for v in integer_specials(DataFormat.Int32) if v != _INT32_MIN]
-    pairs = [(a, b) for a in vals for b in vals]
+    if mathop in _INT_EXTREMES_NON_NEGATIVE:
+        vals = [v for v in vals if v >= 0]
+    divisors = [v for v in vals if v != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR]
+    pairs = [(a, b) for a in vals for b in divisors]
     return _build_paired_tile_override(pairs, torch.int32)
 
 
@@ -2113,7 +2175,7 @@ def test_eltwise_binary_sfpu_int_extremes(formats, dest_acc, mathop):
         formats,
         dest_acc,
         mathop,
-        src_A_override=_build_int_extremes_src(),
+        src_A_override=_build_int_extremes_src(mathop),
         twos_complement=True,
     )
 

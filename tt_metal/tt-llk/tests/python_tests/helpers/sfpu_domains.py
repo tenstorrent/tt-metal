@@ -2360,14 +2360,162 @@ SPECIALS_READY_OPS[MathOperation.Fill] = (
 # they do not (sqrt(-0), rsqrt(-0) -> NaN). That is the unpack_to_dest split, and it is what
 # scopes Sqrt's and Rsqrt's xfails to unpack-to-dest.
 #
-# Still not enrolled:
+# The fourth tranche. The three families each carry a *_SPECIALS_READY_OPS and a
+# _*_SPECIALS_NOT_READY dict, and the totality test asserts the partition -- except that the
+# unary family only ever had the first half. 28 ops sat outside cat B with nothing recording
+# whether that was a decision or an omission.
 #
-#   Log        +inf -> golden +inf, hw 88.5  (~ln(FLT_MAX): the kernel clamps a non-finite
-#              -inf -> golden NaN,  hw 84.3   input to the format maximum and takes the log
-#              NaN  -> golden NaN,  hw 89.1   of that, so no non-finite input survives)
+# Driven on a Blackhole p150 over the full specials set, on every specials-safe cell, after a
+# host-side pass confirming all 28 goldens *answer* at every special (none raises, unlike the
+# third tranche's math.acos / math.asin / math.tan). Three agreed and are enrolled below; the
+# 25 that did not are in _UNARY_SPECIALS_NOT_READY, grouped by measured cause.
 #
-# That is *kernel* behaviour with no ISA ruling, so whether the right outcome is a pass, an
-# xfail or a bug report needs an owner. Worth raising alongside RsqrtCompat(0).
+# ONE RECORD HERE WAS STALE, which is the reason to re-measure rather than transcribe. This
+# comment used to read:
+#
+#     Log  +inf -> golden +inf, hw 88.5   (~ln(FLT_MAX): the kernel clamps a non-finite
+#          -inf -> golden NaN,  hw 84.3    input to the format maximum and takes the log
+#          NaN  -> golden NaN,  hw 89.1    of that, so no non-finite input survives)
+#
+# It is no longer true. Measured now, Log(+inf) = +inf, Log(-inf) = NaN and Log(NaN) = NaN, all
+# agreeing with the golden on every safe cell -- the kernel does not clamp. The note was
+# accurate when written and went quietly false, which is the failure mode convention 3 warns
+# about from the other direction: a reason string is a claim about hardware with a shelf life.
+SPECIALS_READY_OPS.update(
+    {
+        MathOperation.Log: "IEEE: log(+inf) = +inf, log(-inf) = NaN, log(NaN) = NaN, "
+        "log(+/-0) = -inf. The kernel no longer clamps a non-finite input to the format "
+        "maximum -- the behaviour this file recorded for years -- so it now agrees with the "
+        "golden on every safe cell. Green on Blackhole.",
+        MathOperation.LogWithBase: "As Log: the base is a compile-time multiply on the "
+        "result, so every non-finite answer is Log's scaled, and the scale cannot rescue or "
+        "break one. Green on Blackhole.",
+        MathOperation.ReluMin: "min(x, threshold) through the same _relu_max_body_ the "
+        "comparison family enrolled on: a total-order compare, in which +NaN is the largest "
+        "value, so relu_min(NaN) is the threshold. Measured green on Blackhole by driving the "
+        "spec directly -- read this entry as a verdict with no consumer yet, because "
+        "test_eltwise_unary_sfpu_edges skips ReluMin outright for tt-llk issue #1120. The "
+        "enrolment takes effect the day that skip lifts; it is here so the skip is the only "
+        "thing holding the op back.",
+    }
+)
+
+# The 25 that diverge. Five causes, not twenty-five -- which is what the grouping records, and
+# it is also the honest limit of what one tranche establishes. Each entry says what was
+# measured; none claims the op has been individually investigated.
+
+# (1) A reciprocal composition returning +0 for 1/NaN. Identical to the divergence already
+# recorded against unary Reciprocal, reached through the same SFPARECIP, and section 5.6 Q1's
+# composition question rather than a new one per op.
+_UNARY_NOT_READY_RECIPROCAL: Tuple[MathOperation, ...] = (
+    MathOperation.Rdiv,
+    MathOperation.ReciprocalCompat,
+    MathOperation.RsqrtCompat,
+    MathOperation.Sigmoid,
+    MathOperation.TanhDerivative,
+)
+
+# (2) A LUT or polynomial fit evaluated at a non-finite. SFPLUTFP32 documents no NaN/inf
+# handling and a polynomial has no notion of one, so each returns whatever its fit produces
+# from a saturated or wrapped argument -- Erf(NaN) = 1.0, Gelu(-inf) = 0.0,
+# TanhDerivativeLut(+/-inf) = +inf, Digamma(NaN) = 89. What the composition should do there is
+# an LLK decision, not an ISA one.
+_UNARY_NOT_READY_LUT: Tuple[MathOperation, ...] = (
+    MathOperation.Digamma,
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Gelu,
+    MathOperation.GeluDerivative,
+    MathOperation.Lgamma,
+    MathOperation.Polygamma,
+    MathOperation.SigmoidAppx,
+    MathOperation.Tanh,
+    MathOperation.TanhDerivativeLut,
+)
+
+# (3) The kernel saturates a non-finite input to +/-1.1547668e37, which _i1_bessel's own
+# comment already records. Its golden was fixed for correctness rather than to enrol it.
+_UNARY_NOT_READY_SATURATES: Tuple[MathOperation, ...] = (MathOperation.I1,)
+
+# (4) The *golden* is the wrong party, and in a way already fixed once elsewhere. Both of these
+# route a NaN through a finite-input comparison that is false for it, landing in the zero
+# branch: Sign(NaN) reports 0 and Heaviside(NaN) reports 0.5. The kernel answers 1.0 for both,
+# which is what the SFPU's total order gives -- +NaN is the largest FP32 value -- and is the
+# same reading that let UnaryGt, UnaryGe, UnaryMin, Clamp, Hardtanh, ReluMax and Hardsigmoid
+# enrol. So these are the two most likely next enrolments, and they need a golden change first,
+# not a measurement. Kept out until then rather than enrolled against a golden known to be
+# wrong.
+#
+# Both also carry the separate, genuine SFPSETCC negative-zero divergence recorded in
+# test_eltwise_unary_sfpu -- that one is the kernel's and would survive the golden fix.
+_UNARY_NOT_READY_GOLDEN_TOTAL_ORDER: Tuple[MathOperation, ...] = (
+    MathOperation.Sign,
+    MathOperation.Heaviside,
+)
+
+# (5) Each its own question, and none of them a composition the groups above cover. Grouped
+# only by "not yet understood", which is what the reason string says.
+_UNARY_NOT_READY_UNGROUPED: Dict[MathOperation, str] = {
+    MathOperation.CastFp32ToFp16a: "cast(NaN) reaches L1 as +inf on Float32->Float32 at "
+    "dest_acc=Yes, where a NaN should survive. A cast is the one op whose whole job is the "
+    "format conversion the pack path also performs, so which of the two substituted the "
+    "infinity needs a read-back to say.",
+    MathOperation.Expm1Cw: "expm1_cw(+inf) returns NaN where the golden and IEEE give +inf. "
+    "Only on the 32-bit-dest cell; the narrower ones agree, which points at the subtraction "
+    "of 1 rather than at the exponential.",
+    MathOperation.Erfinv: "erfinv(-inf) returns -inf where the golden gives +inf, on top of "
+    "the erfinv(+/-1) saturation already recorded as a divergence in the edge sweep. The two "
+    "may be one cause; nothing establishes that yet.",
+    MathOperation.Frac: "frac(-inf) returns +inf. frac(x) = x - trunc(x) is NaN at either "
+    "infinity mathematically, and the golden says -inf, so all three disagree -- the golden "
+    "needs settling before the kernel can be judged.",
+    MathOperation.Rpow: "rpow(-inf) returns +inf where the golden gives 0. base**(-inf) is 0 "
+    "for a base above 1, so the kernel's exp(x * ln base) composition is not carrying the "
+    "sign of the exponent through.",
+    MathOperation.SqrtCustom: "sqrt_custom(+inf) returns NaN and sqrt_custom(-inf) returns "
+    "+inf -- both signs wrong in opposite directions, on the 32-bit-dest cell only. Sqrt "
+    "itself is enrolled and correct there, so this is the custom variant's own path.",
+    MathOperation.UnaryPower: "power(NaN) returns +inf on the 32-bit-dest cell. Its exponent "
+    "is a compile-time immediate, so this is the same exp(b * ln a) composition SfpuElwpow is "
+    "held out of cat B for.",
+}
+
+_UNARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {}
+_UNARY_SPECIALS_NOT_READY.update(
+    {
+        op: "composition through a reciprocal, which returns +0 for 1/NaN -- the divergence "
+        "unary Reciprocal already carries, through the same SFPARECIP. Section 5.6 Q1."
+        for op in _UNARY_NOT_READY_RECIPROCAL
+    }
+)
+_UNARY_SPECIALS_NOT_READY.update(
+    {
+        op: "a LUT or polynomial fit evaluated at a non-finite, which SFPLUTFP32 documents no "
+        "handling for, so the result is whatever the fit produces from a saturated argument. "
+        "Section 5.6 Q1."
+        for op in _UNARY_NOT_READY_LUT
+    }
+)
+_UNARY_SPECIALS_NOT_READY.update(
+    {
+        op: "the kernel saturates a non-finite input to +/-1.1547668e37 rather than "
+        "propagating it; see this op's golden comment, which records the same."
+        for op in _UNARY_NOT_READY_SATURATES
+    }
+)
+_UNARY_SPECIALS_NOT_READY.update(
+    {
+        op: "the *golden* misroutes a NaN through a finite-input comparison into its zero "
+        "branch; the kernel's answer is the SFPU total order's, in which +NaN is the largest "
+        "value. Needs a golden change, not a measurement -- see the group comment."
+        for op in _UNARY_NOT_READY_GOLDEN_TOTAL_ORDER
+    }
+)
+_UNARY_SPECIALS_NOT_READY.update(_UNARY_NOT_READY_UNGROUPED)
+
+assert not (
+    set(SPECIALS_READY_OPS) & set(_UNARY_SPECIALS_NOT_READY)
+), "an op cannot be both enrolled in cat B and recorded as not ready for it"
 
 
 def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
@@ -2728,6 +2876,14 @@ _BINARY_SPECIALS_NOT_READY: Dict[MathOperation, str] = {
     MathOperation.SfpuLogsigmoid: "operand B is derived (in1 == exp(-in0)), and cat B here is "
     "a product of two independently-chosen lists, so a special in B is not a stimulus the "
     "kernel has a contract about. Needs a probe that derives B from A.",
+    # (5) Not element-wise, so the sweep's whole shape does not fit it. add_top_row reduces one
+    # tile's first row across the other operand, and BinarySFPUGolden returns for it *before*
+    # the Dest and pack modelling -- it raises rather than reporting a generated-NaN mask. A
+    # cat-B probe would be compared against a golden that models neither step, which is the
+    # defect the binary suite's own "0/0 returns inf" retraction was about.
+    MathOperation.SfpuAddTopRow: "not element-wise: the golden returns before the Dest and "
+    "pack modelling and cannot report a generated-NaN mask, so a non-finite would be judged "
+    "against a reference that models neither step.",
 }
 
 assert not (
@@ -3275,6 +3431,10 @@ _CAT_B_INTEGER_ONLY = (
     "integer-only op: no IEEE specials to inject, so format_specials() returns the integer "
     "extremes instead and the question is cat C's"
 )
+_CAT_C_OUT_OF_RANGE = (
+    "the kernel is documented invalid at the format extremes and measured wrong there; see "
+    "_INT_EXTREMES_OUT_OF_RANGE in the binary suite for the bound and the values"
+)
 _CAT_F_INTEGER_ONLY = (
     "integer-only op: no subnormal band and no float ceiling, so format_extremes() raises "
     "for its formats by design"
@@ -3301,6 +3461,10 @@ class SuiteCoverage:
     integer_extremes: FrozenSet[MathOperation] = frozenset()
     #: Ops driven on an integer format at all. Outside this, cat C does not apply.
     integer_driven: FrozenSet[MathOperation] = frozenset()
+    #: Ops driven on an integer format whose kernel is documented invalid at the extremes, so
+    #: cat C is excluded by decision rather than unrecorded. The per-op reason lives in the
+    #: suite's own table; only membership is needed here.
+    integer_extremes_excluded: FrozenSet[MathOperation] = frozenset()
     #: Ops driven on a float format at all. The complement of this within *integer_driven* is
     #: the integer-only set, for which cat B and cat F do not apply -- an integer op has no
     #: IEEE specials to be given and no subnormal band to probe. Derived by subtraction rather
@@ -3347,6 +3511,7 @@ _CAT_B_READY: Dict[MathOperation, str] = {
 }
 
 _CAT_B_NOT_READY: Dict[MathOperation, str] = {
+    **_UNARY_SPECIALS_NOT_READY,
     **_BINARY_SPECIALS_NOT_READY,
     **_TERNARY_SPECIALS_NOT_READY,
 }
@@ -3408,6 +3573,8 @@ def coverage_ledger(
 
         if op in suite.integer_extremes:
             cells[EdgeClass.C] = COVERED
+        elif op in suite.integer_extremes_excluded:
+            cells[EdgeClass.C] = _CAT_C_OUT_OF_RANGE
         elif op in suite.integer_driven:
             cells[EdgeClass.C] = UNRECORDED
         else:
@@ -3501,9 +3668,15 @@ def suite_coverage_from_tests() -> SuiteCoverage:
     return SuiteCoverage(
         # The shift ops belong here: _SHIFT_EDGE_VALUES contains INT32_MAX, and INT32_MIN with
         # its own filter and xfail, so the shift edge sweeps do drive the integer extremes.
+        # _UINT32_BINARY_OPS: the uint32 high-range sweep drives 0, 1 and 2**32 - 1, which is
+        # exactly integer_specials(UInt32). It reaches the extremes by a different route than
+        # _INT_EXTREME_OPS and the ledger has to count both or it under-reports the class --
+        # the same omission W13 fixed for the shift ops.
         integer_extremes=frozenset(binary._INT_EXTREME_OPS)
         | frozenset(binary._SHIFT_EDGE_OPS)
+        | frozenset(binary._UINT32_BINARY_OPS)
         | frozenset(unary._INT_UNARY_OPS),
+        integer_extremes_excluded=frozenset(binary._INT_EXTREMES_OUT_OF_RANGE),
         integer_driven=frozenset(binary._INT_DRIVEN_BINARY_OPS)
         | frozenset(binary._INT_BINARY_STIMULI)
         | frozenset(unary._INT_UNARY_OPS),

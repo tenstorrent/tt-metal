@@ -480,13 +480,17 @@ def test_every_float_binary_op_is_classified_for_cat_b():
     import test_eltwise_binary_sfpu
     from helpers.sfpu_domains import (
         _BINARY_SPECIALS_NOT_READY,
+        _SFPU_BINARY_OPS,
         BINARY_SPECIALS_READY_OPS,
     )
 
+    # _SFPU_BINARY_OPS as well as the ops reaching sfpu_binary(): SfpuAddTopRow is a registered
+    # float binary op that the shared driver does not carry, so it was escaping this check by
+    # being in neither set. The int-driven ops still come out -- an integer op has no IEEE
+    # specials to have a verdict about.
     candidates = (
-        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS
-        - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
-    )
+        test_eltwise_binary_sfpu._CLASSIFIED_STIMULI_OPS | _SFPU_BINARY_OPS
+    ) - test_eltwise_binary_sfpu._INT_DRIVEN_BINARY_OPS
     classified = set(BINARY_SPECIALS_READY_OPS) | set(_BINARY_SPECIALS_NOT_READY)
     unclassified = sorted(op.name for op in candidates - classified)
     assert not unclassified, (
@@ -500,6 +504,39 @@ def test_every_float_binary_op_is_classified_for_cat_b():
     ), f"these ops carry a cat-B verdict but no longer reach the binary driver: {stale}"
 
     for op, reason in BINARY_SPECIALS_READY_OPS.items():
+        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_every_unary_op_is_classified_for_cat_b():
+    """Enrolled or recorded-as-not-ready, for every unary op the sweep drives.
+
+    The unary family had only the first half of this partition for as long as cat B has
+    existed: 67 ops enrolled, 28 outside it, and nothing saying whether that was a decision or
+    an omission. The binary and ternary families have had the check since they were written --
+    this is the same one, and it is what stops a newly registered unary op quietly defaulting
+    to "no specials" while looking, to a reader, as though it had been considered.
+    """
+    from helpers.sfpu_domains import (
+        _UNARY_OPS_NOT_SWEPT,
+        _UNARY_SPECIALS_NOT_READY,
+        SPECIALS_READY_OPS,
+        sfpu_unary_ops,
+    )
+
+    candidates = sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT)
+    classified = set(SPECIALS_READY_OPS) | set(_UNARY_SPECIALS_NOT_READY)
+    unclassified = sorted(op.name for op in candidates - classified)
+    assert not unclassified, (
+        "these unary ops are swept but appear in neither SPECIALS_READY_OPS nor "
+        "_UNARY_SPECIALS_NOT_READY, so nothing records whether cat B is off for them by "
+        f"decision or by omission: {unclassified}"
+    )
+    stale = sorted(op.name for op in set(_UNARY_SPECIALS_NOT_READY) - candidates)
+    assert (
+        not stale
+    ), f"these ops carry a not-ready verdict but are no longer swept: {stale}"
+
+    for op, reason in _UNARY_SPECIALS_NOT_READY.items():
         assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
 
 
@@ -739,8 +776,8 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
 # in the table so that the day something does, the floor is the thing that gets raised.
 _COVERAGE_FLOORS = {
     "A": 20,
-    "B": 76,
-    "C": 8,
+    "B": 79,
+    "C": 20,
     "D": 45,
     "E": 5,
     "F": 23,
@@ -919,6 +956,7 @@ def test_suite_coverage_is_resolved_from_the_suites():
         "integer_extremes",
         "integer_driven",
         "operand_parameters",
+        "integer_extremes_excluded",
         "saturation",
         "float_driven",
         "extra_ops",
@@ -966,6 +1004,54 @@ def test_every_int_binary_op_drives_zero_or_records_why_not():
             assert (
                 len(binary._INT_ZERO_UNDEFINED_DIVISOR[op]) > 20
             ), f"{op.name}'s zero-divisor exclusion reason is too short to be a claim"
+
+
+def test_every_int_binary_op_is_driven_at_the_extremes_or_recorded():
+    """Cat C totality: driven at the integer extremes, or the exclusion is written down.
+
+    The same shape as the zero-operand check above, and it exists for the same reason: reading
+    _INT_BINARY_STIMULI's sub-range comments as "cannot be driven at an extreme" is how twelve
+    of these thirteen ops came to look excluded when measurement showed them fine. Those ranges
+    are accuracy bounds for the random sweep; whether an extreme *value* round-trips is a
+    different question, and this is what makes the suite answer it per op.
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    driven = set(binary._INT_EXTREME_OPS) | set(binary._UINT32_BINARY_OPS)
+    for op in binary._INT_BINARY_STIMULI:
+        excluded = op in binary._INT_EXTREMES_OUT_OF_RANGE
+        assert (op in driven) != excluded, (
+            f"{op.name}: an int binary op must be either driven at the extremes or recorded "
+            "in _INT_EXTREMES_OUT_OF_RANGE with a reason — not both, and not neither"
+        )
+        if excluded:
+            assert (
+                len(binary._INT_EXTREMES_OUT_OF_RANGE[op]) > 20
+            ), f"{op.name}'s out-of-range reason is too short to be a claim"
+    stale = sorted(
+        op.name
+        for op in set(binary._INT_EXTREMES_OUT_OF_RANGE)
+        - set(binary._INT_BINARY_STIMULI)
+    )
+    assert (
+        not stale
+    ), f"these ops carry an out-of-range verdict but are not swept: {stale}"
+
+
+def test_uint32_probe_reaches_the_actual_ceiling():
+    """The uint32 sweep must drive integer_specials(UInt32), not merely approach it.
+
+    It stopped at 2**32 - 2 for a while -- one value short -- so those ops were driven near the
+    top of the range and never at it. All bits set is the pattern a sign-magnitude Dst is most
+    likely to misread, so it is the one value in the list worth being exact about, and the
+    ledger counts these ops for cat C on the strength of it.
+    """
+    import test_eltwise_binary_sfpu as binary
+    from helpers.sfpu_domains import integer_specials
+
+    driven = {v for pair in binary._UINT32_HIGH_PAIRS for v in pair}
+    missing = sorted(set(integer_specials(DataFormat.UInt32)) - driven)
+    assert not missing, f"the uint32 sweep never drives {missing}"
 
 
 def test_signed_division_probe_separates_trunc_from_floor():

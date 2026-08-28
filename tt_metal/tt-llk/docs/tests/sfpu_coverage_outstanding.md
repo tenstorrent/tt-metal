@@ -12,7 +12,7 @@ have listed: that plan was written by reading code, and several of the items bel
 no amount of reading would have found.
 
 Numbering continues the plan's series, so the two files share one namespace and a reference to
-"W14" is unambiguous. W1–W8, W10, W11 and W13 are closed.
+"W15" is unambiguous. W1–W8 and W10–W14 are closed.
 
 **Regenerate the numbers before trusting them:**
 
@@ -28,17 +28,16 @@ Every count in this document came from that command. It needs no hardware.
 
 | # | Gap | Effort | Value | Blocked by |
 |---|---|---|---|---|
-| [W12](#w12--the-unary-family-has-no-cat-b-verdict-table) | 29 float ops have no cat-B verdict: not enrolled, no reason recorded | M | High | — |
-| [W14](#w14--integer-extremes-record-the-exclusions) | 13 int ops are not driven at the format extremes and nothing says why | S | Medium | — |
-| [W15](#w15--eighteen-float-ops-have-no-deliberate-edge-value-at-all) | 18 float ops are driven only by the random sweep | M | Medium | W12 settles most of it |
+| [W15](#w15--eighteen-float-ops-have-no-deliberate-edge-value-at-all) | 18 float ops are driven only by the random sweep | M | Medium | — |
 | [W16](#w16--sfpulogsigmoid-needs-a-derived-operand-probe-to-join-cat-b) | `SfpuLogsigmoid` cannot join cat B through a product of independent lists | M | Low | — |
 | [W17](#w17--the-bfp8_b-lattice-path-still-has-no-caller) | `_bfp_block_aware_compare` is never reached on a Bfp8_b output | S | Low | — |
 | [W18](#w18--cat-fs-remaining-tranches) | 85 float ops are outside `EXTREMES_READY_OPS` | L | Low | — |
 | [W9](sfpu_edge_coverage_plan.md#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | M | Medium | needs a kernel-contract ruling |
 
-Suggested order: **W12 → W14** (each small or already understood), then
-**W15 → W16 → W17**, then **W18** and **W9** last — W18 for diminishing returns, W9 because it
-cannot start until someone rules on what the trig kernels promise.
+Suggested order: **W15 → W16 → W17**, then **W18** and **W9** last — W18 for diminishing
+returns, W9 because it cannot start until someone rules on what the trig kernels promise.
+
+Six of the seven classes now have nothing unrecorded. Cat F is the exception, and it is W18.
 
 ---
 
@@ -46,8 +45,8 @@ cannot start until someone rules on what the trig kernels promise.
 
 ```
 A singularities          covered  20  n/a 109  unrecorded   0
-B ieee_specials          covered  76  n/a  24  unrecorded  29
-C integer_extremes       covered   8  n/a 108  unrecorded  13
+B ieee_specials          covered  79  n/a  50  unrecorded   0
+C integer_extremes       covered  20  n/a 109  unrecorded   0
 D knees                  covered  45  n/a  84  unrecorded   0
 E operand_parameters     covered   5  n/a 124  unrecorded   0
 F magnitude_extremes     covered  23  n/a  21  unrecorded  85
@@ -57,109 +56,6 @@ G signed_zero_at_a_pole  covered  14  n/a 115  unrecorded   0
 `unrecorded` is a distinct state from `n/a` on purpose: it means nothing records whether the
 class applies, which is a different problem from a class that does not apply. Most of the work
 below is turning `unrecorded` into one or the other.
-
----
-
-## W12 — The unary family has no cat-B verdict table
-
-### Problem
-
-The binary and ternary families each partition their ops across a `*_SPECIALS_READY_OPS` and a
-`_*_SPECIALS_NOT_READY` dict, and `test_sfpu_domains` asserts the partition is total — so an op
-outside cat B has a *recorded reason* for being outside it. The unary family has only the first
-half. `SPECIALS_READY_OPS` holds 67 unary ops; the other 28, plus `SfpuAddTopRow`, are outside
-cat B with nothing saying whether that is a decision or an omission:
-
-```
-CastFp32ToFp16a, Digamma, Erf, Erfc, Erfinv, Expm1Cw, Frac, Gelu, GeluDerivative,
-Heaviside, I1, Lgamma, Log, LogWithBase, Polygamma, Rdiv, ReciprocalCompat, ReluMin,
-Rpow, RsqrtCompat, SfpuAddTopRow, Sigmoid, SigmoidAppx, Sign, SqrtCustom, Tanh,
-TanhDerivative, TanhDerivativeLut, UnaryPower
-```
-
-Some of those reasons are already known and written down — just as prose in a section comment
-rather than in a table anything can read:
-
-- **`Log`** — the section comment above `_dest_acc_flag` records it: the kernel clamps a
-  non-finite input to the format maximum and takes the log of that, so `log(+inf)` comes back
-  as 88.5 rather than `+inf`. Written up as "*kernel* behaviour with no ISA ruling", needing an
-  owner.
-- **`Sign` and `Heaviside`** — `_BINARY_SPECIALS_NOT_READY`'s `SfpuMask` entry names them:
-  compare-against-zero on an operand that may be a NaN, through `SFPSETCC`, whose contract is
-  conditioned "provided that VC is neither negative zero nor any kind of NaN".
-
-That is three of the 29 already answered and unrecorded, which is the shape of the whole item.
-
-### Steps
-
-1. **Add `_UNARY_SPECIALS_NOT_READY: Dict[MathOperation, str]`** next to `SPECIALS_READY_OPS`,
-   with the same "an op cannot be in both" assertion the other two families carry.
-
-2. **Seed it from what is already known**, moving the prose above into entries: `Log`,
-   `Sign`, `Heaviside`. Do not paraphrase — the existing wording is the measured result.
-
-3. **Make the partition total, and let the test enforce it.** Extend
-   `test_every_float_binary_op_is_classified_for_cat_b`'s pattern to the unary family, so a
-   newly registered unary op fails at collection until someone decides.
-
-4. **Measure the rest in one tranche, as the third unary tranche was measured.** Drive the
-   remaining ~26 over the full specials set on every Blackhole-reachable triple, enrol the ones
-   that agree, and record a reason for the ones that do not. Convention 3 applies: a reason
-   string written to make a variant green becomes a permanent claim about the hardware.
-
-### Expect
-
-Several to be one cause, not many. `Sigmoid` / `SigmoidAppx` / `Tanh` / `TanhDerivative` /
-`TanhDerivativeLut` are LUT compositions and `SFPLUTFP32` documents no NaN/inf handling — the
-same section 5.6 Q1 question that holds six binary ops and two ternary operands out. The gamma
-family is already excluded at its poles for a domain reason that likely extends to cat B.
-
-### Pin it
-
-The totality test in step 3 is the pin. It is what converts "nobody got to it" into "here is
-why not", and it is why this item is worth more than the 29 cells suggest.
-
-**Cost:** one dict, one test, one measurement tranche.
-
----
-
-## W14 — Integer extremes: record the exclusions
-
-### Problem
-
-Thirteen ops are unrecorded for cat C:
-
-```
-SfpuDivInt32, SfpuDivInt32Floor, SfpuFmodInt32, SfpuGcd, SfpuLcm, SfpuMaxInt32,
-SfpuMaxUint32, SfpuMinInt32, SfpuMinUint32, SfpuMulInt32, SfpuRemainderInt32,
-SfpuRemainderUint32, SfpuRsubInt32
-```
-
-Almost every one of them has a *documented sub-range* in `_INT_BINARY_STIMULI`'s comments that
-the format extremes fall outside of — div and fmod below `2**24` for an exact int→fp32
-reciprocal, lcm assuming `|a|, |b| < 2**15`, mul below ~46340 so the product stays under
-`2**31`, max/min non-negative so signed and unsigned agree. Driving those at `INT32_MAX` would
-produce failures that are documented limitations rather than findings, which is the trap
-`test_eltwise_binary_sfpu_int_extremes`' own scope comment warns about.
-
-So this is not a stimulus gap. It is that nothing records the exclusion, so a reader cannot tell
-it from an omission — the same problem W3 solved for the zero divisor.
-
-### Steps
-
-1. **Add `_INT_EXTREMES_OUT_OF_RANGE: Dict[MathOperation, str]`** in the binary suite, next to
-   `_INT_ZERO_UNDEFINED_DIVISOR` and in the same shape, with the sub-range each op documents.
-   Take the reasons from `_INT_BINARY_STIMULI`'s existing comments rather than restating them.
-
-2. **Check `SfpuRsubInt32` separately.** It is the one op in the list with no documented
-   sub-range — `out = in1 - in0` is exact integer subtraction — so it may be a genuine cat-C
-   candidate rather than an exclusion. Measure before deciding, and note the subtraction can
-   overflow int32, which is its own question.
-
-3. **Assert totality**, as W3's zero probe does: every op in `_INT_BINARY_STIMULI` is either
-   driven at the extremes or has an entry here.
-
-**Cost:** one table, one test, one measurement for rsub.
 
 ---
 
@@ -181,8 +77,10 @@ over a registered domain and by nothing else — no pole, no knee, no special, n
 
 ### Steps
 
-1. **Do W12 first.** It settles cat B for every op on this list, which is the cheapest class to
-   give them and may be all several of them need.
+1. **Read their cat-B verdicts first.** Every op on this list now has one in
+   `_UNARY_SPECIALS_NOT_READY`, and for most of them it is "a LUT or polynomial fit evaluated
+   at a non-finite" — a cause, not an omission. That is the class they are least likely to
+   gain, so start from what is left rather than from cat B.
 
 2. **Then ask, per op, whether it has a knee worth registering.** `Erf` and `Erfc` saturate;
    `Sigmoid` and `Tanh` saturate at both ends; `GeluDerivative` and `TanhDerivative` have a
