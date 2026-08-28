@@ -106,6 +106,21 @@ class TtCohereLayerNorm(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape)),
             )
 
+            # Full-width TILE gamma for the decode-mode plain layernorm: the
+            # RMSNorm-style [1,1,dim/32,32] ROW_MAJOR weight selects a program
+            # that over-allocates L1 at dim 8192 (TT_THROW program.cpp:1722,
+            # 3.36 MB CB on core [0-0] — observed on-box 2026-08-28); the
+            # TILE [1,1,1,dim] layout is probe-verified to fit.
+            self.weight_fullwidth = ttnn.as_tensor(
+                state_dict[weight_name].reshape(1, 1, 1, dim),
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=None if weight_cache_path is None else weight_cache_path / (weight_name + "_fullwidth"),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+            )
+
         # Arch-aware compute config — a hardcoded WormholeComputeKernelConfig
         # fatals at DECODE shapes on Blackhole (std::get: wrong index for
         # variant in layer_norm_pre_all_gather, observed on-box 2026-08-28);
@@ -196,7 +211,7 @@ class TtCohereLayerNorm(LightweightModule):
         return ttnn.layer_norm(
             x,
             epsilon=self.eps,
-            weight=self.weight,
+            weight=self.weight_fullwidth,
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 
