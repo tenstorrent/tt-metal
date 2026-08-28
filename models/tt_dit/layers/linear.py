@@ -363,8 +363,8 @@ class ColParallelLinear(Module):
 
         `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
         `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
-        per-TP-device output slice. Only the all-gather-matmul path supports it, so it requires
-        `parallel_config`; callers on the unfused path should apply the addcmul themselves.
+        per-TP-device output slice and require `parallel_config`. The Ring path fuses them into
+        the all-gather-matmul; other paths route through the addcmul-fused minimal matmul.
         """
         if addcmul_a is not None or addcmul_b is not None:
             if (addcmul_a is None) != (addcmul_b is None):
@@ -491,17 +491,41 @@ class ColParallelLinear(Module):
                     fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
-            output = ttnn.experimental.minimal_matmul(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=self.bias.data if self.bias is not None else None,
-                config=matmul_config,
-                fused_activation=self.fused_activation_fn,
-                compute_kernel_config=compute_kernel_config or self.compute_config,
-                dtype=dtype,
-                fuse_swiglu=self.fuse_swiglu,
-            )
+            if addcmul_a is not None:
+                # This branch used to accept addcmul_a/addcmul_b and silently drop them:
+                # only the Ring all-gather-matmul above fused them, so on Linear topology
+                # the gated residual promised by the docstring was never added (flux2's
+                # double blocks lost their attention residual this way). Route through the
+                # addcmul-fused minimal matmul instead. That op has no fused-activation
+                # support, so reject the combination rather than compute the wrong thing.
+                if self.fused_activation_fn is not None or self.fuse_swiglu:
+                    msg = "fused addcmul is not supported alongside a fused activation on the minimal_matmul path"
+                    raise ValueError(msg)
+                # x may have been gathered above, so size the config from its current K.
+                matmul_config = get_matmul_config(M, x.padded_shape[-1], N, core_grid, default_block_size)
+                output = ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    x,
+                    weight,
+                    addcmul_scalar,
+                    addcmul_a,
+                    addcmul_b,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                )
+            else:
+                matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+                output = ttnn.experimental.minimal_matmul(
+                    input_tensor=x,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=matmul_config,
+                    fused_activation=self.fused_activation_fn,
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
+                )
 
         return _apply_activation_fn(output, self.activation_fn)
 

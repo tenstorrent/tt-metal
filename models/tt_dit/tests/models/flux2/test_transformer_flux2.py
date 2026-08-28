@@ -46,11 +46,15 @@ class ModelLocationGenerator(Protocol):
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
     [
+        # 2x2 is the only geometry a 4-chip box can run: the attention path requires both
+        # sequence and tensor parallel factors > 1.
+        [(2, 2), 0, 1, ttnn.Topology.Linear, 2, line_params_flux2_transformer],
         [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
     ],
     ids=[
+        "bh_2x2_linear",
         "1x8_linear",
         "wh_2x4_linear",
         "bh_4x8_ring",

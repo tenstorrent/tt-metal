@@ -134,6 +134,10 @@ class TransformerBlock(Module):
             q_chunk_size=attention_q_chunk_size,
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
+            # QK-RMSNorm reduces over each head's head_dim independently, not over the whole
+            # row: the reference unflattens to heads before norm_q/norm_k. Defaulting this to
+            # False normalized across all heads and cost ~2.5% PCC on Q/K.
+            per_head_norm=True,
         )
 
         self.norm2 = DistributedLayerNorm(
