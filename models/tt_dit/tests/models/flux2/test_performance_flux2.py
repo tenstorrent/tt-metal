@@ -60,6 +60,9 @@ _STEP_TO_METRIC = {
 }
 
 
+# pytest.ini sets a 300s default. Three timed runs of a 50-step denoise, plus first-call
+# weight conversion, exceed that on a 4-chip box even with warm caches.
+@pytest.mark.timeout(6000)
 @pytest.mark.parametrize(
     "width, height",
     [
@@ -78,7 +81,10 @@ _STEP_TO_METRIC = {
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, num_links, is_fsdp, dynamic_load, device_params",
     [
-        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, False, line_params_flux2_perf],
+        # dynamic_load is mandatory on 4 chips: the 32B transformer, the 24B encoder and the
+        # VAE cannot be co-resident, and without it the encoder OOMs partway through its
+        # weight conversion with DRAM already ~99% full.
+        [(2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, line_params_flux2_perf],
         [(2, 4), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_flux2_perf],
         [(4, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 2, False, False, line_params_8k_flux2_perf],
         [(4, 8), 0, 1, 1, 0, ttnn.Topology.Ring, 2, False, False, ring_params_8k_flux2_perf],
