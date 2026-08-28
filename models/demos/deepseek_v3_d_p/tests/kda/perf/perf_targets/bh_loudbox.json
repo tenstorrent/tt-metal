@@ -19,14 +19,20 @@
   "targets": {
     "SP1xTP8": {
       "reference_ms": 9.664,
+      "session_medians_ms": [9.663542, 9.660243, 9.667747, 9.664054, 9.673352],
+      "observed_range_pct": 0.136,
       "max_regression_pct": 1.0
     },
     "SP2xTP4": {
       "reference_ms": 9.602,
+      "session_medians_ms": [9.598364, 9.600928, 9.605699, 9.602122, 9.606675],
+      "observed_range_pct": 0.087,
       "max_regression_pct": 1.0
     },
     "SP4xTP2": {
       "reference_ms": 10.052,
+      "session_medians_ms": [10.059154, 10.059892, 10.051832, 10.047432, 10.048872],
+      "observed_range_pct": 0.124,
       "max_regression_pct": 1.0
     }
   }
