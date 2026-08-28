@@ -10,6 +10,7 @@ import json
 import os
 import statistics
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -159,11 +160,19 @@ def _load_or_compute_cpu_reference(case: KimiK3TestCase) -> tuple[torch.Tensor, 
 @pytest.fixture(scope="session")
 def kimi_k3_production_reference(
     kimi_k3_checkpoint_dir: Path,
-) -> tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]:
-    """Compute the independent production-length CPU oracle once per test session."""
-    case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
-    golden_output, golden_state, elapsed = _load_or_compute_cpu_reference(case)
-    return case, golden_output, golden_state, elapsed
+) -> Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]]:
+    """Return a lazy loader for the session-cached production-length CPU oracle."""
+    cached_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float] | None = None
+
+    def load() -> tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]:
+        nonlocal cached_reference
+        if cached_reference is None:
+            case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
+            golden_output, golden_state, elapsed = _load_or_compute_cpu_reference(case)
+            cached_reference = case, golden_output, golden_state, elapsed
+        return cached_reference
+
+    return load
 
 
 def _load_perf_target(layout: str, *, sequence: int, repetitions: int, timing_samples: int) -> tuple[float, float]:
@@ -250,12 +259,21 @@ def _trace_wall_samples_ms(
 def test_kimi_k3_layer_1_perf(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
-    kimi_k3_production_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float],
+    kimi_k3_production_reference: Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]],
 ) -> None:
     """Compare production geometry with an independent CPU oracle before timing it."""
     sequence = _SEQUENCE
-    case, golden_output, golden_state, cpu_reference_seconds = kimi_k3_production_reference
     sequence_parallel_axis = 1 - tensor_parallel_axis
+    mesh_shape = tuple(mesh_device.shape)
+    layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
+    repetitions = _REPETITIONS
+    reference_ms, max_regression_pct = _load_perf_target(
+        layout,
+        sequence=sequence,
+        repetitions=repetitions,
+        timing_samples=_TIMING_SAMPLES,
+    )
+    case, golden_output, golden_state, cpu_reference_seconds = kimi_k3_production_reference()
     layer, hidden_tt = make_kimi_k3_device_case(
         mesh_device,
         case,
@@ -268,8 +286,6 @@ def test_kimi_k3_layer_1_perf(
         output, state = layer.forward(hidden_tt, initial_state)
     ttnn.synchronize_device(mesh_device)
     device_forward_ms = (time.perf_counter() - start) * 1e3
-    mesh_shape = tuple(mesh_device.shape)
-    layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
     try:
         pcc = check_kimi_k3_accuracy(
             f"Kimi-K3 layer 1 T={sequence} {layout}",
@@ -287,7 +303,6 @@ def test_kimi_k3_layer_1_perf(
     _deallocate_state(initial_state)
     _deallocate_state(state)
 
-    repetitions = _REPETITIONS
     samples_ms, trace_pcc = _trace_wall_samples_ms(
         mesh_device,
         layer,
@@ -302,12 +317,6 @@ def test_kimi_k3_layer_1_perf(
     first_wall_ms = samples_ms[0]
     median_wall_ms = statistics.median(samples_ms)
     tail_wall_ms = max(samples_ms)
-    reference_ms, max_regression_pct = _load_perf_target(
-        layout,
-        sequence=sequence,
-        repetitions=repetitions,
-        timing_samples=_TIMING_SAMPLES,
-    )
     max_wall_ms = reference_ms * (1.0 + max_regression_pct / 100.0)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
