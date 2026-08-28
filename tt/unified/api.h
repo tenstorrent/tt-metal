@@ -938,6 +938,19 @@ struct NocAsyncMcastTx {
     uint32_t cb_id;
     static constexpr uint32_t num_pages = S::num_pages;
 
+    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
+    //
+    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
+    // barrier on the wrong one returns immediately -- the push then publishes pages that have
+    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
+    // than be re-derived at the barrier, which is why this member exists before anything can
+    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
+    //
+    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
+    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
+    // reconstituted where it is used, inside data-movement-guarded code.
+    uint8_t noc_id = noc_index;
+
     // Carried for the step that moves the flag wait here. Unused today.
     mutable Semaphore<thread> data_sent;
     bool sender;
@@ -971,6 +984,19 @@ struct NocAsyncReadTx {
     uint32_t cb_id;
     static constexpr uint32_t num_pages = S::num_pages;
 
+    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
+    //
+    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
+    // barrier on the wrong one returns immediately -- the push then publishes pages that have
+    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
+    // than be re-derived at the barrier, which is why this member exists before anything can
+    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
+    //
+    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
+    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
+    // reconstituted where it is used, inside data-movement-guarded code.
+    uint8_t noc_id = noc_index;
+
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
 #endif
@@ -996,6 +1022,19 @@ struct NocAsyncWriteTx {
 
     uint32_t cb_id;
     static constexpr uint32_t num_pages = S::num_pages;
+
+    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
+    //
+    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
+    // barrier on the wrong one returns immediately -- the push then publishes pages that have
+    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
+    // than be re-derived at the barrier, which is why this member exists before anything can
+    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
+    //
+    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
+    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
+    // reconstituted where it is used, inside data-movement-guarded code.
+    uint8_t noc_id = noc_index;
 };
 
 // A core-to-core copy has both halves: a local source Block to release and a
@@ -1037,6 +1076,19 @@ struct NocAsyncReadCoreTx {
     static constexpr uint32_t dst_pages = D::num_pages;
     uint32_t src_cb;
     static constexpr uint32_t src_pages = S::num_pages;
+
+    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
+    //
+    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
+    // barrier on the wrong one returns immediately -- the push then publishes pages that have
+    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
+    // than be re-derived at the barrier, which is why this member exists before anything can
+    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
+    //
+    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
+    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
+    // reconstituted where it is used, inside data-movement-guarded code.
+    uint8_t noc_id = noc_index;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -1090,6 +1142,19 @@ struct NocAsyncWriteCoreTx {
     static constexpr uint32_t dst_pages = D::num_pages;
     uint32_t src_cb;
     static constexpr uint32_t src_pages = S::num_pages;
+
+    // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
+    //
+    // Not decoration. noc_async_read_barrier and noc_async_writes_flushed are per-NOC, and a
+    // barrier on the wrong one returns immediately -- the push then publishes pages that have
+    // not landed, with no hang and no assert. So the NOC has to travel with the handle rather
+    // than be re-derived at the barrier, which is why this member exists before anything can
+    // request a NOC other than the thread's own. See unified_explicit_noc_spec.md, step 1.
+    //
+    // Stored as the INDEX rather than as a Noc: the handle types exist on every projection and
+    // Noc is declared only off-TRISC, so a Noc member would not compile on compute. It is
+    // reconstituted where it is used, inside data-movement-guarded code.
+    uint8_t noc_id = noc_index;
 
     // mutable: wait() is const across the whole API, and signalling is what a
     // wait on this handle does.

@@ -543,7 +543,7 @@ template <int thread, typename S>
 Block<S> NocAsyncReadTx<thread, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        noc_async_read_barrier();
+        Noc(noc_id).async_read_barrier();
         buffer(cb_id).push_back(num_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -578,7 +578,7 @@ Block<S> NocAsyncMcastTx<thread, S>::wait() const {
         // Byte for byte NocAsyncReadTx::wait(). The receiver's data_sent wait is still
         // inside noc_load; moving it here is the next step and a behaviour change, so it
         // is not smuggled into this one. `data_sent` and `sender` are carried for it.
-        noc_async_read_barrier();
+        Noc(noc_id).async_read_barrier();
         buffer(cb_id).push_back(num_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -602,7 +602,7 @@ NocAsyncWriteTx<thread, S>::~NocAsyncWriteTx() {
     if constexpr (thread == TT_DM_THREAD_ID) {
         // Writes have DEPARTED local L1 -- the release condition for the source
         // buffer. Not the same as having landed; see wait().
-        noc_async_writes_flushed();
+        Noc(noc_id).async_writes_flushed();
         buffer(cb_id).pop_front(num_pages);
     }
 #endif
@@ -612,7 +612,7 @@ template <int thread, typename S>
 void NocAsyncWriteTx<thread, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        noc_async_write_barrier();  // LANDED at the destination
+        Noc(noc_id).async_write_barrier();  // LANDED at the destination
     }
 #endif
 }
@@ -640,7 +640,7 @@ template <int thread, typename D, typename S>
 Block<D> NocAsyncReadCoreTx<thread, D, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        noc_async_read_barrier();  // landed HERE, which is all a pull needs
+        Noc(noc_id).async_read_barrier();  // landed HERE, which is all a pull needs
         buffer(dst_cb).push_back(dst_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -666,12 +666,12 @@ template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S>::~NocAsyncWriteCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        noc_async_writes_flushed();
+        Noc(noc_id).async_writes_flushed();
         // The arrival flag is an ATOMIC, and a write flush does not cover atomics.
         // Leaving one outstanding is an inter-kernel data race: the ack lands after
         // this kernel has finished, against whatever runs next. The watcher calls
         // it "kernel completing with pending NOC transactions".
-        noc_async_atomic_barrier();
+        Noc(noc_id).async_atomic_barrier();
         buffer(src_cb).pop_front(src_pages);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -859,7 +859,7 @@ NocAsyncMcastTx<thread, S> noc_load(
             // skipping a handshake with no counterpart and a multicast to zero
             // destinations.
             if (num_dests == 0) {
-                noc_async_read_barrier();
+                Noc().async_read_barrier();
                 return;
             }
 
@@ -878,7 +878,7 @@ NocAsyncMcastTx<thread, S> noc_load(
 
             {
                 TT_U_ZONE("MCAST-DRAM");   // the reads issued by fn actually landing
-                noc_async_read_barrier();  // payload is in our L1 before we forward it
+                Noc().async_read_barrier();  // payload is in our L1 before we forward it
             }
 
             {
@@ -892,7 +892,7 @@ NocAsyncMcastTx<thread, S> noc_load(
                 // reorder, and it pays nothing. Ours cannot simply drop it -- removing both
                 // flushes deadlocks the device -- because of the set(0) below, not because of
                 // ordering. See there.
-                noc_async_writes_flushed();
+                Noc().async_writes_flushed();
 
                 data_sent.set(1);
                 data_sent.set_mcast(mcast);
@@ -914,7 +914,7 @@ NocAsyncMcastTx<thread, S> noc_load(
                 // reset in the same breath -- an incrementing counter the receiver compares
                 // against a block number, say -- needs no set(0) and so no flush to protect it.
                 // ttnn gets there by never rewriting the word it just multicast.
-                noc_async_writes_flushed();
+                Noc().async_writes_flushed();
                 data_sent.set(0);
             }
         } else {
@@ -1086,14 +1086,14 @@ void synchronize_cores(PhysicalMcast region) {
 
             release.set(1);
             release.set_mcast(region);
-            noc_async_writes_flushed();
+            Noc().async_writes_flushed();
             release.set(0);  // leave the pair as we found it
         } else {
             arrived.inc_remote(region.start);
             // Same reason as in NocAsyncWriteCoreTx's destructor: an arrival is an
             // atomic, and nothing else here drains it. Parking on `release` does
             // not -- that spins on local L1.
-            noc_async_atomic_barrier();
+            Noc().async_atomic_barrier();
             release.wait(1);
             release.set(0);
         }
