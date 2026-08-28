@@ -81,6 +81,8 @@ inline AllGatherMuxConnection<NumBuffers> all_gather_parse_mux_connection(uint32
 
 template <uint32_t NumBuffers>
 inline void all_gather_open_mux_connections(AllGatherMuxConnection<NumBuffers>* connections) {
+    // Build both directions before starting either handshake. Interior devices
+    // can then overlap the two mux-channel opens instead of serializing them.
     for (uint32_t dir = 0; dir < 2; ++dir) {
         auto& c = connections[dir];
         if (!c.valid) {
@@ -102,7 +104,16 @@ inline void all_gather_open_mux_connections(AllGatherMuxConnection<NumBuffers>* 
             c.local_buffer_index);
         tt::tt_fabric::wait_for_fabric_endpoint_ready(
             c.mux_x, c.mux_y, get_named_compile_time_arg_val("ag_mux_status"), c.mux_status);
-        tt::tt_fabric::fabric_client_connect(c.sender);
+    }
+    for (uint32_t dir = 0; dir < 2; ++dir) {
+        if (connections[dir].valid) {
+            tt::tt_fabric::fabric_client_connect_start(connections[dir].sender);
+        }
+    }
+    for (uint32_t dir = 0; dir < 2; ++dir) {
+        if (connections[dir].valid) {
+            tt::tt_fabric::fabric_client_connect_finish(connections[dir].sender);
+        }
     }
 }
 
@@ -204,12 +215,20 @@ inline void all_gather_local_output(
         write_route_id = PacketHeaderPool::allocate_header_n(num_connections);
         sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     }
-    std::array<volatile PACKET_HEADER_TYPE*, 2> mux_write_headers{};
-    std::array<volatile PACKET_HEADER_TYPE*, 2> mux_sem_headers{};
+    // A four-device line has at most three remote targets. Give every target its
+    // own header so all packets for one payload can be staged before one NOC
+    // flush. Larger rings retain the single-header behavior to stay within the
+    // per-RISC packet-header pool.
+    constexpr bool pipeline_mux_packets = ring_size <= 4;
+    std::array<std::array<volatile PACKET_HEADER_TYPE*, ring_size>, 2> mux_write_headers{};
+    std::array<std::array<volatile PACKET_HEADER_TYPE*, ring_size>, 2> mux_sem_headers{};
     if constexpr (use_mux) {
         for (uint32_t dir = 0; dir < 2; ++dir) {
-            mux_write_headers[dir] = PacketHeaderPool::allocate_header();
-            mux_sem_headers[dir] = PacketHeaderPool::allocate_header();
+            const uint32_t num_headers = pipeline_mux_packets ? ranges[dir] : 1;
+            for (uint32_t header_idx = 0; header_idx < num_headers; ++header_idx) {
+                mux_write_headers[dir][header_idx] = PacketHeaderPool::allocate_header();
+                mux_sem_headers[dir][header_idx] = PacketHeaderPool::allocate_header();
+            }
         }
     }
     auto send_atomic_inc = [&](uint32_t dir, uint64_t dest) {
@@ -220,15 +239,19 @@ inline void all_gather_local_output(
                 // unicast packet for each hop so every remote writer receives
                 // exactly one barrier increment.
                 for (uint32_t hop = 1; hop <= ranges[dir]; ++hop) {
-                    fabric_unicast_noc_unicast_atomic_inc(
-                        &mux_connections[dir].sender,
-                        mux_sem_headers[dir],
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest, 1},
-                        static_cast<uint8_t>(hop));
-                    // The packet header is reused for the next hop. Wait until
-                    // the NOC has copied it into the mux staging slot before
-                    // changing its route fields.
-                    noc_async_writes_flushed();
+                    const uint32_t header_idx = pipeline_mux_packets ? hop - 1 : 0;
+                    if constexpr (!pipeline_mux_packets) {
+                        // The route field is about to be changed on the reused
+                        // header, so its preceding NOC copy must be complete.
+                        if (hop > 1) {
+                            noc_async_writes_flushed();
+                        }
+                    }
+                    auto* header = mux_sem_headers[dir][header_idx];
+                    fabric_unicast_noc_unicast_atomic_inc_set_state<UnicastAtomicIncUpdateMask::Val>(
+                        header, static_cast<uint8_t>(hop), tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                        &mux_connections[dir].sender, header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{dest, 0});
                 }
             }
         } else {
@@ -269,6 +292,9 @@ inline void all_gather_local_output(
     if constexpr (use_mux) {
         send_atomic_inc(0, fabric_barrier_noc_addr);
         send_atomic_inc(1, fabric_barrier_noc_addr);
+        // Protect the pipelined headers before they are reused for the
+        // completion barrier.
+        noc_async_writes_flushed();
     } else {
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection,
@@ -281,56 +307,94 @@ inline void all_gather_local_output(
     noc_semaphore_set(barrier_ptr, 0);
 
     Noc noc;
+    auto send_payload = [&](uint32_t l1_read_addr,
+                            uint32_t dest_x,
+                            uint32_t dest_y,
+                            uint32_t tile_id,
+                            uint32_t payload_size,
+                            bool do_local) {
+        const uint32_t dest_l1 = out_addr + tile_id * tile_size;
+        const uint64_t fabric_dest_noc_addr = safe_get_noc_addr(dest_x, dest_y, dest_l1, 0);
+        if (do_local) {
+            const uint64_t local_dest_noc_addr = safe_get_noc_addr(dest_x, dest_y, dest_l1);
+            noc_async_write(l1_read_addr, local_dest_noc_addr, payload_size);
+        }
+        if constexpr (use_mux) {
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                if (mux_connections[dir].valid) {
+                    // A worker mux has one outgoing fabric connection. Explicit
+                    // unicast packets make each remote destination deterministic.
+                    for (uint32_t hop = 1; hop <= ranges[dir]; ++hop) {
+                        const uint32_t header_idx = pipeline_mux_packets ? hop - 1 : 0;
+                        if constexpr (!pipeline_mux_packets) {
+                            // Preserve the old large-ring behavior: wait before
+                            // changing the route on the shared header.
+                            if (hop > 1) {
+                                noc.async_writes_flushed();
+                            }
+                        }
+                        auto* header = mux_write_headers[dir][header_idx];
+                        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+                            header, static_cast<uint8_t>(hop));
+                        fabric_unicast_noc_unicast_write_with_state<
+                            UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                            &mux_connections[dir].sender,
+                            header,
+                            l1_read_addr,
+                            tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
+                            static_cast<uint16_t>(payload_size));
+                    }
+                }
+            }
+        } else {
+            fabric_multicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                fabric_connection,
+                write_route_id,
+                l1_read_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
+                static_cast<uint16_t>(payload_size));
+        }
+        // The payload may now be released and all stateful headers may be
+        // updated for the next packet.
+        noc.async_writes_flushed();
+    };
     auto send_column = [&](uint32_t l1_read_addr, uint32_t dest_x, uint32_t dest_y, uint32_t bw, bool do_local) {
         for (uint32_t mt = 0; mt < M_tiles; ++mt) {
             const uint32_t tile_id = mt * gathered_n_tiles + output_tile_offset + bw;
-            const uint32_t dest_l1 = out_addr + tile_id * tile_size;
-            const uint64_t fabric_dest_noc_addr = safe_get_noc_addr(dest_x, dest_y, dest_l1, 0);
-            if (do_local) {
-                const uint64_t local_dest_noc_addr = safe_get_noc_addr(dest_x, dest_y, dest_l1);
-                noc_async_write(l1_read_addr, local_dest_noc_addr, tile_size);
-                noc.async_writes_flushed();
-            }
-            if constexpr (use_mux) {
-                for (uint32_t dir = 0; dir < 2; ++dir) {
-                    if (mux_connections[dir].valid) {
-                        // A worker mux has one outgoing fabric connection.
-                        // Explicit unicast packets make each remote chip's
-                        // destination deterministic and avoid relying on
-                        // multicast replication after mux injection.
-                        for (uint32_t hop = 1; hop <= ranges[dir]; ++hop) {
-                            fabric_unicast_noc_unicast_write(
-                                &mux_connections[dir].sender,
-                                mux_write_headers[dir],
-                                l1_read_addr,
-                                tile_size,
-                                tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
-                                static_cast<uint8_t>(hop));
-                            // Protect the reused header and source tile until
-                            // their copies into the mux staging slot complete.
-                            noc.async_writes_flushed();
-                        }
-                    }
-                }
-            } else {
-                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                    fabric_connection,
-                    write_route_id,
-                    l1_read_addr,
-                    tt::tt_fabric::NocUnicastCommandHeader{fabric_dest_noc_addr},
-                    static_cast<uint16_t>(0u));
-            }
+            send_payload(l1_read_addr, dest_x, dest_y, tile_id, tile_size, do_local);
             l1_read_addr += tile_size;
         }
-        noc.async_writes_flushed();
     };
 
-    for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
-        DPRINT("[AGW] before wait_front col={} M={}\n", bw, M_tiles);
-        out_cb.wait_front(M_tiles);
-        DPRINT("[AGW] after wait_front col={}\n", bw);
-        send_column(out_cb.get_read_ptr(), shard_noc_x[0], shard_noc_y[0], bw, true);
-        out_cb.pop_front(M_tiles);
+    if constexpr (M_tiles == 1) {
+        // Along a one-tile-high decode row, adjacent N tiles are contiguous in
+        // both the output CB and destination shard. Fill each fabric packet
+        // instead of paying one packet and one flush per tile.
+        const uint32_t tiles_per_packet = mux_buffer_size / tile_size;
+        ASSERT(tiles_per_packet > 0);
+        for (uint32_t bw = 0; bw < N_tiles_per_core;) {
+            const uint32_t remaining_tiles = N_tiles_per_core - bw;
+            const uint32_t packet_tiles = tiles_per_packet < remaining_tiles ? tiles_per_packet : remaining_tiles;
+            out_cb.wait_front(packet_tiles);
+            send_payload(
+                out_cb.get_read_ptr(),
+                shard_noc_x[0],
+                shard_noc_y[0],
+                output_tile_offset + bw,
+                packet_tiles * tile_size,
+                true);
+            out_cb.pop_front(packet_tiles);
+            bw += packet_tiles;
+        }
+    } else {
+        for (uint32_t bw = 0; bw < N_tiles_per_core; ++bw) {
+            DPRINT("[AGW] before wait_front col={} M={}\n", bw, M_tiles);
+            out_cb.wait_front(M_tiles);
+            DPRINT("[AGW] after wait_front col={}\n", bw);
+            send_column(out_cb.get_read_ptr(), shard_noc_x[0], shard_noc_y[0], bw, true);
+            out_cb.pop_front(M_tiles);
+        }
     }
 
     if constexpr (num_shards > 1) {
@@ -357,6 +421,7 @@ inline void all_gather_local_output(
     if constexpr (use_mux) {
         send_atomic_inc(0, fabric_ready_noc_addr);
         send_atomic_inc(1, fabric_ready_noc_addr);
+        noc_async_writes_flushed();
     } else {
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_connection, sem_route_id, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{fabric_ready_noc_addr, 0});
@@ -369,11 +434,21 @@ inline void all_gather_local_output(
 
     DPRINT("[AGW] before close_connections\n");
     if constexpr (use_mux) {
+        // Overlap close requests and acknowledgements for the two directions.
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            if (mux_connections[dir].valid) {
+                mux_connections[dir].sender.close_start();
+            }
+        }
+        for (uint32_t dir = 0; dir < 2; ++dir) {
+            if (mux_connections[dir].valid) {
+                mux_connections[dir].sender.close_finish();
+            }
+        }
         for (uint32_t dir = 0; dir < 2; ++dir) {
             if (!mux_connections[dir].valid) {
                 continue;
             }
-            tt::tt_fabric::fabric_client_disconnect(mux_connections[dir].sender);
             if (mux_connections[dir].termination_master) {
                 auto* sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_connections[dir].termination_sync);
                 noc_semaphore_wait(sync_ptr, mux_connections[dir].num_clients - 1);
