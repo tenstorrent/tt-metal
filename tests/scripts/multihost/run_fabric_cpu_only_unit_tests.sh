@@ -107,9 +107,6 @@ SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 # tt-cluster-descriptors yet (120-C set has 20 of 36 hosts; 110-C/D lack the u14/u20 rows; 110-A
 # has no set), so only the 120-D SC28 mapping exists for now.
 SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tests/tt_metal/tt_fabric/mock_cluster_mappings/SC28_32x4_revC_subtorus_aisleD_mapping.yaml"
-# 24-host SC24 revC subtorus "virtu" capture (bg-ale22-* hosts) -- the only SC24 revC mock present
-# in the submodule today (the aisle-C set above is still pending); used by the ring-stress sweep.
-SC24_REVC_SUBTORUS_VIRTU_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_mapping.yaml"
 # 24-host SC24 revC subtorus (system-110, aisle C columns c01-c07, units u02-u20); used by the SC24
 # 96-stage / six-BigMesh ring-stress entries.
 # TODO(rsong): pending tt-cluster-descriptors SC24 aisle-C set; path will be finalized when it lands.
@@ -741,7 +738,8 @@ fi # bh-blitz-decode
 #     the SC20 one (80 slots) -- 16/64 only (96+ need >= 24 hosts).
 #   - SC28 revC subtorus aisleD (28-host SC28-ring subset of the aisleD capture, 112 slots):
 #     16-112; 112 is exact fit.
-#   - SC24 revC subtorus virtu (24 hosts, 96 slots): 16-96; 96 is exact fit.
+#   - SC24 revC subtorus aisleC (24 hosts, 96 slots; pending tt-cluster-descriptors PR 17 +
+#     submodule bump): 16-96; 96 is exact fit.
 # Own shard; see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml for the CI budget.
 ######################################
 if run_group "bh-ring-stress"; then
@@ -756,7 +754,7 @@ for entry in \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112 128 144" \
     "SC36_revAB_subtorus_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
     "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112" \
-    "SC24_revC_subtorus_virtu:${SC24_REVC_SUBTORUS_VIRTU_CLUSTER_DESC_MAPPING}:16 64 96" ; do
+    "SC24_revC_subtorus_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64 96" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
     mgd_var="MGD_BLITZ_${stage}"
@@ -792,13 +790,13 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
 # BigMesh sweep, same entry format as the ring sweep above (cluster mock x BigMesh count).
 # MGD_BIGMESH_7 is the full SC28_4x2 spec-decode shape (MGD_BIGMESH_6 is its six-quad reduction):
 # seven 4x32 BigMeshes, all-to-all (21 relaxed pairs), 112 ranks / 28 hosts. 6-BigMesh is exact
-# fit on SC24 mocks and embedded on SC28; 7-BigMesh is exact fit on SC28 and embedded on SC36.
+# fit on the SC24 aisleC mock and embedded on SC28; 7-BigMesh is exact fit on SC28 and embedded on SC36.
 # (SC36 revAB aisleC's SC20 mapping is too small for either.) Same gtest set as the SC24 entry
 # above -- TestPipelineBuilderCheck omitted per #49629.
 MGD_BIGMESH_6="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto"
 MGD_BIGMESH_7="${MGD_SUBTORUS}/subtorus_sc28_4x32_7bigmesh_ring_mesh_graph_descriptor.textproto"
 for entry in \
-    "SC24_revC_subtorus_virtu:${SC24_REVC_SUBTORUS_VIRTU_CLUSTER_DESC_MAPPING}:6" \
+    "SC24_revC_subtorus_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:6" \
     "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"

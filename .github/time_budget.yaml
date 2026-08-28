@@ -197,7 +197,7 @@ scaleout:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 235
+    cpu_medium: 270
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
