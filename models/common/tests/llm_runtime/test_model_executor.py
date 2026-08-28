@@ -12,6 +12,7 @@ import pytest
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.models import executor as executor_module
 from models.common.models.executor import ModelExecutor, ModelExecutorConfig
 
 _EXECUTOR_PATH = Path(__file__).parents[2] / "models" / "executor.py"
@@ -183,23 +184,47 @@ def test_request_state_and_execution_target_are_forwarded_by_identity() -> None:
         assert forwarded[name] is value
 
 
-def test_layout_refresh_preserves_owner_and_sampling_state_identity() -> None:
-    class _Config:
-        def __init__(self, name, state):
-            self.name = name
-            self.sampling_state = state
-
-        def with_page_table_layout(self, layout):
-            replacement = _Config(self.name, self.sampling_state)
-            replacement.page_table_layout = layout
-            return replacement
-
+def test_layout_refresh_preserves_owner_and_sampling_state_identity(monkeypatch) -> None:
     state = object()
     layout = object()
+    prefill_config = SimpleNamespace(
+        max_batch_size=4,
+        max_prefill_chunk_size=2048,
+        device_sampling_enabled=True,
+        can_enable_trace=lambda *_: True,
+        supports_batched_prefill=True,
+        disable_batched_prefill=True,
+        max_prefill_batch_size=4,
+        batched_prefill_batched_extract=True,
+        trace_capture_prime_sequence_lengths=(128,),
+        sampling_state_controller=object(),
+        sampling_state=state,
+    )
+    decode_config = SimpleNamespace(
+        lane_capacity=4,
+        device_sampling_enabled=True,
+        force_greedy_top_k=True,
+        sampling_state_controller=prefill_config.sampling_state_controller,
+        sampling_state=state,
+    )
+    warmup_config = SimpleNamespace(warmup=object(), prefill_sequence_lengths=(128,))
+    resolved_prefill = SimpleNamespace(page_table_layout=layout, sampling_state=state)
+    resolved_decode = SimpleNamespace(page_table_layout=layout, sampling_state=state)
+    resolved_warmup = SimpleNamespace(page_table_layout=layout)
+    prefill_resolve = MagicMock(return_value=resolved_prefill)
+    decode_resolve = MagicMock(return_value=resolved_decode)
+    warmup_resolve = MagicMock(return_value=resolved_warmup)
+    monkeypatch.setattr(executor_module.PrefillRuntimeConfig, "resolve", prefill_resolve)
+    monkeypatch.setattr(executor_module.DecodeRuntimeConfig, "resolve", decode_resolve)
+    monkeypatch.setattr(executor_module.WarmupCoordinatorConfig, "resolve", warmup_resolve)
+
     target = object.__new__(ModelExecutor)
-    target.prefill_runtime = SimpleNamespace(config=_Config("prefill", state))
-    target.decode_runtime = SimpleNamespace(config=_Config("decode", state))
-    target.warmup = SimpleNamespace(config=_Config("warmup", state))
+    target.model = object()
+    target.output_reader = object()
+    target.config = SimpleNamespace(trace=object())
+    target.prefill_runtime = SimpleNamespace(config=prefill_config)
+    target.decode_runtime = SimpleNamespace(config=decode_config)
+    target.warmup = SimpleNamespace(config=warmup_config)
     target._resolve_page_table_layout = lambda: layout
     owners = (target.prefill_runtime, target.decode_runtime, target.warmup)
 
@@ -210,6 +235,11 @@ def test_layout_refresh_preserves_owner_and_sampling_state_identity() -> None:
     assert all(owner.config.page_table_layout is layout for owner in owners)
     assert target.prefill_runtime.config.sampling_state is state
     assert target.decode_runtime.config.sampling_state is state
+    assert prefill_resolve.call_args.kwargs["trace_capture_prime_sequence_lengths"] == (128,)
+    assert prefill_resolve.call_args.kwargs["sampling_state_controller"] is prefill_config.sampling_state_controller
+    assert prefill_resolve.call_args.kwargs["sampling_state"] is state
+    assert decode_resolve.call_args.kwargs["sampling_state_controller"] is prefill_config.sampling_state_controller
+    assert decode_resolve.call_args.kwargs["sampling_state"] is state
 
 
 def test_cleanup_is_ordered_retryable_idempotent_and_terminal() -> None:

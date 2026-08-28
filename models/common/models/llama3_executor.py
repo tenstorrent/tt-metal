@@ -313,6 +313,7 @@ class Llama32_1BExecutor:
             runtime_config,
             config,
             owner_name="Llama32_1BExecutor",
+            sampling_type=Sampling1D,
             prefill_warmup=_warmup_q128_before_prefill,
         )
         self._model_executor._q128_topk_tile_ends_warmed = set()
@@ -335,6 +336,7 @@ class Llama32_3BExecutor:
             runtime_config,
             config,
             owner_name="Llama32_3BExecutor",
+            sampling_type=Sampling1D,
             prefill_warmup=_warmup_q128_before_prefill,
         )
         self._model_executor._q128_topk_tile_ends_warmed = set()

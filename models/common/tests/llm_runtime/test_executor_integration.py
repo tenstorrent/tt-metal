@@ -1492,8 +1492,12 @@ def test_executor_cleanup_is_ordered_retryable_and_idempotent(binding, expect_er
     executor.program_compiler = _Owner("program")
     executor.config = SimpleNamespace(device_sampling_enabled=True)
     executor.model = SimpleNamespace(sampling=_Owner("sampling"))
-    executor.sampling_state_controller = _Owner("sampling-state")
-    executor.sampling_state = object()
+    if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
+        executor.sampling_state_controller = _Owner("sampling-state")
+        executor.sampling_state = object()
+    else:
+        executor.sampling_state_controller = None
+        executor.sampling_state = None
     executor.kv_cache_manager = _Owner("kv")
 
     with expect_error(RuntimeError, "reader") as raised:

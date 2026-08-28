@@ -125,7 +125,8 @@ def test_executor_resolves_batched_prefill_policy(
     if device_sampling_enabled:
 
         class _Sampling:
-            pass
+            def decode_forward(self):
+                raise AssertionError("construction-policy test must not execute sampling")
 
         class _SamplingState:
             def __init__(self, sampling):

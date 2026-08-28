@@ -573,12 +573,44 @@ class ModelExecutor:
         )
 
     def _refresh_page_table_layout(self) -> None:
-        """Install final bounded geometry without replacing runtime owners."""
+        """Re-resolve final geometry without replacing runtime owners."""
 
         layout = self._resolve_page_table_layout()
-        prefill_config = self.prefill_runtime.config.with_page_table_layout(layout)
-        decode_config = self.decode_runtime.config.with_page_table_layout(layout)
-        warmup_config = self.warmup.config.with_page_table_layout(layout)
+        current_prefill = self.prefill_runtime.config
+        prefill_config = PrefillRuntimeConfig.resolve(
+            model=self.model,
+            output_reader=self.output_reader,
+            page_table_layout=layout,
+            max_batch_size=current_prefill.max_batch_size,
+            max_prefill_chunk_size=current_prefill.max_prefill_chunk_size,
+            device_sampling_enabled=current_prefill.device_sampling_enabled,
+            can_enable_trace=current_prefill.can_enable_trace,
+            supports_batched_prefill=current_prefill.supports_batched_prefill,
+            disable_batched_prefill=current_prefill.disable_batched_prefill,
+            max_prefill_batch_size=current_prefill.max_prefill_batch_size,
+            batched_prefill_batched_extract=current_prefill.batched_prefill_batched_extract,
+            trace_capture_prime_sequence_lengths=current_prefill.trace_capture_prime_sequence_lengths,
+            sampling_state_controller=current_prefill.sampling_state_controller,
+            sampling_state=current_prefill.sampling_state,
+        )
+        current_decode = self.decode_runtime.config
+        decode_config = DecodeRuntimeConfig.resolve(
+            model=self.model,
+            output_reader=self.output_reader,
+            lane_capacity=current_decode.lane_capacity,
+            page_table_layout=layout,
+            device_sampling_enabled=current_decode.device_sampling_enabled,
+            force_greedy_top_k=current_decode.force_greedy_top_k,
+            sampling_state_controller=current_decode.sampling_state_controller,
+            sampling_state=current_decode.sampling_state,
+        )
+        warmup_config = WarmupCoordinatorConfig.resolve(
+            warmup=self.warmup.config.warmup,
+            trace=self.config.trace,
+            prefill=prefill_config,
+            decode=decode_config,
+            prefill_sequence_lengths=self.warmup.config.prefill_sequence_lengths,
+        )
 
         self.prefill_runtime.config = prefill_config
         self.decode_runtime.config = decode_config
