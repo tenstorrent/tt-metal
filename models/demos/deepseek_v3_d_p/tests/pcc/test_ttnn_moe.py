@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -114,8 +115,10 @@ def run_model(
     latent_use_norm=True,
     rms_norm_eps=1e-5,
     final_output_pcc=0.982,
+    routed_output_pcc=0.96,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     measure=None,
+    gate_bias_free=False,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -133,6 +136,20 @@ def run_model(
     ``routed_activation`` selects the fused routed-expert kernel's activation and the matching
     torch reference. The shared expert always runs SiLU: no SiTU kernel exists outside the
     routed-expert op, so both sides must stay on SiLU there for the comparison to mean anything.
+
+    ``routed_output_pcc`` is the bar for the ROUTED half alone, whose experts are cached in
+    bfloat4_b (the shared expert is bfloat8_b and lands two nines higher). It is a per-model number
+    because a token's routed output is the weighted sum of ``num_experts_per_tok`` expert outputs, so
+    the independent bf4 quantization errors cancel in proportion to how many experts are summed: the
+    top-8 and top-16 residents average more of it away than a top-4 model can. The composed
+    ``final_output`` / ``reference_output`` checks stay the correctness backstop -- relax this one
+    only with a measurement, and only when those two still pass.
+
+    ``gate_bias_free`` zeroes the generated router correction bias. Set it for a model whose
+    reference router has no bias tensor at all (Mistral4TopkRouter): the device gate always applies
+    SOME bias, so unless it is zero the device and the reference route by different rules and the
+    resulting PCC miss reads as a kernel defect. ``_pack_reference_moe_state_dict`` asserts the two
+    agree, so a forgotten flag fails loudly instead of silently.
 
     ``measure`` wraps the forward for a perf caller: it is called as ``measure(forward)``,
     must invoke the thunk and return its result, and owns the device sync. The perf gates use
@@ -244,6 +261,12 @@ def run_model(
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
+        if gate_bias_free:
+            # Must happen BEFORE build_ttnn_cache: the bias is persisted into the TTNN cache, so
+            # zeroing it afterwards would leave the device on a cached non-zero bias while the
+            # reference ran bias-free. The cache dir is keyed by variant name, so the zeroed cohort
+            # cannot collide with a biased model's cache.
+            gate_weights["e_score_correction_bias"] = torch.zeros_like(gate_weights["e_score_correction_bias"])
         # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
         profiler.end("weights_creation")
@@ -497,7 +520,7 @@ def run_model(
     # fmt: off
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), routed_output_pcc),
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
     if use_latent:
@@ -971,4 +994,128 @@ def test_kimi_k3_moe(
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Mistral Small 4 119B MoE
+# ---------------------------------------------------------------------------
+#
+# Capacity factor 8, matching every other Mistral row (test_prefill_block / test_prefill_transformer)
+# rather than the 5 the Kimi rows use: Mistral dispatches top-4 of 128 at emb 4096, so a token's row
+# is 4096 wide where Kimi's is 7168, but only 4 experts claim it instead of 8. 8 is what the block
+# test was tuned at and what the measured end-to-end numbers were taken with, so the singleton row
+# stays on it -- a MoE module test that dispatches differently from the block it models is not
+# gating the deployed configuration.
+#
+# GPT_DEVICE, not DEVICE_FP32. Mistral's router is softmax over all 128 experts -> top-4 ->
+# renormalize (norm_topk_prob), which is mathematically identical to GPT-OSS routing (top-4 on raw
+# logits -> softmax over just the selection) because softmax is monotonic. DEVICE/DEVICE_FP32 would
+# apply a SIGMOID affinity instead and produce silently wrong weights rather than an error -- the
+# grouped-topk kernel implements only sigmoid/sqrtsoftplus (moe_grouped_topk.cpp:17-23).
+#
+# gate_bias_free: Mistral4TopkRouter carries no e_score_correction_bias, so the device gate has to
+# run a zero one or the two sides route by different rules.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.GPT_DEVICE, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.GPT_DEVICE, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-perf"),
+        pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.GPT_DEVICE, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
+        pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.GPT_DEVICE, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 bring-up targets Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-perf"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        # LoudBox proxy for local bring-up; no pipeline selects it. TP stays 4 as on the 8x4 anchor.
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small4"], indirect=True, ids=["mistral4"])
+def test_mistral4_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    """Mistral Small 4 MoE singleton: 128 experts / top-4 at emb 4096, softmax routing.
+
+    Seeded random weights, like ``test_ds_moe`` / ``test_kimi_moe``: the reference is the upstream
+    ``Mistral4MoE`` loaded from the SAME draw, so no checkpoint is needed. Real-weight coverage of
+    this model's MoE lives in ``test_prefill_block.py::test_mistral4_prefill_block``.
+
+    Two things about Mistral's reference make this row structurally different from the Kimi ones, and
+    both are handled in ``_pack_reference_moe_state_dict``:
+
+      * ``Mistral4NaiveMoe`` stores all 128 experts as ONE stacked 3D parameter pair with gate and up
+        FUSED (``gate_up_proj`` [128, 2*2048, 4096]), the same layout the checkpoint ships. There is
+        no ``experts[i]`` to index.
+      * ``Mistral4TopkRouter`` has no correction-bias parameter at all, so a strict load rejects the
+        key and the device gate must be held to a zero bias to match.
+    """
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+        rms_norm_eps=MistralSmall4Config.RMS_NORM_EPS,
+        # Measured 0.937991 on torus-xy-8x4, 2026-08-21, at mistral4-5k-pcc. Set ~0.005 under it, the
+        # same margin the latent_routed_output row uses against K3's measured value.
+        #
+        # Below the family's 0.96 because Mistral activates top-4 -- the FEWEST in this family
+        # (DeepSeek-V3 and Kimi-K2.6 top-8, Kimi-K3 top-16). The routed output is the weighted sum of
+        # the activated experts' outputs and those experts are cached in bfloat4_b, so the number of
+        # summands sets how much of the independent quantization error cancels; top-4 keeps more of it
+        # than top-8 does.
+        #
+        # This is a numerics bar, not a masked defect, and three independent checks in the same run
+        # say so: gate_indices_recall PASSES (the device selects the same experts as the reference, so
+        # routing is right), shared_output is 0.999761 (the bf8 half is near-exact, isolating the
+        # difference to the bf4 routed half), and the composed output against the real upstream
+        # Mistral4MoE is 0.994691 against a 0.971 bar -- which it could not be if the routed experts
+        # were computing wrong values.
+        routed_output_pcc=0.932,
+        gate_bias_free=True,
     )

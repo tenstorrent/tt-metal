@@ -160,16 +160,44 @@ def _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, sha
     """
     sd = {
         "gate.weight": gate_weights["weight"],
-        "gate.e_score_correction_bias": gate_weights["e_score_correction_bias"],
         "shared_experts.gate_proj.weight": shared_expert_weights["gate_proj"],
         "shared_experts.up_proj.weight": shared_expert_weights["up_proj"],
         "shared_experts.down_proj.weight": shared_expert_weights["down_proj"],
     }
-    src = ("gate_proj", "up_proj", "down_proj")
-    dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
-    for i, w in enumerate(routed_expert_weights):
-        for proj, name in zip(src, dst):
-            sd[f"experts.{i}.{name}.weight"] = w[proj]
+
+    # Router correction bias, when the reference HAS one. Mistral4TopkRouter is bias-free (its whole
+    # rule is softmax -> top-k -> renormalize), so under strict=True the key would be rejected as
+    # unexpected. Omitting it is only sound if the DEVICE gate also runs a zero bias -- otherwise the
+    # two sides apply different routing rules and the PCC failure would look like a kernel defect.
+    # Assert that here rather than let it read as one.
+    if hasattr(moe.gate, "e_score_correction_bias"):
+        sd["gate.e_score_correction_bias"] = gate_weights["e_score_correction_bias"]
+    else:
+        bias = gate_weights.get("e_score_correction_bias")
+        assert bias is None or not bias.any(), (
+            f"{type(moe.gate).__name__} has no e_score_correction_bias, but the device gate was given "
+            "a non-zero one; the two sides would route differently. Pass gate_bias_free=True so the "
+            "generated bias is zeroed before the TTNN cache is built."
+        )
+
+    # Routed experts: either one submodule per expert (DeepSeek / Kimi, projections named
+    # gate/up/down or w1/w3/w2) or ONE stacked 3D parameter pair for all experts with gate and up
+    # fused (Mistral4NaiveMoe -- the same layout its checkpoint ships). The stacked form is a
+    # Parameter on `moe.experts`, so it is not indexable per expert at all.
+    if hasattr(moe.experts, "gate_up_proj"):
+        # gate_up_proj is [n_experts, 2*intermediate, hidden] with GATE first: the reference chunks
+        # it as `gate, up = linear(x, gate_up_proj[e]).chunk(2, dim=-1)`, so concatenating along the
+        # output dim in that order is what reproduces the split.
+        sd["experts.gate_up_proj"] = torch.stack(
+            [torch.cat([w["gate_proj"], w["up_proj"]], dim=0) for w in routed_expert_weights]
+        )
+        sd["experts.down_proj"] = torch.stack([w["down_proj"] for w in routed_expert_weights])
+    else:
+        src = ("gate_proj", "up_proj", "down_proj")
+        dst = ("w1", "w3", "w2") if hasattr(moe.experts[0], "w1") else src
+        for i, w in enumerate(routed_expert_weights):
+            for proj, name in zip(src, dst):
+                sd[f"experts.{i}.{name}.weight"] = w[proj]
     if hasattr(moe, "routed_expert_down_proj"):
         sd["routed_expert_down_proj.weight"] = latent_weights["down_proj"]
         sd["routed_expert_up_proj.weight"] = latent_weights["up_proj"]
