@@ -100,5 +100,5 @@ def test_kimi_k3_layer_1_real_weights_pcc(
         output,
         mesh_device,
         tensor_parallel_axis,
-        pcc_threshold=0.98,
+        pcc_threshold=0.9995,
     )
