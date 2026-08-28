@@ -136,6 +136,13 @@ void py_device_module_types(nb::module_& m_device) {
     nb::class_<tt::tt_metal::DispatchCoreConfig>(
         m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
         .def(
+            nb::init<>(),
+            "Default constructor initializing type to WORKER and axis to default value on platform architecture.")
+        .def(
+            nb::init<tt::tt_metal::DispatchCoreType>(),
+            "Constructor with specified dispatch core type and default axis on platform architecture.",
+            nb::arg("type"))
+        .def(
             nb::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
             "Constructor with specified dispatch core type and axis.",
             nb::arg("type"),
