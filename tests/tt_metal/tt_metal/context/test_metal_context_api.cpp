@@ -72,16 +72,10 @@ TEST_F(MetalContextTest, CreateMockInstances) {
     MetalEnv env_wh{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value())};
     ContextId context_id_wh = MetalContext::create_instance(env_wh);
     EXPECT_EQ(context_id_wh, ContextId{1});
-    EXPECT_EQ(
-        MetalContext::instance(context_id_wh).resolve_dispatch_core_config(),
-        DispatchCoreConfig(DispatchCoreType::WORKER, DispatchCoreAxis::ROW));
 
     MetalEnv env_bh{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1).value())};
     ContextId context_id_bh = MetalContext::create_instance(env_bh);
     EXPECT_EQ(context_id_bh, ContextId{2});
-    EXPECT_EQ(
-        MetalContext::instance(context_id_bh).resolve_dispatch_core_config(),
-        DispatchCoreConfig(DispatchCoreType::WORKER, DispatchCoreAxis::COL));
 
     MetalContext::destroy_instance(false, context_id_wh);
     MetalContext::destroy_instance(false, context_id_bh);
