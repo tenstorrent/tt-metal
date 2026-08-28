@@ -133,6 +133,52 @@ _GALAXY_CI_MIN_BANDWIDTH_GBPS = {
     512 * 1024: 90.0,
 }
 
+# The 32-rank snake must use global row counts divisible by 32, so the short case is
+# 55_040 (32 * 1720) rather than the axis gate's 55_000 (8 * 6875). The large case is
+# already 32 * 16384. Both keep the same replicated output footprint as the axis gate,
+# which is what bounds per-device DRAM.
+_GALAXY_FULL_MESH_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
+
+# These floors are NOT the axis gate's. Holding global volume fixed gives the 32-rank snake
+# only 1/4 the rows-per-device of the 8-rank axis gate, so its per-hop payload is 4x smaller
+# and it cannot amortize the fixed per-hop cost as well. That is a property of the
+# configuration, not a defect -- at equal rows-per-device the snake matches or beats the axis
+# ring (see _GALAXY_FULL_MESH_MATCHED_LOCAL_MIN_BANDWIDTH_GBPS, which is the comparable gate
+# and does carry the axis floors).
+#
+# The short case is also the most variable, so these floors are set from the LOWEST value seen
+# across repeated runs, not a single sample, at 0.9x for margin. Observed on a high-power
+# Blackhole Galaxy (8x4, 2 links, FABRIC_2D_TORUS_XY) over two runs:
+#   1720 rows/device : bf16 RM 70.4-72.4 | fp8 RM 62.7-68.1 | bf16 TILE 69.5-72.8 |
+#                      bfp8 TILE 59.9-64.9   -> min 59.9, floor 53
+#   16384 rows/device: 90.6-93.9 across all four payloads -> min 90.6, floor 81
+# bfp8 TILE at the short length swings ~8% run to run; do not raise these from one good run.
+# Override with TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS when recalibrating.
+_GALAXY_FULL_MESH_CI_MIN_BANDWIDTH_GBPS = {
+    55_040: float(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS", "53.0")),
+    512 * 1024: float(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS", "81.0")),
+}
+
+# Matching *global* volume gives the 32-rank snake a 4x smaller per-hop payload than the
+# 8-rank axis gate, which confounds hop count with message size. These row counts instead
+# match the axis gate's rows-per-device exactly (6875 and 65536), so per-hop payload is
+# identical and only the hop count (31 vs 7) differs. The large case needs a 2304 MiB
+# replicated persistent output per device.
+_GALAXY_FULL_MESH_MATCHED_LOCAL_GLOBAL_ROWS = (6875 * 32, 65536 * 32)
+# This gate deliberately carries the AXIS gate's own floors, since matching rows-per-device is
+# what makes the two directly comparable. Reference _GALAXY_CI_MIN_BANDWIDTH_GBPS rather than
+# duplicating its numbers -- the axis short-case floor has already moved once (79.0 -> 78.0).
+_GALAXY_FULL_MESH_MATCHED_LOCAL_MIN_BANDWIDTH_GBPS = {
+    6875
+    * 32: float(
+        os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS", str(_GALAXY_CI_MIN_BANDWIDTH_GBPS[55_000]))
+    ),
+    65536
+    * 32: float(
+        os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS", str(_GALAXY_CI_MIN_BANDWIDTH_GBPS[512 * 1024]))
+    ),
+}
+
 
 def _is_physical_quietbox(mesh_device):
     """Whether ``mesh_device`` is the complete four-chip QuietBox topology.
@@ -526,7 +572,10 @@ def _run_high_bw_all_gather_perf(
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.skip("high_bw_all_gather bandwidth test requires the realtime device profiler")
 
-    axis_size = mesh_device.shape[cluster_axis]
+    # ``cluster_axis=None`` gathers over one snake ring spanning every device, so the
+    # collective size is the whole mesh and the gather dim is sharded flat in row-major
+    # device order. This mirrors _run_high_bw_all_gather_accuracy exactly.
+    axis_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
     capacity_rows_per_device = capacity_rows_per_device or rows_per_device
     assert rows_per_device <= capacity_rows_per_device
     if input_batch_index is not None:
@@ -540,14 +589,19 @@ def _run_high_bw_all_gather_perf(
     global_shape = (cache_slots, 1, capacity_rows_per_device * axis_size, width)
     torch.manual_seed(0)
     host_input = torch.rand(global_shape, dtype=torch.bfloat16)
+    mesh_mapper = (
+        ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        if cluster_axis is None
+        else ttnn.ShardTensor2dMesh(
+            mesh_device, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(mesh_device.shape)
+        )
+    )
     device_input = _make_tensor(
         mesh_device,
         host_input,
         dtype,
         layout,
-        ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(mesh_device.shape)
-        ),
+        mesh_mapper,
     )
     # The op gathers each device tensor's padded shape. For TILE layout, a logical shard whose height is not a
     # multiple of 32 therefore produces a correspondingly padded gathered output (for example, 625 rows/device
@@ -665,13 +719,15 @@ def _run_high_bw_all_gather_test_cases(mesh_device, min_bandwidth_gbps, cluster_
         )
 
 
-def _run_high_bw_all_gather_ci_perf(mesh_device, cluster_axis, min_bandwidth_gbps):
+def _run_high_bw_all_gather_ci_perf(
+    mesh_device, cluster_axis, min_bandwidth_gbps, global_rows_cases=_CI_PERF_GLOBAL_ROWS
+):
     """Run the compact CI matrix and pair every bandwidth measurement with correctness."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("high_bw_all_gather CI performance coverage requires the realtime device profiler")
 
-    axis_size = mesh_device.shape[cluster_axis]
-    for global_rows in _CI_PERF_GLOBAL_ROWS:
+    axis_size = mesh_device.get_num_devices() if cluster_axis is None else mesh_device.shape[cluster_axis]
+    for global_rows in global_rows_cases:
         assert global_rows % axis_size == 0
         rows_per_device = global_rows // axis_size
         required_bandwidth_gbps = (
@@ -725,6 +781,53 @@ def test_high_bw_all_gather_galaxy_ci_perf(mesh_device):
         rank_line,
         cluster_axis=cluster_axis,
         min_bandwidth_gbps=_GALAXY_CI_MIN_BANDWIDTH_GBPS,
+    )
+
+
+@run_for_blackhole("Blackhole Galaxy full-mesh perf gate requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy full-mesh perf gate requires MESH_DEVICE=TG"
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_full_mesh_ci_perf(mesh_device):
+    """Galaxy full-mesh gate: the same CI perf matrix over one 32-rank snake ring.
+
+    Companion to test_high_bw_all_gather_galaxy_ci_perf, which measures the 8-rank axis
+    ring. Same profiler, same payload matrix, same effective-receive-bandwidth formula,
+    so the two numbers can be compared directly.
+    """
+    assert tuple(mesh_device.shape) == (8, 4)
+    assert mesh_device.get_num_devices() == 32
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=None,
+        min_bandwidth_gbps=_GALAXY_FULL_MESH_CI_MIN_BANDWIDTH_GBPS,
+        global_rows_cases=_GALAXY_FULL_MESH_CI_PERF_GLOBAL_ROWS,
+    )
+
+
+@run_for_blackhole("Blackhole Galaxy full-mesh matched-local perf gate requires Blackhole")
+@pytest.mark.skipif(
+    os.getenv("MESH_DEVICE") != "TG",
+    reason="Blackhole Galaxy full-mesh matched-local perf gate requires MESH_DEVICE=TG",
+)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf(mesh_device):
+    """32-rank snake at the axis gate's exact rows-per-device, isolating hop count.
+
+    test_high_bw_all_gather_galaxy_full_mesh_ci_perf matches global volume, which shrinks
+    the snake's per-hop payload 4x. This matches per-device volume instead, so per-hop
+    payload equals the 8-rank axis gate's and the only difference is 31 hops versus 7.
+    """
+    assert tuple(mesh_device.shape) == (8, 4)
+    assert mesh_device.get_num_devices() == 32
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=None,
+        min_bandwidth_gbps=_GALAXY_FULL_MESH_MATCHED_LOCAL_MIN_BANDWIDTH_GBPS,
+        global_rows_cases=_GALAXY_FULL_MESH_MATCHED_LOCAL_GLOBAL_ROWS,
     )
 
 
@@ -808,6 +911,7 @@ def test_high_bw_all_gather_galaxy_8x4_axis_ring_regression(mesh_device):
         rows_per_device=4,
         num_links=2,
     )
+
 
 @pytest.mark.parametrize(
     "device_params",
