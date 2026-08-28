@@ -94,6 +94,14 @@ def test_grouped_scan_capacity_reports_device_limit(device: ttnn.Device, expect_
         )
 
 
+def test_grouped_scan_uses_largest_valid_configured_divisor(device: ttnn.Device) -> None:
+    del device
+    assert ops._effective_summary_group_chunks(160, 20) == 20
+    assert ops._effective_summary_group_chunks(64, 20) == 16
+    assert ops._effective_summary_group_chunks(88, 21) == 11
+    assert ops._effective_summary_group_chunks(161, 8) == 7
+
+
 def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, expect_error) -> None:
     sequence, heads, dim = 32, 2, 32
     flat_shape = (1, sequence, heads * dim)
@@ -146,16 +154,16 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
 
 
 @pytest.mark.parametrize(
-    "sequence,heads,key_dim,value_dim,summary_group_chunks",
+    "sequence,heads,key_dim,value_dim,summary_group_chunks,grouped_scan_min_chunks",
     [
-        (32, 2, 32, 32, 8),
-        (64, 32, 128, 128, 8),
-        (256, 4, 128, 128, 8),
-        (512, 4, 128, 128, 8),
-        (2816, 12, 128, 128, 21),
-        (5120, 2, 32, 32, 8),
-        (5120, 1, 128, 128, 8),
-        (5152, 2, 32, 32, 8),
+        (32, 2, 32, 32, 8, 160),
+        (64, 32, 128, 128, 8, 160),
+        (256, 4, 128, 128, 8, 160),
+        (512, 4, 128, 128, 8, 160),
+        (2816, 12, 128, 128, 21, 1),
+        (5120, 2, 32, 32, 8, 160),
+        (5120, 1, 128, 128, 8, 160),
+        (5152, 2, 32, 32, 8, 160),
     ],
 )
 def test_chunk_recurrence_pcc(
@@ -165,6 +173,7 @@ def test_chunk_recurrence_pcc(
     key_dim: int,
     value_dim: int,
     summary_group_chunks: int,
+    grouped_scan_min_chunks: int,
 ) -> None:
     generator = torch.Generator().manual_seed(401 + sequence + heads)
     shape = (1, sequence, heads)
@@ -189,6 +198,7 @@ def test_chunk_recurrence_pcc(
             _to_device(beta, device, ttnn.float32),
             _to_device(state, device, ttnn.float32),
             summary_group_chunks=summary_group_chunks,
+            grouped_scan_min_chunks=grouped_scan_min_chunks,
         )
 
     assert result.final_state.memory_config() == ttnn.DRAM_MEMORY_CONFIG

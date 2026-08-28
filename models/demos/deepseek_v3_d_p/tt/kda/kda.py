@@ -254,7 +254,6 @@ class ttKDA:
                 f"KDA prefill requires local T to be positive and divisible by {KDA_CHUNK_SIZE}, got T={sequence}"
             )
         local_chunks = sequence // KDA_CHUNK_SIZE
-        summary_group_chunks = self.recurrence_config.summary_group_chunks
         sequence_parallel_axis = self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None
         if ops._uses_grouped_scan(
             num_chunks=local_chunks,
@@ -268,7 +267,10 @@ class ttKDA:
             ops._validate_grouped_scan_capacity(
                 batch_heads=batch * self.config.num_heads,
                 num_chunks=local_chunks,
-                summary_group_chunks=summary_group_chunks,
+                summary_group_chunks=ops._effective_summary_group_chunks(
+                    local_chunks,
+                    self.recurrence_config.summary_group_chunks,
+                ),
                 device=hidden_states.device(),
             )
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
