@@ -196,7 +196,7 @@
   model_family: DeepSeek
   skus:
     wh_galaxy_perf:
-      timeout: 115
+      timeout: 50
       tier: 1
   owner_id: U0896VBAKFC
   team: models

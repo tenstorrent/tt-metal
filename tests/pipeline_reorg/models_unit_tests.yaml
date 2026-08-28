@@ -1816,7 +1816,7 @@
   model: deepseek-v3
   skus:
     wh_galaxy_perf:
-      timeout: 15
+      timeout: 10
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
@@ -1836,7 +1836,7 @@
   model: deepseek-v3
   skus:
     wh_galaxy_perf:
-      timeout: 150
+      timeout: 45
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
@@ -1853,7 +1853,7 @@
   model: deepseek-v3
   skus:
     wh_galaxy_perf:
-      timeout: 90
+      timeout: 20
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
