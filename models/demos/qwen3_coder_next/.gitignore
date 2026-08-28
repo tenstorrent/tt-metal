@@ -1,0 +1,30 @@
+# Regenerable bring-up artifacts — deliberately untracked.
+# Matches the convention in models/demos/xtts_v2/.gitignore.
+#
+# _captured/ holds the real HF intermediate tensors the per-component PCC tests
+# compare against (117 MB of binary goldens). Regenerate with:
+#     python -m scripts.tt_hw_planner capture-inputs Qwen/Qwen3-Coder-Next
+_captured/
+# Transient profiler / tracy output.
+generated/
+# Python bytecode.
+__pycache__/
+*.pyc
+# Bring-up run/state artifacts — regenerated per bring-up. Not template state.
+RUN_REPORT.md
+E2E_REPORT.md
+BRING_UP_PLAN.md
+bringup_status.json
+.bringup_cc_state.json
+_runtime_fallbacks.json
+kernel_findings.json
+e2e_plan.json
+.loader_blocker.txt
+_stubs/*.best_native
+_stubs/*.last_good_native
+_stubs/*.last_good_sharded
+_stubs/*.preiter_native
+# Generated perf sidecar.
+*.trace_caps.json
+# NOTE: parallelism_manifest.json is INTENTIONALLY tracked — tt/mesh.py reads it at
+# import time to resolve TP/DP, so it is shipped state, not bring-up scratch.
