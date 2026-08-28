@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Eight-device whole-head KDA weight-layout tests."""
 
-import os
 
 import pytest
 import torch
@@ -134,7 +133,7 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
         norm_eps=1e-5,
     )
     state_dict = random_weights(config)
-    sequence = int(os.getenv("KDA_TP_TEST_SEQ", "32"))
+    sequence = 32
     hidden = torch.randn(1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(911)).to(
         torch.bfloat16
     )
@@ -182,7 +181,7 @@ def test_tp_layer_pcc(mesh_device: ttnn.MeshDevice) -> None:
         ("recurrent state", golden_state.recurrent, actual_recurrent),
         ("convolution state", golden_convolution, actual_convolution),
     ):
-        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.98)
+        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999)
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
@@ -276,7 +275,7 @@ def test_2d_tp_weight_and_output_placement(
             expected_output,
             actual_output,
             name=f"tp_axis={tensor_parallel_axis} device={physical_index} output",
-            pcc_threshold=0.98,
+            pcc_threshold=0.999,
         )
 
 

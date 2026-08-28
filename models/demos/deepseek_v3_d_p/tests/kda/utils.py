@@ -16,7 +16,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
@@ -30,6 +30,7 @@ class KimiK3TestCase:
     state_dict: dict[str, torch.Tensor]
     hidden: torch.Tensor
     checkpoint_dir: Path
+    checkpoint_identity: str
 
 
 def report_finiteness(name: str, tensor: torch.Tensor) -> tuple[bool, str]:
@@ -282,7 +283,13 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
         generator=torch.Generator().manual_seed(1607),
         dtype=torch.bfloat16,
     )
-    return KimiK3TestCase(config=config, state_dict=state_dict, hidden=hidden, checkpoint_dir=checkpoint_dir)
+    return KimiK3TestCase(
+        config=config,
+        state_dict=state_dict,
+        hidden=hidden,
+        checkpoint_dir=checkpoint_dir,
+        checkpoint_identity=kda_state_dict_sha256(state_dict),
+    )
 
 
 def make_kimi_k3_device_case(
@@ -297,7 +304,7 @@ def make_kimi_k3_device_case(
     """Construct the real-weight layer and sequence-parallel device input."""
     sequence_parallel_axis = 1 - tensor_parallel_axis
     tensor_cache_path = kimi_k3_tensor_cache_path(
-        case.checkpoint_dir,
+        case.checkpoint_identity,
         mesh_device,
         tensor_parallel_axis,
     )
@@ -342,15 +349,16 @@ def make_kimi_k3_device_case(
 
 
 def kimi_k3_tensor_cache_path(
-    checkpoint_dir: Path,
+    checkpoint_identity: str,
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> Path:
-    """Select TTNN model-cache storage for one immutable checkpoint snapshot and mesh placement."""
+    """Select TTNN model-cache storage for one checkpoint content identity and mesh placement."""
     mesh_shape = tuple(mesh_device.shape)
-    snapshot = checkpoint_dir.resolve().name
+    if len(checkpoint_identity) != 64 or any(character not in "0123456789abcdef" for character in checkpoint_identity):
+        raise ValueError("checkpoint_identity must be a lowercase SHA-256 hex digest")
     layout = f"mesh{mesh_shape[0]}x{mesh_shape[1]}_tpaxis{tensor_parallel_axis}"
-    return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / snapshot / layout
+    return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / checkpoint_identity / layout
 
 
 def run_profiled_forward(

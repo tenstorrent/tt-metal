@@ -10,7 +10,6 @@ import json
 import os
 import statistics
 import time
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 pytestmark = [
     run_for_blackhole(),
     pytest.mark.perf,
+    pytest.mark.timeout(900),
     pytest.mark.parametrize(
         "device_params",
         [
@@ -54,28 +54,15 @@ pytestmark = [
 
 _SEQUENCE = 5120
 _REPETITIONS = 10
-_TIMING_SAMPLES = int(os.getenv("KDA_TIMING_SAMPLES", "5"))
-if _TIMING_SAMPLES < 1:
-    raise ValueError(f"KDA_TIMING_SAMPLES must be positive, got {_TIMING_SAMPLES}")
+_TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_TARGETS_PATH = Path(__file__).parent / "perf_targets" / "bh_loudbox.json"
-_CPU_REFERENCE_CACHE_VERSION = 2
+_CPU_REFERENCE_CACHE_VERSION = 3
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
     storage = tensor.detach().cpu().contiguous().view(torch.uint8).numpy()
     return hashlib.sha256(memoryview(storage)).hexdigest()
-
-
-def _update_state_dict_fingerprint(fingerprint: Any, state_dict: Mapping[str, torch.Tensor]) -> None:
-    for name in sorted(state_dict):
-        tensor = state_dict[name]
-        metadata = json.dumps(
-            [name, str(tensor.dtype), list(tensor.shape)],
-            separators=(",", ":"),
-        )
-        fingerprint.update(metadata.encode())
-        fingerprint.update(_tensor_sha256(tensor).encode())
 
 
 def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
@@ -84,16 +71,15 @@ def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     fingerprint.update(f"v{_CPU_REFERENCE_CACHE_VERSION}".encode())
     fingerprint.update(str(KimiK3Config.FIRST_KDA_LAYER).encode())
     fingerprint.update(str(case.hidden.shape[1]).encode())
-    fingerprint.update(case.checkpoint_dir.name.encode())
+    fingerprint.update(case.checkpoint_identity.encode())
     fingerprint.update((case.checkpoint_dir / "config.json").read_bytes())
     fingerprint.update(_tensor_sha256(case.hidden).encode())
-    _update_state_dict_fingerprint(fingerprint, case.state_dict)
-    for source_path in (reference_dir / "layer.py", reference_dir / "ops.py"):
+    for source_path in (reference_dir / "config.py", reference_dir / "layer.py", reference_dir / "ops.py"):
         fingerprint.update(source_path.read_bytes())
     return (
         Path(ttnn.CONFIG.model_cache_path)
         / "kimi_k3"
-        / case.checkpoint_dir.resolve().name
+        / case.checkpoint_identity
         / "cpu_reference"
         / f"layer_{KimiK3Config.FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
     )
@@ -267,7 +253,7 @@ def test_kimi_k3_layer_1_perf(
 
     repetitions = int(os.getenv("PERF_REPS", str(_REPETITIONS)))
     samples_ms = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, repetitions)
-    wall_ms = samples_ms[0]
+    first_wall_ms = samples_ms[0]
     median_wall_ms = statistics.median(samples_ms)
     tail_wall_ms = max(samples_ms)
     reference_ms, max_regression_pct = _load_perf_target(layout, sequence=sequence, repetitions=repetitions)
@@ -279,7 +265,8 @@ def test_kimi_k3_layer_1_perf(
         "repetitions": repetitions,
         "pcc": pcc,
         "pcc_reference": "independent pure-Torch FP32 CPU reference",
-        "trace_wall_ms": wall_ms,
+        "trace_wall_ms": median_wall_ms,
+        "first_trace_wall_ms": first_wall_ms,
         "trace_wall_samples_ms": samples_ms,
         "median_trace_wall_ms": median_wall_ms,
         "tail_trace_wall_ms": tail_wall_ms,

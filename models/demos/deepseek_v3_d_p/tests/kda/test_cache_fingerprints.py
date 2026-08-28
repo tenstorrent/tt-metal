@@ -4,8 +4,19 @@
 
 from dataclasses import replace
 
+import torch
+
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.utils import make_config
 from models.demos.deepseek_v3_d_p.tt.kda.weights import _cache_stem
+
+
+def test_checkpoint_identity_depends_on_weight_content() -> None:
+    baseline = {"weight": torch.tensor([1.0, 2.0], dtype=torch.bfloat16)}
+    changed = {"weight": torch.tensor([1.0, 3.0], dtype=torch.bfloat16)}
+
+    assert kda_state_dict_sha256(baseline) == kda_state_dict_sha256(baseline)
+    assert kda_state_dict_sha256(baseline) != kda_state_dict_sha256(changed)
 
 
 def test_tensor_cache_stem_identifies_config_and_placement() -> None:
