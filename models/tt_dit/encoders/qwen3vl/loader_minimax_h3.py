@@ -38,6 +38,7 @@ from loguru import logger
 from safetensors import safe_open
 
 from ...parallel.manager import CCLManager
+from ...utils import cache
 from .model_qwen3vl import Qwen3VlTextEncoder
 from .vision_qwen3vl import Qwen3VlVisionModel
 
@@ -160,11 +161,16 @@ def build_minimax_h3_text_encoder(
     )
 
     if load_weights:
-        state = load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers)
-        # Strict: an unconsumed or missing key here is a real mapping bug, and this is the only
-        # place it is cheap to catch.
-        encoder.load_torch_state_dict(state)
-        del state
+        cache.load_model(
+            encoder,
+            model_name="minimax-h3",
+            subfolder="text_encoder",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
+            is_fsdp=is_fsdp,
+            get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(weights_dir, num_layers=num_layers),
+        )
 
     return encoder, config
 
