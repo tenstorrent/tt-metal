@@ -2894,7 +2894,9 @@ class ModelArgs:
         )
 
         self.full_model_n_layers = self.n_layers
-        self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
+        self.norm_eps = text_config.get(
+            "norm_eps", text_config.get("rms_norm_eps", text_config.get("layer_norm_eps"))
+        )  # layer_norm_eps: Command-R (cohere) HF key
         self.vocab_size = text_config["vocab_size"]
         # Pad vocab_size to be divisible by (32 * num_devices) for proper shard alignment
         tile_size = 32
@@ -3025,6 +3027,8 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        # Command-R (cohere): final-logit scalar applied post-linear on the LM head.
+        self.logit_scale = text_config.get("logit_scale", None)
 
         # Final logit soft-capping (Gemma-2): logits -> tanh(logits / cap) * cap.
         # Attn-score softcapping is not applied (see __init__ comment); only the

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Canada Quant Labs (org-internal scaffold — bounty tt-metal#49307 track)
+# SPDX-FileCopyrightText: © 2026 Canada Quant Labs (org-internal — bounty tt-metal#49307 track)
 # SPDX-License-Identifier: Apache-2.0
 #
 # CohereDecoderLayer for Command-R (c4ai-command-r-v01) — bounty tt-metal#49307 track.
@@ -12,15 +12,15 @@
 #        out      = residual + self_attn(h) + mlp(h)
 #      TransformerBlock's sequential attn_norm -> attn -> ff_norm -> MLP does NOT apply.
 #   2. input_layernorm is CohereLayerNorm (mean-centering, fp32 internal) — NOT RMSNorm.
+#      The converted state-dict key is "attention_norm" (map_hf_to_meta_keys renames
+#      HF input_layernorm -> attention_norm); semantically it feeds BOTH branches here.
 #   3. Attention is MHA 64 Q : 64 KV heads (head_dim 128), no QK norm, no attn bias;
 #      scaling is plain 1/sqrt(head_dim). The stock Attention class applies (its
 #      q_norm/k_norm loaders stay inert — no *.q_norm/*.k_norm tensors in this checkpoint).
 #
-# Scaffold status: ctor wiring mirrors TransformerBlock so P5 can slot it into
-# model.py; forward() documents the parallel-block op order with TODO(PCC) markers at
-# every point that must be PCC-validated against the tt-rd CPU reference harness
-# (tt-rd scripts/command-r/) before Stage-1 bring-up. NOT runnable yet — ModelArgs has
-# no cohere model_type (P5 survey: model_config.py, load_checkpoints.py, model.py).
+# Wired into Transformer via the family dispatch in model.py (args.model_type ==
+# "cohere"). Pending: on-box import smoke + PCC >= 0.99 validation of the norm /
+# parallel-residual op order against the tt-rd CPU reference dumps (P6).
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -72,7 +72,7 @@ class CohereDecoderLayer(LightweightModule):
             prefetcher=prefetcher,
         )
         # SwiGLU MLP (hidden_act=silu), intermediate 22528; stock MLP applies.
-        # TODO(PCC): gate/up [22528, 8192], down [8192, 22528] per config; no biases.
+        # gate/up [22528, 8192], down [8192, 22528] per config; no biases.
         self.feed_forward = MLP(
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
@@ -85,6 +85,7 @@ class CohereDecoderLayer(LightweightModule):
             prefetcher=prefetcher,
         )
         # ONE input_layernorm (LayerNorm, eps=config.layer_norm_eps=1e-5, weight-only).
+        # Converted key: layers.{N}.attention_norm.weight (map_hf_to_meta_keys).
         self.input_layernorm = TtCohereLayerNorm(
             device=mesh_device,
             dim=args.dim,
@@ -93,7 +94,7 @@ class CohereDecoderLayer(LightweightModule):
             state_dict_prefix=args.get_state_dict_prefix("", layer_num),
             weight_cache_path=None if args.dummy_weights else weight_cache_path,
             weight_dtype=ttnn.bfloat16,
-            weight_key="input_layernorm",
+            weight_key="attention_norm",
             tt_ccl=self.tt_ccl,
         )
 
@@ -114,8 +115,6 @@ class CohereDecoderLayer(LightweightModule):
         # PARALLEL BLOCK — HF v4.39.3 line 654 op order.
         residual = x
 
-        # TODO(PCC): mem-config contract mirrors TransformerBlock.forward
-        # (args.get_residual_mem_config / get_norm_config) — finalize in P5 wiring.
         skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
         norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
 
@@ -139,15 +138,15 @@ class CohereDecoderLayer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # TODO(PCC): attention output must match TransformerBlock's skip_mem_cfg contract.
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
         # MLP consumes the SAME normed input h (parallel), not the post-attention residual.
         mlp_out = self.feed_forward.forward(h, mode)
 
-        # residual + attn + mlp — single fused residual add.
+        # residual + attn + mlp.
         # TODO(PCC): HF computes (residual + attn) + mlp in fp32-accumulated bf16;
-        # two-step ttnn.add vs chained add ordering to be validated at PCC >= 0.99.
+        # two-step ttnn.add ordering to be validated at PCC >= 0.99 against the
+        # CPU reference per-layer dumps.
         hidden = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
         out = ttnn.add(hidden, mlp_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
         return out  # fractured across devices

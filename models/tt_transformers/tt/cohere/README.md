@@ -46,10 +46,20 @@ HF reference code, NOT the bounty-issue table):
 
 ## Status / next steps
 
-- P3 (this branch): scaffold only — NOT runnable; `ModelArgs` has no cohere model_type yet
-  (P5 survey maps the exact wiring: `model_config.py`, `load_checkpoints.py`, `model.py`).
-- P4: host CPU PCC ≥ 0.99 reference harness (tt-rd `scripts/command-r/`) — captures HF
-  per-layer activations on the QB2 host (249 GB RAM fits the 70 GB F16 checkpoint).
+- P3 (this branch): scaffold landed 2026-08-28 (`b0a6993`).
+- P4: DONE 2026-08-27 — CPU reference captured on the QB2 host: fp32 `prompt00-02.npz`
+  (43 keys each) at `/root/v4run/results/command-r/reference/` (tt-rd `scripts/command-r/`).
+- P5a (this branch, 2026-08-28): **WIRED** — `ModelArgs` picks cohere up from
+  config.json (`norm_eps` falls back to `layer_norm_eps`; `logit_scale` read);
+  `Transformer` family dispatch swaps in `CohereDecoderLayer` + `TtCohereLayerNorm`
+  final norm + `CohereLMHead` when `args.model_type == "cohere"` (lazy imports,
+  zero default-path impact); `TtCohereLayerNorm` real weight loader (RMSNorm-mirrored
+  reshape/replicate); checkpoint conversion verified compatible — tied weights surface
+  both keys via the HF `state_dict`, `input_layernorm -> attention_norm` mapping reused;
+  **NO `load_checkpoints.py` change needed**. Authored + `py_compile` clean; NOT yet
+  run on box (import smoke + PCC pending).
+- P5b next: on-box import smoke + single-layer PCC vs the P4 dumps (P6 harness),
+  then full-stack decode smoke + generator/vLLM wiring check.
 - Target mesh: QB2 4× Blackhole p150, TP=4, mesh (1,4); bounty target is T3K (TP=8) —
   keep the code arch-agnostic per dossier §3 option 1.
 
