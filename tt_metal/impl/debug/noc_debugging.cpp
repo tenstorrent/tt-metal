@@ -16,7 +16,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/xy_pair.hpp"
 #include "tt_stl/assert.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 
 namespace tt::tt_metal {
 

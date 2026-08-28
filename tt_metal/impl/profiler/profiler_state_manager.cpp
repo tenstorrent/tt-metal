@@ -9,7 +9,7 @@
 #include "profiler_state_manager.hpp"
 #include <tt_stl/assert.hpp>
 #include <impl/debug/noc_debugging.hpp>
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "math.hpp"

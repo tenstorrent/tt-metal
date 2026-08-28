@@ -36,7 +36,7 @@
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
