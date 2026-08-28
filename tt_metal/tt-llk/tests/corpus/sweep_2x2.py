@@ -1117,6 +1117,40 @@ KNOBS = {
     # copydest-fresh composition also envelope-refused (8430 -> 8493);
     # the booked carrier cell is byte- and cycle-exact preserved.
     "post-autoincr-window": "-mtt-tensix-optimize-post-autoincr-window",
+    # IJ (cyclic-region-schedule, lane IJ 2026-08-28): the trigonometry
+    # chain-execution residual (lane ID's named successor; word parity
+    # already flipped 76/11 vs hand 77/12 at reclaim+stoch yet +1.66
+    # remained).  AUTOPSY (makespan-oracle loop table at the anchor
+    # leg): sem ResMII=75 RecMII>=88 achieved-II>=94 vs hand 76/>=88/
+    # >=92 — EQUAL recurrence-circuit bounds, the gap is SCHEDULING
+    # (2 modeled slots/iter).  The sem-only stalls sit in ONE interior
+    # region (the exponent muli->add->add chain and the Horner
+    # mad->mad->mad tail) with their natural fillers register-
+    # serialized; the row is a SELF-LOOP bb chopped by cc-write/dst
+    # barrier words, so the plain list scheduler defers whole and the
+    # round-interleave one-region cyclic path refuses
+    # round-interleave-seam-barrier-word (dump-proven).
+    # -mtt-tensix-optimize-cyclic-region-schedule Init(0) lifts the
+    # self-loop deferral for INTERIOR regions of the multi-region row:
+    # each maximal run of admitted straight-line nodes strictly between
+    # issued barrier words is re-list-scheduled under the established
+    # region vocabulary (admission, entry pins, deterministic list
+    # order), and the candidate commits only on a STRICT decrease of
+    # the WHOLE row's modeled steady-state II (the wrapped cyclic
+    # issue model over every issued word of the block; unaudited
+    # latencies floored at zero identically in baseline and
+    # candidate).  Barrier words and region boundaries never move, so
+    # any cross-iteration dependence rides a fixed word or whole-region
+    # order — per-iteration semantics bit-exact by construction.
+    # Refusals by name: cyclic-interior-{opaque-word, backedge-seam,
+    # repeated-shape, no-ii-decrease} + the straight-line scheduler's
+    # pad-site / entry-pad-flip commit guards.  Model floors at the
+    # anchor leg: sem 94 -> 93 (this knob's reach; the storage-collision
+    # rename is 8-LREG-wall-blocked on this row — no free LREG over the
+    # scratch-web span), hand emitted 92 — the post-fix residual is the
+    # constrained floor (region barriers + LREG file), certified in
+    # laneIJ-evidence-20260828.
+    "cyclic-region-schedule": "-mtt-tensix-optimize-cyclic-region-schedule",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1475,6 +1509,12 @@ KNOB_MODES = {
     # post-fold).  on-plus while a booking knob; promotion requires the
     # ON-delta adjudication ceremony.
     "post-autoincr-window": "on-plus",
+    # IJ cyclic-region-schedule: default-off Init(0) booking knob; a
+    # pure post-RA reorder inside self-loop rows (barrier words fixed,
+    # strict whole-row modeled-II acceptance, bit-exact by
+    # construction).  on-plus while a booking knob; promotion requires
+    # the ON-delta adjudication ceremony.
+    "cyclic-region-schedule": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
