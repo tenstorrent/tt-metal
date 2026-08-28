@@ -29,7 +29,7 @@ on:
         type: choice
         options:
           - all
-          - deepseek_prefill
+          - disaggregated_prefill
       test-selection:
         description: 'Select e2e tests to run: all tests, or one test id'
         required: false
@@ -37,7 +37,8 @@ on:
         type: choice
         options:
           - all
-          - bh-qb2-deepseek-d2d-socket-sync
+          - bh-lb-disaggregated-prefill-perf
+          - bh-qb2-disaggregated-prefill-d2d-socket-sync
       build-type:
         required: false
         type: choice
@@ -158,7 +159,10 @@ jobs:
     # expected-jobs, so the matrix script runs only once per SKU (in
     # the impl) and there's no logic duplication across workflows.
     needs: [build-artifact, generate-card-matrix, blackhole-e2e-tests]
-    if: always()
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -211,7 +211,7 @@ on:
     branches: ["main"]
   schedule:
     # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
-    - cron: "0 */4 * * *"
+    - cron: "0 */2 * * *"
 
 permissions:
   actions: read
@@ -319,16 +319,57 @@ jobs:
           wh_skus=()
           bh_skus=()
           sim_skus=()
+          # wh-skus / bh-skus are per-arch lists: pass these to an impl when this pipeline
+          # must restrict a multi-architecture tests YAML to one architecture (umd-sanity-tests).
+          # sanity-skus is the union of every enabled arch's list below: pass this to an impl
+          # whose tests yaml spans multiple architectures in one file (ttnn-sanity-tests,
+          # ops-sanity-tests, blackhole-multi-card-fast-sanity-tests). prepare_test_matrix.py
+          # intersects whichever list it's given against each test's own `skus:` map, so handing
+          # a wider list than a given tests yaml needs is safe -- SKUs the yaml doesn't reference
+          # simply produce no matrix rows for that impl.
+          #
+          # Both lists include every wh_*/bh_* SKU in .github/sku_config.yaml except:
+          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- a separate pipeline (galaxy-sanity.yaml).
+          #   - bh_sc* -- exabox multihost SKUs, used by shield/scaleout, not sanity.
+          #   - cpu_medium -- not a wh/bh hardware SKU.
+          #   - *_prio SKUs -- merge_group-only aliases; sku_config.yaml itself says not to
+          #     list these in a tests yaml's skus map.
           if [[ "$run_wormhole" == "true" ]]; then
-            wh_skus+=("wh_n300_civ2")
+            wh_skus+=(
+              "wh_llmbox"
+              "wh_llmbox_perf"
+              "wh_n150"
+              "wh_n300"
+              "wh_n150_civ2"
+              "wh_n300_civ2"
+              "wh_llmbox_civ2"
+              "wh_llmbox_civ2_viommu"
+              "wh_n300_perf"
+            )
             sanity_skus+=("${wh_skus[@]}")
           fi
           if [[ "$run_blackhole" == "true" ]]; then
-            bh_skus+=("bh_p150b_civ2" "bh_p150b_civ2_viommu" "bh_quietbox_2" "bh_p300")
+            bh_skus+=(
+              "bh_p150b_civ2_viommu"
+              "bh_p150b_civ2"
+              "bh_p150"
+              "bh_p150_perf"
+              "bh_loudbox"
+              "bh_p300"
+              "bh_p300_viommu"
+              "bh_loudbox_civ2_viommu"
+              "bh_quietbox_2"
+              "bh_quietbox_2_iommu"
+            )
             sanity_skus+=("${bh_skus[@]}")
           fi
           if [[ "$run_sim" == "true" ]]; then
-            sim_skus+=("sim_wh_n150" "sim_wh_galaxy" "sim_bh_p150" "sim_bh_galaxy")
+            sim_skus+=(
+              "sim_wh_n150"
+              "sim_wh_galaxy"
+              "sim_bh_p150"
+              "sim_bh_galaxy"
+            )
             sanity_skus+=("${sim_skus[@]}")
           fi
 
@@ -373,7 +414,13 @@ jobs:
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
       summary-scope: ${{ inputs.platform }}
-      enabled-skus: "wh_llmbox_civ2"
+      # sanity-skus, same as ttnn-sanity-tests/ops-sanity-tests/blackhole-multi-card-fast-sanity-tests.
+      # t3000_sanity_tests.yaml today only defines wh_llmbox_civ2; every other SKU in the
+      # list (wh_n300_civ2, wh_llmbox, wh_llmbox_civ2_viommu, wh_llmbox_perf, and any bh_*/sim_*
+      # entries) simply produces no matrix row here until/unless a test entry references it.
+      # The job's own `if:` above still gates on run-wormhole, so this never fires with a
+      # SKU set lacking a wh_llmbox entry.
+      enabled-skus: ${{ needs.generate-sku-matrix.outputs.sanity-skus }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -495,16 +542,16 @@ jobs:
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
-    # always(): a cancelled run still reports on the legs that finished. A
-    # cancelled child contributes no expected-jobs, so its unfinished legs are
-    # not stubbed as infra failures.
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
     #
     # A caller that invokes this workflow twice per run (sanity-tests-debug)
     # passes false, so the two reports don't collide on the artifact name.
     # The github.workflow arm covers this workflow's own push/schedule triggers,
     # where the `inputs` context is empty and the default above never applies;
     # it is the caller's workflow name for a workflow_call, so it is false there.
-    if: ${{ always() && (inputs.publish-run-summary || github.workflow == 'Sanity tests') }}
+    if: ${{ !cancelled() && (inputs.publish-run-summary || github.workflow == 'Sanity tests') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

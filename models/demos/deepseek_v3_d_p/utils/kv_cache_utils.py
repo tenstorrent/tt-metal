@@ -370,6 +370,22 @@ def create_kv_chunk_address_table_ds(
     return lookup_table
 
 
+def merged_num_layers(stage_layout):
+    """Layers a merged (all-stage) table config spans: the sum of every stage's owned count. Also
+    enforces tt-blaze's missing-layer guard -- the stages must tile ``[0, total)`` with no gaps or
+    overlaps, which compute_layer_split's contiguous partition satisfies."""
+    total = sum(s["count"] for s in stage_layout)
+    expected = 0
+    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
+        if s["first_layer"] != expected:
+            raise RuntimeError(
+                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
+                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
+            )
+        expected += s["count"]
+    return total
+
+
 def create_kv_chunk_address_table_kimi(
     config,
     mesh_device,
@@ -424,20 +440,8 @@ def create_kv_chunk_address_table_kimi(
         kvpe_cache.shape[0] == num_users * num_my_layers
     ), f"cache batch dim {kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
 
-    # Stages must tile [0, effective_num_layers) contiguously, no gaps/overlaps (tt-blaze's
-    # missing-layer guard). compute_layer_split produces a contiguous partition, so this should hold.
-    effective_num_layers = sum(s["count"] for s in stage_layout)
-    expected = 0
-    for s in sorted(stage_layout, key=lambda s: s["first_layer"]):
-        if s["first_layer"] != expected:
-            raise RuntimeError(
-                f"gathered layer ranges are not contiguous: expected next stage at layer {expected} but got "
-                f"first_layer={s['first_layer']} (stages={[(x['first_layer'], x['count']) for x in stage_layout]})"
-            )
-        expected += s["count"]
-
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
-    config.num_layers = effective_num_layers
+    config.num_layers = merged_num_layers(stage_layout)
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
     return populate_kv_chunk_address_table_kimi(
         lookup_table=lookup_table,
@@ -466,6 +470,7 @@ def populate_kv_chunk_address_table_kimi(
     num_users=1,
     config_id=0,
     stage_layout=None,
+    layer_rows=None,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -481,11 +486,24 @@ def populate_kv_chunk_address_table_kimi(
         lookup_table: an existing KvChunkAddressTable (single- or multi-config).
         config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
         config_id: which config of the table to populate (default 0, the single-config case).
+        layer_rows: table row to publish each dense cache layer at; None (default) means row == layer.
+            A compacted cache passes its dense -> global layer map here; DRAM addresses do not move.
         (remaining args as in create_kv_chunk_address_table_kimi)
 
     Returns:
         lookup_table: the same table, with config_id populated.
     """
+
+    # Row a dense cache layer is published at; identity unless the cache is compacted.
+    def _table_row(dense_layer):
+        if layer_rows is None:
+            return dense_layer
+        assert dense_layer < len(layer_rows), (
+            f"layer_rows has {len(layer_rows)} entries but the cache holds dense layer {dense_layer}; "
+            f"the map must cover every layer the cache physically stores"
+        )
+        return layer_rows[dense_layer]
+
     if stage_layout is not None:
         # ---- stage_layout-driven path (PP-capable, #48826). ----
         # Per-stage device groups + host tags are built inside the stage loop below (one group per
@@ -537,7 +555,7 @@ def populate_kv_chunk_address_table_kimi(
                                 location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                                 location.size_bytes = chunk_size_bytes
                                 location.device_group_index = group_idx
-                                lookup_table.set(global_layer, position, slot, location, config_id)
+                                lookup_table.set(_table_row(global_layer), position, slot, location, config_id)
 
                                 curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                 if curr_bank_id == 0:
@@ -608,7 +626,7 @@ def populate_kv_chunk_address_table_kimi(
                         location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location, config_id)
+                        lookup_table.set(_table_row(layer), position, slot, location, config_id)
 
                         curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                         if curr_bank_id == 0:

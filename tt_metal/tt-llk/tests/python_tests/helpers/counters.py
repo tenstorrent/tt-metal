@@ -696,7 +696,9 @@ def export_counters(
     if results.empty:
         return
 
-    perf_dir = TestConfig.LLK_ROOT / "perf_data"
+    # Same run directory the combined reports land in, so a run's artefacts stay
+    # together instead of leaving orphans at the perf_data root.
+    perf_dir = TestConfig.perf_run_dir()
     perf_dir.mkdir(parents=True, exist_ok=True)
 
     df = results.copy()

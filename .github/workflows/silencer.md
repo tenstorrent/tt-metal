@@ -96,7 +96,7 @@ safe-outputs:
     labels: [automation, silencer]
     # Scope patches to source-like files only: a mistaken or manipulated agent response
     # cannot touch unrelated files outside Silencer's noise-fix scope.
-    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
+    allowed-files: ["**/*.cpp", "**/*.cc", "**/*.cxx", "**/*.h", "**/*.hpp", "**/*.inl", "**/*.py", "**/*.pyi", "**/*.cmake", "**/CMakeLists.txt"]
     # One target per run (see *Scan procedure* step 5): Silencer fixes a single noise
     # source per turn, so it opens at most one PR. Also gh-aw's default, but stated
     # explicitly here because it is a deliberate scope decision, not an accident.
@@ -123,7 +123,7 @@ safe-outputs:
     # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 2 scans
     # exactly this same list, so there is only one place to update when a tracked
     # workflow is added or removed. Entries are bare filename stems, no extension
-    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 39 are confirmed to
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 34 are confirmed to
     # declare a `workflow_dispatch` trigger, which this safe-output requires.
     workflows:
       - sanity-tests
@@ -131,9 +131,8 @@ safe-outputs:
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
       - galaxy-deepseek-tests
-      - galaxy-perf-tests
-      - galaxy-demo-tests
       - galaxy-unit-tests
+      - models-t1-device-perf-tests
       - galaxy-integration-tests
       - galaxy-stress-tests
       - galaxy-e2e-tests
@@ -154,7 +153,6 @@ safe-outputs:
       - models-t3-unit-tests
 
       - perf-device-models
-      - single-card-ttnn-models-frequent-tests
       - tt-metal-l2-nightly
       - vllm-model-tests
       - sanity-tests-debug

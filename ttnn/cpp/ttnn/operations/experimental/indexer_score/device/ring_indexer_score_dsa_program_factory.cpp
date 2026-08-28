@@ -766,6 +766,22 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
                 }
             }
         };
+
+        // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
+        // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
+        // program. Runtime-arg layouts are declared in ring_attention_all_gather_async_detail.
+        const auto& ag_semaphores = args.fused_ring->ag_semaphore;
+        TT_FATAL(
+            ag_semaphores.size() >= 2,
+            "indexer_score fused override: expected at least 2 AG semaphores, got {}",
+            ag_semaphores.size());
+        const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
+        const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
+        patch_ag_field(/*reader forward=*/3, /*out_ready_sem=*/2, forward_semaphore);
+        patch_ag_field(/*writer forward=*/4, /*out_ready_sem=*/4, forward_semaphore);
+        patch_ag_field(/*reader backward=*/5, /*out_ready_sem=*/2, backward_semaphore);
+        patch_ag_field(/*writer backward=*/6, /*out_ready_sem=*/4, backward_semaphore);
+
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;

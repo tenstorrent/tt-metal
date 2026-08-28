@@ -74,6 +74,9 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_device_operation.cpp
     cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/dit_fused_distributed_rmsnorm_program_factory.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/dit_fused_distributed_groupnorm.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_device_operation.cpp
+    cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_groupnorm/device/dit_fused_distributed_groupnorm_program_factory.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
@@ -156,10 +159,13 @@ endif()
 set(TTNN_CORE_JIT_API_HEADERS
     api/ttnn/tensor/layout/layout.hpp
     cpp/ttnn/kernel/compute/bmm_tilize_untilize.cpp
+    cpp/ttnn/kernel/compute/dest_format_helpers.hpp
     cpp/ttnn/kernel/compute/eltwise_copy.cpp
     cpp/ttnn/kernel/compute/moreh_common.hpp
     cpp/ttnn/kernel/compute/tilize.cpp
+    cpp/ttnn/kernel/compute/tilize_metal2.cpp
     cpp/ttnn/kernel/compute/transpose_wh.cpp
+    cpp/ttnn/kernel/dataflow/cb_fill_helpers.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar.hpp
     cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp
     cpp/ttnn/kernel/dataflow/generate_mm_scaler.hpp

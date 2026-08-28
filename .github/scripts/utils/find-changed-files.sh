@@ -92,7 +92,7 @@ while IFS= read -r FILE; do
         .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
+        tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -107,7 +107,7 @@ while IFS= read -r FILE; do
             TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        ttnn/**/*.@(h|hpp|c|cpp|py))
+        ttnn/**/*.@(h|hpp|inl|c|cpp|py))
             TTNN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -119,11 +119,11 @@ while IFS= read -r FILE; do
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.@(h|hpp|c|cpp|py))
+        tt-train/**/*.@(h|hpp|inl|c|cpp|py))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tools/**/*.@(h|hpp|c|cpp|py))
+        tools/**/*.@(h|hpp|inl|c|cpp|py))
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;

@@ -10,6 +10,9 @@ import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig, _resolve_sampling1d_config
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ---------------------------------------------------------------------------
 # Model name constants (match test_mlp_1d.py naming convention)
 # ---------------------------------------------------------------------------
@@ -1496,11 +1499,10 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
 
     The old single-token logprob path only computes on multi-device shards with
     num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
-    On 1×8, with k=1/p=0/temp=1 the sampled token is the argmax, so its logprob must match
-    torch.log_softmax(logits)[argmax].
+    On 1×8, the returned logprob must match torch.log_softmax(logits)[sampled_token] within
+    bf16 reduction tolerance. PCC is intentionally not used here because the k=1 random-bf16 case
+    is near-constant and can degenerate to zero variance on device.
     """
-    from models.common.utility_functions import comp_pcc
-
     torch.manual_seed(42)
     B = 32
     vocab_size = 32768  # divisible by 8
@@ -1531,10 +1533,8 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
     # Reference: log_softmax over the full vocab (fp32), indexed at the sampled token.
     ref_log_softmax = torch.log_softmax(logits_host.float().squeeze(), dim=-1)  # [B, V]
     ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
-
-    passing, pcc_msg = comp_pcc(ref_lp, lp_host, pcc=0.99)
-    print(f"\n  logprobs PCC (V={vocab_size}, mesh={cluster_shape}): {pcc_msg}")
-    assert passing, f"logprobs PCC below threshold: {pcc_msg}"
+    max_abs_error = torch.max(torch.abs(ref_lp - lp_host)).item()
+    assert max_abs_error <= 5e-2, f"logprobs max abs error {max_abs_error:.6f} exceeds bf16 tolerance"
 
 
 # ==============================================================================

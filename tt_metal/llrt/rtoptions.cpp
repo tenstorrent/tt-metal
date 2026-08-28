@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
+    TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH,  // Factory System Descriptor (FSD) path
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE,  // Core grid override
 
     // ========================================
@@ -189,6 +190,7 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
     TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
     TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
+    TT_METAL_INSPECTOR_LOG_MESH_BUFFERS,               // Log mesh buffer lifecycle to YAML (expensive, off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -512,6 +514,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_MESH_GRAPH_DESC_PATH:
             this->is_custom_fabric_mesh_graph_desc_path_set = true;
             this->custom_fabric_mesh_graph_desc_path = std::string(value);
+            break;
+
+        // TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH
+        // Path to a Factory System Descriptor (FSD) textproto describing the as-built/expected topology.
+        // When set, tooling may map against it instead of live-discovering the PSD, and it lets
+        // Fabric 2.0 statically reroute traffic around broken links.
+        // Default: unset (fall back to live PSD discovery)
+        // Usage: export TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=/path/to/fsd.textproto
+        // See https://github.com/tenstorrent/tt-metal/issues/52859 for the design and rollout.
+        case EnvVarID::TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH:
+            this->factory_system_descriptor_path = std::string(value);
             break;
 
         // TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
@@ -1476,6 +1489,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.log_runtime_entries = false;
             if (strcmp(value, "1") == 0) {
                 this->inspector_settings.log_runtime_entries = true;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_LOG_MESH_BUFFERS
+        // Enables logging of every MeshBuffer construction and destruction to YAML.
+        // WARNING: This is expensive. Buffers churn orders of magnitude faster than programs, so the log
+        // grows very quickly and each event costs a flushed write.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_MESH_BUFFERS=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_MESH_BUFFERS:
+            this->inspector_settings.log_mesh_buffers = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_mesh_buffers = true;
             }
             break;
 

@@ -99,7 +99,11 @@ jobs:
           else
             MATRIX=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
               ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
-              | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
+              | [ .[] | . as $e | select(
+                    ($tokens | index($e.test_type))
+                    or ($tokens | index($e.test_group))
+                    or (($e.test_tags // []) | any(. as $f | $tokens | index($f)))
+                ) ]
             ')
             if [ "$MATRIX" = "[]" ]; then
               echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${{ env.TESTS_YAML_PATH }})."
@@ -173,6 +177,13 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           create-pipeline-dir: "false"
+
+      - name: Configure TorusXY fabric profile
+        if: ${{ matrix.test-group.fabric_profile == 'torus_xy' }}
+        shell: bash
+        run: |
+          echo "TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" >> "$GITHUB_ENV"
+          echo "PREFILL_TORUS_XY_CERTIFIED=1" >> "$GITHUB_ENV"
 
       # Same mechanism as .github/actions/setup-job, which this job can't use (not a container
       # job, tests run under mpirun): on dispatch stall the runtime runs

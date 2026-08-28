@@ -10,7 +10,12 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import is_default_value, is_power_of_2, upper_power_of_2
+from models.common.sampling._utils import (
+    is_default_value,
+    is_power_of_2,
+    topk_would_route_to_large_indices,
+    upper_power_of_2,
+)
 from models.common.sampling.tt_log_probs import LogProbsCalculator
 from models.common.sampling.vocab_padding import (
     build_invalid_vocab_mask,
@@ -209,6 +214,13 @@ class TTSampling(LightweightModule):
             if self.sub_core_grids is not None
             else None
         )
+        # Blackhole galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
+        # loaded during prefill sampling (prefill samples in decode mode). Auto-multicore ops grab the
+        # full 12-wide compute grid, which includes the dispatch column that no loaded sub-device covers
+        # ("kernel group cores do not match sub device cores"). Pin the force-argmax untilize/argmax to
+        # the worker sub-core grids so they stay inside the worker sub-device. Left None elsewhere so no
+        # other arch's behaviour changes.
+        self._force_argmax_sub_core_grids = self.sub_core_grids if getattr(args, "use_unfused_ccl", False) else None
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -551,10 +563,8 @@ class TTSampling(LightweightModule):
         return ttnn.all_gather(
             tensor,
             dim=dim,
-            num_links=num_links,
             memory_config=memory_config,
             cluster_axis=cluster_axis,
-            topology=ttnn.Topology.Linear,
         )
 
     def _get_sampling_cluster_axis(self):
@@ -768,7 +778,16 @@ class TTSampling(LightweightModule):
         """
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
-            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
+            # BH galaxy prefetcher (unfused-CCL) keeps a split senders/worker sub-device manager
+            # loaded during decode. The vocab-trim ttnn.slice auto-grids a 32-core block from origin
+            # (0,0) on the DRAM-interleaved path (it does not honor sub_core_grids there) and spills
+            # into the uncovered senders-column tail -> "kernel group cores do not match sub device
+            # cores". Skip that slice here. Still apply the full-width additive invalid-vocab mask
+            # (already selected whenever sub_core_grids is set; one elementwise add, no slice/concat)
+            # so a 0-padded logit cannot win argmax when every valid logit is negative. untilize/
+            # argmax stay pinned to the worker sub-core grid via _force_argmax_sub_core_grids.
+            force_argmax_skip_vocab_trim = self._force_argmax_sub_core_grids is not None
+            slice_valid_vocab = self._can_slice_valid_vocab_for_argmax() and not force_argmax_skip_vocab_trim
             if not slice_valid_vocab:
                 x = self._mask_invalid_vocab_logits(x)
             # Gather the output across all devices and untilize the tensor (for argmax)
@@ -780,6 +799,31 @@ class TTSampling(LightweightModule):
                     f"Force argmax sampling all-gather: cluster_axis={cluster_axis}, "
                     f"num_links={num_links}, topology={topology}"
                 )
+                # NOTE: do NOT pass a persistent_output_buffer here. The all_gather_async factory
+                # disables its barrier semaphore when persistent buffers are used, and the barrier
+                # is what bounds cross-invocation skew: without it a fast device's next-invocation
+                # writes/increments can reach a peer before that peer's reader has reset its
+                # out_ready semaphore, leaving residual counts that make later waits pass early
+                # (argmax then reads the previous step's logits). Under trace the fresh output
+                # allocation is frozen at capture, so the address is stable anyway.
+                barrier_accessor = getattr(
+                    self.tt_ccl,
+                    "get_sampling_barrier_semaphore_handle",
+                    self.tt_ccl.get_and_cycle_barrier_semaphore_handle,
+                )
+                # Pin the gather to the worker sub-device only on the BH unfused path, where the
+                # downstream untilize/argmax are themselves confined via _force_argmax_sub_core_grids.
+                # Without this, all_gather_async defaults to sub-device 0 (prefetcher/senders under
+                # the galaxy decode manager). Dispatch only serializes within a sub-device, so a
+                # gather on 0 races the worker-grid untilize and under trace replay returns the
+                # previous step's tokens. Eager mode masks this via host dispatch latency.
+                # Left unpinned on Wormhole: untilize/argmax are not sub-core-grid confined there
+                # and still use the default sub-device 0, matching pre-existing WH behaviour.
+                ag_sub_device_id = (
+                    getattr(self.tt_ccl, "worker_sub_device_id", None)
+                    if self._force_argmax_sub_core_grids is not None
+                    else None
+                )
                 x = ttnn.experimental.all_gather_async(
                     x,
                     persistent_output_buffer=None,
@@ -789,15 +833,23 @@ class TTSampling(LightweightModule):
                     memory_config=x.memory_config(),
                     cluster_axis=cluster_axis,
                     topology=topology,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                    barrier_semaphore=barrier_accessor(cluster_axis),
                     chunks_per_sync=self.argmax_chunks_per_sync,
                     num_workers_per_link=self.argmax_num_workers_per_link,
                     num_buffers_per_channel=2,
+                    subdevice_id=ag_sub_device_id,
                 )
             if slice_valid_vocab:
                 x = self._slice_valid_vocab_for_argmax(x)
             num_untilize_chunks = self._untilize_chunk_count(x.shape[-1])
-            if num_untilize_chunks > 1:
+            # DRAM-interleaved ttnn.split/slice does not honor sub_core_grids (same
+            # senders-column spill as the vocab-trim slice above). Qwen3-32B Galaxy
+            # pads to 155648, which _untilize_chunk_count cuts into 4 chunks, so the
+            # post-main-rebase chunked path hits that fatal on the BH prefetcher
+            # worker sub-device. A single untilize of that width compiles there
+            # (Gemma-2's 256000-wide clash is the reason the chunked path exists;
+            # it stays for unpinned Wormhole grids).
+            if num_untilize_chunks > 1 and self._force_argmax_sub_core_grids is None:
                 # Untilizing the full row in one program needs a static circular-buffer
                 # region proportional to the row width; past ~150K elements it clashes
                 # with the model's resident L1 buffers at compile (Gemma-2's 256000-wide
@@ -812,18 +864,29 @@ class TTSampling(LightweightModule):
                     # so peak memory holds ~1 full-vocab buffer less than freeing
                     # after the loop (this runs inside the captured decode trace,
                     # so the peak is baked into the trace region size).
-                    untilized_chunks.append(ttnn.untilize(chunk, use_multicore=True))
+                    untilized_chunks.append(
+                        ttnn.untilize(
+                            chunk,
+                            use_multicore=True,
+                            sub_core_grids=self._force_argmax_sub_core_grids,
+                        )
+                    )
                     chunk.deallocate()
-                x_untilized = ttnn.concat(untilized_chunks, dim=3)
+                x_untilized = ttnn.concat(
+                    untilized_chunks,
+                    dim=3,
+                    sub_core_grids=self._force_argmax_sub_core_grids,
+                )
                 for chunk in untilized_chunks:
                     ttnn.deallocate(chunk)
             else:
-                x_untilized = ttnn.untilize(x, use_multicore=True)
+                x_untilized = ttnn.untilize(x, use_multicore=True, sub_core_grids=self._force_argmax_sub_core_grids)
             tt_out_tok = ttnn.argmax(
                 x_untilized,
                 dim=-1,
                 output_tensor=tt_out_tok,
                 keepdim=False,
+                sub_core_grids=self._force_argmax_sub_core_grids,
             )
             # Argmax fast-path does not compute logprobs (it never runs a softmax over
             # the vocab). On single-chip, on-device logprobs are unsupported anyway
@@ -840,6 +903,19 @@ class TTSampling(LightweightModule):
             topk_values_list = []
             topk_indices_list = []
 
+            # Drop stable=True ONLY when ttnn.topk would take the Blackhole
+            # topk_large_indices composite for these halves once it is absent
+            # (topk_would_route_to_large_indices mirrors
+            # should_route_to_topk_large_indices in topk.cpp; KEEP IN SYNC).
+            # stable is best-effort/broken anyway (tenstorrent/tt-metal#33492);
+            # _adjust_values_for_tiebreak is what actually guarantees the greedy
+            # pick after the gather, regardless of per-device tie order. Calls
+            # that would not route keep today's arguments bit-for-bit, and a
+            # call the model constrained to a sub-grid is never relaxed.
+            use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+                x_bf16_list[0], self.max_top_k, self.mesh_device
+            )
+
             for i in range(len(x_bf16_list)):
                 # Chunks are not padded to a power of two here: an A/B on this path
                 # (PR #53167) measured no end-to-end decode benefit from steering
@@ -855,7 +931,7 @@ class TTSampling(LightweightModule):
                     # self._topk_stable) -- the stable bitonic network is an open LLK issue
                     # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                     # guarantees the greedy pick.
-                    stable=self._topk_stable,
+                    stable=False if use_routed_topk else self._topk_stable,
                 )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
@@ -881,7 +957,14 @@ class TTSampling(LightweightModule):
                     value=-sys.float_info.max,
                     sub_core_grids=self.sub_core_grids,
                 )
-            # Perform local top-k on each device
+            # Perform local top-k on each device. Drop stable=True ONLY when the
+            # relaxed call would take the Blackhole topk_large_indices composite
+            # (mirror of topk.cpp's predicate; KEEP IN SYNC) -- stable is
+            # best-effort/broken anyway (#33492) and _adjust_values_for_tiebreak
+            # guarantees the greedy pick. Sub-grid-constrained calls never relax.
+            use_routed_topk = self.sub_core_grid_topk is None and topk_would_route_to_large_indices(
+                x_bf16, self.max_top_k, self.mesh_device
+            )
             topk_values, topk_indices = ttnn.topk(
                 x_bf16,
                 k=self.max_top_k,
@@ -893,7 +976,7 @@ class TTSampling(LightweightModule):
                 # self._topk_stable) -- the stable bitonic network is an open LLK issue
                 # (tenstorrent/tt-metal#33492); _adjust_values_for_tiebreak is what actually
                 # guarantees the greedy pick.
-                stable=self._topk_stable,
+                stable=False if use_routed_topk else self._topk_stable,
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.
@@ -966,11 +1049,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.manual_seed(
-            seeds=self.seeds_tt_tensor,
-            user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self._sampling_sub_core_grids,
-        )
         # Perform the actual sampling with top-k, top-p, and temperature.
         # WORKAROUND for tenstorrent/tt-metal#33492 (stable top-k unreliable), to be removed with it:
         # for argmax users (k==1) only, boost the single lowest-GLOBAL-INDEX tied maximum in the
@@ -981,6 +1059,16 @@ class TTSampling(LightweightModule):
         # and its known limitation (>max_top_k maxima tied within one device shard).
         sampling_values = self._adjust_values_for_tiebreak(
             topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
+        )
+        # Seed immediately before the draw. The tie-break's int32 ops run on the
+        # SFPU (use_sfpu_reduce_path admits INT32 MIN/MAX/SUM) on the same sub-core grid,
+        # and rand_tile's PRNG/LREG state is programmed by manual_seed -- so any SFPU work
+        # between seeding and drawing can perturb the draw. The original's fp32 tie-break
+        # took the FPU path and never disturbed it.
+        ttnn.manual_seed(
+            seeds=self.seeds_tt_tensor,
+            user_ids=self.user_ids_tt_tensor,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
         tt_out_tok = ttnn.sampling(
             sampling_values,

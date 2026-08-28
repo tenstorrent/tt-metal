@@ -320,13 +320,10 @@ def sfpu_relu_max(value: float, threshold: float) -> float:
 def sfpu_clamp(value: float, low: float, high: float) -> float:
     """clamp under the SFPU's total order, in the kernel's order of operations.
 
-    `_calculate_clamp_` applies the bounds as `v_if (val < min)` then `v_elseif (val >= max)`,
-    both two-vector compares and so both on the total order, which sends a +NaN through the first
-    and onto *high* via the second. Composing torch.clamp instead would keep IEEE semantics and
-    return NaN.
-
-    The `>=` matters: tightening it to a strict `>` would change the answer at +NaN, and
-    _hardtanh's golden calls this too even though its kernel is a different one.
+    Metal `calculate_clamp` and `calculate_hardtanh` (`sfpi::clamp`) are both this same
+    max-then-min composition of SFPSWAP min/max, so one golden models both. A +NaN
+    outranks every value: the max leaves it in place and the min lands it on *high*,
+    where torch.clamp would keep IEEE semantics and return NaN.
     """
     return sfpu_min(sfpu_max(value, low), high)
 
@@ -435,35 +432,46 @@ def get_golden_generator(cls):
     return golden_registry[cls]
 
 
-def _dummy_zeros(**kwargs):
+def _dummy_zeros(*operands, **kwargs):
     # Size the dummy tensor from the caller's tile-shape kwargs when they are
     # all present (num_faces * face_r_dim * FACE_DIM per tile, times tile_cnt),
     # so callers that strictly size-check the result (e.g. untilize_block on a
-    # 16x32 tiny tile) get a correctly-sized tensor. When any sizing kwarg is
-    # absent, fall back to the historical ELEMENTS_PER_TILE (1024) so existing
-    # callers are unaffected.
+    # 16x32 tiny tile) get a correctly-sized tensor.
     num_faces = kwargs.get("num_faces")
     face_r_dim = kwargs.get("face_r_dim")
     tile_cnt = kwargs.get("tile_cnt")
-    if num_faces is None or face_r_dim is None or tile_cnt is None:
-        size = ELEMENTS_PER_TILE
-    else:
+    # MatmulGolden callers pass operand shapes instead of a tile geometry; its
+    # result is rows(A) x cols(B).
+    dims_a = kwargs.get("input_A_dimensions")
+    dims_b = kwargs.get("input_B_dimensions")
+    if num_faces is not None and face_r_dim is not None and tile_cnt is not None:
         size = tile_cnt * num_faces * face_r_dim * FACE_DIM
+    elif dims_a is not None and dims_b is not None:
+        size = dims_a[0] * dims_b[1]
+    else:
+        # Nothing named the geometry, so fall back to the first tensor operand:
+        # for the elementwise goldens the result is exactly as long as its
+        # inputs. This is the historical ELEMENTS_PER_TILE (1024) whenever the
+        # operand is a whole tile, and it is what keeps callers that size-check
+        # a PARTIAL-tile result (an 8x32 SDPA tile, say) working -- a fixed 1024
+        # would blow up when they combine the result with their own operands.
+        operand = next((arg for arg in operands if isinstance(arg, torch.Tensor)), None)
+        size = ELEMENTS_PER_TILE if operand is None else operand.numel()
     return torch.zeros(size, dtype=torch.bfloat16)
 
 
 class DummyGoldenGenerator:
-    def __call__(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def __call__(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
-    def transpose_faces_multi_tile(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def transpose_faces_multi_tile(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
-    def transpose_within_faces_multi_tile(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def transpose_within_faces_multi_tile(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
-    def accumulate_l1(*args, **kwargs):
-        return _dummy_zeros(**kwargs)
+    def accumulate_l1(self, *args, **kwargs):
+        return _dummy_zeros(*args, **kwargs)
 
 
 def dummy_golden_generator(cls):
@@ -2365,6 +2373,7 @@ class UnarySFPUGolden:
             MathOperation.TanhDerivative: self._tanh_derivative,
             MathOperation.TanhDerivativeLut: self._tanh_derivative_lut,
             MathOperation.RsqrtCompat: self._rsqrt,
+            MathOperation.ReciprocalCompat: self._reciprocal,
             MathOperation.Expm1Cw: self._expm1,
             MathOperation.Hardmish: self._hardmish,
             MathOperation.Lgamma: self._lgamma,
@@ -2445,6 +2454,7 @@ class UnarySFPUGolden:
         fill_const_value: float = 5,
         reduce_pool: Optional[ReducePool] = None,
         skip_tilize: bool = False,
+        unpack_to_srcs: bool = False,
         shift_amount: int = 3,
     ):
         self.data_format = data_format
@@ -2491,6 +2501,12 @@ class UnarySFPUGolden:
         if input_format.is_mx_format():
             # MX in L1 always unpacks to Float16_b even if dest_acc=Yes.
             dst_format = DataFormat.Float16_b
+        elif unpack_to_srcs and input_format in (
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ):
+            # SrcS: fp16 stays 16-bit; dest_acc does not widen.
+            dst_format = input_format
         elif self.dest_acc == DestAccumulation.Yes:
             dst_format = DataFormat.Float32
         elif DataFormat.Float16 in (input_format, data_format):
@@ -2794,14 +2810,10 @@ class UnarySFPUGolden:
     def _log(self, x):
         return self._torch_unary(x, torch.log)
 
-    # log_with_base dispatches _calculate_log_ with base_scale = fp16a bits of
-    # 1/ln(2) (0x3DC5). sFloat16a rounds it to the fp16 value below, so the golden
-    # multiplies ln(x) by that exact rounded scale (=> log2(x) modulo the kernel's
-    # own ln approximation, which is within the same tolerance as plain log).
-    _LOG_WITH_BASE_SCALE = 1.4423828125  # fp16(1/ln 2)
-
+    # The dispatch is metal calculate_log with IS_BASE_TWO=true and base_scale = fp32
+    # 1/ln(2), i.e. log2 with an exact exponent term, so torch.log2 is the golden.
     def _log_with_base(self, x):
-        return self._torch_unary(x, lambda t: torch.log(t) * self._LOG_WITH_BASE_SCALE)
+        return self._torch_unary(x, torch.log2)
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
@@ -2954,23 +2966,13 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: value / t)
 
     def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # tt-llk clamp with min/max fixed to the dispatch constants and offset 0. Clamped
-        # under the SFPU's total order, not torch's IEEE one: _calculate_clamp_ applies the
-        # bounds as `v_if (val < min)` then `v_if (val > max)`, so a NaN falls through the
-        # first and lands on max. See sfpu_clamp.
+        # Metal calculate_clamp is the composition sfpu_clamp models -- see its docstring.
         return sfpu_clamp(x, min_val, max_val)
 
     def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # Modelled as a clamp because it *agrees* with one, not because it is one. The kernel is
-        # `_calculate_hardtanh_`, a different function from `_calculate_clamp_` with differently
-        # formatted constants (bf16 p0/p1/p2 = 1.0/-2.0/1.0 against clamp's fp16 min/max/offset):
-        # `val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2`.
-        #
-        # The two coincide on every special this op is enrolled for, and on the finite range they
-        # implement the same function, so sfpu_clamp is a faithful golden here. They agree by
-        # arithmetic rather than by construction, though, so the agreement is pinned in
-        # test_sfpu_domains rather than assumed -- see
-        # test_hardtanh_golden_matches_the_hardtanh_kernel_chain.
+        # Metal calculate_hardtanh is sfpi::clamp, the same composition sfpu_clamp models,
+        # so Hardtanh's golden IS Clamp's. The identity is pinned in test_sfpu_domains
+        # (test_hardtanh_golden_matches_the_clamp_golden).
         return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
@@ -5325,6 +5327,37 @@ class TopKXLGolden:
     def __call__(self, rows, K):
         _, indices = torch.topk(rows.float(), K, dim=-1, largest=True, sorted=True)
         return indices
+
+
+@register_golden
+class Top32RmGolden:
+    """Golden generator for the DeepSeek top32_rm LLKs (row-major top-32, K=32).
+
+    Mirrors the on-silicon gtest reference verify_top32_outputs(): rank the
+    (score, original_index) pairs of a single row by score DESCENDING, ties broken
+    by the smaller original index, and take the first K. The index paired with each
+    surviving score is that score's original row-major position, because the kernel's
+    index stream is index[i] = i and index tracking carries it through the sort.
+
+    Every stimulus is exactly representable in bf16, so the fp32 score order equals
+    the bf16 compare order the SFPU SFPSWAP uses.
+
+    Args:
+        row: 1-D float tensor [row_elements] of the row's scores.
+        K:   number of top elements (32 for top32_rm).
+    Returns:
+        (values, indices): float tensor [K] of the top-K scores and int64 tensor [K]
+        of their original row-major positions, in descending-score order.
+    """
+
+    def __call__(self, row, K=32):
+        row = row.flatten().float()
+        n = row.numel()
+        # Stable descending sort with an index tiebreak: torch.sort is stable, so
+        # sorting by -score keeps the smaller original index first among equal
+        # scores, matching the gtest comparator (score desc, orig_idx asc).
+        order = torch.argsort(-row, stable=True)[:K]
+        return row[order], order.to(torch.int64)
 
 
 @register_golden

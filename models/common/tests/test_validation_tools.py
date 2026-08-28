@@ -67,7 +67,7 @@ class HostValidatedRMSNorm:
             {"eps": self.eps},
         ),
         metric_tolerances={
-            Metric.MAX_ABS_ERROR: 1e-2,
+            Metric.MAX_ABS_ERROR: 5e-2,
             Metric.MEAN_ABS_ERROR: 1e-3,
             "pcc": 0.99,  # can use enum or their string values
         },

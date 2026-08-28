@@ -133,6 +133,36 @@ def test_bw_gelu_default_opt_output(input_shapes, device):
     assert comp_pass
 
 
+@pytest.mark.parametrize(
+    "grad_dtype, input_dtype",
+    (
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.float32),
+    ),
+)
+def test_bw_gelu_grad_dtype_must_match_input(grad_dtype, input_dtype, device, expect_error):
+    shape = torch.Size([1, 1, 320, 384])
+    torch.manual_seed(213919)
+
+    in_data = (torch.rand(shape, dtype=torch.bfloat16) * 200 - 100).requires_grad_(True)
+    grad_data = torch.rand(shape, dtype=torch.bfloat16) * 10 - 5
+
+    input_tensor = ttnn.from_torch(in_data.detach(), input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.from_torch(grad_data, grad_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    if grad_dtype != input_dtype:
+        with expect_error(RuntimeError, "grad_output and input data types to match"):
+            ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
+        return
+
+    result = ttnn.experimental.gelu_bw(grad_tensor, input_tensor)
+    assert result.dtype == input_dtype
+
+    golden_function = ttnn.get_golden_function(ttnn.experimental.gelu_bw)
+    assert compare_pcc([result], golden_function(grad_data, in_data))
+
+
 def test_bw_gelu_program_cache_regression(device):
     """Program-cache regression guard for the experimental gelu_bw Metal 2.0 port.
 

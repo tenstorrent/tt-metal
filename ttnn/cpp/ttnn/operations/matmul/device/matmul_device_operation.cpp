@@ -758,6 +758,55 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             Mt,
                             per_core_M,
                             num_blocks_y);
+                    } else {
+                        TT_FATAL(
+                            num_blocks_x == 1,
+                            "{}: mcast_in1 requires N ({}) to fit within a single per_core_N block ({}), got "
+                            "num_blocks_x={}. A single in1 sender multicasts one per_core_N-wide weight slice to "
+                            "the whole grid, so multi-column N is not supported here; use "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig (the 2D factory) for multi-column N.",
+                            config_name,
+                            Nt,
+                            per_core_N,
+                            num_blocks_x);
+                        const uint32_t logical_blocks_w = ((Nt - 1) / program_config.out_block_w) + 1;
+                        const uint32_t physical_blocks_w = per_core_N / program_config.out_block_w;
+                        TT_FATAL(
+                            logical_blocks_w == physical_blocks_w,
+                            "{}: mcast_in1 requires the logical N tail to be in the final internal W block; "
+                            "got N={}, per_core_N={}, out_block_w={} (logical blocks={}, physical blocks={}). "
+                            "Reduce per_core_N or increase out_block_w.",
+                            config_name,
+                            Nt,
+                            per_core_N,
+                            program_config.out_block_w,
+                            logical_blocks_w,
+                            physical_blocks_w);
+                        if (num_blocks_y == 1) {
+                            const uint32_t logical_blocks_h = ((Mt - 1) / program_config.out_block_h) + 1;
+                            const uint32_t physical_blocks_h = per_core_M / program_config.out_block_h;
+                            TT_FATAL(
+                                logical_blocks_h == physical_blocks_h,
+                                "{}: a single-Y mcast_in1 sender requires the logical M tail to be in the final "
+                                "internal H block; got M={}, per_core_M={}, out_block_h={} (logical blocks={}, "
+                                "physical blocks={}). Reduce per_core_M or increase out_block_h.",
+                                config_name,
+                                Mt,
+                                per_core_M,
+                                program_config.out_block_h,
+                                logical_blocks_h,
+                                physical_blocks_h);
+                            TT_FATAL(
+                                Mt % program_config.out_block_h == 0 || physical_blocks_h == 1,
+                                "{}: a single-Y mcast_in1 sender supports a partial final H block only when "
+                                "per_core_M contains one internal H block; got M={}, per_core_M={}, out_block_h={} "
+                                "(physical blocks={}).",
+                                config_name,
+                                Mt,
+                                per_core_M,
+                                program_config.out_block_h,
+                                physical_blocks_h);
+                        }
                     }
                     check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
                 }
@@ -1052,27 +1101,28 @@ void validate_dram_sender_global_cb_mcast_in0_geometry(
         program_config.out_block_w,
         program_config.per_core_N);
 
-    // The receiver-contiguous weight ↔ matmul cross-checks (DRAM NdShardSpec, one full-K × per_core_N
-    // shard per receiver, num_shards == receiver_count, K % in0_block_w == 0, per_core_N == per-receiver
-    // N, stream_in1 == false) are owned by the shared prefetcher helper. Call it rather than re-deriving
-    // them here, so the recv-contig contract lives in one place.
+    // The weight ↔ matmul cross-checks (per-receiver shard geometry, K % in0_block_w == 0, per_core_N ==
+    // per-receiver N, stream_in1 == false) are owned by the shared prefetcher helper, which dispatches on
+    // the weight's detected DRAM layout — receiver-contiguous NdShardSpec or legacy K-row-major
+    // WIDTH_SHARDED. Call it rather than re-deriving them here, so each layout's contract lives in one
+    // place.
     ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
 
-    // GCB-window guards specific to this op: the mcast reader streams K-blocks through a two-page
-    // remote-CB window, so the GCB must be an exact multiple of the in1 K-block page and hold >= 2 pages.
+    // GCB-window guard specific to this op: the mcast reader streams K-blocks through a remote-CB
+    // window, so the GCB has to hold at least a double buffer of them. The window itself is floored to
+    // whole pages when the CB is created, so a size that is not an exact multiple is fine — the leftover
+    // bytes are simply unused.
     const uint32_t in1_block_size_bytes =
         program_config.in0_block_w * program_config.per_core_N *
         in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    const uint32_t resident_blocks = gcb.size() / in1_block_size_bytes;
     TT_FATAL(
-        gcb.size() % in1_block_size_bytes == 0,
-        "mcast_in0 global_cb size {} must be a multiple of its in1 K-block page size {}",
+        resident_blocks >= 2,
+        "mcast_in0 global_cb requires a two-page streaming window: size {} holds {} whole in1 K-block pages of {} B, "
+        "need at least 2",
         gcb.size(),
+        resident_blocks,
         in1_block_size_bytes);
-    TT_FATAL(
-        gcb.size() >= 2 * in1_block_size_bytes,
-        "mcast_in0 global_cb requires a two-page streaming window: size {} must be at least {}",
-        gcb.size(),
-        2 * in1_block_size_bytes);
 }
 
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
@@ -2518,7 +2568,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     const auto M =
-                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
                     const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;

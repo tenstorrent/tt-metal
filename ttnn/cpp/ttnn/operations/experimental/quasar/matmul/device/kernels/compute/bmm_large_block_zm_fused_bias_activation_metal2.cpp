@@ -15,7 +15,7 @@
 // is converted:
 //   - positional get_compile_time_arg_val(N) -> named get_arg(args::name)
 //   - named CB-index CTAs (get_named_compile_time_arg_val("cb_*")) -> dfb::* tokens
-//   - named non-CB CTAs (bias_ntiles, last_subblock_w_valid, activation_*) -> get_arg(args::name)
+//   - named non-CB CTAs (bias_ntiles, last_subblock_w_valid) -> get_arg(args::name)
 //   - the MATMUL_DRAM_SHARDED worker-core RTA -> get_arg(args::is_worker_core)
 //   - kernel_main-local CircularBuffer wrappers -> DataflowBuffer wrappers
 // The file-scope helper functions still take raw uint32_t cb ids (dfb::* converts implicitly) and
@@ -42,9 +42,6 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#ifdef SFPU_ACTIVATION
-#include "bmm_fused_activation.hpp"
-#endif
 
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
@@ -252,15 +249,6 @@ void kernel_main() {
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
 
-#ifdef SFPU_ACTIVATION
-    constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
-    constexpr uint32_t activation_param0 = get_arg(args::activation_param0);
-    constexpr uint32_t activation_param1 = get_arg(args::activation_param1);
-    constexpr uint32_t activation_param2 = get_arg(args::activation_param2);
-
-    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
-#endif
-
 #ifdef IN1_TRANSPOSE_TILE
     constexpr uint32_t in1_transpose_tile = true;
 #else
@@ -274,10 +262,24 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+#ifndef ARCH_QUASAR
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#else
+            // Quasar: ckernel::ThreadId has no BRISC (WH/BH-only); the is_batch_valid writer is a DM RISC
+            // (DM2-7), read via mailbox_read((uint8_t)<dm_thread>). That DM->TRISC handoff is not yet wired
+            // on Quasar (prior bring-up saw the compute read its own slot -> 0x19 loopback), so rather than
+            // silently marking every batch valid (wrong output for a real sparsity caller), fail loudly at
+            // JIT if anyone enables batch-sparsity on Quasar. Wire the DM-thread read here once the DM/LLK
+            // team confirms the correct DM thread id and that the handoff works.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader (batch sparsity) is unsupported on Quasar: it needs the DM->TRISC "
+                "is_batch_valid mailbox handoff, which is not wired yet. Do not enable it on Quasar.");
+            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#endif
             if (!is_batch_valid) {
                 continue;
             }
@@ -290,7 +292,7 @@ void kernel_main() {
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
                 }
 #endif
 
@@ -304,7 +306,7 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {
                         // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                        pack_relu_config(ReluConfig::zero());
                     }
 #endif
 
@@ -313,7 +315,7 @@ void kernel_main() {
                         transpose_init(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_l1_acc(0);
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
                         reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
@@ -386,16 +388,7 @@ void kernel_main() {
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
-
-#if defined SFPU_ACTIVATION and not defined FUSE_BIAS
-                                apply_activation_from_pack<
-                                    activation_type,
-                                    activation_param0,
-                                    activation_param1,
-                                    activation_param2>(out_subblock_num_tiles);
-#else
                                 tile_regs_wait();
-#endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                                 PACK((pack_reconfig_data_format(mm_out_cb_id)));
@@ -404,12 +397,12 @@ void kernel_main() {
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                                 if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                    pack_reconfig_l1_acc(0);
                                 } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 }
 #else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
+                                pack_reconfig_l1_acc(0);
 #endif
 #endif
                                 uint32_t start_dst_index = 0;
@@ -426,13 +419,13 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                    pack_reconfig_l1_acc(0);
                                 } else if (block == 1) {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 } else if (in0_transpose_tile) {
                                     // For each block, l1_acc would have been enabled during the
                                     // transpose stage. So let us put it back here.
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 }
 #endif
 
@@ -523,19 +516,19 @@ void kernel_main() {
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                pack_relu_config(ReluConfig::zero());
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                 PACK((pack_reconfig_data_format(out_cb_id)));
 #endif
 #ifdef PACKER_L1_ACC
-                PACK((llk_pack_reconfig_l1_acc(0)));
+                pack_reconfig_l1_acc(0);
 #endif
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
+                    add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
                 } else {
-                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
+                    add_init(mm_partials_cb_id, bias_cb_id);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
@@ -576,25 +569,7 @@ void kernel_main() {
 
                         // Pack out to output buffer
                         untilize_mode_out_cb.reserve_back(out_subblock_num_tiles);
-
-#ifdef SFPU_ACTIVATION
-                        PACK(TTI_SEMWAIT(
-                            p_stall::STALL_TDMA | p_stall::STALL_CFG,
-                            semaphore::t6_sem(semaphore::MATH_PACK),
-                            p_stall::STALL_ON_ZERO));
-
-                        // Flip destination register offset for PACKER access
-                        PACK(TT_SETC16(
-                            DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                            ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
-                        }
-
-                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-#else
                         tile_regs_wait();
-#endif
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
@@ -610,7 +585,7 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
 #endif  // PACK_RELU
 #ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
@@ -618,7 +593,7 @@ void kernel_main() {
                     PACK((pack_reconfig_data_format(out_cb_id)));
 #endif
 #ifdef PACKER_L1_ACC
-                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_l1_acc(0);
 #endif
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);

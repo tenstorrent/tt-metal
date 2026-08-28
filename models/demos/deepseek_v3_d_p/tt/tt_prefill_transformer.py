@@ -198,8 +198,10 @@ class TtPrefillTransformer(LightweightModule):
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
         # cache_layer_idx in forward is the LOCAL slot. layer_num is this instance's slice
         # length so the block's flat KV slot (cache_user_id * layer_num + cache_layer_idx)
-        # matches the per-rank cache sized to num_layers. With kv_only_last_layer, the last block is
-        # built kv_only=True (only attn_norm + the KV branch of MLA).
+        # matches the per-rank cache sized to num_layers. first_layer_idx additionally tells the
+        # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
+        # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
+        # branch of MLA).
         self.layers = []
         for local_idx in range(num_layers):
             layer_idx = first_layer_idx + local_idx
@@ -235,6 +237,7 @@ class TtPrefillTransformer(LightweightModule):
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                first_layer_idx=first_layer_idx,
             )
             self.layers.append(layer)
 
