@@ -169,6 +169,8 @@ def bge_qkv_heads_headsplit(
         head_groups: How many slices to split heads into. Must divide num_heads.
             Default ``num_heads`` (max granularity: one KV head per work unit).
         out_memcfg: Output memcfg. Default DRAM.
+        k_out_dtype: K output dtype. Default the input dtype.
+        v_out_dtype: V output dtype. Default the input dtype.
 
     Returns:
         ``(q, k, v)`` each shape ``[B, num_heads, S, head_dim]``.
@@ -181,11 +183,6 @@ def bge_qkv_heads_headsplit(
         raise ValueError(f"num_heads ({num_heads}) must be divisible by head_groups ({head_groups})")
     heads_per_group = num_heads // head_groups
 
-    if k_out_dtype is not None and k_out_dtype != qkv_fused.dtype:
-        raise ValueError(
-            "k_out_dtype must match the input dtype. The QKV scatter emits BF4 K/V " "for the serving path."
-        )
-
     device = qkv_fused.device()
     plan = _TrackAPlan.from_input(qkv_fused, num_heads)
     q_heads_per_kv = 1  # BGE-M3 MHA: Q heads == KV heads
@@ -193,6 +190,10 @@ def bge_qkv_heads_headsplit(
     # ---- Pre-allocate Q/K/V outputs ----
     out_shape = (plan.batch, num_heads, plan.seq_len, plan.head_dim)
     out_dtype = qkv_fused.dtype
+    # The kernel writes every head in the input dtype. A caller that asks for a
+    # narrower K or V dtype gets the conversion after the split.
+    k_dtype = k_out_dtype or out_dtype
+    v_dtype = v_out_dtype or out_dtype
     q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
     k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
     v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
@@ -312,6 +313,16 @@ def bge_qkv_heads_headsplit(
 
     io_tensors = [qkv_fused, q_tensor, k_tensor, v_tensor]
     ttnn.generic_op(io_tensors, program_descriptor)
+
+    if k_dtype != out_dtype:
+        converted = ttnn.typecast(k_tensor, k_dtype, memory_config=out_memcfg)
+        ttnn.deallocate(k_tensor)
+        k_tensor = converted
+    if v_dtype != out_dtype:
+        converted = ttnn.typecast(v_tensor, v_dtype, memory_config=out_memcfg)
+        ttnn.deallocate(v_tensor)
+        v_tensor = converted
+
     return q_tensor, k_tensor, v_tensor
 
 
