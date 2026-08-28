@@ -71,19 +71,30 @@ void bind_full(nb::module_& mod) {
 
         Args:
             shape (ttnn.Shape): The shape of the tensor.
-            fill_value (float): The value to fill the tensor with.
+            fill_value (float | int): The value to fill the tensor with.
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
-        Note:
-            ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
-            TILE_LAYOUT requires width (shape[-1]) and height (shape[-2]) dimension to be multiple of 32.
-
         Returns:
             ttnn.Tensor: A filled tensor of specified shape and value.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE requires width and height dimensions to be multiples of 32.
         )doc";
 
     ttnn::bind_function<"full">(
@@ -134,14 +145,17 @@ void bind_zeros(nb::module_& mod) {
             ttnn.Tensor: A tensor filled with 0.0.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
-        ================= =============== ========
-         Dtypes             Layouts       Ranks
-        ================= =============== ========
-        BFLOAT16, FLOAT32 ROW_MAJOR, TILE  2, 3, 4
-        ================= =============== ========
+            .. list-table::
+               :header-rows: 1
 
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"zeros">(
@@ -176,12 +190,23 @@ void bind_ones(nb::module_& mod) {
             device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
 
-        Note:
-            ROW_MAJOR_LAYOUT requires last dimension (shape[-1]) to be a multiple of 2 with dtype BFLOAT16 or UINT16.
-            TILE_LAYOUT requires requires width (shape[-1]), height (shape[-2]) dimension to be multiple of 32.
-
         Returns:
             ttnn.Tensor: A tensor filled with 1.0.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
+            ROW_MAJOR requires last dimension to be a multiple of 2 with dtype BFLOAT16 or UINT16.
+            TILE requires width and height dimensions to be multiples of 32.
         )doc";
 
     ttnn::bind_function<"ones">(
@@ -227,14 +252,27 @@ void bind_full_like(nb::module_& mod) {
         Args:
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
             fill_value (float | int): The value to fill the tensor with.
-            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
-            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to the input tensor's dtype.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to the input tensor's layout.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to the input tensor's device.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to the input tensor's memory config.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A filled tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"full_like">(
@@ -277,24 +315,27 @@ void bind_zeros_like(nb::module_& mod) {
 
         Args:
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
-            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
-            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to the input tensor's dtype.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to the input tensor's layout.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to the input tensor's device.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to the input tensor's memory config.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A tensor filled with 0.0.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
-        ================ =============== ========
-         types             Layouts       Ranks
-        ================ =============== ========
-        FLOAT16, FLOAT32 ROW_MAJOR, TILE  2, 3, 4
-        ================ =============== ========
+            .. list-table::
+               :header-rows: 1
 
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"zeros_like">(
@@ -326,14 +367,27 @@ void bind_ones_like(nb::module_& mod) {
 
         Args:
             tensor (ttnn.Tensor): The tensor to use as a template for the shape of the new tensor.
-            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `None`.
-            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `None`.
-            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to the input tensor's dtype.
+            layout (ttnn.Layout, optional): The layout of the tensor. Defaults to the input tensor's layout.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device on which the tensor will be allocated. Defaults to the input tensor's device.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to the input tensor's memory config.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: A tensor filled with 1.0.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, UINT8, UINT16, UINT32, INT8, INT32
+                 - TILE, ROW_MAJOR
+
+            BFLOAT8_B and BFLOAT4_B are supported only on TILE layout.
         )doc";
 
     ttnn::bind_function<"ones_like">(
@@ -377,13 +431,28 @@ void bind_arange(nb::module_& mod) {
             start (int, optional): The start of the range. Defaults to 0.
             end (int): The end of the range (exclusive).
             step (int, optional): The step size between consecutive values. Defaults to 1.
+
+        Keyword Args:
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
-            device (ttnn.Device, optional): The device where the tensor will be allocated. Defaults to `None`.
+            device (ttnn.Device | ttnn.MeshDevice, optional): The device where the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the tensor. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
             layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR`.
 
         Returns:
             ttnn.Tensor: A tensor containing evenly spaced values within the specified range.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, UINT16, UINT32, INT32
+                 - TILE, ROW_MAJOR
+
+            `step` must be non-zero, and its sign must match the direction from `start` to `end`.
         )doc";
 
     ttnn::bind_function<"arange">(
@@ -434,15 +503,17 @@ void bind_empty(nb::module_& mod) {
             ttnn.Tensor: The output uninitialized tensor.
 
         Note:
-            Supported dtypes, layouts, and ranks:
+            Supported dtypes and layouts:
 
-        ================= =============== ========
-         Dtypes             Layouts       Ranks
-        ================= =============== ========
-        BFLOAT16, FLOAT32 ROW_MAJOR, TILE  2, 3, 4
-        BFLOAT_8             TILE          2, 3, 4
-        ================= =============== ========
+            .. list-table::
+               :header-rows: 1
 
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
         )doc";
 
     ttnn::bind_function<"empty">(
@@ -481,6 +552,19 @@ void bind_empty_like(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: The output uninitialized tensor with the same shape as the input tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
         )doc";
 
     ttnn::bind_function<"empty_like">(
@@ -549,18 +633,32 @@ Tensor from_buffer_impl(
 // Helper function to bind from_buffer operation
 void bind_from_buffer(nb::module_& mod) {
     const auto* doc = R"doc(
-        Creates a device tensor with values from a buffer of the specified, data type, layout, and memory configuration.
+        Creates a device tensor with values from a buffer of the specified data type, layout, and memory configuration.
 
         Args:
             buffer (List[Any]): The buffer to be used to create the tensor.
             shape (ttnn.Shape): The shape of the tensor to be created.
             dtype (ttnn.DataType): The tensor data type.
             device (ttnn.Device | ttnn.MeshDevice): The device where the tensor will be allocated.
-            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR` unless `dtype` is `ttnn.bfloat4` or `ttnn.bfloat8`, in which case it defaults to `ttnn.TILE`.
+            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
 
         Returns:
             ttnn.Tensor: A tensor with the values from the buffer.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, UINT8, INT8, UINT16, UINT32, INT32
+                 - TILE, ROW_MAJOR
+
+            The buffer element type must be compatible with `dtype`.
+            BFLOAT8_B, BFLOAT4_B, and FP8_E4M3 are not supported for host-side construction.
         )doc";
 
     ttnn::bind_function<"from_buffer">(
