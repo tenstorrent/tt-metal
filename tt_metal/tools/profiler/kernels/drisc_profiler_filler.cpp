@@ -39,22 +39,33 @@ void kernel_main() {
     // LIVE capacity = the rings alone; kSpanWords also counts the 64-word control vector.
     constexpr uint32_t kLiveWords = kNumRisc * kRingWords;
     constexpr uint32_t kPrefix = kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
-    // Sized for the PACKED worst case, not the raw span -- see spsc_span_slot_words(). This is what makes
-    // packing unconditional: the pads can push a nearly-full span's packed image past the raw span's size.
-    constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);  // 2,656
-    constexpr uint32_t kSlotBytes = kSlotWords * 4u;       // 10,560
+    // Read early: the slot geometry depends on it. (Full doc at the self-profiling block below.)
+    constexpr uint32_t kSelfZonesEarly = get_compile_time_arg_val(32);
+    // CAPPED slots, half the full-span worst case: a frame's consume clamps at the payload cap and the
+    // residue ships next sweep, so a slot never needs to hold a whole core's backlog -- and halving the
+    // slot doubles the staging generations the same L1 holds, which is what keeps egress acceptance
+    // jitter off the service loop (measured: knee floor ~8 with egress ablated vs 13 coupled, and
+    // three generations recovered ~2 points of that). Self-zone builds keep the full-span slot: the
+    // self frame ships the RAW span layout and cannot be split.
+    // Full-span slots on purpose. Capping the slot to deepen the staging ring (arg 42, 2026-08-28) was
+    // deleted after its measured wins proved fake: any cap below a core's worst case makes the consume
+    // defer whole lanes, and at speed first-fit deferral STARVED lane 4 outright -- lanes 0-3 produce
+    // ~cap words per sweep, so TRISC2's producer on every core blocked ~30 us in and stayed blocked all
+    // run. The "knee" numbers of the capped configs were that 20% load shed. With all lanes honestly
+    // flowing, every capped variant (1,262/1,598/1,982 payload words; fullest-first and scan-side defer
+    // selection) lost to full slots at every delay measured.
+    constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);
+    constexpr uint32_t kSlotBytes = kSlotWords * 4u;
+    constexpr uint32_t kPayloadCapWords = kSlotWords - kPrefix - kCtrlWords;
+       // 10,560
     constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
     constexpr uint32_t kPageBytes = kPageWords * 4u;
     // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
-    // Two staging generations: one fills while the other drains.
-    // THREE staging generations of smaller batches, not two of larger: same seven-slot L1 footprint,
-    // but the staging-reuse write barrier trails the pipeline by TWO batches of gather flight instead of
-    // one, so a slow PCIe-tile acceptance has twice the slack before it stretches the sweep. Measured
-    // motivation: with egress ablated entirely the knee floor is ~8 against 13 coupled, and the write
-    // barrier's 0.2-2.4 us per-filler variance is the coupling.
-    constexpr uint32_t kNGens = 3;
-    constexpr uint32_t kGenSlots = (kNStage - 1) / kNGens;
+    // Two-core batches; every slot the arena holds beyond the CV slot becomes pipeline depth.
+    constexpr uint32_t kGenSlots = 2;
+    constexpr uint32_t kNGens = (kNStage - 1) / kGenSlots;
+    static_assert(kNGens >= 2, "the ship pipeline needs at least two staging generations");
     // The static VC this filler's PCIe pushes ride (0 or 1, the two unicast request VCs). Spread across
     // the fillers by the host: per-hop NoC arbitration is per-VC, so six pushers on one VC gave the far
     // cores a geometrically starved share of the PCIe tile while near ones stayed fast.
@@ -138,10 +149,13 @@ void kernel_main() {
     // but the host walks a lane only between its head and tail, so they are never decoded. That shared
     // dead space is what lets CV-first and drainer self-profiling coexist.
     constexpr uint32_t kCvSlot = kSelfZones != 0 ? kNStage : kNGens * kGenSlots;
-    constexpr uint32_t kCvBase = kStageBase + kCvSlot * kSlotBytes + (kPrefix + kCtrlWords + kRingWords) * 4u;
+    // Under self-zones the CV staging shares the self slot and must sit past its live ring 0; otherwise
+    // it owns the whole slot past the pipeline and starts at the base.
+    constexpr uint32_t kCvBase = kStageBase + kCvSlot * kSlotBytes +
+                                 (kSelfZones != 0 ? (kPrefix + kCtrlWords + kRingWords) * 4u : 0u);
     static_assert(
-        kCvReadBytes * kMaxCores <= 4u * kRingWords * 4u,
-        "CV staging must fit the self slot's dead ring space");
+        (kSelfZones != 0 ? (kPrefix + kCtrlWords + kRingWords) * 4u : 0u) + kCvReadBytes * kMaxCores <= kSlotBytes,
+        "CV staging must fit inside the slot past the pipeline");
     // Per-sweep PP_DATA series FORCED OFF: zones + footprint + CV-first measured 396 B over the
     // 11,264 B code region, and the out[] byte totals answer the traffic questions without it.
     constexpr uint32_t kNocFpSeries = 0u;
@@ -274,6 +288,7 @@ void kernel_main() {
     // stored, not recomputed, so the two phases cannot diverge. slot_payload[kSelfSlot] is the raw self
     // frame's constant payload.
     static uint32_t slot_runs[kNStage * kNumRisc];
+    static uint8_t slot_core[kNStage];
     static uint32_t slot_payload[kNStage + 1];
     for (uint32_t i = 0; i < kMaxCores; i++) {
         seeded[i] = 0;
@@ -345,6 +360,7 @@ void kernel_main() {
     // wait happens at the slots' next refill, never at sweep end, so a sweep's final ship drains under
     // the pace gap or the next sweep's CV pass instead of on the sweep's critical path.
     bool gen_shipped[kNGens] = {};
+
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
     // ================================ INSTRUMENTATION START (self-zone + NoC-footprint state and marker path) ====
@@ -800,7 +816,7 @@ void kernel_main() {
             {
                 // ---- software pipeline: gather generation G on kReadNoc while G^1 ships on NOC_INDEX ----
                 uint32_t gen = 0;
-                uint32_t pend_base = 0, pend_n = 0, pend_gen = 0;
+                uint32_t pend_n = 0, pend_gen = 0;
                 bool have_pend = false;
 
                 // ---- CV-FIRST phases 0+1: read every core's control words, decide the ship set. ----
@@ -961,34 +977,54 @@ void kernel_main() {
                             overflows++;
                             run = kRingWords;
                         }
-                        slot_runs[sl * kNumRisc + r] = run;
-                        cv[kernel_profiler::SPSC_RING_HEAD_0 + r] = tail - run;
-                        cv[kernel_profiler::SPSC_RING_TAIL_0 + r] = tail;
-                        if (run == 0) {
+                        const uint32_t start = tail - run;
+                        // Cap the frame at the slot's payload capacity, WHOLE LANES ONLY: a lane that
+                        // does not fit ships nothing this frame and goes next sweep. The published tail
+                        // is always a packet boundary but an arbitrary word count is not -- clamping
+                        // mid-run split packets across frames and corrupted the lane stream (measured:
+                        // 300-550 order regressions per socket). A full lane ends at the published
+                        // tail, so all-or-nothing keeps every claim on packet boundaries.
+                        uint32_t take = run;
+                        uint32_t pad = 0;
+                        if (take != 0) {
+                            pad = kernel_profiler::spsc_span_pack_pad(start, off);
+                            const uint32_t used = off - (kPrefix + kCtrlWords);
+                            const uint32_t room =
+                                kPayloadCapWords > used + pad ? kPayloadCapWords - used - pad : 0;
+                            if (take > room) {
+                                take = 0;
+                                pad = 0;
+                            }
+                        }
+                        slot_runs[sl * kNumRisc + r] = take;
+                        cv[kernel_profiler::SPSC_RING_HEAD_0 + r] = start;
+                        cv[kernel_profiler::SPSC_RING_TAIL_0 + r] = start + take;
+                        if (take == 0) {
                             continue;
                         }
-                        off += kernel_profiler::spsc_span_pack_pad(tail - run, off);
-                        const uint32_t hm = (tail - run) & (kRingWords - 1u);
+                        off += pad;
+                        const uint32_t hm = start & (kRingWords - 1u);
                         const uint32_t ring_src = cv_src + (kCtrlWords + r * kRingWords) * 4u;
-                        const uint32_t chunk = run <= kRingWords - hm ? run : kRingWords - hm;
+                        const uint32_t chunk = take <= kRingWords - hm ? take : kRingWords - hm;
                         n_gather_rd++;
                         ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
                             kReadNoc, read_cmd_buf, ring_src + hm * 4u, slot + off * 4u, chunk * 4u);
-                        if (chunk < run) {
+                        if (chunk < take) {
                             n_gather_rd++;
                             ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, false>(
-                                kReadNoc, read_cmd_buf, ring_src, slot + (off + chunk) * 4u, (run - chunk) * 4u);
+                                kReadNoc, read_cmd_buf, ring_src, slot + (off + chunk) * 4u, (take - chunk) * 4u);
                         }
-                        off += run;
+                        off += take;
                     }
                     cv[kernel_profiler::SPSC_CORE_XY] = xy;
                     volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
                     pfx[0] = kernel_profiler::spsc_span_w0();
                     pfx[1] = off - kPrefix;
                     slot_payload[sl] = off - kPrefix;
+                    slot_core[sl] = static_cast<uint8_t>(c);
                 };
 
-                auto ship_batch = [&](uint32_t base_c, uint32_t n, uint32_t g) {
+                auto ship_batch = [&](uint32_t n, uint32_t g) {
                     const uint64_t t_p0 = kInstr != 0 ? get_timestamp() : 0;
                     // c_self joins the nested term because self_publish RESTORES c_reserve/c_write, so without it a
                     // mid-batch self publish would be charged to `proc`.
@@ -998,8 +1034,8 @@ void kernel_main() {
                     kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PROC, SelfMarkPhase> z_proc(
                         self_mark_phase);
                     for (uint32_t i = 0; i < n; i++) {
-                        const uint32_t c = ship_list[base_c + i];
                         const uint32_t sl = g * kGenSlots + i;
+                        const uint32_t c = slot_core[sl];
                         uint32_t* mine = &head_mirror[c * kNumRisc];
                         // HEAD WRITE-BACK: it releases the producer, and is safe at once -- the payload is
                         // resident in staging (this generation's read barrier passed), so those ring slots
@@ -1070,8 +1106,15 @@ void kernel_main() {
                     // what a Tracy parent is.
                 };
 
-                for (uint32_t base_c = 0; base_c < n_ship; base_c += kGenSlots) {
-                    const uint32_t n = (n_ship - base_c) < kGenSlots ? (n_ship - base_c) : kGenSlots;
+                // A batch's FIRST frame may go WIDE (spill into the generation's second slot) when its
+                // core is genuinely backlogged, and the batch then carries that one frame. This is how a
+                // capture-onset backlog (every ring full) drains in one visit instead of trickling out
+                // over three capped sweeps that hold the already-blocked producers for a flat ~130 stalls.
+                // The trigger must sit well above the cap: per-sweep production RIDES the cap at the
+                // lowest workable delays, and a wide frame there would burn a whole generation on an
+                // ordinary core, halving the pipeline depth that bought the low-end knee.
+                uint32_t cur = 0;
+                while (cur < n_ship) {
 
                     // This generation's previous ship must be out of staging before its slots refill. SENT is
                     // enough: the next writer of this staging is this core's own NIU read responses, so the
@@ -1098,11 +1141,16 @@ void kernel_main() {
                     // c_read is TWO disjoint intervals per batch -- the issue, and whatever wait survives the concurrent
                     // ship -- so it takes two zones.
                     const uint64_t t_batch0 = kInstr != 0 ? get_timestamp() : 0;
+                    uint32_t n = 0;
                     {
                         kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_READ, SelfMarkPhase> z_issue(
                             self_mark_phase);
-                        for (uint32_t i = 0; i < n; i++) {
-                            issue_core(ship_list[base_c + i], gen * kGenSlots + i);
+                        uint32_t slots = 0;
+                        while (slots < kGenSlots && cur < n_ship) {
+                            issue_core(ship_list[cur], gen * kGenSlots + slots);
+                            cur++;
+                            n++;
+                            slots++;
                         }
                         // Refresh the NEXT batch's tails in the same flight: issue_core consumes
                         // [mirror, tail-at-read), so on the sweep-start snapshot alone the last batch's
@@ -1111,10 +1159,9 @@ void kernel_main() {
                         // peak lanes 256-320 words against interval x rate ~150, and the scan-order-last
                         // core of every filler took all the stalls). This generation's read barrier covers
                         // these too, so the next issue_core sees landed tails.
-                        const uint32_t nb = base_c + kGenSlots;
-                        const uint32_t nn = nb < n_ship ? ((n_ship - nb) < kGenSlots ? (n_ship - nb) : kGenSlots) : 0;
+                        const uint32_t nn = (n_ship - cur) < kGenSlots ? (n_ship - cur) : kGenSlots;
                         for (uint32_t i = 0; i < nn; i++) {
-                            const uint32_t c = ship_list[nb + i];
+                            const uint32_t c = ship_list[cur + i];
                             const uint32_t xy = coords[c];
                             CoreLocalMem<uint32_t> dst(kCvBase + c * kCvReadBytes);
                             noc.async_read<NocOptions::DEFAULT, kCvReadBytes>(
@@ -1131,7 +1178,7 @@ void kernel_main() {
                     // The overlap: the previous batch's PCIe writes go out on NOC_INDEX while the gather reads
                     // above fly on kReadNoc.
                     if (have_pend) {
-                        ship_batch(pend_base, pend_n, pend_gen);
+                        ship_batch(pend_n, pend_gen);
                     }
 
                     // Issue cost plus only the wait REMAINING after the concurrent ship. Timing to the barrier instead
@@ -1146,14 +1193,13 @@ void kernel_main() {
                     c_issue += t_issue - t_batch0;
                     c_read += (t_issue - t_batch0) + (t_read_end - t_after_proc);
 
-                    pend_base = base_c;
                     pend_n = n;
                     pend_gen = gen;
                     have_pend = true;
                     gen = gen + 1u == kNGens ? 0u : gen + 1u;
                 }
                 if (have_pend) {
-                    ship_batch(pend_base, pend_n, pend_gen);
+                    ship_batch(pend_n, pend_gen);
                     have_pend = false;
                 }
             }

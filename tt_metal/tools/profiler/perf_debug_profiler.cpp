@@ -1273,6 +1273,8 @@ bool PerfDebugProfiler::boot_device(
         ctx.core_virt.resize(static_cast<size_t>(num_cores) + ctx.n_drisc);
     }
 
+    // Must mirror the kernel's kSlotWords: capped slots except under self-zones, whose RAW self frame
+    // needs the full span.
     const uint32_t slot_bytes_all = kernel_profiler::spsc_span_slot_words(kNRisc) * sizeof(uint32_t);
     uint32_t nstage_report = 0;  // last drainer's mapped staging-slot count, for the self-profiling log line
 
@@ -1853,8 +1855,14 @@ bool PerfDebugProfiler::boot_device(
                 // runs, and those lines then print zeros.
                 perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_INSTR", true) ? 1u : 0u};
             TT_FATAL(
-                my_cores * 32u <= 4u * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
-                "CV-first tails staging ({} cores x 32 B) does not fit the self slot's dead ring space",
+                (drisc_zones() ? (kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
+                                  kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
+                                  kernel_profiler::PROFILER_L1_VECTOR_SIZE) *
+                                     4u
+                               : 0u) +
+                        my_cores * 32u <=
+                    slot_bytes_all,
+                "CV-first tails staging ({} cores x 32 B) does not fit inside the slot past the pipeline",
                 my_cores);
             auto drain_id = CreateKernel(
                 *ctx.drain_program[d],
