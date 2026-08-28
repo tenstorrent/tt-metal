@@ -790,15 +790,16 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
 
 # BigMesh sweep, same entry format as the ring sweep above (cluster mock x BigMesh count).
-# MGD_BIGMESH_7 is the full SC28_4x2 spec-decode shape the SC24 6-BigMesh was reduced from:
-# seven 4x32 BigMeshes, all-to-all (21 relaxed pairs), 112 ranks / 28 hosts -- exact fit on the
-# SC28 aisleD subset, embedded on the full SC36 aisleD mock. (SC36 revAB aisleC's SC20 mapping and
-# the SC24 mocks are too small: 7 x 4 = 28 hosts.) Same gtest set as the SC24 6-BigMesh entry
+# MGD_BIGMESH_7 is the full SC28_4x2 spec-decode shape (MGD_BIGMESH_6 is its six-quad reduction):
+# seven 4x32 BigMeshes, all-to-all (21 relaxed pairs), 112 ranks / 28 hosts. 6-BigMesh is exact
+# fit on SC24 mocks and embedded on SC28; 7-BigMesh is exact fit on SC28 and embedded on SC36.
+# (SC36 revAB aisleC's SC20 mapping is too small for either.) Same gtest set as the SC24 entry
 # above -- TestPipelineBuilderCheck omitted per #49629.
 MGD_BIGMESH_6="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto"
 MGD_BIGMESH_7="${MGD_SUBTORUS}/subtorus_sc28_4x32_7bigmesh_ring_mesh_graph_descriptor.textproto"
 for entry in \
-    "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" \
+    "SC24_revC_subtorus_virtu:${SC24_REVC_SUBTORUS_VIRTU_CLUSTER_DESC_MAPPING}:6" \
+    "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"
   for bigmesh in ${bigmeshes}; do
