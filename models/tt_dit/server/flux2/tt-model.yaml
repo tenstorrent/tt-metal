@@ -80,8 +80,11 @@ card:
     [black-forest-labs/FLUX.2-dev](https://huggingface.co/black-forest-labs/FLUX.2-dev)
     and run `huggingface-cli login` first, or the pull fails partway with a 403.
 
-    Budget roughly 106 GB of disk and a long first pull. Weights dominate: the image
-    itself is 1.2 GB.
+    Budget roughly 210 GB of disk and a long first pull. The image is only 1.2 GB; the
+    weights are ~106 GB, and the first boot writes another ~105 GB of weights converted
+    to device layout so later boots skip that work. Deleting
+    `~/.cache/tt-model/flux2-dev-qb2/weights` reclaims the second half at the cost of one
+    slow boot.
 
     **Hardware: four Blackhole chips**, opened as a 2x2 mesh (`p300x2` / `QB2`). This is
     not a preference. FLUX.2 needs its sequence and tensor parallel factors both above 1,
@@ -132,8 +135,8 @@ card:
     Finished jobs and their PNGs are reaped an hour after completion. Download what you
     want to keep.
 
-    First boot is minutes, not seconds, and nearly all of it is converting weights to
-    device layout.
+    First boot converts weights to device layout and caches the result: measured 291s to
+    ready on the first start and 80s on every start after that.
 
 serve:
   hardware: p300x2
