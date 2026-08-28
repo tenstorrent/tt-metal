@@ -265,6 +265,51 @@ def vision_cu_seqlens(grid_thw: torch.Tensor) -> tuple[int, ...]:
     return tuple(bounds)
 
 
+def pad_patches_for_sp(
+    patches: torch.Tensor,
+    pos_embeds: torch.Tensor,
+    rope: tuple[torch.Tensor, torch.Tensor],
+    cu_seqlens: Sequence[int],
+    *,
+    sp_factor: int,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, ...], int]:
+    """Pad a patch batch so its SP shards are tile-aligned, isolating the pad in a phantom window.
+
+    SP requires `total % (sp_factor * 32) == 0` (see `Qwen3VlVisionAttention`), which production grids
+    do not always satisfy -- e.g. two_refs' 38,144 patches divide sp=4/8's alignment but not sp=32's
+    1024. Unlike the decoder, the tower cannot pad blindly: attention is non-causal block-diagonal
+    (tail pad would join the last image's window) and the merger folds consecutive 4-row groups. So
+    the pad rows are appended as their OWN attention window -- one extra `cu_seqlens` boundary -- and
+    flow through as isolated garbage that `Qwen3VlVisionModel.forward(logical_patches=...)` trims
+    after the SP gather, before any consumer sees the tokens.
+
+    Zero patches and pos_embeds, identity rope rows (cos=1, sin=0). The pad count is a multiple of
+    `sp_factor * 32`, hence of the merge group, so the garbage folds into whole tail tokens. Returns
+    `(patches, pos_embeds, rope, cu_seqlens, logical_patches)`; a no-op (inputs returned as-is) when
+    the count is already aligned.
+    """
+    total = patches.shape[0]
+    mult = sp_factor * _TILE
+    padded = -(-total // mult) * mult
+    if padded == total:
+        return patches, pos_embeds, rope, tuple(cu_seqlens), total
+    if cu_seqlens[-1] != total:
+        msg = f"cu_seqlens must span [0, {total}], got {cu_seqlens[0]}..{cu_seqlens[-1]}"
+        raise ValueError(msg)
+    npad = padded - total
+    cos, sin = rope
+    return (
+        torch.nn.functional.pad(patches, (0, 0, 0, npad)),
+        torch.nn.functional.pad(pos_embeds, (0, 0, 0, npad)),
+        (
+            torch.cat([cos, torch.ones(npad, cos.shape[-1], dtype=cos.dtype)], dim=0),
+            torch.cat([sin, torch.zeros(npad, sin.shape[-1], dtype=sin.dtype)], dim=0),
+        ),
+        (*tuple(cu_seqlens), padded),
+        total,
+    )
+
+
 def vision_rope_tensors(
     grid_thw: torch.Tensor,
     *,
@@ -348,6 +393,16 @@ def _with_batch_axis(x: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
 
 def _drop_batch_axis(x: ttnn.Tensor, added: bool) -> ttnn.Tensor:
     return ttnn.reshape(x, (x.shape[-2], x.shape[-1])) if added else x
+
+
+def _trim_tokens(x: ttnn.Tensor, real_tokens: int | None) -> ttnn.Tensor:
+    """Drop the SP-alignment pad's merged garbage tokens from a gathered `(tokens, hidden)` tensor.
+
+    Only valid AFTER the SP gather: the pad occupies the trailing rows of the trailing shard, so on
+    the full sequence it is exactly the tail. A no-op when nothing was padded."""
+    if real_tokens is None or x.shape[-2] <= real_tokens:
+        return x
+    return x[:real_tokens, :]
 
 
 def _gather_hidden(x: ttnn.Tensor, p: VisionParallel) -> ttnn.Tensor:
@@ -999,11 +1054,17 @@ class Qwen3VlVisionModel(Module):
         pos_embeds: ttnn.Tensor,
         rope: tuple[ttnn.Tensor, ttnn.Tensor],
         cu_seqlens: Sequence[int] | None = None,
+        logical_patches: int | None = None,
     ) -> tuple[ttnn.Tensor, list[ttnn.Tensor]]:
         """`cu_seqlens` confines attention to one image or video frame; see [`vision_cu_seqlens`].
 
         Omitting it treats the whole input as one block, which is correct for a single image and wrong
         for several -- pass it whenever `grid_thw` has more than one row or a `t` above 1.
+
+        `logical_patches` is the REAL patch count when the input was padded for SP alignment by
+        [`pad_patches_for_sp`]: the pad's merged garbage tokens are trimmed off the merged output and
+        every deepstack feature after the SP gather (the pad lives on the trailing shard, so only the
+        gathered, full-sequence tokens can be tail-sliced). None means nothing was padded.
         """
         hidden_states = ttnn.add(self.patch_embed.forward(patches), pos_embeds)
 
@@ -1018,14 +1079,16 @@ class Qwen3VlVisionModel(Module):
             f"local_rows={hidden_states.shape[-2]} blocks={(len(cu_seqlens) - 1) if cu_seqlens else 1}"
         )
 
+        real_tokens = None if logical_patches is None else logical_patches // self.spatial_merge_size**2
+
         deepstack_features: list[ttnn.Tensor] = []
         for layer_idx, block in enumerate(self.blocks):
             hidden_states = block.forward(hidden_states, pos_embeds=rope, cu_seqlens=cu_seqlens)
             if layer_idx in self.deepstack_visual_indexes:
                 merger = self.deepstack_merger_list[self.deepstack_visual_indexes.index(layer_idx)]
-                deepstack_features.append(self._gather_tokens(merger.forward(hidden_states)))
+                deepstack_features.append(_trim_tokens(self._gather_tokens(merger.forward(hidden_states)), real_tokens))
 
-        return self._gather_tokens(self.merger.forward(hidden_states)), deepstack_features
+        return _trim_tokens(self._gather_tokens(self.merger.forward(hidden_states)), real_tokens), deepstack_features
 
     def _gather_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Reassemble merged tokens across the SP axis.
