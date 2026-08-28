@@ -249,7 +249,13 @@ RingWorkPlan build_ring_work_plan(
     // same ring-id sequence, so use a no-op callback.
     auto noop_sync = [](uint32_t, uint32_t) {};
 
-    for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
+    // Only iterate the shards the kernels actually visit: 1 (local) + fwd + bwd, which equals ring_size
+    // for a full/dense gather but is fewer when the AG num_targets are clamped to a window radius. Past
+    // that count the sequencer marches out of window and would set active bits at ring_iter indices the
+    // kernels never reach, poisoning is_last_active_ring_iter (never-fires normalization -> deadlock).
+    const uint32_t num_ring_iters = std::min<uint32_t>(
+        derivation.ring_size, 1u + ring_write_plan.backward_writes_expected + ring_write_plan.forward_writes_expected);
+    for (uint32_t ring_iter = 0; ring_iter < num_ring_iters; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         // Sharded joint: each ring iteration delivers one L/P shard immediately, so process
         // joint K/V on every ring iteration (no need to wait for the full gather to complete).
@@ -359,12 +365,19 @@ std::vector<uint32_t> compute_q_work_bitmap(
     // Simulate the ring_id sequencer for this device to get ring_id per iter.
     RingIdSequencer seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
     auto noop_sync = [](uint32_t, uint32_t) {};
+    // Windowed gather: the kernels retime replicated joint to the last active iteration (a windowed ring
+    // may never visit ring_size-1). This bitmap must match, or compute/writer wait on joint work the
+    // reader pushes on a different iter -> deadlock. Mirror the kernel condition exactly.
+    const bool is_windowed = (1u + backward_writes_expected + forward_writes_expected) < ring_size;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         if (!((active_ring_iter_mask >> ring_iter) & 1u)) {
             continue;  // inactive iter — bitmap bit stays 0
         }
-        const bool do_joint_kv = (ring_id == ring_size - 1) && (num_joint_k_chunks > 0);
+        // Last active iter (windowed) matches is_last_active_ring_iter: no active bits above ring_iter.
+        const bool is_last_active = ((active_ring_iter_mask >> (ring_iter + 1)) == 0);
+        const bool do_joint_kv =
+            (num_joint_k_chunks > 0) && (is_windowed ? is_last_active : (ring_id == ring_size - 1));
         for (uint32_t q_chunk = 0; q_chunk < num_q_chunks; ++q_chunk) {
             const bool is_joint_q = (q_chunk >= num_local_q_chunks);
             if (is_joint_q) {

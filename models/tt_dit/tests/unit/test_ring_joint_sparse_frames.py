@@ -681,6 +681,55 @@ class TestSparseFramesRing:
 
     @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
+        ("tokens_per_frame", "window"),
+        [
+            # No reference frame (add_last=False), so the window alone drives W. ~1 frame/shard with a
+            # +-2 window gives W=2 << ring_size -- exercises the genuinely-small-W windowed gather (the
+            # path never hit by the add_last tests, which keep W=full via the far reference frame).
+            pytest.param(128, 5, id="win5_w2"),
+            pytest.param(128, 3, id="win3_w1"),
+        ],
+    )
+    def test_windowed_small_radius(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        window,
+    ):
+        """Windowed gather with a genuinely small radius (no joint). Validates the build_ring_work_plan
+        window-bounding fix: without it, out-of-window active bits poison is_last_active_ring_iter and
+        the ring deadlocks. 1 frame/shard so nf_padded == sp_factor keeps the padded seq shard-even."""
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=sp_factor,
+            num_frames_padded=sp_factor,
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=window,
+            add_last_frame=False,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=tokens_per_frame // 2,
+            k_chunk_size_tokens=tokens_per_frame // 2,
+            sparse_frames_enabled=True,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
         ("tokens_per_frame", "nf_real_fn", "nf_padded_fn"),
         [
             # Fractional frames/shard (the real sp=32 regime): reference frame sits several shards away,
