@@ -915,6 +915,7 @@ MeshGraph MeshGraph::generate_mesh_graph_of_shape(
     tt::ARCH arch,
     std::uint32_t num_connections_per_direction) {
     MeshGraph mesh_graph;
+    mesh_graph.generated_fabric_type_ = fabric_type;
 
     // Use the provided num_connections_per_direction
     std::uint32_t num_eth_ports_per_direction = num_connections_per_direction;

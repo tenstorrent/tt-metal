@@ -224,6 +224,10 @@ public:
     // Returns empty path if MeshGraph was created via generate_mesh_graph_of_shape()
     std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
 
+    // FabricType this graph was generated with, set only by generate_mesh_graph_of_shape() (the
+    // auto-discovery candidate that actually mapped). nullopt for MGD-constructed graphs.
+    std::optional<tt::tt_fabric::FabricType> get_generated_fabric_type() const { return generated_fabric_type_; }
+
 private:
     MeshGraph() = default;
 
@@ -272,6 +276,9 @@ private:
 
     // Store the file path if MeshGraph was created from a descriptor file
     std::optional<std::filesystem::path> mesh_graph_desc_file_path_;
+
+    // FabricType passed to generate_mesh_graph_of_shape(); nullopt for MGD-constructed graphs.
+    std::optional<tt::tt_fabric::FabricType> generated_fabric_type_;
 };
 
 }  // namespace tt::tt_fabric

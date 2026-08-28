@@ -1741,6 +1741,14 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             continue;
         }
         for (const auto& fabric_type : fabric_type_candidates) {
+            // A torus candidate with no genuine axis at this shape (every wrapped dimension has
+            // extent <= 2) demands nothing a MESH doesn't: generate_mesh_graph_of_shape gates its
+            // wrap edges away, so it would map vacuously and mislabel a plain mesh as a torus.
+            // Skip it and let MESH win honestly.
+            if (fabric_type != FabricType::MESH && !has_genuine_torus_axis(fabric_type, mesh_shape, 0) &&
+                !has_genuine_torus_axis(fabric_type, mesh_shape, 1)) {
+                continue;
+            }
             if (auto mesh_graph = try_map_shape(fabric_type, mesh_shape)) {
                 if (fabric_type != requested_fabric_type) {
                     log_warning(

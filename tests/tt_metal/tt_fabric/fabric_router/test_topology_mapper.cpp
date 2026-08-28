@@ -973,6 +973,9 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     // Verify that the mesh graph was generated successfully
     const MeshId mesh_id{0};
     EXPECT_TRUE(!mesh_graph.get_mesh_ids().empty()) << "Mesh graph should have at least one mesh";
+    ASSERT_TRUE(mesh_graph.get_generated_fabric_type().has_value());
+    EXPECT_EQ(mesh_graph.get_generated_fabric_type().value(), FabricType::MESH)
+        << "FABRIC_2D requests a plain mesh; discovery must realize MESH";
 
     // Verify that the mesh graph has chips
     auto chip_ids = mesh_graph.get_chip_ids(mesh_id);
@@ -1011,17 +1014,15 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     // --- Auto-discovery vs shape-based consolidation, on the same wrap-less 2x4 (the BH LoudBox
     // hits the same shape class). Requesting FABRIC_2D_TORUS_XY:
     //
-    //  1. The topology mapper tries candidates against the real cabling. TORUS_X demands a wrap on
-    //     the extent-4 axis, which T3K does not have, so it fails. TORUS_Y on an extent-2 axis is
-    //     VACUOUS: genuine-gating builds no wrap edge, so its logical graph is a plain mesh that
-    //     maps anywhere — discovery reports "realized TORUS_Y" without any physical wrap existing.
+    //  1. The topology mapper tries candidates against the real cabling. Torus candidates that
+    //     demand a wrap on the extent-4 axis (TORUS_XY, TORUS_X) fail — T3K has no wrap cables.
+    //     TORUS_Y on an extent-2 axis is VACUOUS (genuine-gating builds no wrap edge, so its logical
+    //     graph is a plain mesh); such candidates are SKIPPED so a plain mesh is never mislabeled as
+    //     a torus, and discovery honestly realizes MESH. get_generated_fabric_type() regresses this.
     //  2. coerce_fabric_config_to_realized_ring_extents() judges by dimension extents instead: the
     //     extent-4 axis "could" ring, the extent-2 axis cannot, so TORUS_XY consolidates to TORUS_X
-    //     — exactly the axis discovery could NOT wire. The effective config, the discovered mesh
-    //     graph, and per-direction deadlock avoidance then disagree (PR #54626 hardware CI fallout).
-    //
-    // These checks pin the current behavior to make the mechanism visible; resolving the
-    // contradiction (consolidating from the mapper's realized type instead of extents) flips step 2.
+    //     — an axis the cabling could not wire. Consolidating from the mapper's realized type
+    //     (step 1's MESH) instead of extents is the remaining follow-up; this pins the extent rule.
     MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         get_cluster(),
         *physical_system_descriptor_,
@@ -1033,6 +1034,9 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     const auto torus_mesh_shape = torus_mesh_graph.get_mesh_shape(mesh_id);
     ASSERT_EQ(torus_mesh_shape.mesh_size(), 8u);
     ASSERT_EQ(std::max(torus_mesh_shape[0], torus_mesh_shape[1]), 4u);
+    ASSERT_TRUE(torus_mesh_graph.get_generated_fabric_type().has_value());
+    EXPECT_EQ(torus_mesh_graph.get_generated_fabric_type().value(), FabricType::MESH)
+        << "no torus axis is wired on this box; a vacuous torus candidate must not win the fallback";
     const auto& chip0_connections = torus_mesh_graph.get_intra_mesh_connectivity().at(0).at(0);
     EXPECT_EQ(chip0_connections.size(), 2u) << "corner chip of a wrap-less 2x4 has exactly E and S neighbors";
     const ChipId long_axis_wrap_peer = (torus_mesh_shape[1] == 4) ? 3 : 6;  // chip 0's long-axis end (row-major)
@@ -1062,6 +1066,9 @@ TEST(TopologyMapperAutoDiscovery, Fabric1DRingCoercesToLineOnTwoChipSystem) {
         FabricConfig::FABRIC_1D_RING,
         FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}).values().size(), 2u);
+    // Non-UBB clusters realize 1D configs as MESH graphs; a vacuous torus label must never appear.
+    ASSERT_TRUE(mesh_graph.get_generated_fabric_type().has_value());
+    EXPECT_EQ(mesh_graph.get_generated_fabric_type().value(), FabricType::MESH);
 }
 
 TEST(TopologyMapperAutoDiscovery, Fabric1DRingMapsFourChipRing) {
@@ -1076,6 +1083,9 @@ TEST(TopologyMapperAutoDiscovery, Fabric1DRingMapsFourChipRing) {
         FabricConfig::FABRIC_1D_RING,
         FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_EQ(mesh_graph.get_chip_ids(MeshId{0}).values().size(), 4u);
+    // Non-UBB clusters realize 1D configs as MESH graphs; a vacuous torus label must never appear.
+    ASSERT_TRUE(mesh_graph.get_generated_fabric_type().has_value());
+    EXPECT_EQ(mesh_graph.get_generated_fabric_type().value(), FabricType::MESH);
 }
 
 TEST_F(TopologyMapperTest, ClosetBoxSuperpodRelaxedPolicyTest) {
