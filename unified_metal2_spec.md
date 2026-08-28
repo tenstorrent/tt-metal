@@ -571,12 +571,48 @@ failures in `matmul_blocked`'s bfloat8 configurations, which is hazard D19 behav
 D19 says it does; and `passcost`'s scratch buffers, which had the old CB indices 1..7 hardcoded
 in the kernel against a layout the launcher matched by hand.
 
-**One thing does not work on the spec path: the real-time profiler.** `test_unified_passcost`
-checks out but cannot measure -- its `bench()` registers a program realtime-profiler callback,
-the callback reports itself active, and no records arrive for programs dispatched through
-`MakeMeshWorkloadFromSpec` + `EnqueueMeshWorkload`. The correctness half of that suite passes;
-the timing half does not run. Not diagnosed further, and it blocks any performance comparison
-between the two paths, so it is the first thing to fix after this.
+**The real-time profiler needed one field, and the reason is worth knowing.** `bench()`
+registered its callback, the callback reported itself ACTIVE, and no records arrived for
+programs dispatched through `MakeMeshWorkloadFromSpec` + `EnqueueMeshWorkload`.
+
+`ProgramImpl::runtime_id` is zero-initialised (`program_impl.hpp:522`), and zero is
+`REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID` (`dispatch/kernels/realtime_profiler.hpp:23`).
+The dispatch kernel gates the record FIFO on `program_host_id != UNPROFILED`
+(`cq_dispatch.cpp:1432`), so a program nobody numbered is indistinguishable from one the host
+deliberately excluded -- no error, no records, and a profiler that truthfully reports itself
+active.
+
+Nothing else assigns one. The only setter outside the profiler's own examples is ttnn's
+device-operation path (`device_operation.hpp:186`), which every ttnn op passes through and a
+program built straight from a ProgramSpec does not. **So this is a property of the 2.0 host
+API, not of our shim: `MakeProgramFromSpec` and `MakeMeshWorkloadFromSpec` hand back a program
+that is unprofilable until someone remembers to number it.** The shim now numbers every
+program from `ttnn::CoreIDs`, the same counter ttnn uses, so ids stay unique across both.
+
+`passcost` then passes in full, and its model is measurable again: ~0.86us per copy pass over
+8 tiles, 0.148us per input tile for a reduce against 0.234us per input-plus-output tile, so
+0.086us for the acquire and pack alone.
+
+### 7.5 One open failure: mcast_share, in sequence only
+
+`test_unified_mcast_share` hangs partway through a full `run_unified_tests.sh` sequence, twice
+reproducibly, at the transition from its dedicated-NOC configurations to its `DM_DYNAMIC_NOC`
+ones -- all four dedicated configurations pass first. Everything after it in that run is then
+unreliable, because a hung program leaves the device stopped until reset.
+
+What has been ruled out, each on a freshly reset device:
+
+- **Standalone**: passes 8/8, including the whole dynamic-NOC matrix. Twice.
+- **Twice back to back with no reset between**: passes 8/8 both times, so it is not residual
+  state from a previous run of itself.
+- **After `custom_compute`, its immediate predecessor in the runner**: both pass.
+
+So it needs a longer run to appear -- it is the thirteenth suite, and the fifth since the
+runner's last reset. The likeliest suspect is program churn: `run_program_spec` deliberately
+rebuilds the workload on every call, so a full sequence constructs and destroys thousands of
+Programs, and anything that does not fully release accumulates. That is a guess, not a
+finding. Adding the caching that is wanted for benchmarking anyway is the next thing to try,
+and it would settle it either way.
 
 ## 8. What this buys, against the hazard ledger
 
