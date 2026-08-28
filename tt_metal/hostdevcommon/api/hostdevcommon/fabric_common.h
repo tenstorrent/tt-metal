@@ -570,11 +570,7 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
-// read_write[] entries are indexed and NoC-addressed, so the array must start aligned too.
-// Size and offset are NOT pinned here: each architecture's *_hal_tensix_asserts.hpp already
-// checks them against its own MEM_TENSIX_FABRIC_CONNECTIONS_SIZE / _OFFSET_OF_ALIGNED_INFO,
-// which is the right place -- this struct is shared across architectures, so a literal here
-// would be a fourth copy of a number that must move in lockstep.
+// read_write[] entries are NoC-addressed, so the array must start 16-byte aligned
 static_assert(offsetof(tensix_fabric_connections_l1_info_t, read_write) % 16 == 0);
 
 enum class RouterCommand : std::uint32_t {

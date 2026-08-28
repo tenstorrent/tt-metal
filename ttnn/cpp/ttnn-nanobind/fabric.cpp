@@ -308,9 +308,7 @@ void bind_fabric_api(nb::module_& mod) {
         R"(
             Compute fabric connection RT args without any PD mutation.
             Pure computation — resolves routing and assembles the flat RT args vector.
-            Allocates nothing: worker teardown and the producer-cursor landing zone are
-            storage in the per-channel fabric connection table, addressed directly by the
-            kernel, so no semaphore ids are needed. No PD needed.
+            No PD needed.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
