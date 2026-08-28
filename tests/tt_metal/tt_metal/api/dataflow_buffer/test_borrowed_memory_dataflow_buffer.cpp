@@ -78,6 +78,7 @@ struct BorrowedDFBTestConfig {
     DFBAccessPattern cap      = DFBAccessPattern::STRIDED;  // producer is always STRIDED
     bool tensix_consumer      = false;
     bool verify_data          = false;
+    uint32_t borrowed_memory_offset = 0;
     std::optional<uint32_t> num_entries_override = std::nullopt;
     bool expect_attach_fatal = false;
 };
@@ -180,12 +181,16 @@ void run_borrowed_memory_dfb_program(
         .num_entries = cfg.num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
         .borrowed_from = experimental::TensorParamName{"dfb_ring_tensor"},
+        .borrowed_memory_offset = cfg.borrowed_memory_offset,
     };
 
     // --- TensorParameters ---
     const TensorSpec src_spec  = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
     const TensorSpec dst_spec  = make_flat_dram_tensor_spec(cfg.entry_size, cfg.num_entries);
-    const TensorSpec ring_spec = make_flat_l1_tensor_spec(cfg.entry_size, cfg.num_entries);
+    ASSERT_EQ(cfg.borrowed_memory_offset % cfg.entry_size, 0u)
+        << "The runtime test keeps the borrowed subrange aligned to a DFB entry";
+    const uint32_t borrowed_prefix_entries = cfg.borrowed_memory_offset / cfg.entry_size;
+    const TensorSpec ring_spec = make_flat_l1_tensor_spec(cfg.entry_size, cfg.num_entries + borrowed_prefix_entries);
 
     spec.tensor_parameters.push_back({.unique_id = experimental::TensorParamName{"src_tensor"}, .spec = src_spec});
     if (!cfg.tensix_consumer) {
@@ -267,7 +272,9 @@ void run_borrowed_memory_dfb_program(
 
     // Assert the borrowed tensor's L1 address was used for the DFB ring. For a borrowed DFB this
     // stays PINNED across a size override (no reallocation).
-    EXPECT_EQ(program.impl().dataflow_buffers()[0]->uniform_alloc_addr(), static_cast<uint32_t>(ring_tensor.address()));
+    EXPECT_EQ(
+        program.impl().dataflow_buffers()[0]->uniform_alloc_addr(),
+        static_cast<uint32_t>(ring_tensor.address()) + cfg.borrowed_memory_offset);
 
     if (cfg.num_entries_override.has_value()) {
         EXPECT_EQ(program.impl().dataflow_buffers()[0]->config.num_entries, *cfg.num_entries_override)
@@ -484,6 +491,22 @@ TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S) {
             .cap = DFBAccessPattern::STRIDED,
             .tensix_consumer = false,
             .verify_data = true,
+        });
+}
+
+TEST_F(UnitMeshFixture, BorrowedMemoryDMDM1Sx1S_OffsetSubrange) {
+    run_borrowed_memory_dfb_program(
+        this->device(),
+        NodeCoord{0, 0},
+        {
+            .num_entries = 16,
+            .entry_size = 256,
+            .num_producers = 1,
+            .num_consumers = 1,
+            .cap = DFBAccessPattern::STRIDED,
+            .tensix_consumer = false,
+            .verify_data = true,
+            .borrowed_memory_offset = 4 * 256,
         });
 }
 

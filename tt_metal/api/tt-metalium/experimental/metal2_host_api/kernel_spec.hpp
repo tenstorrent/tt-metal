@@ -138,9 +138,19 @@ struct KernelSpec {
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
-        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
+        std::string accessor_name;   // Primary DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+        // Additional constexpr accessor names for the same DFB device slot. This is an escape hatch
+        // for migrating legacy kernels in which multiple semantic CB names intentionally shared one
+        // physical CB index. Aliases do not add endpoints, storage, or data movement.
+        std::vector<std::string> accessor_aliases = {};
+        // Compatibility escape hatch for a token referenced only from a compile-time-discarded branch.
+        // If the named spec is absent, emit a placeholder token and allocate no DFB storage. Using that
+        // token at runtime is invalid; normal DFB bindings must leave this false. The placeholder is
+        // a bare numeric sentinel to preserve Gen1 APIs that accept raw CB ids, so it cannot carry a
+        // TensorAccessor-style live-use trap.
+        bool allow_unbound_for_constexpr_discard = false;
     };
     Group<DFBBinding> dfb_bindings;
 
@@ -150,6 +160,10 @@ struct KernelSpec {
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        // Compatibility escape hatch for a token referenced only from a compile-time-discarded branch.
+        // If the named spec is absent, emit an invalid numeric placeholder and allocate no semaphore.
+        // The numeric form preserves legacy semaphore APIs and therefore cannot carry a live-use trap.
+        bool allow_unbound_for_constexpr_discard = false;
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
@@ -160,6 +174,10 @@ struct KernelSpec {
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
         std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+        // Compatibility escape hatch for a token referenced only from a compile-time-discarded branch.
+        // If the named spec is absent, emit a zero-sized token and allocate no L1. Using that token at
+        // runtime is invalid; normal scratchpad bindings must leave this false.
+        bool allow_unbound_for_constexpr_discard = false;
     };
     Group<ScratchpadBinding> scratchpad_bindings;
 
@@ -174,6 +192,9 @@ struct KernelSpec {
     struct TensorBinding {
         TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
         std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+        // Compatibility escape hatch for a token referenced only from a compile-time-discarded branch.
+        // If the named parameter is absent, emit token metadata but no CTA/CRTA payload or runtime patching.
+        bool allow_unbound_for_constexpr_discard = false;
     };
     Group<TensorBinding> tensor_bindings;
 

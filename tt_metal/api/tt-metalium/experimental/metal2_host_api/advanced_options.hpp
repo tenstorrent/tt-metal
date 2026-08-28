@@ -203,6 +203,7 @@ struct DFBAdvancedOptions {
     // It is NOT supported on Gen2 architectures: setting this flag on a Gen2
     // target is a hard error, whether or not any instance is actually multi-bound.
     bool allow_instance_multi_binding = false;
+
 };
 
 struct AdvancedKernelRunArgs {

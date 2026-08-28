@@ -644,6 +644,20 @@ uint32_t ProgramImpl::get_dfb_handle(const std::string& name) const {
     return it->second;
 }
 
+uint32_t ProgramImpl::total_local_dataflow_buffer_size() const {
+    uint32_t total_size = 0;
+    for (const auto& dfb : dataflow_buffers_) {
+        if (!dfb->borrows_memory() && !dfb->alias_primary_id.has_value()) {
+            total_size += dfb->total_size();
+        }
+    }
+    return total_size;
+}
+
+uint32_t ProgramImpl::get_dataflow_buffer_entry_size(const std::string& name) const {
+    return get_dataflow_buffer(get_dfb_handle(name))->config.entry_size;
+}
+
 uint32_t ProgramImpl::get_semaphore_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->semaphore_handles.find(name);
@@ -783,15 +797,16 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     return names;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_borrowed_binding(
+    uint32_t dfb_id, const std::string& tensor_parameter_name, uint32_t memory_offset) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name, memory_offset);
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<std::tuple<uint32_t, std::string, uint32_t>>& ProgramImpl::get_dfb_borrowed_bindings() const {
+    static const std::vector<std::tuple<uint32_t, std::string, uint32_t>> empty;
     if (!metal2_registry_) {
         return empty;
     }
@@ -1578,6 +1593,10 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
 
             for (auto& handle : scratchpad_handles) {
+                if (handle.size_bytes == 0) {
+                    // Compile-time-discard compatibility token: keep address 0 and reserve no L1.
+                    continue;
+                }
                 // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
                 // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
                 // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
@@ -2775,6 +2794,14 @@ Program::Program(Program&& other) noexcept = default;
 Program& Program::operator=(Program&& other) noexcept = default;
 
 Program::~Program() noexcept = default;
+
+uint32_t Program::total_local_dataflow_buffer_size() const {
+    return internal_->total_local_dataflow_buffer_size();
+}
+
+uint32_t Program::get_dataflow_buffer_entry_size(const std::string& name) const {
+    return internal_->get_dataflow_buffer_entry_size(name);
+}
 
 ProgramId detail::ProgramImpl::get_id() const { return this->id; }
 
