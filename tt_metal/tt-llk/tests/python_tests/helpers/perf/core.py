@@ -345,17 +345,7 @@ def get_unique_base_names(input_dir: Path):
 
 def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
     """Fail the session if any rows share the same (sweep-params, marker) key.
-
-    The key columns are a row's identity, so two rows carrying the same key make
-    the measurement ambiguous. It happens when a sweep varies something the CSV
-    does not record, or when the harness normalizes a parameter onto a value
-    another sweep point already uses (dest_acc promoted from No to Yes for an
-    outlier format combo in TestConfig).
-
-    This used to average the duplicates and log a warning. The warning was never
-    visible: loguru writes to test_run*.log, which CI uploads only when the job
-    fails, so a green run discarded it. Raise instead, so the run fails and names
-    the offending test.
+    
     """
     if frame.empty or MARKER not in frame.columns:
         return frame
@@ -514,7 +504,7 @@ def _prune_runs(runs_dir: Path, keep: int, current: Path) -> None:
 
     ``keep <= 0`` disables pruning. Every step is survivable on its own: one
     unreadable directory costs that directory, not the whole prune, and the run
-    that just finished is protected by name rather than by being the newest —
+    that just finished is protected by nfame rather than by being the newest —
     a clock that jumped backwards must not be able to delete it.
     """
     if keep <= 0:
