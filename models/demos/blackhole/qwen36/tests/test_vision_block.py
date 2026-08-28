@@ -68,7 +68,6 @@ def test_vision_block_inference(
 
         # Example inputs and preprocessing
         pt_input = torch.randn(1, 1, ref_seq_len, model_args.dim, dtype=torch.bfloat16)
-        # pt_input = torch.load(f"ref_x_{layer_num - 1}.pt").unsqueeze(0).unsqueeze(0)
         (
             cu_seqlens,
             position_embeddings,

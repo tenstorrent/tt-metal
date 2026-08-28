@@ -56,23 +56,18 @@ COMPUTE_HIFI2_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
 )
 
 
-# LoFi + no fp32 dest acc. For the two ATTENTION prefill matmuls (QKV in-proj,
-# Wormhole, paired with create_prefill_kpass1_matmul_program_config exactly like
-# COMPUTE_HIFI2_NO_FP32_ACC is (the one-K-pass blocking still requires fp32_dest_acc_en=False).
+# LoFi + no fp32 dest acc, for the two attention prefill matmuls on Wormhole. Paired with
+# create_prefill_kpass1_matmul_program_config, exactly like COMPUTE_HIFI2_NO_FP32_ACC -- the
+# one-K-pass blocking requires fp32_dest_acc_en=False.
 #
-# WHY LoFi IS FREE HERE. HiFi2 costs ~2x LoFi's math passes per tile and bought
-# nothing on these two shapes because both take a BFLOAT8_B *weight*, whose 8-bit mantissa already
-# dominates the product's error -- HiFi2 was paying for precision the operands cannot represent.
-# MEASURED (kernel duration + PCC vs fp32 torch, N300, M=2048, one K pass,
-# tests/perf/test_all_matmuls_sweep.py):
-#     qkv 2048x4096x5120  HiFi2 1007.8us pcc=0.99992  ->  LoFi 887.3us pcc=0.99985   -12.0%
-#     wo  2048x2048x4096  HiFi2  402.6us pcc=0.99987  ->  LoFi 328.9us pcc=0.99981   -18.3%
-# i.e. ~7e-5 PCC for 12-18% of the op. The sweep confirms 8 columns is best
-# grid width for both (fewer loses more in cores than it gains in subblock),
-# further lever here.
+# LoFi is free here because both shapes take a BFLOAT8_B weight, whose 8-bit mantissa already
+# dominates the product's error, so HiFi2's ~2x math passes were paying for precision the operands
+# cannot represent. MEASURED (N300, M=2048, one K pass, tests/perf/test_all_matmuls_sweep.py):
+#     qkv 2048x4096x5120  1007.8 -> 887.3us  -12.0%   pcc 0.99992 -> 0.99985
+#     wo  2048x2048x4096   402.6 -> 328.9us  -18.3%   pcc 0.99987 -> 0.99981
 #
 # Kept SEPARATE from COMPUTE_HIFI2_NO_FP32_ACC rather than changing it: that constant is also the
-# GDN in-proj's, tuned at HiFi2 and NOT covered by this sweep.
+# GDN in-proj's, tuned at HiFi2 and not covered by this sweep.
 COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=True,
@@ -232,25 +227,19 @@ def prefill_grid_default():
 PREFILL_MAX_COLS_PORTABLE = 11
 
 # Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
-#   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
-#     subblock first. At TP=8 the halved N makes wide grids yield a small per_core_N and hence a
-#     narrow subblock, so that ranking retreats to fewer columns and leaves cores idle. Measured
-#     device time is monotonically decreasing in column count instead: attn_wo went 1944us @ 60
-#     cores -> 700us @ 110, and mlp_gate 2943us @ 60 -> 1935us @ 110. So take the width.
-#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` is a function of the per-device K, which
-#     halves. attn_wo/gdn_out go k_tiles 48 -> 24 and `24 // 11 = 2`, but in0_block_w only has to
-#     DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo @ 11 cols, from the sweep:
-#     bw2 786us, bw4 719us, bw6 700us, bw8 705us).
+#   * widest_cols -- `_best_prefill_cols` ranks widths by (out_subblock_w, cols), subblock first.
+#     At TP=8 the halved N makes wide grids yield a narrow subblock, so that ranking retreats to
+#     fewer columns and leaves cores idle. Device time is monotonically decreasing in column count
+#     instead: attn_wo 1944us @ 60 cores -> 700us @ 110. Take the width.
+#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` tracks the per-device K, which halves.
+#     in0_block_w only has to DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo
+#     @ 11 cols: bw2 786us, bw4 719us, bw6 700us, bw8 705us).
 #
-# in0_block_w_cap is L1-BOUND, NOT just a legality bound. in0_block_w sizes the in0 circular
-# buffer, and `_wo_proj` / the MLP prefill arm write their OUTPUT to L1 (attention/tp.py:246,
-# mlp.py:284) -- so the CBs and a resident L1 output tensor compete for the same 1536 KB. Measured
-# on the real model: cap=8 overflows and test_model_tp_long_prefill dies with
-#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
-#    [0-0 - 10-8]. L1 buffer allocated at 1314560 and static circular buffer region ends at 1372032"
-# from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
-# tenant is the op under test, so it reports a win that the full model has no room for. Any future
-# raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# in0_block_w_cap is L1-BOUND, not just a legality bound: it sizes the in0 circular buffer, and
+# `_wo_proj` / the MLP prefill arm write their OUTPUT to L1, so the CBs and a resident L1 output
+# compete for the same 1536 KB. cap=8 overflows and test_model_tp_long_prefill dies on a CB/L1
+# clash. A standalone per-op sweep CANNOT see this -- in isolation the only L1 tenant is the op
+# under test -- so any raise of this cap must be validated by that test, not by the sweep.
 _PREFILL_TUNING = {
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),

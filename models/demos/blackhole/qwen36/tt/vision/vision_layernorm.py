@@ -70,7 +70,6 @@ class LayerNorm(LightweightModule):
             ), f"Input dimension dim ({dim}) must be a multiple of SHARD_HEIGHT ({SHARD_HEIGHT})"
             shard_width_hidden_dim_across_32_cores = dim // SHARD_HEIGHT
             core_grid = ttnn.CoreGrid(x=8, y=SHARD_HEIGHT // 8)
-            # core_grid = ttnn.CoreGrid(x=8, y=8)
             self.sharded_input_config = ttnn.create_sharded_memory_config(
                 shape=(SHARD_HEIGHT, shard_width_hidden_dim_across_32_cores),
                 core_grid=core_grid,
