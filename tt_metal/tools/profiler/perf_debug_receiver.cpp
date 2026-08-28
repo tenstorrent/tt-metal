@@ -478,7 +478,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     uint32_t frames = 0, pages_done = 0, acked_pages = 0;
     while (o + kernel_profiler::SPSC_SPAN_PREFIX_WORDS <= total_words) {
         const uint32_t w1 = word_at(o + 1);
-        if (!pp_is_bulkspan(word_at(o)) || w1 < kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE ||
+        if (!pp_is_bulkspan(word_at(o)) || w1 < kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS ||
             w1 > profiler::kSpscMaxPayloadWords) {
             // Framing is lost; step one page and rescan for the next header.
             s.bad_frames++;

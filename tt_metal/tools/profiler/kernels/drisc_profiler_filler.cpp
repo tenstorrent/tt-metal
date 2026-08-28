@@ -56,7 +56,8 @@ void kernel_main() {
     // selection) lost to full slots at every delay measured.
     constexpr uint32_t kSlotWords = kernel_profiler::spsc_span_slot_words(kNumRisc);
     constexpr uint32_t kSlotBytes = kSlotWords * 4u;
-    constexpr uint32_t kPayloadCapWords = kSlotWords - kPrefix - kCtrlWords;
+    constexpr uint32_t kWireCtrl = kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS;
+    constexpr uint32_t kPayloadCapWords = kSlotWords - kPrefix - kWireCtrl;
        // 10,560
     constexpr uint32_t kPageWords = kernel_profiler::SPSC_SPAN_PAGE_WORDS;
     constexpr uint32_t kPageBytes = kPageWords * 4u;
@@ -189,7 +190,7 @@ void kernel_main() {
         "the shared pad rule no longer matches this part's NoC congruence");
     static_assert(
         kRingWords % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
-            (kPrefix + kCtrlWords) % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
+            (kPrefix + kWireCtrl) % kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS == 0 &&
             kStageBase % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0 &&
             kSlotBytes % (kernel_profiler::SPSC_SPAN_PACK_ALIGN_WORDS * 4u) == 0,
         "packed-gather congruence broken");
@@ -961,7 +962,7 @@ void kernel_main() {
                     const uint32_t* mine = &head_mirror[c * kNumRisc];
                     volatile tt_l1_ptr uint32_t* cv =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot + kPrefix * 4u);
-                    uint32_t off = kPrefix + kCtrlWords;
+                    uint32_t off = kPrefix + kWireCtrl;
                     ncrisc_noc_read_set_state<DM_DEDICATED_NOC, false, false>(
                         kReadNoc, read_cmd_buf, get_noc_addr(xy & 0xFFFFu, xy >> 16, cv_src));
                     // The per-lane walk stays a LOOP, unlike the scans: lane r's bookkeeping runs
@@ -988,7 +989,7 @@ void kernel_main() {
                         uint32_t pad = 0;
                         if (take != 0) {
                             pad = kernel_profiler::spsc_span_pack_pad(start, off);
-                            const uint32_t used = off - (kPrefix + kCtrlWords);
+                            const uint32_t used = off - (kPrefix + kWireCtrl);
                             const uint32_t room =
                                 kPayloadCapWords > used + pad ? kPayloadCapWords - used - pad : 0;
                             if (take > room) {
@@ -997,8 +998,8 @@ void kernel_main() {
                             }
                         }
                         slot_runs[sl * kNumRisc + r] = take;
-                        cv[kernel_profiler::SPSC_RING_HEAD_0 + r] = start;
-                        cv[kernel_profiler::SPSC_RING_TAIL_0 + r] = start + take;
+                        cv[kernel_profiler::SPSC_WIRE_HEAD_0 + r] = start;
+                        cv[kernel_profiler::SPSC_WIRE_TAIL_0 + r] = start + take;
                         if (take == 0) {
                             continue;
                         }
@@ -1016,7 +1017,7 @@ void kernel_main() {
                         }
                         off += take;
                     }
-                    cv[kernel_profiler::SPSC_CORE_XY] = xy;
+                    cv[kernel_profiler::SPSC_WIRE_XY] = xy;
                     volatile tt_l1_ptr uint32_t* pfx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
                     pfx[0] = kernel_profiler::spsc_span_w0();
                     pfx[1] = off - kPrefix;

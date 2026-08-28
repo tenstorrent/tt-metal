@@ -346,6 +346,17 @@ constexpr std::uint32_t spsc_span_pack_pad(std::uint32_t start_counter, std::uin
 
 inline std::uint32_t spsc_span_w0() { return SPSC_SPAN_PACKET_TYPE << SPSC_SPAN_TYPE_SHIFT; }
 
+// Compact on-wire control block for PACKED span frames: just the words the decoder walks. The L1
+// control vector is 64 words laid out for 24 RISCs (heads at 0..4 but tails at 24..28 and XY at 49),
+// and shipping it verbatim made ~50 dead words per frame in the loaded direction of the PCIe tile.
+// RAW (self) frames still carry the true vector at its L1 layout -- the w0 raw flag picks the geometry.
+constexpr static std::uint32_t SPSC_SPAN_WIRE_CTRL_WORDS = 16;
+enum SpscWireCtrl : std::uint32_t {
+    SPSC_WIRE_HEAD_0 = 0,  // ..4
+    SPSC_WIRE_TAIL_0 = 5,  // ..9
+    SPSC_WIRE_XY = 10,
+};
+
 // Layout flag in w0's reserved-zero low bits: set = the payload is the RAW span (control vector +
 // five whole rings at fixed offsets, ring wrap NOT resolved) instead of packed live runs. The drainer
 // ships whichever costs its egress less -- packing trades bytes for NoC write issues (~10 extra per

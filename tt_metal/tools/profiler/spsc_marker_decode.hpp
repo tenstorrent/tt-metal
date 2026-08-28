@@ -401,22 +401,25 @@ inline uint32_t spsc_decode_frame(
     (void)emit_atomic16;
     (void)emit_atomic8;  // the atomic arm is 512-bit only; the 8-wide tier is gone
     const uint32_t* ctrl = frame + kernel_profiler::SPSC_SPAN_PREFIX_WORDS;
-    const auto xy_it = st.core_of_xy.find(ctrl[kernel_profiler::SPSC_CORE_XY]);
+    const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
+    const auto xy_it = st.core_of_xy.find(
+        ctrl[raw ? +kernel_profiler::SPSC_CORE_XY : +kernel_profiler::SPSC_WIRE_XY]);
     if (xy_it == st.core_of_xy.end()) {
         st.unknown_core_frames++;
         return 0;
     }
     const uint32_t core = xy_it->second;
-    const bool raw = (frame[0] & kernel_profiler::SPSC_SPAN_RAW_FLAG) != 0;
     // Frame-local counters, folded into st once at the end: the emitters store through casted ring
     // pointers, so a SpanDecodeState field update here is a forced load-add-store per record -- the
     // compiler must assume the NT stores alias it.
     uint64_t vz = 0, va = 0, vac = 0, sr = 0, lw = 0;
-    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS + kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE;
+    uint32_t off = kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
+                   (raw ? kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE : kernel_profiler::SPSC_SPAN_WIRE_CTRL_WORDS);
     for (uint32_t r = 0; r < kSpscNRiscDecode; r++) {
         const uint32_t lane = core * kSpscNRiscDecode + r;
-        const uint32_t tail = ctrl[kernel_profiler::SPSC_RING_TAIL_0 + r];
-        const uint32_t frame_head = ctrl[kernel_profiler::SPSC_RING_HEAD_0 + r];
+        const uint32_t tail = ctrl[(raw ? +kernel_profiler::SPSC_RING_TAIL_0 : +kernel_profiler::SPSC_WIRE_TAIL_0) + r];
+        const uint32_t frame_head =
+            ctrl[(raw ? +kernel_profiler::SPSC_RING_HEAD_0 : +kernel_profiler::SPSC_WIRE_HEAD_0) + r];
         const uint32_t extent = kernel_profiler::spsc_span_live(frame_head, tail, kSpscRingCap);
         if (extent != tail - frame_head) {
             st.anomalies++;  // torn snapshot; the clamped geometry still frames consistently on both sides
