@@ -1187,10 +1187,22 @@ _UINT32_BINARY_OPS = {
     MathOperation.SfpuRemainderUint32,
 }
 
+
 # int/uint binary ops sharing the same driver: dest_acc=Yes, single-format, and a per-op
 # uniform positive stimuli range. Ranges keep operands (and results) non-negative and small
 # enough to round-trip the sign-magnitude Dst packer plus any int->fp32 reciprocal the
 # kernel uses. mathop -> (low, high).
+# The range each int binary kernel is *documented to be valid on*, and nothing else. Every
+# comment below is about that documented sub-range, which is why they are all positive and all
+# far from the format ceiling.
+#
+# What this table deliberately does not encode is which individual values get driven. Reading
+# it as though it did is how zero came to be missing from every one of them: the ranges are a
+# statement about the kernel's contract, not a stimulus plan. The discrete values live in
+# test_eltwise_binary_sfpu_int_zero_operands and test_eltwise_binary_sfpu_uint32_high_range,
+# which drive them as a *product* rather than sprinkling them into a random tensor -- 0 against
+# a positive, against 1 and against itself are three different cases, and a uniform draw with
+# a few values grafted in tests one of them.
 _INT_BINARY_STIMULI = {
     # trunc/floor division < 2**24: exact int->fp32 reciprocal, trunc == floor, and the
     # sign-magnitude pack path can't round-trip the negatives these kernels would emit.
@@ -1223,12 +1235,167 @@ def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc):
     _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc)
     int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
     formats = InputOutputFormat(int_format, int_format)
-    low, high = _INT_BINARY_STIMULI[mathop]
     sfpu_binary(
         formats,
         dest_acc,
         mathop,
-        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=low, high=high),
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM,
+            low=_INT_BINARY_STIMULI[mathop][0],
+            high=_INT_BINARY_STIMULI[mathop][1],
+        ),
+    )
+
+
+# Ops whose *divisor* has no defined answer at zero, and are therefore excluded from the zero
+# probe's B operand rather than driven blind.
+#
+# Read the kernels before writing this, as the plan asks. calculate_div_int32 and its floor twin
+# build the quotient from `_sfpu_reciprocal_<2>(float_in1)`, and SFPARECIP's contract is stated
+# only for 0 <= x < 2 -- a reciprocal of zero is outside what the primitive promises, exactly as
+# it is for the float div family already recorded in _BINARY_SPECIALS_NOT_READY. remainder and
+# fmod compose the same quotient. So this is section 5.6 Q1's composition question rather than a
+# new one, and the honest record is an exclusion with a reason, not an xfail against a result
+# nobody specified.
+#
+# The goldens agree, which is the host-side half of the same verdict: torch's integer division
+# raises RuntimeError at a zero divisor and the Python `%` in _remainder_int / _fmod_int raises
+# ZeroDivisionError, so there is no reference answer to compare against either.
+#
+# A zero *dividend* is fine for all five and is driven -- 0 / n and 0 % n are ordinary.
+_INT_ZERO_UNDEFINED_DIVISOR: Dict[MathOperation, str] = {
+    MathOperation.SfpuDivInt32: "quotient via _sfpu_reciprocal_, whose contract is stated "
+    "only for 0 <= x < 2; torch's integer div raises at a zero divisor too",
+    MathOperation.SfpuDivInt32Floor: "as SfpuDivInt32 -- the same reciprocal composition, "
+    "differing only in how the quotient is rounded",
+    MathOperation.SfpuRemainderInt32: "composes the same reciprocal quotient; the golden's "
+    "Python % raises ZeroDivisionError",
+    MathOperation.SfpuFmodInt32: "as SfpuRemainderInt32 -- the same quotient, differing only "
+    "in the sign convention for a negative dividend",
+    MathOperation.SfpuRemainderUint32: "as SfpuRemainderInt32, with the operands read "
+    "unsigned; the divisor being zero is the same undefined reciprocal either way",
+}
+
+assert set(_INT_ZERO_UNDEFINED_DIVISOR) <= set(_INT_BINARY_STIMULI), (
+    "these ops record a zero-divisor exclusion but are not driven by the int uniform sweep: "
+    f"{sorted(op.name for op in set(_INT_ZERO_UNDEFINED_DIVISOR) - set(_INT_BINARY_STIMULI))}"
+)
+
+# Small values around zero. 0 is the probe; 1 is the multiplicative identity gcd and lcm are
+# most likely to disagree on; 2 and 7 give a composite and a prime so gcd/lcm results are not
+# all trivially 1 or equal.
+_INT_ZERO_PROBE = (0, 1, 2, 7)
+
+
+def _int_zero_pairs(mathop):
+    """The (a, b) product for *mathop*, with 0 dropped from b where a zero divisor is UB."""
+    b_values = [
+        v
+        for v in _INT_ZERO_PROBE
+        if v != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR
+    ]
+    return [(a, b) for a in _INT_ZERO_PROBE for b in b_values]
+
+
+@pytest.mark.nightly
+@parametrize(
+    mathop=list(_INT_BINARY_STIMULI),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_zero_operands(mathop, dest_acc):
+    """Zero against small operands, for every int binary op that defines an answer there.
+
+    `_INT_BINARY_STIMULI` gives each of these a single positive uniform range, all but max/min
+    starting at 1, so zero was never driven at all -- and gcd(0, x) = x and lcm(0, x) = 0 are
+    the identities those kernels are most plausibly wrong about. A product rather than an
+    element-wise pairing, for the reason edge_pair_values() gives: 0 against a positive, against
+    1 and against itself are three different cases.
+    """
+    int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
+    formats = InputOutputFormat(int_format, int_format)
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(
+            _int_zero_pairs(mathop), torch.int32
+        ),
+    )
+
+
+# The uint32 ops' entire reason for existing is the upper half of the range: below 2**31 an
+# unsigned op and its signed twin agree on every input, so _INT_BINARY_STIMULI's 1e6 cap makes
+# MaxUint32 indistinguishable from MaxInt32. The generator's own UInt32 default is
+# uniform(0, 2**32 - 2); the override threw that away.
+#
+# An explicit *pair* list rather than a random spec over both halves, and the reason is the
+# same trap the `mixed` where condition fell into: uniform(intervals=[...]) selects an interval
+# with probability proportional to its length, and the upper half is ~2000x longer than
+# [0, 1e6], so a two-interval spec puts essentially every element above 2**31 -- measured,
+# 2048 of 2048 -- and never orders a large operand against a small one. That crossing is the
+# whole point: under a signed reading of the bits 0xFFFFFFFE is -2 and loses to 1, under an
+# unsigned one it is 4294967294 and wins.
+#
+# 2**31 exactly (0x80000000) is left out. It is the bit pattern sign-magnitude Dst reads as
+# "negative zero" and cannot round-trip, which is a documented hardware limitation with its own
+# xfail (test_eltwise_binary_sfpu_int_shift_int32_min_unsupported); 2**31 + 1 stands in for it,
+# as INT32_MIN + 1 does on the signed side.
+_UINT32_SMALL = (0, 1, 1_000_000)
+_UINT32_LARGE = (2**31 + 1, 3_000_000_000, 2**32 - 2)
+_UINT32_HIGH_PAIRS = [
+    (a, b) for a in _UINT32_SMALL + _UINT32_LARGE for b in _UINT32_SMALL + _UINT32_LARGE
+]
+
+
+@pytest.mark.nightly
+@parametrize(
+    mathop=sorted(_UINT32_BINARY_OPS, key=lambda op: op.name),
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_uint32_high_range(mathop, dest_acc):
+    """Drive the uint32 ops above 2**31, the only region where they differ from the signed ops."""
+    formats = InputOutputFormat(DataFormat.UInt32, DataFormat.UInt32)
+    pairs = [
+        (a, b)
+        for a, b in _UINT32_HIGH_PAIRS
+        # A zero divisor is undefined for remainder_uint32 the same way it is for its signed
+        # twin; see _INT_ZERO_UNDEFINED_DIVISOR.
+        if b != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR
+    ]
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(pairs, torch.int64),
+        twos_complement=True,
+    )
+
+
+# Truncating and flooring division differ *only* on negative operands -- -7/3 is -2 truncated
+# and -3 floored -- so with the positive-only table above, SfpuDivInt32 and SfpuDivInt32Floor
+# were driven on stimuli that cannot tell them apart. The whole reason the second op exists was
+# unexercised.
+#
+# Both signs on both operands, and magnitudes chosen so the two conventions disagree: 7/3 is
+# exact-free (quotient 2 remainder 1), so every pair with an odd number of negative operands
+# has trunc != floor.
+_SIGNED_DIVISION_PAIRS = [(a, b) for a in (-7, -1, 1, 7) for b in (-3, -1, 1, 3)]
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    mathop=[MathOperation.SfpuDivInt32, MathOperation.SfpuDivInt32Floor],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_int_signed_division(formats, dest_acc, mathop):
+    """trunc vs floor division on negative operands, the only inputs that separate them."""
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(_SIGNED_DIVISION_PAIRS, torch.int32),
+        twos_complement=True,
     )
 
 

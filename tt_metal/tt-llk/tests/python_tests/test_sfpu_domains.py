@@ -646,6 +646,104 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
             )
 
 
+def test_every_int_binary_op_drives_zero_or_records_why_not():
+    """Zero reaches every int binary op, on both operands, or the exclusion is written down.
+
+    `_INT_BINARY_STIMULI` gives each of these a single positive uniform range -- all but max/min
+    starting at 1 -- so before the zero probe existed, gcd(0, x) = x and lcm(0, x) = 0 were
+    simply never driven, and nothing recorded whether that was a decision or an omission. This
+    converts "nobody got to it" into "here is why not".
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    for op in binary._INT_BINARY_STIMULI:
+        pairs = binary._int_zero_pairs(op)
+        assert any(a == 0 for a, _ in pairs), (
+            f"{op.name}: a zero dividend is never driven, and 0 op x is defined for every op "
+            "in this table"
+        )
+        drives_zero_divisor = any(b == 0 for _, b in pairs)
+        excluded = op in binary._INT_ZERO_UNDEFINED_DIVISOR
+        assert drives_zero_divisor != excluded, (
+            f"{op.name}: a zero divisor is neither driven nor recorded in "
+            "_INT_ZERO_UNDEFINED_DIVISOR (or it is both)"
+        )
+        if excluded:
+            assert (
+                len(binary._INT_ZERO_UNDEFINED_DIVISOR[op]) > 20
+            ), f"{op.name}'s zero-divisor exclusion reason is too short to be a claim"
+
+
+def test_signed_division_probe_separates_trunc_from_floor():
+    """The signed-division pairs must contain inputs where the two conventions disagree.
+
+    Truncating and flooring division differ only when the operands have opposite signs, so a
+    probe list that happened to be all same-sign would drive both ops on stimuli that cannot
+    tell them apart -- which is exactly the state the positive-only table left them in, and a
+    green variant would look like it had fixed it.
+    """
+    import test_eltwise_binary_sfpu as binary
+    import torch
+    from helpers.golden_generators import BinarySFPUGolden
+
+    golden = BinarySFPUGolden()
+    separating = [
+        (a, b)
+        for a, b in binary._SIGNED_DIVISION_PAIRS
+        if int(golden.ops[MathOperation.SfpuDivInt32](torch.tensor(a), torch.tensor(b)))
+        != int(
+            golden.ops[MathOperation.SfpuDivInt32Floor](
+                torch.tensor(a), torch.tensor(b)
+            )
+        )
+    ]
+    assert separating, (
+        "no pair in _SIGNED_DIVISION_PAIRS has trunc != floor, so the two ops are still "
+        "driven on stimuli that cannot distinguish them"
+    )
+
+
+def test_uint32_probe_reaches_above_the_signed_boundary_on_both_sides():
+    """The uint32 pairs must cross 2**31, and must order a large operand against a small one.
+
+    Below 2**31 an unsigned op and its signed twin agree on every input, so this list is the
+    only thing that can tell MaxUint32 from MaxInt32. Both halves of the claim are asserted:
+    that large values are present at all, and that they are *paired against* small ones -- a
+    random spec over two intervals gets the first and silently loses the second, because
+    interval selection is proportional to length and the upper half is ~2000x longer.
+
+    2**31 itself is excluded: it is the sign-magnitude "negative zero" pattern that cannot
+    round-trip, which has its own xfail.
+    """
+    import test_eltwise_binary_sfpu as binary
+
+    pairs = binary._UINT32_HIGH_PAIRS
+    boundary = 2**31
+
+    def as_signed(v):
+        return v - 2**32 if v >= boundary else v
+
+    assert any(
+        a >= boundary or b >= boundary for a, b in pairs
+    ), "no pair reaches above 2**31, where the unsigned ops differ from the signed ones"
+    crossed = [(a, b) for a, b in pairs if (a >= boundary) != (b >= boundary)]
+    assert crossed, (
+        "every pair sits on one side of 2**31, so no comparison ever orders a large operand "
+        "against a small one -- the case a signed reading of the bits gets backwards"
+    )
+    separating = [
+        (a, b) for a, b in pairs if max(as_signed(a), as_signed(b)) != max(a, b)
+    ]
+    assert len(separating) > len(pairs) // 4, (
+        f"only {len(separating)} of {len(pairs)} pairs distinguish an unsigned maximum from a "
+        "signed one"
+    )
+    assert boundary not in {v for pair in pairs for v in pair}, (
+        "2**31 is the sign-magnitude negative-zero pattern and cannot round-trip; use "
+        "2**31 + 1 as INT32_MIN + 1 stands in on the signed side"
+    )
+
+
 def test_logsigmoid_exp_branch_is_a_logsigmoid():
     """-exp(-x) has to *be* logsigmoid(x) above the threshold, or modelling it proves nothing.
 

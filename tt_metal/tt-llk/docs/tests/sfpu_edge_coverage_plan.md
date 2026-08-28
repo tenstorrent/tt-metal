@@ -25,14 +25,13 @@ the concrete steps to reach them.
 | # | Gap | Family | Effort | Value | Blocked by |
 |---|---|---|---|---|---|
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
-| [W3](#w3--integer-binary-ops-never-see-zero-negatives-or-the-uint32-upper-half) | Int binary ops: no `0`, no negatives, uint32 capped at 1e6 | binary | M | High | partly HW (sign-magnitude Dst) |
 | [W7](#w7--the-overflow-producing-ops-are-not-driven-at-their-ceiling) | Nothing asserts that a result too large for the output format saturates rather than wraps | unary, binary | M | High | — |
 | [W9](#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | unary | M | Medium | needs a kernel-contract ruling |
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 | [W11](#w11--a-coverage-ledger-so-the-next-gap-is-visible) | No machine-checked record of which value classes each op has seen | infra | M | High | the items above |
 
-Suggested order: **W1** (small, unblocked, independently mergeable), then **W3 → W11**,
-then **W7 → W9 → W10** (each needs a measurement pass, and W9 a kernel-contract ruling).
+Suggested order: **W1** (small, unblocked, independently mergeable), then **W11**, then
+**W7 → W9 → W10** (each needs a measurement pass, and W9 a kernel-contract ruling).
 
 **Already landed**, in the commit this document arrives with: the whole of the original W5
 (IEEE specials for the ternary family, including the `TernarySFPUGolden` and `WhereGolden`
@@ -43,7 +42,9 @@ saturation test. Also the whole of W2 — `StimuliSpec.cycle`, honoured by `Cust
 on by default in `edge_spec()` — the whole of W4, whose cat-B half the ternary specials work
 had already closed, the whole of W6, and the whole of W8 — which also retired the "effectively
 unary" justification that kept `SfpuLogsigmoid` out of cat B, replacing it with the structural
-one. W7 below is what is left of it. The numbering is unchanged so
+one, and the whole of W3 — including the negatives it expected to be blocked, which
+`twos_complement=True` turns out to deliver. W7 below is what is left of it. The numbering is
+unchanged so
 that references from commit messages and reviews still resolve; the closed items are simply
 gone.
 
@@ -214,86 +215,6 @@ If Blackhole agrees and Wormhole does not, add the class to
 
 **Cost:** no new ELFs (the pair list is a runtime axis). A few more elements per override
 tensor.
-
----
-
-## W3 — Integer binary ops never see zero, negatives, or the uint32 upper half
-
-### Problem
-
-`_INT_BINARY_STIMULI` (`test_sfpu_binary.py:1126`) gives every integer binary op a single
-positive uniform range, all of them `low >= 1.0` except max/min at `0.0`, and all far
-below the format ceiling. `test_sfpu_binary_int_extremes` covers only the bitwise ops,
-`eq`/`ne`, and the four ordered comparisons — so the *arithmetic* int ops get nothing else.
-
-Three distinct holes:
-
-- **`SfpuDivInt32` and `SfpuDivInt32Floor` are indistinguishable as tested.** Truncating
-  and flooring division differ *only* on negative operands. The comment in the table even
-  says so ("trunc == floor"). The entire reason the second op exists is unexercised.
-- **Zero operands are never driven** for `gcd`, `lcm`, `div`, `remainder`, `fmod`, `mul`.
-  `gcd(0, x) = x` and `lcm(0, x) = 0` are the identities those kernels most plausibly get
-  wrong, and `x / 0` / `x % 0` are undriven poles.
-- **`SfpuMaxUint32`, `SfpuMinUint32`, `SfpuRemainderUint32` are capped at 1e6**, so no
-  operand ever lands in `[2**31, 2**32)` — the only region where an unsigned op differs
-  from its signed twin. The generator's own UInt32 default is `uniform(0, 2**32 - 2)`
-  (`helpers/stimuli_generator/generator.py:253`); the override throws that away.
-
-Part of this is genuinely blocked: Dst stores int32 sign-magnitude, so a negative operand
-does not round-trip, which is why the table is positive-only. That blocks the negatives.
-It does **not** block zero, and it does not block the uint32 upper half.
-
-### Steps
-
-1. **Split the table's two jobs.** `_INT_BINARY_STIMULI` currently conflates "the range
-   this kernel is documented to be valid on" with "the values we happen to drive".
-   Restructure the value side as an explicit list per op so zero can be included where the
-   kernel defines it:
-
-   ```python
-   # (low, high) for the random bulk, plus the discrete values that must appear.
-   _INT_BINARY_STIMULI = {
-       MathOperation.SfpuGcd: _IntStimuli(low=1.0, high=100_000.0, must_include=[0, 1]),
-       MathOperation.SfpuLcm: _IntStimuli(low=1.0, high=20_000.0,  must_include=[0, 1]),
-       ...
-   }
-   ```
-
-   Deliver `must_include` the same way `_int_unary_stimuli_spec` does — a
-   `StimuliSpec.custom(values=straddle + spread, cycle=True)`, not a second
-   tensor.
-
-2. **Add `test_sfpu_binary_int_zero_operands`** (nightly), driving the cartesian product
-   of `{0, 1, 2, small}` against itself for the ops whose kernels define an answer at
-   zero, via `_build_paired_tile_override`. For the *divisors* — `div`, `divfloor`,
-   `remainder`, `fmod` — a zero divisor needs a decision first: read the kernel, decide
-   whether it is UB or a defined answer, and either register it or record it as excluded
-   with the reason. Do not drive it blind.
-
-3. **Add `test_sfpu_binary_uint32_high_range`** (nightly), for the three uint32 ops, with
-   `spec = StimuliSpec.uniform(intervals=[(0.0, 1e6), (2.0**31, 2.0**32 - 2)])` and
-   `twos_complement=True`. This is the variant that can tell `MaxUint32` from `MaxInt32`;
-   until it exists, nothing can.
-
-4. **Add `test_sfpu_binary_int_signed_division`** (nightly, `xfail` where appropriate) for
-   `SfpuDivInt32` vs `SfpuDivInt32Floor` over `{-7, -1, 1, 7} × {-3, -1, 1, 3}` with
-   `twos_complement=True`. Expect the sign-magnitude Dst limitation to bite; the point is
-   to have it recorded as a *specific* `xfail` with the ISA reference — the same shape as
-   `test_sfpu_binary_int_shift_int32_min_unsupported` — rather than as an absence.
-
-### Pin it
-
-In `test_sfpu_domains.py`, assert every op in `_INT_BINARY_STIMULI` either includes `0`
-in its driven values or appears in a new `_INT_ZERO_UNDEFINED: Dict[MathOperation, str]`
-with a reason. That converts "nobody got to it" into "here is why not".
-
-### Verify
-
-```bash
-CHIP_ARCH=blackhole pytest test_sfpu_binary.py -q -k "int_zero or uint32_high or int_signed"
-```
-
-**Cost:** three new nightly tests, ~30 new ELFs.
 
 ---
 
@@ -543,12 +464,14 @@ Not everything above closes. These are the cases where the honest outcome is a r
 limitation, not a test:
 
 - **`INT32_MIN` through any int32 kernel.** Dst stores integers sign-magnitude and reads
-  `0x80000000` as "negative zero", so the value cannot round-trip. Already covered by a
-  dedicated `xfail` (`test_sfpu_binary_int_shift_int32_min_unsupported`) and by
-  `integer_specials()`'s docstring. W3 should extend that `xfail`'s scope, not try to
-  defeat it.
-- **Negative integer operands generally**, for the same reason — which is why W3's signed
-  division item is scoped to *recording* the limitation rather than passing.
+  `0x80000000` as "negative zero", so the value cannot round-trip. Covered by a dedicated
+  `xfail` (`test_sfpu_binary_int_shift_int32_min_unsupported`) and by `integer_specials()`'s
+  docstring. `INT32_MIN + 1` and `2**31 + 1` stand in for it on the signed and unsigned sides.
+- **Negative integer operands generally** — *retracted*. This entry expected the
+  sign-magnitude Dst to block them, and `twos_complement=True` turns out to deliver them
+  intact: `test_eltwise_binary_sfpu_int_signed_division` drives both signs on both operands and
+  passes, which is what separates truncating from flooring division. Only the single
+  `0x80000000` pattern above is genuinely blocked.
 - **`Lgamma` / `Digamma` / `Polygamma` at their poles.** The kernels are polynomial and LUT
   fits that claim accuracy only well inside a positive domain; a probe at the boundary
   tests a value the kernel never promised. Already recorded above `_OP_SINGULARITIES`.
