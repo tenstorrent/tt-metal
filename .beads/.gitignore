@@ -1,0 +1,38 @@
+# Dolt databases and local runtime state
+dolt/
+embeddeddolt/
+proxieddb/
+backup/
+
+bd.sock
+bd.sock.startlock
+sync-state.json
+last-touched
+.exclusive-lock
+daemon.*
+push-state.json
+*.lock
+.beads-credential-key
+.local_version
+proxied_server_client_info.json
+redirect
+.sync.lock
+export-state/
+export-state.json
+last_pull
+
+# Local ephemeral stores and server state
+ephemeral.sqlite3*
+dolt-server.*
+dolt-pprof/
+*.corrupt.backup/
+.env
+
+# Legacy local databases
+*.db
+*.db?*
+*.db-journal
+*.db-wal
+*.db-shm
+db.sqlite
+bd.db
