@@ -5,7 +5,7 @@
 # 24 galaxies x 4 procs = 96 ranks; each rank owns 8 of its host's 32 chips as a
 # 4x2 stage submesh. The row axis is RING (the 4-row Y ring the decoder / lm-head
 # CCLs need -- notably broadcast_rmsnorm_mcast); blaze.models.cli requests the
-# matching ttnn.FabricConfig.FABRIC_2D_TORUS_Y for multi-mesh, non-4-proc runs.
+# matching FabricConfig FABRIC_2D_TORUS_Y for multi-mesh, non-4-proc runs.
 #
 # Same shape as the golden 80-stage MTP descriptor used by the DeepSeek-V3 80-proc
 # run (golden_110d_rank_bindings_80_stage/mgd.textproto), extended to 96 meshes.
