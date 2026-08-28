@@ -8,7 +8,7 @@
 // The host points three KernelDescriptors at this file -- a reader
 // (RISCV_1/NCRISC), a writer (RISCV_0/BRISC), and a compute kernel -- with
 // identical compile-time and runtime args. No per-thread defines are needed:
-// <tt/unified/core> pulls in tt/unified/adaptor_v1.hpp, which derives the projection
+// <tt/unified/core> pulls in tt/unified/adaptor.hpp, which derives the projection
 // from the defines metal already emits for each build.
 //
 // What each thread ends up executing:

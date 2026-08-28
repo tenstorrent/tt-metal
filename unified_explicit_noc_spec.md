@@ -356,7 +356,7 @@ wire the traffic uses.
 | custom `Fn` routines in kernels | 12 |
 
 25 entry points. The underlying metal calls all take the parameter already, and the
-compute-projection stubs in `adaptor_v1.hpp` already carry a trailing `uint8_t`, so the
+compute-projection stubs in `adaptor.hpp` already carry a trailing `uint8_t`, so the
 signatures line up with no shim work:
 
     inline void noc_async_read(std::uint64_t, uint32_t, uint32_t, uint8_t = 0) { ASSERT(false); }

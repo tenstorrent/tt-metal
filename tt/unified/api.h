@@ -835,9 +835,6 @@ class Semaphore {
 public:
     explicit Semaphore(uint32_t semaphore_id);
 
-    // L1 offset, for handing to a routine that addresses the semaphore directly.
-    uintptr_t l1_addr() const;
-
     // The reserved id. A handle that outlives this object has to carry the id rather
     // than a reference: every pair-derived multicast builds its two semaphores as
     // LOCALS inside noc_load, and a reference would dangle the moment it returned.
@@ -867,8 +864,10 @@ public:
     Semaphore& set_mcast(LogicalMcast mcast);
 
 private:
-    // Kept so l1_addr() can recompute the offset; metal's Semaphore keeps its own
-    // address private.
+    // Backs semaphore_id(). Metal's Semaphore keeps its own L1 address private and
+    // exposes no id, so a handle that has to outlive this object carries this instead
+    // -- and there is deliberately no l1_addr() accessor recomputing that address by
+    // hand: a routine addressing the semaphore directly should take the Semaphore.
     uint32_t id;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
@@ -1207,7 +1206,7 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& ac
 //
 // `fn` is only CALLED on the owning data-movement thread, but its body is
 // COMPILED on all five projections, so the intrinsics it names have to resolve
-// everywhere; see tt/unified/adaptor_v1.hpp.
+// everywhere; see tt/unified/adaptor.hpp.
 template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn);
 

@@ -40,11 +40,11 @@ chunking. Checkable against `torch.nn.functional.scaled_dot_product_attention`.
 Each is a clone of `ReluOp` (`tt/unified/math.hpp:125`). `recip` is what softmax
 normalizes with; `rsqrt` is what RMSNorm needs.
 
-- [x] `tt/unified/adaptor_v1.hpp` -- include `eltwise_unary/recip.h`, `sqrt.h`, `rsqrt.h`
+- [x] `tt/unified/adaptor.hpp` -- include `eltwise_unary/recip.h`, `sqrt.h`, `rsqrt.h`
 - [x] `tt/unified/math.hpp` -- three op structs + free-function templates over expr nodes
 - [x] `tt/unified/expr.hpp` -- `fluent_recip` / `fluent_rsqrt` / `fluent_sqrt` hooks
 - [x] `tt/unified/api.h` -- `ComputeBlock` overload declarations
-- [x] `tt/unified/impl_v1.hpp` -- definitions
+- [x] `tt/unified/impl.hpp` -- definitions
 - [x] `unified_selftest.cpp` -- ckernel stubs + extend the permanent syntax probe
 - [x] `unified_kernels/unary.cpp` + `test_unified_unary.py`
 
@@ -95,11 +95,11 @@ which is bfloat16's own 2^-8 floor; the mixed chain at 0.025-0.028.
 Facts worth keeping:
 
 - **Binaries were far cheaper than the unaries.** No `expr.hpp`, `api.h` or
-  `impl_v1.hpp` work at all: `operator+` is generic over `as_node`, and a binary is
+  `impl.hpp` work at all: `operator+` is generic over `as_node`, and a binary is
   not a method, so it never touches the `Fluent` mixin. Three sites each, all in
   `math.hpp`. **This settles the macro question deferred from phase 1: no.** The
   duplication did not grow the way the unaries' did.
-- **`tt/unified/impl_v1.hpp` and `api.h` were untouched by this phase**, which the
+- **`tt/unified/impl.hpp` and `api.h` were untouched by this phase**, which the
   plan had expected to need mirroring. They did not.
 - **Operand order is gated explicitly.** For `sub` and `div` the SWAPPED reference
   must fail. Swapping the operands inside `operator-` reports
@@ -323,7 +323,7 @@ had, including bias -> bcast.
 - [ ] **Stage 1 -- mechanical.** Add `Tiles<H,W>`; template `Storage<S>`, `Block<S>`,
       `ComputeBlock<S>`, `Accumulator<Mode,S>`, the four `NocAsync*Tx<thread,S>` types.
       Keep both geometries and every existing template argument. Add no checks. ~35
-      signatures across `api.h` and `impl_v1.hpp`. Trace byte-identical.
+      signatures across `api.h` and `impl.hpp`. Trace byte-identical.
 - [x] **Stage 2 -- the checks.** `node_shape<>`; `store` conformance; strict eltwise
       shape equality; matmul operands against the geometry; `noc_core` fit-and-tile;
       scaler as `Shape<1,1>`; `.bias()` compile-time. Each proven by a violation that
@@ -1163,7 +1163,7 @@ sub and 0.79us for mul, that is roughly 4-5us per chunk, so **9-10us of a 46.6us
 about 20%** -- the largest single item identified anywhere in this file.
 
 Also worth recording: `eltwise_binary.h` was simply never included by
-`adaptor_v1.hpp`, which had only the `_sfpu` variant. The FPU forms of the three ops the
+`adaptor.hpp`, which had only the `_sfpu` variant. The FPU forms of the three ops the
 model already supports were not reachable at all.
 
 ### Trees choose their own unit

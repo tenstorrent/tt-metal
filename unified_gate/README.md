@@ -47,7 +47,7 @@ then be copied to where the editable install looks for it:
 
     ninja -C build _ttnn.so && cp build/ttnn/_ttnn.so ttnn/ttnn/_ttnn.so
 
-The one library change Gate B needed is in `tt/unified/adaptor_v1.hpp`: the compute-projection
+The one library change Gate B needed is in `tt/unified/adaptor.hpp`: the compute-projection
 `TensorAccessor` stand-in gained a one-argument constructor, so `TensorAccessor(tensor::in)`
 compiles on a TRISC the same way `TensorAccessor(args, addr)` already did. Additive; the v1
 suite is unaffected.

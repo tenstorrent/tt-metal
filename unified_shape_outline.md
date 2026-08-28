@@ -8,7 +8,7 @@ SPDX-License-Identifier: Apache-2.0
 > **Status.** COMPLETE. The `Extent` rename and all four stages have landed. Neither
 > geometry is declared by hand anywhere any more -- both are derived from the operand
 > shapes, and every stage kept the selftest traces byte-identical. Stage 1 came in at **+188/-158 lines** across
-> `api.h`, `impl_v1.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
+> `api.h`, `impl.hpp`, `shape.hpp`, seven kernels and the selftest, with all three
 > selftest traces byte-identical and all eight device tests passing.
 
 Outline for phase 5 of [unified_llama_prefill.md](unified_llama_prefill.md). Every
@@ -101,7 +101,7 @@ substitution failures.
 ## 2. Name collision
 
 `Shape` is currently the multicast rectangle extent (`LogicalMcast{coord, Shape{h,w}}`),
-used in 6 places: `api.h:90`, `api.h:133`, `impl_v1.hpp:788`, `mcast_bcast.cpp:63`,
+used in 6 places: `api.h:90`, `api.h:133`, `impl.hpp:788`, `mcast_bcast.cpp:63`,
 `matmul_mcast.cpp:102-103`. Rename it to **`Extent`** -- it is an h x w core-rectangle
 size, and the name is accurate. Six-site mechanical rename, done first and separately.
 
@@ -109,7 +109,7 @@ size, and the name is accurate. Six-site mechanical rename, done first and separ
 
 The single most important burden finding: **`num_pages` becomes a `static constexpr`
 member, and reading it through an instance still compiles.** Verified. So the ~40
-places in `impl_v1.hpp` that say `storage.num_pages`, `block.num_pages`,
+places in `impl.hpp` that say `storage.num_pages`, `block.num_pages`,
 `src.num_pages` need **no edit at all**. Only signatures change, not bodies.
 
 ```cpp
@@ -130,7 +130,7 @@ struct Storage {                             template <typename S>
 
 ## 4. The signature burden
 
-**20 declarations in `api.h`, 15 definitions in `impl_v1.hpp`.** The mechanical
+**20 declarations in `api.h`, 15 definitions in `impl.hpp`.** The mechanical
 majority gain one template parameter and one substitution:
 
 ```cpp
@@ -216,7 +216,7 @@ num_pages` trick means the ~40 internal `.num_pages` reads compile untouched.
 | Mechanical signature edits | ~27 of 35, one template param each |
 | Non-mechanical sites | 8, listed above -- and 4 of them *add a check that does not exist today* |
 | Kernel line count | net neutral |
-| Bodies in `impl_v1.hpp` | **unchanged** |
+| Bodies in `impl.hpp` | **unchanged** |
 | Verification | selftest trace must stay **byte-identical** -- no emitted instruction changes |
 
 Real costs, not hidden:

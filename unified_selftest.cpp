@@ -3,7 +3,7 @@
 //   tt/unified/expr.hpp    -- op-agnostic tree, DST allocator, method syntax
 //   tt/unified/math.hpp    -- leaves, ops, fusion kinds, driver strategies
 //   tt/unified/api.h       -- core API (Storage / Block / ComputeBlock / noc_*)
-//   tt/unified/impl_v1.hpp -- its definitions
+//   tt/unified/impl.hpp    -- its definitions
 //
 // Those headers are a design sketch: the CB / NOC / Tensix intrinsics they call
 // come from the metal kernel headers in a real build. This file supplies traced
