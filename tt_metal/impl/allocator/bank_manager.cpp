@@ -495,10 +495,9 @@ uint64_t BankManager::allocate_buffer(
     } else {
         for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
             const auto& r = available_ranges[static_cast<size_t>(i)];
-            // Test the window's width rather than forming r.second - size_per_bank first:
-            // DeviceAddr is unsigned, so a request wider than r.second wraps to a huge value that
-            // then compares >= r.first, and the allocation "succeeds" at a nonsense address
-            // instead of reaching the out-of-memory report below.
+            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
+            // is unsigned, so a request wider than r.second wraps to a huge value that compares
+            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
             if (r.second - r.first >= size_per_bank) {
                 chosen = r.second - size_per_bank;
                 break;
@@ -508,10 +507,9 @@ uint64_t BankManager::allocate_buffer(
 
     if (!chosen.has_value()) {
         auto mem_stats = alloc->get_statistics();
-        // This allocator's own free list is not the whole story: dependency and additional
-        // occupied ranges are subtracted from it before an address is chosen. Reporting only
-        // the free/largest-free-block figures reads as capacity exhaustion even when the
-        // request failed with plenty free, so report what actually survived the subtraction.
+        // The free/largest-free-block figures are this allocator's own view; dependency and
+        // additional ranges are subtracted before an address is chosen. Report what survived that
+        // too, or a failure with plenty free reads as capacity exhaustion.
         DeviceAddr placeable_bytes = 0;
         DeviceAddr largest_placeable = 0;
         for (const auto& r : available_ranges) {

@@ -179,21 +179,14 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             address = dram_manager_->allocate_buffer(size, page_size, bottom_up, config_->compute_grid, num_cores);
             break;
         case BufferType::L1: {
-            // In HYBRID mode, gather per-bank ranges from device allocators so lockstep avoids occupied regions.
+            // In HYBRID mode the per-core allocators hand out addresses this one cannot see, so
+            // gather their occupied ranges and keep the lockstep address clear of them.
             //
-            // A lockstep buffer takes ONE address. By default that address is kept clear of
-            // per-core allocations on EVERY bank, because an op may reach the buffer on a core
-            // outside its own shard grid -- a multicast writes to every core in its rectangle
-            // whether or not that core is a destination.
+            // By default that means every bank, since an op may reach the buffer on a core outside
+            // its own shard grid; experimental/range_lockstep_allocation/buffer.hpp covers when a
+            // buffer may instead be scanned against just the cores it occupies.
             //
-            // That default is expensive. The ranges are neither deduplicated nor attributable to
-            // a core, so on a busy grid their union covers the whole address space and a placement
-            // fails with hundreds of KB still free. A buffer that nothing reaches outside its own
-            // cores can opt into range lockstep, which narrows the scan to the cores it occupies:
-            // a distribution spec's cores_with_data(), or a shard spec's grid.
-            //
-            // Either way the scan spans devices: a mesh buffer holds the same address on all of
-            // them.
+            // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;

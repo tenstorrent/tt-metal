@@ -2,20 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests that range_lockstep_allocation is part of a MemoryConfig's identity, and that the
-nanobind binding for it is wired to the right C++ function.
+Tests that range_lockstep_allocation is part of a MemoryConfig's identity, and that the nanobind
+binding for it is wired to the right C++ function.
 
-The flag changes allocator semantics -- the buffer still takes one address, but the allocator
-only keeps that address clear of per-core allocations on the cores the buffer occupies rather
-than on every core -- so anything that describes or compares a MemoryConfig has to see it.
-per_core_allocation was originally missing from to_json, operator== and the reflection
-attributes, which collided per-core and lockstep variants onto one cache key; these tests keep
-range lockstep from repeating that.
-
-The binding coverage matters for a reason the C++ tests cannot reach: the two experimental
-namespaces expose overloads with identical shapes, so a missing include in the nanobind
-translation unit resolves `set_range_lockstep_allocation` to the per-core overload and still
-compiles. `test_binding_sets_range_lockstep_not_per_core` is what catches that.
+The flag changes allocator semantics, so anything that describes or compares a MemoryConfig has
+to see it. per_core_allocation was originally missing from to_json, operator== and the reflection
+attributes, which collided its configs with lockstep ones onto a single cache key.
 
 No device needed: MemoryConfig is a host-side value.
 """
@@ -56,9 +48,8 @@ def test_binding_exists():
 def test_binding_sets_range_lockstep_not_per_core():
     """The binding must reach the range lockstep overload, not the per-core one.
 
-    Both experimental namespaces export set_..._allocation(MemoryConfig&, bool). Dropping the
-    range_lockstep include from the nanobind TU compiles and silently calls per-core, which
-    only shows up as a difference in which flag moved.
+    Both namespaces export set_..._allocation(MemoryConfig&, bool), so dropping the range_lockstep
+    include from the nanobind TU compiles and silently calls per-core.
     """
     config = _sharded_config()
     config.experimental_set_range_lockstep_allocation(True)

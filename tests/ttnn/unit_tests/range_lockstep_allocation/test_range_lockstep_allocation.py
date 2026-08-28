@@ -4,18 +4,12 @@
 """
 End-to-end tests: a MemoryConfig asking for range lockstep must reach the allocator.
 
-The host-side suite next door proves the flag survives MemoryConfig's identity, equality and
-JSON. This one proves the whole chain works on a device -- MemoryConfig -> TensorSpec ->
-TensorLayout::compute_buffer_sharding_args -> BufferShardingArgs -> Buffer -> allocator -- by
-observing the only externally visible difference the mode makes: whether a placement succeeds
-next to a per-core allocation on a core the buffer does not occupy.
-
-Nothing in the chain errors when a link drops the flag; the request just silently degrades to
-default lockstep. That is why this is tested by allocation outcome rather than by reading the
-flag back.
+No link between MemoryConfig and the allocator errors when it drops the flag; the request just
+degrades to default lockstep. So these assert on allocation outcome -- whether a placement
+succeeds beside a per-core allocation -- rather than reading the flag back.
 
 Mesh, not a plain device: hybrid_device_allocators_ is only populated for mesh allocations, and
-the per-core ranges are only gathered when it is non-empty. A 1x1 mesh is enough.
+the ranges are only gathered when it is non-empty. A 1x1 mesh is enough.
 """
 
 import pytest
@@ -33,10 +27,9 @@ FREE_CORE = ttnn.CoreCoord(1, 0)
 def _num_cores(first_core, last_core):
     """Cores in the inclusive rectangle first_core..last_core -- a CoreRange is an area, not a row.
 
-    ttnn.CoreRange rejects a reversed range on its own, but only once the config is built, and
-    this runs first to size the tensor. A range reversed in both dimensions multiplies two
-    negatives back into a plausible count, so check here rather than rely on the order of the
-    two calls.
+    ttnn.CoreRange rejects a reversed range, but only once the config is built, and this runs
+    first to size the tensor -- where reversing both dimensions multiplies two negatives back
+    into a plausible count.
     """
     assert (
         first_core.x <= last_core.x and first_core.y <= last_core.y
@@ -86,9 +79,7 @@ def _allocate(mesh, first_core, num_bytes, *, last_core=None, range_lockstep=Fal
 def _hog_size(mesh):
     """Over half of a bank's largest free block, so two of them cannot both be placed.
 
-    Sized from the live allocator rather than a constant: the bank size differs across
-    architectures and harvesting, and a fixed number would either not fill half of L1 (making
-    the negative test pass for the wrong reason) or not fit at all.
+    Read from the live allocator because bank size varies with architecture and harvesting.
     """
     view = ttnn.get_memory_view(mesh, ttnn.BufferType.L1)
     largest = view.largest_contiguous_bytes_free_per_bank
@@ -101,9 +92,8 @@ def _hog_size(mesh):
 def hog(hybrid_mesh_device):
     """Factory: occupy most of one core's L1 with a per-core allocation.
 
-    Yields (mesh, hog_core) -> num_bytes, where num_bytes is the size the test should then
-    request. Sized before the hog is placed, since it reads the live free space. The allocation
-    is held for the body of the test and released after.
+    Yields (mesh, place), where place(core) -> the size the test should then request. Held for
+    the body of the test and released after.
     """
     mesh = hybrid_mesh_device
     holder = []
@@ -154,14 +144,10 @@ def test_range_lockstep_still_avoids_per_core_ranges_on_its_own_cores(hog, expec
     """Scoping the scan must narrow it to the buffer's own cores, not switch it off.
 
     The grid covers the hogged core, so that occupancy is the buffer's own business and must
-    still block the placement.
+    still block the placement. Every other test here passes against a scan that collects nothing.
 
-    Parametrized over the hogged core's position in the grid because each position rules out a
-    different wrong implementation: scanning nothing fails all three, scanning only the grid's
-    first core fails the middle and last cases, and dropping the grid's last core fails the last
-    case. Without this test an implementation that scanned nothing would satisfy every other
-    test in this file -- the positive cases would still pass, and the default case is served by
-    an untouched code path.
+    Each hog position rules out a different wrong scan: collecting nothing fails all three, only
+    the grid's first core fails middle and last, dropping the grid's last core fails last.
     """
     mesh, place = hog
     _require_cores(mesh, 3)
@@ -172,12 +158,7 @@ def test_range_lockstep_still_avoids_per_core_ranges_on_its_own_cores(hog, expec
 
 
 def test_range_lockstep_spans_several_free_cores(hogged_mesh):
-    """A multi-core grid that excludes the hogged core must still be placeable.
-
-    Two cores are enough to show a range scan ignoring another core's occupancy, but not that
-    every core of a wider grid is enumerated -- an implementation that only looked at the first
-    core of the grid would pass the single-core case.
-    """
+    """A multi-core grid that excludes the hogged core must still be placeable."""
     mesh, num_bytes = hogged_mesh
     _require_cores(mesh, 4)
     tensor = _allocate(mesh, FREE_CORE, num_bytes, last_core=ttnn.CoreCoord(3, 0), range_lockstep=True)
