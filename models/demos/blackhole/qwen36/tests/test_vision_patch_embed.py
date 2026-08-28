@@ -25,9 +25,24 @@ from models.demos.blackhole.qwen36.tt.vision.patch_embed import VisionEmbed
 from models.demos.blackhole.qwen36.tt.vision.vision_model_config import VisionModelArgs
 
 
-def _load_embed_weights(ckpt_dir, keys):
-    """Read just `keys` out of a sharded safetensors checkpoint."""
+def _load_embed_weights(model_args, keys):
+    """Read just `keys` out of a sharded safetensors checkpoint.
+
+    N300/9B only (tpc.wh_9b_n300_vision): VisionModelArgs.CKPT_DIR mirrors HF_MODEL verbatim there
+    (unlike Qwen36ModelArgs, whose __init__ snapshot_download's hub ids first) -- resolve a hub id
+    to its local snapshot dir the same way Qwen36ModelArgs.__init__ (tt/model_config.py) does for
+    the text model. Other configs keep their previously shipped behavior (CKPT_DIR already local).
+    """
     from safetensors.torch import load_file
+
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    ckpt_dir = model_args.CKPT_DIR
+    if tpc.wh_9b_n300_vision(model_args) and not os.path.isfile(os.path.join(ckpt_dir, "model.safetensors.index.json")):
+        from huggingface_hub import snapshot_download
+
+        offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
+        ckpt_dir = snapshot_download(ckpt_dir, local_files_only=offline)
 
     index = json.loads((Path(ckpt_dir) / "model.safetensors.index.json").read_text())["weight_map"]
     out = {}
@@ -81,7 +96,7 @@ def test_vision_patch_embed(grid_hw, mesh_device, reset_seeds, ensure_gc):
     vcfg = model_args.hf_config.vision_config
 
     weights = _load_embed_weights(
-        model_args.CKPT_DIR,
+        model_args,
         ["model.visual.patch_embed.proj.weight", "model.visual.patch_embed.proj.bias", "model.visual.pos_embed.weight"],
     )
     ref = _RefEmbed(

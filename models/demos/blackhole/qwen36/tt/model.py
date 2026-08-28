@@ -553,7 +553,7 @@ class Qwen36Model:
         Single device: plain matmul."""
         logits = ttnn.linear(x, self.lm_head_weight)
         if self._lmhead_vocab_sharded:
-            from models.tt_transformers.tt.ccl import tt_all_gather
+            from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
             # ~8 MB/device (B=32, vocab/tp=124160, bf16) puts this in the PREFILL-gather size band, not
             # the tiny decode-norm/reduce-scatter one -- upstream's wpl=2/cps=10 fallback is tuned for
@@ -562,11 +562,12 @@ class Qwen36Model:
             # ~1,027us (-21%), matching the prefill AG's wpl=4 win. cps beyond 25 keeps inching down
             # (cps=60 -> -23%) but that's untested territory elsewhere in this codebase; 25 already
             # has precedent (test_attn_norm_decode_sweep.py) and captures nearly all of the win.
-            logits = tt_all_gather(
+            # tuned_vocab_all_gather is a local copy of ccl.tt_all_gather's cluster_axis=None branch
+            # with these two knobs exposed -- this model does not edit the shared ccl.py.
+            logits = tpc.tuned_vocab_all_gather(
                 logits,
                 self.mesh_device,
                 self.tt_ccl,
-                cluster_axis=None,
                 dim=len(logits.shape) - 1,
                 topology=self.args.ccl_topology(),
                 num_workers_per_link=4,
