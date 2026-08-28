@@ -14,6 +14,7 @@ from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
+from ....utils.test import is_global_rank_zero
 from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
 
 NUM_INFERENCE_STEPS = 50
@@ -207,7 +208,9 @@ def test_flux2_performance(
 
     print("=" * 80)
 
-    if is_ci_env:
+    if is_ci_env and is_global_rank_zero():
+        # Report from rank 0 only: all ranks time the same collective run, and
+        # concurrent saves race on the shared output file.
         device_name_map = {
             (2, 2): "BH_QB",
             (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
