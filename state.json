@@ -1,6 +1,6 @@
 {
- "last_run": "2026-08-27T21:30:00Z",
- "run_id": 33118050556,
+ "last_run": "2026-08-28T03:28:00Z",
+ "run_id": "33138712703",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -32,11 +32,19 @@
    "status": "CI green (all check runs success incl PR Gate Status); awaiting maintainer review",
    "note": "DUPLICATE FIX ALERT: external PR #54375 (rafaio1) fixes same issue #54223 with same root cause/fix. Flagged in monthly summary for maintainer to pick one. Do not close either unilaterally."
   },
-  "54664": {
+  "54666": {
    "title": "fix(ttnn): guard matmul per_core_M/N against zero to avoid SIGFPE",
    "closes": 54639,
    "status": "ci_queued",
-   "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero"
+   "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero",
+   "note": " | corrected PR number from stale 54664 to actual 54666 during 2026-08-28 run"
+  },
+  "54655": {
+   "issue": 54655,
+   "title": "fix(ttnn): remove static from unused function templates to fix Clang 23 build",
+   "branch": "repo-assist/fix-issue-54655-clang23-unused-template",
+   "status": "opened",
+   "ci": "unverified locally, triggered via pr-gate.yaml"
   }
  },
  "issues_labeled": [
@@ -480,7 +488,9 @@
    ],
    "date": "2026-08-27",
    "note": "Slow dispatch DFB slot mismatch WH/BH; already assigned to abhullar-tt, well-documented repro, labeled bug for triage clarity"
-  }
+  },
+  "54670": "bug",
+  "54673": "bug"
  },
  "issues_commented": {
   "53922": {
@@ -493,6 +503,11 @@
   "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
  },
  "run_history": [
+  {
+   "run_id": "33138712703",
+   "date": "2026-08-28T03:28:00Z",
+   "summary": "Opened PR fixing #54655 (Clang23 unused-template); labeled #54670,#54673 bug; re-verified 5 tracked PRs no action; corrected 54664->54666 mapping"
+  },
   {
    "run_id": 33118050556,
    "timestamp": "2026-08-27T21:30:00Z",
@@ -537,36 +552,6 @@
    "run_id": 32793663203,
    "time": "2026-08-25T00:33:00Z",
    "summary": "..."
-  },
-  {
-   "run_id": 32762362709,
-   "date": "2026-08-24T13:00:00Z",
-   "summary": "Labelled #54196, #54167 bug; nudged 3 new stale PRs (#45949, #51311, #49787); re-verified #53690/#52106/#53478 unchanged; updated Monthly Summary #51865"
-  },
-  {
-   "run_id": "32727061209",
-   "date": "2026-08-24T12:29:00Z",
-   "summary": "Task 1: labeled #54158 (graph-tracing program-factory metadata) feature-request, #54152 (duplicate gelu_bw ops, unvalidated approximate string) bug. Task 2: reviewed #54155/#54133, both already covered by open fix PRs, no duplicates. Task 5: re-verified PR #53690 still blocked (mergeable_state=blocked) awaiting nvelickovicTT manual runs + pmilenkovicTT reply, unchanged. Task 8: updated Monthly Activity issue #51865 with #54152 added to suggested actions and new run history entry."
-  },
-  {
-   "run_id": "32697403471",
-   "date": "2026-08-24T04:52:00Z",
-   "summary": "Task 1: labeled #54138 (binary_ng program-cache bug writeup) as bug, MEDIUM confidence. Task 2/reviewed #54144 (argmax SFPU feature, already correctly labeled, no action) and #54133 (already covered by PR #53837, no action). Task 5: re-verified PR #53690 still blocked awaiting nvelickovicTT requested manual Sanity/L2/BH-e2e runs and pmilenkovicTT reply; no new CI runs found on that branch since last check. Task 8: updated Monthly Activity issue #51865."
-  },
-  {
-   "run_id": "32676705827",
-   "date": "2026-08-24T00:29:00Z",
-   "summary": "Task 6: author check-in nudges on PRs #51084 (Metal 2.0 plusone port, unaddressed reviewer feedback since Jul 27), #51119, #51120 (ttsim docs fixes, both behind main) - 3/3 nudge budget used. Task 1/2: reviewed fresh issues #54096/#54104/#54110, all already correctly labelled/covered, no new action; read #53417 diff to sanity-check #54096's bisect claim. Task 8: updated Monthly Activity issue #51865 with refreshed suggested actions and run history."
-  },
-  {
-   "run_id": "32657926945",
-   "date": "2026-08-23T18:30:00Z",
-   "summary": "Task 6: codeowners-pinged #51004, author-checkin nudges on #51129 and #51155 (3/3 nudge budget used). Task 1/2: reviewed fresh issue #54096, already labeled/covered, no new action. Task 5: re-verified 5 tracked PRs unchanged. Task 8: updated Monthly Activity issue #51865."
-  },
-  {
-   "run_id": "32622883904",
-   "date": "2026-08-23",
-   "summary": "Labeled #54096 (P150x4 cold-boot fabric bring-up regression, bisected to #53417) bug. Replied on PR #51868 confirming reviewer kanapitsas's report that Ring Joint SDPA's logsigmoid_sub shares the softplus bf16 bug; flagged the boundary regression test request for a maintainer (no HW access). Confirmed PR #53749 merged. Re-verified PRs #53478/#53113/#51868/#52106/#53690 unchanged. Rewrote Monthly Activity issue #51865 body to strictly match canonical format (had drifted with multiple appended run sections)."
   }
  ],
  "no_action_reviewed": [
