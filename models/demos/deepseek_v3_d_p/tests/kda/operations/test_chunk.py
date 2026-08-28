@@ -78,6 +78,18 @@ def _run_recurrence(
     )
 
 
+def test_grouped_scan_capacity_reports_device_limit(device: ttnn.Device, expect_error) -> None:
+    grid = device.compute_with_storage_grid_size()
+    capacity = min(grid.x * grid.y, 128)
+    with expect_error(ValueError, f"only {capacity} are supported"):
+        ops._validate_grouped_scan_capacity(
+            batch_heads=capacity + 1,
+            num_chunks=1,
+            summary_group_chunks=1,
+            device=device,
+        )
+
+
 def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, expect_error) -> None:
     sequence, heads, dim = 32, 2, 32
     flat_shape = (1, sequence, heads * dim)
@@ -114,14 +126,14 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
         "beta": _to_device(torch.randn(beta_shape), device, ttnn.bfloat16),
     }
     for name, tensor in wrong_dtype_inputs.items():
-        with expect_error(AssertionError, "^$"):
+        with expect_error(ValueError, f"{name} dtype must be"):
             run({**valid_inputs, name: tensor})
 
-    with expect_error(AssertionError, "^$"):
+    with expect_error(ValueError, "initial_state dtype must be"):
         run(valid_inputs, _to_device(torch.randn(state_shape), device, ttnn.bfloat16))
 
     l1_state = ttnn.to_memory_config(valid_state, ttnn.L1_MEMORY_CONFIG)
-    with expect_error(AssertionError, "^$"):
+    with expect_error(ValueError, "initial_state memory config must be DRAM interleaved"):
         run(valid_inputs, l1_state)
 
     rank_four_q = _to_device(torch.randn(1, 1, sequence, heads * dim), device, ttnn.bfloat16)

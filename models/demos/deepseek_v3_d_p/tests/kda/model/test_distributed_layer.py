@@ -111,7 +111,7 @@ def test_sp_layer_matches_serial_reference(
         expected_output,
         actual_output,
         name=f"tp_axis={tensor_parallel_axis} output",
-        pcc_threshold=0.98,
+        pcc_threshold=0.999,
     )
     for sp_rank in range(sp_size):
         actual_recurrent = reconstruct_state_at_sp_rank(
@@ -129,13 +129,13 @@ def test_sp_layer_matches_serial_reference(
             expected_state.recurrent,
             actual_recurrent,
             name=f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} recurrent",
-            pcc_threshold=0.98,
+            pcc_threshold=0.999,
         )
         assert_accurate(
             expected_convolution,
             actual_convolution,
             name=f"tp_axis={tensor_parallel_axis} sp_rank={sp_rank} convolution",
-            pcc_threshold=0.98,
+            pcc_threshold=0.999,
         )
 
 
@@ -238,18 +238,18 @@ def test_sp_chunked_prefill_matches_one_shot(
         local_width=local_heads * config.head_k_dim,
     )
     label = f"tp_axis={tensor_parallel_axis} group={summary_group_chunks}"
-    assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.98)
+    assert_accurate(one_shot, chunked, name=f"{label} chunked output", pcc_threshold=0.9999)
     assert_accurate(
         one_shot_recurrent,
         chunked_recurrent,
         name=f"{label} chunked recurrent",
-        pcc_threshold=0.98,
+        pcc_threshold=0.9999,
     )
     assert_accurate(
         one_shot_convolution,
         chunked_convolution,
         name=f"{label} chunked convolution",
-        pcc_threshold=0.98,
+        pcc_threshold=0.9999,
     )
 
 

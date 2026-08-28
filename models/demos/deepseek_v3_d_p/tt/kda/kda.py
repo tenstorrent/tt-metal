@@ -14,7 +14,15 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda import ops
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_BETA_DTYPE,
+    KDA_CHUNK_SIZE,
+    KDA_GATE_DTYPE,
+    KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_QKV_DTYPE,
+    KDA_RECURRENT_STATE_DTYPE,
+    KDAProgramConfig,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -85,7 +93,12 @@ class _KDAInputs:
 
 @dataclass(frozen=True)
 class KdaState:
-    """Logical KDA carries owned by the caller, never by :class:`ttKDA`."""
+    """Caller-owned KDA carries.
+
+    ``recurrent`` is TP-local and must be replicated across the SP axis;
+    ``convolution`` is partition-local along SP. Construct state with
+    :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
+    """
 
     recurrent: ttnn.Tensor
     convolution: ttnn.Tensor
@@ -131,7 +144,6 @@ class ttKDA:
         tt_ccl: TT_CCL | None = None,
         sp_axis: int = 0,
         tp_axis: int = 1,
-        topology: ttnn.Topology | None = None,
         program_config: KDAProgramConfig | None = None,
         weights: KDAWeights | None = None,
     ) -> None:
@@ -149,7 +161,7 @@ class ttKDA:
         self.output_projection_out_block_w = program_config.output_projection_out_block_w
         output_grid = mesh_device.compute_with_storage_grid_size()
         self.output_projection_grid = (output_grid.x, output_grid.y)
-        self.tp_ccl_topology = topology if topology is not None else program_config.tp_ccl_topology
+        self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
         if weights is not None and state_dict:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
@@ -238,10 +250,10 @@ class ttKDA:
         return KdaState(
             recurrent=ttnn.zeros(
                 (batch_size, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim),
-                dtype=self.recurrence_config.recurrent_state_dtype,
+                dtype=KDA_RECURRENT_STATE_DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=self.recurrence_config.output_memory_config,
+                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             ),
             convolution=ttnn.zeros(
                 (batch_size, self.config.conv_kernel_size - 1, self._convolution_width),
@@ -257,6 +269,7 @@ class ttKDA:
         hidden_states: ttnn.Tensor,
         state: KdaState,
     ) -> tuple[int, int]:
+        """Validate shape/type plus the documented SP state-distribution contract."""
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
@@ -265,28 +278,30 @@ class ttKDA:
         sequence = hidden_states.shape[1]
         if batch != 1:
             raise ValueError(f"KDA prefill currently requires batch size 1, got B={batch}")
-        chunk_size = self.recurrence_config.chunk_size
-        if sequence <= 0 or sequence % chunk_size != 0:
+        if sequence <= 0 or sequence % KDA_CHUNK_SIZE != 0:
             raise ValueError(
-                f"KDA prefill requires local T to be positive and divisible by {chunk_size}, got T={sequence}"
+                f"KDA prefill requires local T to be positive and divisible by {KDA_CHUNK_SIZE}, got T={sequence}"
             )
-        if self.sequence_parallel_size > 1:
-            local_chunks = sequence // chunk_size
-            if local_chunks % self.recurrence_config.summary_group_chunks != 0:
-                raise ValueError(
-                    f"local chunk count {local_chunks} must be divisible by "
-                    f"summary_group_chunks {self.recurrence_config.summary_group_chunks}"
-                )
+        local_chunks = sequence // KDA_CHUNK_SIZE
+        summary_group_chunks = self.recurrence_config.summary_group_chunks
+        uses_grouped_scan = self.sequence_parallel_size > 1 or (
+            local_chunks >= self.recurrence_config.grouped_scan_min_chunks and local_chunks % summary_group_chunks == 0
+        )
+        if uses_grouped_scan:
+            ops._validate_grouped_scan_capacity(
+                batch_heads=batch * self.config.num_heads,
+                num_chunks=local_chunks,
+                summary_group_chunks=summary_group_chunks,
+                device=hidden_states.device(),
+            )
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
         expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
         if tuple(state.recurrent.shape) != expected_recurrent:
             raise ValueError(f"recurrent state shape {tuple(state.recurrent.shape)} != {expected_recurrent}")
         if tuple(state.convolution.shape) != expected_convolution:
             raise ValueError(f"convolution state shape {tuple(state.convolution.shape)} != {expected_convolution}")
-        if state.recurrent.dtype != self.recurrence_config.recurrent_state_dtype:
-            raise ValueError(
-                f"recurrent state dtype {state.recurrent.dtype} != {self.recurrence_config.recurrent_state_dtype}"
-            )
+        if state.recurrent.dtype != KDA_RECURRENT_STATE_DTYPE:
+            raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
             raise ValueError("convolution state must be BF16 row-major")
         return batch, sequence
@@ -387,10 +402,10 @@ class ttKDA:
         beta_for_recurrence = ttnn.sigmoid(
             ttnn.typecast(
                 beta,
-                self.recurrence_config.beta_dtype,
-                memory_config=self.recurrence_config.output_memory_config,
+                KDA_BETA_DTYPE,
+                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             ),
-            memory_config=self.recurrence_config.output_memory_config,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         )
         gate = ttnn.linear(
             decay_rank,
@@ -445,15 +460,15 @@ class ttKDA:
             self.config.head_v_dim,
         )
         for tensor in (inputs.q, inputs.k, inputs.v):
-            assert tensor.dtype == self.recurrence_config.qkv_dtype
+            assert tensor.dtype == KDA_QKV_DTYPE
             assert tensor.layout == ttnn.TILE_LAYOUT
-        assert inputs.decay.dtype == self.recurrence_config.gate_dtype
+        assert inputs.decay.dtype == KDA_GATE_DTYPE
         assert inputs.decay.layout == ttnn.TILE_LAYOUT
-        assert inputs.beta.dtype == self.recurrence_config.beta_dtype
+        assert inputs.beta.dtype == KDA_BETA_DTYPE
         assert inputs.beta.layout == ttnn.TILE_LAYOUT
-        assert recurrent_state.dtype == self.recurrence_config.recurrent_state_dtype
+        assert recurrent_state.dtype == KDA_RECURRENT_STATE_DTYPE
         assert recurrent_state.layout == ttnn.TILE_LAYOUT
-        assert recurrent_state.memory_config() == self.recurrence_config.output_memory_config
+        assert recurrent_state.memory_config() == KDA_OUTPUT_MEMORY_CONFIG
 
     def _kda_prefill(
         self,
@@ -508,7 +523,6 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         config, weights = self.config, self.weights
-        output = ttnn.reshape(output, (batch, sequence, config.v_dim))
         if self.tensor_parallel_size > 1:
             assert self.tt_ccl is not None
             assert output.dtype == self.gated_rms_output_dtype

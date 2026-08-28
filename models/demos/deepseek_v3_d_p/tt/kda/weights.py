@@ -168,7 +168,7 @@ def load_kda_weights(
         tensor_cache_path.mkdir(parents=True, exist_ok=True)
 
     def device_tensor(
-        tensor: torch.Tensor,
+        tensor: torch.Tensor | None,
         name: str,
         *,
         dtype: ttnn.DataType = ttnn.bfloat16,
@@ -185,6 +185,7 @@ def load_kda_weights(
             assert cache_file is not None
             serialized_cache_file = Path(f"{cache_file}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
             return ttnn.load_tensor(serialized_cache_file, device=device)
+        assert tensor is not None
         converted = ttnn.as_tensor(
             tensor.contiguous(),
             dtype=dtype,
@@ -254,23 +255,13 @@ def load_kda_weights(
             fused_tap = group_output_shards(*tap_weights).reshape(1, 1, -1)
             convolution_host_taps.append(fused_tap)
     else:
-        input_width = (
-            config.q_dim
-            + config.k_dim
-            + config.v_dim
-            + config.head_k_dim * tensor_parallel_size
-            + config.v_dim
-            + config.num_heads
-        )
-        input_projection = torch.empty(config.hidden_size, input_width)
-        decay_output_projection = torch.empty(config.head_k_dim, config.q_dim)
-        output_projection = torch.empty(config.v_dim, config.hidden_size)
-        decay_scale_flat = torch.empty(1, 1, config.q_dim)
-        decay_bias_flat = torch.empty(1, 1, config.q_dim)
-        norm = torch.empty(config.head_v_dim)
-        convolution_host_taps = [
-            torch.empty(1, 1, config.q_dim + config.k_dim + config.v_dim) for _ in range(config.conv_kernel_size)
-        ]
+        input_projection = None
+        decay_output_projection = None
+        output_projection = None
+        decay_scale_flat = None
+        decay_bias_flat = None
+        norm = None
+        convolution_host_taps = [None] * config.conv_kernel_size
 
     converted = {
         "input_projection": device_tensor(input_projection, "input_projection_head_major", shard_dim=-1),

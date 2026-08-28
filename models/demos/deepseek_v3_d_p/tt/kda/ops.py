@@ -12,7 +12,21 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_AFFINE_SUMMARY_DTYPE,
+    KDA_BETA_DTYPE,
+    KDA_CHUNK_SIZE,
+    KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    KDA_GATE_DTYPE,
+    KDA_OUTPUT_MEMORY_CONFIG,
+    KDA_PREFIX_MEMORY_CONFIG,
+    KDA_PREP_OUTPUT_BF16_MASK,
+    KDA_PREPARATION_MEMORY_CONFIG,
+    KDA_QKV_DTYPE,
+    KDA_RECURRENT_STATE_DTYPE,
+    KDA_SCAN_OUTPUT_DTYPE,
+    KDARecurrenceProgramConfig,
+)
 
 
 def _output_memory_config(memory_config: ttnn.MemoryConfig | None) -> ttnn.MemoryConfig:
@@ -183,7 +197,6 @@ class _RecurrenceComputeConfig:
 def _validate_recurrence_geometry(
     inputs: _FlatRecurrenceInputs,
     *,
-    program_config: KDARecurrenceProgramConfig,
     sequence_parallel_axis: int | None,
 ) -> _RecurrenceGeometry:
     """Validate the flat production contract and derive host-only execution metadata."""
@@ -207,8 +220,8 @@ def _validate_recurrence_geometry(
     value_dim = v_shape[2] // heads
     if sequence_parallel_axis not in (None, 0, 1):
         raise ValueError("sequence_parallel_axis must be 0 or 1")
-    if sequence <= 0 or sequence % program_config.chunk_size:
-        raise ValueError(f"flat KDA recurrence requires T divisible by {program_config.chunk_size}")
+    if sequence <= 0 or sequence % KDA_CHUNK_SIZE:
+        raise ValueError(f"flat KDA recurrence requires T divisible by {KDA_CHUNK_SIZE}")
 
     return _RecurrenceGeometry(
         batch=batch,
@@ -216,8 +229,8 @@ def _validate_recurrence_geometry(
         heads=heads,
         key_dim=key_dim,
         value_dim=value_dim,
-        chunk_size=program_config.chunk_size,
-        num_chunks=sequence // program_config.chunk_size,
+        chunk_size=KDA_CHUNK_SIZE,
+        num_chunks=sequence // KDA_CHUNK_SIZE,
     )
 
 
@@ -234,7 +247,6 @@ def _prepare_chunk_terms(
     inputs: _FlatRecurrenceInputs,
     geometry: _RecurrenceGeometry,
     *,
-    program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> _PreparedChunks:
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
@@ -244,19 +256,15 @@ def _prepare_chunk_terms(
         inputs.gate,
         inputs.beta,
         geometry.heads,
-        memory_config=program_config.preparation_memory_config,
+        memory_config=KDA_PREPARATION_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,
-        output_bf16_mask=program_config.prep_output_bf16_mask,
+        output_bf16_mask=KDA_PREP_OUTPUT_BF16_MASK,
     )
     prepared = _PreparedChunks.from_kernel_outputs(outputs)
     for index, tensor in enumerate(outputs):
-        expected_dtype = (
-            program_config.qkv_dtype
-            if program_config.prep_output_bf16_mask & (1 << index)
-            else program_config.recurrent_state_dtype
-        )
+        expected_dtype = KDA_QKV_DTYPE if KDA_PREP_OUTPUT_BF16_MASK & (1 << index) else KDA_RECURRENT_STATE_DTYPE
         assert tensor.dtype == expected_dtype
-        assert tensor.memory_config() == program_config.preparation_memory_config
+        assert tensor.memory_config() == KDA_PREPARATION_MEMORY_CONFIG
     return prepared
 
 
@@ -292,7 +300,6 @@ def _summarize_chunk_groups(
     grouped: _PreparedChunks,
     geometry: _RecurrenceGeometry,
     *,
-    program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     summary_memory_config = _group_summary_memory_config(
@@ -306,9 +313,28 @@ def _summarize_chunk_groups(
     assert affine_a.dtype == ttnn.float32
     assert affine_b.dtype == ttnn.float32
     # Precision boundary: summary-pair math is FP32; storage and transport are measured BF16.
-    summary_a = ttnn.typecast(affine_a, program_config.affine_summary_dtype, memory_config=summary_memory_config)
-    summary_b = ttnn.typecast(affine_b, program_config.affine_summary_dtype, memory_config=summary_memory_config)
+    summary_a = ttnn.typecast(affine_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
+    summary_b = ttnn.typecast(affine_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
     return summary_a, summary_b
+
+
+def _validate_grouped_scan_capacity(
+    *,
+    batch_heads: int,
+    num_chunks: int,
+    summary_group_chunks: int,
+    device: ttnn.Device | ttnn.MeshDevice,
+) -> None:
+    """Reject grouped scans that cannot assign one worker to each summary owner."""
+    if num_chunks % summary_group_chunks:
+        raise ValueError(
+            f"local chunk count {num_chunks} must be divisible by summary_group_chunks {summary_group_chunks}"
+        )
+    group_heads = batch_heads * (num_chunks // summary_group_chunks)
+    grid = device.compute_with_storage_grid_size()
+    capacity = min(grid.x * grid.y, 128)
+    if group_heads > capacity:
+        raise ValueError(f"grouped KDA needs {group_heads} summary owners, but only {capacity} are supported")
 
 
 class _RecurrenceScan(ABC):
@@ -340,11 +366,11 @@ class _DirectScan(_RecurrenceScan):
         output, final_state = ttnn.experimental.kda.recurrent_chunk_scan(
             *prepared.as_kernel_args(),
             initial_state,
-            memory_config=self._program_config.output_memory_config,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config.grouped_scan,
         )
-        assert output.dtype == self._program_config.scan_output_dtype
-        assert final_state.dtype == self._program_config.recurrent_state_dtype
+        assert output.dtype == KDA_SCAN_OUTPUT_DTYPE
+        assert final_state.dtype == KDA_RECURRENT_STATE_DTYPE
         return _ScanResult(output=output, final_state=final_state)
 
 
@@ -356,17 +382,16 @@ class _GroupedScan(_RecurrenceScan):
         geometry: _RecurrenceGeometry,
     ) -> _ScanResult:
         group_chunks = self._program_config.summary_group_chunks
-        if geometry.num_chunks % group_chunks:
-            raise ValueError(
-                f"local chunk count {geometry.num_chunks} must be divisible by " f"summary_group_chunks {group_chunks}"
-            )
         if geometry.key_dim != geometry.value_dim:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
+        _validate_grouped_scan_capacity(
+            batch_heads=geometry.batch_heads,
+            num_chunks=geometry.num_chunks,
+            summary_group_chunks=group_chunks,
+            device=prepared.v_beta.device(),
+        )
         groups_per_head = geometry.num_chunks // group_chunks
         group_heads = geometry.batch_heads * groups_per_head
-        grid = prepared.v_beta.device().compute_with_storage_grid_size()
-        if group_heads > min(grid.x * grid.y, 128):
-            raise ValueError(f"grouped KDA needs {group_heads} summary owners, but only 128 are supported")
 
         grouped = _reshape_chunks_for_groups(
             prepared,
@@ -377,7 +402,6 @@ class _GroupedScan(_RecurrenceScan):
         summary_a, summary_b = _summarize_chunk_groups(
             grouped,
             geometry,
-            program_config=self._program_config,
             compute_config=self._compute_config,
         )
         group_initial_states, strategy_final_state = self._compute_group_entry_states(
@@ -389,10 +413,10 @@ class _GroupedScan(_RecurrenceScan):
         grouped_output, grouped_final_states = ttnn.experimental.kda.recurrent_chunk_scan(
             *grouped.as_kernel_args(),
             group_initial_states,
-            memory_config=self._program_config.output_memory_config,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config.grouped_scan,
         )
-        assert grouped_output.dtype == self._program_config.scan_output_dtype
+        assert grouped_output.dtype == KDA_SCAN_OUTPUT_DTYPE
         output = ttnn.reshape(
             grouped_output,
             (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim),
@@ -456,7 +480,7 @@ class _LocalGroupedScan(_GroupedScan):
             all_final_states,
             (0, groups_per_head - 1, 0, 0),
             (geometry.batch_heads, groups_per_head, geometry.key_dim, geometry.value_dim),
-            memory_config=self._program_config.output_memory_config,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         )
         return ttnn.reshape(last_final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
 
@@ -482,7 +506,7 @@ class _DistributedGroupedScan(_GroupedScan):
             summary_a,
             summary_b,
             groups_per_head,
-            memory_config=self._program_config.output_memory_config,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config.affine_prefix,
         )
         assert partition_a.dtype == ttnn.float32
@@ -492,16 +516,15 @@ class _DistributedGroupedScan(_GroupedScan):
             partition_b,
             initial_state,
             sequence_parallel_axis=self._sequence_parallel_axis,
-            program_config=self._program_config,
             compute_config=self._compute_config.affine_prefix,
         )
-        assert partition_entry_state.dtype == self._program_config.recurrent_state_dtype
+        assert partition_entry_state.dtype == KDA_RECURRENT_STATE_DTYPE
         group_initial_states = ttnn.experimental.kda.affine_exclusive_scan(
             summary_a,
             summary_b,
             partition_entry_state,
             groups_per_head,
-            memory_config=self._program_config.prefix_memory_config,
+            memory_config=KDA_PREFIX_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config.affine_prefix,
         )
         return group_initial_states, distributed_final_state
@@ -556,24 +579,36 @@ def _chunk_recurrence(
     """Run the fixed Kimi-K3 recurrence contract through the selected scan strategy."""
     geometry = _validate_recurrence_geometry(
         inputs,
-        program_config=program_config,
         sequence_parallel_axis=sequence_parallel_axis,
     )
-    for tensor in (inputs.q, inputs.k, inputs.v, inputs.gate, inputs.beta, initial_state):
-        assert tensor.layout == ttnn.TILE_LAYOUT
-    assert inputs.q.dtype == program_config.qkv_dtype
-    assert inputs.k.dtype == program_config.qkv_dtype
-    assert inputs.v.dtype == program_config.qkv_dtype
-    assert inputs.gate.dtype == program_config.gate_dtype
-    assert inputs.beta.dtype == program_config.beta_dtype
-    assert initial_state.dtype == program_config.recurrent_state_dtype
-    assert tuple(initial_state.shape) == (
-        geometry.batch,
-        geometry.heads,
-        geometry.key_dim,
-        geometry.value_dim,
-    )
-    assert initial_state.memory_config() == program_config.output_memory_config
+    tensors = {
+        "q": inputs.q,
+        "k": inputs.k,
+        "v": inputs.v,
+        "gate": inputs.gate,
+        "beta": inputs.beta,
+        "initial_state": initial_state,
+    }
+    for name, tensor in tensors.items():
+        if tensor.layout != ttnn.TILE_LAYOUT:
+            raise ValueError(f"{name} layout must be TILE_LAYOUT, got {tensor.layout}")
+    expected_dtypes = {
+        "q": KDA_QKV_DTYPE,
+        "k": KDA_QKV_DTYPE,
+        "v": KDA_QKV_DTYPE,
+        "gate": KDA_GATE_DTYPE,
+        "beta": KDA_BETA_DTYPE,
+        "initial_state": KDA_RECURRENT_STATE_DTYPE,
+    }
+    for name, expected_dtype in expected_dtypes.items():
+        actual_dtype = tensors[name].dtype
+        if actual_dtype != expected_dtype:
+            raise ValueError(f"{name} dtype must be {expected_dtype}, got {actual_dtype}")
+    expected_state_shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
+    if tuple(initial_state.shape) != expected_state_shape:
+        raise ValueError(f"initial_state shape {tuple(initial_state.shape)} != {expected_state_shape}")
+    if initial_state.memory_config() != KDA_OUTPUT_MEMORY_CONFIG:
+        raise ValueError("initial_state memory config must be DRAM interleaved")
 
     state = ttnn.reshape(
         initial_state,
@@ -589,13 +624,12 @@ def _chunk_recurrence(
     prepared = _prepare_chunk_terms(
         chunk_inputs,
         geometry,
-        program_config=program_config,
         compute_config=compute_config,
     )
     scan = scan_strategy.run(prepared, state, geometry)
     result = _restore_recurrence_output(scan, geometry)
-    assert result.output.dtype == program_config.scan_output_dtype
-    assert result.final_state.dtype == program_config.recurrent_state_dtype
+    assert result.output.dtype == KDA_SCAN_OUTPUT_DTYPE
+    assert result.final_state.dtype == KDA_RECURRENT_STATE_DTYPE
     return result
 
 
@@ -605,7 +639,6 @@ def _distributed_affine_prefix(
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    program_config: KDARecurrenceProgramConfig,
     compute_config: ttnn.DeviceComputeKernelConfig | None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose SP partition affine summaries and return entry/final carries."""
@@ -620,7 +653,7 @@ def _distributed_affine_prefix(
         raise ValueError("distributed KDA affine prefix currently requires K == V")
     assert transform_a.dtype == ttnn.float32
     assert transform_b.dtype == ttnn.float32
-    assert initial_state.dtype == program_config.recurrent_state_dtype
+    assert initial_state.dtype == KDA_RECURRENT_STATE_DTYPE
 
     mesh_device = transform_a.device()
     mesh_shape = tuple(mesh_device.shape)
@@ -629,12 +662,12 @@ def _distributed_affine_prefix(
     sp_size = mesh_shape[sequence_parallel_axis]
     batch_heads, key_dim = shape[0], shape[1]
     value_dim = transform_b.shape[-1]
-    output_memory = program_config.output_memory_config
-    working_memory = program_config.distributed_working_memory_config
+    output_memory = KDA_OUTPUT_MEMORY_CONFIG
+    working_memory = KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG
 
     # Precision boundary: FP32 composition is transported as measured BF16.
-    transport_a = ttnn.typecast(transform_a, program_config.affine_summary_dtype, memory_config=output_memory)
-    transport_b = ttnn.typecast(transform_b, program_config.affine_summary_dtype, memory_config=output_memory)
+    transport_a = ttnn.typecast(transform_a, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+    transport_b = ttnn.typecast(transform_b, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
     transport_a = ttnn.reshape(transport_a, (1, batch_heads, key_dim, key_dim))
     transport_b = ttnn.reshape(transport_b, (1, batch_heads, key_dim, value_dim))
     packed = ttnn.concat([transport_a, transport_b], dim=3, memory_config=output_memory)
@@ -646,7 +679,7 @@ def _distributed_affine_prefix(
     )
 
     carry = ttnn.to_memory_config(initial_state, working_memory)
-    assert carry.dtype == program_config.recurrent_state_dtype
+    assert carry.dtype == KDA_RECURRENT_STATE_DTYPE
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
     entry_states = []
     for rank in range(sp_size):
@@ -666,19 +699,19 @@ def _distributed_affine_prefix(
         # Precision boundary: BF16 collective payload is restored for FP32 carry math.
         rank_a_for_carry = ttnn.typecast(
             transported_rank_a,
-            program_config.recurrent_state_dtype,
+            KDA_RECURRENT_STATE_DTYPE,
             memory_config=working_memory,
         )
         rank_b_for_carry = ttnn.typecast(
             transported_rank_b,
-            program_config.recurrent_state_dtype,
+            KDA_RECURRENT_STATE_DTYPE,
             memory_config=working_memory,
         )
         carry = ttnn.matmul(
             rank_a_for_carry,
             carry,
             memory_config=working_memory,
-            dtype=program_config.recurrent_state_dtype,
+            dtype=KDA_RECURRENT_STATE_DTYPE,
             compute_kernel_config=compute_config,
         )
         carry = ttnn.add(carry, rank_b_for_carry, memory_config=working_memory)
@@ -691,7 +724,7 @@ def _distributed_affine_prefix(
         memory_config=output_memory,
     )
     final_state = ttnn.to_memory_config(carry, output_memory)
-    assert final_state.dtype == program_config.recurrent_state_dtype
+    assert final_state.dtype == KDA_RECURRENT_STATE_DTYPE
     entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
     final_state = ttnn.reshape(final_state, (batch_heads, key_dim, value_dim))
     return entry_state, final_state
