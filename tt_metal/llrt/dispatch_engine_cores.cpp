@@ -21,6 +21,9 @@
 
 namespace {
 
+// Two pool pops per CQ (prefetch, then dispatch) land on the same core.
+constexpr size_t num_fd_kernels_per_cq = 2;
+
 std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_from_yaml(
     tt::tt_metal::MetalEnvImpl& env,
     tt::ChipId device_id,
@@ -53,7 +56,7 @@ void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     }
     const std::vector<tt::tt_metal::CoreCoord> available_des = std::move(logical_cores);
     logical_cores.clear();
-    logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * 2);
+    logical_cores.reserve(static_cast<size_t>(num_hw_cqs) * num_fd_kernels_per_cq);
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
         const size_t de_index = static_cast<size_t>(cq_id) % available_des.size();
         const auto& de = available_des[de_index];
@@ -121,6 +124,34 @@ std::vector<CoreCoord> get_quasar_soc_dispatch_engine_logical_cores(const metal_
         logical_cores.emplace_back(static_cast<uint32_t>(index), 0);
     }
     return logical_cores;
+}
+
+std::vector<CoreCoord> get_quasar_dispatch_core_per_cq(
+    tt::ARCH arch, const std::vector<CoreCoord>& dispatch_core_pool, uint8_t num_hw_cqs) {
+    if (arch != tt::ARCH::QUASAR || dispatch_core_pool.empty()) {
+        return {};
+    }
+    TT_FATAL(
+        dispatch_core_pool.size() == num_fd_kernels_per_cq * num_hw_cqs,
+        "Dispatch core pool holds {} cores, expected {} ({} FD kernels per CQ over {} CQs)",
+        dispatch_core_pool.size(),
+        num_fd_kernels_per_cq * num_hw_cqs,
+        num_fd_kernels_per_cq,
+        num_hw_cqs);
+
+    std::vector<CoreCoord> cq_dispatch_cores;
+    cq_dispatch_cores.reserve(num_hw_cqs);
+    for (uint8_t cq_id = 0; cq_id < num_hw_cqs; ++cq_id) {
+        const CoreCoord& prefetch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq_id];
+        const CoreCoord& dispatch_core = dispatch_core_pool[num_fd_kernels_per_cq * cq_id + 1];
+        TT_FATAL(
+            prefetch_core == dispatch_core,
+            "Expected prefetch and dispatch cores to be the same, got prefetch core {} and dispatch core {}",
+            prefetch_core,
+            dispatch_core);
+        cq_dispatch_cores.push_back(dispatch_core);
+    }
+    return cq_dispatch_cores;
 }
 
 void validate_quasar_dispatch_cores_for_fd(
