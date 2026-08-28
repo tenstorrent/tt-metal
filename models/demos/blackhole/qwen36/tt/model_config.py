@@ -149,12 +149,15 @@ class Qwen36ModelArgs(ModelArgs):
         # construction, asserted below. Blackhole is excluded: its decode grid (num_cores=44) is
         # tuned against the unpadded width. Gate on dim, not model_name -- HF_MODEL is often a
         # hashed snapshot dir (same reasoning as _qkv_l1_tuned_for_this_model in gdn/tp.py).
-        _ab_gap_9b = (not tpc.is_blackhole()) and self.dim <= 4096
-        _gap_9b = (-(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp) if _ab_gap_9b else 0
-        _ab_gap_27b = (not tpc.is_blackhole()) and self.dim > 4096
-        _gap_27b = (-(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp) if _ab_gap_27b else 0
-        assert not (_ab_gap_9b and _ab_gap_27b), "a/b gap gates must be mutually exclusive"
-        self.gdn_ab_gap = _gap_9b + _gap_27b
+        # if/elif, not two independent booleans summed: makes "both gates active" unrepresentable
+        # instead of merely asserted against, while keeping each model's gap on its own line (own
+        # provenance, independently editable) per the paragraph above.
+        if tpc.is_blackhole():
+            self.gdn_ab_gap = 0
+        elif self.dim <= 4096:
+            self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp  # 9B, measured N300 TP=2
+        else:
+            self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp  # 27B, measured T3K TP=8
         self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
         # No pad: geometry, cache key and decode progcfgs all use the natural width.
         #
