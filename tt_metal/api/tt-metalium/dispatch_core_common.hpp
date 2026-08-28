@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <optional>
+
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal {
@@ -16,8 +19,6 @@ class DispatchCoreConfig {
 private:
     DispatchCoreType type_;
     std::optional<DispatchCoreAxis> axis_;
-
-    static DispatchCoreAxis get_default_axis();
 
 public:
     DispatchCoreConfig() : type_(DispatchCoreType::WORKER) {}
@@ -33,7 +34,16 @@ public:
 
     void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
 
-    DispatchCoreAxis get_dispatch_core_axis() const { return axis_.value_or(get_default_axis()); }
+    // Temporary resolver hook. Ordinary consumers should require a complete config and call
+    // get_dispatch_core_axis(); this predicate disappears when axis_ becomes non-optional.
+    bool has_dispatch_core_axis() const { return axis_.has_value(); }
+
+    DispatchCoreAxis get_dispatch_core_axis() const {
+        TT_FATAL(
+            axis_.has_value(),
+            "Dispatch core axis has not been resolved. Set it explicitly or call resolve_dispatch_core_axis().");
+        return axis_.value();
+    }
 
     void set_dispatch_core_axis(DispatchCoreAxis new_axis) { axis_ = new_axis; }
 

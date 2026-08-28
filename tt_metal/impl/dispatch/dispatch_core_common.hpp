@@ -52,7 +52,6 @@ CoreType resolve_dispatch_core_type(tt::ARCH arch, DispatchCoreType dispatch_cor
 
 // Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
 // Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.
-// TODO: https://github.com/tenstorrent/tt-metal/issues/39974
 DispatchCoreAxis resolve_dispatch_core_axis(
     const DispatchCoreConfig& config, tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
 
@@ -62,8 +61,5 @@ DispatchCoreConfig resolve_dispatch_core_config(
     tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::optional<DispatchCoreType> type = std::nullopt,
     std::optional<DispatchCoreAxis> axis = std::nullopt);
-
-// Helper functions to get the dispatch core config/type
-DispatchCoreConfig get_dispatch_core_config();
 
 }  // namespace tt::tt_metal

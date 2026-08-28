@@ -522,6 +522,11 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 TEST(MetalContextIntegrationTest, MockMetal2ProgramEnqueueOnOwningMesh) {
     MetalEnv mock_env{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
     auto mesh_device = mock_env.create_mesh_device(distributed::MeshDeviceConfig(distributed::MeshShape(1)));
+    const auto context_id = mesh_device->impl().get_context_id();
+
+    EXPECT_EQ(
+        MetalContext::instance(context_id).get_dispatch_core_config().get_dispatch_core_axis(), DispatchCoreAxis::COL);
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
 
     experimental::ProgramSpec spec = MakeMinimalNoOpProgramSpec();
     distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);

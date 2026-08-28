@@ -23,6 +23,15 @@ protected:
     void TearDown() override { MetalContext::destroy_all_instances(); }
 };
 
+TEST_F(MetalContextTest, UnresolvedDispatchCoreAxisThrowsWithoutCreatingDefaultContext) {
+    ASSERT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    const DispatchCoreConfig config;
+    EXPECT_THROW(config.get_dispatch_core_axis(), std::runtime_error);
+
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+}
+
 TEST(DispatchCoreConfigTest, ResolvesPlatformDefaults) {
     EXPECT_EQ(
         resolve_dispatch_core_config(tt::ARCH::WORMHOLE_B0, tt_fabric::FabricTensixConfig::DISABLED),
