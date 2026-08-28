@@ -76,7 +76,7 @@ def run(device, op, num_blocks=1, tiles_per_block=1, seed=0, fidelity=None, buff
         ],
         tensors={"in": ta, "out": tout},
         named_compile_time_args=named_ct_args,
-        defines=(defines or []) + [("TT_UNIFIED_METAL2", "1")],
+        defines=defines,
         name=f"unary_{op}",
         **(fidelity or {}),
     )

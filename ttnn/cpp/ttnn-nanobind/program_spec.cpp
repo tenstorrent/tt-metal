@@ -26,6 +26,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -41,6 +42,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -152,39 +154,86 @@ namespace {
 // Split out from the binding so the reference_wrappers are formed and consumed inside one
 // scope: `tensors` is a caller argument, so every MeshTensor referenced here outlives the
 // enqueue below.
+// A runtime id, WITHOUT WHICH THE PROGRAM IS INVISIBLE TO THE REAL-TIME PROFILER. It defaults
+// to 0, and 0 is REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID
+// (dispatch/kernels/realtime_profiler.hpp:23) -- so the dispatch kernel takes a zero-id program
+// for one the host asked not to profile and never appends it to the record FIFO. No error, no
+// records, and a profiler that reports itself active.
+//
+// Nothing else assigns one: the only setter in the tree outside tests is ttnn's
+// device-operation path (device_operation.hpp:186), which every ttnn op goes through and a
+// program built straight from a ProgramSpec does not. Same counter as ttnn's, so ids stay
+// unique across both.
+//
+// Re-stamped on every launch, cache hit included: the id identifies THIS execution, so a reused
+// program that kept its first id would have every later run attributed to the first.
+void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
+    const auto runtime_id = static_cast<uint64_t>(CoreIDs::instance().fetch_and_increment_device_operation_id());
+    for (auto& [_, program] : workload.get_programs()) {
+        program.set_runtime_id(runtime_id);
+    }
+}
+
+// What the cache stores. CachedMeshWorkload is metal's own shape for this, and the shared
+// variables a program factory would keep alongside the workload are nothing here -- the run
+// args are re-supplied on every launch.
+using CachedWorkload = tt::tt_metal::program_cache::detail::CachedMeshWorkload<std::monostate>;
+
 void run_program_spec(
     tt::tt_metal::distributed::MeshDevice& mesh_device,
     const exp::ProgramSpec& spec,
     exp::ProgramRunArgs run_args,
     const std::vector<std::pair<std::string, ttnn::Tensor>>& tensors,
-    bool blocking) {
+    bool blocking,
+    const std::string& cache_key) {
     for (const auto& [name, tensor] : tensors) {
         run_args.tensor_args.insert(
             {exp::TensorParamName{name}, exp::ProgramRunArgs::TensorArgument{std::cref(tensor.mesh_tensor())}});
     }
 
-    // No caching: the workload is rebuilt on every call, so a kernel edit is picked up and
-    // nothing stale can be dispatched. That costs a spec validation and a JIT-cache lookup
-    // per launch, which is the right trade for a correctness harness and the wrong one for
-    // a benchmark. Caching belongs here when the benchmarks move over.
-    tt::tt_metal::distributed::MeshWorkload workload = exp::MakeMeshWorkloadFromSpec(mesh_device, spec);
+    // THE CACHE LIVES ON THE DEVICE, deliberately. A built workload owns device memory, so a
+    // cache that outlived the device would hand back a program pointing at freed L1 -- and
+    // mesh_device.get_program_cache() is cleared when the device closes, which is the one
+    // place that fact is already known. It is also what num_program_cache_entries() reports,
+    // so the harness can see whether it is hitting.
+    //
+    // The key is supplied by the caller rather than computed from the spec here, and the
+    // reason is that a key computed from a struct is only as good as the field list someone
+    // remembered to walk -- an omitted field is a SILENT wrong-program hit. unified_harness.py
+    // derives its key mechanically from every argument it was handed, so a new argument is
+    // covered without anyone remembering. An empty key disables caching.
+    //
+    // ProgramCacheKey carries the exact string as well as the hash, and std::unordered_map
+    // confirms a bucket match with operator==, so a hash collision is resolved rather than
+    // returning the wrong program.
+    auto& cache = mesh_device.get_program_cache();
+    const tt::tt_metal::program_cache::detail::ProgramCacheKey key{
+        ttsl::hash::hash_objects(0, cache_key), "unified_program_spec:" + cache_key};
+
+    const bool use_cache = !cache_key.empty() && cache.is_enabled();
+    if (!use_cache || !cache.contains(key)) {
+        tt::tt_metal::distributed::MeshWorkload built = exp::MakeMeshWorkloadFromSpec(mesh_device, spec);
+        if (!use_cache) {
+            tt::tt_metal::Program& program = built.get_programs().begin()->second;
+            exp::SetProgramRunArgs(program, run_args);
+            set_runtime_id(built);
+            tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), built, blocking);
+            return;
+        }
+        cache.insert(
+            key, tt::tt_metal::program_cache::detail::CachedProgramFactory(CachedWorkload{std::move(built), {}}, 0));
+    }
+
+    // On a hit the workload is reused as it stands and only the MUTABLE half is refreshed:
+    // run args and tensor bindings, which is exactly the split ProgramSpec and ProgramRunArgs
+    // were drawn along. The DFB backing store is allocated per execution regardless
+    // (dataflow_buffer_spec.hpp), so a reused program does not carry stale buffers.
+    auto& cached = cache.get(key).cached_program.get<CachedWorkload>();
+    tt::tt_metal::distributed::MeshWorkload& workload = cached.workload;
     tt::tt_metal::Program& program = workload.get_programs().begin()->second;
     exp::SetProgramRunArgs(program, run_args);
 
-    // A runtime id, WITHOUT WHICH THE PROGRAM IS INVISIBLE TO THE REAL-TIME PROFILER. It
-    // defaults to 0, and 0 is REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID
-    // (dispatch/kernels/realtime_profiler.hpp:23) -- so the dispatch kernel takes a
-    // zero-id program for one the host asked not to profile and never appends it to the
-    // record FIFO. No error, no records, and a profiler that reports itself active.
-    //
-    // Nothing else assigns one: the only setter in the tree outside tests is ttnn's
-    // device-operation path (device_operation.hpp:186), which every ttnn op goes through and
-    // a program built straight from a ProgramSpec does not. Same counter as ttnn's, so ids
-    // stay unique across both.
-    const auto runtime_id = static_cast<uint64_t>(CoreIDs::instance().fetch_and_increment_device_operation_id());
-    for (auto& [_, p] : workload.get_programs()) {
-        p.set_runtime_id(runtime_id);
-    }
+    set_runtime_id(workload);
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, blocking);
 }
@@ -418,14 +467,18 @@ void py_module_types(nb::module_& mod) {
         nb::arg("run_args"),
         nb::arg("tensors"),
         nb::arg("blocking") = true,
+        nb::arg("cache_key") = "",
         R"pbdoc(
             Build a program from `spec`, bind `run_args` and `tensors`, and enqueue it.
 
             `tensors` is a list of (tensor_parameter_name, ttnn.Tensor) pairs, one for every
             TensorParameter the spec declares.
 
-            The workload is rebuilt on every call. That is deliberate for a correctness
-            harness -- nothing stale can be dispatched -- and wrong for a benchmark.
+            `cache_key` identifies the built workload in the DEVICE's program cache, so a
+            repeated launch of the same program reuses it and only re-binds the mutable half
+            (run args and tensors). Empty disables caching and rebuilds every call. The key
+            must distinguish every spec that could differ -- see unified_harness.py, which
+            derives it from all of its arguments rather than a hand-written list.
         )pbdoc");
 }
 
