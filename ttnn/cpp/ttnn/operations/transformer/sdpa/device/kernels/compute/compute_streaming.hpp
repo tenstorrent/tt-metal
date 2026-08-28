@@ -2657,22 +2657,22 @@ void sdpa_ring_v2(
 
         const bool is_first_kv_for_this_q = is_first_active_iter;
 
-        bool is_this_first_work_iter_for_q = false;
-        bool is_this_last_work_iter_for_q = false;
-        if constexpr (sparse_frames_enabled) {
-            const uint32_t q_bits = q_work_bitmap[q_chunk];
-            if (q_bits != 0u) {
-                is_this_first_work_iter_for_q = (ring_iter == __builtin_ctz(q_bits));
-                is_this_last_work_iter_for_q = (ring_iter == (31u - __builtin_clz(q_bits)));
+        const bool is_this_first_work_iter_for_q = [&] {
+            if constexpr (sparse_frames_enabled) {
+                const uint32_t q_bits = q_work_bitmap[q_chunk];
+                return q_bits != 0u ? (ring_iter == __builtin_ctz(q_bits)) : is_first_kv_for_this_q;
             } else {
-                // Fallback for q_chunk with zero total work (shouldn't reach main loop).
-                is_this_first_work_iter_for_q = is_first_kv_for_this_q;
-                is_this_last_work_iter_for_q = is_last_ring_iter;
+                return is_first_kv_for_this_q;
             }
-        } else {
-            is_this_first_work_iter_for_q = is_first_kv_for_this_q;
-            is_this_last_work_iter_for_q = is_last_ring_iter;
-        }
+        }();
+        const bool is_this_last_work_iter_for_q = [&] {
+            if constexpr (sparse_frames_enabled) {
+                const uint32_t q_bits = q_work_bitmap[q_chunk];
+                return q_bits != 0u ? (ring_iter == (31u - __builtin_clz(q_bits))) : is_last_ring_iter;
+            } else {
+                return is_last_ring_iter;
+            }
+        }();
 
         // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
