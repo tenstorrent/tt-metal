@@ -983,6 +983,63 @@ void bind_gelu(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()));
 }
 
+// geglu is bound separately from the other GLU-family ops (glu/reglu/swiglu use
+// bind_unary_operation_with_dim_parameter) because it exposes the GELU variant selector.
+void bind_geglu(nb::module_& mod) {
+    static constexpr auto doc = R"doc(
+        Applies geglu to :attr:`input_tensor` element-wise.
+
+        Split the tensor into two parts, apply the GELU function on the second tensor, and then perform multiplication with the first tensor.
+
+        .. math::
+            \mathrm{output\_tensor}_i = \verb|geglu|(\mathrm{input\_tensor}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            dim (int): Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3). Defaults to `-1`.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            variant (ttnn.GeluVariant, optional): Select the GELU implementation used for the gate. Defaults to `GeluVariant.Accurate`.
+
+                - `Accurate`: piecewise Gaussian CDF in BF16, or erf-based evaluation in FP32. Most accurate.
+                - `FastLut`: 6-segment piecewise-linear lookup table. Fastest and least accurate; over the
+                  normal BF16 range the absolute error reaches 0.024 near zero, and every input at or below
+                  -3 returns exactly 0.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) evaluated in FP32.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE, ROW_MAJOR
+
+            System memory is not supported.
+
+            Last dimension of input tensor should be divisible by 64.
+
+        )doc";
+
+    ttnn::bind_function<"geglu">(
+        mod,
+        doc,
+        nb::overload_cast<const Tensor&, int32_t, const std::optional<tt::tt_metal::MemoryConfig>&, GeluVariant>(
+            &ttnn::geglu),
+        nb::arg("input_tensor"),
+        nb::arg("dim") = -1,
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("variant") = GeluVariant::ACCURATE);
+}
+
 void bind_sigmoid(nb::module_& mod) {
     auto doc = fmt::format(
         R"doc(
@@ -1828,18 +1885,7 @@ void py_module(nb::module_& mod) {
 
         )doc");
 
-    bind_unary_operation_with_dim_parameter<"geglu", &ttnn::geglu>(
-        mod,
-        "dim",
-        "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
-        "Split the tensor into two parts, apply the GELU function on the second tensor, and then perform "
-        "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(System memory is not supported.
-
-           Last dimension of input tensor should be divisible by 64.
-
-        )doc");
+    bind_geglu(mod);
 
     bind_unary_operation_with_dim_parameter<"swiglu", &ttnn::swiglu>(
         mod,
