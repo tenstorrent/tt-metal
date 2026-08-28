@@ -620,6 +620,22 @@ sets its own environment per case and ignores both.
   raising, so it cannot be caught in-process -- and a case is only "ok" if it is refused BY
   THE EXPECTED CHECK. A timeout counts as a failure, since a hang is what these exist to
   eliminate.
+- **`unified_selftest.cpp` is in the runner**, first and before any device is touched. It is
+  the only build that puts `-Wall -Wextra -Werror` through these headers -- the device build
+  turns those warnings off -- and the only check that all three thread projections trace
+  identically and that every circular buffer balances.
+
+  It is in the runner because it was NOT, and rotted for it: nothing referenced it, so it
+  stopped compiling at stage 1b and four separate changes each broke it a little more
+  (`DataflowBuffer`, the `Noc` barriers, D19's page-format check, `NOC_MODE`) with no run
+  saying so. **A check nothing runs is not a check**, and the cost of finding that out was a
+  stretch of work whose claim to be "green" covered less than it sounded like. Three seconds
+  against nine minutes of device time also fixes the ordering: a header that does not
+  compile should not cost a suite run to discover.
+
+  Repairing it immediately earned its keep, catching three live `-Werror` findings in
+  `math.hpp` that no other build can see -- `bias_cb` and `epi_bias_cb` missing from the
+  non-compute `(void)` lists, and `kAccTiles` declared outside the guard that uses it.
 
 ### Verification status, stated exactly
 
