@@ -2265,15 +2265,6 @@ std::string RunTimeOptions::get_sanitizer_hash() const {
     return hash_str;
 }
 
-// Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
-// depends on RTOptions settings.
-tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
-    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
-    dispatch_core_config.set_dispatch_core_type(
-        this->dispatch_core_type_override.value_or(tt_metal::DispatchCoreType::WORKER));
-    return dispatch_core_config;
-}
-
 void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {
     if (enabled) {
         profiler_enabled = true;

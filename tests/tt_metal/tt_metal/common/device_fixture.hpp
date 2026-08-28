@@ -45,8 +45,7 @@ protected:
     }
 
     void create_devices(const std::vector<ChipId>& device_ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         // TODO: Some CI machines have lots of cards, running all tests on all the cards is slow.
         // Coverage for multidevices should be decent if we just confirm 2 work.
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
@@ -131,8 +130,7 @@ protected:
     }
 
     void create_devices(const std::vector<ChipId>& ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
         devices_.clear();

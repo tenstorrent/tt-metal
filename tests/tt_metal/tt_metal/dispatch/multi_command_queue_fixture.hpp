@@ -73,8 +73,7 @@ protected:
     }
 
     void create_device(const ChipId device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         std::vector<ChipId> chip_id = {device_id};
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
@@ -132,8 +131,7 @@ protected:
             GTEST_SKIP();
         }
 
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");

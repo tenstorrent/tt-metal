@@ -35,7 +35,7 @@ static void open_and_close_device() {
         ids.push_back(id);
     }
     ASSERT_GT(ids.size(), 0);
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
 
     // Open one unit mesh per MMIO chip. Multi-chip boards (e.g. P300) expose more than one
     // MMIO chip, so assert against the number of chips opened rather than hardcoding a single device.

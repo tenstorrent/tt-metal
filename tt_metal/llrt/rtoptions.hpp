@@ -738,7 +738,6 @@ public:
     std::optional<tt_metal::DispatchCoreType> get_dispatch_core_type_override() const {
         return dispatch_core_type_override;
     }
-    tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     bool is_simulator_or_emulated() const {

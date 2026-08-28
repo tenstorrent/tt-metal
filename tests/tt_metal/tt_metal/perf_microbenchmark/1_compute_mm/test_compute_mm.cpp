@@ -332,7 +332,7 @@ int main(int argc, char** argv) {
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1 /* num_command_queues */,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config());
 
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device = mesh_device_map.at(pci_express_slot);
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);

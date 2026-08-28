@@ -58,8 +58,7 @@ protected:
     void create_devices(
         std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -135,8 +134,7 @@ protected:
     }
 
     void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -265,8 +263,7 @@ private:
     }
 
     static void create_shared_devices() {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<ChipId> chip_ids;
         auto* enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
@@ -348,7 +345,7 @@ protected:
             chip_ids.push_back(id);
         }
 
-        auto dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        auto dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
         for (const auto& [id, device] : reserved_devices) {

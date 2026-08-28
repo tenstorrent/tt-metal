@@ -70,7 +70,7 @@ inline void log_dispatch_mode(bool slow_dispatch) {
 
 inline void populate_shared_state(LLKSharedDevices& s, const std::vector<ChipId>& ids) {
     s.arch = detect_arch();
-    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+    const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
     auto id_to_device = distributed::MeshDevice::create_unit_meshes(
         ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, dispatch_core_config);
     s.devices.clear();
