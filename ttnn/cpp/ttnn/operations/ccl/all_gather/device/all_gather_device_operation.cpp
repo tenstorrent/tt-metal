@@ -262,7 +262,26 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 // A short stripe favours unicast on top of that, because a long one gives multicast long
                 // runs to send instead. That refinement is left out: it cost 5 of the 17 big line shapes
                 // measured 0.5-2.2%, which is not worth walking the stripe geometry here to recover.
-                use_unicast = !is_ring && per_link_bytes >= 3'000'000;
+                //
+                // Device count decides more than size does on a line, and not monotonically. Measured at
+                // 2, 3, 4, 6 and 8 devices with the per-device tensor held fixed:
+                //   2 devices  unicast by 23-37% at every size -- one hop, so unicast never relays, while
+                //              multicast still pays its barrier fan-in and packet setup.
+                //   3 devices  a tie, to within 0.1%.
+                //   4 devices  multicast by 18-30% at every size; 6 devices, by 3-11%. Unicast re-reads
+                //              and re-sends at each hop, which is what the fabric does for free here.
+                //   8 devices  back to a near tie, and there size picks the winner (below).
+                // Above 8 is untested; the 4->6->8 trend has multicast's edge shrinking, so the size test
+                // is the safer extrapolation.
+                if (is_ring) {
+                    use_unicast = false;
+                } else if (args.num_devices <= 2) {
+                    use_unicast = true;
+                } else if (args.num_devices <= 6) {
+                    use_unicast = false;
+                } else {
+                    use_unicast = per_link_bytes >= 3'000'000;
+                }
                 break;
             }
             case tt::ARCH::BLACKHOLE: {

@@ -272,13 +272,21 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         // A long stripe outlasts a transfer many times over, so a worker's runs stay inside one row and its
         // writes land sequentially at the destination. Short stripes straddle a row edge on every transfer.
         const bool long_stripe = output_chunks_per_stripe >= 64;
-        const bool small = per_link_bytes <= 512 * 1024;
-        const bool long_stripe_wins = long_stripe && (is_ring || per_link_bytes <= 4 * 1024 * 1024);
+        // Thresholds are on this device's own share of the link, not the whole gathered output, because
+        // that is the form that transfers: measured at 2, 4 and 8 devices, the boundaries below sit at the
+        // same per-device figure each time. Stated against the total they would only be right at 8 -- at 4
+        // the long-stripe rule then takes one worker where two are 5% faster, and at 2 it does the same and
+        // also holds one worker 9% past where the second starts paying.
+        const uint64_t device_bytes_per_link = per_link_bytes / std::max(1u, num_devices);
+        const bool small = device_bytes_per_link <= 64 * 1024;
+        const bool long_stripe_wins = long_stripe && (is_ring || device_bytes_per_link <= 512 * 1024);
         workers_per_dir = (small || long_stripe_wins) ? 1 : 2;
         packets_per_cb_entry = 3;  // multicast wants 1 here; every cell was swept on its own
         // Two slots let a worker stage its next packet while the mux forwards the last. On a ring at scale
         // that only interleaves the two workers' packets more finely at the receiver, scattering its DRAM
         // writes, so one slot wins there; a line, whose per-hop relay is already serialised, keeps two.
+        // Ring only, and a ring cannot be shortened on a T3000 (the wrap-around link needs all 8), so this
+        // one stays in whole-output terms at the 8-device calibration.
         mux_slots_per_channel = (is_ring && per_link_bytes >= 2 * 1024 * 1024) ? 1 : 2;
         // No run cap: the sweeps put the best run length at the hardware ceiling (7616 B), so any value
         // settable here is already above it and would only cost payload.
