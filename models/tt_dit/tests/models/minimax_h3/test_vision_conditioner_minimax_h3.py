@@ -79,7 +79,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, local_device_to_torch
 from .common_av import is_host
 
 _LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
@@ -864,7 +864,9 @@ def test_fused_conditioner_two_refs_real_weights(
             f"dec prep {(t3 - t2) * 1000:8.1f} | dec op {(t4 - t3) * 1000:8.1f} | "
             f"e2e {(t4 - t0) * 1000:8.1f} ms"
         )
-    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
+    # Replicated after the decoder's SP gather. Full-mesh ConcatMesh2dToTensor needs one host shard
+    # per `[4, 32]` coordinate (128); each tt-run rank only has 32 local chips. Read the local replica.
+    actual = local_device_to_torch(out)
 
     logger.info(
         f"minimax-h3 fused conditioner [real, {variant}] TP={tp_factor} SP={tower_sp_factor} "
@@ -1014,7 +1016,9 @@ def test_fused_conditioner_t2va_real_weights(
             f"full conditioner [t2va] {tag} iter {i + 1}/{_PERF_ITERS}: "
             f"dec prep {(t1 - t0) * 1000:8.1f} | dec op {(t2 - t1) * 1000:8.1f} | e2e {(t2 - t0) * 1000:8.1f} ms"
         )
-    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
+    # Replicated after the decoder's SP gather. Same 4-host compose issue as two_refs: read the
+    # local replica rather than ConcatMesh2dToTensor over the full `[4, 32]` mesh.
+    actual = local_device_to_torch(out)
 
     logger.info(f"minimax-h3 fused conditioner [real, t2va] {tag} hidden_states[{TAP}], seq={seq_len}:")
     assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
