@@ -295,7 +295,6 @@ inline void calculate_cosine() {
 
         j = j + NEG_ROUNDING_BIAS;
 
-        sfpi::vFloat two = sfpi::sFloat16b(2.0f);
         j = j * 2.0f - 1.0f;
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
