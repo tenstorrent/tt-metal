@@ -550,13 +550,7 @@ Cluster::~Cluster() {
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_user_chip_ethernet_coordinates() const {
-    auto user_chip_ethernet_coordinates = this->get_cluster_desc()->get_chip_locations();
-    if (this->is_galaxy_cluster()) {
-        std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
-            return this->get_cluster_desc()->get_board_type(entry.first) != BoardType::GALAXY;
-        });
-    }
-    return user_chip_ethernet_coordinates;
+    return this->get_cluster_desc()->get_chip_locations();
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_all_chip_ethernet_coordinates() const {
