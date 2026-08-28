@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import torch
 from loguru import logger
@@ -374,6 +374,30 @@ class TtPrefillRuntime:
             )
         return self.make_placeholder_activation()
 
+    def make_mtp_chunk_input(self, mtp_stream: Sequence[int]) -> ttnn.Tensor:
+        """Trunk input for a chunk whose MTP stream is `mtp_stream` — the `chunk_size + K` list from
+        `mtp_extended_stream()`, i.e. what an inference server hands prefill for this chunk.
+
+        Derives the trunk's `chunk_size` ids from the SAME list the MTP levels slice, so the two
+        cannot disagree. Building the trunk tensor from a separate list is the one MTP wiring error
+        nothing downstream can catch: `mtp_tokens` still has the right length, every window is still
+        `chunk_size` wide, `_mtp_embed_window`'s length assert still passes — the trunk and the K
+        levels just prefill different text, and the only symptom is bad KV.
+
+        Pair it with the same list:
+
+            stream = mtp_extended_stream(chunk_ids, K, real_len=..., lookahead=...)
+            inp = runtime.make_mtp_chunk_input(stream)
+            runtime.prefill_chunk(inp, ..., mtp_tokens=stream)
+        """
+        c = self.config.chunk_size
+        assert len(mtp_stream) > c, (
+            f"MTP stream is {len(mtp_stream)} ids, expected chunk_size ({c}) + K. The stream carries "
+            "K positions past the chunk's right edge, so it is strictly longer than the chunk; a "
+            "chunk_size-long list is the trunk input, not an MTP stream."
+        )
+        return self.make_chunk_input(list(mtp_stream[:c]))
+
     def compile(self, kv_caches: MlaKvCaches) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine passes the
         `MlaKvCaches` it owns; the warm-up writes into it (slot 0) and is harmless. The runtime holds NO
@@ -525,6 +549,9 @@ class TtPrefillRuntime:
         request_id: int = 0,
         d2h_service=None,
         record_dev: Optional[ttnn.Tensor] = None,
+        mtp_tokens: Optional[list[int]] = None,
+        mtp_seed_token: Optional[int] = None,
+        on_mtp_complete=None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
@@ -567,6 +594,21 @@ class TtPrefillRuntime:
                 CQ (no host sync). When None, no ack or zeroing.
             record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
                 d2h_service is set.
+            mtp_tokens: GLM-5.2 MTP (#53533) — this chunk's chunk_size + K extended token stream from
+                mtp_extended_stream(): the chunk's own ids plus the next chunk's first K, or K
+                generation slots on the last chunk of a request. Build `tokens_or_activation` from
+                this same list with make_mtp_chunk_input() — it slices the trunk's chunk_size ids off
+                the front, so the trunk and the K levels cannot end up prefilling different text.
+                The K MTP levels then write their KV
+                into slots [num_layers, num_layers + K) of this same user's slice, so kv_caches.kvpe
+                must have been allocated with those extra slots — allocate it to
+                `self.model.num_kvpe_cache_layers`, which is the single number every block strides
+                users by. Not yet reconciled with KV migration: build_kv_chunk_table still strides
+                by config.num_layers, so a migrated run with MTP on and num_users > 1 would describe
+                the wrong rows. MTP and migration are not a combination that exists yet; do not turn
+                both on without fixing that stride first. None disables MTP for this chunk.
+            mtp_seed_token: optional t_P for the last chunk (saves one 32-row LM head call).
+            on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens).
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -606,6 +648,11 @@ class TtPrefillRuntime:
             # That means the pipelined sink's request_id cannot be re-bound per call the way the eager
             # path does below — publish this chunk's id instead; the captured callback built by
             # set_layer_completion_sink() reads it at replay time.
+            assert mtp_tokens is None, (
+                "use_trace does not support MTP: the shift-windows are uploaded per chunk (fresh "
+                "addresses) and the last chunk's levels round-trip through the host LM head, neither "
+                "of which survives a capture; run with PREFILL_USE_TRACE=0"
+            )
             self._trace_request_id = request_id
             ttnn.copy(input_tensor, self._trace_input)
             for dst, val in zip(self._trace_metadata, (slot_id, actual_start, actual_end)):
@@ -649,6 +696,9 @@ class TtPrefillRuntime:
             actual_end=actual_end,
             cache_user_id=slot_id,
             index_kv_cache=kv_caches.index,
+            mtp_tokens=mtp_tokens,
+            mtp_seed_token=mtp_seed_token,
+            on_mtp_complete=on_mtp_complete,
         )
         ttnn.deallocate(model_input)
 
@@ -848,7 +898,11 @@ class TtPrefillRuntime:
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
         mesh_device = self.mesh_device
-        num_layers = self.config.num_layers
+        # The `.kvpe` per-slot stride is the cache's DEPTH, not this rank's layer count: with MTP on
+        # the two differ by K (each level writes its own slot), and striding by the smaller number
+        # makes every slot but 0 read the wrong region. The model is what decides the depth, so read
+        # it from there; without MTP the two numbers are equal and this is a no-op.
+        num_layers = getattr(self.model, "num_kvpe_cache_layers", self.config.num_layers)
         # `.kvpe` is an MlaKvCache wrapper, NOT a bare tensor: physical ops use `.storage`, and physical
         # rows may be packed (SCALED_FP8), so decode them with `unpack_host` to logical [latent || RoPE] —
         # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised

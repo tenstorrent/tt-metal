@@ -13,7 +13,8 @@ decoder layer:
     out = shared_head.norm(h^k)                                           <- TtMTPModule
 
 ``TtFusedMTP`` owns only the input-side projection; ``TtMTPModule`` wraps it together with one
-``TtPrefillBlock`` and the output-side ``shared_head.norm``.
+``TtPrefillBlock`` and the output-side ``shared_head.norm``; ``TtMTPPredictor`` replays one such
+module across ``num_levels`` levels, each writing its own KV cache slot.
 
 GLM-5.2 uses the DeepSeek-V3 paper scheme: K levels predicted at ONE position, K KV caches, ONE
 shared set of weight modules. It is NOT EAGLE-style autoregressive drafting. ``num_nextn_predict_layers``

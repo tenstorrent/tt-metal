@@ -25,6 +25,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows import MTPEmbedSource
+from models.demos.deepseek_v3_d_p.tt.runners.input_prep import build_position_zero_mask, prepare_prefill_mtp_window
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
@@ -146,6 +148,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        mtp_predictor=None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -194,11 +197,20 @@ class TtPrefillTransformer(LightweightModule):
             else None
         )
 
+        # The KV-cache slot stride, in slots per user. Normally the rank's layer count, but MTP
+        # writes K MORE slots per user -- level k lands at num_layers + k -- so the cache is
+        # num_layers + K deep and EVERY block, trunk and MTP alike, must stride by that same
+        # number. Striding the trunk by num_layers while the cache is deeper puts user 1's layer 0
+        # on top of user 0's MTP slots: silent corruption, invisible at num_users == 1, which is
+        # exactly the configuration MTP is being brought up in.
+        num_mtp_levels = 0 if mtp_predictor is None else int(mtp_predictor.num_levels)
+        self.num_kvpe_cache_layers = num_layers + num_mtp_levels
+
         # --- Transformer layers ---
         # layer_idx is the GLOBAL index (drives weight cache keys + dense/MoE selection);
-        # cache_layer_idx in forward is the LOCAL slot. layer_num is this instance's slice
-        # length so the block's flat KV slot (cache_user_id * layer_num + cache_layer_idx)
-        # matches the per-rank cache sized to num_layers. first_layer_idx additionally tells the
+        # cache_layer_idx in forward is the LOCAL slot. layer_num is the per-user slot stride
+        # (the block's flat KV slot is cache_user_id * layer_num + cache_layer_idx), so it matches
+        # the cache's actual depth, not this rank's layer count. first_layer_idx additionally tells the
         # sparse indexer which stage it is, so its (separately numbered) key cache is rank-local too.
         # With kv_only_last_layer, the last block is built kv_only=True (only attn_norm + the KV
         # branch of MLA).
@@ -231,7 +243,7 @@ class TtPrefillTransformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 is_chunked=is_chunked,
                 slot_num=slot_num,
-                layer_num=num_layers,
+                layer_num=self.num_kvpe_cache_layers,
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -302,6 +314,64 @@ class TtPrefillTransformer(LightweightModule):
         self.is_balanced = is_balanced
         self.chunk_order = create_balanced_chunk_order(mesh_device.shape[sp_axis]) if is_balanced else None
 
+        # Sharding parameters, kept because MTP uploads its own shift-windows through the same
+        # path the trunk input took (see _mtp_embed_window).
+        self.sp_axis = sp_axis
+        self.tp_axis = tp_axis
+        self.mesh_shape = tuple(mesh_device.shape)
+        self.sp_factor = mesh_device.shape[sp_axis]
+        self.tp_factor = mesh_device.shape[tp_axis]
+        self.emb_dim_per_chip = config.hidden_size // self.tp_factor
+
+        # --- MTP (GLM-5.2, issue #53533) -----------------------------------------------------
+        # Injected rather than built here: the predictor owns MTP weights and a full GLM decoder
+        # block, and the transformer has no business loading either. What the transformer
+        # contributes is the three things only it holds at once -- the embedding table, model.norm,
+        # and the LM head -- which is exactly what the token->embedding boundary needs.
+        self.mtp_predictor = mtp_predictor
+        self.num_mtp_levels = num_mtp_levels
+        self._mtp_pos0_mask = None
+        if mtp_predictor is not None:
+            assert is_last_rank and not kv_only_last_layer, (
+                "MTP is seeded by h^0 = model.norm(trunk output) and needs the LM head for the last "
+                "chunk's generated tokens; both live only on a last rank that builds the tail"
+            )
+            assert padding_side == "right", (
+                f"MTP assumes right padding, got padding_side={padding_side!r}. Two things break "
+                "under left padding, both silently: mtp_extended_stream lays the last chunk out as "
+                "[ prompt | K generation slots | pad ], which puts the slots in the middle of the "
+                "padding instead of after the last real token; and the position-0 mask zeroes "
+                "chunk-local row 0, which is absolute position 0 only when the real tokens start "
+                "there. Neither raises -- they just produce the wrong embedding window."
+            )
+            assert mtp_predictor.first_cache_slot == num_layers, (
+                f"MTP writes KV slots [first_cache_slot, first_cache_slot + K); it must start where "
+                f"the trunk's slots end, at {num_layers}, not {mtp_predictor.first_cache_slot} -- "
+                "otherwise the levels overwrite trunk layers or leave a hole"
+            )
+            if self.indexer_types is not None:
+                assert len(self.indexer_types) > mtp_predictor.layer_idx, (
+                    f"config.indexer_types has {len(self.indexer_types)} entries and does not cover "
+                    f"MTP layer {mtp_predictor.layer_idx}. indexer_layer_is_reused() then falls "
+                    "through its out-of-range guard, so the level gets a real indexer by accident "
+                    "rather than by declaration, and full_indexer_rank() sizes the index cache one "
+                    "slot short. Call enable_mtp_indexer_slot(config, layer_idx) before building the "
+                    "predictor -- on a COPY, since config_only is lru_cached and this mutates."
+                )
+            mtp_stride = getattr(mtp_predictor.module.layer.mla, "layer_num", None)
+            assert mtp_stride in (None, self.num_kvpe_cache_layers), (
+                f"the MTP block strides users by {mtp_stride} but the trunk blocks stride by "
+                f"{self.num_kvpe_cache_layers}; build the predictor with "
+                f"layer_num={self.num_kvpe_cache_layers} (it reaches TtPrefillBlock through "
+                "TtMTPModule's **block_kwargs)"
+            )
+            assert self.embed is not None, (
+                "MTP embeds its own shifted token windows, and the embedding table is built only on "
+                "the first rank. Single-galaxy (is_first_rank == is_last_rank == True) works today; a "
+                "multi-rank split needs the table replicated onto the last rank -- rank 0 cannot embed "
+                "a token that does not exist until the last rank has run."
+            )
+
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
     def set_trace_controller(self, controller):
@@ -360,6 +430,9 @@ class TtPrefillTransformer(LightweightModule):
         cache_user_id: int = 0,
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        mtp_tokens: Optional[list[int]] = None,
+        mtp_seed_token: Optional[int] = None,
+        on_mtp_complete: Optional[Callable] = None,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -394,6 +467,15 @@ class TtPrefillTransformer(LightweightModule):
                         pad-zero, but with a device sync first. Wire one or the other, never both.
             on_layer_hidden: optional tap fired at the END of each block with (GLOBAL layer index, block
                         output activation). Read-only — see tt_prefill_block.forward.
+            mtp_tokens: GLM-5.2 MTP (#53533) — this chunk's seq_len + K extended token stream from
+                        mtp_extended_stream(), indexed by chunk-local position, so level k's window is
+                        the slice [k : k+seq_len]. None disables MTP for this chunk. Requires an
+                        mtp_predictor; the K levels run after the trunk tail, off model.norm's output.
+            mtp_seed_token: optional t_P for the last chunk, saving one 32-row LM head call. Only pass
+                        it when it was produced greedily — see _mtp_next_token_fn.
+            on_mtp_complete: tap fired once with (MTPPredictorOutput, generated_tokens). A tap rather
+                        than an extra return value, so the trunk's return arity is unchanged whether or
+                        not MTP ran — the same reason on_layer_complete is a callback.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next
@@ -414,6 +496,19 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
         )
+
+        # Check the MTP token contract HERE, before the trunk runs. The stream is not consumed until
+        # the very end of this forward (run_mtp -> MTPEmbedSource, which asserts the same length), so
+        # a wrong-length list otherwise costs a whole trunk chunk -- one that has already written KV --
+        # before it raises. Pure host arithmetic; it costs nothing.
+        if mtp_tokens is not None:
+            assert self.mtp_predictor is not None, "mtp_tokens passed but this transformer has no mtp_predictor"
+            assert len(mtp_tokens) == self.seq_len + self.num_mtp_levels, (
+                f"mtp_tokens is {len(mtp_tokens)} ids, expected seq_len + K = {self.seq_len} + "
+                f"{self.num_mtp_levels}. It is the EXTENDED stream from mtp_extended_stream(), not the "
+                "chunk's own tokens -- it carries K positions past the chunk's right edge. Slice the "
+                "trunk input off the same list with TtPrefillRuntime.make_mtp_chunk_input()."
+            )
 
         # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
         # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
@@ -540,6 +635,38 @@ class TtPrefillTransformer(LightweightModule):
         if return_intermediates:
             intermediates["first_token"] = sweep_results
 
+        # --- MTP levels (GLM-5.2, #53533) ---------------------------------------------------
+        # After the trunk tail, so the trunk path is byte-identical when MTP is off. `h` is h^0
+        # (post-model.norm) and is still live: neither the LM head nor _sample frees it.
+        if mtp_tokens is not None:
+            assert self.mtp_predictor is not None, "mtp_tokens passed but this transformer has no mtp_predictor"
+            assert actual_start is not None, (
+                "MTP needs actual_start on the host to know whether this chunk contains absolute "
+                "position 0, where vLLM zeroes the embedding on every level; the on-device metadata "
+                "path keeps actual_start on device and cannot answer that here"
+            )
+            # d2h_service / record_dev / on_layer_complete / on_layer_hidden are deliberately NOT
+            # forwarded: the layer-ack protocol counts TRUNK layers, so K extra acks would be K
+            # records the producer never asked for, and on_layer_hidden's index would collide with
+            # the trunk's. MTP's product is the KV it writes, not an ack.
+            mtp_out, mtp_generated = self.run_mtp(
+                h,
+                kvpe_cache,
+                rope_tensors,
+                mtp_tokens,
+                actual_isl,
+                zero_position_0=(actual_start == 0),
+                seed_token=mtp_seed_token,
+                cache_user_id=cache_user_id,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                padding_side=self.padding_side,
+                index_kv_cache=index_kv_cache,
+                metadata=metadata,
+            )
+            if on_mtp_complete is not None:
+                on_mtp_complete(mtp_out, mtp_generated)
+
         return first_token_id, first_token_prob, intermediates
 
     def _lm_head_and_extract(
@@ -574,6 +701,122 @@ class TtPrefillTransformer(LightweightModule):
         logger.debug(f"[TtPrefillTransformer._extract] {first_token_logits.shape}")
 
         return logits_host, first_token_logits
+
+    # ----------------------------------------------------------------------------------------------
+    # MTP (GLM-5.2, issue #53533)
+    # ----------------------------------------------------------------------------------------------
+
+    def _mtp_position_zero_mask(self) -> ttnn.Tensor:
+        """Cached per-chip ``[1, 1, L, H/tp]`` mask zeroing ABSOLUTE position 0. Built once, reused."""
+        if self._mtp_pos0_mask is None:
+            self._mtp_pos0_mask = build_position_zero_mask(
+                self.mesh_device,
+                self.sp_factor,
+                self.seq_len,
+                self.is_balanced,
+                self.mesh_shape,
+                self.sp_axis,
+                emb_dim_per_chip=self.emb_dim_per_chip,
+            )
+        return self._mtp_pos0_mask
+
+    def _mtp_embed_window(self, window_ids: list[int], zero_position_0: bool) -> ttnn.Tensor:
+        """Shard, upload and embed ONE MTP shift-window. Returns ``[1, 1, L, H/tp]`` TILE_LAYOUT.
+
+        The window is sharded with THIS chunk's ``is_balanced``, and that is what makes the shift
+        correct: sharding is a fixed row -> position permutation applied to the window's *contents*,
+        so applying the trunk's permutation to a window shifted by ``k`` lands ``t_{p+k}`` on the row
+        whose hidden sits at ``p``. Shifting tokens rather than embeddings is also what keeps it
+        free -- the token tensor is ROW_MAJOR uint32, so a row offset costs nothing, while the
+        embedding is TILE_LAYOUT and ``k`` in 1..4 is never 32-row aligned.
+
+        The sequence axis does not grow: ``+K`` is a token-window overhang, not extra rows of
+        compute. Every window is ``L`` rows per chip, exactly like the trunk input.
+        """
+        assert (
+            len(window_ids) == self.seq_len
+        ), f"MTP window is {len(window_ids)} ids, expected the padded chunk length {self.seq_len}"
+        tt_ids = prepare_prefill_mtp_window(
+            window_ids, self.mesh_device, self.sp_factor, self.is_balanced, self.mesh_shape, self.sp_axis
+        )
+        emb = ttnn.unsqueeze_to_4D(self.embed(tt_ids))
+        ttnn.deallocate(tt_ids)
+        if zero_position_0:
+            masked = ttnn.multiply(emb, self._mtp_position_zero_mask())
+            ttnn.deallocate(emb)
+            emb = masked
+        return emb
+
+    def _mtp_next_token_fn(self, actual_isl: int):
+        """``H^k -> int``: the greedy token at the last real row, through the trunk's own LM head.
+
+        Greedy (argmax), not :meth:`_sample`: the MTP chain is a draft, the reference is argmax, and
+        sampling here would make level ``k+1``'s *input* depend on the sampling temperature. It is
+        the same head and the same row the trunk already used, so at temperature 0 the two agree by
+        construction -- which is why ``seed_token`` is an optimisation and not the definition.
+
+        Cost is one extra 32-row LM head call per level: ``TtLMHead.forward`` narrows to the single
+        tile containing the target row before the vocab matmul.
+        """
+
+        def next_token(h_normed):
+            _, logits = self._lm_head_and_extract(h_normed, actual_isl)
+            flat = logits.reshape(-1)
+            assert (
+                flat.numel() == self.lm_head.vocab_size
+            ), f"expected full-vocab logits, got {flat.numel()} of {self.lm_head.vocab_size}"
+            return int(torch.argmax(flat).item())
+
+        return next_token
+
+    def run_mtp(
+        self,
+        h_normed: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        rope_tensors: dict,
+        mtp_tokens: list[int],
+        actual_isl: int,
+        *,
+        zero_position_0: bool,
+        seed_token: Optional[int] = None,
+        **fwd_kwargs,
+    ):
+        """Run the K MTP levels off ``h^0``. Returns ``(MTPPredictorOutput, generated_tokens)``.
+
+        Args:
+            h_normed: ``h^0`` -- the trunk output AFTER ``model.norm``.
+            mtp_tokens: this chunk's ``C + K`` extended token stream from
+                ``mtp_extended_stream``. Interior chunks carry the next chunk's first ``K`` ids;
+                the last chunk carries ``K`` generation slots instead, filled level by level from
+                each level's own LM head.
+            actual_isl: this chunk's real-token count -- both the LM-head row and where the last
+                chunk's generation slots start.
+            zero_position_0: True only on the chunk containing absolute position 0.
+            seed_token: ``t_P`` if the caller already has it. Optional; omitting it costs one 32-row
+                LM head call and removes any coupling to the trunk's sampling temperature.
+            fwd_kwargs: passed to every level's block. The KV-cache slot is NOT among them -- the
+                predictor owns ``cache_layer_idx``, writing level ``k`` (0-based) to
+                ``first_cache_slot + k``, so the caller's cache must have ``num_layers + K`` slots
+                per user and every block in the model must have been built with the same
+                ``layer_num``, since the flat slot is ``cache_user_id * layer_num + cache_layer_idx``.
+        """
+        assert self.mtp_predictor is not None, "run_mtp called on a transformer built without an mtp_predictor"
+        source = MTPEmbedSource(
+            mtp_tokens,
+            self.seq_len,
+            self.num_mtp_levels,
+            embed_fn=lambda window: self._mtp_embed_window(window, zero_position_0),
+            next_token_fn=self._mtp_next_token_fn(actual_isl),
+            real_len=actual_isl,
+            seed_token=seed_token,
+        )
+        # Forwarded here rather than by the caller: `actual_isl` is a named parameter of this
+        # method AND something every level's block needs, so a caller that passed both would hit
+        # "got multiple values for argument 'actual_isl'". It cannot already be in fwd_kwargs --
+        # a keyword of that name binds to the parameter above, never to **fwd_kwargs.
+        fwd_kwargs["actual_isl"] = actual_isl
+        out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
+        return out, source.generated_tokens
 
     def _sample(
         self,
