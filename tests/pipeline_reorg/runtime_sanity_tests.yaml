@@ -99,11 +99,24 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# TEMPORARY PROBE — not the intended final form, see PR #54793.
-# The first CI run used one combined --gtest_filter; SingleDmL1Write hard-crashed the process
-# (UnimplementedFunctionality: rv64_custom_0 funct3=2 reg_index=32) so the other 13 never ran.
-# This loop runs each test in its own process so one CI run tells us exactly which of the 14
-# the simulator can execute. It is replaced by a plain filter of the surviving tests.
+# Quasar simulator coverage. The ttsim team already runs this exact list against their
+# Quasar simulator by hand; wiring it here runs it automatically on every sanity run.
+#
+# NOC_API_V2 must be turned off for sim_quasar (workaround from Matt Craighead, ttsim).
+# Quasar kernels compile against noc_nonblocking_api_v2.h by default, which drives the NOC
+# through custom-0 RISC-V instructions (__builtin_riscv_ttrocc_cmdbuf_wr_reg). libttsim_qsr.so
+# does not model all of them, so any NOC-touching kernel aborts the simulator process outright:
+#   ERROR: UnimplementedFunctionality: rv64_custom_0: funct3=2 reg_index=32 cmd_buf=0
+# (reg_index 32 = byte offset 0x100 = CMD_BUF_R_MAX_BYTES_IN_PACKET, which every
+# init_wr/rd/at_cmd_buf() in noc_nonblocking_api_v2.h writes). Deleting the `#define NOC_API_V2`
+# selects noc_nonblocking_api_v1.h instead, whose plain memory-mapped NOC registers the
+# simulator does model. ttsim does exactly this on their own side. Kernels are JIT-compiled at
+# test-run time, so editing the header under TT_METAL_HOME is enough — no tt-metal rebuild.
+#
+# This is a sim_quasar limitation, not a general one, so the edit lives in this entry's cmd and
+# touches no other simulator or hardware leg. Tracking issue #54794 — delete the grep/sed once
+# ttsim models the V2 path. The grep guard makes the workaround fail loudly instead of silently
+# becoming a no-op if that define is ever renamed or moved.
 #
 # sim_quasar resolves to libttsim_qsr.so + quasar_32_arch.yaml (see .github/sku_config.yaml
 # and .github/actions/setup-ttsim/action.yml). That action also exports
@@ -113,27 +126,29 @@
 # The non-Quasar-fixture entries (HostOnlyTest, UnitMeshFixture, RISCVAtomicsFixture) are
 # arch-agnostic and are included deliberately: the ttsim list uses them as a baseline that the
 # simulator can run the ordinary host/L1 paths, not just the Quasar-specific kernels.
+#
+# The filter is accumulated one test per line so each is greppable; folding it into a single
+# --gtest_filter= argument directly would make one ~800-character line.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
-    status=0; for t in
-    HostOnlyTest.Bfp8Conversion
-    UnitMeshFixture.InterleavedL1Buffer
-    UnitMeshFixture.UnalignedReadWriteCore
-    QuasarMeshDeviceSingleCardFixture.DmLoopback
-    QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts
-    QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads
-    QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread
-    QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS
-    QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster
-    QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline
-    QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline
-    QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
-    RISCVAtomicsFixture.TestAtomicAddFetchRISCV
-    RISCVAtomicsFixture.TestAtomicLoadStoreRISCV
-    ; do echo PROBE-START $t;
-    if timeout 100 ./build/test/tt_metal/unit_tests_legacy --gtest_filter=$t; then echo PROBE-RESULT PASS $t;
-    else rc=$?; echo PROBE-RESULT FAIL $t rc=$rc; status=1; fi; done;
-    echo PROBE-DONE status=$status; exit $status
+    hdr=$TT_METAL_HOME/tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h;
+    grep -q 'define NOC_API_V2' $hdr || { echo no NOC_API_V2 define in $hdr - see issue 54794; exit 1; };
+    sed -i -e '/define NOC_API_V2/d' $hdr;
+    f=HostOnlyTest.Bfp8Conversion;
+    f=$f:UnitMeshFixture.InterleavedL1Buffer;
+    f=$f:UnitMeshFixture.UnalignedReadWriteCore;
+    f=$f:QuasarMeshDeviceSingleCardFixture.DmLoopback;
+    f=$f:QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline;
+    f=$f:QuasarMeshDeviceSingleCardFixture.SingleDmL1Write;
+    f=$f:RISCVAtomicsFixture.TestAtomicAddFetchRISCV;
+    f=$f:RISCVAtomicsFixture.TestAtomicLoadStoreRISCV;
+    ./build/test/tt_metal/unit_tests_legacy --gtest_filter=$f
   skus:
     sim_quasar:
       timeout: 30
