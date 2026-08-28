@@ -373,12 +373,14 @@ constexpr static std::uint32_t SPSC_SPAN_RAW_FLAG = 1u;
 // and the frame layout above all already live. Codes MUST match spsc_packet.h's PP_* -- asserted in
 // spsc_marker_decode.hpp, which is the one place that sees both headers.
 // Producer tail-publish batch (kernel_profiler.hpp publish_tail_batched): the published TAIL can lag
-// true ring occupancy by up to this many words between fenced publishes. The drainer's anti-stall
-// pacing valves subtract it, so they fire on the earliest occupancy the lag could be hiding.
-// (16 was measured worth ~1.5 knee points at the ZONE_S knee -- the lag is drainer-invisible occupancy
-// against the producer's 506-word bar -- but rejected: the batch is a global producer-overhead knob,
-// and the drainer's hot-lane revisit recovers the margin without touching producers.)
-static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 64;
+// true ring occupancy by up to this many words between fenced publishes -- drainer-invisible occupancy
+// against the producer's 506-word bar. Must be a power of two. 16, not 64: the interleaved microbench
+// (device reset between runs, 200k zones/RISC) measured 64 at 59.82/60.31 cycles/zone and 16 at
+// 59.34/59.36 -- the "global producer-overhead knob" fear that once kept this at 64 has the sign
+// wrong, and the recovered margin is what the knee needed: with the barrier-hoisted heads, delay 10
+// goes 25-44 stalls to 0/0/0. NOT 8: it buys delay 9 (0-1 stalls) but measures 59.87 cycles/zone --
+// a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
+static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
 
 static constexpr std::uint32_t SPSC_TYPE_ZONE_START = 0;   // legacy pair (workers: stall zone, >3.2s fallback)
 static constexpr std::uint32_t SPSC_TYPE_ZONE_END = 1;     // legacy pair
