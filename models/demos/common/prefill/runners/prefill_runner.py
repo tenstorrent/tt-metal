@@ -364,7 +364,9 @@ def _d2d_recv(inbound, metadata_buf) -> tuple:
     return act, meta, metadata_device
 
 
-def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deallocate: bool = True) -> None:
+def _d2d_send(
+    outbound, activation: ttnn.Tensor, rank: int, meta: dict, send_md: ttnn.Tensor, *, deallocate: bool = True
+) -> None:
     """Push this rank's output hidden state + metadata to the downstream rank's receiver, then free it.
     The model already emits the activation in the sender backing's spec, and outbound_socket_service_sync
     TT_FATALs on any spec mismatch, so no host-side relayout is needed.
@@ -373,23 +375,26 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deall
     sync copies it into the sender backing on the CQ (before the next replay, which reuses the same buffer,
     is enqueued), so it must NOT be freed — the next chunk's replay writes into it in place."""
     t0 = time.perf_counter()
-    backing = outbound.get_backing_tensor()
     import torch
 
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"]]
     # The outbound op ships metadata as a replicated device tensor (3 uint32 words), not a Python list.
-    md_tensor = ttnn.from_torch(
-        torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=backing.device(),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.create_mesh_mapper(
-            backing.device(),
-            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+    # int32 on the wire on purpose: the shutdown sentinel is -1, which must land as 0xFFFFFFFF.
+    #
+    # `send_md` is the caller-owned persistent record buffer; refresh it in place so its address stays
+    # stable across chunks -- that address is what a capture of the send below would bake in. NOTE the
+    # refresh is itself a host->device write, rejected inside a capture window exactly as the previous
+    # from_torch(device=...) was; capturing the send means hoisting this refresh out of the window.
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(
+            torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(send_md.device()),
         ),
+        send_md,
     )
-    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=md_tensor)
+    ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(outbound, activation, metadata=send_md)
     if deallocate:
         ttnn.deallocate(activation)
     logger.info(
@@ -398,7 +403,7 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deall
     )
 
 
-def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
+def _forward_shutdown(d2d_out, rank: int, hidden_size: int, send_md: ttnn.Tensor) -> None:
     """Forward the shutdown sentinel to the downstream rank so it unblocks in its own recv, then release
     the outbound link so the transfer ships (mirroring _compute_and_send's tail). The activation content
     is irrelevant — the downstream discards it once it sees the sentinel — but outbound_socket_service_sync
@@ -420,7 +425,7 @@ def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
         "actual_start": SHUTDOWN_METADATA_WORD,
         "actual_end": SHUTDOWN_METADATA_WORD,
     }
-    _d2d_send(d2d_out, dummy, rank, sentinel)  # ships + frees the dummy
+    _d2d_send(d2d_out, dummy, rank, sentinel, send_md)  # ships + frees the dummy
     d2d_out.release_fabric_links()
     logger.info(f"[pp rank {rank}] forwarded SHUTDOWN sentinel to rank {rank + 1}")
 
@@ -438,7 +443,7 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
 
 
 def _compute_and_send(
-    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
+    runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2d_send_md, d2h_service=None, record_dev=None
 ) -> float:
     """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
@@ -468,7 +473,9 @@ def _compute_and_send(
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
         # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
-        _d2d_send(d2d_out, out, rank, meta, deallocate=not runtime.config.use_trace)  # grant below ships it
+        _d2d_send(
+            d2d_out, out, rank, meta, d2d_send_md, deallocate=not runtime.config.use_trace
+        )  # grant below ships it
     if d2d_out is not None:
         d2d_out.release_fabric_links()
     return t_start
@@ -500,6 +507,7 @@ def run_request_loop(
     d2d_out=None,
     d2h_service=None,
     metadata_buf=None,
+    d2d_send_md=None,
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
@@ -511,6 +519,8 @@ def run_request_loop(
         raise ValueError("request mode requires the H2D service on the first rank for input")
     if metadata_buf is None:
         raise ValueError("request mode requires the persistent metadata record buffer (_make_socket_metadata_buffer)")
+    if d2d_out is not None and d2d_send_md is None:
+        raise ValueError("a D2D sender requires its persistent send-record buffer (_make_socket_metadata_buffer)")
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
@@ -531,10 +541,19 @@ def run_request_loop(
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
             if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
+                _forward_shutdown(d2d_out, rank, hidden_size, d2d_send_md)
             break
         t = _compute_and_send(
-            runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
+            runtime,
+            kv_caches,
+            rank,
+            c,
+            inp,
+            meta,
+            d2d_out,
+            d2d_send_md,
+            d2h_service=d2h_service,
+            record_dev=metadata_device,
         )
         if first is None:
             first = t
@@ -1131,6 +1150,10 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # forward, so its address is baked into the trace; and because a buffer allocated during capture can
     # overlap the captured trace buffers.
     metadata_buf = _make_socket_metadata_buffer(mesh_device)
+    # Same treatment for the outbound D2D push's record, which is rebuilt per chunk today. Identical
+    # spec, so it reuses the same allocator -- but it is a DISTINCT buffer: the receive record and the
+    # send record carry different chunks' metadata and are live at the same time.
+    d2d_send_md = _make_socket_metadata_buffer(mesh_device) if d2d_out is not None else None
 
     # Capture the trace (use_trace) after the D2D endpoints AND the per-layer completion wiring
     # (LayerAck channel / layer-completion sink) are set up, but before the request loop: the capture
@@ -1153,6 +1176,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_out=d2d_out,
             d2h_service=d2h_service,
             metadata_buf=metadata_buf,
+            d2d_send_md=d2d_send_md,
         )
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
