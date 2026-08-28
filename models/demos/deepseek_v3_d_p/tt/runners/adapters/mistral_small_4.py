@@ -34,7 +34,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # softmax -> top-4 -> renormalise. moe_grouped_topk's parse_score_func takes only sigmoid /
     # sqrtsoftplus, so the sigmoid gate applies a wrong affinity silently whatever the grouping.
     default_gate_mode = "GPT_DEVICE"
-    prefill_trace_default = None  # no golden trace recorded yet; pass one via PREFILL_TRACE_DIR
+    # Host-generated torch/HF golden, not a vLLM recording: it localises per layer but is not an
+    # independent reference.
+    prefill_trace_default = "/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Routing
     # consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.
@@ -72,6 +74,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # the fp8 tensors. mistral4_hf_config also fixes the softmax-scale convention (see that module).
     config_builder_overrides_checkpoint = True
     mla_pcc_threshold = 0.995
+    # Raw PCC on this model's late-layer hidden states reads 0.17 at layer_32 where the
+    # normalised score reads 0.936 and the next token still matches the reference exactly.
+    gate_hidden_states_on_npcc = True
     # 0.971 was sized for the sigmoid gate, which measured 0.972458 -- a revert would have passed.
     # The softmax gate measures 0.994563; 0.982 (DeepSeek's value) catches a regression with room.
     moe_pcc_threshold = 0.982
