@@ -1046,6 +1046,34 @@ KNOBS = {
     # adjudication); orig/lift/uni8/unih blaze arms knob-vs-fix
     # byte-identical 8/8.
     "dst-autoincr-load-carrier": "-mtt-tensix-optimize-dst-autoincr-load-carrier",
+    # IH (post-autoincr-window, lane IH 2026-08-28): lane IF's named
+    # successor — POST-AUTOINCR WINDOW RE-FORMATION.
+    # -mtt-tensix-optimize-post-autoincr-window Init(0) DEFERS the
+    # replay window formation past the dst-autoincr fold: the explicit
+    # per-row TTINCRWC separators are window-excluded barrier words, so
+    # a carried row body is word-uniform (capturable) only post-fold,
+    # and a pre-fold formation run also STARVES the fold's windows of
+    # replay-buffer slots (measured on useq: tail-shuffle windows worth
+    # <= 11 delivered words claimed slots [0,14) against a 45-word
+    # carried-body candidate).  Deferral provably loses no opportunity
+    # (the fold only removes barrier words).  Carried payloads carry a
+    # structural launch-arithmetic audit (delivered executions ==
+    # replaced row sites, named refusal) and named refusals for the two
+    # word-inexact sub-mechanisms (isomorphic-run conversion, first-trip
+    # peel).  MEASURED (BH p150, 3 reps cycle-identical, anchors EXACT):
+    # composed with the carrier knob the useq bodies reach the hand
+    # delivery class — ONE hoisted no-exec record + 8 launches/tile,
+    # zero raw sync words, tile words sum 97->51 / max 99->53 — and the
+    # ENVELOPE LAW still holds: sum 1596->1606..1608 (+0.7%), max
+    # 1823->1822 (wash) vs the straight-push carried-walk form; the
+    # hand-exact 1-record/4-launch shape (testing-only
+    # -mtt-tensix-post-autoincr-window-prefer-longest) measures worse
+    # still (sum 1737, max 1850 — it evicts the tail windows from the
+    # 32-slot budget).  Third confirmation of the FI envelope law, now
+    # at the strongest possible captured form; A9/A10 stay lift-booked.
+    # copydest-fresh composition also envelope-refused (8430 -> 8493);
+    # the booked carrier cell is byte- and cycle-exact preserved.
+    "post-autoincr-window": "-mtt-tensix-optimize-post-autoincr-window",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1393,6 +1421,11 @@ KNOB_MODES = {
     # bailed on raw-word recording shadows).  on-plus while a booking
     # knob; promotion requires the ON-delta adjudication ceremony.
     "dst-autoincr-load-carrier": "on-plus",
+    # IH post-autoincr-window: default-off Init(0) booking knob; a
+    # formation-DEFERRAL (the same reviewed machinery runs once,
+    # post-fold).  on-plus while a booking knob; promotion requires the
+    # ON-delta adjudication ceremony.
+    "post-autoincr-window": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
