@@ -29,7 +29,6 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from ttnn.operations.moe_fused_swiglu.moe_fused_swiglu_helpers import weight_memory_configs
 
 
 TILE = 32
@@ -159,19 +158,12 @@ def test_moe_fused_swiglu_is_bit_exact_across_cached_replays(device):
         )
 
     torch.manual_seed(20260821)
-    gate_up_memory_config, down_memory_config = weight_memory_configs(device, EMB, HIDDEN, core_grid=GRID)
     host_weights = (
         torch.randn((EMB, HIDDEN), dtype=torch.bfloat16) * 2.0e-2,
         torch.randn((EMB, HIDDEN), dtype=torch.bfloat16) * 2.0e-2,
         torch.randn((HIDDEN, EMB), dtype=torch.bfloat16) * 2.0e-2,
     )
-    weights = tuple(
-        _to_device(host, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device, memory_config)
-        for host, memory_config in zip(
-            host_weights,
-            (gate_up_memory_config, gate_up_memory_config, down_memory_config),
-        )
-    )
+    weights = tuple(_to_device(host, ttnn.bfloat4_b, ttnn.TILE_LAYOUT, device) for host in host_weights)
     expert_ids = _to_device(
         torch.tensor([GLOBAL_EXPERT_ID], dtype=torch.int32),
         ttnn.uint32,
