@@ -6,13 +6,11 @@
 
 #include <array>
 #include <algorithm>
-#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -23,10 +21,11 @@ namespace fabric_tests {
 
 // Maximum number of fabric connections supported per kernel.
 // This is used to size FabricConnectionArray storage without template proliferation.
-// Read back off the manager instead of restated, so the array and the manager that backs its EDM
-// slots cannot disagree.
-static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS =
-    static_cast<uint8_t>(tt::tt_fabric::RoutingPlaneConnectionManager::MaxConnections);
+#ifdef ARCH_BLACKHOLE
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 5;  // N, S, E, W, Z
+#else
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;  // N, S, E, W
+#endif
 
 struct LocalArgsBuffer {
     uint32_t base_address = 0;
@@ -536,30 +535,11 @@ struct MuxCachedInfo {
     size_t local_mux_status_address = 0;
 };
 
-// Stands in for the connection manager in instantiations that do not use it, so those pay no L1.
-struct NoManagerBacking {};
-
-struct ManagerBacking {
-    tt::tt_fabric::RoutingPlaneConnectionManager manager;
-    // Global connection index -> manager slot. Only the non-mux entries are meaningful, since the
-    // manager is packed while the global index space also counts mux connections.
-    std::array<uint8_t, MAX_NUM_FABRIC_CONNECTIONS> slot_of{};
-};
-
 /* ****************************************************************************
  * FabricConnectionArray: Unified connection management for kernel
  *
  * Provides type-erased storage for both WorkerToFabricEdmSender and
  * WorkerToFabricMuxSender connections with runtime dispatch.
- *
- * VC0 EDM connections are held in a RoutingPlaneConnectionManager so the kernel
- * exercises the same object production callers use; mux connections stay in the
- * local storage below. VC2 keeps the storage path too: the manager parses via
- * the Tensix L1 connection table, which VC2 senders are not in.
- *
- * The manager path expects a per-connection eth_chan_directions tag ahead of
- * each sender block, which the host emits for exactly the same set of
- * connections (see generate_connection_args_for_core).
  * *****************************************************************************/
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct FabricConnectionArray {
@@ -569,10 +549,7 @@ struct FabricConnectionArray {
     using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
     static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(EdmSenderT), sizeof(MuxConnectionType));
 
-    static constexpr bool kUseManager = std::is_same_v<EdmSenderT, tt::tt_fabric::WorkerToFabricEdmSender>;
-
-    // Type-erased storage for connections (sized for maximum). Stays full width even when the
-    // manager backs the EDM slots, because a mux connection can land on any global index.
+    // Type-erased storage for connections (sized for maximum).
     alignas(std::max(alignof(EdmSenderT), alignof(MuxConnectionType)))
         std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
     std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
@@ -580,18 +557,12 @@ struct FabricConnectionArray {
     // Cached mux info for wait_for_fabric_endpoint_ready
     std::array<MuxCachedInfo, MAX_NUM_FABRIC_CONNECTIONS> mux_cached_info;
 
-    std::conditional_t<kUseManager, ManagerBacking, NoManagerBacking> edm_connections;
-
     // Actual number of connections in use (set at initialization, bounds-checked in kernel)
     uint8_t num_connections = 0;
 
     // Accessors with proper type casting
     FORCE_INLINE EdmSenderT& get_fabric_connection(uint8_t idx) {
-        if constexpr (kUseManager) {
-            return edm_connections.manager.get(edm_connections.slot_of[idx]).sender;
-        } else {
-            return *reinterpret_cast<EdmSenderT*>(storage.data() + idx * MAX_CONNECTION_SIZE);
-        }
+        return *reinterpret_cast<EdmSenderT*>(storage.data() + idx * MAX_CONNECTION_SIZE);
     }
 
     FORCE_INLINE MuxConnectionType& get_mux_connection(uint8_t idx) {
@@ -639,11 +610,6 @@ struct FabricConnectionArray {
                     mux_local_addrs.teardown_address,
                     mux_local_addrs.buffer_index_address);
                 new (&get_mux_connection(i)) MuxConnectionType(conn);
-            } else if constexpr (kUseManager) {
-                // Host emits the eth_chan_directions tag ahead of the sender block for VC0 only.
-                const uint8_t tag = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_args_idx++));
-                edm_connections.slot_of[i] =
-                    static_cast<uint8_t>(edm_connections.manager.append_from_args(rt_args_idx, tag));
             } else {
                 // Initialize fabric connection using placement new
                 auto conn = EdmSenderT::template build_from_args<core_type>(rt_args_idx);
