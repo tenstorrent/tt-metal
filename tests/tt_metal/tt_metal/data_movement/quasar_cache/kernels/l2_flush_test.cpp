@@ -6,7 +6,7 @@
 // Writes values to cacheable memory and flushes/invalidates using various L2 functions.
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
 #include "risc_common.h"
