@@ -724,7 +724,7 @@
 - name: "Mistral-Small-4-119B MLA accuracy 5k, 25k"
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-    export MISTRAL4_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache
+    export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -746,7 +746,7 @@
   fabric_profile: torus_xy
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
-    export MISTRAL4_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_119b_mla_ref_cache
+    export MISTRAL4_MLA_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/mla_ref
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -827,7 +827,7 @@
   cmd: |
     export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
     export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
-    export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/mistral_small_4_host_ref_cache
+    export TT_MISTRAL4_PREFILL_HOST_REF_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/host_ref
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
