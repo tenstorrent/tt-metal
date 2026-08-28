@@ -6,6 +6,10 @@
 runtime
 *.log
 *.csv
+# ...except the unified kernels' perf baseline, which is checked-in DATA rather than benchmark
+# output: unified_perf.py compares against it to catch regressions, so it has to travel with
+# the code it describes.
+!unified_perf_baseline.csv
 *.xlsx
 *.code-workspace
 /tt-perf*
