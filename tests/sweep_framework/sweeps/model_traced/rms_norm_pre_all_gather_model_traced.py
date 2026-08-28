@@ -45,29 +45,43 @@ if model_traced_params:
 
 
 def invalidate_vector(test_vector) -> tuple:
-    """Reject traced configs this framework cannot run as recorded.
+    """Reject traced configs whose recorded arguments cannot be what the model ran.
 
-    fp32 dest accumulation doubles this op's static dataflow buffers, and with no traced
-    program_config the default path keeps a whole row of the input on ONE core. Measured on
-    blackhole, width 4096 asks for 1690624 B against a 1572864 B L1 budget and throws before the op
-    runs:
+    Nine traced configs (every width-4096 one, from Llama-3.3-70B on P300) record the
+    combination INTERLEAVED input + no program_config + fp32_dest_acc_en=True. That
+    combination cannot be allocated on ANY current arch:
 
-        dataflow_buffer.cpp: statically allocated dataflow buffers on core range [0-0 - 0-0]
-        grow to 1690624 B which is beyond max L1 size of 1572864 B
+        default grid:  1684672 B on one core   (wormhole L1 1499136 B, blackhole 1572864 B)
+        use_2d_core_grid=True: 1725632 B       -- worse, not a workaround
 
-    The models this was traced from reach this op with the input already width-sharded across a core
-    grid plus a matching LayerNormShardedMultiCoreProgramConfig (see tt_transformers/tt/ccl.py:440-443),
-    which is what makes fp32 accumulation affordable. That sharding and program_config are absent from
-    the trace, so the vector as recorded is not the computation the model performed, and it cannot be
-    made to run faithfully: dropping fp32_dest_acc_en does fit L1 but accumulates 4096 squares in
-    bfloat16 and lands at PCC ~0.72, i.e. it would trade an exception for a wrong answer.
+    Measured directly, not inferred. Since traces are only kept from tests that PASSED,
+    the model cannot have executed this combination, so some recorded field does not
+    correspond to the call that actually ran:
 
-    Reported as invalid rather than failed. In CI this was 9 vectors -- every width-4096 config -- in
-    every scheduled model-traced run.
+      - ttnn.rms_norm_pre_all_gather passes a supplied compute_kernel_config through
+        unchanged (init_device_compute_kernel_config returns it as-is), and its own
+        default is fp32_dest_acc_en=False -- so the recorded True came from a real
+        config object, not from op defaults.
+      - The model's own norm path sets fp32_dest_acc_en=False (distributed_norm.py
+        ln_cfg), and for a width-sharded input it passes a LayerNormShardedMultiCore
+        program_config (ccl.py:443). A sharded input WITHOUT a program_config does not
+        even reach the allocation check ("std::get: wrong index for variant").
+      - The recorded width is per-chip and is faithful (8192 hidden / 2 devices = 4096),
+        so this is not a mesh or placement artifact.
 
-    The 1690624 B measurement gives ~413 B of buffer per element of width, so the budget runs out
-    just under width 3810; the bound below is expressed from that rather than hardcoding 4096, and it
-    leaves the traced width-1024 and width-640 configs (31 vectors, all passing) untouched.
+    Which field is wrong cannot be determined from the trace alone, and the sweep cannot
+    reconstruct what was never recorded, so these are reported invalid rather than failed.
+    This needs a tracer-fidelity fix, not a sweep fix.
+
+    Note the config is not merely unrunnable as recorded: run with the model's real
+    fp32_dest_acc_en=False it executes, but the device accumulates sum(x^2) in bfloat16
+    while this module's golden accumulates in fp32, giving PCC 0.87 directly (0.72 through
+    the golden reconciliation) against thresholds of 0.95/0.80. So making these vectors
+    pass would need the golden to model bfloat16 accumulation as well.
+
+    The bound below is expressed from the measured 1690624 B at width 4096 (~413 B per
+    element of width) rather than hardcoding 4096, and leaves the traced width-1024 and
+    width-640 configs (31 vectors, all passing) untouched.
     """
     ckc = test_vector.get("compute_kernel_config")
     if not isinstance(ckc, dict) or not ckc.get("fp32_dest_acc_en"):
