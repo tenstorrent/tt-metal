@@ -14,6 +14,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
+    estimate_for_tensors,
+    qkv_causal_conv1d_silu_work,
+    utilization,
+)
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -357,9 +362,27 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
     outputs, perf_record = profile_realtime_program(device, run)
     duration_ns = perf_record["duration_ns"]
     assert tuple(tuple(output.shape) for output in outputs) == tuple((1, _SEQUENCE, width) for width in case.widths)
+    work = qkv_causal_conv1d_silu_work(1, _SEQUENCE, *case.widths)
+    assert work is not None
+    estimate = estimate_for_tensors(
+        work,
+        (input_tt, history_tt, *taps_tt),
+        outputs,
+        device=device,
+        frequency_ghz=perf_record["frequency_ghz"],
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+    )
+    assert estimate.valid
+    percentages = utilization(estimate, duration_ns)
     logger.info(
-        f"QKV causal Conv1D plus SiLU {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"QKV causal Conv1D plus SiLU {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, ideal_fpu_cycles={estimate.ideal_fpu_cycles}, "
+        f"ideal_fpu_ns={estimate.ideal_fpu_ns}, mandatory_dram_bytes={estimate.mandatory_dram_bytes}, "
+        f"ideal_dram_ns={estimate.ideal_dram_ns}, ideal_ns={estimate.ideal_ns}, "
+        f"omitted_sfpu_results={estimate.omitted_sfpu_results}, "
+        f"fpu_utilization_pct={percentages.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={percentages.dram_utilization_pct:.2f}, "
+        f"roofline_utilization_pct={percentages.roofline_utilization_pct:.2f}"
     )
     lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
     upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
