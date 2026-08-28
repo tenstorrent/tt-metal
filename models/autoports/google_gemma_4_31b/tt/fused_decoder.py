@@ -29,6 +29,10 @@ from models.demos.gemma4.tt.attention.operations import (
 # ``nlp_concat_heads`` uses one core. These chunks keep its input at or below
 # 1 MiB on P150: 32 heads * chunk * head_dim * sizeof(bf16).
 SLIDING_HEAD_CONCAT_CHUNK = 64
+# Fixed row window and minimum pad bucket for the head-concat rewrite; see
+# _concatenate_heads for why these must not vary with prompt length.
+HEAD_CONCAT_ROW_CHUNK = 4096
+HEAD_CONCAT_MIN_BUCKET = 256
 
 # Worker grid the tuned gate-projection program config below is built for. Its
 # block dimensions are coupled to this core count, so a part whose grid is
@@ -121,8 +125,46 @@ class FusedDecoder(FunctionalDecoder):
         # single-core CB storage on P150 (limit 1,572,864 B). Keep the proven
         # multi-core structural rewrite for head_dim=512.
         if head_dim >= 512 or seq_len > 128:
-            transposed = ttnn.permute(sdpa, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            return ttnn.reshape(transposed, [1, 1, seq_len, num_heads * head_dim])
+            # Run the rewrite in fixed-size row windows, padding each partial
+            # window up to a power-of-two bucket. The padded-tile reshape
+            # parks a per-shape page-mapping tensor in DRAM for the lifetime
+            # of the program cache; with the sequence length in its shape,
+            # every distinct prompt length pins new DRAM (about 0.5 KB per
+            # token per unique length) and agentic serving OOMs after a few
+            # hours. Bucketing keeps the reshape shape set bounded.
+            width = num_heads * head_dim
+            output = ttnn.allocate_tensor_on_device(
+                shape=(1, 1, seq_len, width),
+                dtype=sdpa.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_device=sdpa.device(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for start in range(0, seq_len, HEAD_CONCAT_ROW_CHUNK):
+                end = min(start + HEAD_CONCAT_ROW_CHUNK, seq_len)
+                rows = end - start
+                bucket = HEAD_CONCAT_MIN_BUCKET
+                while bucket < rows:
+                    bucket *= 2
+                whole = start == 0 and end == seq_len
+                piece = sdpa if whole else ttnn.slice(sdpa, [0, 0, start, 0], [1, num_heads, end, head_dim])
+                if rows < bucket:
+                    padded = ttnn.pad(piece, [(0, 0), (0, 0), (0, bucket - rows), (0, 0)], value=0.0)
+                    if piece is not sdpa:
+                        piece.deallocate(True)
+                    piece = padded
+                transposed = ttnn.permute(piece, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                if piece is not sdpa:
+                    piece.deallocate(True)
+                flat = ttnn.reshape(transposed, [1, 1, bucket, width])
+                write_chunk = flat if rows == bucket else ttnn.slice(flat, [0, 0, 0, 0], [1, 1, rows, width])
+                ttnn.experimental.slice_write(write_chunk, output, [0, 0, start, 0], [1, 1, end, width], [1, 1, 1, 1])
+                if write_chunk is not flat:
+                    write_chunk.deallocate(True)
+                flat.deallocate(True)
+                if transposed.is_allocated():
+                    transposed.deallocate(True)
+            return output
 
         chunk_size = SLIDING_HEAD_CONCAT_CHUNK
         chunks = []
