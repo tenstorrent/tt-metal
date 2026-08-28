@@ -114,7 +114,7 @@ inline std::uint8_t fabric_set_2d_mcast_route(
 //
 // This API sends through one caller-chosen connection, so the root action must have at most one eth
 // output -- the per-direction client contract (one operation per outgoing direction). A caller wanting
-// the whole rectangle in one operation uses fabric_multicast_source_inject_*.
+// the whole rectangle in one operation uses a fabric_multicast_source_inject_* API.
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
