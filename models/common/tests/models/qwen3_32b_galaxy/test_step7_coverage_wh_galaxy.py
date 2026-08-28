@@ -155,25 +155,46 @@ _PARAMS = pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indir
 @_PARAMS
 @_GALAXY
 @torch.no_grad()
-def test_qwen_paged_and_contiguous_caches_agree(mesh_device: ttnn.MeshDevice):
-    prompt = _prompt(128)
+def test_qwen_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable(mesh_device: ttnn.MeshDevice):
+    """The Llama twin carries the reasoning; see finding D-C4.
+
+    ``from_pretrained(paged_attention_config=None)`` substitutes
+    ``default_paged_attention_config``, so "paged versus contiguous" is not
+    expressible through the adaptor and the case as written compared a pool
+    against itself. This compares the default 2048-block pool against an
+    explicit 4096-block one, which changes every slot's run of block ids.
+    """
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    pools = {
+        "default-2048": None,
+        "explicit-4096": _paged_config(context=4096, active_slots=GALAXY_PHYSICAL_BATCH),
+    }
     outputs = {}
-    for name, paged in (("contiguous", None), ("paged", _paged_config(context=2048, active_slots=32))):
-        handle = _load(mesh_device, paged_attention_config=paged)
+    for name, paged in pools.items():
+        handle = _load(mesh_device, max_seq_len=4096 if paged else 2048, paged_attention_config=paged)
         try:
+            configs = {spec.paged_attention_config for spec in handle.model.kv_specs}
+            assert len(configs) == 1
+            resolved = next(iter(configs))
+            assert resolved is not None, (
+                "D-C4 has been fixed: from_pretrained now builds a contiguous cache. "
+                "Restore the paged-versus-contiguous comparison this case was written for."
+            )
+            print(f"[pool] {name}: block_size={resolved.block_size} max_num_blocks={resolved.max_num_blocks}")
             with GalaxyDirectRunner(handle.model) as runner:
-                prefill = runner.prefill_row(prompt, slot=0)
-                tokens = [0] * GALAXY_PHYSICAL_BATCH
-                positions = [0] * GALAXY_PHYSICAL_BATCH
-                tokens[0] = int(torch.argmax(prefill[0]))
-                positions[0] = len(prompt)
-                outputs[name] = (prefill[0].clone(), runner.decode_logits(tokens, positions)[0].clone())
+                prefill = torch.cat([runner.prefill_row(row, slot=slot) for slot, row in enumerate(rows)], dim=0)
+                tokens = [1] * GALAXY_PHYSICAL_BATCH
+                positions = [128] * GALAXY_PHYSICAL_BATCH
+                outputs[name] = (prefill.clone(), runner.decode_logits(tokens, positions).clone())
         finally:
             _close(handle)
 
+    first, second = outputs["default-2048"], outputs["explicit-4096"]
     for index, stage in enumerate(("prefill", "decode")):
-        passed, message = _pcc(outputs["contiguous"][index], outputs["paged"][index], _PAGED_VS_CONTIGUOUS_PCC)
-        assert passed, f"{stage} paged vs contiguous: {message}"
+        for slot in range(GALAXY_PHYSICAL_BATCH):
+            passed, message = _pcc(first[index][slot], second[index][slot], _PAGED_VS_CONTIGUOUS_PCC)
+            assert passed, f"{stage} slot {slot}, 2048-block pool vs 4096-block pool: {message}"
 
 
 @_PARAMS
@@ -184,8 +205,17 @@ def test_qwen_paged_capacity_resolved_after_construction_serves_a_request(mesh_d
     handle = _load(mesh_device, paged_attention_config=None)
     try:
         model = handle.model
-        assert all(spec.paged_attention_config is None for spec in model.kv_specs)
-        pool = _paged_config(context=2048, active_slots=32)
+        # D-C4: `paged_attention_config=None` does not mean "contiguous"; the
+        # adaptor substitutes `default_paged_attention_config`. The reachable
+        # claim is that the geometry can still be replaced before anything is
+        # bound. Corrected by `mb-coverage` attempt 2.
+        installed = {spec.paged_attention_config for spec in model.kv_specs}
+        assert len(installed) == 1 and next(iter(installed)) is not None
+        default_pool = next(iter(installed))
+        print(f"[pool] as constructed: {default_pool}")
+
+        pool = _paged_config(context=4096, active_slots=32)
+        assert pool != default_pool, "the replacement pool must differ from the default to prove anything"
         model.configure_paged_attention(block_size=pool.block_size, max_num_blocks=pool.max_num_blocks)
 
         with GalaxyDirectRunner(model) as runner:
