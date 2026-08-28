@@ -18,6 +18,16 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
+// The worker rectangle this op always runs on, independent of the device grid. Fixed rather than
+// derived: the K-axis split, the activated L1 multicast pattern and the padded per_core_N all
+// assume it, and the program factory asserts the device is at least this large.
+//
+// Exported because a hybrid routed-expert forward has to hand moe_fused_swiglu the SAME grid --
+// that op defaults to the full device grid instead -- or the two halves block differently and the
+// measured token-count crossover between them stops applying. Read it, do not restate it.
+inline constexpr uint32_t kCoreGridX = 11;
+inline constexpr uint32_t kCoreGridY = 8;
+
 // Maximum number of global experts the op supports.
 //
 // The reader fetches the per-global-expert `counts` vector (and the
