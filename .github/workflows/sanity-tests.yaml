@@ -538,6 +538,8 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      ref: ${{ inputs.ref || github.sha }}
+      summary-scope: ${{ inputs.platform }}
 
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
@@ -564,6 +566,7 @@ jobs:
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
+      - models-sanity-tests
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
