@@ -34,7 +34,7 @@ from ...layers.na3d import (
 )
 from ...layers.normalization import RMSNorm
 from ...utils import decode_tree
-from .diffvae_ltx_stage5 import TILE, block_prof, deep_prof, log_dram, stage_time_end, stage_time_start, stage_timer
+from .diffvae_ltx_stage5 import TILE, block_prof, deep_prof, log_dram, stage_timer
 
 ROPE_BASE = 10000.0
 
@@ -972,63 +972,59 @@ class DeterministicStages(Module):
         the band directly (same ``sp_axis``, same W order) rather than re-sharding a replicated context.
         ``dims`` is still the FULL ``(T, H, W)``; the caller derives ``W/sp`` from ``self.sp``.
         """
-        _t0 = stage_time_start(self.mesh_device, "conv_in (denorm folded)", category=decode_tree.MLP)
-        x = self.conv_in(x)
-        stage_time_end(self.mesh_device, _t0)
+        with stage_timer(self.mesh_device, "conv_in (denorm folded)", category=decode_tree.MLP):
+            x = self.conv_in(x)
         count = len(self.upsamples) if stages is None else stages
         sharded = False
         for stage in range(count):
             # Labelled with the dims going IN: the out-dims do not exist until the upsample below
             # runs, and a span names itself at open so a leaked one is still identifiable.
-            _stage_t0 = stage_time_start(self.mesh_device, f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})")
-            t, h, w = dims
-            stage_sharded = self._w_sharded and stage > 0
-            if stage_sharded:
-                assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
-                if not sharded:
-                    _t0 = stage_time_start(
-                        self.mesh_device, "reshard: replicated -> W-sharded", category=decode_tree.RESHAPE
-                    )
-                    x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
-                    stage_time_end(self.mesh_device, _t0)
-                    sharded = True
-            local_dims = (t, h, w // self.sp) if stage_sharded else dims
+            with stage_timer(self.mesh_device, f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"):
+                t, h, w = dims
+                stage_sharded = self._w_sharded and stage > 0
+                if stage_sharded:
+                    assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
+                    if not sharded:
+                        with stage_timer(
+                            self.mesh_device, "reshard: replicated -> W-sharded", category=decode_tree.RESHAPE
+                        ):
+                            x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
+                        sharded = True
+                local_dims = (t, h, w // self.sp) if stage_sharded else dims
 
-            # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is
-            # its blocks rather than its blocks plus whatever it had to build first.
-            _t0 = stage_time_start(
-                self.mesh_device, f"stage {stage + 1} setup: rope tables + plan", category=decode_tree.SETUP
-            )
-            cos, sin = self._rope(dims)
-            if stage_sharded:
-                cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
-                sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
-            plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
-            stage_time_end(self.mesh_device, _t0)
+                # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is
+                # its blocks rather than its blocks plus whatever it had to build first.
+                with stage_timer(
+                    self.mesh_device, f"stage {stage + 1} setup: rope tables + plan", category=decode_tree.SETUP
+                ):
+                    cos, sin = self._rope(dims)
+                    if stage_sharded:
+                        cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
+                        sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
+                    plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
 
-            # dim read here rather than after the loop: NABlock is residual, so its channel count
-            # is unchanged by the blocks.
-            _t0 = stage_time_start(
-                self.mesh_device, f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}"
-            )
-            for index, block in enumerate(self.det_stages[stage]):
-                x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
-                log_dram(self.mesh_device, f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}")
-            stage_time_end(self.mesh_device, _t0)
+                # dim read here rather than after the loop: NABlock is residual, so its channel count
+                # is unchanged by the blocks.
+                with stage_timer(
+                    self.mesh_device, f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}"
+                ):
+                    for index, block in enumerate(self.det_stages[stage]):
+                        x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
+                        log_dram(
+                            self.mesh_device,
+                            f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}",
+                        )
 
-            _t0 = stage_time_start(self.mesh_device, f"upsample {stage + 1}", category=decode_tree.UPSAMPLE)
-            x, out_dims = self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
-            stage_time_end(self.mesh_device, _t0)
-            if stage_sharded:
-                out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
-            dims = out_dims
-            log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
-            stage_time_end(self.mesh_device, _stage_t0)
+                with stage_timer(self.mesh_device, f"upsample {stage + 1}", category=decode_tree.UPSAMPLE):
+                    x, out_dims = self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
+                if stage_sharded:
+                    out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
+                dims = out_dims
+                log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
 
         if sharded and gather_output:
-            _t0 = stage_time_start(self.mesh_device, "det -> replicated context gather", category=decode_tree.ALLGATHER)
-            x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "det -> replicated context gather", category=decode_tree.ALLGATHER):
+                x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
 
@@ -1197,58 +1193,53 @@ class DiffVAEDecoder(Module):
             # Upload the latent as-is and do the ghost pad and channels-last flatten on device, so the
             # only host step left before the pipeline is the transfer itself. The pad replicates the
             # last frame, which is a slice plus a concat on the T axis.
-            _t0 = stage_time_start(self.mesh_device, "host->mesh: upload latent (raw)", category=decode_tree.HOST_XFER)
-            raw = latent_tt
-            if raw is None:
-                raw = ttnn.from_torch(
-                    latent.reshape(1, channels, t, h * w).contiguous(),
-                    device=self.mesh_device,
-                    dtype=self.dtype,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "host->mesh: upload latent (raw)", category=decode_tree.HOST_XFER):
+                raw = latent_tt
+                if raw is None:
+                    raw = ttnn.from_torch(
+                        latent.reshape(1, channels, t, h * w).contiguous(),
+                        device=self.mesh_device,
+                        dtype=self.dtype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
 
-            _t0 = stage_time_start(self.mesh_device, "device: ghost pad + flatten", category=decode_tree.RESHAPE)
-            last = ttnn.slice(raw, [0, 0, t - 1, 0], [1, channels, t, h * w])
-            parts = [raw] + [last] * ghost
-            padded_tt = ttnn.concat(parts, dim=2)
-            if latent_tt is None:
-                ttnn.deallocate(raw)
-            ttnn.deallocate(last)
-            moved = ttnn.permute(padded_tt, (0, 2, 3, 1))  # (1, T+ghost, H*W, C)
-            ttnn.deallocate(padded_tt)
-            x = ttnn.to_layout(ttnn.reshape(moved, ((t + ghost) * h * w, channels)), ttnn.TILE_LAYOUT)
-            ttnn.deallocate(moved)
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "device: ghost pad + flatten", category=decode_tree.RESHAPE):
+                last = ttnn.slice(raw, [0, 0, t - 1, 0], [1, channels, t, h * w])
+                parts = [raw] + [last] * ghost
+                padded_tt = ttnn.concat(parts, dim=2)
+                if latent_tt is None:
+                    ttnn.deallocate(raw)
+                ttnn.deallocate(last)
+                moved = ttnn.permute(padded_tt, (0, 2, 3, 1))  # (1, T+ghost, H*W, C)
+                ttnn.deallocate(padded_tt)
+                x = ttnn.to_layout(ttnn.reshape(moved, ((t + ghost) * h * w, channels)), ttnn.TILE_LAYOUT)
+                ttnn.deallocate(moved)
         else:
-            _t0 = stage_time_start(
-                self.mesh_device, "host: ghost pad + permute/flatten", category=decode_tree.HOST_COMPUTE
-            )
-            padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, ghost, -1, -1)], dim=2)
-            tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
-            stage_time_end(self.mesh_device, _t0)
-            _t0 = stage_time_start(self.mesh_device, "host->mesh: upload TILE", category=decode_tree.HOST_XFER)
-            x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "host: ghost pad + permute/flatten", category=decode_tree.HOST_COMPUTE):
+                padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, ghost, -1, -1)], dim=2)
+                tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
+            with stage_timer(self.mesh_device, "host->mesh: upload TILE", category=decode_tree.HOST_XFER):
+                x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
 
         x, dims = self.stages(x, dims=(t + ghost, h, w), gather_output=gather_output)
         sharded_out = self.stages._w_sharded and not gather_output
         w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]  # local W columns per chip
         keep = self.context_frames(t)
-        _t0 = stage_time_start(self.mesh_device, "ghost crop on T", category=decode_tree.RESHAPE)
-        if keep < dims[0]:
-            channels_out = self.config["stage_channels"][-1]
-            # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
-            # 2.7 GB against 31.8 GB of DRAM, so they are freed as they die rather than at GC. The
-            # crop is on T (frame axis), which the W-shard leaves untouched -- just use w_eff columns.
-            frames = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * w_eff, channels_out))
-            ttnn.deallocate(x)
-            cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * w_eff, channels_out])
-            ttnn.deallocate(frames)
-            x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * w_eff, channels_out)), ttnn.TILE_LAYOUT)
-            ttnn.deallocate(cropped)
-            dims = (keep, dims[1], dims[2])
-        stage_time_end(self.mesh_device, _t0)
+        with stage_timer(self.mesh_device, "ghost crop on T", category=decode_tree.RESHAPE):
+            if keep < dims[0]:
+                channels_out = self.config["stage_channels"][-1]
+                # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
+                # 2.7 GB against 31.8 GB of DRAM, so they are freed as they die rather than at GC. The
+                # crop is on T (frame axis), which the W-shard leaves untouched -- just use w_eff columns.
+                frames = ttnn.reshape(
+                    ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * w_eff, channels_out)
+                )
+                ttnn.deallocate(x)
+                cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * w_eff, channels_out])
+                ttnn.deallocate(frames)
+                x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * w_eff, channels_out)), ttnn.TILE_LAYOUT)
+                ttnn.deallocate(cropped)
+                dims = (keep, dims[1], dims[2])
         return x, dims
 
     def decode(
@@ -1275,31 +1266,30 @@ class DiffVAEDecoder(Module):
         # The whole decode under one node: the tree hangs off this, and its total is an honesty
         # check against the caller's own wall-clock measurement of the same call.
         with stage_timer(self.mesh_device, "decode TOTAL", root=True):
-            _ctx_t0 = stage_time_start(self.mesh_device, "det stages TOTAL (forward_context)")
-            context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
-            stage_time_end(self.mesh_device, _ctx_t0)
+            with stage_timer(self.mesh_device, "det stages TOTAL (forward_context)"):
+                context, dims = self.forward_context(
+                    latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt
+                )
             grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
             channels_out = self.config["stage_channels"][-1]
             # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
             # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
-            _t0 = stage_time_start(self.mesh_device, "context reshape for stage 5", category=decode_tree.RESHAPE)
-            if self._wsharded_handoff:
-                w_local = grid.w // self.stages.sp
-                context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
-            else:
-                context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "context reshape for stage 5", category=decode_tree.RESHAPE):
+                if self._wsharded_handoff:
+                    w_local = grid.w // self.stages.sp
+                    context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
+                else:
+                    context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
 
             # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device in the patchified
             # layout. Host generation is proportional to the OUTPUT volume, not the latent -- 908M floats at
             # 1080p 6s -- and a caller supplying its own noise pays neither path.
             if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
                 shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
-                _t0 = stage_time_start(
+                with stage_timer(
                     self.mesh_device, f"host: noise randn {tuple(shape)}", category=decode_tree.HOST_COMPUTE
-                )
-                noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
-                stage_time_end(self.mesh_device, _t0)
+                ):
+                    noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
 
             # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0]. Uploaded
             # once and kept: a constant on the per-decode path is still a host-to-device write, which a
@@ -1309,18 +1299,17 @@ class DiffVAEDecoder(Module):
                     torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
                 )
             timestep = self._timestep
-            _t0 = stage_time_start(self.mesh_device, "stage5 TOTAL (forward)")
-            pixels = self.stage5.forward(
-                context,
-                noise,
-                timestep,
-                grid,
-                context_sharded=self._wsharded_handoff,
-                seed=seed,
-                device_out=device_out,
-                output_type=output_type,
-            )
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "stage5 TOTAL (forward)"):
+                pixels = self.stage5.forward(
+                    context,
+                    noise,
+                    timestep,
+                    grid,
+                    context_sharded=self._wsharded_handoff,
+                    seed=seed,
+                    device_out=device_out,
+                    output_type=output_type,
+                )
             return pixels
 
     def forward(

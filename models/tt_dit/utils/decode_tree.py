@@ -3,8 +3,8 @@
 
 """Call-stack-shaped ledger for DiffVAE decode timings.
 
-The timing helpers (``stage_timer``, ``stage_time_start``/``end``, ``block_prof``,
-``na3d._sp_w_prof``) are already nested the way a reader wants them: a stage contains its blocks, a
+The timing helpers (``stage_timer``, ``block_prof``, ``na3d._sp_w_prof``) are already nested the way
+a reader wants them: a stage contains its blocks, a
 block contains its attention, an attention contains its collectives. Each one just threw its
 measurement into a flat sink -- a log line or a module-global dict -- and forgot the stack it was on.
 This module is that stack, and the tree falls out of it.

@@ -38,21 +38,13 @@ from ...utils import decode_tree
 _STAGE_TIMING = decode_tree.ENABLED
 
 
-class _Handle(NamedTuple):
-    """What stage_time_start hands to stage_time_end: the clock, the tree node, and the label.
-
-    The label is set at START and rides along to the end, so a span that never closes can still
-    name itself in the tree -- anonymous orphans are useless exactly when a leak needs finding.
-    """
-
-    t0: float
-    span: object
-    label: str
-
-
 @contextlib.contextmanager
 def stage_timer(mesh_device, label: str, *, category: str | None = None, root: bool = False):
-    """Sync the mesh and time a decode stage (or its host-side tail). Inert unless DIFFVAE_STAGE_TIMING."""
+    """Sync the mesh and time a decode stage (or its host-side tail). Inert unless DIFFVAE_STAGE_TIMING.
+
+    The label is taken at open rather than on the way out because a tree node names itself from
+    birth: a span that never closes is then still identifiable, which is when the name matters most.
+    """
     if not _STAGE_TIMING:
         yield
         return
@@ -69,27 +61,6 @@ def stage_timer(mesh_device, label: str, *, category: str | None = None, root: b
     ttnn.synchronize_device(mesh_device)
     ms = (time.perf_counter() - t0) * 1000
     decode_tree.close_span(span, ms)
-
-
-def stage_time_start(mesh_device, label: str, *, category: str | None = None):
-    """Paired form of stage_timer for loop bodies that can't be wrapped. Returns a handle (or None).
-
-    The label is required here rather than at the end because a tree node names itself from birth:
-    a span that never closes is then still identifiable, which is when the name matters most.
-    """
-    if not _STAGE_TIMING:
-        return None
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    return _Handle(t0, decode_tree.open_span(label.strip(), category=category), label)
-
-
-def stage_time_end(mesh_device, handle):
-    if handle is None:
-        return
-    ttnn.synchronize_device(mesh_device)
-    ms = (time.perf_counter() - handle.t0) * 1000
-    decode_tree.close_span(handle.span, ms)
 
 
 def deep_prof(mesh_device, key: str, *, category: str | None = None):
@@ -1690,21 +1661,19 @@ class DiffVAEStage5(Module):
         block writes the context half, so nothing depends on them being adjacent.
         """
         cfg = self.config
-        _t0 = stage_time_start(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=decode_tree.SETUP)
-        scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
-        modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
-        tables = self.rope_tables(grid)
-        band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
-        stage_time_end(self.mesh_device, _t0)
+        with stage_timer(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=decode_tree.SETUP):
+            scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
+            modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
+            tables = self.rope_tables(grid)
+            band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
         from ...layers.na3d import SP_W_PROF
 
         _BLOCK_PROF.clear()
         SP_W_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
-            _bt0 = stage_time_start(self.mesh_device, f"  stage5 block {index}")
-            x = block(x, context, modulation, grid, bands, band_tables, brick=brick)
-            stage_time_end(self.mesh_device, _bt0)
+            with stage_timer(self.mesh_device, f"  stage5 block {index}"):
+                x = block(x, context, modulation, grid, bands, band_tables, brick=brick)
             log_dram(self.mesh_device, f"stage5 block {index}")
         # The tail runs per band too: its output is a quarter the width of the volume it comes
         # from, so joining after the projection rather than before is the cheap order.
@@ -1769,31 +1738,28 @@ class DiffVAEStage5(Module):
         """
         cfg = self.config
         bands = self.bands(grid)
-        _t0 = stage_time_start(self.mesh_device, "stage5: context reshard", category=decode_tree.RESHAPE)
-        if self._w_sharded and not context_sharded:
-            context = self._wshard_context(context, grid)
-        elif self._w_sharded:
-            context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)  # already this chip's band; just ensure TILE
-        stage_time_end(self.mesh_device, _t0)
+        with stage_timer(self.mesh_device, "stage5: context reshard", category=decode_tree.RESHAPE):
+            if self._w_sharded and not context_sharded:
+                context = self._wshard_context(context, grid)
+            elif self._w_sharded:
+                context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)  # already this chip's band; just ensure TILE
 
         # Evaluated apart from the block timer: as an argument it was host patchify and a noise
         # upload being charged to the diffusion blocks.
         # Which of the two this is, is known before the clock starts, so the span can name itself at
         # open rather than picking a label on the way out.
         _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
-        _t0 = stage_time_start(self.mesh_device, _label, category=decode_tree.HOST_COMPUTE)
-        x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
-        stage_time_end(self.mesh_device, _t0)
+        with stage_timer(self.mesh_device, _label, category=decode_tree.HOST_COMPUTE):
+            x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
 
         brick = self._stage5_brick(grid) if self._keep_bricked else None
         if brick is not None:
-            _t0 = stage_time_start(self.mesh_device, "stage5: brick x+context", category=decode_tree.RESHAPE)
-            context = self._brick_activation(context, self._local_volume(grid), brick)
-            x_bands = [
-                self._brick_activation(band_x, self._local_volume(grid, t=band.hi - band.lo), brick)
-                for band_x, band in zip(x_bands, bands)
-            ]
-            stage_time_end(self.mesh_device, _t0)
+            with stage_timer(self.mesh_device, "stage5: brick x+context", category=decode_tree.RESHAPE):
+                context = self._brick_activation(context, self._local_volume(grid), brick)
+                x_bands = [
+                    self._brick_activation(band_x, self._local_volume(grid, t=band.hi - band.lo), brick)
+                    for band_x, band in zip(x_bands, bands)
+                ]
 
         with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
             out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
