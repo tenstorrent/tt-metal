@@ -1289,6 +1289,38 @@ def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
     return torch.cat(shards, dim=0)
 
 
+def tuned_vocab_all_gather(input_tensor, mesh_device, tt_ccl, dim, topology, num_workers_per_link, chunks_per_sync):
+    """The LM-head vocab-sharded logits all-gather, with num_workers_per_link/chunks_per_sync as
+    real parameters (upstream's models.tt_transformers.tt.ccl.tt_all_gather hardcodes 2/10).
+
+    A local copy of that function's cluster_axis=None branch instead of a change to the shared
+    file: this model must not edit ccl.py (other models depend on it). Kept in sync with upstream
+    by inspection; if upstream's all_gather_async call shape changes, re-diff tt_all_gather here.
+    """
+    if list(mesh_device.shape) == [1, 1]:
+        return input_tensor
+    num_links = tt_ccl.get_num_links(None)
+    input_tensor = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+    if input_tensor.dtype != ttnn.bfloat16:
+        input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
+    gathered = ttnn.experimental.all_gather_async(
+        input_tensor,
+        persistent_output_buffer=None,
+        dim=dim,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=num_links,
+        topology=topology,
+        memory_config=None,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=2,
+        subdevice_id=None,
+    )
+    input_tensor.deallocate(True)
+    return gathered
+
+
 def prepare_conv_taps(conv_w, key_dim, nk, dk, nv, dv, kernel_size, tp):
     """Split fused conv1d into kernel taps, reordered to match prepare_gdn_qkv grouping."""
     cw = conv_w.float()
