@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "api/debug/assert.h"
@@ -15,6 +16,68 @@ namespace tt::tt_fabric {
 
 namespace route_2d_detail {
 
+// Device route tables place both reverse-tree regions on at least a halfword boundary. memcpy keeps
+// the raw byte storage alias-safe and gives the device compiler an opportunity to fold the copy into
+// one little-endian halfword load when it proves that alignment through the inlined call chain.
+struct AlignedMcastTreeEdgeReader {
+    static FORCE_INLINE std::uint16_t get(const std::uint8_t* region, std::uint32_t index) {
+        const std::uint8_t* edge_bytes = region + index * Routing2DCodec::MCAST_TREE_EDGE_BYTES;
+        std::uint16_t edge;
+        __builtin_memcpy(&edge, edge_bytes, sizeof(edge));
+        return edge;
+    }
+};
+
+// The shared multicast encoder updates a mutable byte map, while the device commits that completed
+// map to L1 in words. Word backing provides aligned source loads; only a partial final word needs
+// initialization because the encoder overwrites every active byte.
+template <std::size_t CapacityBytes>
+class Route2DMapStaging {
+public:
+    static constexpr std::size_t WORD_COUNT = (CapacityBytes + sizeof(std::uint32_t) - 1) / sizeof(std::uint32_t);
+
+    explicit FORCE_INLINE Route2DMapStaging(std::uint32_t map_bytes) {
+        const std::uint32_t tail_bytes = map_bytes % sizeof(std::uint32_t);
+        if (tail_bytes != 0) {
+            // The chunked copy reads the tail as a full word before storing only its valid low bytes.
+            words[map_bytes / sizeof(std::uint32_t)] = 0;
+        }
+    }
+
+    FORCE_INLINE std::uint8_t* bytes() { return reinterpret_cast<std::uint8_t*>(words); }
+    FORCE_INLINE const std::uint32_t* word_data() const { return words; }
+
+private:
+    std::uint32_t words[WORD_COUNT];
+};
+
+// Copies the contiguous [Y | X] action map to the packet after encoding is complete. Full words use
+// the naturally aligned route_buffer base; exact halfword/byte tails avoid touching following fields.
+FORCE_INLINE void copy_2d_map_to_l1(
+    volatile tt_l1_ptr std::uint8_t* output, const std::uint32_t* input_words, std::uint32_t map_bytes) {
+    auto* output_words = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(output);
+    const std::uint32_t full_words = map_bytes / sizeof(std::uint32_t);
+    for (std::uint32_t i = 0; i < full_words; ++i) {
+        output_words[i] = input_words[i];
+    }
+
+    const std::uint32_t tail_bytes = map_bytes % sizeof(std::uint32_t);
+    if (tail_bytes != 0) {
+        std::uint32_t tail = input_words[full_words];
+        volatile tt_l1_ptr std::uint8_t* output_tail = output + full_words * sizeof(std::uint32_t);
+        if (tail_bytes >= sizeof(std::uint16_t)) {
+            *reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(output_tail) = static_cast<std::uint16_t>(tail);
+            output_tail += sizeof(std::uint16_t);
+            tail >>= sizeof(std::uint16_t) * 8;
+        }
+        if (tail_bytes & 1u) {
+            *output_tail = static_cast<std::uint8_t>(tail);
+        }
+    }
+}
+
+// A packed route-table byte holds four 2-bit next-hop codes. Expand it into four one-hot action bytes
+// in one uint32_t so the packet map can be emitted a word at a time.
 FORCE_INLINE std::uint32_t widen_y_packed_byte(std::uint8_t packed) {
     return static_cast<std::uint32_t>(Routing2DCodec::widen_y(packed & 0x3u)) |
            (static_cast<std::uint32_t>(Routing2DCodec::widen_y((packed >> 2) & 0x3u)) << 8) |
@@ -81,9 +144,10 @@ private:
 
 }  // namespace route_2d_detail
 
-// Installs destination dst_dev_id's action maps from the given route table: the Y row widened into
-// route_buffer[0..Y), the X row into route_buffer[Y..Y+X), LOCAL_DELIVER OR-ed onto the destination's
-// X slot. Shared by the worker unicast producer and the intermesh landing encoder.
+// Installs destination dst_dev_id's action maps from the given route table. The destination's packed
+// Y row becomes route_buffer[0..Y); its packed X row becomes route_buffer[Y..Y+X). A zero Y action
+// transitions decode to X, whose destination slot carries LOCAL_DELIVER. Shared by worker unicast
+// setup and intermesh landing.
 inline void widen_2d_route_to_chip(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     const std::uint8_t* route_table,
