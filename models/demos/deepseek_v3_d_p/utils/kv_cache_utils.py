@@ -931,15 +931,19 @@ def init_kvpe_cache(
     # num_users; a device kernel zeros it instead with no host transfer. Allocating
     # directly in the requested dtype/layout also sidesteps the mesh-mapper from_torch
     # path that forces TILE for fp8_e4m3 (so fp8 rides on ROW_MAJOR).
-    full_mesh_topology = None
-    if full_mesh:
+    # A cache sharded on dim 2 across BOTH mesh axes has the same declared distribution whether it got
+    # there via full_mesh (one snake ring) or via tp_axis (SP x TP dedup): row-major over the mesh IS
+    # the sp*tp linearization. Build that topology once and stamp it for either mode.
+    row_major_seq_topology = None
+    if full_mesh or tp_axis is not None:
         dist_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
-        physical_mesh_shape = dist_shape
         coords = [
             ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())])
-            for coord in ttnn.MeshCoordinateRange(physical_mesh_shape)
+            for coord in ttnn.MeshCoordinateRange(dist_shape)
         ]
-        full_mesh_topology = ttnn.TensorTopology(dist_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords)
+        row_major_seq_topology = ttnn.TensorTopology(
+            dist_shape, [ttnn.PlacementShard(2), ttnn.PlacementShard(2)], coords
+        )
 
     kvpe_cache = ttnn.allocate_tensor_on_device(
         ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
@@ -950,11 +954,19 @@ def init_kvpe_cache(
     )
     DRAMZeroFill.op(kvpe_cache)
 
-    if full_mesh:
-        # Full-mesh ring mode assigns one canonical row-major sequence shard to every coordinate.
+    if row_major_seq_topology is not None:
         # DRAMZeroFill is an in-place generic op whose output follows the allocator's default replicated
-        # topology, so stamp the intended full-mesh distribution after the fill.
-        kvpe_cache.update_tensor_topology(full_mesh_topology)
+        # topology, so stamp the intended distribution after the fill.
+        #
+        # full_mesh: one canonical row-major sequence shard per coordinate.
+        #
+        # tp_axis: a TP-deduped cache is genuinely dim-2 sharded across both axes (each chip holds
+        # seq_len/(sp*tp) rows in sp*tp row-major order), so declaring it 1-D Replicate below would be a
+        # lie the ops can no longer tolerate -- high_bw_all_gather validates cluster_axis against the
+        # declared distribution rank and rejects an axis gather on a rank-1 topology, which is what broke
+        # the indexer's TP leg. Declaring the real distribution also leaves placements[sp_axis] sharded
+        # after that gather replicates placements[tp_axis], which is exactly the post-gather layout.
+        kvpe_cache.update_tensor_topology(row_major_seq_topology)
         return kvpe_cache
 
     # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
