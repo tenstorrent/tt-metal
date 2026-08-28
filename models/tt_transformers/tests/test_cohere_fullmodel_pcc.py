@@ -302,9 +302,14 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
     if lm_head_input_mem_cfg.is_sharded():
         tt_head_in = ttnn.interleaved_to_sharded(tt_head_in, lm_head_input_mem_cfg)
     tt_logits = tt_head(tt_head_in)
+    # Per-device lm_head output is a SEQUENTIAL 64,000-wide vocab chunk (padded_vocab
+    # 256,000 / 4 devices — observed on-box run3: raw (1, 4, 32, 64000)); compose the
+    # mesh device axis onto the LAST tensor dim to rebuild full-vocab logits
+    # (dims=(0,1) wrongly stacks devices as a batch axis — run3 comp_pcc mismatch
+    # 1536000 vs 384000).
     logits_torch = ttnn.to_torch(
         tt_logits,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )
     logger.info(f"[cohere-head] raw logits shape from device: {tuple(logits_torch.shape)}")
     logits_torch = logits_torch.reshape(1, -1, logits_torch.shape[-1])[:, :seq_len, : model_args.vocab_size]
