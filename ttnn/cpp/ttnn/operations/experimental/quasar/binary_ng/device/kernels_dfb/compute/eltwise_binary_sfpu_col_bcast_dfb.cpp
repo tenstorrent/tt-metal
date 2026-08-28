@@ -7,7 +7,7 @@
 // Copy of eltwise_binary_col_bcast_dfb.cpp (the FPU COL kernel) with the binary-op section swapped to the
 // SFPU path -- the SAME delta eltwise_binary_sfpu_no_bcast_dfb.cpp / eltwise_binary_sfpu_row_bcast_dfb.cpp
 // apply (unary_op_init_common + BINARY_SFPU_INIT + the copy-both-operands-to-DST / BINARY_SFPU_OP body,
-// with the ARCH_QUASAR copy_tile_to_dst_init_short handling). The broadcast pass (unary_bcast<COL> through
+// with ARCH_QUASAR per-operand copy_init retargeting). The broadcast pass (unary_bcast<COL> through
 // the intermediate llk_post DFB -- MOVB2D LLK datacopy, same as ROW/SCALAR, keyed by COL's broadcast
 // constants dst_lo=0/srcb_col_inc/bcast0) with its two pack_reconfig_data_format / pack_init
 // (ARCH_QUASAR gasket) calls, and the freq/tile_start reuse loop, are IDENTICAL to the FPU COL kernel --
@@ -148,21 +148,21 @@ ALWI void process_tile(
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             tile_regs_acquire();
 #ifdef ARCH_QUASAR
-        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor)
-        // to point at each operand before its copy_tile loop. matches_metal_v2_slice requires lhs and rhs
-        // to share a data format, so the data-format reconfig the WH/BH _with_dt path performs is not needed.
-        copy_tile_to_dst_init_short(dfb_post_lhs_id);
+            // Quasar reprograms the unpacker descriptor through copy_init. Both operands have the same
+            // data format in this slice, so only WH/BH need an explicit SrcA format reconfiguration.
+            copy_init(dfb_post_lhs_id);
 #else
-            copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
+            reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+            copy_init(dfb_post_lhs_id);
 #endif
-        copy_tile(dfb_post_lhs_id, i, 0);
+            copy_tile(dfb_post_lhs_id, i, 0);
 #ifdef ARCH_QUASAR
-        copy_tile_to_dst_init_short(dfb_post_rhs_id);
+            copy_init(dfb_post_rhs_id);
 #else
-            copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+            reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+            copy_init(dfb_post_rhs_id);
 #endif
-        copy_tile(dfb_post_rhs_id, i, 1);
+            copy_tile(dfb_post_rhs_id, i, 1);
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT;
 #endif
@@ -232,7 +232,8 @@ void kernel_main() {
     constexpr auto dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

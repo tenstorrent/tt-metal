@@ -412,43 +412,6 @@ std::map<ChipId, IDevice*> CreateDevices(
 
 namespace experimental {
 
-std::map<ChipId, IDevice*> CreateDevices(
-    ContextId context_id,
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs,
-    size_t l1_small_size,
-    size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& /*l1_bank_remap*/,
-    size_t worker_l1_size,
-    bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw) {
-    ZoneScoped;
-    auto& ctx = MetalContext::instance(context_id);
-    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
-    ctx.initialize_device_manager(
-        device_ids,
-        num_hw_cqs,
-        l1_small_size,
-        trace_region_size,
-        dispatch_core_config,
-        {},
-        worker_l1_size,
-        init_profiler,
-        initialize_fabric_and_dispatch_fw);
-
-    const auto devices = ctx.device_manager()->get_all_active_devices();
-    std::map<ChipId, IDevice*> ret_devices;
-    for (IDevice* dev : devices) {
-        if (is_galaxy and dev->is_mmio_capable()) {
-            continue;
-        }
-        ret_devices.insert({dev->id(), dev});
-    }
-
-    return ret_devices;
-}
-
 void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
@@ -1352,23 +1315,21 @@ IDevice* CreateDevice(
     const size_t worker_l1_size) {
     ZoneScoped;
 
-    // MMIO devices do not support dispatch on galaxy cluster
-    // Suggest the user to use the CreateDevices API
+    // MMIO devices do not support dispatch on galaxy clusters.
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         TT_FATAL(
             !(MetalContext::instance().get_cluster().is_galaxy_cluster() &&
               MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
-            "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
-            "devices for dispatch.");
+            "Galaxy clusters do not support dispatch on MMIO devices. Use "
+            "distributed::MeshDevice::create_unit_meshes to open all devices for dispatch.");
     }
 
     // This API may not be used to create single remote device or multi chip clusters
-    // CreateDevices should be used instead to ensure proper init/teardown
+    // MeshDevice should be used instead to ensure proper initialization and teardown.
     TT_FATAL(
         MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
         "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
-        "must use "
-        "CreateDevices().",
+        "use distributed::MeshDevice::create_unit_meshes().",
         device_id);
 
     MetalContext::instance().initialize_device_manager(
@@ -1394,13 +1355,12 @@ bool CloseDevice(IDevice* device) {
     ZoneScoped;
     auto device_id = device->id();
 
-    // This API may not be used to close single remote device or multi chip clusters
-    // CloseDevices should be used instead to ensure proper init/teardown
+    // This API may not be used to close a single remote device or multi-chip cluster.
+    // MeshDevice RAII should be used instead to ensure proper teardown.
     TT_FATAL(
         MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
-        "CloseDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
-        "must use "
-        "CloseDevices().",
+        "CloseDevice(device_id={}) may only be used for closing single MMIO capable devices. For multi chip clusters, "
+        "use MeshDevice RAII or MeshDevice::close().",
         device_id);
 
     return MetalContext::instance().device_manager()->close_device(device_id);

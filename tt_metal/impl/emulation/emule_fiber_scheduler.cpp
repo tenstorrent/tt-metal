@@ -45,8 +45,6 @@ extern thread_local uint8_t my_logical_y_;
 
 namespace tt::tt_metal::emule_fiber {
 
-namespace {
-
 enum class FiberState : uint8_t { Ready, Running, Parked, QuiescenceDeferred, Done };
 
 struct Fiber {
@@ -83,6 +81,8 @@ struct Fiber {
         }
     }
 };
+
+namespace {
 
 // Per-worker state. Fibers are pinned (Fiber::home), so a fiber always runs on the
 // same worker — these are read/written only by that worker.

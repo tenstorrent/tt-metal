@@ -10,7 +10,7 @@
 // the RHS PREPROCESS + wait_front(1) move OUT of process_sfpu_scalar_tiles (the scalar tile is produced
 // once, by the writer), the per-tile RHS copy_tile always reads tile index 0, and the RHS DFB is popped
 // once after all chunks. The LHS stream, the lhs/rhs/post activation machinery, and the ARCH_QUASAR
-// copy_tile_to_dst_init_short gasket are identical to the no-broadcast kernel.
+// per-operand copy_init retargeting is identical to the no-broadcast kernel.
 //
 // DFB operand naming mirrors the CB CBIndex mapping:
 //   dfb::pre_lhs  (= CBIndex::c_0)   dfb::pre_rhs (= c_1)   dfb::out (= c_2)
@@ -78,17 +78,17 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
     for (uint32_t i = 0; i < n; ++i) {
         tile_regs_acquire();
 #ifdef ARCH_QUASAR
-        // Quasar's copy_tile_to_dst_init_short_with_dt is a no-op and cannot switch which operand the
-        // unpacker reads, so use copy_tile_to_dst_init_short (which reprograms the unpacker descriptor).
-        copy_tile_to_dst_init_short(dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
 #else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_rhs_id, dfb_post_lhs_id);
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
 #endif
         copy_tile(dfb_post_lhs_id, i, 0);
 #ifdef ARCH_QUASAR
-        copy_tile_to_dst_init_short(dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
 #else
-        copy_tile_to_dst_init_short_with_dt(dfb_post_lhs_id, dfb_post_rhs_id);
+        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
 #endif
         copy_tile(dfb_post_rhs_id, 0, 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
@@ -139,7 +139,8 @@ void kernel_main() {
     constexpr uint32_t dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    unary_op_init_common(dfb_post_lhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_out_id);
+    copy_init(dfb_post_lhs_id);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

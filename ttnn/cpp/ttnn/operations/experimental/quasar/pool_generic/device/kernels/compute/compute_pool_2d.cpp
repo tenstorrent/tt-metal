@@ -93,18 +93,15 @@ void kernel_main() {
         last_tile_is_partial && (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face) ? 1 : 2;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::AVG;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time. Callers (e.g. grid_sample under fp32_dest_acc_en) can
-    // also force the 4-tile limit via ct_arg[16] so each chunk fits in half-sync DEST (= 4 fp32 tiles)
-    // without forcing dst_full_sync_en.
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
-    constexpr bool force_max_tiles_per_reduction_4 = get_arg(args::force_max_tiles_per_reduction_4);
-    constexpr uint32_t MAX_TILES_PER_REDUCTION =
-        (force_max_tiles_per_reduction_4 || (is_avg_pool && is_large_kernel)) ? 4 : 8;
+    // The host factory resolves DEST-capacity limits (fp32 vs fp16, half-sync vs full-sync) and
+    // equal-width c-block constraints into a single value; kernels consume it directly.
+    constexpr uint32_t MAX_TILES_PER_REDUCTION = get_arg(args::max_tiles_per_reduction);
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
+    static_assert(partial_iter_output_tiles == max_tiles_per_iter, "c-blocks must all be the same width");
 
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::AVG, "Only supports REDUCE_OP = MAX or AVG");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
@@ -370,11 +367,12 @@ void kernel_main() {
 #endif
                 // Model A (wide-reduction fix): the scratch CB holds ONE contiguous full-width (in_ntiles_c)
                 // output stick, so reserve it ONCE per stick (on the first c-block) -- NOT per c-block.
-                // Reserving/pushing a full stick per c-block advanced wr_entry_idx mid-stick, overran the
-                // 2-slot ring, and grew the packer's L1 base (base_l1 = wr_entry_idx * ...) past the buffer-
-                // descriptor limit -> Risc IB interrupt (0x19), with the fault address creeping run-to-run as
-                // base_l1 grew. Each c-block packs its channel slice into this shared stick below; the whole
-                // stick is pushed once on the last c-block so the DM reader consumes exactly one stick per pop.
+                // reader_pool_2d.cpp consumes one stick per output row: a single wait_front / full-row copy /
+                // pop_front(scratch_npages), treating row 0 of the entry as all channels. Reserving and pushing
+                // per c-block advances the CB write entry mid-stick, so each c-block's slice lands in a different
+                // entry (at a non-zero offset within it) and the reader sees in_nblocks_c entries for every one it
+                // pops. Each c-block packs its channel slice into this shared stick below; the whole stick is
+                // pushed once on the last c-block so the reader consumes exactly one stick per pop.
                 if (first_c_block) {
                     curr_scratch_cb.reserve_back(scratch_npages);
                 }
@@ -383,16 +381,16 @@ void kernel_main() {
                 // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
                 // all-zero tile. Re-init the pack_untilize for THIS stick's scratch CB before packing so
                 // both scratch_cb_0 (even) and scratch_cb_1 (odd) get a valid, CB-matched descriptor.
-                // [DIAG] pack bounds (Bug 2 PACR0_TILE_INC 0x19): ntiles = tiles this pack_untilize_dest
-                // writes; cap = scratch CB byte capacity; npages/esz = its entry geometry. If
-                // ntiles*esz > cap (or ntiles exceeds what the scratch descriptor addresses) the pack tile
-                // increment crosses L1_LIMIT_ADDR -> fault. Printed BEFORE the pack so it flushes pre-fault.
                 // Pack this c-block into its channel slice of the shared full-width stick. full_ct_dim =
-                // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick
-                // (llk_pack_untilize stride_offset_0 = num_faces_c_dim * FULL_CT_DIM); block_c_index places the
-                // slice so the c-blocks tile contiguously (l1 tile offset = block_c_index * block_ct_dim):
-                //   c0 -> block_c_index 0            -> tiles 0..3
-                //   c1 -> block_c_index 4/2 = 2      -> tiles 4..5
+                // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick, and
+                // block_c_index places the slice (llk_pack_untilize: l1_tile_idx = base_l1 + block_rt *
+                // y_stride + block_c_index * block_ct_dim). For in_ntiles_c = 12, MAX_TILES_PER_REDUCTION = 8:
+                //   c0 -> width 8, block_c_index 0            -> tiles 0..7
+                //   c1 -> width 4, block_c_index (1*8)/4 = 2  -> tiles 8..11
+                // NOTE: the offset is expressed in units of block_ct_dim, so the last (narrow) block only
+                // lands correctly when partial_iter_output_tiles divides c_i * max_tiles_per_iter. It does
+                // not for in_ntiles_c % MAX_TILES_PER_REDUCTION in {3,5,6,7}: e.g. in_ntiles_c = 11 gives
+                // 8/3 = 2 -> tiles 6..8, overwriting c0's tail and leaving 9..10 stale.
                 // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
                 if (last_c_block) {
                     pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
@@ -403,31 +401,8 @@ void kernel_main() {
                     pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
                 }
                 tile_regs_release();
+
                 if (last_c_block) {
-                    // Push the whole stick once, after every c-block has packed its slice, so the DM reader
-                    // consumes exactly one full stick per wait_front/pop_front(scratch_npages) -- the previous
-                    // per-c-block push overran the ring (see the reserve note above).
-                    //
-                    // [DEBUG scratch scaffold] Producer-side pack-write commit barrier. push_back() below posts
-                    // the SPSC credit the DM reader spins on (reader_pool_2d.cpp wait_front), after which it reads
-                    // this stick's row DIRECTLY from TL1. On HW the credit instruction itself waits for the packer
-                    // write to drain (TT_PUSH_TILES packer_wr_done_wait_mask=0x1 in llk_push_tiles), but the Quasar
-                    // emulator does NOT honor that embedded sub-field, so the counter can post before
-                    // pack_untilize_dest's TL1 write lands -> the reader reads a stale/empty scratch slot (a
-                    // fraction of sticks dropped->0 or dup->neighbor: PCC 0.897; watcher latency hides it, since
-                    // the scratch CB is single-buffered so the credit is the only producer->consumer serializer).
-                    // Drain the packer engine before posting the credit. Mirrors the "wait for pack to finish"
-                    // STALLWAIT idiom in llk_pack_common.h:307. No-op-equivalent on HW (redundant with the wr_done
-                    // wait); remove once the sim models PUSH_TILES.packer_wr_done_wait_mask.
-                    // Quasar-only: this barrier fixes the emulator's failure to honor PUSH_TILES'
-                    // packer_wr_done_wait_mask (see comment above). WH/BH HW honor it, so the stall is a no-op
-                    // there -- and TTI_STALLWAIT has a DIFFERENT arity per arch (Quasar takes 4 args, WH takes 2),
-                    // so it must be arch-gated to compile at all. NB: TTI_STALLWAIT expands to a bare __asm__
-                    // statement, so it must NOT be wrapped in the expression-form PACK((...)) parens -- PACK(...)
-                    // is variadic, so the comma-separated p_stall args pass straight through as one asm statement.
-#ifdef ARCH_QUASAR
-                    PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
-#endif
                     curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
                 }
 #else
