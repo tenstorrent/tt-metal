@@ -382,20 +382,18 @@ std::size_t resolve_num_workers_per_dram_bank(
     // so automatic mode falls back instead of failing during program creation.
     const auto primary_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
     const uint32_t physical_bank_count = static_cast<uint32_t>(primary_workers.size());
-    const auto& input_b_shape = input_tensor_b.padded_shape();
+    const auto& input_b_padded_shape = input_tensor_b.padded_shape();
     // The automatic policy is measured on eight-bank Blackhole devices. Keep
     // other bank topologies on the established path until they have equivalent
     // model-level evidence; explicit reader counts remain available there.
-    if (physical_bank_count != 8 || input_b_shape[-1] % tile_width != 0) {
+    if (physical_bank_count != 8 || input_b_padded_shape[-1] % tile_width != 0) {
         return 1;
     }
-    const uint32_t logical_width_tiles = input_b_shape[-1] / tile_width;
+    const uint32_t padded_width_tiles = input_b_padded_shape[-1] / tile_width;
     const uint32_t storage_width_tiles = shard_width_tiles * physical_bank_count;
-    // Do not put a partially filled final reader into automatic mode. The existing
-    // multi-reader writeback path assigns every reader a complete storage interval;
-    // exact logical coverage makes that contract unambiguous and avoids introducing
-    // caller-visible padding or a special partial-reader path.
-    if (logical_width_tiles != storage_width_tiles) {
+    // Use only the tensor's existing padded storage. Automatic mode does not add
+    // padding or repack the weight to make a multi-reader split legal.
+    if (padded_width_tiles != storage_width_tiles) {
         return 1;
     }
 
@@ -407,12 +405,12 @@ std::size_t resolve_num_workers_per_dram_bank(
     constexpr uint64_t min_weight_bytes = 8ULL * 1024 * 1024;
     constexpr uint32_t min_reader_row_bytes = 4 * 1024;
     constexpr uint32_t min_input_a_cores = 64;
-    if (input_b_shape[-2] % tile_height != 0) {
+    if (input_b_padded_shape[-2] % tile_height != 0) {
         return 1;
     }
     const uint64_t tile_bytes = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
     const uint64_t weight_bytes =
-        static_cast<uint64_t>(input_b_shape[-2] / tile_height) * logical_width_tiles * tile_bytes;
+        static_cast<uint64_t>(input_b_padded_shape[-2] / tile_height) * padded_width_tiles * tile_bytes;
     const uint64_t reader_row_bytes = static_cast<uint64_t>(shard_width_tiles / 2) * tile_bytes;
     if (weight_bytes < min_weight_bytes || reader_row_bytes < min_reader_row_bytes) {
         return 1;

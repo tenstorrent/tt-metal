@@ -284,16 +284,16 @@ def test_matmul_in1_dram_sharded_worker_count_default_is_auto():
         # 33 logical tiles naturally pad to an odd shard width on p100, p150,
         # and Wormhole. Automatic mode must retain one reader.
         (2048, 1056, (1, 1)),
-        # Fifteen logical tiles occupy sixteen storage tiles on an eight-bank
-        # Blackhole. The shard is even, but a two-reader split would leave a
-        # partial final reader, so automatic mode must retain one reader.
+        # Fifteen logical tiles occupy sixteen existing padded storage tiles on
+        # an eight-bank Blackhole. The weight is small, so automatic mode keeps
+        # the established one-reader path without changing its storage.
         (512, 480, (1, 1)),
     ],
     ids=[
         "small_even_shard_falls_back",
         "large_64_core_weight_uses_two_readers",
         "natural_odd_shard_falls_back",
-        "partial_final_reader_falls_back",
+        "small_padded_weight_falls_back",
     ],
 )
 def test_matmul_in1_dram_sharded_auto_worker_count(device, K, N, grid_size, function_level_defaults):

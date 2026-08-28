@@ -361,8 +361,8 @@ void validate_num_workers_per_dram_bank(std::size_t workers_per_bank);
 // An explicit value is returned unchanged and validated strictly. Automatic mode
 // uses two readers only for a large compressed weight on an eight-bank Blackhole,
 // with useful per-reader transaction size, at least 64 input multicast cores,
-// exact existing storage coverage, and enough legal reader cores. All other
-// cases retain one.
+// exact coverage of the tensor's existing padded storage, and enough legal
+// reader cores. All other cases retain one.
 std::size_t resolve_num_workers_per_dram_bank(
     const std::optional<std::size_t>& requested_workers_per_bank,
     const ttnn::Tensor& input_tensor_a,

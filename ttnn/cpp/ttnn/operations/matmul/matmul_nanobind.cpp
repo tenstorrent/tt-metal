@@ -610,7 +610,7 @@ void py_module(nb::module_& mod) {
 
             ``None`` selects two workers for large compressed weights on eight-bank Blackhole devices
             when the existing per-bank shard splits evenly, each reader gets at least 4 KiB per weight
-            row, input A uses at least 64 multicast cores, the shard covers the logical width exactly,
+            row, input A uses at least 64 multicast cores, the shard covers the existing padded width exactly,
             and the device has enough legal reader cores. Otherwise it selects one. Automatic selection
             does not pad or repack the tensor. Explicit values of 1, 2, or 3 are strict.
             Multiple workers split each bank's width shard evenly. All readers for one bank use NOC0
