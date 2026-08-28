@@ -191,7 +191,9 @@ def test_commit_link_falls_back_to_the_bare_sha_off_github():
     from jira_client import _commit_link
 
     assert _commit_link("deadbeefcafe1234", repo="") == "deadbeefcafe1234"
-    assert _commit_link("deadbeefcafe1234", repo="o/r") == "[deadbeefcafe](https://github.com/o/r/commit/deadbeefcafe1234)"
+    assert (
+        _commit_link("deadbeefcafe1234", repo="o/r") == "[deadbeefcafe](https://github.com/o/r/commit/deadbeefcafe1234)"
+    )
     assert _commit_link("", repo="o/r") == "unknown"
 
 
@@ -210,7 +212,7 @@ def test_two_labelled_links_on_one_line_do_not_merge():
 
 
 def test_adf_renders_headings_and_bullets():
-    """"### " and "- " give the RELEASE-7 shape without an ADF-aware producer."""
+    """ "### " and "- " give the RELEASE-7 shape without an ADF-aware producer."""
     from jira_client import _adf
 
     doc = _adf("### Impact\nBad.\n- one\n- two\nplain\n- solo")
@@ -314,8 +316,12 @@ def test_dedup_comment_also_merges_labels_onto_the_existing_issue(monkeypatch):
 
     monkeypatch.setattr(jira_client, "_api", fake_api)
     out = jira_client.file_issue(
-        "https://j.test", "e", "t", "RELEASE",
-        summary="s", description="d",
+        "https://j.test",
+        "e",
+        "t",
+        "RELEASE",
+        summary="s",
+        description="d",
         labels=["ci-failure", "package-release-ref:stable"],
         dedup_label="package-release-failure:abc",
     )

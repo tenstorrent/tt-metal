@@ -30,7 +30,7 @@ def test_a_runner_qualifier_after_e2e_tests_is_dropped():
 
 
 def test_a_parenthetical_that_is_the_model_is_kept():
-    """"Demo Test with Perf Metrics" alone identifies nothing."""
+    """ "Demo Test with Perf Metrics" alone identifies nothing."""
     job = MULTI + "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4) [bh_sc16]"
     assert name(job) == "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)"
 
