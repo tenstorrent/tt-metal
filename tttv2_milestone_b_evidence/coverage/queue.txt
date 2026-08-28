@@ -8,11 +8,15 @@
 # same TT_FATAL. They stay queued, at the tail, and the report says why they are
 # there rather than earlier.
 # format: deadline|pytimeout|logname|nodeid|extra
+# ---- promoted 08:52Z: a3_q_dc5 found a SECOND fault at the same call site
+# (TT_FATAL program.cpp:2205, kernel group cores do not match sub device cores).
+# 2m36s a run, so the three-run rule is cheap here, and the Llama half decides
+# whether D-C8 is geometry-dependent the way the L1 clash is. ----
+2400|2100|a3_l_dc5|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
 # a3_q_pool_default ran at 08:33:24 from the working tree, 90 s before the same
 # source was committed as 6df3c4a14a3 (black formatting was the only change), so its
 # log is stamped 2061c126743, a commit that does not contain the test. Re-recorded
 # here from the committed tree so the pair the comparison reads is unambiguous.
-1800|1500|a3_q_pool_default_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-default2048-8x4-device_params0]|
 # Qwen areas 1-3, one run each
 1800|1500|a3_q_late_capacity|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_cross_slot|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
@@ -27,7 +31,6 @@
 # not runner.decode_sampled), to place the fault at the shared selector
 1800|1500|a3_q_heterogeneous|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]|
 # Llama: the diagnostic, the cross-process recorders, D-C7's Llama half
-2400|2100|a3_l_dc5|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_pool_default|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-default2048-8x4-device_params0]|
 2400|2100|a3_l_pool_explicit|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-explicit4096-8x4-device_params0]|
 2400|2100|a3_l_two_pools|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable[wormhole_b0-8x4-device_params0]|
@@ -43,8 +46,6 @@
 2400|2100|a3_l_concat_active31|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]|
 2400|2100|a3_l_heterogeneous|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]|
 # the three-run rule on the two new claims
-1800|1500|a3_q_dc5_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
-1800|1500|a3_q_dc5_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_dc5_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_dc5_run3|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_pool_explicit_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-explicit4096-8x4-device_params0]|

@@ -200,3 +200,89 @@ not contain the file at all. Milestone B's own verdict on this gate is a clean
 **PASS**. But `mb-signoff` should state the exception rather than assert a bare
 zero over `models/common`, because the next person to run the grep will find it
 and will not know it is pre-existing.
+
+### D-C8 — **new**: behind D-C5 the selector matmul violates the loaded decode sub-device's core set
+
+This is why the diagnostic was worth a Galaxy quarter-hour.
+
+`a3_q_dc5` (`logs2/a3_q_dc5.log`, commit `152d4c49efb`, `1 failed, 2 warnings in
+156.06s`) relocated the decode logits exactly as D-C5's proposed one-line fix
+would:
+
+```text
+[dc5] greedy: decode logits were TensorMemoryLayout.WIDTH_SHARDED, width 19200;
+      relocated to TensorMemoryLayout.INTERLEAVED
+```
+
+The `INTERLEAVED` assertion is gone; the call gets **further into the same
+function** and then dies:
+
+```text
+models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py:822: in sample
+models/common/models/qwen3_32b_galaxy/model.py:1810: in sample_decode
+models/common/models/qwen3_32b_galaxy/model.py:1793: in select_decode_column_users
+models/common/models/galaxy/collectives.py:445: in __call__
+E   RuntimeError: TT_FATAL @ tt_metal/impl/program/program.cpp:2205:
+E                 num_intersections == num_cores
+E   info:
+E   Kernel group cores do not match sub device cores for programmable core type TENSIX
+```
+
+`collectives.py:445` is the same line as D-C5 — the bare `ttnn.matmul` — and the
+new failure is one layer down: the program the matmul builds spans cores that are
+**not in the loaded decode sub-device's core set**. Decode runs under a
+sub-device manager (`Prefetcher2D._configure_mode`); a default multi-core matmul
+program config resolves its grid from the tensors and the full compute grid, not
+from the loaded sub-device, so the two disagree and `program.cpp` refuses the
+program.
+
+**So D-C5's fix is not one line, and the file already says why.** Two hundred
+lines above the selector, `collectives._relocate_sharded` documents this exact
+hazard for a *different* op:
+
+> a direct `to_memory_config` between two shard specs that differ in grid **and**
+> width resolves to `reshard_program_factory_generic`, which builds over the full
+> compute grid and is illegal under a loaded sub-device manager.
+> `sharded_to_interleaved` runs on its input's `shard_spec.grid` and
+> `interleaved_to_sharded` on its output shard's cores, and both of those are
+> worker-confined here.
+
+The relocation was chosen for worker-confinement and it *is* worker-confined —
+that part of the fix works, and `a3_q_dc5` is the hardware evidence. What is not
+worker-confined is the **matmul that consumes it**. Making the selector's input
+interleaved satisfies the matmul's memory-layout precondition and simultaneously
+hands it a placement decision it makes over the wrong grid.
+
+**The reduction, for whoever owns this.** `GalaxyColumnUserSelector` needs *both*:
+
+1. an input B the matmul accepts — interleaved, or a program config that takes
+   width-sharded in1; **and**
+2. a program config whose core grid is inside the decode worker sub-device, the
+   way every other decode-time op in `collectives.py` is.
+
+Neither is expressible from a test, and (2) is the one no amount of relocation
+reaches. `GalaxyColumnUserSelector.__init__` already accepts a
+`compute_kernel_config` and a `memory_config` and passes both to the matmul; it
+accepts no `program_config`, and nothing in it knows which sub-device is loaded.
+
+**And this is the third fault in one stack of three.** The L1 address clash hid
+D-C5 for Llama; D-C5 hid D-C8 for both models. The class's own docstring predicted
+it in as many words —
+
+> **Unqualified.** This composition has never run on a Galaxy mesh. Qualify it
+> with the focused selector test before trusting a device sampling path built on
+> it; the alternative is composing the logits to host and calling
+> `Sampling2D.sample_host`.
+
+— and the focused selector test it points at
+(`test_column_user_selector_wh_galaxy.py`) builds its input with
+`memory_config=ttnn.DRAM_MEMORY_CONFIG` **and no loaded sub-device manager**, so
+it cannot see either fault. The alternative the docstring offers — compose to host
+and call `sample_host` — is what both demos' passing half actually does, and it is
+the only sampling path this tree has that works on a Galaxy.
+
+**Consequence for the exit gate.** Area 4 is **BLOCKED**, for both models, by two
+stacked defects in shared Galaxy code. Not "unmeasured": measured, twice, with the
+first blocker removed at the call site to reach the second. Milestone B's device
+sampling does not work end to end on this hardware at this tree, and the report
+should say so in those words.
