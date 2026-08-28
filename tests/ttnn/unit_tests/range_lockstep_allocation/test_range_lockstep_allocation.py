@@ -30,8 +30,13 @@ HOGGED_CORE = ttnn.CoreCoord(0, 0)
 FREE_CORE = ttnn.CoreCoord(1, 0)
 
 
-def _single_core_config(core, num_bytes, *, range_lockstep=False, per_core=False):
-    """Height-sharded L1 config putting all ``num_bytes`` on exactly ``core``.
+def _num_cores(first_core, last_core):
+    """Cores in the inclusive rectangle first_core..last_core -- a CoreRange is an area, not a row."""
+    return (last_core.x - first_core.x + 1) * (last_core.y - first_core.y + 1)
+
+
+def _grid_config(first_core, last_core, num_bytes, *, range_lockstep=False, per_core=False):
+    """Height-sharded L1 config giving every core in first_core..last_core ``num_bytes``.
 
     The shard shape has to match the tensor's own width; TensorSpec validates that before the
     allocator is ever reached.
@@ -40,7 +45,7 @@ def _single_core_config(core, num_bytes, *, range_lockstep=False, per_core=False
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
-            ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
+            ttnn.CoreRangeSet([ttnn.CoreRange(first_core, last_core)]),
             [1, num_bytes],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
@@ -52,13 +57,18 @@ def _single_core_config(core, num_bytes, *, range_lockstep=False, per_core=False
     return mem_config
 
 
-def _allocate(mesh, core, num_bytes, *, range_lockstep=False, per_core=False):
-    data = torch.zeros(1, num_bytes, dtype=torch.uint8)
+def _allocate(mesh, first_core, num_bytes, *, last_core=None, range_lockstep=False, per_core=False):
+    """Allocate ``num_bytes`` on every core of the rectangle first_core..last_core.
+
+    One row of the tensor per core, so the shard shape stays [1, num_bytes] whatever the grid.
+    """
+    last_core = first_core if last_core is None else last_core
+    data = torch.zeros(_num_cores(first_core, last_core), num_bytes, dtype=torch.uint8)
     return ttnn.from_torch(
         data,
         dtype=ttnn.uint8,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=_single_core_config(core, num_bytes, range_lockstep=range_lockstep, per_core=per_core),
+        memory_config=_grid_config(first_core, last_core, num_bytes, range_lockstep=range_lockstep, per_core=per_core),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         device=mesh,
     )
@@ -79,21 +89,37 @@ def _hog_size(mesh):
 
 
 @pytest.fixture
-def hogged_mesh(hybrid_mesh_device):
-    """A mesh whose core (0,0) holds a per-core allocation covering most of its L1.
+def hog(hybrid_mesh_device):
+    """Factory: occupy most of one core's L1 with a per-core allocation.
 
-    Yields (mesh, num_bytes) where num_bytes is the same size the test should then request on
-    FREE_CORE. The hog is kept alive for the body of the test and released after.
+    Yields (mesh, hog_core) -> num_bytes, where num_bytes is the size the test should then
+    request. Sized before the hog is placed, since it reads the live free space. The allocation
+    is held for the body of the test and released after.
     """
     mesh = hybrid_mesh_device
-    grid = mesh.compute_with_storage_grid_size()
-    if grid.x < 2:
-        pytest.skip(f"need two disjoint compute cores in a row, grid is {grid.x}x{grid.y}")
+    holder = []
 
-    num_bytes = _hog_size(mesh)
-    hog = _allocate(mesh, HOGGED_CORE, num_bytes, per_core=True)
-    yield mesh, num_bytes
-    del hog
+    def place(core):
+        num_bytes = _hog_size(mesh)
+        holder.append(_allocate(mesh, core, num_bytes, per_core=True))
+        return num_bytes
+
+    yield mesh, place
+    holder.clear()
+
+
+def _require_cores(mesh, count):
+    grid = mesh.compute_with_storage_grid_size()
+    if grid.x < count:
+        pytest.skip(f"need {count} compute cores in a row, grid is {grid.x}x{grid.y}")
+
+
+@pytest.fixture
+def hogged_mesh(hog):
+    """The common case: HOGGED_CORE occupied, yielding (mesh, num_bytes)."""
+    mesh, place = hog
+    _require_cores(mesh, 2)
+    yield mesh, place(HOGGED_CORE)
 
 
 def test_range_lockstep_ignores_per_core_ranges_on_other_cores(hogged_mesh):
@@ -114,6 +140,41 @@ def test_default_lockstep_still_avoids_per_core_ranges_everywhere(hogged_mesh, e
         _allocate(mesh, FREE_CORE, num_bytes)
 
 
+@pytest.mark.parametrize("hog_index", [0, 1, 2], ids=["hog-first", "hog-middle", "hog-last"])
+def test_range_lockstep_still_avoids_per_core_ranges_on_its_own_cores(hog, expect_error, hog_index):
+    """Scoping the scan must narrow it to the buffer's own cores, not switch it off.
+
+    The grid covers the hogged core, so that occupancy is the buffer's own business and must
+    still block the placement.
+
+    Parametrized over the hogged core's position in the grid because each position rules out a
+    different wrong implementation: scanning nothing fails all three, scanning only the grid's
+    first core fails the middle and last cases, and dropping the grid's last core fails the last
+    case. Without this test an implementation that scanned nothing would satisfy every other
+    test in this file -- the positive cases would still pass, and the default case is served by
+    an untouched code path.
+    """
+    mesh, place = hog
+    _require_cores(mesh, 3)
+    first, last = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0)
+    num_bytes = place(ttnn.CoreCoord(hog_index, 0))
+    with expect_error(RuntimeError, "Out of Memory"):
+        _allocate(mesh, first, num_bytes, last_core=last, range_lockstep=True)
+
+
+def test_range_lockstep_spans_several_free_cores(hogged_mesh):
+    """A multi-core grid that excludes the hogged core must still be placeable.
+
+    Two cores are enough to show a range scan ignoring another core's occupancy, but not that
+    every core of a wider grid is enumerated -- an implementation that only looked at the first
+    core of the grid would pass the single-core case.
+    """
+    mesh, num_bytes = hogged_mesh
+    _require_cores(mesh, 4)
+    tensor = _allocate(mesh, FREE_CORE, num_bytes, last_core=ttnn.CoreCoord(3, 0), range_lockstep=True)
+    assert tensor is not None
+
+
 def test_range_lockstep_round_trip(hybrid_mesh_device):
     """Data written through a range lockstep config reads back intact.
 
@@ -125,7 +186,7 @@ def test_range_lockstep_round_trip(hybrid_mesh_device):
         data,
         dtype=ttnn.uint8,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=_single_core_config(HOGGED_CORE, num_bytes, range_lockstep=True),
+        memory_config=_grid_config(HOGGED_CORE, HOGGED_CORE, num_bytes, range_lockstep=True),
         mesh_mapper=ttnn.ReplicateTensorToMesh(hybrid_mesh_device),
         device=hybrid_mesh_device,
     )
