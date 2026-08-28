@@ -73,9 +73,8 @@ def _run_pipe(
 
     nrx, nry = rx1 - rx0 + 1, ry1 - ry0 + 1
     num_recv = nrx * nry
-    # ttnn.Mcast2D owns the fan-out (from the rect area) and the ack count. ack_count=0 => the dense
-    # default (every rect core acks == the fan-out); a test may override to drive the split-count case.
-    ack_count = 0 if ack_count is None else ack_count
+    # ttnn.Mcast2D derives the acknowledgment count from fan-out when ack_count is None. A test may
+    # override it to drive the split-count case.
 
     page_bytes = TILE_BYTES
     payload_pages = payload_tiles
@@ -108,14 +107,14 @@ def _run_pipe(
     mc = ttnn.Mcast2D(
         device,
         recv_crs,
-        ttnn.CoreCoord(sx, sy),
+        ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(sx, sy)),
         ttnn.McastConfig(
             noc=ttnn.NOC.NOC_1 if sender_noc == 1 else ttnn.NOC.NOC_0,
             base_sem_id=0,
             handshake=pre_handshake,
             data_ready=data_ready_mode,
+            ack_count_override=ack_count,
         ),
-        num_active=ack_count,
     )
 
     # ---- CBs (both on union so index->addr map is identical across all cores) ----
@@ -269,7 +268,7 @@ def _run_control_only_signal(
     mc = ttnn.Mcast2D(
         device,
         recv_crs,
-        ttnn.CoreCoord(sx, sy),
+        ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(sx, sy)),
         ttnn.McastConfig(
             base_sem_id=0,
             handshake=handshake,
@@ -486,7 +485,12 @@ def _run_split_count(device, payload_tiles, recv_rect=((0, 0), (0, 3)), ack_subs
     # ONE Mcast2D (handshake=True, ack_count=2): the sender waits on 2 acks though it broadcasts to all
     # 4 (fan-out == area). Every receiver rides THIS object; the acking vs non-acking split is a per-kernel
     # pre_handshake bit on compile_time_args() below, not a second object.
-    mc = ttnn.Mcast2D(device, recv_crs, ttnn.CoreCoord(sx, sy), ttnn.McastConfig(base_sem_id=0), num_active=ack_subset)
+    mc = ttnn.Mcast2D(
+        device,
+        recv_crs,
+        ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(sx, sy)),
+        ttnn.McastConfig(base_sem_id=0, ack_count_override=ack_subset),
+    )
 
     cb_src, cb_dst = 0, 1
     cbs = [
@@ -607,7 +611,12 @@ def _run_f3(device, rect_len, payload_tiles, n_iters):
     has_receivers = R > 1  # degenerate (R==1) self-only: no receiver cores, sender does a local copy
 
     # Mcast2D fully-inside (sender at the column corner, in the rect); no handshake -> data_ready only.
-    mc = ttnn.Mcast2D(device, full_crs, ttnn.CoreCoord(0, 0), ttnn.McastConfig(handshake=False, base_sem_id=0))
+    mc = ttnn.Mcast2D(
+        device,
+        full_crs,
+        ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(0, 0)),
+        ttnn.McastConfig(handshake=False, base_sem_id=0),
+    )
 
     cb_src, cb_dst, cb_result = 0, 1, 16
     cbs = [
@@ -716,7 +725,7 @@ def test_f3_degenerate(device):
 
 # ======== ROTATING LINE via the host helper (Mcast1D) + the unified McastArgs decoder ========
 # End-to-end proof of the rotating WIRE (not just the pipe's shared-cell mechanics above):
-# ttnn.Mcast1D(PerRow, rotating_sender=True) emits the semaphores, CT, and the per-core RT block (full-line rect
+# Mcast1D with Mcast1DRotatingSenderConfig emits the semaphores, CT, and per-core RT block (full-line rect
 # + ordered per-round sender coords); pipe_rotating_line.cpp decodes it with ONE
 # McastArgs<1,4> (owns both arg lists and reads rotating_span from CT) and runs the N-core rotating line --
 # the 1D mirror of block-sharded
@@ -766,8 +775,8 @@ def _run_rotating_line(
             device,
             receiver_grid,
             ttnn.Mcast1DShape.PerRow,
-            0,
-            ttnn.McastConfig(rotating_sender=True, data_ready=data_ready_mode),
+            ttnn.Mcast1DRotatingSenderConfig(),
+            ttnn.McastConfig(data_ready=data_ready_mode),
         )
     else:
         sender_grid = ttnn.CoreRangeSet(
@@ -777,9 +786,8 @@ def _run_rotating_line(
             device,
             receiver_grid,
             ttnn.Mcast1DShape.PerRow,
-            0,
-            ttnn.McastConfig(rotating_sender=True, data_ready=data_ready_mode),
-            sender_grid,
+            ttnn.Mcast1DRotatingSenderConfig(sender_grid=sender_grid),
+            ttnn.McastConfig(data_ready=data_ready_mode),
         )
     assert mc.compile_time_args()[6] == span, f"expected {span} sender rounds"
     semaphores = mc.owned_semaphores()
@@ -904,24 +912,18 @@ def _run_fixed_line(
     io_tensors = [input_tensor, output_tensor]
 
     # ---- the host helper owns sems + CT + per-core RT for every per-row family at once ----
-    if sender_placement is None:
-        # Exercise the original constructor/keyword contract in the existing fixed-line coverage.
-        mc = ttnn.Mcast1D(
-            device,
-            grid,
-            ttnn.Mcast1DShape.PerRow,
-            sender_index=starting_sender_index,
-            config=ttnn.McastConfig(),
-        )
-    else:
-        mc = ttnn.Mcast1D(
-            device,
-            grid,
-            ttnn.Mcast1DShape.PerRow,
+    mc = ttnn.Mcast1D(
+        device,
+        grid,
+        ttnn.Mcast1DShape.PerRow,
+        ttnn.Mcast1DFixedSenderConfig(
             starting_sender_index=starting_sender_index,
-            sender_placement=sender_placement,
-            config=ttnn.McastConfig(),
-        )
+            sender_placement=(
+                sender_placement if sender_placement is not None else ttnn.Mcast1DSenderPlacement.Uniform
+            ),
+        ),
+        ttnn.McastConfig(),
+    )
     assert mc.compile_time_args()[6] == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
         for Y in range(GR):
