@@ -47,6 +47,7 @@
 #include <tt_stl/strong_type.hpp>
 
 #include "ttnn-nanobind/export_enum.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -169,6 +170,21 @@ void run_program_spec(
     tt::tt_metal::distributed::MeshWorkload workload = exp::MakeMeshWorkloadFromSpec(mesh_device, spec);
     tt::tt_metal::Program& program = workload.get_programs().begin()->second;
     exp::SetProgramRunArgs(program, run_args);
+
+    // A runtime id, WITHOUT WHICH THE PROGRAM IS INVISIBLE TO THE REAL-TIME PROFILER. It
+    // defaults to 0, and 0 is REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID
+    // (dispatch/kernels/realtime_profiler.hpp:23) -- so the dispatch kernel takes a
+    // zero-id program for one the host asked not to profile and never appends it to the
+    // record FIFO. No error, no records, and a profiler that reports itself active.
+    //
+    // Nothing else assigns one: the only setter in the tree outside tests is ttnn's
+    // device-operation path (device_operation.hpp:186), which every ttnn op goes through and
+    // a program built straight from a ProgramSpec does not. Same counter as ttnn's, so ids
+    // stay unique across both.
+    const auto runtime_id = static_cast<uint64_t>(CoreIDs::instance().fetch_and_increment_device_operation_id());
+    for (auto& [_, p] : workload.get_programs()) {
+        p.set_runtime_id(runtime_id);
+    }
 
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, blocking);
 }
