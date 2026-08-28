@@ -305,36 +305,62 @@ inline __attribute__((always_inline)) void program(const ResolvedTemplate1Config
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
+    // Copy the configuration into scalars before the sync; reading the aggregate between the
+    // volatile MopCfg accesses forces it onto the stack instead of into registers.
+    const std::uint32_t outer_count = config.outer_count;
+    const std::uint32_t inner_count = config.inner_count;
+    const std::uint32_t start_op    = config.start_op;
+    const std::uint32_t end_op0     = config.end_op0;
+    const std::uint32_t end_op1     = config.end_op1;
+    const std::uint32_t loop_op     = config.loop_op;
+    const std::uint32_t loop_op1    = config.loop_op1;
+    const std::uint32_t loop0_last  = config.loop0_last;
+    const std::uint32_t loop1_last  = config.loop1_last;
+
+    // Checked here, on the scalar copies, so the diagnostic adds no stack traffic around ebreak.
+    LLK_ASSERT(
+        !(is_plain_nop(start_op) && effective_template1_count(inner_count) == 0 && !is_plain_nop(end_op0)),
+        "Template 1 MOP configuration triggers the no-start/zero-inner/active-end count anomaly");
+
     ckernel::mop_sync();
 
-    mop_cfg[0] = config.outer_count;
-    mop_cfg[1] = config.inner_count;
-    mop_cfg[2] = config.start_op;
-    mop_cfg[3] = config.end_op0;
-    mop_cfg[4] = config.end_op1;
-    mop_cfg[5] = config.loop_op;
-    mop_cfg[6] = config.loop_op1;
-    mop_cfg[7] = config.loop0_last;
-    mop_cfg[8] = config.loop1_last;
+    mop_cfg[0] = outer_count;
+    mop_cfg[1] = inner_count;
+    mop_cfg[2] = start_op;
+    mop_cfg[3] = end_op0;
+    mop_cfg[4] = end_op1;
+    mop_cfg[5] = loop_op;
+    mop_cfg[6] = loop_op1;
+    mop_cfg[7] = loop0_last;
+    mop_cfg[8] = loop1_last;
 }
 
 inline __attribute__((always_inline)) void program(const MopConfig<MopTemplate::Template0> &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    const bool has_end_ops = config.end_op.is_set;
-    const bool has_mid_ops = config.mid_ops.all_set();
+    // Copy the configuration into scalars before the sync; reading the aggregate between the
+    // volatile MopCfg accesses forces it onto the stack instead of into registers.
+    const bool has_end_ops              = config.end_op.is_set;
+    const bool has_mid_ops              = config.mid_ops.all_set();
+    const std::uint32_t end_op          = config.end_op.value_or(TT_OP_NOP);
+    const std::uint32_t start_op        = config.start_op.value;
+    const std::uint32_t mid_op_a        = config.mid_ops.op_a.value_or(TT_OP_NOP);
+    const std::uint32_t mid_op_b        = config.mid_ops.op_b.value_or(TT_OP_NOP);
+    const std::uint32_t mid_op_c        = config.mid_ops.op_c.value_or(TT_OP_NOP);
+    const std::uint32_t start_op_shadow = config.start_op_shadow.value;
+    const std::uint32_t end_op_shadow   = config.end_op_shadow.value_or(TT_OP_NOP);
 
     ckernel::mop_sync();
 
     mop_cfg[1] = static_cast<std::uint32_t>(has_end_ops) | (static_cast<std::uint32_t>(has_mid_ops) << 1);
-    mop_cfg[2] = config.end_op.value_or(TT_OP_NOP);
-    mop_cfg[3] = config.start_op.value;
-    mop_cfg[4] = config.mid_ops.op_a.value_or(TT_OP_NOP);
-    mop_cfg[5] = config.mid_ops.op_b.value_or(TT_OP_NOP);
-    mop_cfg[6] = config.mid_ops.op_c.value_or(TT_OP_NOP);
-    mop_cfg[7] = config.start_op_shadow.value;
-    mop_cfg[8] = config.end_op_shadow.value_or(TT_OP_NOP);
+    mop_cfg[2] = end_op;
+    mop_cfg[3] = start_op;
+    mop_cfg[4] = mid_op_a;
+    mop_cfg[5] = mid_op_b;
+    mop_cfg[6] = mid_op_c;
+    mop_cfg[7] = start_op_shadow;
+    mop_cfg[8] = end_op_shadow;
 }
 } // namespace detail
 
@@ -426,9 +452,6 @@ inline __attribute__((always_inline)) void program(const RuntimeField<FirstField
     runtime_config.outer_count                     = detail::select_runtime_field<Template1Field::OuterLoopCount>(resolved_config.outer_count, first, rest...);
     runtime_config.inner_count                     = detail::select_runtime_field<Template1Field::InnerLoopCount>(resolved_config.inner_count, first, rest...);
 
-    LLK_ASSERT(
-        !detail::triggers_template1_count_anomaly(runtime_config), "Template 1 MOP configuration triggers the no-start/zero-inner/active-end count anomaly");
-
     detail::program(runtime_config);
 }
 
@@ -443,11 +466,7 @@ inline __attribute__((always_inline)) void program(const RuntimeField<FirstField
  */
 inline __attribute__((always_inline)) void program(const MopConfig<MopTemplate::Template1> &config)
 {
-    const detail::ResolvedTemplate1Config resolved_config = detail::resolve(config);
-    LLK_ASSERT(
-        !detail::triggers_template1_count_anomaly(resolved_config), "Template 1 MOP configuration triggers the no-start/zero-inner/active-end count anomaly");
-
-    detail::program(resolved_config);
+    detail::program(detail::resolve(config));
 }
 
 /**
