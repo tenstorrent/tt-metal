@@ -74,7 +74,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # packed_expert_checkpoint deliberately unset: the fixture splits the stacked experts now
     # (extract_routed_experts), and setting it would silently load attention only.
     mla_pcc_threshold = 0.995
-    moe_pcc_threshold = 0.971
+    # 0.971 was sized for the sigmoid gate, which measured 0.972458 -- a revert would have passed.
+    # The softmax gate measures 0.994563; 0.982 (DeepSeek's value) catches a regression with room.
+    moe_pcc_threshold = 0.982
     prefill_trace_layout = "single_file"
 
     # --- CPU reference ---------------------------------------------------------------------------

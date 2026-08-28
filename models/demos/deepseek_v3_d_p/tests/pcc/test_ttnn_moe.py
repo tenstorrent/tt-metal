@@ -209,7 +209,8 @@ def run_model(
     if use_latent:
         logger.info(f"LatentMoE: routed side at {routed_emb} (emb_dim={emb_dim}), shared inter={shared_hidden}")
 
-    weights_type = "realistic" if run_pcc_check else "dummy"
+    bias_free_router = not getattr(variant.model_config, "ROUTER_HAS_CORRECTION_BIAS", True)
+    weights_type = ("realistic" if run_pcc_check else "dummy") + ("_bias0" if bias_free_router else "")
     # Base dir is env-overridable so concurrent users don't collide on a single shared /tmp path
     # (the default /tmp/{variant}_moe_cache is world-visible but owner-writable → cross-user EACCES).
     _moe_cache_base = os.environ.get("DS_MOE_CACHE_DIR", f"/tmp/{variant.name}_moe_cache")
@@ -250,6 +251,10 @@ def run_model(
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
+        if bias_free_router:
+            # Zero is this bias's exact identity in every consumer -- top-k on (logits + bias) and
+            # the sigmoid affinity alike -- so the golden matches a router that has no bias at all.
+            gate_weights["e_score_correction_bias"] = torch.zeros_like(gate_weights["e_score_correction_bias"])
         # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
         profiler.end("weights_creation")
@@ -345,6 +350,11 @@ def run_model(
     if run_pcc_check:
         profiler.start("torch_moe_creation")
         torch_moe = TorchMoe(
+            topk_method=(
+                "gpt_softmax"
+                if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE)
+                else "noaux_tc"
+            ),
             dispatch_group_size=dispatch_group_size,
             experts_per_chip=experts_per_chip,
             num_routed_experts=num_routed_experts,
@@ -998,11 +1008,12 @@ def test_kimi_k3_moe(
 # the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. Random weights
 # only: the checkpoint stacks the routed experts, so the pretrained fixture loads attention alone.
 #
-# The [reference_output] check sits at its threshold by construction, for two reasons that are both
-# about routing rather than device numerics: Mistral's router scores with softmax while the device op
-# only knows sigmoid, and the fixture emits an e_score_correction_bias that the device consumes but
-# Mistral's router does not have. Together those cap this comparison near 0.977, against the
-# moe_pcc_threshold of 0.971. A miss here is far more likely to be routing than arithmetic.
+# GPT_DEVICE, not DEVICE_FP32. Mistral's router is softmax -> top-4 -> renormalize, which at zero
+# bias equals top-4 on the raw logits followed by softmax over the selection -- what the GPT gate
+# computes. Exact in real arithmetic; in bf16 the softmax quantizes before the top-k, so ~0.3% of
+# tokens tie differently and land on another expert. That residual is the gap to a perfect PCC. The sigmoid modes would apply a different affinity silently. The synthesized
+# correction bias is zeroed to match a router that has none, and the weight cache is keyed on that so
+# a cache built with a random bias cannot be loaded over it.
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -1010,7 +1021,7 @@ def test_kimi_k3_moe(
     ),
     [
         # fmt: off
-        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
         # fmt: on
     ],
 )
