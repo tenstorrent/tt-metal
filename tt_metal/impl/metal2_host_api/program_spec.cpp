@@ -161,12 +161,10 @@ using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 // Basic Utility Helpers
 // ============================================================================
 
-inline tt::ARCH get_arch() { return tt::tt_metal::hal::get_arch(); }
+inline bool is_gen2_arch(const Hal& hal) { return hal.get_arch() == tt::ARCH::QUASAR; }
 
-inline bool is_gen2_arch() { return get_arch() == tt::ARCH::QUASAR; }
-
-inline bool is_gen1_arch() {
-    tt::ARCH arch = get_arch();
+inline bool is_gen1_arch(const Hal& hal) {
+    tt::ARCH arch = hal.get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
 
@@ -748,8 +746,9 @@ bool DmKernelDisablesImplicitSync(const DataMovementGen2Config& gen2_config, con
 // Assumes CollectedSpecData is already built.
 
 void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected, MetalContext& metal_ctx) {
+    const Hal& hal = metal_ctx.hal();
     // Sanity check for supported architecture.
-    TT_FATAL(is_gen1_arch() || is_gen2_arch(), "Unsupported architecture.");
+    TT_FATAL(is_gen1_arch(hal) || is_gen2_arch(hal), "Unsupported architecture.");
 
     //////////////////////////////
     // Node bounds checks
@@ -800,7 +799,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (kernel.is_compute_kernel()) {
-            if (is_gen2_arch()) {
+            if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_TENSIX_ENGINES_PER_NODE,
                     "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
@@ -822,7 +821,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
         }
         if (kernel.is_data_movement_kernel()) {
-            if (is_gen2_arch()) {
+            if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
                     "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
@@ -846,7 +845,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen1Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
@@ -866,7 +865,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
                     kernel.unique_id,
                     static_cast<int>(processor));
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen2Config>(data_movement_config),
                     "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
@@ -878,13 +877,13 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_compute_kernel()) {
             const auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
 
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen1Config>(compute_config),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
                     "ComputeGen2Config. Supply a Gen1 config (ComputeGen1Config).",
                     kernel.unique_id);
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen2Config>(compute_config),
                     "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig holds a "
@@ -911,7 +910,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //      the second DM kernel is registered). DM_DYNAMIC_NOC kernels are exempt: they may
     //      intentionally share a NOC, freeing the other NOC for fabric.
     // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
-    if (is_gen1_arch()) {
+    if (is_gen1_arch(hal)) {
         // (node, processor) -> the kernel that already claimed it.
         std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed_processor;
         // node -> (noc mode, the kernel that first set it) — all DM kernels on a node must agree.
@@ -1223,10 +1222,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // indexes the packed config by device slot up to dfb::NUM_DFBS. Tile-counter exhaustion on
     // Gen2 is still checked later at enqueue.
     {
-        const auto& hal = metal_ctx.hal();
-        const uint32_t max_slots_per_core = hal.has_tile_counter_registers()
-                                                ? static_cast<uint32_t>(::dfb::NUM_DFBS)
-                                                : tt::tt_metal::hal::get_arch_num_circular_buffers();
+        const uint32_t max_slots_per_core = hal.has_tile_counter_registers() ? static_cast<uint32_t>(::dfb::NUM_DFBS)
+                                                                             : hal.get_arch_num_circular_buffers();
 
         std::unordered_map<NodeCoord, uint32_t> dfbs_per_node;
         for (const auto& dfb : spec.dataflow_buffers) {
@@ -1239,7 +1236,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (count <= max_slots_per_core) {
                 continue;
             }
-            if (is_gen1_arch()) {
+            if (is_gen1_arch(hal)) {
                 TT_THROW(
                     "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but Gen1 "
                     "supports at most {} device slots per core (disjoint cores may reuse slots).",
@@ -1248,7 +1245,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     node.x,
                     node.y,
                     max_slots_per_core);
-            } else if (is_gen2_arch()) {
+            } else if (is_gen2_arch(hal)) {
                 TT_THROW(
                     "ProgramSpec '{}' places {} DataflowBufferSpecs on node ({}, {}), but the "
                     "target architecture supports at most {} device slots per core. The true "
@@ -1282,7 +1279,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // tile-counter / remapper machinery is driven by the producer/consumer masks, so a multi-bound
     // instance cannot be lowered. Reject the flag itself on Gen2, independent of whether any instance
     // is actually multi-bound — a Gen2 spec carrying it is never valid.
-    if (is_gen2_arch()) {
+    if (is_gen2_arch(hal)) {
         for (const auto& dfb : spec.dataflow_buffers) {
             TT_FATAL(
                 !dfb.advanced_options.allow_instance_multi_binding,
@@ -1479,7 +1476,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // consumer_risc_mask must not overlap" error in the DFB backend. (Compute self-loops are
             // always legal: they lower to the intra-Tensix packer->unpacker flow.)
             TT_FATAL(
-                !(is_gen2_arch() && self_loop_kernel->is_data_movement_kernel()),
+                !(is_gen2_arch(hal) && self_loop_kernel->is_data_movement_kernel()),
                 "DataflowBuffer '{}' is self-looped by data-movement kernel '{}' (bound as both PRODUCER "
                 "and CONSUMER). Self-loop DFBs are not supported for data-movement kernels on Gen2 "
                 "architectures. Consider using a scratchpad or LocalTensorAccessor instead.",
@@ -1719,7 +1716,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 
     // Data format must be valid for the architecture
-    const tt::ARCH arch = get_arch();
+    const tt::ARCH arch = hal.get_arch();
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.data_format_metadata.has_value()) {
             TT_FATAL(
@@ -1737,7 +1734,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     for (const auto& sem : spec.semaphores) {
         const uint32_t init_value = sem.advanced_options.initial_value;
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             TT_FATAL(
                 init_value == 0,
                 "SemaphoreSpec '{}' has initial_value={} but only zero is supported on Quasar",
@@ -1788,7 +1785,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dm_cores_needed += kernel_spec->num_threads;
             }
         }
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             TT_FATAL(
                 compute_engines_needed <= QUASAR_TENSIX_ENGINES_PER_NODE,
                 "WorkUnitSpec '{}' needs {} Tensix engines, but only {} are available",
@@ -1802,7 +1799,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dm_cores_needed,
                 QUASAR_USER_DM_CORES_PER_NODE);
         }
-        if (is_gen1_arch()) {
+        if (is_gen1_arch(hal)) {
             TT_FATAL(
                 compute_engines_needed <= 1,
                 "WorkUnitSpec '{}' has {} compute kernels. The target architecture supports at most one.",
@@ -2741,8 +2738,8 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
 // ----------------------------------------------------------------------------
 
 std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
-    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot) {
-    const uint32_t max_cbs = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    const ComputeUnpackModes& user_modes, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
+    const uint32_t max_cbs = hal.get_arch_num_circular_buffers();
     std::vector<UnpackToDestMode> unpack_modes(max_cbs, UnpackToDestMode::Default);
     for (const auto& [dfb_name, mode] : user_modes) {
         // Indexed by device slot: this vector is consumed by the HLK alongside the CB-indexed data
@@ -2768,7 +2765,8 @@ std::vector<UnpackToDestMode> BuildUnpackToDestModeVector(
 // MakeGen1ComputeConfig: Create a ComputeConfig (WH/BH) from a KernelSpec
 // ----------------------------------------------------------------------------
 
-ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+ComputeConfig MakeGen1ComputeConfig(
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
 
@@ -2778,7 +2776,8 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
         "ComputeGen1Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot);
+    std::vector<UnpackToDestMode> unpack_dst_modes =
+        BuildUnpackToDestModeVector(gen1.unpack_modes, dfb_name_to_slot, hal);
 
     return ComputeConfig{
         .math_fidelity = gen1.fpu_math_fidelity,
@@ -2818,7 +2817,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
 // ----------------------------------------------------------------------------
 
 experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
-    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot) {
+    const KernelSpec& kernel_spec, const DFBNameToSlotMap& dfb_name_to_slot, const Hal& hal) {
     TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
     const auto& compute_config = std::get<ComputeHardwareConfig>(kernel_spec.hw_config);
     TT_FATAL(
@@ -2827,7 +2826,8 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         "ComputeGen2Config, generation mismatch, please provide the correctly typed hardware config.");
     const auto& gen2 = std::get<ComputeGen2Config>(compute_config);
 
-    std::vector<UnpackToDestMode> unpack_dst_modes = BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot);
+    std::vector<UnpackToDestMode> unpack_dst_modes =
+        BuildUnpackToDestModeVector(gen2.unpack_modes, dfb_name_to_slot, hal);
 
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
@@ -2892,6 +2892,7 @@ namespace {
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
+    const Hal& hal = metal_ctx.hal();
 
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
@@ -2905,7 +2906,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     //  - Gen2: backtracking solver assigns DM cores automatically
     //  - Gen1: processor is user-specified in Gen1Config
     KernelRiscMaskMap kernel_to_risc_mask =
-        is_gen2_arch() ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
+        is_gen2_arch(hal) ? SolveGen2KernelRiscMasks(spec, collected) : BuildGen1KernelRiscMasks(spec);
 
     // Step 2b: For multi-binding DFBs, all KernelSpecs on the same role must end up with
     // identical risc_masks. The DFB has a single producer_risc_mask / consumer_risc_mask in
@@ -2941,7 +2942,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                 if (mask == first_mask) {
                     continue;
                 }
-                if (is_gen2_arch()) {
+                if (is_gen2_arch(hal)) {
                     TT_THROW(
                         "Internal error: Gen2 solver produced disagreeing risc_masks for DFB '{}' "
                         "{} bindings ('{}' = 0x{:x} vs '{}' = 0x{:x}). The coupling-group solver "
@@ -3121,7 +3122,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // Kernel creation APIs accept a "is_metal2_kernel" bool, which fences Metal 2.0 JIT machinery
         constexpr bool is_metal2_kernel = true;
 
-        if (is_gen2_arch()) {
+        if (is_gen2_arch(hal)) {
             uint16_t risc_mask = kernel_to_risc_mask.at(&kernel_spec);
             if (kernel_spec.is_data_movement_kernel()) {
                 auto config = MakeQuasarDataMovementConfig(kernel_spec);
@@ -3141,7 +3142,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot);
+                auto config = MakeGen2ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
                 auto processors = GetComputeProcessorSet(ComputeEngineMask{(uint8_t)(risc_mask >> 8)});
                 kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
@@ -3175,7 +3176,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
                     tensor_binding_handles,
                     ta_bindings.crta_layout);
             } else {
-                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot);
+                auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
                 kernel = std::make_shared<ComputeKernel>(
                     program_impl->get_context_id(),
