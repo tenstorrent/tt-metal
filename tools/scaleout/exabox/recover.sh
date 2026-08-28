@@ -62,6 +62,13 @@ Optional:
     --max-attempts <number>                 Number of times to run the full recovery (reset + validation)
                                             before giving up, or until it succeeds (default: 1).
                                             This is the outer loop wrapping the whole recovery.
+    --max-retrains <number>                 Total Ethernet link retrains per recovery attempt (default: 5).
+                                            This is run_cluster_validation's link retraining, not
+                                            --max-attempts, which reruns the whole recovery.
+    --reset-every <number>                  Run tt-smi -glx_reset after every N retrains that fail to bring
+                                            the links back (default: 2), on just the hosts the unretrainable
+                                            cable connects. A retrain cannot re-initialise an ASIC that never
+                                            came up; a galaxy reset can. Set >= --max-retrains to disable.
     --sleep-duration <seconds>              Sleep duration after reset, before validation (default: 5)
     --skip-reset                            Skip tt-smi reset, only run validation
     --skip-validation                       Skip validation, only run tt-smi reset
@@ -129,6 +136,8 @@ DOCKER_IMAGE=""
 DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260728-7-g04e4029f0e3"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
+MAX_RETRAINS=5
+RESET_EVERY=2
 SLEEP_DURATION=5
 SKIP_RESET=false
 SKIP_VALIDATION=false
@@ -219,6 +228,30 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MAX_ATTEMPTS="$2"
+            shift 2
+            ;;
+        --max-retrains)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --max-retrains requires a non-empty value"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --max-retrains must be a positive integer, got '$2'"
+                exit 1
+            fi
+            MAX_RETRAINS="$2"
+            shift 2
+            ;;
+        --reset-every)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --reset-every requires a non-empty value"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Error: --reset-every must be a positive integer, got '$2'"
+                exit 1
+            fi
+            RESET_EVERY="$2"
             shift 2
             ;;
         --sleep-duration)
@@ -460,6 +493,8 @@ else
 fi
 echo "Num iterations: $NUM_ITERATIONS"
 echo "Max attempts: $MAX_ATTEMPTS"
+echo "Max retrains: $MAX_RETRAINS"
+echo "Reset every: $RESET_EVERY retrain(s)"
 echo "Send traffic: $SEND_TRAFFIC"
 echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
@@ -530,24 +565,24 @@ fi
 # loop, only if every attempt failed.
 UNRETRAINABLE_YAML="$OUTPUT_DIR/unretrainable_channels.yaml"
 VALIDATION_EXIT=0
-for (( ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++ )); do
-echo "=========================================="
-echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS"
-echo "=========================================="
 
-# All attempts share $OUTPUT_DIR, but unretrainable_channels.yaml is only (re)written on one
-# specific validation failure path. Clear any artifact from a prior attempt so Step 3 can only
-# regenerate descriptors from evidence produced by the current (latest post-reset) attempt.
-rm -f "$UNRETRAINABLE_YAML"
+# Both ends of a bad cable are listed as separate entries, so the "host:" values in
+# unretrainable_channels.yaml are exactly the machines it lands on. Prints them comma-separated.
+hosts_from_unretrainable_yaml() {
+    local yaml="$1"
+    [[ -f "$yaml" ]] || return 0
+    awk '$1 == "-" && $2 == "host:" { print $3; next } $1 == "host:" { print $2 }' "$yaml" |
+        sort -u | paste -sd, -
+}
 
-# Step 1: tt-smi reset
+# Run tt-smi -glx_reset on a comma-separated host list, returning mpirun's status.
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
-RESET_EXIT=0
-if [[ "$SKIP_RESET" == false ]]; then
-    echo "Running tt-smi -glx_reset..."
+run_glx_reset() {
+    local reset_hosts="$1"
+    local reset_cmd
     # tt-smi writes progress to the tty (not stdout), so run under `script`; the
     # tr/sed/awk pipeline collapses its animated \r/spinner output and keeps colors.
-    read -r -d '' RESET_CMD <<'RESET_CMD' || true
+    read -r -d '' reset_cmd <<'RESET_CMD' || true
 set -o pipefail
 h=$(hostname)
 script -qefc "tt-smi -glx_reset" /dev/null |
@@ -573,13 +608,29 @@ fi
 # Propagate tt-smi's status so mpirun (and the caller) sees per-host reset failures.
 exit "$ec"
 RESET_CMD
-    # Capture mpirun's status without tripping `set -e` (the `if` context suspends it) so a reset
-    # failure retries the attempt instead of aborting the whole script. The remote command exits with
-    # tt-smi's status, so mpirun returns non-zero if any host's reset failed.
-    if mpirun --host "$HOSTS" \
+    mpirun --host "$reset_hosts" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        bash -c "$RESET_CMD"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
+        bash -c "$reset_cmd"
+}
+
+for (( ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++ )); do
+echo "=========================================="
+echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS"
+echo "=========================================="
+
+# All attempts share $OUTPUT_DIR, but unretrainable_channels.yaml is only (re)written on one
+# specific validation failure path. Clear any artifact from a prior attempt so Step 3 can only
+# regenerate descriptors from evidence produced by the current (latest post-reset) attempt.
+rm -f "$UNRETRAINABLE_YAML"
+
+# Step 1: tt-smi reset
+RESET_EXIT=0
+if [[ "$SKIP_RESET" == false ]]; then
+    echo "Running tt-smi -glx_reset..."
+    # Capture the status without tripping `set -e` (the `if` context suspends it) so a reset
+    # failure retries the attempt instead of aborting the whole script.
+    if run_glx_reset "$HOSTS"; then RESET_EXIT=0; else RESET_EXIT=$?; fi
 
     if [[ $RESET_EXIT -ne 0 ]]; then
         echo ""
@@ -612,7 +663,9 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
     fi
     VALIDATION_ARGS+=(--output-path "$OUTPUT_DIR")
 
+    # $1 caps this round's retrains, so the tool hands control back here once it is spent.
     run_cluster_validation() {
+        local round_args=("${VALIDATION_ARGS[@]}" --max-retrains "$1")
         if [[ -n "$DOCKER_IMAGE" ]]; then
             # --tag-host makes mpi-docker prefix each rank with [hostname]; tag_stream adds the time.
             ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
@@ -623,12 +676,12 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
                 "${MPI_EXTRA_ARGS[@]}" \
                 --host "$HOSTS" \
                 ./build/tools/scaleout/run_cluster_validation \
-                "${VALIDATION_ARGS[@]}"
+                "${round_args[@]}"
         else
             # Bare [host] tag on the rank (only the rank knows its hostname); tag_stream
             # adds the time. pipefail keeps run_cluster_validation's real exit code.
             local _bin_cmd
-            _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation "${VALIDATION_ARGS[@]}")
+            _bin_cmd=$(printf '%q ' ./build/tools/scaleout/run_cluster_validation "${round_args[@]}")
             mpirun --host "$HOSTS" \
                 --mca btl_tcp_if_include "$MPI_IF" \
                 "${MPI_EXTRA_ARGS[@]}" \
@@ -636,19 +689,49 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
         fi
     }
 
-    echo ""
-    echo "Running cluster validation..."
-    VALIDATION_LOG=$(mktemp)
-    # Capture the exit code without tripping `set -e` (the `if` context suspends it) so regen
-    # can run on failure. pipefail makes the pipeline reflect run_cluster_validation's status.
-    if run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
+    # A link is only reported unretrainable once the tool's whole budget is spent, so spend
+    # $MAX_RETRAINS in rounds of $RESET_EVERY and glx reset between them: a retrain cannot
+    # re-initialise an ASIC that never came up, but a galaxy reset can. With nothing to escalate to,
+    # or with RESET_EVERY >= MAX_RETRAINS, this is one round, i.e. the original behaviour.
+    ROUND_BUDGET=$RESET_EVERY
+    [[ "$SKIP_RESET" == true ]] && ROUND_BUDGET=$MAX_RETRAINS
+    RETRAINS_LEFT=$MAX_RETRAINS
 
-    if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$VALIDATION_LOG"; then
+    while [[ $RETRAINS_LEFT -gt 0 ]]; do
+        ROUND_RETRAINS=$ROUND_BUDGET
+        [[ $ROUND_RETRAINS -gt $RETRAINS_LEFT ]] && ROUND_RETRAINS=$RETRAINS_LEFT
+        RETRAINS_LEFT=$((RETRAINS_LEFT - ROUND_RETRAINS))
+
+        # Keep only this round's evidence, for the escalation below and for Step 3's regeneration.
+        rm -f "$UNRETRAINABLE_YAML"
+
         echo ""
-        echo "Ethernet links were retrained — rerunning validation to issue traffic..."
-        if run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
-    fi
-    rm -f "$VALIDATION_LOG"
+        echo "Running cluster validation (up to $ROUND_RETRAINS retrain(s), $RETRAINS_LEFT held back)..."
+        VALIDATION_LOG=$(mktemp)
+        # Capture the exit code without tripping `set -e` (the `if` context suspends it) so regen
+        # can run on failure. pipefail makes the pipeline reflect run_cluster_validation's status.
+        if run_cluster_validation "$ROUND_RETRAINS" 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
+
+        if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$VALIDATION_LOG"; then
+            echo ""
+            echo "Ethernet links were retrained — rerunning validation to issue traffic..."
+            if run_cluster_validation "$ROUND_RETRAINS" 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
+        fi
+        rm -f "$VALIDATION_LOG"
+        [[ $VALIDATION_EXIT -eq 0 || $RETRAINS_LEFT -eq 0 ]] && break
+
+        # An empty list means validation failed for some other reason, which a reset will not fix.
+        FAULTY_HOSTS=$(hosts_from_unretrainable_yaml "$UNRETRAINABLE_YAML")
+        [[ -z "$FAULTY_HOSTS" ]] && break
+
+        echo ""
+        echo "Links still down; running tt-smi -glx_reset on $FAULTY_HOSTS"
+        if ! run_glx_reset "$FAULTY_HOSTS"; then
+            echo "Targeted reset failed; no further retrains this attempt."
+            break
+        fi
+        sleep "$SLEEP_DURATION"
+    done
 else
     echo "Skipping validation (--skip-validation)"
 fi
