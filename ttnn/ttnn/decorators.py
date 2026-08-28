@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import os
 
 import pathlib
 import sys
@@ -19,6 +18,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
+from ttnn.trace_allocation_config import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
 def compare_tensors_using_pcc(
@@ -232,6 +232,15 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
     if not isinstance(tensor, ttnn.Tensor):
         raise RuntimeError(f"Unsupported tensor type for comparison: {type(tensor)}")
 
+    def convert_ttnn_to_torch(ttnn_tensor, **kwargs):
+        if ttnn_tensor.dtype == ttnn.DataType.FP8_E4M3:
+            # Torch 2.7 cannot import FP8 DLPack tensors; compare through host FLOAT32 instead.
+            # This matches the FP8 golden's dequantized torch.float32 representation.
+            if ttnn.is_tensor_storage_on_device(ttnn_tensor):
+                ttnn_tensor = ttnn.from_device(ttnn_tensor)
+            ttnn_tensor = ttnn.to_dtype(ttnn_tensor, ttnn.float32)
+        return ttnn.to_torch(ttnn_tensor, **kwargs)
+
     try:
         topology = tensor.tensor_topology()
         placements = list(topology.placements())
@@ -255,7 +264,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
         if not device_tensors:
             return None
 
-        torch_shards = [ttnn.to_torch(device_tensor) for device_tensor in device_tensors]
+        torch_shards = [convert_ttnn_to_torch(device_tensor) for device_tensor in device_tensors]
         if len(torch_shards) == 1:
             return torch_shards[0]
 
@@ -301,7 +310,7 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                 isinstance(placement, ttnn.PlacementShard) and placement.dim >= per_device_rank
                 for placement in placements
             ):
-                return ttnn.to_torch(device_tensors[0])
+                return convert_ttnn_to_torch(device_tensors[0])
 
         if not has_shard:
             composed = compose_device_tensors()
@@ -330,13 +339,13 @@ def to_torch_for_comparison(tensor, golden_tensor=None):
                     mesh_shape_override=ttnn.MeshShape(composer_shape),
                 ),
             )
-            return ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+            return convert_ttnn_to_torch(tensor, mesh_composer=mesh_composer)
 
     composed = compose_device_tensors()
     if composed is not None:
         return composed
 
-    return ttnn.to_torch(tensor)
+    return convert_ttnn_to_torch(tensor)
 
 
 def get_tensor_report_record(tensor):
@@ -519,6 +528,75 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
 
 
+if TRACE_ALLOC_DIAGNOSTICS:
+
+    def _drain_traceback_ids(source="op_end", op_name=None):
+        """Drain allocation IDs and capture their Python call stacks."""
+        from ttnn._ttnn.operations.trace import drain_pending_traceback_ids, drain_retired_traceback_ids
+        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+        pending = drain_pending_traceback_ids()
+        retired = set(drain_retired_traceback_ids())
+        for buf_id in retired:
+            UnsafeAllocationTracker._tracebacks.pop(buf_id, None)
+        pending = [buf_id for buf_id in pending if buf_id not in retired]
+        if not pending:
+            return
+        import traceback as _tb
+
+        # Drop the tracker wrapper frames so the traceback ends at the model call site.
+        stack = "".join(_tb.format_stack()[:-2])
+        if source == "op_start":
+            marker = (
+                "[trace alloc tracker] pending traceback IDs were flushed at op entry; "
+                "allocation likely happened outside a wrapped op"
+            )
+            if op_name:
+                marker += f" before '{op_name}'"
+            marker += ".\n"
+            stack = marker + stack
+        for buf_id in pending:
+            UnsafeAllocationTracker._tracebacks[buf_id] = stack
+
+
+# Keyword argument names through which an operation writes into a caller-supplied tensor in
+# place; the tensor's contents are overwritten so any pre-existing global golden becomes stale.
+INPLACE_OUTPUT_KWARG_NAMES = (
+    "output_tensor",
+    "optional_tensor",
+    "optional_output_tensor",
+    "out",
+    "output_tensors",
+    "optional_output_tensors",
+)
+
+
+def get_inplace_output_tensors(function_kwargs):
+    tensors = []
+    for name in INPLACE_OUTPUT_KWARG_NAMES:
+        if name in function_kwargs:
+            tensors += get_ttnn_tensors(function_kwargs[name])
+    return tensors
+
+
+def refresh_or_invalidate_global_goldens(inplace_tensors, global_golden_output):
+    # Re-key the fresh golden onto a caller tensor an op wrote in place, or drop its stale
+    # entry when no golden exists so the next read rebuilds the golden from device data.
+    import torch
+
+    if not inplace_tensors:
+        return
+    golden_tensors = get_tensors(global_golden_output, torch.Tensor) if global_golden_output is not None else []
+    for index, tensor in enumerate(inplace_tensors):
+        tensor_id = getattr(tensor, "tensor_id", None)
+        if tensor_id is None:
+            continue
+        if len(golden_tensors) == len(inplace_tensors):
+            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[tensor_id] = golden_tensors[index]
+        else:
+            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor_id, None)
+
+
 @dataclasses.dataclass
 class FastOperation:
     python_fully_qualified_name: str
@@ -685,6 +763,41 @@ class FastOperation:
         #         self.__doc__ = f.read()
 
 
+if TRACE_ALLOC_TRACKING:
+    from ttnn._ttnn.operations.trace import pop_allocation_context, push_allocation_context
+
+    _untracked_fast_operation_call = FastOperation.__call__
+
+    if TRACE_ALLOC_DIAGNOSTICS:
+
+        @wraps(_untracked_fast_operation_call)
+        def _tracked_fast_operation_call(self, *function_args, **function_kwargs):
+            if self._requires_slow_runtime():
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+            _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
+            push_allocation_context(self.python_fully_qualified_name)
+            try:
+                result = _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                return result
+            finally:
+                pop_allocation_context()
+
+    else:
+
+        @wraps(_untracked_fast_operation_call)
+        def _tracked_fast_operation_call(self, *function_args, **function_kwargs):
+            if self._requires_slow_runtime():
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+            push_allocation_context(self.python_fully_qualified_name)
+            try:
+                return _untracked_fast_operation_call(self, *function_args, **function_kwargs)
+            finally:
+                pop_allocation_context()
+
+    FastOperation.__call__ = _tracked_fast_operation_call
+
+
 @dataclasses.dataclass
 class Operation:
     python_fully_qualified_name: str
@@ -748,6 +861,10 @@ class Operation:
                     logger.debug(
                         f"{self.python_fully_qualified_name}: Skipping comparison against CPU because golden_function is not provided"
                     )
+                    # An op without a golden (e.g. dropout) can still mutate a caller tensor in
+                    # place; invalidate its stale global golden so later reads don't mismatch.
+                    if ttnn.CONFIG.report_path is not None:
+                        refresh_or_invalidate_global_goldens(get_inplace_output_tensors(function_kwargs), None)
                     TENSOR_IDS_PRODUCED_BY_OPERATION.update(get_output_tensor_ids(function_return_value))
                     return function_return_value, (
                         local_tensor_comparison_records,
@@ -829,6 +946,13 @@ class Operation:
                             f"{self.python_fully_qualified_name}: Failed global tensor comparison: {e}. "
                             "Global comparison will be skipped"
                         )
+
+                # An in-place op (optional_tensor/output_tensor) returns a new wrapper, so re-key
+                # the fresh global golden onto the caller's tensor to keep later reads consistent.
+                if ttnn.CONFIG.report_path is not None:
+                    refresh_or_invalidate_global_goldens(
+                        get_inplace_output_tensors(function_kwargs), global_golden_function_output
+                    )
 
                 if isinstance(local_golden_function_output, torch.Tensor):
                     local_golden_function_output = [local_golden_function_output]
@@ -960,6 +1084,16 @@ class Operation:
         function = runtime_decorator(function)
         self.decorated_function = function
 
+        if self.function.__doc__ is None:
+            return
+
+        # Delete the signature line created by nanobind
+        docstring_lines = self.function.__doc__.split("\n")
+        op_name = self.python_fully_qualified_name.split(".")[-1]
+        if f"{op_name}(" in docstring_lines[0]:
+            docstring_lines.pop(0)
+        self.__doc__ = "\n".join(docstring_lines)
+
     def __call__(self, *function_args, **function_kwargs):
         recording = ttnn.graph.is_python_io_recording_enabled()
         if recording:
@@ -975,7 +1109,34 @@ class Operation:
                 ttnn.graph.track_function_end()
         return output
 
-    __doc__ = property(lambda self: self.decorated_function.__doc__)
+
+if TRACE_ALLOC_TRACKING:
+    _untracked_operation_call = Operation.__call__
+
+    if TRACE_ALLOC_DIAGNOSTICS:
+
+        @wraps(_untracked_operation_call)
+        def _tracked_operation_call(self, *function_args, **function_kwargs):
+            _drain_traceback_ids(source="op_start", op_name=self.python_fully_qualified_name)
+            push_allocation_context(self.python_fully_qualified_name)
+            try:
+                result = _untracked_operation_call(self, *function_args, **function_kwargs)
+                _drain_traceback_ids(source="op_end", op_name=self.python_fully_qualified_name)
+                return result
+            finally:
+                pop_allocation_context()
+
+    else:
+
+        @wraps(_untracked_operation_call)
+        def _tracked_operation_call(self, *function_args, **function_kwargs):
+            push_allocation_context(self.python_fully_qualified_name)
+            try:
+                return _untracked_operation_call(self, *function_args, **function_kwargs)
+            finally:
+                pop_allocation_context()
+
+    Operation.__call__ = _tracked_operation_call
 
 
 class RegisteredOperations:
@@ -1018,7 +1179,6 @@ def query_registered_operations(include_experimental=False):
 
 
 def dump_operations(csv_file, include_experimental=False):
-    import csv
     import pandas as pd
 
     apis = query_registered_operations(include_experimental)
@@ -1030,13 +1190,13 @@ def dump_operations(csv_file, include_experimental=False):
             "preprocess_golden_function_inputs": str(obj.preprocess_golden_function_inputs),
             "golden_function": str(obj.golden_function),
             "postprocess_golden_function_outputs": str(obj.postprocess_golden_function_outputs),
+            "has_golden_function": obj.golden_function is not None,
             "is_cpp_operation": obj.is_cpp_operation,
             "is_experimental": obj.is_experimental,
         }
 
     df = pd.DataFrame([to_dict(obj) for obj in apis])
     df.sort_values(by=["is_experimental", "is_cpp_operation", "python_fully_qualified_name"], inplace=True)
-    df["has_golden_function"] = df["golden_function"].apply(lambda golden_function: golden_function is not None)
     df = df[
         [
             "python_fully_qualified_name",

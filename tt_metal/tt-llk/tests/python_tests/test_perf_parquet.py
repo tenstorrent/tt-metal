@@ -12,6 +12,7 @@ shared wide schema (DB_SCHEMA), that columns a test did not emit become NULL
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
+from helpers.metrics import export_metrics
 from helpers.perf.parquet import (
     align_to_schema,
     arrow_schema,
@@ -23,7 +24,17 @@ from helpers.perf.parquet import (
     write_parquet,
     write_run_batch,
 )
-from helpers.perf.wide_schema import DB_SCHEMA
+from helpers.perf.schema import (
+    MARKER,
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
+from helpers.perf.test_schemas import PERF_TEST_SCHEMAS
+from helpers.perf.wide_schema import DB_SCHEMA, DROPPED_COLUMNS
 
 _RUN_PROV = dict(
     commit_sha="abc123",
@@ -292,6 +303,60 @@ def test_convert_keeps_num_blocks_columns(tmp_path):
     names = pq.read_table(tmp_path / "out.parquet").schema.names
     assert "input_num_blocks" in names
     assert "output_num_blocks" in names
+
+
+def test_catalog_columns_are_in_db_schema():
+    # Every WH/BH per-test CSV column must be in the published WH/BH table (or
+    # intentionally dropped). Quasar has its own table — see
+    # test_perf_parquet_quasar.py.
+    schema_names = {c.name for c in DB_SCHEMA} | DROPPED_COLUMNS
+    missing = {}
+    for test, entry in PERF_TEST_SCHEMAS.items():
+        unknown = sorted(set(entry["columns"]) - schema_names)
+        if unknown:
+            missing[test] = unknown
+    assert not missing, (
+        "WH/BH perf-test catalog column(s) are not in "
+        "helpers.perf.wide_schema.DB_SCHEMA and would be dropped from Parquet: "
+        f"{missing}. Add them as nullable columns (or to DROPPED_COLUMNS if they "
+        "must not be published)."
+    )
+
+
+def test_counter_metric_columns_are_accounted_for():
+    # Drives the real emitter, not the schema's constants, so a rename fails here.
+    schema_names = {c.name for c in DB_SCHEMA} | DROPPED_COLUMNS
+    unknown = set()
+    for run_type in sorted(RUN_TYPE_NAMES):
+        for metric in sorted(METRIC_BASES):
+            for computed in (
+                [{"zone": "ZONE_1", metric: 1.0}],
+                [{"zone": "ZONE_1", metric: 1.0}, {"zone": "ZONE_1", metric: 2.0}],
+            ):
+                frame = export_metrics(computed, run_type, ["INIT", "TILE_LOOP"])
+                unknown |= {
+                    c for c in frame.columns if c != MARKER and c not in schema_names
+                }
+    assert not unknown, (
+        "helpers.metrics.export_metrics emits counter metric column(s) that are "
+        "neither published nor dropped, so a run with --enable-perf-counters fails "
+        f"the strict writer: {sorted(unknown)}"
+    )
+
+
+def test_counter_metrics_stay_out_of_the_published_table():
+    published = {c.name for c in DB_SCHEMA}
+    forms = {
+        metric_column(run_type, base)
+        for run_type in RUN_TYPE_NAMES
+        for metric in METRIC_BASES
+        for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    }
+    leaked = sorted(published & forms)
+    assert not leaked, (
+        "counter metric column(s) reached the published table: "
+        f"{leaked[:5]}{'...' if len(leaked) > 5 else ''}"
+    )
 
 
 # ── Parquet -> CSV (reverse conversion) ───────────────────────────────────────

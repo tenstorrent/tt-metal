@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -32,7 +33,8 @@ void kernel_main() {
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5;
     constexpr float kKappa = 0.044715;
 
-    unary_op_init_common(dfb::grad_out, dfb::grad_in);
+    compute_kernel_hw_startup(dfb::grad_out, dfb::grad_in);
+    copy_init(dfb::grad_out);
     add_binary_tile_init();
     mul_binary_tile_init();
     square_tile_init();

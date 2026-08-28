@@ -241,25 +241,6 @@ public:
             };
         }
 
-        // Quasar dispatch-engine cores run DM-only firmware (COMPILE_FOR_DM), but the on-device
-        // DevicePrintMemoryLayout still reserves the TRISC sub-buffer first, so the DM print buffer
-        // (the one get_device_print_buffer() returns) lives at structure_address +
-        // kQuasarDprintComputeSubbufferSize. Only the DM sub-buffer is populated; mirror the DM half of
-        // the Quasar TENSIX split above.
-        if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
-            const uint16_t dm_count = static_cast<uint16_t>(hal.get_processor_types_count(
-                programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
-            TT_FATAL(
-                static_cast<uint32_t>(kQuasarDprintComputeSubbufferSize) + kQuasarDprintDmSubbufferSize ==
-                    structure_size,
-                "Quasar DISPATCH DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",
-                kQuasarDprintComputeSubbufferSize,
-                kQuasarDprintDmSubbufferSize,
-                structure_size);
-            return {make_buffer(
-                structure_address + kQuasarDprintComputeSubbufferSize, kQuasarDprintDmSubbufferSize, dm_count, 0)};
-        }
-
         const uint16_t num_processors = static_cast<uint16_t>(hal.get_num_risc_processors(programmable_core_type));
         return {make_buffer(structure_address, static_cast<uint16_t>(structure_size), num_processors, 0)};
     }
@@ -1041,7 +1022,7 @@ void DPrintServer::Impl::await() {
 void DPrintServer::Impl::init_device(ChipId device_id) {
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    CoreDescriptorSet all_cores = GetAllCores(cluster, control_plane, device_id);
+    CoreDescriptorSet all_cores = GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
@@ -1077,7 +1058,8 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // here are virtual.
     auto& cluster = env_.get_cluster();
     auto& control_plane = env_.get_control_plane();
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores =
+        tt::tt_metal::GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     tt::tt_metal::CoreDescriptorSet dispatch_cores =
         tt::tt_metal::GetDispatchCores(env_, device_id, num_hw_cqs_, dispatch_core_config_);
 
@@ -1294,7 +1276,8 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     log_info(LogMetal, "DPRINT Server detached device {}", device_id);
 
     // When detaching a device, disable prints on it.
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores =
+        tt::tt_metal::GetAllCores(env_.get_hal(), cluster, control_plane, device_id);
     for (const auto& logical_core : all_cores) {
         init_print_buffers_for_core(device_id, logical_core);
     }

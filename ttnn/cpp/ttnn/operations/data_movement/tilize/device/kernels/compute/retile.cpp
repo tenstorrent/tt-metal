@@ -38,7 +38,9 @@ ALWI void fill_zeros_pages(DataflowBuffer& dfb, uint32_t num_pages, uint32_t pag
 void kernel_main() {
     const uint32_t num_input_blocks = get_arg_val<uint32_t>(0);
     const uint32_t num_real_input_rows = get_arg_val<uint32_t>(1);
-    if (num_input_blocks == 0) {
+    // Shrink-case output cap: emit real rows only. Padded rows would OOB the output DRAM buffer.
+    const uint32_t num_real_output_rows = get_arg_val<uint32_t>(2);
+    if (num_input_blocks == 0 || num_real_output_rows == 0) {
         return;
     }
 
@@ -75,6 +77,8 @@ void kernel_main() {
     DataflowBuffer mid(mid_cb);
     DataflowBuffer out_dfb(out_cb);
 
+    uint32_t emitted_output_rows = 0;
+
     for (uint32_t b = 0; b < num_iters; ++b) {
         // Rows beyond num_real_input_rows are grow-case height padding: they don't exist in DRAM,
         // so they are zero-filled into the intermediate instead of untilized from the input.
@@ -109,10 +113,14 @@ void kernel_main() {
         pack_reconfig_data_format(mid_cb, out_cb);
         tilize_init(mid_view_cb, tiles_per_block, out_cb);
         for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
+            if (emitted_output_rows >= num_real_output_rows) {
+                break;
+            }
             UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })
             out_dfb.reserve_back(tiles_per_block);
             tilize_block(mid_view_cb, tiles_per_block, out_cb);
             out_dfb.push_back(tiles_per_block);
+            ++emitted_output_rows;
         }
         tilize_uninit(mid_view_cb, out_cb);
 
@@ -120,5 +128,9 @@ void kernel_main() {
 
         reconfig_data_format_srca(mid_view_cb, src_cb);
         pack_reconfig_data_format(out_cb, mid_cb);
+
+        if (emitted_output_rows >= num_real_output_rows) {
+            break;
+        }
     }
 }

@@ -69,11 +69,14 @@ class BinarySfpu(Sfpu):
     ) -> str:
         stage = operation.stage_id
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
+        en_32bit_dest = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
 
         return (
             f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
             f"    _llk_math_eltwise_sfpu_init_();\n"
-            f"    test_utils::init_binary_sfpu_operation_quasar<{op}>();\n"
+            f"    test_utils::init_binary_sfpu_operation_quasar<"
+            f"{op}, {en_32bit_dest}, false, {approx_mode}>();\n"
         )
 
     def calculate(
@@ -86,6 +89,7 @@ class BinarySfpu(Sfpu):
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         dest_sync = operation.dest_sync.cpp_enum_value
         en_32bit_dest = config.dest_acc.cpp_enum_value
+        approx_mode = self.approx_mode.cpp_enum_value
         quasar_iterations = self.iterations // 4
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
@@ -95,7 +99,8 @@ class BinarySfpu(Sfpu):
 
         return (
             f"test_utils::call_binary_sfpu_operation_quasar<"
-            f"{op}, {dest_sync}, {en_32bit_dest}, {dst_rounding_mode}, {quasar_iterations}"
+            f"{op}, {dest_sync}, {en_32bit_dest}, {dst_rounding_mode}, "
+            f"{quasar_iterations}, false, {approx_mode}"
             f">({src1} /* src0_tile */, {src2} /* src1_tile */, {dst} /* dst_tile */, {data_format});\n"
         )
 

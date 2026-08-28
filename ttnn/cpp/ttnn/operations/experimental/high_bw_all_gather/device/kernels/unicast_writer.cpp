@@ -38,8 +38,8 @@ void kernel_main() {
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);
     constexpr uint32_t packet_size = get_compile_time_arg_val(5);
     constexpr uint32_t slice_step = get_compile_time_arg_val(6);
-    // See unicast_reader.cpp: runtime-controlled gathers retain a dynamic stripe width;
-    // fixed bank-owned gathers bake it to avoid divide/modulo in the send loop.
+    // See unicast_reader.cpp: the maximum per-rank output slot remains fixed for
+    // runtime-controlled gathers, so its stripe width can be baked.
     constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
     constexpr auto output_tensor_args = TensorAccessorArgs<8>();
 

@@ -55,7 +55,6 @@ Table of Contents
 | normalization/ | "LayerNorm, RMSNorm, softmax" |
 | transformer/ | Attention / SDPA |
 | "ccl/, point_to_point/" | "Collective communication, point-to-point transfer" |
-| moreh/ | Moreh op suite |
 | "embedding/, embedding_backward/" | Embedding forward / backward |
 | "kv_cache/, prefetcher/" | Inference serving support |
 | "creation/, full/, full_like/, rand/, randn/, uniform/, bernoulli/" | Tensor creation |
@@ -100,9 +99,9 @@ The repository holds one Quasar op tree. There are no separate program directori
 
 | Level | Program | Delivered from | Feature this release |
 | --- | --- | --- | --- |
-| L3.1 | Quasar Horizon | ttnn/cpp/ttnn/operations/experimental/quasar/ | &lt;...&gt; |
-| L3.2 | Quasar Trinity | ttnn/cpp/ttnn/operations/experimental/quasar/ | Quasar ResNet Kernel Ops |
-| L3.3 | Quasar Saturn | ttnn/cpp/ttnn/operations/experimental/quasar/ | &lt;...&gt; |
+| L3.1 | 2.0.1 | ttnn/cpp/ttnn/operations/experimental/quasar/ | Quasar ResNet Kernel Ops |
+| L3.2 | 2.0.2 | ttnn/cpp/ttnn/operations/experimental/quasar/ | &lt;...&gt; |
+| L3.3 | 2.0.3 | ttnn/cpp/ttnn/operations/experimental/quasar/ | &lt;...&gt; |
 
 **This delivery contains:** all of Level 1 plus the full Quasar op tree (experimental/quasar/).
 
@@ -147,9 +146,9 @@ The repository holds **one** Quasar architecture folder. There are no separate H
 
 | **Level** | **Program** | **Delivered from** | **Feature this release** |
 | --- | --- | --- | --- |
-| L3.1 | Quasar Horizon | tt_metal/tt-llk/tt_llk_quasar/ | <...> |
-| **L3.2** | **Quasar Trinity** | tt_metal/tt-llk/tt_llk_quasar/ | **LLK INT8 support; PDL-related LLK features; Quant / dequant kernels** |
-| L3.3 | Quasar Saturn | tt_metal/tt-llk/tt_llk_quasar/ | <...> |
+| L3.1 | 2.0.1 | tt_metal/tt-llk/tt_llk_quasar/ | LLK INT8 support; PDL-related LLK features; Quant / dequant kernels |
+| L3.2 | 2.0.2 | tt_metal/tt-llk/tt_llk_quasar/ | <...> |
+| L3.3 | 2.0.3 | tt_metal/tt-llk/tt_llk_quasar/ | <...> |
 
 **This delivery contains:**all of Level 1 (common/, tests/, docs/, infra/) plus the full Quasar architecture folder (tt_llk_quasar/).
 
@@ -208,8 +207,8 @@ The repository holds one Quasar runtime tree. There are no separate program dire
 
 | **Level** | **Program** | **Delivered from** | **Feature this release** |
 | --- | --- | --- | --- |
-| L3.1 | Quasar Horizon | tt_metal/.../tt-2xx/quasar/ | <...> |
-| L3.2 | Quasar Trinity | tt_metal/.../tt-2xx/quasar/ | FD support for dispatch engine; Profiler debug tool support |
-| L3.3 | Quasar Saturn | tt_metal/.../tt-2xx/quasar/ | <...> |
+| L3.1 | 2.0.1 | tt_metal/.../tt-2xx/quasar/ | FD support for dispatch engine; Profiler debug tool support |
+| L3.2 | 2.0.2 | tt_metal/.../tt-2xx/quasar/ | <...> |
+| L3.3 | 2.0.3 | tt_metal/.../tt-2xx/quasar/ | <...> |
 
 **This delivery contains:** all of Level 1 plus the full Quasar generation and chip folders (llrt/hal/tt-2xx/, hw/firmware/src/tt-2xx/, hw/inc/internal/tt-2xx/, hw/ckernels/quasar/)

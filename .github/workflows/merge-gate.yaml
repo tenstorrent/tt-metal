@@ -240,6 +240,7 @@ jobs:
 
   resolve-docker-pull-refs:
     needs: [check-harbor, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -249,6 +250,7 @@ jobs:
 
   resolve-docker-pull-refs-tsan:
     needs: [check-harbor, build-tsan]
+    if: ${{ !cancelled() && needs.build-tsan.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -256,6 +258,7 @@ jobs:
 
   resolve-docker-pull-refs-asan:
     needs: [check-harbor, build-asan]
+    if: ${{ !cancelled() && needs.build-asan.result == 'success' }}
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -277,6 +280,9 @@ jobs:
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.resolve-docker-pull-refs-tsan.outputs.dev-docker-image }}
+      # Canonical (non-Harbor-prefixed) ref for the github_hosted_cpu leg, which runs
+      # on GitHub-hosted runners without Harbor access.
+      cpu-docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       enabled-skus: ALL_SKUS_IN_TESTS
       per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
@@ -306,6 +312,7 @@ jobs:
 
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.resolve-docker-pull-refs.result == 'success' && needs.find-changes.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:

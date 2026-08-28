@@ -679,7 +679,10 @@ bool Device::close() {
 
     this->invalidate_smc_dispatch_telemetry_control();
 
-    tt::tt_metal::MetalContext::instance().get_service_core_manager().impl().on_device_close(this->id_);
+    tt::tt_metal::MetalContext::instance(this->get_context_id())
+        .get_service_core_manager()
+        .impl()
+        .on_device_close(this->id_);
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
@@ -739,7 +742,10 @@ CoreCoord Device::compute_with_storage_grid_size() const {
     auto grid = tt::get_compute_grid_size(MetalEnvAccessor(*env_).impl(), id_, num_hw_cqs_, dispatch_core_config);
     // Cap to FD-mode grid when service cores are claimed — prevents SD workloads
     // from targeting dispatch-column cores running persistent service kernels.
-    if (auto safe = MetalContext::instance().get_service_core_manager().impl().get_safe_compute_grid(id_)) {
+    if (auto safe = MetalContext::instance(this->get_context_id())
+                        .get_service_core_manager()
+                        .impl()
+                        .get_safe_compute_grid(id_)) {
         grid.x = std::min(grid.x, safe->x);
         grid.y = std::min(grid.y, safe->y);
     }
@@ -912,12 +918,6 @@ void Device::disable_and_clear_program_cache() {
     program_cache_.clear();
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
-
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocations_unsafe(); }
-
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {

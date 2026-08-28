@@ -133,12 +133,9 @@ namespace {
 // A tri-state env var (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES) overrides the auto-detect:
 //   =1 → force enable, =0 → force disable, unset → auto-detect (below).
 //
-// Two independent constraints for auto-detect, both about the application owning the right DRAM RISC core:
-//   - Firmware must support it (arch + firmware-bundle floor) -- resolved by check_firmware_capabilities.
-//   - Topology: with DRAM harvesting the specific core the application must write to for GCB credits can
-//     differ per device, which breaks our programming model that the cores look identical on every
-//     device. A single device has no cross-device consistency to break, and an unharvested multi-device
-//     system lines the cores up the same way -- so require no harvested DRAM channels, OR a single device.
+// Auto-detect resolves firmware support only (architecture + firmware-bundle floor, via
+// check_firmware_capabilities). DRAM harvesting no longer disables the core type: DRAM programs and
+// GCB credit targets resolve sender coordinates from each device's SOC descriptor.
 bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, const llrt::RunTimeOptions& rtoptions) {
     const auto override = rtoptions.get_blackhole_dram_programmable_cores_override();
     if (override.has_value()) {
@@ -158,21 +155,7 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         {.firmware_bundle = cluster.get_cluster_desc()->get_cluster_firmware_bundle_version()},
         req,
         res);
-    if (!res.dram_programmable_cores) {
-        return false;
-    }
-
-    if (cluster.number_of_devices() == 1) {
-        return true;
-    }
-    // Multi-device: the GCB-credit core must be the same on every device, so reject if any device has
-    // a harvested DRAM channel (which would shift that core on that device).
-    for (const auto chip : cluster.all_chip_ids()) {
-        if (cluster.get_soc_desc(chip).harvesting_masks.dram_harvesting_mask != 0) {
-            return false;
-        }
-    }
-    return true;
+    return res.dram_programmable_cores;
 }
 }  // namespace
 
@@ -305,7 +288,11 @@ bool MetalEnvImpl::set_fabric_config(
     }
 
     if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
-        log_warning(
+        // This is the expected, common case: DeviceManager's legacy dispatch-fallback path (see
+        // DeviceManager::initialize) always requests num_routing_planes=1 to enable minimal fabric for dispatch,
+        // regardless of how many routing planes the control plane already has active. Silently keeping the higher
+        // existing value is correct behavior, not a misconfiguration, so this does not warrant warning severity.
+        log_debug(
             tt::LogMetal,
             "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
             num_routing_planes.value(),
@@ -376,10 +363,8 @@ void MetalEnvImpl::initialize_fabric_tensix_datamover_config() {
         return;
     }
 
-    if (get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        return;
-    }
-
+    // Mock is included: this is control-plane/soc-descriptor derived (no device I/O), and the mock
+    // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
     if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         auto& cp = this->get_control_plane();
         cp.initialize_fabric_tensix_datamover_config();

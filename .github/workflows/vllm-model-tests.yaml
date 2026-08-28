@@ -152,6 +152,7 @@ jobs:
             "${{ needs.resolve-skus.outputs.model }}"
   build-artifact:
     needs: [check-harbor, validate-filters]
+    if: ${{ !cancelled() && needs.validate-filters.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -163,8 +164,80 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+  vllm-plugin-unit-tests:
+    needs: build-artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        VLLM_SOURCE: ${{ inputs.vllm-source || 'plugin' }}
+        PLUGIN_DIR: ${{ inputs.vllm-source == 'fork' && '/work/vllm/plugins/vllm-tt-plugin' || '/work/vllm-tt-plugin' }}
+        PYTHONPATH: ${{ inputs.vllm-source == 'fork' && '/work:/work/vllm' || '/work:/work/vllm-tt-plugin/src' }}
+        LD_LIBRARY_PATH: /work/build/lib
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+          persist-credentials: false
+      - name: ⬇️ Setup Metal
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: ⬇️ Checkout vLLM TT plugin
+        if: ${{ inputs.vllm-source != 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/vllm-tt-plugin
+          path: docker-job/vllm-tt-plugin
+          ref: ${{ inputs.vllm-tt-plugin-ref || 'main' }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: ⬇️ Checkout vLLM fork
+        if: ${{ inputs.vllm-source == 'fork' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          repository: tenstorrent/vllm
+          path: docker-job/vllm
+          ref: ${{ inputs.vllm-commit || 'dev' }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 📀 Install vLLM and plugin test dependencies
+        run: |
+          if [ "$VLLM_SOURCE" = "fork" ]; then
+            VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
+          else
+            pushd vllm-tt-plugin
+            source docs/install-vllm-tt.sh
+            uv pip install -e ".[dev]"
+            popd
+          fi
+      - name: 🧪 Run host-only plugin tests
+        run: |
+          pushd "$PLUGIN_DIR"
+          pytest tests --ignore=tests/tt -v
+          popd
   vllm-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/vllm-model-tests-impl.yaml
     with:

@@ -18,6 +18,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <cabling_generator/cabling_generator.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
@@ -391,6 +392,12 @@ int main(int argc, char* argv[]) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
+        // Refresh the cluster descriptor from hardware so the retrained links are reflected in the
+        // re-discovery below. run_physical_system_discovery() derives its entire ethernet topology from
+        // cluster_desc.get_ethernet_connections(), which is only rebuilt by rediscover_ethernet_links().
+        // Without this, re-discovery returns the stale (pre-reset) topology, missing_asic_topology never
+        // shrinks, and the loop always exhausts MAX_RETRAINS_BEFORE_FAILURE even when the retrain succeeded.
+        cluster.rediscover_ethernet_links();
         // Re-run discovery
         auto& context_ref = tt::tt_metal::MetalContext::instance();
         physical_system_descriptor.clear();
@@ -409,7 +416,7 @@ int main(int argc, char* argv[]) {
         log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
         log_unretrainable_channels(
             missing_asic_topology, physical_system_descriptor, num_retrains, input_args.output_path);
-        TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
+        log_output_rank0("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
@@ -440,7 +447,7 @@ int main(int argc, char* argv[]) {
     }
     distributed_context.barrier();
     if (input_args.fail_on_warning && !eth_connections_healthy) {
-        TT_THROW("Encountered unhealthy ethernet connections, listed above");
+        log_output_rank0("Encountered unhealthy ethernet connections, listed above");
         return -1;
     }
     return 0;
