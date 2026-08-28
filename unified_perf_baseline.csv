@@ -85,3 +85,46 @@ stage1-done,af928a542da,2026-08-28,llama_prefill,Phi-3 mini 3.8B/d96/S512,198.2
 stage1-done,af928a542da,2026-08-28,llama_prefill,Qwen3 0.6B/d128/S512,219.0
 stage1-done,af928a542da,2026-08-28,llama_prefill,Llama 3.2 3B/d128/S512,219.0
 stage1-done,af928a542da,2026-08-28,llama_prefill,Gemma 3 1B/d256/S512,307.5
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt1/ct1,3.37
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt1/ct4,6.28
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt1/ct8,10.04
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt4/ct1,6.35
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt4/ct4,12.57
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt4/ct8,21.35
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt8/ct1,10.20
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt8/ct4,21.00
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt8/rt8/ct8,36.47
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt1/ct1,8.16
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt1/ct4,18.49
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt1/ct8,32.05
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt4/ct1,18.73
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt4/ct4,40.25
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt4/ct8,71.32
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt8/ct1,32.83
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt8/ct4,69.99
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,dst/kb1/kt32/rt8/ct8,123.60
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt1/ct1,3.61
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt1/ct4,6.79
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt1/ct8,10.88
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt4/ct1,6.83
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt4/ct4,13.47
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt4/ct8,23.04
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt8/ct1,11.05
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt8/ct4,22.66
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt8/rt8/ct8,39.85
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt1/ct1,8.39
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt1/ct4,19.00
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt1/ct8,32.88
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt4/ct1,19.22
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt4/ct4,41.10
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt4/ct8,72.94
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt8/ct1,33.73
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt8/ct4,71.63
+dynamic-noc-fix,78b815b6d93,2026-08-28,matmul,l1/kb1/kt32/rt8/ct8,126.92
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Llama 3.2 1B/d64/S512,176.6
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Qwen2.5 0.5B/d64/S512,176.6
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,TinyLlama 1.1B/d64/S512,176.6
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Phi-3 mini 3.8B/d96/S512,198.1
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Qwen3 0.6B/d128/S512,219.1
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Llama 3.2 3B/d128/S512,219.1
+dynamic-noc-fix,78b815b6d93,2026-08-28,llama_prefill,Gemma 3 1B/d256/S512,307.7

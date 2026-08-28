@@ -608,7 +608,7 @@ program from `ttnn::CoreIDs`, the same counter ttnn uses, so ids stay unique acr
 8 tiles, 0.148us per input tile for a reduce against 0.234us per input-plus-output tile, so
 0.086us for the acquire and pack alone.
 
-### 7.5 One open failure: mcast_share, and a methodology error that hid it
+### 7.5 mcast_share: RESOLVED, and the methodology error that hid it
 
 **`test_unified_mcast_share` hangs when kernel asserts are compiled in, and only then.**
 Isolated to one variable, same device, same reset, nothing else changed:
@@ -616,16 +616,32 @@ Isolated to one variable, same device, same reset, nothing else changed:
     TT_METAL_HOME=$PWD                                          ./test_unified_mcast_share.py   8/8 configs ok
     TT_METAL_HOME=$PWD TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1     ./test_unified_mcast_share.py   hangs
 
-Under the WATCHER -- asserts also on, different reporting -- it passes in 8s. That combination
-is what `unified_api_hazards.md` already warns about under "the two assert modes are not
-interchangeable": lightweight is an `ebreak` that halts the RISC and is indistinguishable from
-a hang, so an assert firing and a deadlock look identical from the host. Which of the two this
-is has not been established. mcast_share is also the suite built to be timing-sensitive --
-handshake-pair sharing and deliberate skew -- so a build that changes kernel size changing its
-behaviour is not surprising, and that cuts both ways: it could be a real assert, or a race the
-watcher's timing avoids.
+Under the WATCHER -- asserts also on, different reporting -- it passes in 8s.
 
-**IT IS NOT A PORT REGRESSION.** The pre-port tree -- `tt/unified/`, `mcast_share.cpp`,
+**It was a real assert, in metal's firmware, and it is now fixed.** The kernel returned with a
+nonposted write still in flight; `brisc.cc:550-561` asserts under `DM_DYNAMIC_NOC` that
+nonposted writes have LANDED before the next kernel runs, where dedicated mode asserts only
+that they were sent. `~NocAsyncWriteTx` waited for departure, which is the DFB's release
+condition but not the kernel-exit one. `detail::release_writes` now barriers in dynamic mode
+only; dedicated-mode codegen is unchanged, and the suite is 20/20 with asserts on for the
+first time. `unified_api_hazards.md` entry 30 carries the full account.
+
+**How it was found, since three of the four theories about this test were wrong.** Muting only
+the library's own asserts left it hanging, and replacing metal's two circular-buffer asserts
+with prints left it hanging with the prints silent -- so the halting `ebreak` was in neither
+place. What settled it was neutering `lightweight_assert_trap` itself: with `ASSERT_ENABLED`
+still 1 and every condition still compiled, all 8 configurations passed and passed bit-exact.
+That proved an assert was firing AND that the payload was correct, which together point at a
+check made too early rather than at a broken computation. `objdump`/`addr2line -i` over the
+built ELFs then enumerated the live sites directly, which beat guessing at 145 candidates.
+
+Three properties of this bug are worth carrying forward, because each one defeats an obvious
+tool. It presents as a HANG WITH A CORRECT RESULT. It is invisible in dedicated mode, which is
+every other suite and every shipping path. And it is invisible under the WATCHER -- the tool
+you would reach for -- because the watcher's own overhead gives the writes time to arrive, so
+the assert it exists to report does not trip.
+
+**IT WAS NOT A PORT REGRESSION.** The pre-port tree -- `tt/unified/`, `mcast_share.cpp`,
 `unified_harness.py` and the launcher all checked out at `8bb48ab0f1d`, on the descriptor path
 -- hangs identically with asserts on: four configurations pass, then it stops, same place,
 same timeout. So this predates the Metal 2.0 work entirely and belongs to the assert-mode
