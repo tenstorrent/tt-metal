@@ -9,7 +9,6 @@ import time
 from typing import Union
 
 import numpy as np
-import pytest
 import torch
 from loguru import logger
 from ttnn.device import Arch
@@ -1070,6 +1069,11 @@ def is_slow_dispatch():
 
 
 def ti_skip(condition, reason="Invalid test parameters"):
+    # Imported here, not at module scope: this module sits on the model path (tt_dit's
+    # attention imports it), so a top-level pytest import makes every deployment that
+    # ships models/common — a release container, for instance — need a test framework.
+    import pytest
+
     return pytest.mark.skipif(condition, reason="Skipping unsupported case: " + reason)
 
 
