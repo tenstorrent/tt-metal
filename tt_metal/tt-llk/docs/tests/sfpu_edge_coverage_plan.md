@@ -25,17 +25,16 @@ the concrete steps to reach them.
 | # | Gap | Family | Effort | Value | Blocked by |
 |---|---|---|---|---|---|
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
-| [W7](#w7--the-overflow-producing-ops-are-not-driven-at-their-ceiling) | Nothing asserts that a result too large for the output format saturates rather than wraps | unary, binary | M | High | — |
 | [W9](#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | unary | M | Medium | needs a kernel-contract ruling |
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 
-Suggested order: **W1** (small, unblocked, independently mergeable), then **W7 → W9 → W10**
-(each needs a measurement pass, and W9 a kernel-contract ruling).
+Suggested order: **W1** (small, unblocked, independently mergeable), then **W10**, then
+**W9** — which needs a kernel-contract ruling before any of it can be written.
 
 `python -m helpers.sfpu_domains --report` prints the coverage ledger, which is now the fastest
-way to see where each remaining item moves the needle: W1 is cat G (0 of 14 ops that have a
-zero pole), W7 is cat F (14 of 129), W9 is cat A, and W10 is a delivery question that cuts
-across all of them.
+way to see where each remaining item moves the needle: W1 is cat G (0 covered, of the 14 ops
+that have a zero pole to deliver one to), W9 is cat A, and W10 is a delivery question that cuts
+across every class.
 
 **Already landed.** These items are closed and their sections are gone; the numbering of what
 remains is unchanged so that references from commit messages and reviews still resolve.
@@ -47,7 +46,7 @@ remains is unchanged so that references from commit messages and reviews still r
 | W4 | a `mixed` where-condition that is mixed by construction on every format; its cat-B half had already been closed by the ternary specials work |
 | W5 | IEEE specials for the whole ternary family, including the `TernarySFPUGolden` and `WhereGolden` Dest/pack modelling that blocked it |
 | W6 | the addc multiplier as a compile-time axis, with the `value = 0` identity asserted bit for bit |
-| W7 | everything except its overflow half: `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis, `EXTREMES_READY_OPS` with its first tranche, and one saturation test. W7 below is what is left of it |
+| W7 | all of it: `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis and `EXTREMES_READY_OPS` for the ops that cannot overflow, then a table-driven saturation sweep for the nine that can — seven unary and two binary |
 | W8 | logsigmoid's `x > 4` branch, the golden that models it, and the paired operand B it needs — which also retired the "effectively unary" justification keeping the op out of cat B |
 | W11 | the coverage ledger, `python -m helpers.sfpu_domains --report`, and the ratchet that stops a class losing coverage silently |
 
@@ -218,95 +217,6 @@ If Blackhole agrees and Wormhole does not, add the class to
 
 **Cost:** no new ELFs (the pair list is a runtime axis). A few more elements per override
 tensor.
-
----
-
-## W7 — The overflow-producing ops are not driven at their ceiling
-
-### Problem
-
-The cat-F machinery now exists and its first tranche is enrolled, but that tranche is
-deliberately the ops that *cannot* overflow: `Abs`, `Neg`, `Sign`, `Signbit`, the rounding
-family, `Identity`, `Fill` and the four sweep-reachable comparisons all return their input, a
-bounded constant, or a magnitude no larger than the input. So `test_eltwise_unary_sfpu_extremes`
-asserts that the pipeline *delivers* a magnitude extreme, and says nothing about what happens
-when a result leaves the format.
-
-That second half is the one with a silent failure mode. The convert from the SFPU's fp32 to a
-narrower output must saturate to ±inf. If it ever wrapped instead, ±inf would still come out
-right for a non-finite *input* — so every cat-B probe would keep passing — while every large
-finite input silently returned a tiny wrong value, and no random sweep would reach it, because
-the widest registered domain in `_OP_DOMAIN_REGISTRY` is `Square` at ±1000.
-
-`test_eltwise_unary_sfpu_square_saturation` is the one op that has this today, and it is the
-template. Still unwritten: `Exp`, `Exp2`, `ExpWithBase`, `Expm1`, `Sinh`, `Cosh`, and on the
-binary side `SfpuElwpow`, `SfpuElwmul` and `SfpuElwadd`.
-
-### What is already there to build on
-
-Landed with this document, so none of it needs rebuilding:
-
-- `format_extremes(fmt)` — the ceiling, the largest step below it, the smallest normal and one
-  subnormal, both signs, each rounded onto the format's own grid so nothing quantizes on the way
-  in. `_FORMAT_MIN_NORMAL` alongside it, sourced from the same `torch.finfo` call
-  `golden_generators._FTZ_THRESHOLD` uses.
-- `extremes_safe(input, output, dest_acc)` and the `extremes=` axis on `edge_values()` /
-  `edge_spec()`, kept separate from `specials` because the delivery rules and the failure
-  classes differ.
-- `extreme_values(input, output, dest_acc)` — cat F alone, for a sweep that wants one failure
-  class per variant.
-- `subnormal_delivered(input, dest_acc)` — measured: the datacopy path hands the kernel `+0.0`,
-  so the subnormal probe is only sent on a 32-bit input at `dest_acc=Yes`.
-- `EXTREMES_READY_OPS`, opt-in per op, and `test_eltwise_unary_sfpu_extremes` reading it.
-
-### Steps
-
-1. **One op per PR, and measure before enrolling.** Driving an op at its ceiling on a golden
-   that does not model saturation produces a wall of failures with one root cause, which is
-   indistinguishable from no measurement at all. `UnarySFPUGolden._square` is the shape that
-   works: a `isfinite(result)` test routed through `handle_infinite_numbers()`, which already
-   knows that a B-exponent format gets ±inf and Float16 gets NaN. Check the op's golden has an
-   equivalent before writing the probe list.
-
-2. **Choose probes that are exactly representable, and unambiguous across the format axis.**
-   `_SQUARE_SATURATION_MAGNITUDES` is powers of two for this reason: a decimal written near a
-   threshold is pinned to a value other than the one it names (`88.7` is `88.5` in bfloat16).
-   The second trap is subtler — `_FORMAT_MAX_MAGNITUDE` falls back to bfloat16's ceiling for
-   every format at least that wide, so a probe landing between bfloat16's maximum and fp32's is
-   finite on a Float32 output and infinite on a Float16_b one, and the variant then measures the
-   output format rather than the kernel. Pick probes clear of that band on both sides.
-
-   For the exp family the natural grid is the exponent itself: `exp2(127)` is finite in both,
-   `exp2(129)` overflows both. For `Sinh`/`Cosh` the bfloat16 grid near the threshold is spaced
-   0.5, so `89.0` (finite) and `90.0` (overflows both) are exact and unambiguous.
-
-3. **Assert the straddle host-side.** `_assert_square_probes_straddle_the_ceiling()` is the
-   guard to copy: without it a probe list stays plausible while the ceiling it was chosen to
-   straddle moves, and the variant passes either way — asserting ordinary arithmetic if every
-   probe went finite, or saturation with no control if every probe went infinite.
-
-4. **The binary ops need the pair, not the value.** `SfpuElwmul` and `SfpuElwadd` overflow as a
-   function of *both* operands, so their probe is a pair list through `edge_pair_values()` and
-   an `_EDGE_CLASSES` member of its own rather than a `spec_A`. Do these after two unary ones,
-   not before.
-
-5. **Generalise last, not first.** Once two or three ops have their own saturation test the
-   shared shape will be obvious; derived before then it fits the op it was written against and
-   nothing else. This is the step that closes W7.
-
-### Pin it
-
-Each op's straddle assertion runs at collection, as `_assert_square_probes_straddle_the_ceiling`
-does, so a format-table change fails in every lane with no hardware.
-
-### Verify
-
-```bash
-pytest test_sfpu_domains.py -q
-CHIP_ARCH=blackhole pytest test_eltwise_unary_sfpu.py -q -m nightly -k saturation
-```
-
-**Cost:** small per op, and the number of ops is the whole cost. Budget one PR each.
 
 ---
 

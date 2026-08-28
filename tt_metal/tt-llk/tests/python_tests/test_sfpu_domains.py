@@ -696,6 +696,7 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
         TERNARY_SPECIALS_READY_OPS,
         EdgeClass,
         op_edge_points,
+        suite_coverage_from_tests,
     )
 
     ready = (
@@ -703,6 +704,7 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
         | set(BINARY_SPECIALS_READY_OPS)
         | set(TERNARY_SPECIALS_READY_OPS)
     )
+    suite = suite_coverage_from_tests()
     for op, cells in _ledger().items():
         if cells[EdgeClass.A] == COVERED:
             assert (
@@ -715,7 +717,9 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
                 op_edge_points(op, operand) for operand in Operand
             ), f"{op.name} has no registered knee"
         if cells[EdgeClass.F] == COVERED:
-            assert op in EXTREMES_READY_OPS, f"{op.name} is not enrolled for cat F"
+            assert (
+                op in EXTREMES_READY_OPS or op in suite.saturation
+            ), f"{op.name} is neither enrolled for cat F nor driven by a saturation sweep"
 
 
 # The ratchet. Floors rather than exact counts: a class getting *more* coverage must not need a
@@ -731,7 +735,7 @@ _COVERAGE_FLOORS = {
     "C": 5,
     "D": 45,
     "E": 5,
-    "F": 14,
+    "F": 23,
     "G": 0,
 }
 
@@ -769,6 +773,7 @@ def test_suite_coverage_is_resolved_from_the_suites():
         "integer_extremes",
         "integer_driven",
         "operand_parameters",
+        "saturation",
         "extra_ops",
     ):
         assert getattr(suite, field), (

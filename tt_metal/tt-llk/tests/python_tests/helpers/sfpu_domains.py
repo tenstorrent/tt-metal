@@ -3280,6 +3280,12 @@ class SuiteCoverage:
     integer_driven: FrozenSet[MathOperation] = frozenset()
     #: Ops taking an operand as a parameter -- a shift amount, a compile-time scalar (cat E).
     operand_parameters: FrozenSet[MathOperation] = frozenset()
+    #: Ops driven at a magnitude extreme by a purpose-built saturation sweep rather than
+    #: through EXTREMES_READY_OPS (cat F). The two halves of cat F have different gates --
+    #: enrolment for the ops that cannot overflow, a hand-chosen probe list for the ones whose
+    #: *result* leaves the format -- and the ledger has to count both or it reports less
+    #: coverage than the suite delivers.
+    saturation: FrozenSet[MathOperation] = frozenset()
     #: Ops a suite drives that have no _OP_DOMAIN_REGISTRY entry, so _ledger_ops() cannot
     #: find them. The ~30 integer and bitwise binary ops are the population this exists for.
     extra_ops: FrozenSet[MathOperation] = frozenset()
@@ -3378,7 +3384,11 @@ def coverage_ledger(
             else "takes no operand as a parameter (no shift amount, no compile-time scalar)"
         )
 
-        cells[EdgeClass.F] = COVERED if op in EXTREMES_READY_OPS else UNRECORDED
+        cells[EdgeClass.F] = (
+            COVERED
+            if op in EXTREMES_READY_OPS or op in suite.saturation
+            else UNRECORDED
+        )
 
         cells[EdgeClass.G] = (
             UNRECORDED
@@ -3455,6 +3465,8 @@ def suite_coverage_from_tests() -> SuiteCoverage:
         operand_parameters=frozenset(unary._UNARY_SHIFT_OPS)
         | frozenset(binary._SHIFT_EDGE_OPS)
         | frozenset(ternary._SCALAR_OPS),
+        saturation=frozenset(unary._SATURATION_PROBES)
+        | frozenset(binary._BINARY_SATURATION_PAIRS),
         extra_ops=frozenset(binary._INT_DRIVEN_BINARY_OPS)
         | frozenset(binary._INT_BINARY_STIMULI),
     )

@@ -36,6 +36,7 @@ from helpers.sfpu_domains import (
     edge_pair_values,
     exclude_undefined_pair,
     for_op,
+    format_extremes,
     generated_nan_sign_is_asserted,
     integer_specials,
     op_edge_points,
@@ -1406,6 +1407,111 @@ def test_eltwise_binary_sfpu_int_signed_division(formats, dest_acc, mathop):
         mathop,
         src_A_override=_build_paired_tile_override(_SIGNED_DIVISION_PAIRS, torch.int32),
         twos_complement=True,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Overflow saturation, binary side
+#
+# The unary half of this lives in test_eltwise_unary_sfpu_saturation and the reasoning is the
+# same: the convert from the SFPU's fp32 to a narrower output must saturate to +/-inf, and a
+# convert that wrapped instead would keep every cat-B probe green -- +/-inf still comes out
+# right for a non-finite *input* -- while every large finite input silently returned a tiny
+# wrong value.
+#
+# A pair list rather than a spec, because these ops overflow as a function of *both* operands:
+# `a * b` needs two large operands, `a + b` needs two near the ceiling, and neither is
+# expressible as a range on one of them. Powers of two throughout, so every product and sum is
+# exact and the saturation is a property of the exponent range rather than of a rounding.
+#
+# THE OPS THAT ARE HERE ARE THE ONES WHOSE CONTRACT REACHES THE CEILING. SfpuElwadd and
+# SfpuElwmul are "plain SFPMAD arithmetic, which the ISA specifies as IEEE" -- exact over the
+# whole format range, and their registered uniform(-1, 1) is a stimulus choice rather than an
+# accuracy claim, so a probe at 2**64 is inside what they promise.
+#
+# SfpuElwpow is not here, and the plan listed it. Its registered domain is base [0, 8] and
+# exponent [0, 4], which tops out at 8**4 = 4096 -- it cannot overflow anywhere inside what the
+# kernel claims accuracy on. Measured anyway, to be sure the exclusion is about the domain and
+# not about a defect: above the threshold it does saturate correctly (2**200, 2**400 and 3**300
+# all give +inf), and *below* it the finite controls are 45% off at 2**100 and 16% off at
+# 2**127 -- which is the exp(b*ln a) composition being driven two orders of magnitude outside
+# its registered exponent, not a saturation bug. A variant built on those controls would fail
+# for a reason that has nothing to do with the convert.
+_BINARY_SATURATION_PAIRS = {
+    # 2**62 * 2**62 = 2**124, inside the range; 2**64 * 2**64 = 2**128, outside it. Both signs
+    # on the overflowing pairs, because a multiply's result sign is the operands' XOR and a
+    # sign-handling defect at the ceiling would otherwise show on half the domain.
+    MathOperation.SfpuElwmul: [
+        (2.0**62, 2.0**62),
+        (2.0**63, 1.0),
+        (2.0**64, 2.0**64),
+        (2.0**65, 2.0**64),
+        (-(2.0**64), 2.0**64),
+        (2.0**64, -(2.0**64)),
+    ],
+    # An add only overflows from two operands already near the ceiling: 2**127 + 2**127 is
+    # 2**128. 2**127 + 2**126 is 1.5 * 2**127, still inside -- the control that a wrapped
+    # result could not fake.
+    MathOperation.SfpuElwadd: [
+        (2.0**126, 2.0**126),
+        (2.0**127, 1.0),
+        (2.0**127, 2.0**126),
+        (2.0**127, 2.0**127),
+        (-(2.0**127), -(2.0**127)),
+    ],
+}
+
+
+def _assert_binary_saturation_pairs_straddle_the_ceiling():
+    """Each op's pair list must contain both an overflowing pair and a finite control.
+
+    The binary twin of _assert_saturation_probes_straddle_the_ceiling. Without it the lists are
+    literals that stay plausible while the ceiling they were chosen to straddle moves, and the
+    variant passes either way -- asserting ordinary arithmetic if every pair went finite, or
+    saturation with no control if every pair went infinite.
+
+    BinarySFPUGolden is instantiated directly rather than through get_golden_generator for the
+    reason _classify_edge_pair records: the harness swaps in a stub under --compile-producer,
+    and this runs at import.
+    """
+    golden = BinarySFPUGolden()
+    for fmt in (DataFormat.Float16_b, DataFormat.Float32):
+        ceiling = max(abs(v) for v in format_extremes(fmt))
+        for mathop, pairs in _BINARY_SATURATION_PAIRS.items():
+            classified = {True: 0, False: 0}
+            for a, b in pairs:
+                result = abs(
+                    float(golden.ops[mathop](torch.tensor(a), torch.tensor(b)))
+                )
+                classified[not math.isfinite(result) or result > ceiling] += 1
+            assert classified[True] and classified[False], (
+                f"{mathop.name} on {fmt.name}: {classified[True]} overflowing pairs and "
+                f"{classified[False]} finite ones — the list has to contain both, or it "
+                "asserts saturation with no control (or no saturation at all)"
+            )
+
+
+_assert_binary_saturation_pairs_straddle_the_ceiling()
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=sorted(_BINARY_SATURATION_PAIRS, key=lambda op: op.name),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_eltwise_binary_sfpu_saturation(formats, dest_acc, mathop):
+    """A product or sum too large for the output format must saturate to ±inf, not wrap."""
+    _skip_fp32_no_dest_acc(formats, dest_acc)
+    _skip_bh_float16_no_dest_acc(formats, dest_acc)
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        src_A_override=_build_paired_tile_override(
+            _BINARY_SATURATION_PAIRS[mathop], torch.float32
+        ),
     )
 
 

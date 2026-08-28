@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+from dataclasses import dataclass
 from itertools import chain, product
 
 import pytest
@@ -855,81 +857,151 @@ def test_eltwise_unary_sfpu_extremes(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Overflow saturation, one op at a time
+# Overflow saturation
 #
 # The cat-F tranche above is deliberately the ops that *cannot* overflow: every one of them
 # returns its input, a bounded constant, or a magnitude no larger than the input, so the
-# ceiling probe asks whether the pipeline delivered the datum and nothing more. The other
-# half of cat F is the ops whose *result* leaves the format, and that is a different
+# ceiling probe asks whether the pipeline delivered the datum and nothing more. This is the
+# other half of cat F -- the ops whose *result* leaves the format -- and it is a different
 # assertion with a different failure mode.
 #
-# It is worth its own test because the failure is invisible to everything else in the suite.
+# It is worth its own sweep because the failure is invisible to everything else in the suite.
 # The convert from the SFPU's fp32 to a narrower output must saturate to +/-inf; if it ever
 # wrapped instead, +/-inf would still come out right for a non-finite *input* -- so every cat-B
 # probe would keep passing -- while every large finite input silently returned a tiny wrong
-# value, which no random sweep would reach because the registered domain for Square stops at
-# +/-1000.
+# value, which no random sweep would reach because the widest registered domain in
+# _OP_DOMAIN_REGISTRY is Square at +/-1000.
 #
-# Square first, and one op per follow-up rather than a shared harness now: exp, exp2,
-# expwithbase, expm1, sinh, cosh and the binary mul/add/pow all overflow too, and the shared
-# shape is only obvious once two or three of them have been written. Derived early it fits
-# whichever op it was written against and nothing else.
+# Table-driven, and only now. Square was written on its own first and the other six measured
+# individually against it before this was derived: a shared harness built before two or three
+# ops exist fits the op it was written against and nothing else. What the seven turned out to
+# share is exactly two lists of magnitudes and a sign flag.
 #
-# Every probe is a power of two, so `x*x` is exact in every format this runs on and the
-# saturation is a property of the exponent range rather than of a rounding. A probe written as
-# a decimal near the threshold is the trap here: 1.9e19 is not representable in bfloat16 and
-# arrives as something else, so the test would pin a threshold other than the one it names.
+# EVERY PROBE IS EXACT IN EVERY FORMAT THIS RUNS ON. Square's are powers of two and the rest
+# are integers below 256, which bfloat16's 8 mantissa bits hold exactly. A decimal written near
+# a threshold is the trap: 88.7 is 88.5 in bfloat16, so the test would pin a threshold other
+# than the one it names.
+#
+# The overflowing probes are also clear of the band between bfloat16's ceiling and fp32's. A
+# value in there is finite on a Float32 output and infinite on a Float16_b one, and the variant
+# would then be measuring the output format rather than the kernel.
+#
+# Underflow is not here. It is the same convert and the opposite end, but a result flushed to
+# zero is the subnormal question cat F already covers through subnormal_delivered(), and
+# putting both in one tensor would give one xfail two causes.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# 2**63 squared is 2**126, the largest power-of-two square inside the bfloat16 exponent range;
-# 2**64 squared is 2**128, the first one outside it. So this list straddles the ceiling with an
-# exact pair, and carries a smaller finite control and a larger overflowing one either side.
-# Both signs, because square is even and a sign-handling defect at the ceiling would otherwise
-# only be visible on half the domain.
-_SQUARE_SATURATION_MAGNITUDES = (2.0**62, 2.0**63, 2.0**64, 2.0**65)
-_SQUARE_SATURATION_PROBES = (
-    tuple(-m for m in _SQUARE_SATURATION_MAGNITUDES) + _SQUARE_SATURATION_MAGNITUDES
-)
 
+@dataclass(frozen=True)
+class _SaturationProbe:
+    """Magnitudes that straddle an op's overflow point, either side of it.
 
-def _assert_square_probes_straddle_the_ceiling():
-    """The probe list must contain both a finite square and an overflowing one, per format.
+    *finite* are the controls -- large enough that a wrapped result would be obvious, small
+    enough that the answer is still representable. *overflowing* must saturate. Both are
+    needed: a list with no finite half asserts saturation with nothing to compare it to, and
+    one with no overflowing half asserts ordinary arithmetic.
 
-    Without this the list is a set of literals that stays plausible while the thing it was
-    chosen to straddle moves: a wider ceiling makes every probe finite and the test asserts
-    ordinary arithmetic, a narrower one makes every probe overflow and it asserts saturation
-    without a control. Either way it still passes, which is the failure mode worth an assert.
+    *signed* emits the negation of every magnitude as well. Set it where the sign reaches the
+    result -- Square and Cosh are even, Sinh is odd, and a sign-handling defect at the ceiling
+    would otherwise only be visible on half the domain.
     """
-    for fmt in (DataFormat.Float16_b, DataFormat.Float32):
+
+    finite: tuple
+    overflowing: tuple
+    signed: bool = False
+
+    def values(self) -> list:
+        magnitudes = self.finite + self.overflowing
+        if not self.signed:
+            return list(magnitudes)
+        return [-m for m in magnitudes] + list(magnitudes)
+
+
+# 2**63 squared is 2**126, the largest power-of-two square inside the bfloat16 exponent range;
+# 2**64 squared is 2**128, the first one outside it. exp overflows just above 88, exp2 just
+# above 127 (the exponent *is* the grid there), expwithbase is exp(x/2) so its threshold is
+# twice exp's, and sinh/cosh are e**|x|/2 so theirs is just above 89.
+_SATURATION_PROBES = {
+    MathOperation.Square: _SaturationProbe(
+        finite=(2.0**62, 2.0**63), overflowing=(2.0**64, 2.0**65), signed=True
+    ),
+    MathOperation.Exp: _SaturationProbe(finite=(80.0, 88.0), overflowing=(90.0, 100.0)),
+    MathOperation.Exp2: _SaturationProbe(
+        finite=(120.0, 127.0), overflowing=(128.0, 135.0)
+    ),
+    MathOperation.ExpWithBase: _SaturationProbe(
+        finite=(160.0, 176.0), overflowing=(180.0, 200.0)
+    ),
+    MathOperation.Expm1: _SaturationProbe(
+        finite=(80.0, 88.0), overflowing=(90.0, 100.0)
+    ),
+    MathOperation.Sinh: _SaturationProbe(
+        finite=(80.0, 89.0), overflowing=(90.0, 100.0), signed=True
+    ),
+    MathOperation.Cosh: _SaturationProbe(
+        finite=(80.0, 89.0), overflowing=(90.0, 100.0), signed=True
+    ),
+}
+
+_SATURATION_FORMATS = [DataFormat.Float16_b, DataFormat.Float32]
+
+
+def _assert_saturation_probes_straddle_the_ceiling():
+    """Every op's finite probes must stay under the ceiling and its overflowing ones exceed it.
+
+    Without this, a probe list is a set of literals that stays plausible while the thing it was
+    chosen to straddle moves: a wider ceiling makes every probe finite and the sweep asserts
+    ordinary arithmetic, a narrower one makes every probe overflow and it asserts saturation
+    with no control. Either way it still passes, which is the failure mode worth an assert.
+
+    The classification comes from the *golden*, so there is no second copy of what each op
+    computes -- only of where its overflow point is, which is what the table is. The goldens
+    evaluate in fp64, so `math.isfinite` alone is not the test: Square(2**64) and Cosh(90) are
+    both finite in fp64 and both above every ceiling this sweep runs on. UnarySFPUGolden is
+    instantiated directly rather than through get_golden_generator for the reason
+    _classify_edge_pair records: the harness swaps in a stub under --compile-producer, and this
+    runs at import.
+    """
+    golden = UnarySFPUGolden()
+    for fmt in _SATURATION_FORMATS:
+        golden.data_format = fmt
+        golden.dst_format = fmt
         ceiling = max(abs(v) for v in format_extremes(fmt))
-        squares = [m * m for m in _SQUARE_SATURATION_MAGNITUDES]
-        assert any(sq <= ceiling for sq in squares) and any(
-            sq > ceiling for sq in squares
-        ), (
-            f"_SQUARE_SATURATION_MAGNITUDES no longer straddles {fmt.name}'s ceiling "
-            f"{ceiling}: squares are {squares}. Re-choose the exponents rather than widening "
-            "the list."
-        )
+        for mathop, probe in _SATURATION_PROBES.items():
+            for magnitude in probe.finite + probe.overflowing:
+                result = abs(float(golden.ops[mathop](magnitude)))
+                overflows = not math.isfinite(result) or result > ceiling
+                expected = magnitude in probe.overflowing
+                assert overflows == expected, (
+                    f"{mathop.name} at {magnitude!r} on {fmt.name}: the golden gives "
+                    f"{result!r} against a ceiling of {ceiling!r}, so it "
+                    f"{'overflows' if overflows else 'does not overflow'} — but the table "
+                    f"lists it as {'overflowing' if expected else 'finite'}. Re-choose the "
+                    "magnitudes rather than moving the entry."
+                )
 
 
-_assert_square_probes_straddle_the_ceiling()
+_assert_saturation_probes_straddle_the_ceiling()
 
 
 @pytest.mark.nightly
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
-    mathop=MathOperation.Square,
+    formats=input_output_formats(_SATURATION_FORMATS),
+    mathop=sorted(_SATURATION_PROBES, key=lambda op: op.name),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
 )
-def test_eltwise_unary_sfpu_square_saturation(
+def test_eltwise_unary_sfpu_saturation(
     formats: list[InputOutputFormat],
     mathop: MathOperation,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
 ):
-    """square(x) for a large finite x must saturate to +inf, not wrap to a small finite value."""
+    """A result too large for the output format must saturate to ±inf, not wrap."""
+    _skip_coverage_unsupported(mathop)
     _skip_bh_unless_fp32(formats, dest_acc)
+
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
 
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
@@ -940,10 +1012,12 @@ def test_eltwise_unary_sfpu_square_saturation(
         FastMode.No,
         input_dimensions,
         # cycle=True for the reason edge_spec() gives: a zero tail would make the verdict a
-        # statement about square(0), and 0 is the one input that cannot saturate.
+        # statement about f(0), and 0 is the one input that cannot saturate.
         spec_A=StimuliSpec.custom(
-            values=list(_SQUARE_SATURATION_PROBES), seed=0, cycle=True
+            values=_SATURATION_PROBES[mathop].values(), seed=0, cycle=True
         ),
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
     )
 
 
