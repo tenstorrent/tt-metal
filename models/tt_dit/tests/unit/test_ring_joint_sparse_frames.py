@@ -195,8 +195,16 @@ def _run_sparse_frames_op(
     sparse_frames_enabled: bool = True,
     force_allow_all: bool = False,
     allow_override: torch.Tensor | None = None,
+    reference_as_joint: bool = False,
 ):
-    """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref."""
+    """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref.
+
+    reference_as_joint: validate the windowed-CCL Phase-2 decomposition. The reference frame (the last
+    real frame, attended by every query) is peeled out of the spatial mask and instead delivered as a
+    replicated joint K/V (`joint_strategy="rear"`, always attended). The spatial gather then only needs
+    the window band, so its window radius collapses to the window span. The golden is unchanged (full
+    windowed+reference pattern), so a match proves: window-only spatial + reference-as-joint == full.
+    A dummy joint Q is required (the op forces joint Q/K/V to share length L); its output is discarded."""
 
     assert tokens_per_frame % ttnn.TILE_SIZE == 0, "tokens_per_frame must be tile-aligned"
     n_pad = num_frames_padded * tokens_per_frame
@@ -242,6 +250,23 @@ def _run_sparse_frames_op(
         allow = torch.zeros(num_frames_padded, num_frames_padded, dtype=torch.uint8)
         allow[:num_frames_real, :num_frames_real] = 1
     gt = _torch_sdpa_ref(padded_Q, padded_K, padded_V, allow, tokens_per_frame=tokens_per_frame)[:, :, :real_n, :]
+
+    # Phase-2 decomposition: peel the reference frame out of the spatial mask and route it through the
+    # joint path. `allow` (hence `gt`) keeps the full pattern; only the op's spatial mask drops the
+    # reference column so the windowed gather no longer needs the far reference shards.
+    ref_frame = num_frames_real - 1  # the last real frame is the reference (see _window_plan add_last)
+    if reference_as_joint:
+        assert add_last_frame, "reference_as_joint expects the add-last-frame (reference) pattern"
+        spatial_allow = allow.clone()
+        spatial_allow[:, ref_frame] = 0  # every query gets the reference via joint instead of spatial
+        # Replicated reference K/V = the reference frame's tokens (real data, < real_n), same on every device.
+        ref_slice = slice(ref_frame * tokens_per_frame, (ref_frame + 1) * tokens_per_frame)
+        ref_K = padded_K[:, :, ref_slice, :].contiguous()
+        ref_V = padded_V[:, :, ref_slice, :].contiguous()
+        # Dummy joint Q (op forces joint Q/K/V to share length L=tokens_per_frame); its output is discarded.
+        dummy_joint_Q = torch.zeros(b, nh, tokens_per_frame, d)
+    else:
+        spatial_allow = allow
 
     # ------- Set up the ring op on device --------------------------------
     full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -309,7 +334,20 @@ def _run_sparse_frames_op(
     persistent_output_buffer_k = _make_persistent_output_buffer()
     persistent_output_buffer_v = _make_persistent_output_buffer()
 
-    sparse_frame_mask = _pack_sparse_frame_mask(allow) if sparse_frames_enabled else []
+    sparse_frame_mask = _pack_sparse_frame_mask(spatial_allow) if sparse_frames_enabled else []
+
+    # Replicated joint tensors for the reference-as-joint path: full L=tokens_per_frame on every device
+    # (replicated on the sp/seq axis), sharded on the tp/head axis like the spatial inputs.
+    tt_joint_Q = tt_joint_K = tt_joint_V = None
+    if reference_as_joint:
+        joint_shard_dims = [None, None]
+        joint_shard_dims[sp_axis] = None  # replicated across the ring
+        joint_shard_dims[tp_axis] = 1  # heads sharded
+        tt_joint_Q = _to_dev(dummy_joint_Q, joint_shard_dims)
+        tt_joint_K = _to_dev(ref_K, joint_shard_dims)
+        tt_joint_V = _to_dev(ref_V, joint_shard_dims)
+        del ref_K, ref_V, dummy_joint_Q
+        gc.collect()
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
@@ -329,13 +367,16 @@ def _run_sparse_frames_op(
         tt_Q,
         tt_K,
         tt_V,
-        None,
-        None,
-        None,
+        tt_joint_Q,
+        tt_joint_K,
+        tt_joint_V,
         persistent_output_buffer_k=persistent_output_buffer_k,
         persistent_output_buffer_v=persistent_output_buffer_v,
         joint_strategy="rear",
         logical_n=real_n,  # true un-padded sequence length; padded region is beyond
+        # Replicated joint: per-device joint seq == logical_l (== L), so the op keeps it replicated
+        # (not sharded). Must be > 0 or the reference joint tokens are skipped as padding.
+        logical_l=(tokens_per_frame if reference_as_joint else 0),
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
         dim=2,
@@ -636,6 +677,57 @@ class TestSparseFramesRing:
             k_chunk_size_tokens=tokens_per_frame // 2,
             sparse_frames_enabled=True,
             allow_override=allow_override,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        ("tokens_per_frame", "nf_real_fn", "nf_padded_fn"),
+        [
+            # Fractional frames/shard (the real sp=32 regime): reference frame sits several shards away,
+            # so the windowed spatial gather (reference peeled to joint) collapses W to the window span.
+            pytest.param(64, lambda sp: sp + sp // 2 - 2, lambda sp: sp + sp // 2, id="frac_1p5"),
+            # Whole frame/shard: reference still far from the low devices.
+            pytest.param(128, lambda sp: sp, lambda sp: sp, id="whole_1p0"),
+        ],
+    )
+    def test_reference_as_joint(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        nf_real_fn,
+        nf_padded_fn,
+    ):
+        """Windowed-CCL Phase 2: deliver the reference frame as replicated joint K/V so the spatial
+        gather only needs the window band. Same windowed+reference golden as the plain sparse path, so a
+        PCC match proves window-only spatial gather + reference-as-joint == full windowed+reference."""
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real_fn(sp_factor),
+            num_frames_padded=nf_padded_fn(sp_factor),
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=tokens_per_frame // 2,
+            k_chunk_size_tokens=tokens_per_frame // 2,
+            sparse_frames_enabled=True,
+            reference_as_joint=True,
         )
 
     @_MESH_TOPOLOGY
