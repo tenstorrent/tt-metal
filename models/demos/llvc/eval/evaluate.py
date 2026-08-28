@@ -485,7 +485,7 @@ def metrics_stage(args: argparse.Namespace, report: dict | None) -> dict:
     if not args.target_ref:
         raise ValueError(
             "--target-ref is required for speaker similarity (bounty: cosine vs the target speaker). "
-            "Pass LibriSpeech speaker-8312 wavs, e.g. --target-ref LibriSpeech/train-clean-360/8312"
+            "Pass LibriSpeech speaker-8312 wavs, e.g. --target-ref LibriSpeech/train-clean-100/8312"
         )
     wer = try_wer(sources, converted, whisper_model=args.whisper_model)
     if wer is not None:

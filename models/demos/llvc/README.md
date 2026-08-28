@@ -125,13 +125,18 @@ Bounty Stage-1 gates that need a device box plus the official KoeAI checkpoint:
 | Token-level accuracy | **> 95%** voiced frames PCC > 0.9 | convert stage vs the PyTorch reference (same `nhead`) |
 
 The earlier **10.9% WER** used Whisper `base.en` on the 10 smoke `test_wavs`
-clips and is **not** the bounty number. Re-run with the commands below.
+clips and is **not** the bounty number. The measured bounty number below uses
+LibriSpeech `test-clean` (the paper's eval set): short isolated clips inflate
+Whisper's WER (proper nouns, single-word slips) even when conversion is clean —
+the same pipeline scores 6.98% on the 10 `test_wavs` clips vs 1.23% on 50
+`test-clean` utterances.
 
 **Agreed eval set (KoeAI paper / issue #32187):**
 
 1. Source audio: KoeAI `test_wavs`, or LibriSpeech `test-clean` (paper eval).
 2. Target-speaker reference: LibriSpeech **speaker 8312** (KoeAI `f_8312`).
-   After unzipping `train-clean-360.tar.gz`: `LibriSpeech/train-clean-360/8312`.
+   After unzipping `train-clean-100.tar.gz`: `LibriSpeech/train-clean-100/8312`
+   (speaker 8312, Jaimie Noy, is in the train-clean-100 subset).
 3. Config / weights: `experiments/llvc/config.json` +
    `llvc_models/models/checkpoints/llvc/G_500000.pth`.
 
@@ -148,10 +153,10 @@ python models/demos/llvc/eval/evaluate.py --stage convert \
 Offline metrics (separate venv; Whisper must not share the ttnn torch):
 
 ```bash
-pip install openai-whisper jiwer resemblyzer librosa onnxruntime requests 'torchmetrics[audio]'
+pip install openai-whisper jiwer resemblyzer librosa onnxruntime requests soundfile 'torchmetrics[audio]'
 python models/demos/llvc/eval/evaluate.py --stage metrics \
   --out-dir llvc_eval_out \
-  --target-ref LibriSpeech/train-clean-360/8312 \
+  --target-ref LibriSpeech/train-clean-100/8312 \
   --whisper-model small.en
 ```
 
@@ -168,21 +173,27 @@ Attach `llvc_eval_out/eval_report.md` and `eval_report.json` to the PR.
 The three external-model metrics are imported lazily; if a dependency is missing
 the harness logs a skip line and still reports the pure-torch metrics.
 
-## Targets and measured results (N300, `wormhole_b0`)
+## Targets and measured results (N150, `wormhole_b0`)
 
-| Metric | Target | Measured (full-size, `chunk_factor=2`) | Where checked |
+Measured on a Tenstorrent cloud N150 with the official KoeAI checkpoint
+(`G_500000.pth`, `chunk_factor=2`, trace enabled). WER / speaker similarity /
+DNSMOS from 50 LibriSpeech `test-clean` utterances (`--limit 50`), scored with
+Whisper `small.en` and Resemblyzer vs speaker 8312 (106 reference files).
+
+| Metric | Target | Measured | Where checked |
 |---|---|---|---|
-| Streaming e2e RTF | < 0.3 | re-measure after transfer-inclusive timer | `tests/perf/test_perf.py` |
-| Per-chunk e2e latency | < 100 ms | re-measure after transfer-inclusive timer | `tests/perf/test_perf.py` |
-| Accuracy vs PyTorch | PCC > 0.90 | 0.9997 | `tests/pcc/test_llvc.py` |
-| Content preservation | WER < 3.0% | re-run `--stage metrics --whisper-model small.en` | `eval/evaluate.py` |
-| Speaker similarity to target | cosine > 0.70 | re-run `--stage metrics --target-ref .../8312` | `eval/evaluate.py` |
+| Streaming e2e RTF | < 0.3 | **0.220** | `eval/evaluate.py` (test_wavs: 0.220) |
+| Per-chunk e2e latency | < 100 ms | **33.7 ms** | `eval/evaluate.py` |
+| Accuracy vs PyTorch | PCC > 0.90 | **0.9993** global; 99.55% voiced frames > 0.9 | `eval/evaluate.py`, `tests/pcc/test_llvc.py` |
+| Content preservation | WER < 3.0% | **1.23%** (test-clean, 50 files) | `eval/evaluate.py --stage metrics` |
+| Speaker similarity to target | cosine > 0.70 | **0.904 mean / 0.812 min** | `eval/evaluate.py --stage metrics` |
+| Audio quality (DNSMOS OVRL) | — | 3.33 / 5 | `eval/evaluate.py --stage metrics` |
 
-Previously published full-size figures (device-only timer, real KoeAI weights,
-trace): RTF **0.217** / 33.6 ms at `chunk_factor=2`, RTF 0.404 at `chunk_factor=1`.
-Eager (no trace) was 2.77 — trace gives ~7× by removing per-chunk host dispatch,
-with identical numerics. Re-run the demo/perf tests to fill e2e numbers (they
-will be slightly higher once H2D/D2H is included).
+Small-config perf gates (`tests/perf/test_perf.py`, e2e incl. H2D/D2H):
+`chunk_factor=1` RTF 0.156 / 17.0 ms, `chunk_factor=2` RTF 0.086 / 30.3 ms,
+`chunk_factor=4` RTF 0.049 / 56.6 ms — all under the RTF < 0.3 and < 100 ms
+targets. Eager (no trace) full-size RTF was 2.77 — trace gives ~13× by removing
+per-chunk host dispatch, with identical numerics.
 
 ## Notes, limitations, and optimization roadmap
 
