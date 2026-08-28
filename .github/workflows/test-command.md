@@ -296,7 +296,6 @@ safe-outputs:
 
       - galaxy-profiler-tests
       - galaxy-multi-user-isolation-tests
-      - galaxy-deepseek-tests
       - galaxy-unit-tests
       - galaxy-integration-tests
       - galaxy-stress-tests
@@ -461,7 +460,6 @@ match that reality: never describe a pipeline as dispatched on a fork PR.
 | `blackhole-e2e-tests` | Blackhole (P150/P300/BH QuietBox) | Anything under a `blackhole/` path or BH-specific HAL/SoC descriptor |
 | `galaxy-sanity`, `galaxy-health` | Galaxy (WH/BH) | Quick Galaxy-reachability check before committing to the heavier Galaxy suites |
 | `galaxy-unit-tests`, `galaxy-integration-tests`, `galaxy-e2e-tests` | Galaxy | Fabric, CCL, multi-device, or large-mesh code paths |
-| `galaxy-deepseek-tests` | Galaxy | DeepSeek-specific model code |
 | `galaxy-profiler-tests` | Galaxy | Galaxy profiler instrumentation changes |
 | `galaxy-stress-tests`, `galaxy-multi-user-isolation-tests` | Galaxy | Stability, long-run, or multi-tenant isolation behaviour |
 | `t3000-unit-tests`, `t3000-integration-tests`, `t3000-e2e-tests` | T3000 (8×WH) | Multi-chip work that does not need a full Galaxy |
