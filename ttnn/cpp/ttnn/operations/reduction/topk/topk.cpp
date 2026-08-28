@@ -264,9 +264,11 @@ constexpr uint32_t large_k_route_k_multiple = 16;
 constexpr uint32_t large_k_route_max_width = 1u << 19;
 
 // Python sampling queries this exact predicate through the nanobind helper
-// ttnn._sampling_topk_would_route_to_large_indices before relaxing its call
-// shape. Keep that helper wired to this implementation so policy changes
-// cannot drift.
+// ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices
+// before relaxing its call shape (the binding lives on the reduction
+// submodule; only registered ttnn operations are hoisted to top-level ttnn).
+// Keep that helper wired to this implementation so policy changes cannot
+// drift.
 bool should_route_to_topk_large_indices(
     const Tensor& transformed_tensor,
     const uint32_t k,

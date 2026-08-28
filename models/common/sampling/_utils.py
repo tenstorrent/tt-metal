@@ -44,4 +44,4 @@ def topk_would_route_to_large_indices(x, k) -> bool:
     """Return the authoritative C++ route decision for the sampling call shape."""
     import ttnn
 
-    return ttnn._sampling_topk_would_route_to_large_indices(x, k)
+    return ttnn._ttnn.operations.reduction._sampling_topk_would_route_to_large_indices(x, k)
