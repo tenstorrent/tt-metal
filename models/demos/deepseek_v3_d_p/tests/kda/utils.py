@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable
 
 import torch
 
@@ -21,7 +20,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
 @dataclass(frozen=True)
@@ -65,16 +63,21 @@ def assert_accurate(
     """Require finite tensors and a passing PCC, and return the measured PCC."""
     golden_finite, golden_summary = report_finiteness(f"{name} golden", golden)
     actual_finite, actual_summary = report_finiteness(f"{name} actual", actual)
-    passed, pcc = comp_pcc(golden, actual, pcc=pcc_threshold)
-    max_abs = (golden.float() - actual.float()).abs().max().item()
-    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
     failures = []
     if not golden_finite:
         failures.append(golden_summary)
     if not actual_finite:
         failures.append(actual_summary)
-    if not passed:
-        failures.append(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
+    if golden.shape != actual.shape:
+        failures.append(f"{name} shape {tuple(actual.shape)} != {tuple(golden.shape)}")
+        pcc = float("nan")
+        max_abs = float("nan")
+    else:
+        passed, pcc = comp_pcc(golden, actual, pcc=pcc_threshold)
+        max_abs = (golden.float() - actual.float()).abs().max().item()
+        if not passed:
+            failures.append(f"{name} PCC {pcc:.6f} < {pcc_threshold}")
+    print(f"{name}: PCC={pcc:.6f}, max_abs={max_abs:.6e}")
     assert not failures, "\n".join(failures)
     return pcc
 
@@ -359,23 +362,6 @@ def kimi_k3_tensor_cache_path(
         raise ValueError("checkpoint_identity must be a lowercase SHA-256 hex digest")
     layout = f"mesh{mesh_shape[0]}x{mesh_shape[1]}_tpaxis{tensor_parallel_axis}"
     return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / checkpoint_identity / layout
-
-
-def run_profiled_forward(
-    mesh_device: ttnn.MeshDevice,
-    forward: Callable[[], ttnn.Tensor],
-) -> tuple[ttnn.Tensor, list[dict[str, object]]]:
-    """Run one correctness forward and require usable realtime-profiler records."""
-    assert ttnn.device.IsProgramRealtimeProfilerActive(), "realtime profiler must be active for KDA correctness"
-    output, records = profile_realtime_program(
-        mesh_device,
-        forward,
-        collect_all=True,
-        record_timeout_seconds=10.0,
-    )
-    non_sentinel_records = [record for record in records if int(record["runtime_id"]) != 0]
-    assert non_sentinel_records, "realtime profiler returned no program records"
-    return output, non_sentinel_records
 
 
 def make_config() -> KDAConfig:

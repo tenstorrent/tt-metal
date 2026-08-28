@@ -251,7 +251,7 @@ def test_kimi_k3_layer_1_perf(
         ttnn.deallocate(output)
     _deallocate_state(state)
 
-    repetitions = int(os.getenv("PERF_REPS", str(_REPETITIONS)))
+    repetitions = _REPETITIONS
     samples_ms = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, repetitions)
     first_wall_ms = samples_ms[0]
     median_wall_ms = statistics.median(samples_ms)

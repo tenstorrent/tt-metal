@@ -15,13 +15,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     kimi_k3_tensor_cache_path,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
-    run_profiled_forward,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.requires_host_iommu,
     pytest.mark.parametrize(
         "device_params",
         [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -56,8 +54,8 @@ def test_kimi_k3_layer_1_real_weights_pcc(
             case.state_dict,
             cache_path,
             cache_prefix,
-            mesh_device,
             case.config,
+            mesh_device,
             tensor_parallel_axis=tensor_parallel_axis,
         )
     assert KDAWeights.check_cache_complete(
@@ -87,8 +85,8 @@ def test_kimi_k3_layer_1_real_weights_pcc(
     )
     state = layer.allocate_state(batch_size=1)
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        (output, state), records = run_profiled_forward(mesh_device, lambda: layer.forward(hidden_tt, state))
-    print(f"Kimi-K3 layer 1 realtime program records: {len(records)}")
+        output, state = layer.forward(hidden_tt, state)
+    ttnn.synchronize_device(mesh_device)
 
     mesh_shape = tuple(mesh_device.shape)
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"

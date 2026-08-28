@@ -18,8 +18,7 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 - Required performance acceptance is real Kimi-K3, B=1, T=5120 on SP1xTP8, SP2xTP4, and SP4xTP2.
 - LoudBox references, five-session dispersion, and regression limits live in `perf/perf_targets/bh_loudbox.json`.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
-- `model/test_real_weights.py` checks output and both states against the independent Torch reference
-  and requires usable realtime program records.
+- `model/test_real_weights.py` checks output and both states against the independent Torch reference.
 - `perf/test_layer_perf.py` checks those endpoints on a synchronized eager forward, then gates the
   median of five warm trace-replay samples. Its 900-second item timeout covers a cold CPU-oracle cache.
   Timing repetitions are not accuracy or determinism samples.
@@ -34,7 +33,7 @@ tests/
 ├── test_cache_fingerprints.py           — Persistent checkpoint-content, config, and placement identities.
 ├── test_numeric_validation.py          — Accuracy, equality, bit-identity, and finiteness contracts.
 ├── utils.py                            — Three numeric contracts; case builders,
-│                                         reconstruction, and profiling support.
+│                                         reconstruction, and device-case support.
 ├── checkpoint/
 │   └── test_checkpoint.py              — Indexed-shard loading, failures, and weight
 │                                         validation, and padded K3 A_log normalization.
@@ -51,7 +50,7 @@ tests/
 │   ├── test_layer.py                   — Composed accuracy, state/cache contracts, immutable
 │   │                                     trace replay, and bit-identical determinism.
 │   ├── test_real_weights.py            — Kimi-K3 layer-1 accuracy on all layouts
-│   │                                     with required realtime program records.
+│   │                                     against the independent Torch reference.
 │   └── test_weights.py                 — TP placement and output-projection accuracy plus
 │                                         bit-identical projection determinism.
 └── perf/
@@ -98,7 +97,7 @@ scripts/run_safe_pytest.sh \
 Required performance matrix:
 
 ```bash
-KIMI_K3_CKPT=/path/to/pinned/kimi-k3 PERF_REPS=10 \
+KIMI_K3_CKPT=/path/to/pinned/kimi-k3 \
 scripts/run_safe_pytest.sh --run-all \
   models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py -q -s
 ```
