@@ -56,19 +56,6 @@ public:
 
     RoutingPlaneConnectionManager() : num_active_(0) {}
 
-    // Parses one sender at the cursor and appends it as the next slot, returning that slot's index.
-    // The tag is passed in rather than read here so that callers whose arg stream interleaves these
-    // connections with other kinds can keep their own layout. Under FABRIC_2D the slot's dst ids are
-    // left at their value-initialized zero; callers needing them must set them separately.
-    inline uint32_t append_from_args(std::size_t& arg_idx, uint8_t tag) {
-        ASSERT(num_active_ < MaxConnections);
-        const uint32_t slot = num_active_++;
-        auto& conn = slots_[slot];
-        conn.tag = tag;
-        conn.sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-        return slot;
-    }
-
     template <BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
@@ -79,12 +66,15 @@ public:
         ASSERT(num_connections_to_build <= MaxConnections);
 
         for (uint32_t i = 0; i < num_connections_to_build; ++i) {
-            const uint8_t tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
-            mgr.append_from_args(arg_idx, tag);
+            auto& conn = mgr.slots_[i];
+            conn.tag = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+            conn.sender =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
             if constexpr (connect) {
-                mgr.slots_[i].sender.open_start();
+                conn.sender.open_start();
             }
         }
+        mgr.num_active_ = num_connections_to_build;
 
         if constexpr (connect && wait_for_connection_open_finish) {
             for (uint32_t i = 0; i < mgr.num_active_; ++i) {
