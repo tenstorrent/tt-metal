@@ -1,19 +1,14 @@
-# mb-coverage attempt 3 queue, revision 3 (08:39Z). a3_q_pool_default is in
-# flight and is deliberately absent.
-#
-# Ordering rule: one run of every *distinct* claim before any second run of any
-# claim, and D-C5 duplicates last. a3_q_greedy and a3_l_greedy already proved on
-# silicon that all of area 4 dies in one shared matmul, so a3_{q,l}_padded_greedy,
-# _temperature and _seeded would each spend a Galaxy quarter-hour re-printing the
-# same TT_FATAL. They stay queued, at the tail, and the report says why they are
-# there rather than earlier.
+# mb-coverage attempt 3 (relaunch 08:16Z) queue, re-prioritised for the finish
+# condition: breadth over both models across areas 1-4 first, because those area
+# cases have never run at all; the gate-line re-runs come last, because attempt 3
+# proved git diff 718997518ab..HEAD -- models/ touches only the two step-7 test
+# files, so the existing gate logs already are measurements at this tree.
 # format: deadline|pytimeout|logname|nodeid|extra
-# a3_q_pool_default ran at 08:33:24 from the working tree, 90 s before the same
-# source was committed as 6df3c4a14a3 (black formatting was the only change), so its
-# log is stamped 2061c126743, a commit that does not contain the test. Re-recorded
-# here from the committed tree so the pair the comparison reads is unambiguous.
-1800|1500|a3_q_pool_default_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-default2048-8x4-device_params0]|
-# Qwen areas 1-3, one run each
+# ---- inserted 08:33Z: the cross-process paged-pool recorders (area 1's headline claim) ----
+1800|1500|a3_q_pool_default|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-default2048-8x4-device_params0]|
+1800|1500|a3_q_pool_explicit|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-explicit4096-8x4-device_params0]|
+#
+# ---- PASS A: Qwen areas 1-3, never run (cheapest distinct claims per hour) ----
 1800|1500|a3_q_late_capacity|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_cross_slot|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_concat_len128|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]|
@@ -23,15 +18,11 @@
 1800|1500|a3_q_chunked|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_prefix_then_plain|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_mixed_slots|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
-# one D-C5 reproduction by the other entry point (model.sample_decode directly,
-# not runner.decode_sampled), to place the fault at the shared selector
-1800|1500|a3_q_heterogeneous|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]|
-# Llama: the diagnostic, the cross-process recorders, D-C7's Llama half
-2400|2100|a3_l_dc5|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
+# ---- PASS B: Llama areas 1-3, never run ----
+2400|2100|a3_l_two_pools|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable[wormhole_b0-8x4-device_params0]|
+# ---- inserted 08:33Z: the Llama half of the cross-process recorders ----
 2400|2100|a3_l_pool_default|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-default2048-8x4-device_params0]|
 2400|2100|a3_l_pool_explicit|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-explicit4096-8x4-device_params0]|
-2400|2100|a3_l_two_pools|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_two_paged_pools_agree_and_a_contiguous_cache_is_unreachable[wormhole_b0-8x4-device_params0]|
-# Llama areas 1-3, one run each
 2400|2100|a3_l_late_capacity|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_cross_slot|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_concat_len128|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]|
@@ -41,14 +32,19 @@
 2400|2100|a3_l_mixed_slots|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_concat_active16|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active16-8x4-device_params0]|
 2400|2100|a3_l_concat_active31|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_padded_rows_change_no_active_rows_logits[wormhole_b0-active31-8x4-device_params0]|
+# ---- PASS C: area 4, the sampling policies the brief names, both models.
+# a3_q_greedy already recorded the D-C5 TT_FATAL for Qwen and a3_l_greedy is in
+# flight for Llama, so these four ask a narrower question: does any of them reach
+# the sampler by a route the selector matmul does not sit on?
+2400|2100|a3_l_padded_greedy|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]|
+2400|2100|a3_l_temperature|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
+1800|1500|a3_q_padded_greedy|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]|
+1800|1500|a3_q_temperature|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
+1800|1500|a3_q_seeded|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
+1800|1500|a3_q_heterogeneous|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]|
+2400|2100|a3_l_seeded|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_heterogeneous|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_per_slot_heterogeneous_sampling_controls[wormhole_b0-8x4-device_params0]|
-# the three-run rule on the two new claims
-1800|1500|a3_q_dc5_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
-1800|1500|a3_q_dc5_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
-2400|2100|a3_l_dc5_run2|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
-2400|2100|a3_l_dc5_run3|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_device_sampling_claims_behind_dc5_with_interleaved_logits[wormhole_b0-8x4-device_params0]|
-1800|1500|a3_q_pool_explicit_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_pool_logits_are_recorded_for_cross_process_comparison[wormhole_b0-explicit4096-8x4-device_params0]|
-# second fresh process for the Qwen area cases
+# ---- PASS D: second fresh process for the Qwen area cases (three-run rule) ----
 1800|1500|a3_q_late_capacity_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_cross_slot_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_concat_len128_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]|
@@ -56,16 +52,14 @@
 1800|1500|a3_q_chunked_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_prefix_then_plain_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_mixed_slots_run2|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
-# the concat-32 length ladder above 128
+# ---- PASS E: the concat-32 length ladder above 128, as the brief asks ----
 1800|1500|a3_q_concat_len256|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]|
 1800|1500|a3_q_concat_len512|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]|
 2400|2100|a3_l_concat_len256|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len256-8x4-device_params0]|
 2400|2100|a3_l_concat_len512|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len512-8x4-device_params0]|
 2700|2400|a3_l_concat_len1024|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len1024-8x4-device_params0]|
 3000|2700|a3_l_concat_len2048|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len2048-8x4-device_params0]|
-# repeat-and-cleanup: two model constructions in one process, Llama
-2400|2100|a3_l_two_models|models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_two_models_in_one_process[wormhole_b0-8x4-device_params0]|
-# third fresh process for the Qwen area cases
+# ---- PASS F: third fresh process for the Qwen area cases ----
 1800|1500|a3_q_late_capacity_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_paged_capacity_resolved_after_construction_serves_a_request[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_cross_slot_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_write_for_one_user_never_appears_in_another_users_blocks[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_concat_len128_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_concat32_matches_sequential_prefill_at_each_length[wormhole_b0-len128-8x4-device_params0]|
@@ -73,25 +67,18 @@
 1800|1500|a3_q_chunked_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_chunked_prefill_matches_a_single_uncached_prefill[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_prefix_then_plain_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_prefix_cached_request_then_a_normal_one[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_mixed_slots_run3|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_prefix_cached_and_plain_requests_mixed_across_slots[wormhole_b0-8x4-device_params0]|
-# gate-line re-runs (see A3_GATE_TABLE.md: the existing gate logs already are
-# measurements at this tree, so these buy a second process, not a first)
+# ---- PASS G: gate-line re-runs, lowest priority (see the header) ----
 2700|2400|a3_l_tf_run3|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_teacher_forced_accuracy_batch1[wormhole_b0-8x4-device_params0]|
 2700|2400|a3_q_tf_run2|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_teacher_forced_accuracy_batch1[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_prefix_run2|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_prefix_cached_prefill_matches_uncached[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_prefix_run2|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_prefix_cached_prefill_matches_uncached[wormhole_b0-8x4-device_params0]|
-1800|1500|a3_q_demo32_run2|models/common/models/qwen3_32b_galaxy/demo.py::test_qwen3_32b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination[wormhole_b0-8x4-device_params0]|
-2400|2100|a3_l_demo32_run2|models/common/models/llama33_70b_galaxy/demo.py::test_llama33_70b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination[wormhole_b0-8x4-device_params0]|
+2400|2100|a3_l_two_models|models/common/tests/models/llama33_70b_galaxy/test_bringup_wh_galaxy.py::test_two_models_in_one_process[wormhole_b0-8x4-device_params0]|
+2400|2100|a3_l_batch32_slots_run2|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_batch32_slots_are_isolated[wormhole_b0-8x4-device_params0]|
 1800|1500|a3_q_smoke4k_run2|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_long_context_smoke[wormhole_b0-4k-8x4-device_params0]|
 1800|1500|a3_q_smoke32k_run2|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_long_context_smoke[wormhole_b0-32k-8x4-device_params0]|
 1800|1500|a3_q_smoke128k_run2|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py::test_qwen3_32b_galaxy_long_context_smoke[wormhole_b0-128k-8x4-device_params0]|
+1800|1500|a3_q_demo32_run2|models/common/models/qwen3_32b_galaxy/demo.py::test_qwen3_32b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination[wormhole_b0-8x4-device_params0]|
 2400|2100|a3_l_smoke4k_run2|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[wormhole_b0-4k-8x4-device_params0]|
 2700|2400|a3_l_smoke32k_run2|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[wormhole_b0-32k-8x4-device_params0]|
 3000|2700|a3_l_smoke128k_run2|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_long_context_smoke[wormhole_b0-128k-8x4-device_params0]|
-2400|2100|a3_l_batch32_slots_run2|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py::test_llama33_70b_galaxy_batch32_slots_are_isolated[wormhole_b0-8x4-device_params0]|
-# D-C5 duplicates, deliberately last
-1800|1500|a3_q_padded_greedy|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]|
-1800|1500|a3_q_temperature|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
-1800|1500|a3_q_seeded|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py::test_qwen_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
-2400|2100|a3_l_padded_greedy|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_no_padded_vocabulary_id_is_ever_sampled[wormhole_b0-greedy-8x4-device_params0]|
-2400|2100|a3_l_temperature|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax[wormhole_b0-8x4-device_params0]|
-2400|2100|a3_l_seeded|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py::test_llama_a_seeded_slot_repeats_across_runs[wormhole_b0-8x4-device_params0]|
+2400|2100|a3_l_demo32_run2|models/common/models/llama33_70b_galaxy/demo.py::test_llama33_70b_galaxy_direct_demo_batch32_has_no_cross_slot_contamination[wormhole_b0-8x4-device_params0]|

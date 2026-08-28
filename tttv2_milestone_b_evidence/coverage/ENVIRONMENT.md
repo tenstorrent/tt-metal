@@ -102,3 +102,124 @@ Resets the mesh (`tt-smi -glx_reset`, 900 s cap) after any non-clean run.
 Every test in these files builds its own model, and several build two. That
 single number is what makes a 17-node-id file a three-hour run and is the reason
 this attempt ran subsets rather than whole files where it had to choose.
+
+---
+
+# Attempt 3's additions
+
+Recorded 2026-08-28 by **attempt 3**, unattended. Nothing above is edited; this
+section adds what changed and what attempt 3 measured for itself.
+
+## Tree
+
+| | |
+| --- | --- |
+| Commit at start **and throughout** | `af589dff4d509b7afa3ea7b5ee41995c2e2761ad` |
+| Run directory | `tttv2_milestone_b_runs/20260828T073724Z`, 12 h slot from `07:37:58Z` |
+| Attempt 2's device commits | `1451b192584` (runs 01–g1) and `718997518ab` (runs g2 onward) |
+
+**The fact that makes attempt 2's evidence usable at this tree**, established
+before anything was scheduled:
+
+```sh
+git diff --stat 718997518ab..HEAD -- models/    # EMPTY
+git diff --stat 1451b192584..HEAD -- models/    # only the two test_step7_coverage_wh_galaxy.py files
+```
+
+So attempt 2's 27 logs stamped `718997518ab` were produced against source
+byte-identical to `HEAD` under `models/`, and its four earlier logs differ only in
+a test file that `test_full_model_wh_galaxy.py` does not import. That is not the
+same thing as quoting an earlier job's number — it is a measurement whose tree has
+been proved identical — and every gate row in §A3 says which of the two it is.
+
+## Mesh, at 07:38Z
+
+```sh
+$ ls /sys/class/tenstorrent | wc -l ; ls /dev/tenstorrent | wc -l
+32
+32
+$ pgrep -af 'pytest|ttnn' | grep -v grep     # empty
+$ python -u -m pytest ... models/common/tests/models/galaxy/test_partition_wh_galaxy.py
+5 passed in 13.66s                            # logs2/a3_00_mesh_health.log
+```
+
+Attempt 2's mesh finding holds at this commit. `HF_HOME` was again inherited
+**empty** and again exported to `/localdev/ctr-apbernal/hf_data` by every script.
+
+## Disk
+
+`/proj_sw` began this attempt with **1158 GiB free of 29803 (97% used)** — the
+queue runner's own guard prunes only `model_cache/*.tensorbin` files this job
+created, and halts rather than continue below 150 GiB. `/localdev` had 1206 GiB.
+Both weight sets were already staged, so no cold 138 GB stage was paid.
+
+## Harness
+
+Attempt 2's `cov_run3.sh` → `cov_device_run.sh` → `cov_after_device_run.sh` chain
+unchanged, driven by `cov_queue.sh` over `queue.txt` (one node id per line, one
+process per line — see D-C3). Attempt 3 added one read-only script:
+
+* `cov_watch3.sh` — polls `logs2/queue.out` and, for each finished item, re-reads
+  the log itself and appends its own extracted pytest summary line to
+  `VERDICTS_A3.txt`. It exists so that no verdict in this report comes from a
+  human-written index: `RESULTS_A2.md` was one row short of the truth and the
+  attempt-2 bridge inherited that gap. It never signals anything.
+
+## One operational note, for the next unattended job on this box
+
+`pkill -f <pattern>` matches **this agent's own tool-call wrapper shell**, whose
+command line contains the pattern verbatim. Running `pkill -f cov_watch3.sh` to
+restart a helper killed the calling shell mid-command (exit 144) rather than the
+helper. The house rules already forbid killing your own tree; the specific trap is
+that `-f` reads the wrapper's `eval '…'` string. Target a PID confirmed with
+`ps -o comm=` instead, as `cov_ensure_mesh_free.sh` does.
+
+## Attempt 3's second agent invocation, `08:16:43Z`
+
+The first invocation ended at `08:16:43Z` and `run_milestone_b_jobs.sh` (PID
+10669, `--no-screen --jobs mb-coverage --attempts 2`) relaunched immediately. The
+second invocation re-verified the environment before touching anything, because
+its brief says to:
+
+```sh
+$ ls /sys/class/tenstorrent | wc -l ; ls /dev/tenstorrent | wc -l
+32
+32
+$ echo "[$HF_HOME]"
+[]                                       # still inherited empty
+$ df -h /proj_sw /localdev | tail -2
+aus-wekacluster/proj_sw   30T   28T  1.2T  97% /proj_sw
+/dev/md1                 7.0T  5.8T  1.2T  84% /localdev
+```
+
+**The device queue survived the relaunch and this matters more than the numbers
+above.** `cov_queue.sh` had been started detached at `07:43:08Z` and was
+reparented to init (PPID 1) when its parent agent went away. At `08:16:44Z` — one
+second after the relaunch — it dequeued `a3_l_greedy` and ran it to completion.
+So:
+
+* the mesh was continuously occupied across an agent boundary, by design rather
+  than by luck. Attempt 2 lost the tail of its night to a kill that took its whole
+  process tree; a detached serial queue is what makes that survivable;
+* the second invocation's **first** obligation was therefore *not* to start
+  anything. `pgrep -af 'pytest|ttnn'` showed PID 28892 holding the mesh. It was
+  confirmed with `ps -o pid=,ppid=,comm=,args=` (comm `python`, args the exact
+  node id in `queue.out`), identified as the inherited queue's own work rather
+  than a stuck process, and **left alone**. Killing it would have cost the Llama
+  build already 16 minutes in — and it produced `a3_l_greedy`, the log that closed
+  D-C5 for Llama.
+
+Two mechanical consequences of the boundary, both recorded rather than tidied
+away:
+
+1. `cov_queue.sh`'s environment is fixed at its own launch, so an env var the
+   second invocation exports cannot reach a queued run. Anything a new test needs
+   must have a working default — which is why the cross-process pool artifacts
+   default to `$TMPDIR/tttv2_step7_artifacts` and take `STEP7_ARTIFACT_DIR` only
+   as an override;
+2. `a3_q_pool_default` was dequeued at `08:33:24`, 90 s before its own source was
+   committed as `6df3c4a14a3`. Its log is stamped `2061c126743`, a commit that does
+   not contain the test it ran. The only difference between what ran and what was
+   committed is `black` reformatting (the pre-commit run reports `black … Failed —
+   files were modified`, every other hook `Passed`), and the run was repeated from
+   the committed tree as `a3_q_pool_default_run2` rather than argued about.
