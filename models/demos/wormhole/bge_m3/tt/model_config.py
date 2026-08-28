@@ -28,7 +28,6 @@ class ModelArgs:
         data_parallel=False,
         use_experimental_encoder_sdpa=False,
         mlp_wi_output_dtype=None,
-        encoder_sdpa_q256_vbf4=False,
         use_qkv_scatter_matmul=False,
         quality_mode=False,
     ):
@@ -68,13 +67,11 @@ class ModelArgs:
         self.use_jit = data_parallel and self.max_seq_len == 8192 and int(self.max_batch_size) == 12
         if self.use_jit:
             use_experimental_encoder_sdpa = True
-            encoder_sdpa_q256_vbf4 = not quality_mode
             use_qkv_scatter_matmul = not quality_mode
             if mlp_wi_output_dtype is None:
                 mlp_wi_output_dtype = ttnn.bfloat8_b if quality_mode else ttnn.bfloat4_b
         self.use_experimental_encoder_sdpa = use_experimental_encoder_sdpa
         self.mlp_wi_output_dtype = mlp_wi_output_dtype
-        self.encoder_sdpa_q256_vbf4 = encoder_sdpa_q256_vbf4
         self.use_qkv_scatter_matmul = use_qkv_scatter_matmul
         # Opt-in high-precision masked attention (disables the BF4 serving
         # kernels for compact-valid-length requests). Serving default False.

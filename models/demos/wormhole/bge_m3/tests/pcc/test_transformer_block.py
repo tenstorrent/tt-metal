@@ -45,12 +45,20 @@ def first_layer_artifacts(model_location_generator):
 
     hf_layer = backbone.encoder.layer[0]
     state_dict = {f"roberta.encoder.layer.0.{key}": value for key, value in hf_layer.state_dict().items()}
+    # Mirrors the ModelArgs fields BgeM3TransformerBlock reads. The serving
+    # flags stay off, so the block builds the base attention and MLP modules.
     args = SimpleNamespace(
         dim=HIDDEN_SIZE,
         n_heads=NUM_HEADS,
         head_dim=HEAD_DIM,
         intermediate_size=MLP_SIZE,
         norm_eps=backbone.config.layer_norm_eps,
+        use_jit=False,
+        data_parallel=False,
+        use_experimental_encoder_sdpa=False,
+        use_qkv_scatter_matmul=False,
+        quality_mode=False,
+        mlp_wi_output_dtype=None,
     )
     return hf_layer, state_dict, args
 

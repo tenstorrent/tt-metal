@@ -214,7 +214,6 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         qkv_scale_prefolded=(max_seq_len == 8192),
         # Opt-in JIT encoder SDPA (DP S8192 only), from the explicit model arg.
         use_experimental_encoder_sdpa=args.use_experimental_encoder_sdpa,
-        encoder_sdpa_q256_vbf4=args.encoder_sdpa_q256_vbf4,
         use_qkv_scatter_matmul=args.use_qkv_scatter_matmul,
         mask_hifi=args.quality_mode,
     )

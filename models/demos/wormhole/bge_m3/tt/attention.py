@@ -77,7 +77,6 @@ class BgeM3AttentionConfig:
     qkv_scale_prefolded: bool = False
     # Use the model-local encoder-SDPA descriptor instead of the stock ttnn SDPA.
     use_experimental_encoder_sdpa: bool = False
-    encoder_sdpa_q256_vbf4: bool = False
     # Fuse the QKV matmul, the head scatter, and the K/V BF4 conversion.
     use_qkv_scatter_matmul: bool = False
     # Route masked requests to the high-precision kernels instead of BF4.
