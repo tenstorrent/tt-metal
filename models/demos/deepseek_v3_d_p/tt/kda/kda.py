@@ -50,6 +50,7 @@ def _output_projection_program_config(
     grid: tuple[int, int],
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     per_core_n = max(1, math.ceil(output_width / ttnn.TILE_SIZE / grid[0]))
+    # Keep two output tiles per block when possible to bound accumulation footprint.
     out_block_w_limit = max(1, per_core_n // 2)
     if out_block_w_cap is not None:
         out_block_w_limit = min(out_block_w_limit, out_block_w_cap)
@@ -57,6 +58,7 @@ def _output_projection_program_config(
         compute_with_storage_grid_size=grid,
         in0_block_w=_largest_divisor_at_most(
             input_width // ttnn.TILE_SIZE,
+            # Four input tiles balances reuse with the per-core L1 budget on Blackhole.
             min(4, max(1, input_width // ttnn.TILE_SIZE // grid[0])),
         ),
         out_subblock_h=1,
@@ -525,9 +527,9 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         config, weights = self.config, self.weights
+        assert output.dtype == self.gated_rms_output_dtype
         if self.tensor_parallel_size > 1:
             assert self.tt_ccl is not None
-            assert output.dtype == self.gated_rms_output_dtype
             output = ttnn.reshape(output, (1, batch, sequence, config.v_dim))
             output = ttnn.linear(
                 output,
@@ -542,6 +544,7 @@ class ttKDA:
                 ),
                 compute_kernel_config=self.output_projection_compute_config,
             )
+            # The calibrated 1D SP1xTP8 path uses the axis-less CCL pool; 2D meshes target the TP axis.
             cluster_axis = None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
@@ -555,6 +558,8 @@ class ttKDA:
             )
             output = ttnn.reshape(output, (batch, sequence, output.shape[-1]))
         else:
+            # Single-device tests retain TTNN's default matmul selection; the tuned program config
+            # belongs to the distributed projection followed by reduce-scatter above.
             output = ttnn.linear(
                 output,
                 weights.output_projection,

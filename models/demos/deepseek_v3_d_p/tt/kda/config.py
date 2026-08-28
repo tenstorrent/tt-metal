@@ -7,7 +7,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 
 KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
@@ -19,6 +18,7 @@ KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 KDA_PREPARATION_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
+# The distributed prefix spans the local stream while its carry/working buffers occupy L1.
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
@@ -62,8 +62,8 @@ class KDAProgramConfig:
 def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return measured K3 tuning with caller-owned per-axis CCL topology."""
     return KDAProgramConfig(
-        recurrence=KDARecurrenceProgramConfig(summary_group_chunks=KimiK3Config.KDA_SUMMARY_GROUP_CHUNKS),
-        output_projection_out_block_w=KimiK3Config.KDA_OUTPUT_PROJECTION_OUT_BLOCK_W,
+        recurrence=KDARecurrenceProgramConfig(summary_group_chunks=20),
+        output_projection_out_block_w=4,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,

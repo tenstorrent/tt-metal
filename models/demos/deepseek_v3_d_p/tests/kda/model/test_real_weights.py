@@ -9,7 +9,7 @@ import pytest
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
     kimi_k3_tensor_cache_path,
@@ -42,7 +42,7 @@ def test_kimi_k3_layer_1_real_weights_pcc(
     case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=128)
     golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
     cache_path = kimi_k3_tensor_cache_path(case.checkpoint_identity, mesh_device, tensor_parallel_axis)
-    cache_prefix = f"layer_{KimiK3Config.FIRST_KDA_LAYER}.kda"
+    cache_prefix = f"layer_{KIMI_K3_FIRST_KDA_LAYER}.kda"
     if not KDAWeights.check_cache_complete(
         cache_path,
         cache_prefix,
@@ -66,10 +66,10 @@ def test_kimi_k3_layer_1_real_weights_pcc(
         tensor_parallel_axis=tensor_parallel_axis,
     )
     cached_weights = KDAWeights.from_cache(
-        mesh_device,
-        case.config,
         cache_path,
         cache_prefix,
+        case.config,
+        mesh_device,
         tensor_parallel_axis=tensor_parallel_axis,
     )
     sequence_parallel_axis = 1 - tensor_parallel_axis
