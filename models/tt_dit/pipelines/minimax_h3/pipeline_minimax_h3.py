@@ -72,6 +72,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
+from ...utils.tracing import StateTensor
 from ..events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from .adaln_precompute import precompute_adaln_table, request_step_timesteps
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
@@ -91,9 +92,11 @@ from .packing import (
     build_packed_sequence,
     build_rope_tables,
     build_row_timesteps,
+    build_slot_routing,
     patchify_video_latents,
     prepare_keyframe_image,
     resolve_canvas_size,
+    slot_levels,
     unpack_audio_tokens,
     unpatchify_video_tokens,
     video_latent_num_frames,
@@ -156,9 +159,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
 }
 
 
-# Precision levers, env-only, matching cpu_vs_device.py's CVD_SPLIT_MODE/CVD_TAP_MATMUL/CVD_PREFER_MAC.
-# Unset means "leave the constructor default alone" (full/True/True, accurate mode) -- an env var set
-# to "0"/"false" is not the same as omitting it.
 def _audio_lever_flag(name):
     raw = os.environ.get(name)
     return None if raw is None else raw not in ("0", "false", "False", "")
@@ -264,8 +264,9 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
-        precomputed_adaln: bool = True,
+        precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
+        trace_denoise: bool | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
@@ -280,7 +281,9 @@ class MiniMaxH3Pipeline:
         num_links = preset["num_links"] if num_links is None else num_links
         topology = preset["topology"] if topology is None else topology
         coresident = preset.get("coresident", True) if coresident is None else coresident
-        self.trace_denoise = preset.get("trace_denoise", False)
+        # Preset default (quad-only), overridable so the traced resident path is testable on a
+        # single 4x8 Galaxy too rather than only where the preset turns it on.
+        self.trace_denoise = preset.get("trace_denoise", False) if trace_denoise is None else trace_denoise
         # False during `warmup`: generation logs (stage times, per-step, VAE profile) are the
         # measured-call report, not the compile pass. Construction logs still go through `_host_log`.
         self._log_generation = True
@@ -289,6 +292,29 @@ class MiniMaxH3Pipeline:
         # only valid for that exact request, so both are compared before reusing it.
         self._trace_signature: tuple | None = None
         self._trace_adaln_cache = None
+        # Persistent per-step trace I/O for the denoise loop, the LTX / Flux2 pattern: a ttnn trace
+        # bakes its inputs' addresses, so the buffers that change every step live in one place and are
+        # refreshed *in* (via `ttnn.copy` when traced) rather than reallocated. The static per-request
+        # inputs -- rope, prompt, conditioning, and the resident routing indices -- are built once in
+        # the preamble instead. `update(traced=False)` on the first, untraced pass allocates each
+        # buffer; a shape change releases the trace and the next untraced pass rebinds them.
+        self._tt_video = StateTensor()
+        self._tt_audio = StateTensor()
+        self._tt_timestep = StateTensor()
+        # The per-request-constant trace inputs. They never change across steps, but they are read on
+        # *every* traced step, so they must live in buffers whose address is stable across the capture
+        # call and every later replay call -- otherwise the tracer copies a freshly allocated (post-
+        # capture) tensor into the trace each step, and it is clobbered by `execute_trace` after the
+        # first step (see `Tracer`'s "allocated after capture may be overwritten" contract). Updated
+        # once in the preamble with `traced=traced`: the untraced warmup pass allocates the buffer
+        # before capture, and traced passes `ttnn.copy` into that same buffer. `_tt_cond` is a list
+        # because ref2va packs several conditioning blocks; it is sized on demand in the preamble.
+        self._tt_rope_cos = StateTensor()
+        self._tt_rope_sin = StateTensor()
+        self._tt_prompt = StateTensor()
+        self._tt_adaln = StateTensor()
+        self._tt_tsi = StateTensor()
+        self._tt_cond: list[StateTensor] = []
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -353,11 +379,12 @@ class MiniMaxH3Pipeline:
         self._audio_encoder = None
         self._adaln_cache = None
         self._adaln_cache_steps: int | None = None
-        # AdaLN strategy. The default projects every block's `adaln_proj` on host into a modulation
-        # table for the request's schedule, so the 26 GB of projection weights (6.50 GB/device at
-        # TP=4) never reach the device. `precomputed_adaln=False` keeps those weights resident and
-        # projects `temb` on device every step instead; `dit_fsdp=True` shards the DiT's
-        # SP-replicated weights over the SP axis (all-gathered per use) to relieve memory pressure.
+        # AdaLN strategy. The default (`precomputed_adaln=False`) keeps the `adaln_proj` weights
+        # resident and projects `temb` on device every step. `precomputed_adaln=True` projects every
+        # block's `adaln_proj` on host into a modulation table for the request's schedule, so the
+        # 26 GB of projection weights (6.50 GB/device at TP=4) never reach the device.
+        # `dit_fsdp=True` shards the DiT's SP-replicated weights over the SP axis (all-gathered per
+        # use) to relieve memory pressure.
         self.precomputed_adaln = precomputed_adaln
         self.dit_fsdp = dit_fsdp
         self._resident: str | None = None
@@ -379,17 +406,21 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
-        precomputed_adaln: bool = True,
+        precomputed_adaln: bool = False,
         dit_fsdp: bool = False,
+        trace_denoise: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
 
-        `precomputed_adaln=False` keeps the DiT's `adaln_proj` weights resident and projects `temb` on
-        device each step instead of using the host-built table; `dit_fsdp=True` shards the DiT over the
-        SP axis. Both default to the shipped precomputed, non-sharded build.
+        `precomputed_adaln=True` projects every block's `adaln_proj` on host into a modulation table
+        so the 26 GB of projection weights never reach the device; the default (`False`) keeps those
+        weights resident and projects `temb` on device each step. `dit_fsdp=True` shards the DiT over
+        the SP axis. `trace_denoise` defaults to the mesh preset (on for the quad only); pass `True`
+        to trace the denoise step on other shapes, e.g. to exercise the traced resident path on one
+        4x8 Galaxy.
         """
         weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
         if not weights_dir:
@@ -407,6 +438,7 @@ class MiniMaxH3Pipeline:
             task=task,
             precomputed_adaln=precomputed_adaln,
             dit_fsdp=dit_fsdp,
+            trace_denoise=trace_denoise,
         )
 
     @staticmethod
@@ -875,11 +907,10 @@ class MiniMaxH3Pipeline:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}
         config["patch_size"] = tuple(config["patch_size"])
 
-        # Default (`precomputed_adaln=True`): every `adaln_proj` is projected on host into a table for
-        # the exact schedule and the 26 GB of projection weights (6.50 GB/device at TP=4) never reach
-        # the device. `precomputed_adaln=False` builds the reference projected path instead -- the
-        # `adaln_proj` weights stay resident and `temb` is projected on device each step -- and
-        # `dit_fsdp=True` additionally shards the DiT over SP.
+        # Default (`precomputed_adaln=False`): the `adaln_proj` weights stay resident and `temb` is
+        # projected on device each step. `precomputed_adaln=True` projects every `adaln_proj` on host
+        # into a table for the exact schedule so the 26 GB of projection weights (6.50 GB/device at
+        # TP=4) never reach the device. `dit_fsdp=True` additionally shards the DiT over SP.
         # See `models/transformers/minimax_h3/adaln_cache_minimax_h3.py`.
         adaln_mode = "precomputed_adaln" if self.precomputed_adaln else "resident_adaln"
         if self.dit_fsdp:
@@ -1800,44 +1831,39 @@ class MiniMaxH3Pipeline:
             f"{padded_len // self.sp_factor} rows/device, {num_cond} condition rows"
         )
 
-        # Constant for the whole loop: the rotary tables, the text stream, and the conditioning
-        # blocks. The blocks are invariant -- the loop writes only rows from `num_cond` /
-        # `num_cond_audio` on, and raises if a conditioning row moved. Hoisting them is
-        # bit-identical and worth ~0 % of wall time, the upload having overlapped device work.
-        t_rope = time.time()
-        rope_cos, rope_sin = self._device_metadata(layout, padded_len)
-        t_rope = time.time() - t_rope
-        tt_cond = []
-        video_cursor = audio_cursor = 0
-        for modality, rows in condition_spec:
-            if modality == "audio":
-                chunk = audio_rows[audio_cursor : audio_cursor + rows]
-                audio_cursor += rows
-            else:
-                chunk = video_rows[video_cursor : video_cursor + rows]
-                video_cursor += rows
-            tt_cond.append((bf16_tensor(chunk.unsqueeze(0).unsqueeze(0), device=self.mesh_device), modality))
-        tt_cond = tt_cond or None
-        # [1, L, 5120] -> [1, 1, L, 5120], replicated: the model projects and refines the text stream
-        # before the packed sequence is fractured, so every device needs all of it.
-        tt_prompt = bf16_tensor(prompt_embeds.reshape(1, 1, -1, prompt_embeds.shape[-1]), device=self.mesh_device)
-
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+
+        # Resident-AdaLN routing is constant for the whole request: a row's noise level is fixed by
+        # its role. Only `slot_roles` -- which sizes the per-step timestep vector -- is needed before
+        # the trace signature; the index tensors it implies are built once below, after `traced` is
+        # known, so they land in the persistent buffers the trace bakes rather than a fresh per-call
+        # allocation. The precomputed path keeps its own per-step absolute-row indexing in the loop.
+        row_slot = slot_roles = None
+        if adaln_cache is None:
+            row_slot, slot_roles = build_slot_routing(layout)
 
         # Trace the per-step forward where the preset asks for it, as Wan does on the quad only. At
         # SP=32 a step is dominated by dispatching 50 blocks from host across four MPI ranks rather
         # than by the matmuls, and a trace replaces that dispatch with one replay.
         #
-        # Requires the precomputed-AdaLN path, which owns `timestep`; see `traced_step`.
-        #
         # `traced_step` has one unkeyed `Tracer` per transformer, so a capture is valid only for the
-        # request it was taken at: a different packed length fails the tracer's shape checks, and the
-        # AdaLN tables are captured by *address*, so a rebuilt cache would replay the old schedule's
-        # modulation. Release the trace whenever either changes -- which also lets the transformer
-        # reallocate its padding buffer at the new shape without a live trace referencing the old one.
-        signature = (tuple(video_rows.shape), tuple(audio_rows.shape), tuple(prompt_embeds.shape), len(timesteps))
-        warm = signature == self._trace_signature and adaln_cache is self._trace_adaln_cache
+        # request it was taken at: a different packed length fails the tracer's shape checks. Release
+        # the trace whenever the signature changes -- which also lets the transformer reallocate its
+        # padding buffer at the new shape without a live trace referencing the old one.
+        #
+        # The precomputed path additionally keys on the AdaLN cache object and step count: its tables
+        # are captured by *address*, so a rebuilt cache would replay the old schedule's modulation.
+        # The resident path projects modulation in-trace from the per-step `timestep`, so it keys on
+        # shapes alone (with `num_slots`, which sets the timestep width) -- a new schedule at the same
+        # resolution reuses the capture and never retraces.
+        shape_signature = (tuple(video_rows.shape), tuple(audio_rows.shape), tuple(prompt_embeds.shape))
+        if adaln_cache is None:
+            signature = (*shape_signature, len(slot_roles))
+            warm = signature == self._trace_signature
+        else:
+            signature = (*shape_signature, len(timesteps))
+            warm = signature == self._trace_signature and adaln_cache is self._trace_adaln_cache
         if not warm:
             self.release_traces()
             self._trace_signature = None
@@ -1846,87 +1872,167 @@ class MiniMaxH3Pipeline:
         # Not on the first generation at a signature: a capture can neither compile a program nor
         # allocate a buffer, and `CCLManager` fills its persistent buffers lazily. One untraced
         # generation does both, so the first pass at a shape runs untraced and later ones are traced.
-        traced = self.trace_denoise and adaln_cache is not None and warm
+        traced = self.trace_denoise and warm
         if traced:
+            # `None` on the resident path; `traced_step` reads it off `self`.
             transformer.traced_adaln_cache = adaln_cache
+
+        # Per-request-constant trace inputs -> persistent StateTensors, updated once now that the
+        # trace decision is made. A ttnn trace bakes its inputs' addresses, so each must occupy one
+        # stable buffer across the capture call and every replay; a per-call `from_torch` would be a
+        # post-capture allocation the tracer's contract lets `execute_trace` clobber mid-replay --
+        # exactly the corruption that surfaced once a pure-replay call followed the capture. `update`
+        # allocates the buffer on the untraced warmup pass and `ttnn.copy`s into it when traced.
+        t_rope = time.time()
+        rope_cos, rope_sin = self._device_metadata(layout, padded_len)
+        self._tt_rope_cos.update(rope_cos, traced=traced)
+        self._tt_rope_sin.update(rope_sin, traced=traced)
+        t_rope = time.time() - t_rope
+
+        # [1, L, 5120] -> [1, 1, L, 5120], replicated: the model refines the text stream before the
+        # packed sequence is fractured, so every device needs all of it.
+        self._tt_prompt.update(
+            prompt_embeds.reshape(1, 1, -1, prompt_embeds.shape[-1]),
+            traced=traced,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+        )
+
+        # Conditioning blocks are invariant -- the loop writes only rows from `num_cond` /
+        # `num_cond_audio` on, and the anchor check below raises if one moved. One resident buffer per
+        # block, sized on demand; `t2va` has none, so `tt_cond` stays None.
+        tt_cond = None
+        if condition_spec:
+            while len(self._tt_cond) < len(condition_spec):
+                self._tt_cond.append(StateTensor())
+            tt_cond = []
+            video_cursor = audio_cursor = 0
+            for block, (modality, rows) in enumerate(condition_spec):
+                if modality == "audio":
+                    chunk = audio_rows[audio_cursor : audio_cursor + rows]
+                    audio_cursor += rows
+                else:
+                    chunk = video_rows[video_cursor : video_cursor + rows]
+                    video_cursor += rows
+                self._tt_cond[block].update(
+                    chunk.unsqueeze(0).unsqueeze(0), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device
+                )
+                tt_cond.append((self._tt_cond[block].value, modality))
+
+        # Resident-path index tensors are constant across the request, so uploaded once here. The
+        # precomputed path refreshes the same two buffers per step in the loop instead.
+        if adaln_cache is None:
+            self._tt_adaln.update(
+                self._row_indices(adaln_indices(layout.token_tags, row_slot), padded_len), traced=traced
+            )
+            self._tt_tsi.update(self._row_indices(row_slot, padded_len), traced=traced)
+
+        # Target latents: uploaded once and advanced in place on device by the Euler step below, so
+        # they stay resident across the loop -- no per-step re-upload, no host round-trip. Under
+        # tracing `update` copies the fresh initial noise into the same buffer the capture read, which
+        # both resets it for each replay and keeps the trace's input address valid.
+        self._tt_video.update(
+            video_rows[num_cond:].unsqueeze(0).unsqueeze(0),
+            traced=traced,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+        )
+        self._tt_audio.update(
+            audio_rows[num_cond_audio:].unsqueeze(0).unsqueeze(0),
+            traced=traced,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+        )
+
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
         for i, t in enumerate(timesteps):
             t_step = time.time()
-            # Per-row noise levels, reduced to the (distinct timesteps, per-row index) pair the
-            # model addresses its AdaLN table through.
-            unique, row_index = build_row_timesteps(
-                layout,
-                float(t),
-                float(audio_timesteps[i]),
-                max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
-                MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
-            )
-            # `tt_cond` is hoisted above the loop; only the generated rows change per step.
-            tt_video = bf16_tensor(video_rows[num_cond:].unsqueeze(0).unsqueeze(0), device=self.mesh_device)
-            tt_audio = bf16_tensor(audio_rows[num_cond_audio:].unsqueeze(0).unsqueeze(0), device=self.mesh_device)
-            # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, T, 1] so it
-            # broadcasts against the frequency factor.
-            tt_timestep = from_torch(unique.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
+            # Every trace input is a persistent buffer hoisted above the loop; only the per-step
+            # modulation input changes. The resident path refreshes just the per-slot noise levels;
+            # the precomputed path refreshes the two index tensors into the same buffers.
             if adaln_cache is not None:
-                # `build_row_timesteps` numbers levels in its own order; the table numbers them in
-                # `step_timesteps(step)` order. Match by **value** rather than assuming the two agree:
-                # the level count varies per step (the conditioning floor collides with the video level
-                # early in the schedule and separates later), so positional correspondence is not
-                # guaranteed. Rows are then absolute, which is what the resident table is indexed by.
+                # Precomputed path: the host-built table numbers levels per step in `step_timesteps`
+                # order, so a row's absolute table row is found by matching its level *by value*.
+                # `build_row_timesteps` numbers levels in its own order and the level count varies per
+                # step (the conditioning floor collides with the video level early in the schedule and
+                # separates later), so positional correspondence is not guaranteed. The per-row
+                # indices are rebuilt each step into the resident buffers; `timestep` is unused here.
+                unique, row_index = build_row_timesteps(
+                    layout,
+                    float(t),
+                    float(audio_timesteps[i]),
+                    max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
+                    MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
+                )
                 levels = self._adaln_table.step_timesteps(i)
                 position = torch.tensor(
                     [int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype
                 )
                 step_row_index = adaln_cache.step_offset(i) + position[row_index]
+                self._tt_adaln.update(
+                    self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len), traced=traced
+                )
+                self._tt_tsi.update(self._row_indices(step_row_index, padded_len), traced=traced)
             else:
-                # Resident-AdaLN path: each block projects `temb` for *this* step's `unique` levels on
-                # device (row `t * MODALITY_NUM + tag`), so a row indexes its level directly -- local,
-                # in `build_row_timesteps` order, no table offset. `tt_timestep` is those same levels.
-                step_row_index = row_index
+                # Resident-AdaLN path: the index tensors are constant, so only the per-slot noise
+                # levels change per step. Each block projects `temb` for these levels on device (row
+                # `slot * MODALITY_NUM + tag`), so a row indexes its slot directly -- no table offset,
+                # nothing rebuilt from the host per step.
+                levels = slot_levels(
+                    slot_roles,
+                    video_timestep=float(t),
+                    audio_timestep=float(audio_timesteps[i]),
+                    condition_video_timestep=max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
+                    condition_audio_timestep=MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
+                )
+                # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, num_slots, 1]
+                # so it broadcasts against the frequency factor. `num_slots` is fixed for the request,
+                # so the buffer's shape never changes and the trace can bake its address; only the
+                # values are refreshed in place.
+                self._tt_timestep.update(
+                    levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                )
 
-            tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)
-            tt_tsi = self._row_indices(step_row_index, padded_len)
-
+            # `None` timestep on the precomputed path -- its buffer is never populated.
+            tt_timestep = self._tt_timestep.value if adaln_cache is None else None
             if traced:
                 video_velocity, audio_velocity = transformer.traced_step(
-                    video_1BVC=tt_video,
-                    audio_1BAC=tt_audio,
-                    prompt_1BLP=tt_prompt,
+                    video_1BVC=self._tt_video.value,
+                    audio_1BAC=self._tt_audio.value,
+                    prompt_1BLP=self._tt_prompt.value,
                     condition_blocks=tt_cond,
-                    adaln_indices=tt_adaln,
-                    timestep_indices=tt_tsi,
-                    rope_cos=rope_cos,
-                    rope_sin=rope_sin,
+                    timestep=tt_timestep,
+                    adaln_indices=self._tt_adaln.value,
+                    timestep_indices=self._tt_tsi.value,
+                    rope_cos=self._tt_rope_cos.value,
+                    rope_sin=self._tt_rope_sin.value,
                     traced=True,
                 )
             else:
                 video_velocity, audio_velocity = transformer(
-                    video_1BVC=tt_video,
-                    audio_1BAC=tt_audio,
-                    prompt_1BLP=tt_prompt,
+                    video_1BVC=self._tt_video.value,
+                    audio_1BAC=self._tt_audio.value,
+                    prompt_1BLP=self._tt_prompt.value,
                     condition_blocks=tt_cond,
                     timestep=tt_timestep,
-                    adaln_indices=tt_adaln,
-                    timestep_indices=tt_tsi,
-                    rope_cos=rope_cos,
-                    rope_sin=rope_sin,
+                    adaln_indices=self._tt_adaln.value,
+                    timestep_indices=self._tt_tsi.value,
+                    rope_cos=self._tt_rope_cos.value,
+                    rope_sin=self._tt_rope_sin.value,
                     adaln_cache=adaln_cache,
                 )
 
-            # The model returns the *target* rows only, so reshape to the row width rather than to
-            # `video_rows.shape`, which still counts the condition rows.
-            v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
-            a = local_device_to_torch(audio_velocity).reshape(-1, audio_rows.shape[-1]).float()
-
-            # tt_dit's scheduler returns the next sample directly; only the diffusers one wraps it.
-            # Each stream steps its own schedule -- shift 12.0 for video, 3.0 for audio.
-            #
-            # Only the generated rows are ever written, which is what makes the keyframe anchors
-            # survive: nothing re-imposes them, they are simply never touched. `t2va` has no condition
-            # rows, so `[0:]` is the whole tensor and this is bit-identical to writing it outright.
-            video_rows[num_cond:] = scheduler.step(v, t, video_rows[num_cond:])
-            audio_rows[num_cond_audio:] = audio_scheduler.step(a, audio_timesteps[i], audio_rows[num_cond_audio:])
+            # On-device Euler, in place so the latents stay resident and the (traced) input buffers
+            # are advanced directly: `next = sample + (sigma - sigma_next) * v`, the mirror of Flux2's
+            # `multiply_`/`add_` step. `step_coefficient(i)` is the exact scalar `scheduler.step()`
+            # applies -- see its derivation -- so this matches the host reference to the bf16 apply's
+            # precision. Each stream steps its own schedule (shift 12.0 for video, 3.0 for audio), and
+            # only the target rows are ever touched, so the keyframe anchors survive untouched.
+            ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
+            ttnn.add_(self._tt_video.value, video_velocity)
+            ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
+            ttnn.add_(self._tt_audio.value, audio_velocity)
             t_step = time.time() - t_step
             if i == 0:
                 t_first = t_step
@@ -1944,6 +2050,17 @@ class MiniMaxH3Pipeline:
             f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
             f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
             f"({t_steady / steady_steps * 1000:.0f} ms/step)"
+        )
+
+        # One read-back of the resident latents into the target region of the host rows. The
+        # condition rows were never uploaded, so `[:num_cond]` stays pristine -- the return contract
+        # (cond | target, cond first) and the decoders are unchanged, and the anchor check below is
+        # then structural. The model holds only the target rows, so reshape to the row width.
+        video_rows[num_cond:] = (
+            local_device_to_torch(self._tt_video.value).reshape(-1, video_rows.shape[-1]).to(video_rows.dtype)
+        )
+        audio_rows[num_cond_audio:] = (
+            local_device_to_torch(self._tt_audio.value).reshape(-1, audio_rows.shape[-1]).to(audio_rows.dtype)
         )
 
         # RuntimeError, not AssertionError: these are real failures of the loop, not caller errors, and
