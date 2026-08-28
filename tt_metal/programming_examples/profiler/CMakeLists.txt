@@ -16,10 +16,12 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 # built separately (needs internal Cluster
 # headers, so it can't go through the public-API-only CREATE_PGM_EXAMPLES_EXE).
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_perf_debug_zones)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_eth_wallclock_sync)
 
 add_custom_target(
     profiler_examples
     DEPENDS
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
         test_perf_debug_zones
+        test_eth_wallclock_sync
 )
