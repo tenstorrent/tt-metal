@@ -18,15 +18,17 @@ from quasar.test_sfpu_reduce_quasar import (
     test_sfpu_reduce_quasar as run_sfpu_reduce_quasar,
 )
 
-# Dest-full tall and wide, in elements.
+# Three 4-tile shapes, in elements. Four is what Dest holds at 32-bit and what the functional sweep
+# caps at, since a row reduce needs its whole block resident. Not generate_perf_input_dimensions():
+# that sizes to the 16-bit capacity of 8 tiles, which the functional generator never emits.
 #
-# Not generate_perf_input_dimensions(): that sizes to the Dest capacity for the format's dest_acc,
-# which is 8 tiles at 16-bit. The functional sweep caps every format at MAX_TILES=4 instead, since
-# a row reduce needs its whole block resident and the 32-bit ceiling of 4 binds first. Deriving
-# from the same cap keeps the perf shapes to ones the functional generator actually emits.
+# Square earns its place on the row axis - it is the only 4-tile shape where both factors of
+# row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE exceed one. The column axis times the same on
+# all three, since it reduces tile by tile, so those rows are knowingly duplicates.
 PERF_INPUT_DIMENSIONS_REDUCE = [
-    [MAX_TILES * TILE_DIM, TILE_DIM],  # tall: 4 tile rows x 1 tile column
-    [TILE_DIM, MAX_TILES * TILE_DIM],  # wide: 1 tile row x 4 tile columns
+    [MAX_TILES * TILE_DIM, TILE_DIM],  # tall:   4 x 1 tiles
+    [TILE_DIM, MAX_TILES * TILE_DIM],  # wide:   1 x 4 tiles
+    [2 * TILE_DIM, 2 * TILE_DIM],  # square: 2 x 2 tiles
 ]
 
 # One format per instruction path that costs something different:

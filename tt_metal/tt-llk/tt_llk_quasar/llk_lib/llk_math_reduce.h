@@ -500,11 +500,9 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
 {
-    // There is no min-pool instruction: the FPU has GMPOOL (max) and GAPOOL (average/sum), and
-    // anything that is not MAX falls through to GAPOOL. The unpacker's partial-face fill splits the
-    // same way - NEGINF for MAX, zero otherwise, which a min reduce would lose to. So MIN here would
-    // not fail, it would quietly average and pad with a value that wins. PoolType::MIN exists for the
-    // SFPU reduce, which implements it properly.
+    // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum) - so MIN
+    // would not fail here, it would quietly average, and the unpacker would pad with zero where a
+    // min reduce needs +inf. PoolType::MIN exists for the SFPU reduce, which implements it.
     static_assert(
         POOL_TYPE != PoolType::MIN,
         "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "

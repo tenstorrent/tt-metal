@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from helpers.constraints import is_valid_quasar_unpack_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -45,11 +46,18 @@ REDUCE_POOLS = [ReducePool.Sum, ReducePool.Average, ReducePool.Max, ReducePool.M
 
 # Formats the kernel implements. Floats load with sfpmem::DEFAULT (Dest word format resolved at
 # runtime); Int32 names sfpmem::INT32 outright.
-REDUCE_INPUT_FORMATS = [
-    DataFormat.Float32,
-    DataFormat.Float16_b,
-    DataFormat.Float16,
-    DataFormat.Int32,
+#
+# Input and output always match: the reduce accumulates in the SFPU's fp32 lanes and stores back
+# through the same Dest word, so there is no widening step to model. WH/BH widen UInt16 to UInt32
+# for Sum/Average, which is why their version of this axis depends on the pool; this one does not.
+REDUCE_FORMATS = [
+    InputOutputFormat(fmt, fmt)
+    for fmt in (
+        DataFormat.Float32,
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Int32,
+    )
 ]
 
 # Relative precision per float format: bf16 has 7 explicit mantissa bits, fp16 10, fp32 23.
@@ -79,15 +87,6 @@ FLOAT_PAD_MIN = -3.0e30
 FLOAT_PAD_MAX = 3.0e30
 FLOAT16_PAD_MIN = -6.0e4
 FLOAT16_PAD_MAX = 6.0e4
-
-
-def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
-    """Input/output format pairs for the reduce suite.
-
-    Output always matches input: the reduce accumulates in the SFPU's fp32 lanes and stores back
-    through the same Dest word, so there is no widening step to model.
-    """
-    return [InputOutputFormat(fmt, fmt) for fmt in REDUCE_INPUT_FORMATS]
 
 
 def get_supported_reduce_axes(
@@ -209,7 +208,7 @@ def get_reduce_atol(
 @pytest.mark.quasar
 @parametrize(
     reduce_pool=REDUCE_POOLS,
-    formats=get_reduce_formats,
+    formats=REDUCE_FORMATS,
     mathop=get_supported_reduce_axes,
     input_bounds=get_format_input_bounds,
     dimension_combinations=DIMENSION_COMBINATIONS,
@@ -237,14 +236,20 @@ def test_sfpu_reduce_quasar(
     The kernel writes only the axis it collapses and leaves the rest of the tile holding leftovers,
     so the assert compares just that axis - which is what a reduce's consumers read.
     """
-    # Not an axis: unpack-to-dest needs the L1 format's width to match the Dest word's, so the
-    # pairing is forced. Nothing is lost by a narrow Dest - the SFPU still folds in fp32 lanes and
-    # stores once per output element, so it only rounds what the packer would have rounded anyway.
+    # Not an axis: the unpack-to-dest engine cannot widen, so a 32-bit format needs a 32-bit Dest
+    # and a 16-bit format a 16-bit one - one legal value per format. Nothing is lost by a narrow
+    # Dest: the SFPU still folds in fp32 lanes and stores once per output element, so it only
+    # rounds what the packer would have rounded anyway.
     dest_acc = (
         DestAccumulation.Yes
         if formats.input_format.is_32_bit()
         else DestAccumulation.No
     )
+    # Checked against the harness's own rule, so a format whose legal width does not follow from
+    # is_32_bit() fails here rather than on device.
+    assert is_valid_quasar_unpack_to_dest(
+        formats.input_format, formats.input_format, dest_acc
+    ), f"{formats.input_format.name} at dest_acc={dest_acc.name} is not a legal unpack-to-dest pairing"
 
     min_value, max_value = input_bounds
     input_dimensions = dimension_combinations
