@@ -103,53 +103,6 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
     EXPECT_EQ(topology_mapper.get_mesh_shape(mesh_id), full_shape);
 }
 
-// Demonstrates the auto-discovery vs shape-based-consolidation mechanism on a wrap-less 2x4 (T3K
-// mock cluster; the BH LoudBox hits the same shape class). Requesting FABRIC_2D_TORUS_XY:
-//
-//  1. The topology mapper tries candidates against the real cabling. TORUS_X demands a wrap on the
-//     extent-4 axis, which T3K does not have, so it fails. TORUS_Y on an extent-2 axis is VACUOUS:
-//     genuine-gating builds no wrap edge, so its logical graph is a plain mesh that maps anywhere —
-//     discovery reports "realized TORUS_Y" without any physical wrap existing.
-//  2. coerce_fabric_config_to_realized_ring_extents() judges by dimension extents instead: the
-//     extent-4 axis "could" ring, the extent-2 axis cannot, so TORUS_XY consolidates to TORUS_X —
-//     exactly the axis discovery could NOT wire. The effective config, the discovered mesh graph,
-//     and per-direction deadlock avoidance then disagree (PR #54626 review, hardware CI fallout).
-//
-// This test pins the current behavior to make the mechanism visible; resolving the contradiction
-// (consolidating from the mapper's realized type on the auto-discovery path) flips step 2.
-TEST_F(TopologyMapperTest, T3kMeshGraphTestAutoDiscoveryTorusConsolidation) {
-    if (get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        GTEST_SKIP() << "Requires a (mock) T3K cluster: 2x4 with no wrap cabling";
-    }
-
-    MeshGraph mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
-        get_cluster(),
-        *physical_system_descriptor_,
-        FabricConfig::FABRIC_2D_TORUS_XY,
-        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-
-    // Step 1: discovery maps all 8 chips, but no wrap edge exists anywhere: the long axis has no
-    // wrap cabling and the short axis is genuine-gated. Chip 0 has exactly its two mesh neighbors.
-    const MeshId mesh_id{0};
-    const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-    ASSERT_EQ(mesh_shape.mesh_size(), 8u);
-    const auto long_axis_extent = std::max(mesh_shape[0], mesh_shape[1]);
-    ASSERT_EQ(long_axis_extent, 4u);
-    const auto& chip0_connections = mesh_graph.get_intra_mesh_connectivity().at(0).at(0);
-    EXPECT_EQ(chip0_connections.size(), 2u) << "corner chip of a wrap-less 2x4 has exactly E and S neighbors";
-    const ChipId long_axis_wrap_peer = (mesh_shape[1] == 4) ? 3 : 6;  // chip 0's long-axis end (row-major)
-    EXPECT_EQ(chip0_connections.count(long_axis_wrap_peer), 0u) << "no wrap edge on the extent-4 axis";
-
-    // Step 2: the extent-based consolidation keeps the torus on the extent-4 axis discovery could
-    // not wire (and drops the extent-2 axis). This documents the contradiction; it is NOT the
-    // desired end state.
-    const auto consolidated =
-        coerce_fabric_config_to_realized_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, {mesh_shape});
-    const auto expected_extent_based =
-        (mesh_shape[1] == 4) ? FabricConfig::FABRIC_2D_TORUS_X : FabricConfig::FABRIC_2D_TORUS_Y;
-    EXPECT_EQ(consolidated, expected_extent_based);
-}
-
 TEST_F(TopologyMapperTest, DualGalaxyBigMeshTest) {
     const std::filesystem::path dual_galaxy_big_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -1054,6 +1007,44 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
             EXPECT_NE(asic_id.get(), 0u) << "ASIC ID should be valid for fabric node " << fabric_node_id;
         }
     });
+
+    // --- Auto-discovery vs shape-based consolidation, on the same wrap-less 2x4 (the BH LoudBox
+    // hits the same shape class). Requesting FABRIC_2D_TORUS_XY:
+    //
+    //  1. The topology mapper tries candidates against the real cabling. TORUS_X demands a wrap on
+    //     the extent-4 axis, which T3K does not have, so it fails. TORUS_Y on an extent-2 axis is
+    //     VACUOUS: genuine-gating builds no wrap edge, so its logical graph is a plain mesh that
+    //     maps anywhere — discovery reports "realized TORUS_Y" without any physical wrap existing.
+    //  2. coerce_fabric_config_to_realized_ring_extents() judges by dimension extents instead: the
+    //     extent-4 axis "could" ring, the extent-2 axis cannot, so TORUS_XY consolidates to TORUS_X
+    //     — exactly the axis discovery could NOT wire. The effective config, the discovered mesh
+    //     graph, and per-direction deadlock avoidance then disagree (PR #54626 hardware CI fallout).
+    //
+    // These checks pin the current behavior to make the mechanism visible; resolving the
+    // contradiction (consolidating from the mapper's realized type on this path) flips step 2.
+    MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
+        get_cluster(),
+        *physical_system_descriptor_,
+        FabricConfig::FABRIC_2D_TORUS_XY,
+        FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    // Step 1: discovery maps all 8 chips, but no wrap edge exists anywhere: the long axis has no
+    // wrap cabling and the short axis is genuine-gated. Chip 0 has exactly its two mesh neighbors.
+    const auto torus_mesh_shape = torus_mesh_graph.get_mesh_shape(mesh_id);
+    ASSERT_EQ(torus_mesh_shape.mesh_size(), 8u);
+    ASSERT_EQ(std::max(torus_mesh_shape[0], torus_mesh_shape[1]), 4u);
+    const auto& chip0_connections = torus_mesh_graph.get_intra_mesh_connectivity().at(0).at(0);
+    EXPECT_EQ(chip0_connections.size(), 2u) << "corner chip of a wrap-less 2x4 has exactly E and S neighbors";
+    const ChipId long_axis_wrap_peer = (torus_mesh_shape[1] == 4) ? 3 : 6;  // chip 0's long-axis end (row-major)
+    EXPECT_EQ(chip0_connections.count(long_axis_wrap_peer), 0u) << "no wrap edge on the extent-4 axis";
+
+    // Step 2: the extent-based consolidation keeps the torus on the extent-4 axis discovery could
+    // not wire (and drops the extent-2 axis). Documents the contradiction; NOT the desired end state.
+    const auto consolidated =
+        coerce_fabric_config_to_realized_ring_extents(FabricConfig::FABRIC_2D_TORUS_XY, {torus_mesh_shape});
+    const auto expected_extent_based =
+        (torus_mesh_shape[1] == 4) ? FabricConfig::FABRIC_2D_TORUS_X : FabricConfig::FABRIC_2D_TORUS_Y;
+    EXPECT_EQ(consolidated, expected_extent_based);
 }
 
 // Auto-discovery coerces FABRIC_1D_RING to FABRIC_1D when the physical system cannot form a ring
