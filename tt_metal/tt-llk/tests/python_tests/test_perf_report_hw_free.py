@@ -442,7 +442,8 @@ def test_combine_perf_reports_emits_parquet_alongside_csv(tmp_path, monkeypatch)
     # ...reachable through the stable `latest` path...
     assert (root / "perf_data" / "latest" / "perf_x" / "perf_x.csv").exists()
     # ...and a run-level Parquet batch alongside it.
-    parquet = run_dir / "testrun.parquet"
+    # Named from the run tag, not run_id: run_id is shared by every shard.
+    parquet = run_dir / "testrun-wormhole-0.parquet"
     assert parquet.exists()
     table = pq.read_table(parquet)
     assert table.schema.names == [c.name for c in DB_SCHEMA]
@@ -483,7 +484,8 @@ def test_combine_perf_reports_raises_on_unknown_parquet_columns(tmp_path, monkey
 
     run_dir = root / "perf_data" / "runs" / "testrun-wormhole-0"
     assert (run_dir / "perf_x" / "perf_x.csv").exists()
-    assert not (run_dir / "testrun.parquet").exists()
+    # Glob rather than a literal name: the batch is named from the run tag.
+    assert not list(run_dir.glob("*.parquet"))
 
 
 def _seed_worker_csv(workers, base, mean):

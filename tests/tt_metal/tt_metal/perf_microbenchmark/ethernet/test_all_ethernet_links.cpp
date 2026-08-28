@@ -110,7 +110,7 @@ struct SenderReceiverPair {
 tt_metal::distributed::MeshDevice* find_device_with_id(
     const std::vector<std::shared_ptr<tt_metal::distributed::MeshDevice>>& devices, ChipId chip_id) {
     for (const auto& device : devices) {
-        if (device->get_devices()[0]->id() == chip_id) {
+        if (device->get_device_ids()[0] == chip_id) {
             return device.get();
         }
     }
@@ -238,8 +238,9 @@ private:
         bool slow_dispath_mode = (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr);
 
         std::queue<ChipId> chip_q;
-        chip_q.push(this->devices[0]->get_devices()[0]->id());  // Start with the first device's chip ID
-        sender_chips.insert(this->devices[0]->get_devices()[0]->id());
+        const auto device_id = this->devices[0]->get_device_ids()[0];
+        chip_q.push(device_id);  // Start with the first device's chip ID
+        sender_chips.insert(device_id);
         std::unordered_set<ChipId> visited_chips;
 
         // Need sender and receiver chips to be disjoint because we profile wrt. sender and don't want devices to be out
@@ -275,10 +276,11 @@ private:
 
             // Handle other unconnected device clusters
             for (auto& device : this->devices) {
-                if (!visited_chips.contains(device->get_devices()[0]->id())) {
+                const auto device_id = device->get_device_ids()[0];
+                if (!visited_chips.contains(device_id)) {
                     // This device is not connected others visited above, mark it as a sender for its connected cluster
-                    chip_q.push(device->get_devices()[0]->id());
-                    sender_chips.insert(device->get_devices()[0]->id());
+                    chip_q.push(device_id);
+                    sender_chips.insert(device_id);
                     break;
                 }
             }
@@ -330,8 +332,9 @@ std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper
     // Create a mapping from chip ID to vector index
     std::map<ChipId, size_t> chip_to_index;
     for (size_t i = 0; i < device_helper.devices.size(); i++) {
-        chip_to_index[device_helper.devices[i]->get_devices()[0]->id()] = i;
-        log_info(tt::LogTest, "Device {} index {}", device_helper.devices[i]->get_devices()[0]->id(), i);
+        const auto device_id = device_helper.devices[i]->get_device_ids()[0];
+        chip_to_index[device_id] = i;
+        log_info(tt::LogTest, "Device {} index {}", device_id, i);
     }
 
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
@@ -438,8 +441,8 @@ void validation(
     auto* sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
     auto* receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
     TT_FATAL(
-        sender_device->get_devices()[0]->id() == link.sender.chip and
-            receiver_device->get_devices()[0]->id() == link.receiver.chip,
+        sender_device->get_device_ids()[0] == link.sender.chip and
+            receiver_device->get_device_ids()[0] == link.receiver.chip,
         "Mismatch between chips");
 
     auto sender_virtual =

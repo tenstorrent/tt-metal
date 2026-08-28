@@ -18,8 +18,8 @@ void kernel_main() {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t onetile = 1;
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
 
     CircularBuffer cb_in(tt::CBIndex::c_0);
     CircularBuffer cb_out(tt::CBIndex::c_16);
