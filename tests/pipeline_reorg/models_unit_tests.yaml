@@ -965,6 +965,40 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+- name: TT-DiT encoder unit tests, shared amongst all models.
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
+    # No -k: params needing more than 8 devices skip themselves in the mesh_device fixture.
+    # -rs keeps those skip reasons visible so a green leg can be told from one that ran nothing.
+    # mistral3 is excluded: it loads black-forest-labs/FLUX.2-dev, a manually gated repo that CI's
+    # HF_TOKEN has no access to, so all 13 of its cases fail with a 403 GatedRepoError. This is an
+    # access problem, not a caching one -- MLPerf write access does not help.
+    # TODO(#54499): get the CI account added to the FLUX.2-dev allowlist, then drop the --ignore.
+    # qwen3vl vision_tower is excluded: 8 of its 22 cases fail (6 PCC misses that worsen with
+    # aspect ratio -- 98.6% at 4:3, 96.9% at 16:9, 93.1% at 4:1 against a 99% threshold -- plus 2
+    # TT_FATAL allocator faults on max_load). Added by #52874 and never run by any pipeline, so
+    # these are pre-existing, not regressions. It is also 63 of the leg's 98 minutes.
+    # TODO(#54498): hand the PCC/allocator failures to the MiniMax H3 owners, then drop the --ignore.
+    # gemma is excluded on two counts: google/gemma-3-12b-it-qat-q4_0-unquantized is gated and CI's
+    # token is not on its allowlist (4 cases), and test_gemma_connector_blocks calls a stale
+    # EmbeddingsConnector.forward signature (1 case). See #54503.
+    # TODO(#54503): allowlist the token and fix the connector call site, then drop the --ignore.
+    pytest --timeout 10000 -rs --durations=0 \
+      --ignore=models/tt_dit/tests/encoders/mistral3 \
+      --ignore=models/tt_dit/tests/encoders/gemma \
+      --ignore=models/tt_dit/tests/encoders/qwen3vl/test_qwen3vl_vision_tower.py \
+      models/tt_dit/tests/encoders/
+  model: dit-encoders
+  skus:
+    wh_llmbox:
+      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # Phi-4-mini: disabled, asserting with 'assert freqs.shape[-1] == ext_factors.shape[-1]'
 # - name: Phi-4-mini unit tests
 #   cmd: |
@@ -1281,11 +1315,14 @@
     unset TT_METAL_WATCHER  # blocked by #50886
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_attention_wan.py
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "not f32 and not 720p and not f81"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "not 720p"
     pytest --maxfail 10 --timeout 10000  models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py
+    pytest --timeout 1000 models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx"
+    pytest --timeout 1000 models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding -k "wh_glx"
   model: wan-2.2-t2v
   model_family: Wan
   skus:
@@ -1293,7 +1330,7 @@
     #   timeout: 150
     #   tier: 1
     wh_galaxy:
-      timeout: 150
+      timeout: 155
       tier: 1
     bh_quietbox_2:
       timeout: 105
@@ -1542,7 +1579,7 @@
   model_family: TTTv2
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 23
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
@@ -1703,6 +1740,68 @@
   skus:
     wh_llmbox:
       timeout: 4
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers RMSNorm 2D module unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers MLP 2D module unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+      -m "not slow" \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.modules.mlp.mlp_2d \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
+      tier: 1
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: models
+
+- name: TT-Transformers auto-compose 2D unit tests
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    pytest models/common/tests/test_auto_compose.py \
+      --tb=short \
+      --durations-min=3.0 \
+      --cov=models.common.auto_compose \
+      --cov-report=term-missing \
+      --cov-config=models/common/tests/setup.cfg
+  model: tt-transformers-common
+  model_family: TTTv2
+  skus:
+    wh_galaxy_perf:
+      timeout: 5
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
