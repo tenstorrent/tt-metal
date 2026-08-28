@@ -2481,12 +2481,16 @@ void PerfDebugProfiler::stop() {
                     res[50],
                     drain_cyc / kCycPerUs / 1000.0);
             }
-            if (res[48] != 0 || res[135] != 0 || res[142] != 0) {
+            // A full spool is back-pressure (deferred cores, stalled producers), never loss -- this fires
+            // only when the pump made no progress for the dead-consumer bound, the same contract as the
+            // direct path's credit timeout.
+            if (res[48] != 0 || res[135] != 0 || res[142] != 0 || res[144] != 0) {
                 log_warning(
                     tt::LogMetal,
-                    "[perf-debug profiler] GDDR SPOOL LOSS: {} frames dropped on a full spool{}{} -- grow "
-                    "TT_METAL_PERF_DEBUG_DRAM_MB or the host FIFO",
+                    "[perf-debug profiler] GDDR SPOOL LOSS: {} frames dropped{}{}{} -- the host consumer "
+                    "stopped draining (dead or wedged); capture is lost but the workload was never blocked",
                     res[48],
+                    res[144] != 0 ? " after the spool egress made no progress for the dead-consumer bound" : "",
                     res[135] != 0 ? ", exit drain DEADLINE EXPIRED" : "",
                     res[142] != 0 ? fmt::format(", {} bytes stranded in the spool", res[142]) : "");
             }
