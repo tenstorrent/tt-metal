@@ -651,7 +651,10 @@ class Qwen3VlAttention(Module):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid_size,
             q_chunk_size=chunk_size,
-            k_chunk_size=chunk_size,
+            # k 512: fewer streaming-softmax rescales (each rounds bf16; see the tower's
+            # _windowed_program_config for the sweep). Fidelity-neutral here -- the causal decoder's
+            # attention error was already sub-noise -- but ~2-5 % faster (fewer K iterations).
+            k_chunk_size=min(seq_len, 512),
             exp_approx_mode=False,
         )
 
@@ -665,7 +668,9 @@ class Qwen3VlAttention(Module):
         cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=worker_grid,
             q_chunk_size=chunk,
-            k_chunk_size=chunk,
+            # k 512 within each ring shard (self-capping when the shard is shorter, e.g. any
+            # sp32 config or short prompts): same rationale and measurement as the causal path.
+            k_chunk_size=min(-(-local_seq_len // 32) * 32, 512),
             exp_approx_mode=False,
         )
         return cfg, worker_grid
