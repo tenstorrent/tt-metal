@@ -23,6 +23,13 @@ namespace ckernel::sfpu {
 // Written with at most three live vFloat values. The straightforward version, holding
 // the two inputs plus max, difference, exponential and result at once, does not fit:
 // the SFPI compiler reports "cannot store sfpu register (register spill)".
+//
+// Equal infinities need their own branch. |a - b| is the right difference everywhere
+// except a == b == +/-inf, where inf - inf is NaN and the NaN then swallows the whole
+// result; the composed form this replaces returns +/-inf there, so without the branch
+// the fix would be a regression on those two points. Comparing first and substituting a
+// zero difference keeps it correct: max(inf, inf) + ln 2 = inf. A NaN input still
+// propagates, because a NaN compares unequal to itself and takes the other branch.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -31,7 +38,9 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = sfpi::max(a, b);
-        a = sfpi::abs(a - b);
+        v_if(a == b) { a = 0.0f; }
+        v_else { a = sfpi::abs(a - b); }
+        v_endif;
         // The accurate exponential is required, not a preference: the approximate body
         // returns 255/256 rather than 1 at zero, which lands as a 2.8e-03 relative error
         // on the whole result. _sfpu_exp_fp32_accurate_unsafe_ is also not usable here --

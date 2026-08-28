@@ -474,3 +474,38 @@ def test_logaddexp_beyond_exp_range_fp32(device, a, b):
         f"the exact result is {z_torch.flatten()[0].item()}"
     )
     assert_allclose(tt_out, z_torch, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (float("inf"), float("inf")),  # |a - b| is inf - inf = NaN
+        (float("-inf"), float("-inf")),
+        (float("inf"), float("-inf")),  # different signs: the difference is well defined
+        (float("inf"), 0.0),  # one infinite operand, as a control
+        (float("-inf"), 0.0),
+    ],
+)
+def test_logaddexp_equal_infinities_fp32(device, a, b):
+    # max(a, b) + log1p(exp(-|a - b|)) needs a == b handled separately at the
+    # infinities: inf - inf is NaN, and the NaN then swallows the result. The
+    # composed form it replaces returns +/-inf on these two points, so leaving them
+    # out would trade an overflow bug for a NaN one.
+    #
+    # torch.logaddexp is the reference here: logaddexp(inf, inf) is inf and
+    # logaddexp(-inf, -inf) is -inf.
+    x_torch = torch.tensor([[a]], dtype=torch.float32)
+    y_torch = torch.tensor([[b]], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    # Compared as scalars on purpose: torch.equal also compares shape, and would report
+    # False rather than raise if to_torch ever came back padded. == is exact here, which
+    # is what these five points need -- an allclose against +/-inf says nothing.
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert got == want, f"logaddexp({a}, {b}) returned {got}; the exact result is {want}"
