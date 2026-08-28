@@ -69,16 +69,15 @@ GATE_MODELS = {
     "mistral_small_4": MistralSmall4Config,
 }
 
-# Gates whose router has NO correction bias. create_gate_weights always synthesizes a random one, and
-# with a nonzero bias the GPT_* path validates GPT-OSS routing (top-k on BIASED logits) rather than
-# Mistral's softmax -> top-k -> renormalize. Zeroing it makes the two coincide, which is the whole
-# reason Mistral can reuse the GPT modes: Mistral's checkpoint carries only mlp.gate.weight.
-_BIAS_FREE_GATES = {"mistral_small_4"}
-
 
 def _zero_bias_if_bias_free(gate_model: str, gate_w: dict) -> dict:
-    """Zero the correction bias for bias-free routers, so the golden matches the real model."""
-    if gate_model in _BIAS_FREE_GATES:
+    """Zero the correction bias for a router that has none, so the golden matches the real model.
+
+    create_gate_weights always synthesizes a random bias. With a nonzero one the GPT_* path
+    validates GPT-OSS routing (top-k on BIASED logits) rather than Mistral's softmax -> top-k ->
+    renormalize; zeroing it makes the two coincide, which is why Mistral can reuse the GPT modes.
+    """
+    if not getattr(GATE_MODELS[gate_model], "ROUTER_HAS_CORRECTION_BIAS", True):
         gate_w["e_score_correction_bias"] = torch.zeros_like(gate_w["e_score_correction_bias"])
     return gate_w
 
