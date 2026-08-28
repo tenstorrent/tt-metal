@@ -202,7 +202,6 @@ TEST_F(MeshDeviceFixture, Semaphore_RelayUnicast_NoViolation) {
 TEST_F(MeshDeviceFixture, Semaphore_SemDerivedOutsideRegion_StillChecked) {
     ::setenv("TT_METAL_EMULE_ASAN", "1", 1);
 
-    auto* device = this->devices_.at(0)->get_devices()[0];
     CoreCoord logical_core = {0, 0};
     Program program = CreateProgram();
     uint32_t sem_id = CreateSemaphore(program, logical_core, /*initial_value=*/0);
