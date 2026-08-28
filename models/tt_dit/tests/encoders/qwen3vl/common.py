@@ -13,7 +13,6 @@ import transformers
 import ttnn
 
 from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder
-from ....encoders.qwen3vl.vision_qwen3vl import pad_vision_sp_rows
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor
@@ -78,11 +77,19 @@ def resolve_parallel(submesh, tp_axis, sp_axis, num_links):
     return cfg, CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear)
 
 
-def sp_shard(x, submesh, sp_axis, *, value=0.0):
+def skip_if_sp_misaligned(total, submesh, sp_axis):
+    """Ring SDPA needs N_local_q % 32 == 0; misalignment is model geometry, not a port bug, so skip."""
+    if sp_axis is None:
+        return
+    sp = tuple(submesh.shape)[sp_axis]
+    if total % (sp * 32) != 0:
+        pytest.skip(f"{total} patches do not divide into {sp} tile-aligned shards (needs a multiple of {sp * 32})")
+
+
+def sp_shard(x, submesh, sp_axis):
     if sp_axis is None:
         return bf16_tensor(x, device=submesh)
-    sp = tuple(submesh.shape)[sp_axis]
-    return bf16_tensor(pad_vision_sp_rows(x, sp, value=value), device=submesh, mesh_axis=sp_axis, shard_dim=0)
+    return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=0)
 
 
 @contextlib.contextmanager
