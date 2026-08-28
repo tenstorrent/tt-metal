@@ -89,6 +89,10 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         }
 
+        // MOVD2A writes SrcA from Dest and so is outside the Src auto-wait. Gate on the unpacker's
+        // dummy DVALID -- its UNP_ZEROSRC zeroes the bank these rows fill -- and drain in-flight math.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD);
+
         switch (idst)
         {
             case 0:
@@ -121,6 +125,10 @@ inline void _llk_math_mul_reduce_scalar_move_dest_to_src_([[maybe_unused]] std::
     }
     else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB)
     {
+        // MOVD2B writes SrcB from Dest and so is outside the Src auto-wait. Gate on the unpacker's
+        // dummy DVALID -- its UNP_ZEROSRC zeroes the bank these rows fill -- and drain in-flight math.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_BD);
 
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
@@ -246,6 +254,9 @@ inline void _llk_math_mul_reduce_column_(const std::uint32_t dst_index, const ck
 template <MathFidelity math_fidelity>
 inline void _llk_math_mul_reduce_scalar_()
 {
+    // Same gate as the DEST_TO_SRCB move: MOVD2B is outside the Src auto-wait.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+
     // Copy row 0 from dest to srcB (rows 16-31 as scratch) and transpose
     TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
     TTI_GATESRCRST(0b1, 0b1);
