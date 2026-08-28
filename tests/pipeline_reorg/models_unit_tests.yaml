@@ -479,7 +479,7 @@
 
 - name: Gemma-4-26B-A4B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
     pytest --timeout 900 \
@@ -547,7 +547,7 @@
 
 - name: Gemma-4-12B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
@@ -876,7 +876,7 @@
 
 - name: Qwen2.5-72B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-72B-Instruct
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py -k 32-page_params  # batch 32 only
     pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py -k 128-page_params  # 128 seqlen only
