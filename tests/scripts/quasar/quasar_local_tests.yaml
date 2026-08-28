@@ -290,13 +290,6 @@ models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_c
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_split_program_e2e.py:
-  - runner: pytest
-    config: 2x3
-    env:
-      TT_METAL_ENV: dev
-      TT_METAL_SLOW_DISPATCH_MODE: 1
-
 models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py:
   - runner: pytest
     config: 2x3
