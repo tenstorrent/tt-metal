@@ -177,7 +177,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DEST_SYNC>();
                     }
-                    llk_math_fast_untilize_block(0, unit_dim);
+                    llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dim);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();
@@ -199,7 +199,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_math_wait_for_dest_available_<FAST_UNTILIZE_INTERNAL_DEST_SYNC>();
                         }
-                        llk_math_fast_untilize_block(0, unit_dims[u]);
+                        llk_math_fast_untilize_block<is_fp32_dest_acc_en>(0, unit_dims[u]);
                         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                         {
                             _llk_math_dest_section_done_<FAST_UNTILIZE_INTERNAL_DEST_SYNC, is_fp32_dest_acc_en>();

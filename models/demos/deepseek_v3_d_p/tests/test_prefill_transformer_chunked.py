@@ -149,22 +149,26 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), measured after the Fabric2D TorusXY routing fixes. Each entry is the median
-    # across the per-run medians from run 31944546064/job 95160035844 and run 31951045807/job
-    # 95176102903. With two runs, that is the midpoint of the two observations rather than either
-    # run's one-sided value.
+    # (55k / code_debug). Re-centered 2026-08-24 (issue #54220): the op got 2-6% FASTER and 7/11 chunks
+    # fell out the bottom of the old band -- the baseline was stale, not the margin too tight. Likely
+    # source is #53968 (active-ERISC __global_pointer$ link fix); a branch that is 08-23 main with
+    # #53968 reverted (run 32666670314) still measures the pre-shift level.
+    #
+    # These are the per-chunk medians of run 32722605093/job 97446035784 (main) verbatim -- the current
+    # level, measured on main, is the baseline. Run 32731794058/job 97448128368 independently agrees to
+    # <=0.010 s on every chunk, so it also sits well inside the +/- 3% band around these numbers.
     (61, 11, 10): [
-        0.5660,
-        0.5695,
-        0.6120,
-        0.6615,
-        0.6925,
-        0.7205,
-        0.7455,
-        0.7785,
-        0.8200,
-        0.8585,
-        0.8935,
+        0.547,
+        0.550,
+        0.596,
+        0.624,
+        0.660,
+        0.691,
+        0.705,
+        0.744,
+        0.798,
+        0.835,
+        0.875,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
@@ -1007,7 +1011,7 @@ _PADDED_MODES = ["notrace", "traced"]
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_padded(
@@ -1751,7 +1755,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.skipif(
     not is_high_power(),
@@ -1843,7 +1847,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked(

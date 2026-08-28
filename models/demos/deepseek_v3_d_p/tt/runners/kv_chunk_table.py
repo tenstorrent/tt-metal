@@ -96,6 +96,7 @@ def build_and_serialize_kv_chunk_table(
     first_layer_idx=0,
     num_my_layers=None,
     stage_layouts=None,
+    index_layer_ids=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -152,6 +153,7 @@ def build_and_serialize_kv_chunk_table(
             chunk_size_global=chunk_size_global,
             path=path,
             stage_layouts=stage_layouts,
+            index_layer_ids=index_layer_ids,
         )
 
     # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
@@ -196,6 +198,7 @@ def _build_and_serialize_merged_kv_chunk_table(
     tp_axis=1,
     chunk_size_global=None,
     stage_layouts=None,
+    index_layer_ids=None,
 ) -> str:
     """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
@@ -203,6 +206,9 @@ def _build_and_serialize_merged_kv_chunk_table(
     for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
     :func:`dflash_config_name`. Names must stay in sorted order (asserted) so the protobuf round-trip
     keeps KVPE at config id 0 and the index at 1 — see the naming note at the top of this module.
+
+    ``index_layer_ids``: dense row -> global layer map; publishes config 1 on the LAYER axis so one
+    layer number selects the same layer in every config. None keeps the compacted axis.
 
     ``stage_layouts`` is one all-gathered layout per block-cyclic cache, in the same order — each config
     needs its own, since a layout carries one cache's DRAM base and one layer-index space. Only rank 0
@@ -216,8 +222,11 @@ def _build_and_serialize_merged_kv_chunk_table(
     entries = []
     dflash_kv_heads = 0
     n_block_cyclic = 0
+    index_config_name = None
     for kind, payload in caches:
         if kind in ("kvpe", "index"):  # block-cyclic MLA caches -> populate_kv_chunk_address_table_kimi
+            if kind == "index":
+                index_config_name = str(n_block_cyclic)
             entries.append((str(n_block_cyclic), payload, None))
             n_block_cyclic += 1
         elif kind == "dflash":
@@ -291,6 +300,22 @@ def _build_and_serialize_merged_kv_chunk_table(
     names = [name for name, _, _ in entries]
     assert names == sorted(names), f"config names must already be sorted (protobuf renumbers by name): {names}"
     configs = {name: _table_config(cache, layout_of.get(name)) for name, cache, _ in entries}
+
+    # Widen the index config to the layer axis before the table is built (extents are fixed at construction).
+    # The compacted extent stays the DRAM row count: only the published axis grows, so the stage layouts
+    # gathered above (dense, one per cache) keep addressing the same rows.
+    if index_config_name is not None and index_layer_ids is not None:
+        index_dense_layers = configs[index_config_name].num_layers
+        # Global layer total: under PP the `num_layers` arg is this rank's slice, config 0 spans every stage.
+        global_layers = configs["0"].num_layers
+        assert len(index_layer_ids) == index_dense_layers, (
+            f"index_layer_ids has {len(index_layer_ids)} entries but the index config spans "
+            f"{index_dense_layers} compacted layers; every dense row needs a global layer id"
+        )
+        assert (
+            max(index_layer_ids) < global_layers
+        ), f"index_layer_ids reaches layer {max(index_layer_ids)} but the table spans {global_layers} layers"
+        configs[index_config_name].num_layers = global_layers
     table = disagg.KvChunkAddressTable(configs)
 
     for name, cache, head_idx in entries:
@@ -308,6 +333,7 @@ def _build_and_serialize_merged_kv_chunk_table(
                 num_users=num_users,
                 config_id=config_id,
                 stage_layout=layout_of[name],
+                layer_rows=index_layer_ids if name == index_config_name else None,
             )
         else:  # one global kv-head of the drafter's K or V cache
             populate_kv_chunk_address_table_dflash(

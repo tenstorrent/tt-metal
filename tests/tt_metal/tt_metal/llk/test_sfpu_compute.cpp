@@ -47,6 +47,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/int8.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -976,16 +977,16 @@ std::vector<uint32_t> sfpu_quasar_run(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const experimental::ProgramSpec& spec,
     const experimental::ProgramRunArgs& params,
-    const std::vector<std::pair<std::shared_ptr<tt::tt_metal::Buffer>, const std::vector<uint32_t>*>>& inputs,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buf) {
+    const std::vector<std::pair<std::shared_ptr<distributed::MeshBuffer>, const std::vector<uint32_t>*>>& inputs,
+    const std::shared_ptr<distributed::MeshBuffer>& out_buf) {
     auto program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     experimental::SetProgramRunArgs(program, params);
     for (const auto& [buf, data] : inputs) {
-        tt_metal::detail::WriteToBuffer(buf, *data);
+        slow_dispatch::WriteToBuffer(*buf, *data);
     }
     LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     std::vector<uint32_t> dest;
-    tt_metal::detail::ReadFromBuffer(out_buf, dest);
+    slow_dispatch::ReadFromBuffer(*out_buf, dest);
     return dest;
 }
 
@@ -1003,24 +1004,21 @@ std::vector<uint32_t> sfpu_quasar_run(
 /// @return
 bool run_sfpu_binary_two_input_buffer(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    auto* device = mesh_device->get_devices()[0];
     const size_t per_buffer_byte_size_input = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
     const size_t per_buffer_byte_size_output = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
-    tt::tt_metal::InterleavedBufferConfig dram_config_input{
-        .device = device,
-        .size = per_buffer_byte_size_input,
-        .page_size = per_buffer_byte_size_input,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::InterleavedBufferConfig dram_config_output{
-        .device = device,
-        .size = per_buffer_byte_size_output,
-        .page_size = per_buffer_byte_size_output,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    auto input0_dram_buffer = CreateBuffer(dram_config_input);
-    auto input1_dram_buffer = CreateBuffer(dram_config_input);
-    auto output_dram_buffer = CreateBuffer(dram_config_output);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size_input},
+        {.page_size = per_buffer_byte_size_input, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size_input},
+        {.page_size = per_buffer_byte_size_input, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size_output},
+        {.page_size = per_buffer_byte_size_output, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
 
     const bool is_int8_op = sfpu_util::is_int8_binary_sfpu_op(test_config.sfpu_op);
     const size_t element_size = is_int8_op ? sizeof(int8_t) : sizeof(bfloat16);
@@ -1191,16 +1189,22 @@ bool run_sfpu_ternary_three_input_buffer(
     const size_t per_buffer_byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto* device = mesh_device->get_devices()[0];
 
-    tt::tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = per_buffer_byte_size,
-        .page_size = per_buffer_byte_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-
-    auto input0_dram_buffer = CreateBuffer(dram_config);
-    auto input1_dram_buffer = CreateBuffer(dram_config);
-    auto input2_dram_buffer = CreateBuffer(dram_config);
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto input0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input1_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto input2_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = per_buffer_byte_size},
+        {.page_size = per_buffer_byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
+        mesh_device.get());
 
     const size_t numel = per_buffer_byte_size / sizeof(bfloat16);
     const int seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -1425,12 +1429,12 @@ bool run_sfpu_ternary_three_input_buffer(
             }
         }
 
-        tt_metal::detail::WriteToBuffer(input0_dram_buffer, packed_in0);
-        tt_metal::detail::WriteToBuffer(input1_dram_buffer, packed_in1);
-        tt_metal::detail::WriteToBuffer(input2_dram_buffer, packed_in2);
+        distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, packed_in0, /*blocking=*/true);
+        distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, packed_in1, /*blocking=*/true);
+        distributed::EnqueueWriteMeshBuffer(cq, input2_dram_buffer, packed_in2, /*blocking=*/true);
         distributed::EnqueueMeshWorkload(cq, workload, false);
         distributed::Finish(cq);
-        tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+        distributed::EnqueueReadMeshBuffer(cq, dest_buffer_data, output_dram_buffer, /*blocking=*/true);
     }
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);

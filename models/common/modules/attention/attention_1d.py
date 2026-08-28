@@ -980,12 +980,11 @@ class Attention1D(LightweightModule):
         """Batched prefill KV fill — one fill call per user (loop), mirroring TTTv1 attention.py
         L1013-1040.
 
-        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]`` and
-        ``user_id`` is the list of *local* valid row indices (padded slots are excluded). ``batch_idx``
-        is a scalar per call because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows — a
-        per-row batch_idx in one call is unsupported. The executor builds ``page_table`` with one row
-        per local user, so local row ``i`` selects that user's physical blocks. Device-verified
-        correct (kernel probe E: per-slot readback pcc 1.0).
+        ``k_fill`` / ``v_fill`` are ``[batch_size, n_kv_heads, per_user_seq_len, head_dim]``.
+        Eager execution supplies active local ``user_id`` rows, while trace capture deliberately
+        supplies every padded row to keep one stable graph. Planner-owned padded page-table rows are
+        all ``-1``, the paged-fill skip sentinel, so those captured calls issue no KV writes.
+        ``batch_idx`` is scalar because ``paged_fill_cache`` reads ``batch_idx_ptr[0]`` for all rows.
         """
         cfg = self.config
         is_paged = cfg.paged_attention_config is not None

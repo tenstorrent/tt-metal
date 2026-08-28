@@ -106,6 +106,23 @@ class FakeExecutionTarget:
         return self.decode_outputs.pop(0)
 
 
+def test_compile_only_helper_ignores_compiled_prefill_programs():
+    target = FakeExecutionTarget(
+        compile_prefill_output=(object(),),
+        prefill_output=None,
+        decode_outputs=[],
+    )
+
+    run_helpers._compile_prefill_and_decode(
+        target,
+        prefill_tokens=torch.tensor([[1, 2], [3, 4]]),
+        prefill_page_table=torch.zeros(2, 1, dtype=torch.int32),
+    )
+
+    assert [name for name, _ in target.calls] == ["compile_prefill", "compile_decode"]
+    assert torch.equal(target.calls[1][1]["tokens"], torch.zeros(2, dtype=torch.long))
+
+
 def test_teacher_forcing_uses_public_target_surface_and_preserves_user_order():
     target = FakeExecutionTarget(
         compile_prefill_output=_logits([3, 4]),
@@ -240,16 +257,19 @@ class PublicReadbackTarget(FakeExecutionTarget):
         )
         self.mesh_device = SimpleNamespace(shape=(1, 1))
         self.next_event = 0
+        self.pending_events = []
 
     def read_decode_output(self, tt_out, *, async_read=False):
         assert async_read
         event = self.next_event
         self.next_event += 1
+        self.pending_events.append(event)
         self.calls.append(("read_decode_output", {"event": event}))
         return tt_out, [event]
 
     def process_decode_output_host(self, tt_out, *, is_tokens=False):
         assert is_tokens
+        run_helpers.ttnn.event_synchronize(self.pending_events.pop(0))
         self.calls.append(("process_decode_output_host", {}))
         return tt_out
 
@@ -275,7 +295,9 @@ def test_perf_benchmark_uses_public_async_readback_without_trace_introspection(m
     )
 
     assert [name for name, _ in target.calls[:2]] == ["compile_decode", "compile_prefill"]
-    assert synchronized_events == [0, 1, 2]
+    # The benchmark owns the device-paced wait; the public normalizer may
+    # defensively observe the already-completed event again while retiring it.
+    assert synchronized_events == [0, 0, 1, 1, 2, 2]
     assert result.generated_token_ids == [[2, 3, 4, 5]]
     assert len(result.decode_times_s) == 2
     assert result.decode_iteration_times_s == pytest.approx([0.1, 0.1])
@@ -349,14 +371,16 @@ def test_composite_target_synchronizes_each_lane_mesh(monkeypatch):
     assert synchronized == ["lane-0", "lane-1"]
 
 
-def test_special_token_guard_ignores_stop_tokens_warns_locally_and_fails_in_ci(monkeypatch, expect_error):
+def test_special_token_guard_truncates_at_stop_tokens_warns_locally_and_fails_in_ci(monkeypatch, expect_error):
     tokenizer = SimpleNamespace(
         all_special_ids=[0, 1, 2, 99],
         eos_token_id=2,
+        stop_tokens=[3],
         convert_tokens_to_ids=lambda token: 99 if token == "<|eot_id|>" else -1,
     )
     generated_token_ids = [
         [5, 2, 0],
+        [5, 3, 0],
         [6, 99, 1],
         [7, 0, 8],
         [9, 1, 2],
@@ -366,9 +390,20 @@ def test_special_token_guard_ignores_stop_tokens_warns_locally_and_fails_in_ci(m
 
     run_helpers.assert_no_special_tokens(generated_token_ids, tokenizer, case_name="batch-1", is_ci_env=False)
 
-    assert warnings == ["[batch-1] model produced special tokens (2/4 users)"]
-    with expect_error(AssertionError, "2/4 users"):
+    assert warnings == ["[batch-1] model produced special tokens (2/5 users)"]
+    with expect_error(AssertionError, "2/5 users"):
         run_helpers.assert_no_special_tokens(generated_token_ids, tokenizer, case_name="batch-1", is_ci_env=True)
+
+
+def test_special_token_guard_without_stop_tokens_keeps_generated_tail_visible(expect_error):
+    tokenizer = SimpleNamespace(
+        all_special_ids=[0],
+        eos_token_id=2,
+        convert_tokens_to_ids=lambda _token: -1,
+    )
+
+    with expect_error(AssertionError, "1/1 users"):
+        run_helpers.assert_no_special_tokens([[5, 3, 0]], tokenizer, is_ci_env=True)
 
 
 def test_loop_policy_is_not_exported_from_production_executor():

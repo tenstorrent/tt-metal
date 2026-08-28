@@ -2515,6 +2515,16 @@ class TestGraphReportImport:
         _ = ttnn.relu(tt_input)
         _ = ttnn.graph.end_graph_capture_to_file(report_path)
 
+        with open(report_path) as f:
+            report_json = json.load(f)
+        assert "metadata" in report_json
+        assert report_json["metadata"].get("git_sha")
+        assert len(report_json["metadata"]["git_sha"]) >= 40
+        assert report_json["metadata"].get("git_sha_short")
+        assert report_json["metadata"].get("version")
+        assert report_json["metadata"].get("build_type")
+        assert report_json["metadata"]["build_type"] != "Unknown"
+
         db_path = graph_report.import_report(report_path, db_dir)
 
         conn = sqlite3.connect(db_path)
@@ -2525,10 +2535,10 @@ class TestGraphReportImport:
 
         assert "git_sha" in rows and "git_url" in rows
         git_meta = graph_report.get_tt_metal_git_report_metadata()
-        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_sha"] == report_json["metadata"]["git_sha"]
         assert rows["git_url"] == git_meta["git_url"]
         if git_meta["git_sha"]:
-            assert len(rows["git_sha"]) >= 7
+            assert len(rows["git_sha"]) >= 40
 
 
 class TestSanitizeGitRemoteUrl:

@@ -28,7 +28,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat_force.hpp"
 
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -534,15 +534,17 @@ constexpr uint32_t kRepeatDfbPeakPerCore = 768;
 
 ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::MeshDevice* device) {
     const auto input_spec = metal2_repeat_input_spec();
+    // The forced-native entry rather than `ttnn::repeat`: the latter routes this case to the
+    // codegen path, which uses circular buffers and would report a non-zero peak with or without
+    // dataflow buffers being recorded.
     return ttnn::graph::query_op_constraints(
-        [](auto&&... args) { return ttnn::repeat(std::forward<decltype(args)>(args)...); },
+        [](auto&&... args) {
+            return ttnn::operations::data_movement::detail::repeat_force_native(std::forward<decltype(args)>(args)...);
+        },
         device,
         input_spec,
         ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
-        input_spec.tensor_layout().get_memory_config(),
-        // Without this, `repeat` picks the codegen path, which uses circular buffers and would
-        // report a non-zero peak with or without dataflow buffers being recorded.
-        std::string("native"));
+        input_spec.tensor_layout().get_memory_config());
 }
 
 // Two repeats in one capture. Params are by const& because forwarding the same pack twice is
@@ -550,15 +552,15 @@ ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::Mes
 ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed::MeshDevice* device) {
     const auto input_spec = metal2_repeat_input_spec();
     return ttnn::graph::query_op_constraints(
-        [](const auto& input, const auto& repetition_vector, const auto& memory_config, const auto& implementation) {
-            [[maybe_unused]] const auto first = ttnn::repeat(input, repetition_vector, memory_config, implementation);
-            return ttnn::repeat(input, repetition_vector, memory_config, implementation);
+        [](const auto& input, const auto& repetition_vector, const auto& memory_config) {
+            namespace detail = ttnn::operations::data_movement::detail;
+            [[maybe_unused]] const auto first = detail::repeat_force_native(input, repetition_vector, memory_config);
+            return detail::repeat_force_native(input, repetition_vector, memory_config);
         },
         device,
         input_spec,
         ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
-        input_spec.tensor_layout().get_memory_config(),
-        std::string("native"));
+        input_spec.tensor_layout().get_memory_config());
 }
 }  // namespace
 
