@@ -105,6 +105,9 @@ void kernel_main() {
 
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    // fast_tilize_init reprograms the SrcB tile descriptor's num_faces field; balance it with its uninit so
+    // that field is restored before a later A/B op (tilizeA_B_reduce_init below) validates the unpacker state.
+    fast_tilize_uninit(cb_in2, cb_out0, 1);
 
     transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
