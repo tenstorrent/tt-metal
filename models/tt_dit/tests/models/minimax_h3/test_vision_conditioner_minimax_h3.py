@@ -544,7 +544,8 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
     [
-        pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
+pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
+        pytest.param((4, 8), (4, 8), 0, 2, id="tp4_sp8"),
         pytest.param((4, 32), (4, 32), 0, 2, id="4x32"),
     ],
     indirect=["mesh_device"],
@@ -810,4 +811,137 @@ def test_fused_conditioner_two_refs_real_weights(
     assert missing == 0 and spurious == 0, (
         f"massive-activation rows disagree: {missing} missing from ours, {spurious} spurious "
         f"(golden {int(golden_massive.sum())} such rows, ours {int(ours_massive.sum())})"
+    )
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+)
+# Decoder-only parallel configs. `sp_on` shards the presentation on the non-TP axis (causal ring
+# attention); `is_fsdp` shards the weights on that same axis (they compose -- weights vs activation
+# rows; see Qwen3VlContext).
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links"),
+    [
+        # What pipeline_minimax_h3 runs for t2va today: TP=4 on axis 0, FSDP over the size-8 axis, no SP.
+        pytest.param((4, 8), (4, 8), 0, False, True, 2, id="tp4_fsdp8"),
+        # The candidate upgrade: decoder SP=8 AND FSDP=8 sharing axis 1 (the lifted-restriction path).
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, id="tp4_sp8_fsdp8"),
+        # The two_refs sibling's decoder orientation, for cross-reference against its numbers.
+        pytest.param((4, 8), (4, 8), 1, True, False, 2, id="tp8_sp4"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("check_pcc", [pytest.param(True, id="check"), pytest.param(False, id="perf")])
+# 512 is a representative prompt-only presentation; t2va prompts bucket to SEQ_BUCKET_SIZE=128
+# multiples, and 512 is a whole number of buckets so the encoder pads nothing.
+@pytest.mark.parametrize("seq_len", [512], ids=["prompt_512"])
+def test_fused_conditioner_t2va_real_weights(
+    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len
+):
+    """The `t2va` conditioner: TEXT-ONLY presentation, on released weights -- the exact path
+    `encode_prompt` takes with no keyframes and no references. No vision tower is built (t2va never
+    reaches it), no scatter, and mRoPE degenerates to the shared token index (the documented
+    text-only degeneracy), so this isolates the decoder's cost and correctness per parallel config.
+
+    The timed loop mirrors the two_refs sibling: iter 1 compiles, iter 2 is the steady state.
+    `check` compares hidden_states[TAP] against the reference's text-only forward through the same
+    production API; `perf` asserts shape + finiteness only.
+    """
+    path, reference = conditioner
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    shape = tuple(submesh.shape)
+    tp_factor = shape[tp_axis]
+    sp_axis = (1 - tp_axis) if sp_on else None
+    sp_factor = shape[sp_axis] if sp_on else 1
+    cfg = reference.language_model.config
+
+    torch.manual_seed(0)
+    ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
+    tag = f"tp{tp_factor}" + (f"_sp{sp_factor}" if sp_on else "") + (f"_fsdp{shape[1 - tp_axis]}" if is_fsdp else "")
+    logger.info(f"[t2va] presentation built: seq={seq_len}, text only, config {tag}.")
+
+    golden = None
+    if check_pcc:
+        logger.info(f"[t2va] computing the HF golden ({TAP} decoder layers over {seq_len} tokens, fp32 CPU).")
+        with torch.no_grad():
+            outputs = reference(
+                input_ids=ids, attention_mask=torch.ones_like(ids), use_cache=False, output_hidden_states=True
+            )
+        golden = outputs.hidden_states[TAP].float()
+        assert golden.shape == (1, seq_len, cfg.hidden_size)
+
+    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
+    head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+    encoder, _ = build_minimax_h3_text_encoder(
+        path,
+        mesh_device=submesh,
+        parallel_config=EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=(ParallelFactor(factor=sp_factor, mesh_axis=sp_axis) if sp_on else None),
+        ),
+        ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+        is_fsdp=is_fsdp,
+        num_layers=TAP,
+        load_weights=False,
+    )
+    layer_re = re.compile(r"^layers\.(\d+)\.")
+    truncated = {
+        key: value
+        for key, value in reference.language_model.state_dict().items()
+        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
+    }
+    encoder.load_torch_state_dict(truncated)
+    logger.info("[t2va] tt decoder built, weights loaded. Starting the device loop.")
+
+    out = None
+    for i in range(_PERF_ITERS):
+        ttnn.synchronize_device(submesh)
+        t0 = time.time()
+        # Text-only mRoPE: all three axes carry the token index, the documented degeneracy.
+        dcos, dsin = create_rope_tensors(
+            1, seq_len, None, head_dim, rope_params["rope_theta"], rope_params["mrope_section"]
+        )
+        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
+        tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
+        ttnn.synchronize_device(submesh)
+        t1 = time.time()
+        out = encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_dcos, tt_dsin))[0]
+        ttnn.synchronize_device(submesh)
+        t2 = time.time()
+        logger.info(
+            f"full conditioner [t2va] {tag} iter {i + 1}/{_PERF_ITERS}: "
+            f"dec prep {(t1 - t0) * 1000:8.1f} | dec op {(t2 - t1) * 1000:8.1f} | e2e {(t2 - t0) * 1000:8.1f} ms"
+        )
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
+
+    logger.info(f"minimax-h3 fused conditioner [real, t2va] {tag} hidden_states[{TAP}], seq={seq_len}:")
+    assert actual.shape[-2:] == (seq_len, cfg.hidden_size)
+    assert torch.isfinite(actual).all(), "conditioner output contains NaN or Inf"
+    if not check_pcc:
+        return  # perf: shape + finiteness only
+
+    # Every row is a text row, so the gate is the fused sibling's text-row bound plus the
+    # massive-activation-row agreement; there is no vision category.
+    g = golden[0].double()
+    p = actual.reshape(golden.shape)[0].double()
+    row_error = (p - g).norm(dim=1) / g.norm(dim=1)
+    norms = g.norm(dim=1)
+    median_norm = float(norms.median())
+    golden_massive = norms > MASSIVE_ROW_MULTIPLE * median_norm
+    ours_massive = p.norm(dim=1) > MASSIVE_ROW_MULTIPLE * median_norm
+    assert_quality(golden, actual)  # logged, not gated
+    logger.info(
+        f"  text rows n={seq_len}: median {float(row_error.median()) * 100:.2f} % "
+        f"max {float(row_error.max()) * 100:.2f} %"
+    )
+    assert (
+        float(row_error.max()) < FUSED_MAX_TEXT_ROW_ERROR
+    ), f"text rows are {float(row_error.max()) * 100:.2f} % off; the decoder path itself is wrong"
+    missing = int((golden_massive & ~ours_massive).sum())
+    spurious = int((ours_massive & ~golden_massive).sum())
+    assert missing == 0 and spurious == 0, (
+        f"massive-activation rows disagree: {missing} missing, {spurious} spurious "
+        f"(golden {int(golden_massive.sum())}, ours {int(ours_massive.sum())})"
     )
