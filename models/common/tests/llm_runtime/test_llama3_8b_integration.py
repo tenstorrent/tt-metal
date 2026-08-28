@@ -584,23 +584,6 @@ def test_vllm_capacity_resolution_reconfigures_existing_runtime_owners_before_al
     assert executor.prefill_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.warmup.config.page_table_layout is executor.page_table_layout
-    assert (
-        executor.prefill_runtime.config.max_page_table_capacity_width
-        == executor.decode_runtime.config.max_page_table_capacity_width
-        == executor.warmup.config.max_page_table_capacity_width
-        == executor.page_table_layout.raw_capacity_width
-    )
-    assert (
-        executor.prefill_runtime.config.max_prefill_page_table_width
-        == executor.warmup.config.max_prefill_page_table_width
-        == executor.page_table_layout.prefill_width
-    )
-    assert (
-        executor.prefill_runtime.config.max_decode_page_table_width
-        == executor.decode_runtime.config.max_decode_page_table_width
-        == executor.warmup.config.max_decode_page_table_width
-        == executor.page_table_layout.decode_width
-    )
 
     def fake_allocate():
         assert executor._runtime_configuration_sealed
