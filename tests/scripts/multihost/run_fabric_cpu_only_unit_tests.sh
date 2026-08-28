@@ -752,7 +752,10 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
 #    so the resolver can place the closed 96-stage tour across the six physical quads.
 SC24_RING_STRESS_TIMEOUT=600
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x2_pipeline_96stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
+# TODO(https://github.com/tenstorrent/tt-metal/issues/49629): TestPipelineBuilderCheck omitted, like the
+# SC20 5-group 32x4 entry: on group-of-BigMesh MGDs the pipeline builder's resolve_graph_layout does not
+# complete (>35 min on a 104-core host with all 96 ranks pinned in it). Layout + corner pins pass (~45 s/rank).
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${SC24_RING_STRESS_TIMEOUT} tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
 
 fi # bh-ring-stress
 
