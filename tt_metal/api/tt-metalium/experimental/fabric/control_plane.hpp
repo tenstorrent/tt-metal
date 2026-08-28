@@ -557,13 +557,12 @@ private:
     void validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const;
     std::string get_galaxy_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const;
 
-    // Consolidates fabric_config_ with the mesh shapes on MULTI-mesh graphs only: ring/torus configs
-    // whose wrapped dimension no mesh realizes (extent <= 2) are downgraded to their line/mesh
-    // equivalents, so deadlock avoidance is never derived from an unrealized torus axis on an
-    // inter-mesh link (#54650). Single-mesh systems keep the requested config verbatim: the mismatch
-    // needs an inter-mesh link, and single-mesh 2x2 boxes with double-cabled pairs genuinely ring.
-    // Must run before the mesh graph and adjacency graphs are built from fabric_config_ (the MGD path
-    // consolidates from the parsed descriptor's shapes; auto-discovery from the generated mesh graph).
+    // Consolidates fabric_config_ with the mesh shapes: 2D torus axes whose wrapped dimension no
+    // mesh realizes (extent <= 2) are downgraded, and FABRIC_1D_RING downgrades only when no mesh
+    // has more than 2 chips (the 1D ring tours all chips, so a 2x2 keeps its 4-cycle). Deadlock
+    // avoidance is therefore never derived from an unrealized torus axis (#54650). Must run before
+    // the mesh graph and adjacency graphs are built from fabric_config_ (the MGD path consolidates
+    // from the parsed descriptor's shapes; auto-discovery from the generated mesh graph).
     void consolidate_fabric_config_with_mesh_graph_shapes(const std::vector<MeshShape>& mesh_shapes);
 };
 

@@ -1020,10 +1020,8 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTestFromPhysicalSystemDescriptor) {
     //     — exactly the axis discovery could NOT wire. The effective config, the discovered mesh
     //     graph, and per-direction deadlock avoidance then disagree (PR #54626 hardware CI fallout).
     //
-    // These checks pin the helper's current behavior to make the mechanism visible; resolving the
-    // contradiction (consolidating from the mapper's realized type) flips step 2. Note the control
-    // plane only applies this consolidation to MULTI-mesh graphs — single-mesh systems like this one
-    // keep the requested config verbatim — so the contradiction is latent here, not live.
+    // These checks pin the current behavior to make the mechanism visible; resolving the
+    // contradiction (consolidating from the mapper's realized type instead of extents) flips step 2.
     MeshGraph torus_mesh_graph = TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         get_cluster(),
         *physical_system_descriptor_,
