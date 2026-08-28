@@ -642,6 +642,9 @@ void kernel_main() {
 #ifdef ROTATED_Q_SPLIT
         // Packed physical core owning this chunk next iteration (kRotNoDest if it stays put).
         uint32_t mig_dest = kRotNoDest;
+        // Flat chunk id this save belongs to, so the early-flush decision below can compare chunk
+        // identity instead of slot position (slots do not map to fixed chunks under rotation).
+        uint32_t flat_q = 0;
 #endif
     } deferred = {};
 
@@ -784,7 +787,22 @@ void kernel_main() {
             const uint32_t q_per_core = global_q_end - global_q_start;
 #endif
             const uint32_t last_q_index = q_per_core - 1;
-            const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
+            [[maybe_unused]] const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
+#ifdef ROTATED_Q_SPLIT
+            // Flat chunk id that the site-3 prefetch below will fetch for this q_index: the next
+            // slot of this iteration, or -- on the last slot -- slot 0 of the next iteration. Used
+            // to decide the early flush by chunk identity; see the site-2 comment.
+            constexpr uint32_t kRotNoPrefetch = 0xFFFFFFFFu;
+            auto rot_prefetch_target_flat = [&](uint32_t q_index) {
+                if (q_index + 1 < q_per_core) {
+                    return rot_flat_at(ring_iter, q_index + 1);
+                }
+                if (!is_last_ring_iter) {
+                    return rot_flat_at(ring_iter + 1, 0);
+                }
+                return kRotNoPrefetch;
+            };
+#endif
 
             // TRID assignment by Q position: Q[0] -> TRID_FIRST, Q[N-1] -> TRID_LAST,
             // Q[1..N-2] -> TRID_INNER. Used both for tagging the current Q's save (deferred.trid)
@@ -797,14 +815,17 @@ void kernel_main() {
             // TRID_LAST for its restore in the next -- letting the restore read accumulators whose
             // save is still in flight. So key off the FIXED slot count instead: base chunks keep
             // their slot and only the float ever occupies the last one.
-            // NOT YET FIXED, and do not patch this in isolation -- both halves were measured:
+            // Under rotation last_q_index is base or base+1 depending on whether this core holds
+            // the float, so slot -> TRID is not stable across ring iterations and a base chunk can
+            // be saved under TRID_INNER yet have its restore barriered on TRID_LAST. That is a real
+            // hazard on paper, but no observed failure has been attributable to it: the base == 2
+            // and base == 1 wrong-numbers bugs were the flush and cross-ring-prefetch ordering
+            // fixed elsewhere in this function, and all rotated shapes pass PCC with this map as
+            // is. Do not "fix" it in isolation -- both halves were measured and neither helped:
             //   - keying off rot_max_slots alone makes the map stable but breaks accuracy outright
             //     (PCC 0.0 on kimi50k-q32-k512 chunk 0), because need_barrier below assumes the
             //     last slot maps to TRID_LAST and skips its barrier when nothing does;
-            //   - stable map + unconditional barrier is self-consistent but changed nothing, so this
-            //     hazard is NOT the cause of the rotated-split accuracy failure on kimi50k.
-            // Left at the flat-split behaviour until the real root cause is known, since the fix for
-            // that may restructure this contract anyway.
+            //   - stable map + unconditional barrier is self-consistent but changed nothing.
             auto trid_for_q = [&](uint32_t qi) {
                 return qi == 0 ? TRID_FIRST : qi == last_q_index ? TRID_LAST : TRID_INNER;
             };
@@ -922,10 +943,11 @@ void kernel_main() {
                 // during the RECEIVER's use iteration -- donor and receiver therefore index
                 // rot_sem_slot() with the same ring_iter (>= 1).
                 // A core can be donor and receiver in the SAME iteration (giving one float away and
-                // taking another). That is not a cycle, because the signal always precedes the wait:
-                // at q_per_core == 2 flush_before_prefetch is forced, so the early flush runs before
-                // prefetch_intra_ring; at q_per_core >= 3 the late flush runs at q_index 0 while the
-                // wait first fires at q_index == last_q_index - 1 >= 1.
+                // taking another). That is not a cycle, because the signal always precedes the wait.
+                // Receiving means holding a float, so q_per_core == base + 1 >= 3 and last_q_index
+                // >= 2, which puts the receiver's wait at q_index == last_q_index - 1 >= 1; the
+                // donor's save is flushed by the unconditional late flush at q_index == 0, one slot
+                // earlier. (A float-free iteration has q_per_core == base and never waits at all.)
                 // Barrier first: flushed-but-not-landed writes must not be visible as "ready".
                 if (deferred.mig_dest != kRotNoDest) {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
@@ -976,7 +998,20 @@ void kernel_main() {
                 // With >= 2 valid K chunks and q_per_core >= 3, K0 uses ping-pong accumulators
                 // (not staging CBs), so we prefetch first and flush later during the K-loop
                 // window — spreading DRAM writes to reduce bank contention.
+                //
+                // q_per_core == 2 is a POSITIONAL proxy for "the chunk about to be prefetched is the
+                // one whose save is still in staging". That proxy is exact only while slots map to
+                // fixed chunks. Under rotation they do not, and the count is this iteration's while
+                // the pending save came from the previous one: at base == 2 an iteration holding the
+                // float (count 3) would skip the early flush and then prefetch slot 1 -- the very
+                // base chunk the previous float-free iteration (count 2) left in staging -- reading
+                // stale accumulators. So compare chunk ids directly there.
+#ifdef ROTATED_Q_SPLIT
+                if (deferred.pending &&
+                    (single_valid_kv_chunk || deferred.flat_q == rot_prefetch_target_flat(q_index))) {
+#else
                 if (deferred.pending && flush_before_prefetch) {
+#endif
                     flush_deferred_save();
                 }
 
@@ -987,6 +1022,17 @@ void kernel_main() {
                 // write_out below. Reserving space in cb_prev_out here would block until
                 // normalize finishes, creating a cycle with cb_out. Deferred prefetch below
                 // runs after write_out to break the cycle.
+#ifdef ROTATED_Q_SPLIT
+                // At base == 1 an iteration can own exactly ONE chunk, and then the cross-ring
+                // prefetch target (slot 0 of t+1) is the chunk being processed right now, whose save
+                // is only created at the end of this body -- prefetching it here would restore the
+                // PREVIOUS iteration's accumulators. Postpone it until after that save is issued and
+                // has landed. With >= 2 owned chunks the target is a different chunk whose save is
+                // already pending, which the identity-based early flush above handles instead.
+                const bool rot_postpone_cross_prefetch =
+                    !is_last_ring_iter && q_index == last_q_index &&
+                    rot_flat_at(ring_iter + 1, 0) == rot_flat_at(ring_iter, q_index);
+#endif
                 const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
                 if (!single_q_chunk && !is_first_active_iter && !defer_prefetch) {
                     prefetch_intra_ring(q_index + 1);
@@ -994,7 +1040,11 @@ void kernel_main() {
                 // Cross-ring: Q[N-1] -> Q[0] of next ring iter. Under the rotated split the next
                 // iteration's slot 0 is always a base chunk this core owned all along (floats sit
                 // last), so no handoff wait is needed here.
-                if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index) {
+                if (!single_q_chunk && !is_last_ring_iter && q_index == last_q_index
+#ifdef ROTATED_Q_SPLIT
+                    && !rot_postpone_cross_prefetch
+#endif
+                ) {
                     prefetch_for(
 #ifdef ROTATED_Q_SPLIT
                         rot_flat_at(ring_iter + 1, 0),
@@ -1051,8 +1101,20 @@ void kernel_main() {
 #ifdef ROTATED_Q_SPLIT
                     // Only the last (float) slot can migrate; base chunks keep kRotNoDest.
                     deferred.mig_dest = (q_index == last_q_index) ? rot_float_dest : kRotNoDest;
+                    deferred.flat_q = rot_flat_at(ring_iter, q_index);
 #endif
                 }
+
+#ifdef ROTATED_Q_SPLIT
+                // Postponed cross-ring prefetch (see rot_postpone_cross_prefetch): this slot's save
+                // now exists, so issue it and read it back. prefetch_for barriers deferred.trid
+                // first, which is what makes the save visible to the read.
+                if (rot_postpone_cross_prefetch) {
+                    const uint32_t save_trid = deferred.trid;
+                    flush_deferred_save();
+                    prefetch_for(rot_flat_at(ring_iter + 1, 0), save_trid, /*barrier_first=*/true);
+                }
+#endif
 
                 // Delayed intra-ring prefetch for normalize-only Qs: skipped earlier to avoid
                 // cycling cb_prev_out <-> cb_out with compute's normalize. Now cb_out has been

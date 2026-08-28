@@ -2640,21 +2640,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         active_ring_iter_mask == full_ring_iter_mask &&
         // Degenerate: nothing to rotate (work divides evenly), or nowhere to rotate it to.
         rot_float_chunks != 0 && rot_rows_needed < grid_size.y &&
-        // rot_base_chunks >= 2 is load-bearing in four independent places, not just the hang:
-        //   - writer: single_q_chunk must be false, or the deferred save/restore path the handoff
-        //     rides on is bypassed entirely;
-        //   - reader: need_q_read must be true, or Q is pushed once for the whole op while compute
-        //     expects it per iteration;
-        //   - reader: padded iterations decode slot (rot_my_count - 1), which underflows at 0;
-        //   - base == 1 HANGS. Cores park in chain_link.hpp receiver_sem.wait(VALID) on the reader
-        //     (ncrisc) and the rest pile up behind them on CWFW/CRBW, i.e. the K mcast chain loses
-        //     phase alignment; it is not the accumulator handoff, whose waits live in the writer.
-        //     Forcing row_loop to rot_base_chunks + 1 everywhere does not fix it and breaks base 2,
-        //     so the reader's padded-slot accounting has to be understood first.
-        // The first two are now pinned to the fixed slot count in the kernels, so lowering this
-        // bound means fixing the padded-slot underflow and the hang -- not just relaxing a number.
-        // Worth doing: base == 1 is the worst static imbalance and the largest predicted win.
-        rot_base_chunks >= 2;
+        // rot_base_chunks >= 1: every core must own at least one chunk every iteration, since the
+        // reader decodes slot (rot_my_count - 1) on padded iterations and would underflow at 0.
+        // base == 1 is now supported and is the largest win (measured 1.71x on kimi_k3 q128: 15.587
+        // -> 9.091 ms at k224, 14.967 -> 8.746 ms at k256), because it is the worst static imbalance
+        // -- half the rows would otherwise pay the +1 mcast slot on every ring iteration.
+        //
+        // Getting below the old >= 2 bound took three fixes, all in the writer/reader, and all of
+        // them are no-ops at base >= 3 (see each site for why):
+        //   - the reader pinned need_q_read and the writer pinned single_q_chunk to the FIXED slot
+        //     count rather than the static flat count. Compute derives its accumulator mode from
+        //     rot_max_slots, and at base == 1 a core whose static count was 1 pushed Q once for the
+        //     whole op while compute expected it per iteration -- that was the base == 1 HANG
+        //     (cores parked in chain_link.hpp receiver_sem.wait(VALID), the rest behind them);
+        //   - the early-flush decision compares flat chunk ids instead of using the positional
+        //     q_per_core == 2 proxy, which was evaluated on the current iteration's count while the
+        //     pending save came from the previous one. That was the base == 2 wrong-numbers bug;
+        //   - the cross-ring prefetch is postponed past this slot's own save when they are the same
+        //     chunk, which only happens when a core owns exactly one chunk that iteration.
+        rot_base_chunks >= 1;
 
     struct RotatedIterSched {
         std::vector<uint32_t> my_chunks;   // flat chunk ids; base chunks first, float (if any) last

@@ -156,7 +156,7 @@ void kernel_main() {
     // global_q_start/global_q_end and silently desync from the reader and writer. The host pairs
     // latent-V with streaming compute, but only via a chain of implications, so pin it here.
     static_assert(use_streaming_compute, "ROTATED_Q_SPLIT requires the streaming compute path");
-    static_assert(ROTATED_Q_SPLIT >= 3, "ROTATED_Q_SPLIT is rot_base_chunks + 1, and the host requires base >= 2");
+    static_assert(ROTATED_Q_SPLIT >= 2, "ROTATED_Q_SPLIT is rot_base_chunks + 1, and the host requires base >= 1");
     // Rotated per-ring-iteration Q distribution: per ring iteration the factory appends
     // [my_count, chunk ids x ROTATED_Q_SPLIT] (fixed stride). See the program factory comment.
     constexpr uint32_t rot_max_slots = ROTATED_Q_SPLIT;

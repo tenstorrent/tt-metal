@@ -5278,12 +5278,21 @@ RING_MLA_CHUNKED_CONFIGS, RING_MLA_CHUNKED_CONFIG_IDS = _generate_chunked_config
 if os.environ.get("RING_MLA_K_SWEEP"):
     # Local only. Extends the base list (not the derived *_TEST_CONFIGS, whose ids list is the same
     # object) so accuracy/determinism/perf_impl all pick these up with matching lengths.
-    # q64/k448 is the fastest shape found on this box, so give it accuracy/determinism coverage
-    # (only q32 had any). Do not add q128 here: 24 heads x (640/128) = 120 work units over 110
-    # cores puts rot_base_chunks at 1, which the rotated split must refuse -- see the hang note in
-    # ring_joint_sdpa_program_factory.cpp.
+    # Accuracy/determinism coverage for the shapes only q32 used to have. These are the shapes that
+    # exercise the small-rot_base_chunks paths: q64 -> 240 units/110 cores = base 2, q128 -> 120
+    # units = base 1 (both were unsupported or broken before; see the predicate in
+    # ring_joint_sdpa_program_factory.cpp). q128's k is capped by L1.
+    # NOTE q64 (Sq_chunk_t == 2) is BROKEN independently of the rotated split: k320 and k448 both
+    # give PCC ~0.12 with RMSE ~100 and inf on later chunks, and they fail identically with
+    # RING_MLA_DISABLE_ROTATED_Q_SPLIT=1. q32 (Sq_chunk_t 1) and q128 (Sq_chunk_t 4) are fine, so
+    # this is specific to Sq_chunk_t == 2 -- and the committed q64/k448 perf baseline below is
+    # therefore measuring a shape that produces garbage.
     RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, 448))
     RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q64-k448")
+    RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 128, 256))
+    RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q128-k256")
+    RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, 320))
+    RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q64-k320")
 MINIMAX3_GQA_CHUNKED_CONFIGS, MINIMAX3_GQA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(
     MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS
 )
@@ -6224,6 +6233,10 @@ if os.environ.get("RING_MLA_K_SWEEP") and RING_MLA_RING8_BASELINES_APPLY:
         RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 64, _k, 8, None))
     for _k in (320, 448, 576, 608):
         RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 32, _k, 8, None))
+    # q128 -> 24 heads x (640/128) = 120 work units over 110 cores, i.e. rot_base_chunks == 1: the
+    # worst static imbalance (2:1) and so the largest rotation win. k is capped by L1 here.
+    for _k in (224, 256):
+        RING_MLA_CHUNKED_PERF_CHECK_CONFIGS.append(("kimi_k3", 128, _k, 8, None))
 
 
 if MESH_CONFIG.is_galaxy:
