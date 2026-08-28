@@ -104,6 +104,14 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input.layout() == Layout::TILE || tensor_args.input.layout() == Layout::ROW_MAJOR,
         "Input tensor layout must be TILE or ROW_MAJOR but got {}",
         tensor_args.input.layout());
+    // use_tensor_args unconditionally selects SliceTileTensorArgsProgramFactory, which counts work as
+    // output.physical_volume() / TILE_HW and sizes its CBs with tile_size(). The public slice() entry
+    // point already refuses to take this path for a non-TILE input, but ttnn::prim::slice is callable
+    // directly, so re-check it here where the factory is actually chosen.
+    TT_FATAL(
+        !args.use_tensor_args || tensor_args.input.layout() == Layout::TILE,
+        "Tensor-args slice requires a TILE layout input, but got {}",
+        tensor_args.input.layout());
     TT_FATAL(
         tensor_args.input.padded_shape().rank() == args.slice_start.rank() &&
             args.slice_start.rank() == args.slice_end.rank(),
@@ -165,7 +173,21 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             tile.get_height(),
             tile.get_width());
         if (tensor_args.preallocated_output.has_value()) {
-            const auto out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
+            const auto& out_tensor = tensor_args.preallocated_output.value();
+            // Layout and dtype must be checked before the tile: PageConfig::get_tile() reports a default
+            // 32x32 Tile for a ROW_MAJOR tensor, so the comparison below would accept one. Both properties
+            // are pinned to the input by compute_output_specs, which is what the tile factories are built
+            // against, so this rejects only combinations the op never produced for itself.
+            TT_FATAL(
+                out_tensor.layout() == Layout::TILE,
+                "The preallocated output tensor must be TILE layout to match the input, but it has {} layout",
+                out_tensor.layout());
+            TT_FATAL(
+                out_tensor.dtype() == tensor_args.input.dtype(),
+                "The preallocated output tensor dtype ({}) must match the input tensor dtype ({})",
+                out_tensor.dtype(),
+                tensor_args.input.dtype());
+            const auto out_tile = out_tensor.tensor_spec().tile();
             TT_FATAL(
                 out_tile == tile,
                 "The preallocated output tensor tile ({}x{}) must match the input tensor tile ({}x{})",

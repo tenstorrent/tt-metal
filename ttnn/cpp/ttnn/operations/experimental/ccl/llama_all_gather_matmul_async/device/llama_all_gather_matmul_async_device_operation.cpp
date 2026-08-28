@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.hpp"
+
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -30,6 +33,27 @@ void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
             input0.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input0.memory_config().memory_layout());
+
+    // The all-gather half is only partly tile-aware: it derives the weight tensor width as
+    // padded_shape[3] / 32 and both shard page counts by dividing by TILE_HW, so a non-standard tile
+    // compiles a mis-sized program even though the tile is now in the key. Guard rather than rely on
+    // hashing, which would only give a wrong program its own cache entry. This op has no cache-hit
+    // validator, so the miss validator runs on both paths.
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+            "llama_all_gather_matmul_async requires standard 32x32 tiles, but {} has a {}x{} tile",
+            name,
+            tile.get_height(),
+            tile.get_width());
+    };
+    require_standard_tile(input0, "input0");
+    require_standard_tile(tensor_args.input1, "input1");
+    require_standard_tile(tensor_args.intermediate, "the intermediate tensor");
 }
 
 LlamaAllGatherMatmulAsyncDeviceOperation::spec_return_value_t
@@ -124,6 +148,10 @@ ttsl::hash::hash_t LlamaAllGatherMatmulAsyncDeviceOperation::compute_program_has
         args.output_memory_config,
         args.topology,
         args.cluster_axis,
+        // sub_device_id selects the sender worker core pool and is forwarded to the matmul half, so it
+        // is structural to the compiled program rather than per-call data. Widened past the uint8 range
+        // so the disengaged optional cannot collide with a real sub-device id.
+        args.sub_device_id.has_value() ? static_cast<uint32_t>(args.sub_device_id->get()) : 0xFFFFFFFFu,
         args.matmul_struct,
         input0_shape,
         input0_memory_layout,

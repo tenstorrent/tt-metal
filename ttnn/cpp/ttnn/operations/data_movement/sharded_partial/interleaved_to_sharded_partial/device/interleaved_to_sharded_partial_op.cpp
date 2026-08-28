@@ -89,9 +89,15 @@ ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_h
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     // slice_index is deliberately excluded from the key: it only feeds the runtime read-offset
     // starting_idx_h (same program structure for every slice of a given num_slices), and it is
-    // re-applied on every cache hit via get_dynamic_runtime_args. Keying on it would rebuild the
+    // re-applied on every cache hit by InterleavedToShardedPartialProgramFactory::
+    // override_runtime_arguments. Keying on it would rebuild the
     // program for each slice of a partial-slicing loop. num_slices -- which drives the work split --
     // stays keyed.
+    // padded_shape and the input's memory config both reach the compiled program and neither is
+    // refreshed on a hit: the factory bakes shape-derived reader/writer args at first miss while
+    // override_runtime_arguments patches only the address and starting offset, and the input buffer
+    // type selects the TensorAccessorArgs compile-time words, the scratch CB's existence and the input
+    // CB page size. The non-partial sibling already keys both.
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
@@ -99,7 +105,9 @@ ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_h
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         input_tensor.dtype(),
-        input_tensor.layout());
+        input_tensor.layout(),
+        input_tensor.padded_shape(),
+        input_tensor.memory_config());
 }
 
 Tensor interleaved_to_sharded_partial(

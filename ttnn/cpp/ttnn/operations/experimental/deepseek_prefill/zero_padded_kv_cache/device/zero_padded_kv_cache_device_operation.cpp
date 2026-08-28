@@ -98,6 +98,10 @@ void validate_runtime_args(
             TT_FATAL(meta.storage_type() == StorageType::DEVICE, "metadata tensor {} must be on device", name);
             TT_FATAL(meta.dtype() == DataType::UINT32, "metadata tensor {} must be UINT32", name);
             TT_FATAL(meta.layout() == Layout::ROW_MAJOR, "metadata tensor {} must be ROW_MAJOR", name);
+            // A sharded metadata tensor changes the shape and length of the accessor block the kernels
+            // append, and both sibling ops reject it; the hashed memory config keeps it off a cached
+            // program but would still let it compile on a fresh miss.
+            TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
             TT_FATAL(
                 meta.logical_volume() == 1,
                 "metadata tensor {} must be a single element (got {})",
@@ -125,6 +129,12 @@ void validate_runtime_args(
         TT_FATAL(args.slot_idx < num_slots, "slot_idx ({}) out of range for num_slots ({})", args.slot_idx, num_slots);
     }
 
+    // Checked here rather than only in the miss validator because device() is dereferenced on the next
+    // line and returns nullptr for host storage, so on a hit the fault would land there instead.
+    TT_FATAL(
+        cache.storage_type() == StorageType::DEVICE,
+        "cache must be on device, but its storage type is {}",
+        cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "zero_padded_kv_cache requires a 2D mesh");
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -177,7 +187,7 @@ ZeroPaddedKvCacheDeviceOperation::program_factory_t ZeroPaddedKvCacheDeviceOpera
 void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
-    TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
+    // cache storage is pinned in validate_runtime_args so it also runs on hits.
     TT_FATAL(cache.buffer()->buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
     TT_FATAL(
         cache.layout() == Layout::TILE || cache.layout() == Layout::ROW_MAJOR,

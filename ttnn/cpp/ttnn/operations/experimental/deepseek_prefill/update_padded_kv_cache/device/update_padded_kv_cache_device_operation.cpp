@@ -72,6 +72,12 @@ void validate_runtime_args(
         args.num_layers);
     // The cache is sharded across a 2D mesh; the kernel derives sp_factor from the mesh extent.
     const auto& cache = tensor_args.cache;
+    // Checked here rather than only in the miss validator because device() is dereferenced on the next
+    // line and returns nullptr for host storage, so on a hit the fault would land there instead.
+    TT_FATAL(
+        cache.storage_type() == StorageType::DEVICE,
+        "cache must be on device, but its storage type is {}",
+        cache.storage_type());
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
     if (!args.cluster_axis.has_value()) {
@@ -121,6 +127,20 @@ void validate_runtime_args(
     };
     require_standard_tile(cache, "cache");
     require_standard_tile(tensor_args.input, "input");
+
+    // cache's dtype and layout are absent from the key (only input's are hashed), and both set the
+    // writer's page size, so they have to be re-checked on hits too: a second call that changes only
+    // the cache would otherwise reuse a program built for the first one's page geometry.
+    TT_FATAL(
+        cache.dtype() == tensor_args.input.dtype(),
+        "cache and input dtype must match (got {} and {})",
+        cache.dtype(),
+        tensor_args.input.dtype());
+    TT_FATAL(
+        cache.layout() == tensor_args.input.layout(),
+        "cache and input layout must match (got {} and {})",
+        cache.layout(),
+        tensor_args.input.layout());
 
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
@@ -231,16 +251,15 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
 
-    TT_FATAL(cache.storage_type() == StorageType::DEVICE, "cache must be on device");
+    // cache storage is pinned in validate_runtime_args so it also runs on hits.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "input must be on device");
-    TT_FATAL(cache.dtype() == input.dtype(), "cache and input dtype must match");
 
     // Layout / dtype gating. The op is a pure page copy, so it supports both TILE and ROW_MAJOR;
     // the page-unit math in create_descriptor branches on layout. The two formats are mutually
     // exclusive per dtype family:
     //   - block-float (bfloat8_b/bfloat4_b) carries a per-face shared exponent and is tile-only.
     //   - fp8_e4m3 is ROW_MAJOR-only (Blackhole) in ttnn today.
-    TT_FATAL(cache.layout() == input.layout(), "cache and input layout must match");
+    // cache-vs-input dtype and layout agreement lives in validate_runtime_args so it also runs on hits.
     TT_FATAL(input.layout() == Layout::TILE || input.layout() == Layout::ROW_MAJOR, "layout must be TILE or ROW_MAJOR");
     if (tt::tt_metal::is_block_float(input.dtype())) {
         TT_FATAL(input.layout() == Layout::TILE, "block-float dtypes (bfloat8_b/bfloat4_b) require TILE layout");

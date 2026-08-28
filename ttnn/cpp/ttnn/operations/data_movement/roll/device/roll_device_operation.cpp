@@ -56,8 +56,18 @@ void RollDeviceOperation::validate_on_program_cache_hit(
 
 ttsl::hash::hash_t RollDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
+    // padded_shape drives the N-D decomposition the factory writes into per-core runtime args, and it
+    // changes their count, which override_runtime_arguments cannot resize. output_mem_config supplies
+    // the output shard grid and orientation, which become the kernels' core ranges and select the
+    // shard-linear mapping; only the shard shape is re-checked on a hit.
     return tt::tt_metal::operation::hash_operation<RollDeviceOperation>(
-        attrs.shift, attrs.dim, args.input.memory_config(), args.input.dtype(), args.input.layout());
+        attrs.shift,
+        attrs.dim,
+        attrs.output_mem_config,
+        args.input.memory_config(),
+        args.input.dtype(),
+        args.input.layout(),
+        args.input.padded_shape());
 }
 
 RollDeviceOperation::spec_return_value_t RollDeviceOperation::compute_output_specs(

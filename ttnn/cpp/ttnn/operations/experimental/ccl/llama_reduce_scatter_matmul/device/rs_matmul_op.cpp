@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter/device/llama_reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
@@ -13,6 +15,28 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 namespace ttnn::operations::experimental::ccl {
+
+namespace {
+
+// The shared reduce-scatter factory sizes its pages with the two-argument tile_size(), which assumes
+// the architectural 32x32 tile, and derives the per-packet page counts from it. Keying page_config
+// stops a non-standard tile from aliasing onto a cached program, but the program it would compile for
+// itself is still mis-sized, so reject it outright. Called from both validators because the op defines
+// its own cache-hit validator, which would otherwise drop the check on hits.
+void validate_standard_tile(const Matmul_RS::tensor_args_t& tensor_args) {
+    const auto& input = tensor_args.rs.input_tensor;
+    if (input.layout() != Layout::TILE) {
+        return;
+    }
+    const auto tile = input.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "llama_rs_matmul requires a standard 32x32 tile on the reduce-scatter input, got {}x{}",
+        tile.get_height(),
+        tile.get_width());
+}
+
+}  // namespace
 
 void Matmul_RS::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -30,6 +54,7 @@ void Matmul_RS::validate_on_program_cache_hit(
             {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {}});
     }
     LlamaReduceScatterDeviceOperation::validate_on_program_cache_hit(operation_attributes.rs_op, tensor_args.rs);
+    validate_standard_tile(tensor_args);
 }
 
 void Matmul_RS::validate_on_program_cache_miss(
@@ -48,6 +73,7 @@ void Matmul_RS::validate_on_program_cache_miss(
             {{tensor_args.matmul.input_tensor, tensor_args.matmul.weight_tensor}, {std::nullopt}, {}});
     }
     LlamaReduceScatterDeviceOperation::validate_on_program_cache_miss(operation_attributes.rs_op, tensor_args.rs);
+    validate_standard_tile(tensor_args);
 }
 
 Matmul_RS::spec_return_value_t Matmul_RS::compute_output_specs(
@@ -85,6 +111,13 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
 
 ttsl::hash::hash_t Matmul_RS::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // The matmul operands need their full specs, not just page configs: the helper derives M/K/N, every
+    // CB format and the work split from the real shapes and dtypes. MatmulParams pins only the
+    // caller-supplied blocking, because the fused launcher routes through create_matmul_attributes,
+    // which (unlike matmul()) never normalizes a nullopt program_config via get_program_config. So two
+    // calls that differ only in weight width or dtype would otherwise share a key.
+    const auto& mm_in = tensor_args.matmul.input_tensor;
+    const auto& mm_w = tensor_args.matmul.weight_tensor;
     // Both halves are tile-aware: the shared reduce-scatter factory derives
     // input_tiles_per_core_width from the input's real tile, and the matmul helper reads in0/in1
     // tiles off its operands to size every block and circular buffer. Keying on each page config
@@ -92,7 +125,13 @@ ttsl::hash::hash_t Matmul_RS::compute_program_hash(
     // The fused matmul half also compiles from MatmulParams (program_config, compute kernel
     // config, fused activation, output dtype/tile, untilize_out, transpose, global_cb); none of
     // those can be refreshed on a cache hit, so the whole struct must be keyed.
+    // second_weight_tensor's presence selects between two structurally different programs: a
+    // two-output matmul driven by a MatmulFusedOpSignaler versus a single-output matmul with none,
+    // which also changes the output arity that override_runtime_arguments indexes into. The launcher
+    // requires exactly one of rs_tensor / second_weight_tensor, so both modes are reachable in one
+    // process and the discriminator has to be part of the key.
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
+        tensor_args.second_weight_tensor.has_value(),
         operation_attributes.rs_op.dim,
         operation_attributes.rs_op.cluster_axis,
         operation_attributes.rs_op.ring_devices,
@@ -100,13 +139,32 @@ ttsl::hash::hash_t Matmul_RS::compute_program_hash(
         operation_attributes.rs_op.topology,
         operation_attributes.rs_op.use_noc1_only,
         operation_attributes.matmul,
+        // output_mem_config supplies the output shard grid behind the OUTPUT_CORE_XY define and the
+        // output/accumulator CB sizes; subdevice_id selects the matmul core pool and mcast origin.
+        operation_attributes.rs_op.output_mem_config,
+        operation_attributes.rs_op.subdevice_id.has_value()
+            ? static_cast<uint32_t>(operation_attributes.rs_op.subdevice_id->get())
+            : 0xFFFFFFFFu,
         tensor_args.rs.input_tensor.dtype(),
         tensor_args.rs.input_tensor.memory_config(),
         tensor_args.rs.input_tensor.device()->id(),
         tensor_args.rs.input_tensor.tensor_spec().page_config(),
+        // The shared reduce-scatter factory derives ncores_input and the SCHEDULE define from the
+        // logical shape, which the hashed memory config does not determine for an over-provisioned
+        // shard grid — a configuration this op explicitly supports.
+        tensor_args.rs.input_tensor.logical_shape(),
+        // The packet buffer's shard grid picks the packet-worker cores and, via restricted_cores, the
+        // matmul placement too, so its memory config is structural and not just its page config.
         tensor_args.rs.intermediate_packet_buffer.tensor_spec().page_config(),
-        tensor_args.matmul.input_tensor.tensor_spec().page_config(),
-        tensor_args.matmul.weight_tensor.tensor_spec().page_config());
+        tensor_args.rs.intermediate_packet_buffer.memory_config(),
+        mm_in.tensor_spec().page_config(),
+        mm_in.padded_shape(),
+        mm_in.dtype(),
+        mm_in.memory_config(),
+        mm_w.tensor_spec().page_config(),
+        mm_w.padded_shape(),
+        mm_w.dtype(),
+        mm_w.memory_config());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

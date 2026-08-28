@@ -66,6 +66,13 @@ void validate_runtime_args(
 
     const auto& input = tensor_args.input;
     const auto& cos = tensor_args.cos;
+    // Dereferenced on the next line, and Tensor::device() returns nullptr for host storage. The miss
+    // validator's storage pins do not run on hits, so without this a host-storage cos faults here
+    // instead of reporting.
+    TT_FATAL(
+        cos.storage_type() == StorageType::DEVICE,
+        "rotary_embedding_indexed requires cos to be on device, but its storage type is {}",
+        cos.storage_type());
     const auto& mesh_view = cos.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "rotary_embedding_indexed requires a 2D mesh");
     const uint32_t chunk_local_t = input.padded_shape()[-2] / TILE_HEIGHT;
@@ -78,9 +85,15 @@ void validate_runtime_args(
     // is absent from compute_program_hash. Runs on both paths so a non-standard tile is reported here
     // rather than as a mis-sized program on a miss or a TensorSpec mismatch on a hit.
     const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
-        if (tensor.layout() != Layout::TILE) {
-            return;
-        }
+        // Assert the layout rather than skipping non-TILE tensors. All four operands are required to be
+        // TILE, but that pin lives in the miss validator and so does not run on a hit; without this a
+        // ROW_MAJOR operand would reach the framework's TensorSpec comparison and throw there instead of
+        // being reported here. The layout is already being read, so this costs one comparison.
+        TT_FATAL(
+            tensor.layout() == Layout::TILE,
+            "rotary_embedding_indexed requires TILE layout, but {} has {} layout",
+            name,
+            tensor.layout());
         const auto tile = tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
@@ -208,7 +221,9 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
 void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // kv_actual_global is not hashed and can differ from the compiled program's call; re-validate
-    // every hit. Structural constraints are hashed and so guaranteed unchanged here.
+    // every hit. Structural specs are hashed wholesale, so a structural change misses rather than
+    // arriving here -- but note the checks above the delegation in validate_on_program_cache_miss are
+    // miss-only, so anything that must hold on a hit belongs in validate_runtime_args.
     validate_runtime_args(args, tensor_args);
 }
 
@@ -230,45 +245,33 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // The cache key must cover every structural spec the program is built from -- in particular every
     // TensorParameter's declared TensorSpec -- because on a cache hit UpdateProgramRunArgs REJECTS (does
-    // not recompile) a tensor whose spec doesn't match the one baked at creation. So hash the full input,
-    // cos, sin and trans_mat specs, the output spec (via output_mem_config; its dtype/shape follow input),
-    // cluster_axis, compute_kernel_config, and metadata.has_value() + the metadata tensor's spec.
+    // not recompile) a tensor whose spec doesn't match the one baked at creation. Those parameters are
+    // declared with default relaxations, so that comparison is Strict over the whole spec: logical shape,
+    // padded shape, dtype, page config and alignment.
+    //
+    // Hash tensor_spec() wholesale rather than a projection of it, so the key and the framework's
+    // accept/reject predicate agree by construction. Under a projection, two tensors differing only in a
+    // field the projection drops (logical shape, or alignment) would share a key, hit, and then throw
+    // from report_tensor_arg_mismatch instead of rebuilding. output_mem_config covers the output spec;
+    // its dtype, shape and layout all follow the input.
     //
     // Only kv_actual_global is excluded: it is a reader runtime arg patched on cache hits, so successive
     // chunks reuse one cached program. Per-device my_sp_coord is a per-coordinate compile-time arg the
-    // mesh adapter already folds into the workload hash via the target coordinates. Full shapes (not just
-    // volumes) are hashed since the work split and CB sizing derive from specific dimensions.
-    const auto& input = tensor_args.input;
-    const auto& cos = tensor_args.cos;
-    const auto& sin = tensor_args.sin;
-    const auto& trans_mat = tensor_args.trans_mat;
-    // metadata is an optional TensorParameter; stand in with defaults on the scalar path (already
-    // separated by has_value=false) so its spec still participates in the key when present.
-    const MemoryConfig metadata_mem_config =
-        tensor_args.metadata.has_value() ? tensor_args.metadata->memory_config() : MemoryConfig{};
-    const Shape metadata_padded_shape =
-        tensor_args.metadata.has_value() ? tensor_args.metadata->padded_shape() : Shape{};
-    return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
+    // mesh adapter already folds into the workload hash via the target coordinates.
+    auto hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
-        metadata_mem_config,
-        metadata_padded_shape,
         args.cluster_axis,
         args.compute_kernel_config,
         args.output_mem_config,
-        input.dtype(),
-        input.memory_config(),
-        input.logical_shape(),
-        input.padded_shape(),
-        input.layout(),
-        cos.dtype(),
-        cos.memory_config(),
-        cos.padded_shape(),
-        sin.dtype(),
-        sin.memory_config(),
-        sin.padded_shape(),
-        trans_mat.dtype(),
-        trans_mat.memory_config(),
-        trans_mat.padded_shape());
+        tensor_args.input.tensor_spec(),
+        tensor_args.cos.tensor_spec(),
+        tensor_args.sin.tensor_spec(),
+        tensor_args.trans_mat.tensor_spec());
+    if (tensor_args.metadata.has_value()) {
+        // metadata is an optional TensorParameter, compared just as strictly when it is present.
+        hash = ttsl::hash::hash_objects(hash, tensor_args.metadata->tensor_spec());
+    }
+    return hash;
 }
 
 RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::cached_program_t
