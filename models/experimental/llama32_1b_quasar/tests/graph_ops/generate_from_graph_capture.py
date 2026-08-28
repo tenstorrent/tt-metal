@@ -287,6 +287,13 @@ def parse_argument(text: str):
         tensors = [{"k": "t", "shape": _shape(sh), "dtype": dt, "layout": lay, "mem": None} for sh, dt, lay in found]
         return {"k": "tlist", "tensors": tensors}
 
+    if "ttnn.Tensor(" in text and (text.startswith("[") or text.startswith("(")):
+        # A nested sequence -- [[tensor], [tensor]] -- which _safe_arg_str now summarizes rather
+        # than str()-ing. graph_case rebuilds a "tlist" as one flat list of operands, so parsing
+        # this would flatten the structure and call the op with a different argument shape than
+        # the capture recorded. Fail closed; the generated file's docstring reports the drop.
+        return {"k": "skip", "repr": text}
+
     if text.startswith("MemoryConfig("):
         spec = parse_memory_config(text)
         return dict(spec, k="mem") if spec else {"k": "skip", "repr": text}
@@ -329,7 +336,14 @@ def parse_argument(text: str):
         # patch-merger gelu fusions) were unreconstructible for want of it, and with them the only
         # calls that launch the standalone activation program (matmul.cpp:355 runs a fused
         # activation as a separate unary_chain when no core_coord is given).
-        # True/False/None never reach here -- literal_eval takes them above.
+        # True/False/None never reach here -- literal_eval takes them above. nan/inf/infinity do
+        # reach here (literal_eval rejects them as bare identifiers) and must stay floats: a
+        # captured `epsilon=inf` reconstructed as the string "inf" would change the argument's
+        # type for any op reading a scalar kwarg.
+        try:
+            return {"k": "lit", "v": float(text)}
+        except ValueError:
+            pass
         if _BARE_STRING_RE.match(text):
             return {"k": "lit", "v": text}
         return {"k": "skip", "repr": text}

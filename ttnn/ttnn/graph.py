@@ -38,7 +38,6 @@ from ttnn.graph_report import (
     extract_operation_durations,
 )
 
-
 # ---------------------------------------------------------------------------
 # Python-level I/O tracking
 # ---------------------------------------------------------------------------
@@ -340,9 +339,17 @@ def _ttnn_tensor_summary(t) -> str:
     return f"ttnn.Tensor({', '.join(parts)})"
 
 
-# Cap on how many elements of a sequence argument are summarized individually, and how deep
-# the element-wise walk goes before it elides the rest.
+# Cap on how many elements of a sequence argument are summarized individually. A captured
+# ttnn.concat takes as many operands as the model splits into -- 6 for a Qwen3-VL LM head -- so 32
+# records every sequence seen so far with room to spare, while bounding the cost of an argument
+# repr on a pathological call.
 _MAX_SEQUENCE_ELEMENTS = 32
+# How deep the element-wise walk goes. Every sequence argument observed in a capture so far is a
+# flat list of tensors (depth 1: ttnn.concat, the CCL ops); the limit exists to bound recursion on
+# an unexpected or self-referential structure, not to describe a shape we expect, so it is set a
+# few levels above the observed maximum. Crossing it is safe by construction: the walk elides
+# rather than falling back to str(), and _holds_tensor treats "too deep to search" as "assume a
+# tensor is in there".
 _MAX_SEQUENCE_DEPTH = 4
 
 
