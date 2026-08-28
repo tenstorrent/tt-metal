@@ -105,7 +105,13 @@ class TtCohereLayerNorm(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape)),
             )
 
-        self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+        # Arch-aware compute config — a hardcoded WormholeComputeKernelConfig
+        # fatals at DECODE shapes on Blackhole (std::get: wrong index for
+        # variant in layer_norm_pre_all_gather, observed on-box 2026-08-28);
+        # init_device_compute_kernel_config is the pattern the image's own
+        # test_distributed_layernorm.py uses.
+        self.compute_kernel_config_hifi2 = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
