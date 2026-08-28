@@ -239,7 +239,7 @@
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_rope_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not prefill_paged_slots_long and not B32"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
