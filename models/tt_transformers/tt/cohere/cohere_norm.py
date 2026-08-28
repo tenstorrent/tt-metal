@@ -57,12 +57,14 @@ class TtCohereLayerNorm(LightweightModule):
         weight_dtype=ttnn.bfloat16,
         weight_key="attention_norm",
         tt_ccl=None,
+        args=None,
     ):
         super().__init__()
         self.device = device
         self.dim = dim
         self.eps = eps
         self.tt_ccl = tt_ccl
+        self.args = args
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -182,6 +184,42 @@ class TtCohereLayerNorm(LightweightModule):
         )
         return x
 
+    def _decode_sharded_layernorm(self, x: ttnn.Tensor, sharded_program_config, sharded_output_config) -> ttnn.Tensor:
+        """Decode-mode layernorm mirroring the stock DistributedNorm contract
+        (models/tt_transformers/tt/distributed_norm.py forward, TG=False,
+        is_distributed_norm(DECODE)==False on a 1xN mesh): all_gather the TP width
+        shards DIRECTLY into the sharded attention/lm-head input memory config,
+        then run the layernorm as a SHARDED op (create_sharded_norm_config grid)
+        outputting the same sharded config the DRAM-sharded decode matmuls consume.
+
+        The previous version gathered to DRAM interleaved + plain full-width
+        layernorm -> interleaved output -> ttnn.linear at attention.py:599 fataled
+        std::bad_optional_access (the DRAM-sharded decode matmul reads in0's
+        shard_spec; interleaved input has none) — observed on-box 2026-08-28.
+        """
+        x = ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=self.tt_ccl.get_num_links(1),
+            cluster_axis=1,
+            topology=self.args.ccl_topology() if self.args is not None else ttnn.Topology.Linear,
+            memory_config=sharded_output_config,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        return ttnn.layer_norm(
+            x,
+            epsilon=self.eps,
+            weight=self.weight,
+            program_config=sharded_program_config,
+            memory_config=sharded_output_config,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )
+
     def _decode_fullwidth_layernorm(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Decode-mode distributed layernorm for Command-R.
 
@@ -224,7 +262,10 @@ class TtCohereLayerNorm(LightweightModule):
 
         if self.distributed and not in_sharded:
             if mode == Mode.DECODE or mode == "decode":
-                x = self._decode_fullwidth_layernorm(x)
+                if sharded_program_config is not None and sharded_output_config is not None:
+                    x = self._decode_sharded_layernorm(x, sharded_program_config, sharded_output_config)
+                else:
+                    x = self._decode_fullwidth_layernorm(x)
             else:
                 x = self._distributed_layernorm(x)
         else:
@@ -266,4 +307,5 @@ def build_cohere_final_norm(args, mesh_device, state_dict, weight_cache_path, dt
         weight_dtype=ttnn.bfloat16,
         weight_key="norm",
         tt_ccl=tt_ccl,
+        args=args,
     )

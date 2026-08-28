@@ -26,6 +26,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.cohere.cohere_norm import TtCohereLayerNorm
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mlp import MLP
 
 
@@ -96,6 +97,7 @@ class CohereDecoderLayer(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             weight_key="attention_norm",
             tt_ccl=self.tt_ccl,
+            args=args,
         )
 
     def forward(
@@ -136,11 +138,23 @@ class CohereDecoderLayer(LightweightModule):
         # The copy MUST be taken BEFORE attention.forward consumes h: copying after
         # the attention call operates on the already-deallocated tensor (ttnn.clone
         # even SEGFAULTS natively on it; ttnn.add throws "Input Tensor is not
-        # allocated"). Zero-add always materializes a fresh DRAM tensor with
-        # bitwise-identical values (x + 0.0 == x for IEEE floats); ttnn.clone is
-        # avoided after the observed native crash. TODO(perf): trivial at seq<=128;
-        # revisit for long-prefill Stage-2 (dealloc-suppressed shared buffer).
-        h_mlp = ttnn.add(h, 0.0)
+        # allocated").
+        if mode == Mode.DECODE or mode == "decode":
+            # DECODE: the norm output h is sharded on attn_input_grid (the attn-norm
+            # sharded_output_config), but the MLP's DRAM-sharded matmuls expect the
+            # FF-norm layout on mlp_core_grid — a DIFFERENT grid (2x8 vs 4x8 at dim
+            # 8192; stock models get it from a separate ff_norm). Reshard for the
+            # MLP branch; to_memory_config materializes a fresh tensor, which also
+            # covers the dealloc hazard above.
+            ff_sharded_cfg = self.args.get_norm_config("ff", mode, self.prefetcher)["sharded_output_config"]
+            h_mlp = ttnn.to_memory_config(h, ff_sharded_cfg)
+        else:
+            # PREFILL: both branches consume interleaved DRAM; zero-add always
+            # materializes a fresh tensor with bitwise-identical values
+            # (x + 0.0 == x for IEEE floats); ttnn.clone is avoided after the
+            # observed native crash. TODO(perf): revisit for long-prefill Stage-2
+            # (dealloc-suppressed shared buffer).
+            h_mlp = ttnn.add(h, 0.0)
 
         attn_out = self.attention.forward(
             h_attn,
