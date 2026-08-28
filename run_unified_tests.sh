@@ -19,10 +19,24 @@
 #                               but cheap and stable across a long run.
 #
 #   watcher (--watcher)         Reports core, RISC, line and kernel, and throws to the
-#                               host. The good diagnostic, and what to re-run a failing
-#                               suite under. Costs about a second on a thirty second
+#                               host. The good diagnostic, and the first thing to re-run a
+#                               failing suite under. Costs about a second on a thirty second
 #                               suite. Not the default only because lightweight is enough
 #                               to catch a fired assert and cheaper to leave on.
+#
+#                               A PASS UNDER THE WATCHER DOES NOT MEAN NO ASSERT FIRED.
+#                               The watcher's own overhead perturbs timing, so a check on
+#                               whether something has landed YET can stop failing under it.
+#                               That is what hid hazard 30 (a kernel returning with a write
+#                               still in flight) for as long as it hid. When lightweight
+#                               hangs and the watcher is clean, do not conclude "not an
+#                               assert" -- neuter lightweight_assert_trap in
+#                               hw/inc/api/debug/assert.h instead, keeping ASSERT_ENABLED
+#                               and every condition compiled, and see whether the suite
+#                               passes. If it does, an assert IS firing, and
+#                               `objdump -d` plus `addr2line -i` over the built ELFs in
+#                               ~/.cache/tt-metal-cache enumerates the live ebreak sites
+#                               with their inline stacks, which beats guessing.
 #
 # DO NOT hard-kill a run. A stopped device STAYS stopped until reset, so every run launched
 # afterwards fails for a reason that has nothing to do with it -- and `kill -9` on the shell
@@ -143,7 +157,8 @@ for suite in "${SUITES[@]}"; do
     else
         if [ $rc -eq 124 ]; then
             echo "  ${suite}: TIMED OUT twice (${limit}s each) -- an assert may have halted a RISC;"
-            echo "      re-run it under ./run_unified_tests.sh --watcher ${suite} for the line"
+            echo "      re-run it under ./run_unified_tests.sh --watcher ${suite} for the line."
+            echo "      If the watcher is CLEAN, that does not clear it: see the watcher note above."
             [ $have_reset -eq 1 ] && tt-smi -r > /dev/null 2>&1
         else
             echo "  ${suite}: FAIL rc=${rc} (${took}s) -- /tmp/unified_${suite}.log"
