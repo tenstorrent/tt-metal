@@ -38,6 +38,17 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         // It also fixes the original bug here, which store()d our own value straight into
         // total_cb_allocated -- making the device-wide figure last-writer-wins rather than a
         // total across processes.
+        //
+        // The exchange and the aggregate move are two separate atomics, and nothing makes the
+        // pair atomic against a process dying between them: killed there, the slot holds the
+        // new value while the total still reflects the old one, and the reaper subtracts the
+        // slot -- so the total ends up off by the delta. record_allocation() has the mirror of
+        // this. Closing it needs either a region-wide lock on the record path, which is the
+        // cost this rework removed, or a redo log, which cannot be made atomic at every step
+        // either. What is done instead is to bound how long a wrong figure survives:
+        // saturating_sub keeps it from wrapping, and reset_aggregates_if_idle() zeroes every
+        // total once the last process detaches, so drift cannot outlive the busy period that
+        // produced it.
         for (auto& slot : region_->processes) {
             if (slot.pid.load(std::memory_order_relaxed) == pid) {
                 const uint64_t previous = slot.cb_allocated.exchange(cb_allocated, std::memory_order_relaxed);

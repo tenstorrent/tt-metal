@@ -675,5 +675,34 @@ TEST_F(ShmMemoryTrackingMultiProcess, LegacyRegionWithNoLiveOwnerIsReclaimed) {
     EXPECT_EQ(state.total_dram, 0u) << "the dead owner's bytes survived the reinitialization";
 }
 
+// The aggregates are maintained by delta, which is not crash-atomic against a process dying
+// between publishing its slot and moving the total. Idle is where that is repaired: once no
+// process is attached, the right answer is known independently of any delta, so every total is
+// stored as zero rather than left carrying whatever a killed process's half-applied update
+// left behind. Without it a wrong figure outlives every process that could explain it.
+TEST_F(ShmMemoryTrackingMultiProcess, StrandedAggregateIsClearedWhenNoProcessIsAttached) {
+    constexpr uint64_t kStranded = 128 * 1024 * 1024;
+
+    // Put bytes in the device-wide total that no slot accounts for: exactly the residue a
+    // process killed between its slot exchange and its aggregate delta leaves.
+    {
+        const int fd = shm_open(shm_object_name(asic_id_).c_str(), O_RDWR, 0600);
+        ASSERT_NE(fd, -1);
+        auto* region = static_cast<DeviceMemoryRegion*>(
+            mmap(nullptr, sizeof(DeviceMemoryRegion), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+        close(fd);
+        ASSERT_NE(region, MAP_FAILED);
+        ASSERT_EQ(region->reference_count.load(std::memory_order_acquire), 0u)
+            << "fixture should have left the region with nobody attached";
+        region->total_dram_allocated.store(kStranded, std::memory_order_relaxed);
+        munmap(region, sizeof(DeviceMemoryRegion));
+    }
+
+    auto provider = attach(asic_id_);
+    ASSERT_TRUE(provider->is_initialized());
+    EXPECT_EQ(provider->get_device_stats().dram_allocated, 0u)
+        << "unowned bytes from a previous run were carried into this one";
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

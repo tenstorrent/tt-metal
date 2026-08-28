@@ -245,6 +245,10 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     // pins the count above zero (which used to stop the region ever resetting).
     if (per_pid_tracking_enabled_) {
         reap_dead_processes();
+        // Reaping may have emptied the region. Do the idle reset before claiming our own
+        // slot, so that whatever a killed predecessor left in the aggregates is cleared
+        // rather than carried into this run's figures.
+        reset_aggregates_if_idle();
         claim_own_pid_entry(getpid());
     }
 
@@ -287,24 +291,7 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
         // processes" state below is reached even if a peer was killed.
         reap_dead_processes();
 
-        const uint32_t attached = region_->reference_count.load(std::memory_order_relaxed);
-        if (attached == 0) {
-            log_debug(tt::LogMetal, "Device {}: last process detached, per-chip stats reset", device_id_);
-            // Per-chip stats are accumulated rather than per-process attributed, so
-            // they cannot be derived. Clearing them when nobody is attached keeps the
-            // invariant "no live processes => everything reads zero".
-            for (auto& chip_stat : region_->chip_stats) {
-                if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
-                    chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
-                    chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
-                    chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
-                    chip_stat.trace_allocated.store(0, std::memory_order_relaxed);
-                    chip_stat.cb_allocated.store(0, std::memory_order_relaxed);
-                }
-            }
-        } else {
-            log_debug(tt::LogMetal, "Device {}: process detached, {} still attached", device_id_, attached);
-        }
+        reset_aggregates_if_idle();
 
         munmap(region_, sizeof(DeviceMemoryRegion));
         region_ = nullptr;
@@ -313,6 +300,38 @@ SharedMemoryStatsProvider::~SharedMemoryStatsProvider() {
     if (shm_fd_ != -1) {
         close(shm_fd_);
         shm_fd_ = -1;
+    }
+}
+
+void SharedMemoryStatsProvider::reset_aggregates_if_idle() {
+    if (!region_) {
+        return;
+    }
+    const uint32_t attached = region_->reference_count.load(std::memory_order_acquire);
+    if (attached != 0) {
+        log_debug(tt::LogMetal, "Device {}: process detached, {} still attached", device_id_, attached);
+        return;
+    }
+
+    log_debug(tt::LogMetal, "Device {}: no process attached, aggregates reset", device_id_);
+
+    // A process can claim a slot while these stores are in flight. That costs nothing: a
+    // freshly claimed slot has all its byte counters zeroed by claim_own_pid_entry() before
+    // it is published, so there is no contribution here yet to erase.
+    region_->total_dram_allocated.store(0, std::memory_order_relaxed);
+    region_->total_l1_allocated.store(0, std::memory_order_relaxed);
+    region_->total_l1_small_allocated.store(0, std::memory_order_relaxed);
+    region_->total_trace_allocated.store(0, std::memory_order_relaxed);
+    region_->total_cb_allocated.store(0, std::memory_order_relaxed);
+
+    for (auto& chip_stat : region_->chip_stats) {
+        if (chip_stat.chip_id.load(std::memory_order_relaxed) != CHIP_STATS_UNUSED) {
+            chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.trace_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.cb_allocated.store(0, std::memory_order_relaxed);
+        }
     }
 }
 

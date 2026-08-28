@@ -276,6 +276,20 @@ private:
     // decides, wherever we know where to find it.
     bool legacy_region_is_reclaimable(uint32_t found_version) const;
 
+    // Helper: when no process is attached any more, store zero into every aggregate --
+    // the device-wide totals and the per-chip stats alike.
+    //
+    // Two things need this. Per-chip stats are accumulated rather than per-process
+    // attributed, so they cannot be derived by subtracting a departing process's slot and
+    // would otherwise only ever grow. The device-wide totals *are* maintained by delta and
+    // should already be zero here, so this is their repair: the slot-exchange and
+    // aggregate-delta pair in update_from_allocator() and record_allocation() is not
+    // crash-atomic, and a process killed between the two leaves the totals off by that
+    // delta with no owner left to subtract it. Idle is the point at which the right answer
+    // is known independently, so any such drift is bounded to the busy period it happened
+    // in instead of accumulating across runs.
+    void reset_aggregates_if_idle();
+
     // Helper: unmap the region and close the fd, leaving this provider disabled. Used
     // wherever attach decides it must not touch a region it cannot safely take over.
     void detach_region();
