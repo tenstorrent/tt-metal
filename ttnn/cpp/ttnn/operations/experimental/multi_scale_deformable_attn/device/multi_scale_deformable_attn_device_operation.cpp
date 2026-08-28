@@ -54,7 +54,14 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     TT_FATAL(gs.rank() == 4, "grid rank must be 4 (N, Q, 1, P*2) or (N, Q*P, 1, 2), got {}", gs);
     TT_FATAL(as.rank() == 3, "attn rank must be 3 (N, Q, P), got {}", as);
     TT_FATAL(gs[-2] == 1, "grid 3rd dim must be 1 (single sample row per query)");
-    TT_FATAL(vs[0] == gs[0] && vs[0] == as[0], "N (batch*head) dim mismatch");
+    TT_FATAL(
+        static_cast<uint32_t>(vs[0]) * attrs.num_heads == static_cast<uint32_t>(gs[0]) &&
+            static_cast<uint32_t>(gs[0]) == static_cast<uint32_t>(as[0]),
+        "value's batch (= {}) times num_heads (= {}) must equal grid and attn N (= {}, {})",
+        static_cast<uint32_t>(vs[0]),
+        attrs.num_heads,
+        static_cast<uint32_t>(gs[0]),
+        static_cast<uint32_t>(as[0]));
 
     // Reject zero-sized inputs: split_work_to_cores(grid, 0) and zero-page
     // CB creation are undefined; we'd rather fail loudly than crash deep in
@@ -64,13 +71,19 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     TT_FATAL(as[1] > 0, "Q must be > 0");
     TT_FATAL(as[2] > 0, "P must be > 0");
 
+    const uint32_t nh = attrs.num_heads;
+    TT_FATAL(nh > 0, "num_heads must be > 0");
+    TT_FATAL(
+        vs[-1] % nh == 0,
+        "value's last dim (= {}) must be divisible by num_heads (= {})",
+        static_cast<uint32_t>(vs[-1]),
+        nh);
+    const uint32_t d = static_cast<uint32_t>(vs[-1]) / nh;
     // The reader scatters each D-wide value stick across ceil(D/32) tiles
     // laid side by side (16 values per face half), and the writer gathers
-    // them back per query row, so any positive multiple of 16 works.
-    TT_FATAL(
-        vs[-1] > 0 && vs[-1] % 16 == 0,
-        "value's last dim (D) must be a positive multiple of 16, got {}",
-        static_cast<uint32_t>(vs[-1]));
+    // them back per query row, so any positive multiple of 16 works. A head's
+    // slice starts at h*D*2 bytes, which the 16-multiple also keeps NoC-aligned.
+    TT_FATAL(d > 0 && d % 16 == 0, "value's per-head D (= {}) must be a positive multiple of 16", d);
 
     const uint32_t q = static_cast<uint32_t>(as[1]);
     const uint32_t p = static_cast<uint32_t>(as[2]);
@@ -100,8 +113,8 @@ MSDAOperation::spec_return_value_t MSDAOperation::compute_output_specs(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     const auto& vs = args.value.logical_shape();  // (N, h, w, D)
     const auto& as = args.attn.logical_shape();   // (N, Q, P)
-    const uint32_t N = vs[0];
-    const uint32_t D = vs[3];
+    const uint32_t N = vs[0] * attrs.num_heads;
+    const uint32_t D = vs[3] / attrs.num_heads;
     const uint32_t Q = as[1];
 
     Shape out_shape({N, Q, D});
@@ -125,11 +138,13 @@ ttnn::Tensor multi_scale_deformable_attn(
     const Tensor& grid,
     const Tensor& attn,
     const std::optional<MemoryConfig>& memory_config,
-    bool align_corners) {
+    bool align_corners,
+    uint32_t num_heads) {
     using OperationType = ttnn::operations::experimental::multi_scale_deformable_attn::MSDAOperation;
     auto attrs = OperationType::operation_attributes_t{
         .output_memory_config = memory_config.value_or(value.memory_config()),
         .align_corners = align_corners,
+        .num_heads = num_heads,
     };
     auto args = OperationType::tensor_args_t{
         .value = value,

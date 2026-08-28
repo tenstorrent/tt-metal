@@ -18,6 +18,8 @@ namespace ttnn::experimental {
 //
 // Inputs:
 //   value:  (N, h_in, w_in, D) ROW_MAJOR bfloat16, where N = B * num_heads
+//           with num_heads > 1: (B, h_in, w_in, num_heads*D), heads addressed by
+//           byte offset inside the stick so no head-major copy is needed
 //   grid:   (N, Q, 1, P*2)     ROW_MAJOR bfloat16, (x, y) per point, normalized to [-1, 1]
 //                              (N, Q*P, 1, 2) also accepted, at P NoC reads per query instead of 1
 //   attn:   (N, Q, P)          ROW_MAJOR bfloat16
@@ -33,6 +35,7 @@ ttnn::Tensor multi_scale_deformable_attn(
     const ttnn::Tensor& grid,
     const ttnn::Tensor& attn,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    bool align_corners = false);
+    bool align_corners = false,
+    uint32_t num_heads = 1);
 
 }  // namespace ttnn::experimental

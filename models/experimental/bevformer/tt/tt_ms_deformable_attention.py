@@ -61,8 +61,9 @@ def multi_scale_deformable_attn_ttnn(
     Returns:
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
-    bs, _, num_heads, head_dim = value.shape
-    _, num_queries, _, num_levels, num_points = attention_weights.shape
+    bs, _, embed_dims = value.shape
+    _, num_queries, num_heads, num_levels, num_points = attention_weights.shape
+    head_dim = embed_dims // num_heads
 
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
@@ -83,9 +84,11 @@ def multi_scale_deformable_attn_ttnn(
     # plain sum of the per-level reductions.
     output = None
     for level, (H_, W_) in enumerate(value_spatial_shapes):
-        # [bs, H_*W_, num_heads, head_dim] -> [bs*num_heads, H_, W_, head_dim]
-        value_l_ = ttnn.permute(value_list[level], (0, 2, 1, 3))  # Move heads to dimension 1
-        value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
+        # [bs, H_*W_, embed_dims] -> [bs, H_, W_, embed_dims]. Heads stay packed in the last
+        # dimension and the fused op addresses one by byte offset, so the head-major copy this
+        # used to make — 92.6 MB across the levels, at the 64-byte page it produced — is gone.
+        # Splitting H_*W_ is a leading-dimension split, so the page is untouched and it is a view.
+        value_l_ = ttnn.reshape(value_list[level], (bs, H_, W_, embed_dims))
 
         # Already head-major, so the level slice is the fused op's grid up to a reshape. The point
         # axis stays folded into the last dimension: a ROW_MAJOR page is the last dimension, so
@@ -98,9 +101,11 @@ def multi_scale_deformable_attn_ttnn(
 
         attn_l_ = ttnn.reshape(attention_weights[:, :, :, level, :], (bs * num_heads, num_queries, num_points))
 
-        # value (N, H_, W_, head_dim), grid (N, num_queries, 1, num_points*2), attn (N, num_queries,
-        # num_points) -> (N, num_queries, head_dim), with N = bs * num_heads.
-        output_l_ = ttnn.experimental.multi_scale_deformable_attn(value_l_, sampling_grid_l_, attn_l_)
+        # value (bs, H_, W_, embed_dims), grid (N, num_queries, 1, num_points*2), attn
+        # (N, num_queries, num_points) -> (N, num_queries, head_dim), with N = bs * num_heads.
+        output_l_ = ttnn.experimental.multi_scale_deformable_attn(
+            value_l_, sampling_grid_l_, attn_l_, num_heads=num_heads
+        )
         output = output_l_ if output is None else ttnn.add(output, output_l_)
 
     # [bs*num_heads, num_queries, head_dim] -> [bs, num_queries, num_heads*head_dim]. Channels stay
@@ -251,13 +256,10 @@ class TTMSDeformableAttention:
             zeros_like_value = ttnn.zeros_like(value)
             value = ttnn.where(mask, zeros_like_value, value)
 
-        # Untilized before the head split, not after. Splitting embed_dims into
-        # (num_heads, head_dim) on a tiled tensor is a re-layout that pads num_heads to a full tile,
-        # and the core attention untilizes each level anyway — so the conversion is free here and
-        # the split becomes a view.
-        value = ttnn.reshape(
-            ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT), (bs, num_keys, self.num_heads, self.head_dim)
-        )
+        # Untilized here because the core attention needs every level ROW_MAJOR anyway. The head
+        # split that used to follow is gone: the fused op reads a head out of the embed_dims-wide
+        # stick by byte offset, so value keeps its 512-byte page all the way down.
+        value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
 
         if ENABLE_LOGGING:
             logger.info("MSDA Sampling Offset Generation")

@@ -20,6 +20,9 @@ struct MSDAOperation {
         //   align_corners=false: pixel = (g + 1) * size / 2 - 0.5   (PyTorch / mmcv default)
         //   align_corners=true:  pixel = (g + 1) * (size - 1) / 2
         bool align_corners = false;
+        // Heads packed into value's last dimension. The reader picks head n % num_heads
+        // out of a stick by byte offset, so value is never copied head-major.
+        uint32_t num_heads = 1;
     };
 
     struct tensor_args_t {
@@ -54,6 +57,7 @@ ttnn::Tensor multi_scale_deformable_attn(
     const Tensor& grid,
     const Tensor& attn,
     const std::optional<MemoryConfig>& memory_config,
-    bool align_corners);
+    bool align_corners,
+    uint32_t num_heads);
 
 }  // namespace ttnn::prim

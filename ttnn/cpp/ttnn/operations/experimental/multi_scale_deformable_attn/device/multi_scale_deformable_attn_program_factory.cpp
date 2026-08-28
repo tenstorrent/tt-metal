@@ -49,10 +49,11 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const auto& vs = value.logical_shape();  // (N, h, w, D)
     const auto& as = attn.logical_shape();   // (N, Q, P)
 
-    const uint32_t N = vs[0];
+    const uint32_t num_heads = operation_attributes.num_heads;
+    const uint32_t N = vs[0] * num_heads;
     const uint32_t h_in = vs[1];
     const uint32_t w_in = vs[2];
-    const uint32_t D = vs[3];
+    const uint32_t D = vs[3] / num_heads;
     const uint32_t Q = as[1];
     const uint32_t P = as[2];
     const uint32_t reduction_size = 4 * P;
@@ -82,7 +83,9 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t total_output_tiles = static_cast<uint32_t>(tiles.size());
 
     // Stick sizes (raw, before alignment).
-    const uint32_t value_stick_raw = D * value.element_size();
+    // The value page holds every head's slice; the reader takes one head out of it by
+    // byte offset, which is what spares the caller a head-major copy of the whole tensor.
+    const uint32_t value_stick_raw = num_heads * D * value.element_size();
     // Either grid form is accepted: (N, Q, 1, P*2) puts a query's whole point run in one page,
     // (N, Q*P, 1, 2) one point per page. The wide form is one NoC read per query instead of P, and
     // spares the caller a ROW_MAJOR rewrite down to a 4-byte page.
@@ -181,6 +184,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         grid_stick_aligned,
         attn_stick_aligned,
         grid_pts_per_stick,
+        num_heads,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);

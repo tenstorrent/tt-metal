@@ -118,3 +118,44 @@ def test_msda_rejects_grid_width_not_dividing_p(device, expect_error):
 
     with expect_error(RuntimeError, "divisor of P"):
         ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t)
+
+
+@pytest.mark.parametrize("num_heads", [1, 2, 4])
+@pytest.mark.parametrize("head_dim", [16, 32])
+def test_msda_packed_heads(device, num_heads, head_dim):
+    """Heads packed into value's last dimension match the head-major form they replace.
+
+    The reader picks head n % num_heads out of the stick by byte offset, so the caller never
+    materialises (B*num_heads, h, w, D).
+    """
+    B, h_in, w_in, Q, P = 2, 16, 16, 32, 4
+    N = B * num_heads
+    torch.manual_seed(0)
+    # (B, h, w, num_heads*D) — heads packed; head-major view is the same data permuted.
+    packed = torch.randn(B, h_in, w_in, num_heads * head_dim, dtype=torch.float32)
+    major = packed.reshape(B, h_in, w_in, num_heads, head_dim).permute(0, 3, 1, 2, 4)
+    major = major.reshape(N, h_in, w_in, head_dim).contiguous()
+    grid = torch.rand(N, Q * P, 1, 2, dtype=torch.float32) * 2.0 - 1.0
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda(major, grid, attn, align_corners=False)
+
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    grid_t = ttnn.from_torch(grid.to(torch.bfloat16), **rm)
+    attn_t = ttnn.from_torch(attn.to(torch.bfloat16), **rm)
+    value_t = ttnn.from_torch(packed.to(torch.bfloat16), **rm)
+
+    out = ttnn.to_torch(ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t, num_heads=num_heads))
+    assert_with_pcc(ref, out.to(torch.float32), pcc=0.99)
+
+
+def test_msda_rejects_num_heads_not_dividing_channels(device, expect_error):
+    """value's last dim must split evenly into num_heads slices of a 16-multiple."""
+    B, h_in, w_in, Q, P = 1, 10, 10, 16, 4
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_t = ttnn.from_torch(torch.randn(B, h_in, w_in, 48).to(torch.bfloat16), **rm)
+    grid_t = ttnn.from_torch((torch.rand(B * 2, Q * P, 1, 2) * 2.0 - 1.0).to(torch.bfloat16), **rm)
+    attn_t = ttnn.from_torch(torch.softmax(torch.randn(B * 2, Q, P), dim=-1).to(torch.bfloat16), **rm)
+
+    with expect_error(RuntimeError, "multiple of 16"):
+        ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t, num_heads=2)

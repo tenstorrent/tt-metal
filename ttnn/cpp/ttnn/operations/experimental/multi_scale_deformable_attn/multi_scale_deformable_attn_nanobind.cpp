@@ -20,13 +20,16 @@ void bind_multi_scale_deformable_attn(nb::module_& mod) {
         Fused multi-scale deformable attention (num_levels == 1 fast path).
 
         Args:
-            * :attr:`value`: (N, h_in, w_in, D) ROW_MAJOR bfloat16, N = B * num_heads
+            * :attr:`value`: (N, h_in, w_in, D) ROW_MAJOR bfloat16, N = B * num_heads. With
+              num_heads > 1 it is (B, h_in, w_in, num_heads*D) instead: the reader takes head
+              n % num_heads out of the stick by byte offset, so no head-major copy is needed.
             * :attr:`grid`: (N, Q, 1, P*2) ROW_MAJOR bfloat16, (x, y) interleaved per point, normalized to [-1, 1]. (N, Q*P, 1, 2) is also accepted but costs P NoC reads per query instead of one.
             * :attr:`attn`: (N, Q, P) ROW_MAJOR bfloat16
             * :attr:`memory_config`: output memory config
             * :attr:`align_corners`: bilinear pixel-coord mapping
                 - False (default, matches mmcv): pixel = (g + 1) * size / 2 - 0.5
                 - True:                           pixel = (g + 1) * (size - 1) / 2
+            * :attr:`num_heads`: heads packed into value's last dimension (default 1)
 
         Returns:
             (N, Q, D) ROW_MAJOR bfloat16.
@@ -40,7 +43,8 @@ void bind_multi_scale_deformable_attn(nb::module_& mod) {
         nb::arg("attn"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("align_corners") = false);
+        nb::arg("align_corners") = false,
+        nb::arg("num_heads") = 1);
 }
 
 }  // namespace ttnn::operations::experimental::multi_scale_deformable_attn::detail

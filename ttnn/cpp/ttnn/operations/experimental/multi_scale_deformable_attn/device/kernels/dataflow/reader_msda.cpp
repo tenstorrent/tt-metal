@@ -87,7 +87,10 @@ constexpr uint32_t attn_stick_nbytes = get_compile_time_arg_val(15);
 // Points sharing one grid page: P when the caller folds the point axis into the
 // last dimension, 1 for the (N, Q*P, 1, 2) form. Divides P either way.
 constexpr uint32_t grid_pts_per_stick = get_compile_time_arg_val(16);
-constexpr auto value_args = TensorAccessorArgs<17>();
+// Heads packed into the value stick. n indexes (batch, head) jointly, so the batch
+// picks the page and the head picks a byte range inside it.
+constexpr uint32_t num_heads = get_compile_time_arg_val(17);
+constexpr auto value_args = TensorAccessorArgs<18>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
@@ -104,7 +107,8 @@ constexpr uint32_t GRID_STICKS_PER_QUERY = P / grid_pts_per_stick;
 constexpr uint32_t STICK_WORDS = D / 2;
 constexpr uint32_t WORDS_PER_TILE_ROW = 2 * HALF_WORDS;
 constexpr uint32_t N_D_TILES = (STICK_WORDS + WORDS_PER_TILE_ROW - 1) / WORDS_PER_TILE_ROW;
-constexpr uint32_t STICK_NBYTES = D * 2;                     // logical, before alignment padding
+constexpr uint32_t STICK_NBYTES = D * 2;  // one head's slice, before alignment padding
+constexpr uint32_t HEAD_STRIDE_NBYTES = STICK_NBYTES;
 constexpr uint32_t TILE_ROW_NBYTES = 2 * HALF_STICK_NBYTES;  // 32 bf16 = one tile row
 static_assert(D % 16 == 0 && D > 0, "D must be a positive multiple of 16");
 // x0/y0 cross from the compute kernel as bf16, which is exact for integers up to
@@ -170,7 +174,8 @@ void kernel_main() {
         }
         noc.async_read_barrier();
 
-        const uint32_t n_off = n * static_cast<uint32_t>(h_in_i * w_in_i);
+        const uint32_t n_off = (n / num_heads) * static_cast<uint32_t>(h_in_i * w_in_i);
+        const uint32_t head_off = (n % num_heads) * HEAD_STRIDE_NBYTES;
 
         // Hand the geometry to the compute kernel: one column-0 tile per point for
         // gx, gy and attn. All P points go out before any corner comes back — a
@@ -306,9 +311,12 @@ void kernel_main() {
                     const uint32_t stick_idx = n_off + cy * w_in_i + cx;
                     const auto off = msda_tile_layout::tile_row_offsets(r);
                     for (uint32_t k = 0; k < N_D_TILES; ++k) {
-                        const uint32_t src_off = k * TILE_ROW_NBYTES;
+                        // Length is measured inside this head's slice; head_off only moves
+                        // the address, so it must not enter the remaining-bytes maths.
+                        const uint32_t tile_off = k * TILE_ROW_NBYTES;
+                        const uint32_t src_off = head_off + tile_off;
                         const uint32_t bytes_k =
-                            (STICK_NBYTES - src_off < TILE_ROW_NBYTES) ? (STICK_NBYTES - src_off) : TILE_ROW_NBYTES;
+                            (STICK_NBYTES - tile_off < TILE_ROW_NBYTES) ? (STICK_NBYTES - tile_off) : TILE_ROW_NBYTES;
                         const uint32_t lo_bytes = bytes_k < HALF_STICK_NBYTES ? bytes_k : HALF_STICK_NBYTES;
                         const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
                         CoreLocalMem<uint32_t> dl(ktile_l1 + off.lo);
