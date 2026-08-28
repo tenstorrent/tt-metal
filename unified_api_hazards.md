@@ -251,17 +251,41 @@ without a marker are mechanisms the headers document as the caller's responsibil
 
 ## D. Host/kernel contract -- no compiler behind any of it
 
-17. **Runtime-arg count or order mismatch.** THREE device hangs so far, all the same cause.
-    The list is positional and untyped: a kernel gains an argument and every launcher must be
-    found by grep. The kernel reads a garbage loop bound and the device hangs -- no compile
-    error, no assert.
+17. ~~**Runtime-arg count or order mismatch.**~~ **DEAD.** Three device hangs, all the same
+    cause, and the cause no longer exists: there is no positional runtime-argument list. A
+    kernel reads `get_arg(args::block_count)` against a schema its KernelSpec declares, so
+    ORDER is not a thing that can be wrong -- arguments are looked up by name -- and COUNT is
+    refused on the host before a kernel runs, at `program_run_args.cpp:242`
+    (`provided == named_rta_names.size()`). `test_unified_negative` checks that refusal, having
+    previously checked the sentinel.
 
-18. **Compile-time arg drift.** `TensorAccessorArgs<N>` offsets are chained by hand, so
-    inserting one argument shifts every one downstream.
+    The sentinel is gone with it. `check_runtime_args` and `kRuntimeArgSentinel` existed only
+    to catch a count mismatch in the positional list, and a check for a list that no longer
+    exists is dead weight.
+
+    One limit worth stating rather than glossing: metal's check compares the COUNT supplied
+    against the count declared, so it catches a missing argument without saying which one. That
+    is a diagnostic-quality complaint, not a hazard -- the failure is a refusal at a named line
+    rather than a garbage loop bound.
+
+18. ~~**Compile-time arg drift.**~~ **DEAD.** `TensorAccessorArgs<N>` is gone: an accessor is
+    built from a binding token, `TensorAccessor(tensor::in)`, and the token carries its own
+    offsets. There is nothing chained by hand and nothing downstream to shift.
+
+    It is dead twice over, in fact. `KernelSpec::CompileTimeArgs` is a
+    `Table<std::string, uint32_t>` -- the Metal 2.0 host API has no positional compile-time
+    list at all, so there is no place for an offset to drift even if something wanted one.
 
 19. **CB data format not matching the tensor's dtype.** Page size follows the format -- 1088
     bytes for bfloat8_b against 2048 for bfloat16 -- so a disagreement reads the wrong bytes
     with no error.
+
+    **STILL LIVE, and the Metal 2.0 port produced a fresh instance rather than fixing it.** A
+    dataflow buffer declares `data_format_metadata`, but nothing checks it against the
+    TensorParameter the buffer is filled from. Porting `matmul_blocked`'s launcher, its weight
+    buffer defaulted to bfloat16 while the tensor stayed bfloat8_b: fifteen configurations came
+    back NUMERICALLY WRONG, with no error anywhere. Which is precisely what this entry
+    predicts, now with a case attached.
 
 20. **CB index collisions**, or a Storage naming a CB the host never declared.
     **VERIFIED LIVE, in our own kernel, and fixed.** `matmul_blocked.cpp` declares
@@ -272,7 +296,26 @@ without a marker are mechanisms the headers document as the caller's responsibil
     adding it: one check for hazard 1 caught an instance of hazard 20 that had been latent
     for the whole project. The harnesses now allocate it unconditionally.
 
-21. **A user semaphore id colliding with the reserved multicast base.**
+    **HALF DEAD after the Metal 2.0 port, and it is worth being precise about which half.**
+    A buffer the host never declared is now refused at build with the buffer named -- a
+    dataflow buffer with no producer or no consumer fails `program_spec.cpp:393`, confirmed by
+    probe -- and so is a kernel naming a buffer the launcher does not declare, which turned up
+    two real cases where kernel and launcher had drifted to different NAMES for the same
+    buffer (matmul_blocked's `a`/`b` against the kernel's `in`/`wo`). Under the descriptor path
+    the two sides only ever had to agree on numbers, so names could drift and did.
+
+    What survives is the original instance's own shape: slot numbers still reach the kernel as
+    compile-time VALUES, and nothing checks that the number a Storage is given denotes the
+    buffer that was meant. A wrong number is loud rather than silent -- every projection reads
+    the same value, so they agree with each other and disagree with the host, which is wrong
+    data or a hang on the first run -- but it is not caught before the run.
+
+21. ~~**A user semaphore id colliding with the reserved multicast base.**~~ **CHECKED.** The
+    harness names its semaphores and allocates the six reserved ones above the caller's, and
+    `tt/unified/api.h` static_asserts the derived base against `sem::u_mcast_ready0` and the
+    end of the run against `sem::u_copy_arrived1` -- both ends, which pins the whole run since
+    metal cannot issue a duplicate id. A collision is a build error naming the arithmetic.
+    Verified non-vacuous twice, by moving the base and by splitting the run.
 
 ## E. Silently wrong, never hangs
 
@@ -440,6 +483,13 @@ theatre.** Every runtime item below depends on it.
    About three lines. UNCHECKED CAVEAT: whether alignment padding can make the two
    legitimately differ for some dtype.
 
+   **Now the top of this list rather than the fourth item.** Every hazard above it is dead
+   (D17, D18, D21) or half dead (D20), and D19 has since produced a live instance of exactly
+   the failure it describes -- fifteen numerically wrong configurations in `matmul_blocked`,
+   no error. The Metal 2.0 host API also gives a second place to put the check: a dataflow
+   buffer's `data_format_metadata` and the TensorParameter it is filled from are both declared
+   on the host, side by side, and nothing compares them.
+
 5. **F28, the DST leaf budget.** One `static_assert(kLeaves <= kMaxDstTiles)`. Free,
    compile-time, and it settles an open question in the list above rather than leaving it
    marked unverified.
@@ -463,12 +513,13 @@ it is what they all need.
 
 ## Explicitly not fruit
 
-**D17**, named runtime arguments, is the three-hang problem and remains real work. Specced in
-`unified_named_args_spec.md`, whose finding is uncomfortable: of the three named-argument
-mechanisms in the tree, the compile-time one (D18) is reachable from our path today, and the
-runtime one (D17, every hang) is not -- Metal 2.0 proper is gated behind a host API with no
-Python bindings, and the only reachable runtime option is a Blaze feature whose own README
-says not to use it. So the easy phase is not the phase that hurts.
+~~**D17**, named runtime arguments~~ -- **done, and the uncomfortable finding did not
+survive contact.** `unified_named_args_spec.md` concluded that the runtime half was
+unreachable: Metal 2.0 proper sat behind a host API with no Python bindings, leaving only a
+Blaze feature whose own README says not to use it. What that spec did not look at, being
+scoped to arguments, is that the *kernel* side of Metal 2.0 was never gated at all -- and the
+host side turned out to need one narrow nanobind shim rather than a rewrite. Both D17 and D18
+are dead; see `unified_metal2_spec.md`.
 
 **The B and C uniformity classes** need a per-thread trace of circular-buffer operations,
 cross-checked at kernel end -- push counts against wait counts, per CB, per projection. That
