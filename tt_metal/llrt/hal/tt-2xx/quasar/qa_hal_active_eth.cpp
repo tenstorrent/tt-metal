@@ -43,7 +43,7 @@ namespace active_eth_realtime_profiler_msgs {
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
-    static_assert(MEM_IERISC_MAP_END % L1_ALIGNMENT == 0);
+    static_assert(MEM_AERISC_MAP_END % L1_ALIGNMENT == 0);
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
