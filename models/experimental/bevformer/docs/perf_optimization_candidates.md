@@ -6,8 +6,10 @@ here becomes `landed` with a link to its report.
 
 Numbers quoted below as *cost* come from the baseline profile
 ([00-baseline.md](perf_reports/00-baseline.md)): one encoder layer, N150, 655.6 ms kernel +
-2416.5 ms host gap = 3072.1 ms wall. The layer today is **489.5 ms kernel + 14.0 ms gap** after
-[stage 04](perf_reports/04-fused-msda.md); costs quoted against the baseline are historical.
+2416.5 ms host gap = 3072.1 ms wall. The layer today is **456.8 ms kernel** after
+[stage 05](perf_reports/05-offset-normalizer-folded.md); costs quoted against the baseline are
+historical. Gap/wall figures are not comparable across runs — see
+[PERF.md](PERF.md#the-gap-column-is-not-reliable).
 
 ## Candidates
 
@@ -19,10 +21,10 @@ Numbers quoted below as *cost* come from the baseline profile
 | [1c](#1c-hoist-index-computation-above-the-layer-loop) | rebatch plan once per frame, not per layer | gap | −94.6 ms encoder wall (−2.2%) | S | low | **landed — [02](perf_reports/02-rebatch-plan-hoisted.md)** |
 | [1d](#1d-per-call-constant-uploads) | cache what is frame-invariant | gap | −56.4 ms encoder wall (−1.3%) | S | none | **landed — [03](perf_reports/03-constant-uploads-cached.md)** |
 | [2](#candidate-2--fused-msda) | fused `multi_scale_deformable_attn` | kernel | **−191.6 ms kernel (−28.1%)** | M | med | **landed — [04](perf_reports/04-fused-msda.md)** |
-| [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | ~24 ms | S | low | todo — **rescoped by 2** |
+| [3](#candidate-3--tile-padding-waste) | fold the offset normalizer into the Linear | kernel | **−32.7 ms kernel** | S | low | **landed — [05](perf_reports/05-offset-normalizer-folded.md)** |
 | [4](#candidate-4--the-msda-concat) | replace the per-level concat | kernel | — | — | — | **moot — deleted by [04](perf_reports/04-fused-msda.md)** |
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | ≤9 ms/layer | M | low | parked behind 1b |
-| [6](#candidate-6--msdaoperation-itself) | `MSDAOperation` device time | kernel | **143 ms** | ? | ? | todo — upstream |
+| [6](#candidate-6--msdaoperation-itself) | `MSDAOperation` device time | kernel | **167.8 ms** (36.7% of layer) | ? | ? | todo — upstream |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -222,6 +224,10 @@ Hard constraints from
 
 ## Candidate 3 — tile padding waste
 
+**Landed** — [stage 05](perf_reports/05-offset-normalizer-folded.md), −32.7 ms kernel, PCC
+unchanged at 0.999611. Beat its own rescoped estimate: ~24 ms was the SCA divide alone, and TSA
+carried the same divide for another 9 ms.
+
 **Rescoped by [stage 04](perf_reports/04-fused-msda.md): ~60 ms → ~24 ms, and the fix changed.**
 The two `Permute` sites below were inside the MSDA decomposition and no longer exist; `ReshapeView`
 dropped 157 → 77 ms for the same reason. What survives is the `BinaryNg` site — the `div` by
@@ -301,8 +307,10 @@ lifts.
 
 ## Candidate 6 — `MSDAOperation` itself
 
-New, created by [stage 04](perf_reports/04-fused-msda.md). The fused op is now **the single largest
-cost in the layer**: 167.6 ms total, 143.3 ms of it the four SCA calls at ~35.9 ms each.
+New, created by [stage 04](perf_reports/04-fused-msda.md). The fused op is **the single largest
+cost in the layer**: 167.8 ms total, 143.3 ms of it the four SCA calls at ~35.9 ms each. After
+[stage 05](perf_reports/05-offset-normalizer-folded.md) it is **36.7% of layer kernel time** and
+more than three times the next model-side item.
 
 It is more expensive than the sampling it absorbed:
 
@@ -336,12 +344,13 @@ tilize↔untilize churn around each call is not obviously necessary and is model
 4. ~~**1d**~~ — landed, −56.4 ms encoder wall. **Candidate 1 is complete.**
 5. ~~**2**~~ — landed, −191.6 ms kernel (−28.1%). **Was ordered after 4 and should not have been.**
 6. ~~**4**~~ — never run; [deleted by 2](perf_reports/04-fused-msda.md).
-7. **6** — 143 ms, the largest single cost now. Microbenchmark before anything else; the answer may
-   belong upstream rather than in this model.
-8. **3** — ~24 ms after rescoping, and the fix (fold the normalizer into the Linear weight) is
-   already written in `vadv2`. Cheapest remaining model-side win.
+7. ~~**3**~~ — landed, −32.7 ms kernel. Taken before 6 because it sits upstream of the fused region
+   and its value does not depend on what 6 concludes.
+8. **6** — **167.8 ms, 36.7% of the layer, and now more than three times the next model-side item.**
+   Microbenchmark it; the answer likely belongs upstream rather than in this model.
 9. **5** — needs 1b, and is worth ≤9 ms/layer rather than the 218 ms first claimed. Only revisit if
-   an encoder-harness measurement shows per-forward host time the layer profile does not.
+   an encoder-harness measurement shows per-forward host time the layer profile does not — and that
+   harness would have to fix the gap column first (see [PERF.md](PERF.md#the-gap-column-is-not-reliable)).
 
 The baseline settled what was previously a guess: host round-trips dominated wall clock 4:1 over
 kernel time, and within kernel time it is layout churn, not arithmetic — matmul is 0.7%. Nothing in

@@ -46,7 +46,8 @@ today. The signposted region therefore carries host dispatch, and both columns a
 | 1 | [SCA rebatch and scatter-back on device](perf_reports/01-sca-rebatch-on-device.md) | 683.0 ms | 44.4 ms | **727.4 ms** | **−2344.7 ms** | 146 |
 | 2 | [rebatch plan resolved once per forward](perf_reports/02-rebatch-plan-hoisted.md) | 680.4 ms | 46.3 ms | **726.7 ms** | −0.7 ms | 146 |
 | 3 | [constant uploads cached](perf_reports/03-constant-uploads-cached.md) | 681.7 ms | 40.5 ms | **722.2 ms** | −4.5 ms | 121 |
-| 4 | [fused multi_scale_deformable_attn](perf_reports/04-fused-msda.md) | 489.5 ms | 14.0 ms | **503.5 ms** | **−190.6 ms** † | 129 |
+| 4 | [fused multi_scale_deformable_attn](perf_reports/04-fused-msda.md) | 489.5 ms | 14.0 ms | 503.5 ms | **−191.6 ms kernel** † | 129 |
+| 5 | [offset normalizer folded into the Linear](perf_reports/05-offset-normalizer-folded.md) | 456.8 ms | *see below* | — | **−32.7 ms kernel** | 127 |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. device idle
 between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
@@ -56,19 +57,45 @@ Rows 1–3 were re-measured 2026-08-27 (`2026_08_27_08_56_58`, `2026_08_27_21_31
 0.999608 in all three.
 
 † Row 4's Δ is against a **same-session re-measure of row 3** (`2026_08_27_23_03_17`: 681.1 ms
-kernel / 13.0 ms gap / 694.1 ms wall), not against the 722.2 ms in row 3. The kernel figures agree
-to 0.1%; the gap column does not, because it carries region-entry cost that varies run to run. Read
-the −190.6 ms as kernel-driven — kernel alone moved 681.1 → 489.5 ms, **−28.1%**.
+kernel / 13.0 ms gap / 694.1 ms wall), not against the 722.2 ms in row 3.
 
-**−83.6% of wall clock since the baseline.** Stage 1 traded +27 ms of kernel for −2372 ms of host
-gap; stage 4 then took −192 ms of kernel by replacing the deformable-attention decomposition with
-the fused device op. **Kernel is 97% of wall clock.**
+## The gap column is not reliable
 
-The two deformable-attention calls were 623 ms of the 683 ms kernel at stage 3 and are 431 ms of
-the 490 ms kernel now — still 88% of it, so this remains the only region worth working. What
-changed is the shape of the problem: layout churn around the sampler is largely gone, and the
-single biggest op in the layer is now `MSDAOperation` itself at 143 ms across four calls. That is
-an op-level question, not a model-level one.
+Rows 4 and 5 quote **kernel deltas, not wall deltas**, and rows 0–3's wall figures should be treated
+with the same suspicion.
+
+The layer was profiled twice on identical stage-05 code, minutes apart:
+
+| run | kernel | gap | wall |
+|---|---:|---:|---:|
+| `2026_08_28_10_23_13` | 456.8 ms | 93.4 ms | 550.2 ms |
+| `2026_08_28_10_30_24` | 456.8 ms | 151.2 ms | 608.0 ms |
+
+Kernel reproduces to 0.1 ms. **Gap differs by 57.8 ms on the same binary**, and stage 04 measured
+14.0 ms on the same harness the night before — 14.0 / 93.4 / 151.2 ms across three runs, none of it
+attributable to code.
+
+Taken at face value the wall column makes stage 05 a ~100 ms regression while its kernel drops
+32.7 ms. It is not a regression. At `DEVICE_PERF_ITERS = 1` the gap column carries region-entry cost
+that does not amortize, and it is evidently sensitive to machine state beyond that — the
+[stage-01 correction](perf_reports/01-sca-rebatch-on-device.md) already found the same column
+overstating by 174 ms.
+
+**Use `DEVICE KERNEL DURATION` for stage-to-stage comparison.** A trustworthy wall number needs a
+harness with enough timed iterations to amortize region entry; that does not exist in the tree yet.
+
+Cumulative kernel, all measured in the same window: **681.1 → 489.5 → 456.8 ms, −32.9%.**
+
+Stage 1 traded +27 ms of kernel for a host-gap collapse — the one place the gap column was moving
+by so much that noise could not explain it. Stages 4 and 5 then took **−224.3 ms of kernel**
+(681.1 → 456.8, −32.9%): the fused device op replacing the deformable-attention decomposition, then
+the offset normalizer folded into the Linear that fed it.
+
+The two deformable-attention calls were 623 ms of the 683 ms kernel at stage 3 and are 397.9 ms of
+the 456.8 ms kernel now — still 87% of it, so this remains the only region worth working. What
+changed is the shape of the problem: the layout churn around the sampler is largely gone, and the
+single biggest op in the layer is now `MSDAOperation` itself at 167.8 ms across five calls, **36.7%
+of the layer**. That is an op-level question, not a model-level one.
 
 **Kernel is flat across stages 1–3** — 683.0 / 680.4 / 681.7 ms. None of these changes touches what
 runs on device inside a layer; they remove dispatches.
@@ -156,31 +183,31 @@ Problem 1 is closed — candidate 1 is complete. Problem 2 is addressed by
 
 ## Where the time is now
 
-`2026_08_27_23_24_32`, stage 04: 129 ops, 489.5 ms kernel.
+`2026_08_28_10_23_13`, stage 05: 127 ops, 456.8 ms kernel.
 
 | Op | inst | ms | % of kernel |
 |---|---:|---:|---:|
-| MSDAOperation | 5 | 167.6 | 34.2 |
-| BinaryNgDeviceOperation | 19 | 81.5 | 16.6 |
-| ReshapeViewDeviceOperation | 20 | 77.1 | 15.7 |
-| PermuteDeviceOperation | 11 | 62.5 | 12.8 |
-| UntilizeWithUnpaddingDeviceOperation | 17 | 42.4 | 8.7 |
-| TilizeWithValPaddingDeviceOperation | 6 | 17.1 | 3.5 |
-| SliceDeviceOperation | 13 | 13.2 | 2.7 |
-| ScatterDeviceOperation | 1 | 10.5 | 2.1 |
-| TransposeDeviceOperation | 12 | 7.9 | 1.6 |
+| MSDAOperation | 5 | 167.8 | 36.7 |
+| ReshapeViewDeviceOperation | 20 | 77.1 | 16.9 |
+| PermuteDeviceOperation | 11 | 62.7 | 13.7 |
+| BinaryNgDeviceOperation | 17 | 48.2 | 10.6 |
+| UntilizeWithUnpaddingDeviceOperation | 17 | 42.4 | 9.3 |
+| TilizeWithValPaddingDeviceOperation | 6 | 17.1 | 3.7 |
+| SliceDeviceOperation | 13 | 13.3 | 2.9 |
+| ScatterDeviceOperation | 1 | 10.5 | 2.3 |
+| TransposeDeviceOperation | 12 | 8.2 | 1.8 |
 | MatmulDeviceOperation | 11 | 4.7 | 1.0 |
-| *8 others* | 14 | 4.8 | 1.0 |
+| *others* | 14 | 4.8 | 1.1 |
 
 Matmul is still 1%. `GridSample` and `Concat` — 17.0% and 16.9% of kernel at stage 03 — are **gone
 from the table entirely**, absorbed into `MSDAOperation`.
 
 The profile has changed character. Through stage 03 the story was layout churn: reshape, permute,
-concat and grid-sample around a small amount of real work. Now **one op is a third of the layer**,
-and it is more expensive per sample than the `GridSample` it replaced (see
-[candidate 6](perf_optimization_candidates.md#candidate-6--msdaoperation-itself)). The remaining
-model-side levers — the `div` at 23.9 ms and ~103 ms of per-level tilize/untilize churn — are
-smaller than the op itself.
+concat and grid-sample around a small amount of real work. Now **one op is over a third of the
+layer**, and it is more expensive per sample than the `GridSample` it replaced (see
+[candidate 6](perf_optimization_candidates.md#candidate-6--msdaoperation-itself)). Every remaining
+model-side lever — ~103 ms of per-level tilize/untilize churn being the largest — is smaller than
+the op itself.
 
 ## What was tried and rejected
 
