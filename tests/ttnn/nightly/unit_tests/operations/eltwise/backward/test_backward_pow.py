@@ -26,7 +26,7 @@ def test_negative_exponent(input_shapes, exponent, device, expect_error):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=0)
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -20, 20, device, seed=1)
 
-    with expect_error(RuntimeError, "negative exponents are not supported"):
+    with expect_error(RuntimeError, r"negative exponents are not supported"):
         ttnn.pow_bw(grad_tensor, input_tensor, exponent)
 
 

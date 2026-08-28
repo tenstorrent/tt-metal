@@ -300,7 +300,7 @@ def test_pad_subcoregrids_rejects_sharded(device, expect_error):
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem)
 
     sub_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
-    with expect_error(RuntimeError, "must not exceed number of cores"):
+    with expect_error(RuntimeError, r"must not exceed number of cores"):
         ttnn.pad(
             input_tensor,
             padding=((0, 0), (0, 0), (0, 32), (0, 0)),
@@ -324,7 +324,7 @@ def test_pad_subcoregrids_rejects_singlecore(device, expect_error):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     sub_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
-    with expect_error(RuntimeError, "sub_core_grids is only supported when use_multicore"):
+    with expect_error(RuntimeError, r"sub_core_grids is only supported when use_multicore"):
         ttnn.pad(
             input_tensor,
             padding=((0, 0), (0, 0), (0, 32), (0, 32)),

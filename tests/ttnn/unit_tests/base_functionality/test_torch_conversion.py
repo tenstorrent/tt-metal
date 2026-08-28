@@ -1188,7 +1188,7 @@ def test_from_torch_sharded_tilize_dispatch_core_overlap(device, expect_error):
     # expect_error rather than xfail: it brackets the rejection so CI log triage does not
     # read the fatal as a crash, and it fails once the write path accepts the shard grid.
     # Restore the assertions below at that point.
-    with expect_error(RuntimeError, "Invalid shard grid"):
+    with expect_error(RuntimeError, r"Invalid shard grid"):
         result = ttnn.from_torch(
             torch_tensor,
             dtype=ttnn.bfloat16,

@@ -135,7 +135,7 @@ def test_moreh_clip_grad_norm_with_error_if_nonfinite(error_if_nonfinite, device
         )
 
     if error_if_nonfinite:
-        with expect_error(RuntimeError, "is non-finite, so it cannot be clipped"):
+        with expect_error(RuntimeError, r"The total norm of order"):
             run_clip_grad_norm()
     else:
         run_clip_grad_norm()

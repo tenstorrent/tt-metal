@@ -445,7 +445,7 @@ def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
     ],
 )
 def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device, expect_error):
-    with expect_error(Exception, "Unreachable"):
+    with expect_error(Exception, r"Unreachable"):
         ttnn.from_buffer(buffer, [2, 3], dtype, device, ttnn.TILE_LAYOUT)
 
 

@@ -78,7 +78,7 @@ class TestMatmulBlockSharded1DGrid:
         )
 
         # Should raise RuntimeError with message about BLOCK_SHARDED on 1D grid
-        with expect_error(RuntimeError, "BLOCK_SHARDED") as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
 
         assert "BLOCK_SHARDED" in str(excinfo.value)
@@ -128,7 +128,7 @@ class TestMatmulBlockSharded1DGrid:
         )
 
         # Should raise RuntimeError with message about BLOCK_SHARDED on 1D grid
-        with expect_error(RuntimeError, "BLOCK_SHARDED") as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
 
         assert "BLOCK_SHARDED" in str(excinfo.value)
@@ -336,7 +336,7 @@ class TestMatmulBlockSharded1DGridOriginalIssue:
         )
 
         # With the fix, this should raise RuntimeError instead of hanging
-        with expect_error(RuntimeError, "BLOCK_SHARDED") as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(v2, v3, memory_config=memory_config)
 
         error_msg = str(excinfo.value)
@@ -375,7 +375,7 @@ class TestMatmulBlockSharded1DGridOriginalIssue:
         )
 
         # With the fix, this should raise RuntimeError instead of hanging
-        with expect_error(RuntimeError, "BLOCK_SHARDED") as excinfo:
+        with expect_error(RuntimeError, r"BLOCK_SHARDED") as excinfo:
             _ = ttnn.matmul(tt_a, tt_b, memory_config=memory_config)
 
         error_msg = str(excinfo.value)

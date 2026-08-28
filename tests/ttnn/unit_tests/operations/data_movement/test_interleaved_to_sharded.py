@@ -296,5 +296,5 @@ def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_s
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
 
-    with expect_error(RuntimeError, "interleaved_to_sharded does not support ND sharding"):
+    with expect_error(RuntimeError, r"interleaved_to_sharded does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)

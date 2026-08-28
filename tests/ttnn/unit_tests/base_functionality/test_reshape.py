@@ -774,7 +774,7 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape, expec
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
     )
-    with expect_error(RuntimeError, "Attempting to reshape between two shapes with different volumes"):
+    with expect_error(RuntimeError, r"Attempting to reshape between two shapes with different volumes"):
         ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
 
 

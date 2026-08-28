@@ -1272,7 +1272,7 @@ def test_paged_fill_cache_batched_rejects_mismatched_batch_idx_tensor(device, ba
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint32,
     )
-    with expect_error(RuntimeError, "Batch idx tensor must have input_tensor batch dim"):
+    with expect_error(RuntimeError, r"Batch idx tensor must have input_tensor batch dim"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
 
 
@@ -1293,7 +1293,7 @@ def test_paged_fill_cache_rejects_multi_batch_input_without_tensor(device, expec
     input_tt = ttnn.from_torch(input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     page_table_tt = ttnn.from_torch(page_table_torch, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
-    with expect_error(RuntimeError, "input_batch must be 1"):
+    with expect_error(RuntimeError, r"When no batch_idx_tensor is provided, input_batch must be 1"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx=0)
 
 
@@ -1378,5 +1378,5 @@ def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device,
     except (RuntimeError, ValueError):
         pytest.skip("Cannot construct a TILE_LAYOUT uint32 tensor on this build; layout assertion still in place.")
 
-    with expect_error(RuntimeError, "Batch idx tensor must have input_tensor batch dim"):
+    with expect_error(RuntimeError, r"Batch idx tensor must have input_tensor batch dim"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)

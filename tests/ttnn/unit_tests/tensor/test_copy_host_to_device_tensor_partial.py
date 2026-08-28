@@ -141,5 +141,5 @@ def test_copy_host_to_device_tensor_partial_interleaved_raises(device, expect_er
     dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, mem_config)
     ttnn.copy_host_to_device_tensor(tt_a, dev)
     flt = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    with expect_error(RuntimeError, "logical_core_filter is only supported for sharded buffer layouts"):
+    with expect_error(RuntimeError, r"logical_core_filter is only supported for sharded buffer layouts"):
         ttnn.copy_host_to_device_tensor_partial(tt_b, dev, flt)

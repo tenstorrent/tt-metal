@@ -24,5 +24,5 @@ def test_deallocate(device, h, w, expect_error):
     output_tensor_reference = ttnn.reshape(output_tensor, (h, w))
 
     ttnn.deallocate(output_tensor)
-    with expect_error(RuntimeError, "Input Tensor A is not allocated"):
+    with expect_error(RuntimeError, r"Input Tensor A is not allocated"):
         output_tensor_reference + output_tensor_reference

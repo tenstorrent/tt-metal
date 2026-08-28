@@ -396,7 +396,7 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device, exp
         input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
     )
 
-    with expect_error(RuntimeError, "When input tensor is in DRAM, output memory_config must be explicitly specified"):
+    with expect_error(RuntimeError, r"When input tensor is in DRAM, output memory_config must be explicitly specified"):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
 
     # Create an output shard that is not padded up to nearest aligned width
@@ -404,5 +404,5 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device, exp
     output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    with expect_error(RuntimeError, "Output shard width must be rounded up to next multiple of 8"):
+    with expect_error(RuntimeError, r"Output shard width must be rounded up to next multiple of 8"):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16, memory_config=output_mem_config)
