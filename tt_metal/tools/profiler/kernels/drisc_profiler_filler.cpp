@@ -852,17 +852,18 @@ void kernel_main() {
                     // ROTATED start, but only while the ship threshold is actually deferring cores. The
                     // scan/ship order is also the service order; under deferral a fixed order gives the
                     // last cores a whole sweep less headroom every sweep -- the same handful of cores took
-                    // every producer stall while their slice-mates took none. But when every live core
-                    // ships every sweep, rotation is the harm instead: the start advancing one slot per
-                    // sweep hands every core a near-2-sweep service interval once per rotation period
-                    // (measured at delay 48, SHIP_MIN_PCT=1: svc max 36.8 us vs the 21 us sweep, exactly
-                    // 1/num_cores of services in the 2-sweep bucket). Wrap by compare, never %: a runtime
-                    // modulo is a soft-div on this core (N+64).
+                    // every producer stall while their slice-mates took none. The rotation steps BACKWARD:
+                    // stepping the start forward makes the previously-first core suddenly last, handing
+                    // that one core a near-2-sweep service interval per step (measured twice: delay 48
+                    // svc max 36.8 us vs the 21 us sweep with exactly 1/num_cores of services in the
+                    // 2-sweep bucket; and at delay 12 as the residual "transient" stalls -- paired
+                    // BRISC/NCRISC lanes of the sacrificed cores blocking ~5 us at each sporadic deferral
+                    // tick). Backward, the previously-LAST core becomes first and every other core's
+                    // interval grows by one visit (~1 us), which every lane's margin absorbs. Wrap by
+                    // compare, never %: a runtime modulo is a soft-div on this core (N+64).
                     if (ship_deferred != deferred_seen) {
                         deferred_seen = ship_deferred;
-                        if (++scan_rot >= num_cores) {
-                            scan_rot = 0;
-                        }
+                        scan_rot = scan_rot == 0 ? num_cores - 1u : scan_rot - 1u;
                     }
                     const uint64_t t_scan0 = kInstr != 0 ? get_timestamp() : 0;
                     uint32_t c = scan_rot;
