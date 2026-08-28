@@ -401,11 +401,6 @@ models:
     bh_galaxy: 470
 
     # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840).
-    # 488 -> 595: the seven Mistral-Small-4-119B entries add 110 min (479 -> 589). Five are sized
-    # from measured test time on run 32793561151 plus runner setup, not from a margin; the block
-    # and transformer rows are left generous until CI reports their own times. 6 min headroom.
-
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840).
     # 488 -> 585: the six Mistral-Small-4-119B entries add 100 min, plus 2 on the shared KV cache
     # table entry it now rides (479 -> 581). Sized from measured test time on run 32793561151
     # plus runner setup, not from a flat margin. 4 min headroom.
