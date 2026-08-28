@@ -105,6 +105,18 @@ def test_cohere_fullmodel_40layer_pcc(max_seq_len, mesh_device, reset_seeds, ens
     seq_len = embed.shape[1]
     assert seq_len <= max_seq_len, f"prompt seq {seq_len} > max_seq_len {max_seq_len}"
 
+    # ROOT-CAUSE KNOB (2026-08-28): HF Cohere rotates Q/K in the INTERLEAVED-native
+    # convention (modeling_cohere rotate_half override: adjacent pairs + repeat_interleave
+    # cache) — unlike llama's NeoX half-split. The stock loader's use_hf_rope=False path
+    # applies reverse_permute to q/k_proj (NeoX->Meta interleave), which SCRAMBLES
+    # already-interleaved cohere weights. COHERE_SKIP_QKV_PERMUTE=1 monkeypatches the
+    # loader to the no-permute variant to test the hypothesis on-box.
+    if os.environ.get("COHERE_SKIP_QKV_PERMUTE", "0") == "1":
+        import models.tt_transformers.tt.model_config as _mc
+
+        _mc.convert_hf_to_meta = _mc.convert_hf_to_meta_no_qkv_permute
+        logger.info("[cohere-fullmodel] COHERE_SKIP_QKV_PERMUTE=1 — Q/K kept in HF interleaved-native layout")
+
     model_args = ModelArgs(
         mesh_device, max_batch_size=1, max_seq_len=max_seq_len, cache_hf=True, use_hf_rope=False
     )
