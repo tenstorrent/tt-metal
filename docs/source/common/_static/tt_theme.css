@@ -511,6 +511,24 @@ body:has(.tt-top-nav) .wy-side-nav-search img {
   padding-left: 15px;
 }
 
+/* Sidebar subtree folding. Expansion is driven by a .tt-open class that
+   tt-search.js toggles on caret click, so mirror the production rules here —
+   without them the caret rotates but the subtree never appears.
+
+   Both declarations need !important. RTD's own
+   `.wy-menu-vertical .toctree-l1.current .toctree-l2 > ul { display: none }`
+   has specificity (0,4,1), which outranks `li.tt-open > ul` (0,2,2). On a page
+   that is itself a toctree-l1 (e.g. ttnn/api.html, where every section below it
+   is an in-page anchor and so never gets .current), that rule pins every
+   toctree-l2 subtree closed and no amount of clicking can open it. */
+.wy-menu-vertical li:not(.tt-open) > ul {
+  display: none !important;
+}
+
+.wy-menu-vertical li.tt-open > ul {
+  display: flex !important;
+}
+
 /* Section group headers (captions) — Figma: Berkeley Mono 12px, #3A5452, py-12px */
 .wy-menu-vertical header,
 .wy-menu-vertical p.caption {
@@ -1092,8 +1110,13 @@ div[role="navigation"][aria-label="Page navigation"] {
   font-weight: 500 !important;
 }
 
-/* Hide "View page source" */
-.wy-breadcrumbs-aside {
+/* Hide "View page source".
+   Must be qualified as `.wy-breadcrumbs > li.wy-breadcrumbs-aside` (0,2,1) to
+   outrank `.wy-breadcrumbs > li { display: inline-flex !important }` (0,1,1)
+   above. A bare `.wy-breadcrumbs-aside` (0,1,0) loses that comparison — both
+   rules are !important, so specificity decides — and the link renders flush
+   against the active breadcrumb with no separator. */
+.wy-breadcrumbs > li.wy-breadcrumbs-aside {
   display: none !important;
 }
 
