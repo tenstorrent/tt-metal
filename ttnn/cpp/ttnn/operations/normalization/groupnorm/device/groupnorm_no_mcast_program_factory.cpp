@@ -18,6 +18,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -511,10 +512,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             .normalisation_stats = ex2pe_CB_size,
         };
     };
-    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const std::uint64_t available_cb_l1_bytes = lowest_occupied_l1 > cb_l1_base ? lowest_occupied_l1 - cb_l1_base : 0;
-    const std::uint64_t usable_l1_bytes = available_cb_l1_bytes * 95 / 100;
+    const std::uint64_t usable_l1_bytes = ttnn::operations::core::program_cache_l1_capacity(device);
     const std::uint32_t replay_input_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
     const std::uint32_t replay_input_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
     const auto cb_footprint_group_1 = make_cb_footprint(

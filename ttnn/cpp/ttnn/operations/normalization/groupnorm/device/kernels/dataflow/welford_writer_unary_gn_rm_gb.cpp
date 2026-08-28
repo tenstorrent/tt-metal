@@ -73,7 +73,9 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+#if !defined(MASK_SYNTHESIZE)
     constexpr auto input_mask_args = TensorAccessorArgs<beta_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
@@ -85,11 +87,15 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(2);
     const uint32_t beta_addr = get_arg_val<uint32_t>(3);
+#if !defined(MASK_SYNTHESIZE)
     const uint32_t input_mask_addr = get_arg_val<uint32_t>(4);
+#endif
     const uint32_t out_start_id = get_arg_val<uint32_t>(5);
     const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(6);
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
+#if !defined(MASK_SYNTHESIZE)
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
+#endif
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t dfb_eps_id = tt::CBIndex::c_3;
@@ -115,7 +121,9 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_out_id);
     constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(dfb_input_mask_id);
 
+#if !defined(MASK_SYNTHESIZE)
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr);
+#endif
 
 #if defined(MASK_SYNTHESIZE)
     // Full group size, distinct from num_cols_per_group above, which is that value
@@ -141,11 +149,12 @@ void kernel_main() {
 
     dfb_input_mask.reserve_back(block_w * num_groups_per_core);
     uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
-    uint32_t input_mask_tile_id = input_mask_tile_start_id;
 #if defined(MASK_SYNTHESIZE)
     // start_stride for the first group on this core is 0. Subsequent groups
     // advance row_offset by group_size_mod_tile_w with wrapping.
     uint32_t mask_row_offset = 0;
+#else
+    uint32_t input_mask_tile_id = input_mask_tile_start_id;
 #endif
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
 #if defined(MASK_SYNTHESIZE)

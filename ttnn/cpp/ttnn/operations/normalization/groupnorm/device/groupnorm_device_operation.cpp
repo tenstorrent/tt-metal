@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 
@@ -48,13 +49,12 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
 
 ttsl::hash::hash_t GroupNormDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::optional<tt::tt_metal::DeviceAddr> lowest_occupied_l1;
+    std::optional<std::uint64_t> l1_capacity;
     if (!tensor_args.input.is_sharded()) {
-        const auto* device = tensor_args.input.device();
-        lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+        l1_capacity = ttnn::operations::core::program_cache_l1_capacity(tensor_args.input.device());
     }
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<GroupNormDeviceOperation>, operation_attributes, tensor_args, lowest_occupied_l1);
+        ttsl::hash::type_hash<GroupNormDeviceOperation>, operation_attributes, tensor_args, l1_capacity);
 }
 
 void GroupNormDeviceOperation::validate_on_program_cache_miss(

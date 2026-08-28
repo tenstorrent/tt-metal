@@ -15,6 +15,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -336,12 +337,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     const std::uint32_t out_rm_tiles = input_is_row_major ? 2 * block_size : 0;
     const std::uint32_t out_rm_size = out_rm_tiles * out_single_tile_size;
 
-    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const std::uint64_t available_cb_l1_bytes = lowest_occupied_l1 > cb_l1_base ? lowest_occupied_l1 - cb_l1_base : 0;
-    const std::uint64_t usable_cb_l1_bytes = available_cb_l1_bytes * 95 / 100;
+    const std::uint64_t usable_cb_l1_bytes = ttnn::operations::core::program_cache_l1_capacity(device);
 
-    // The reciprocal LUT is an externally bound L1 buffer, so the occupied-address boundary above
+    // The reciprocal LUT is an externally bound L1 buffer, so the available capacity above
     // already excludes it from the free buffer span. Counting it here would charge its storage twice.
     const auto make_cb_footprint = [&](bool sfpu_statistics) {
         return LayerNormCbFootprint{

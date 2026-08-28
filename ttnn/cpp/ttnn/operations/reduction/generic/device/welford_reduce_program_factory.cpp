@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -67,7 +68,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     const bool is_std = (operation_attributes.math_op == ReduceOpMath::STD);
-    const bool use_post_mul = (operation_attributes.scalar != 1.0f);
+    // The reduction runs on unscaled input. Apply the equivalent factor to the
+    // result only when it is non-unity: var(s*x)=s^2 var(x), std(s*x)=|s| std(x).
+    const float post_mul_scaler =
+        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
+    const bool use_post_mul = post_mul_scaler != 1.0f;
 
     // Variance output to bf16 can use bf16 scratch only when no further math follows
     // the scratch read-back. Std still needs sqrt, and scaled variance still needs its
@@ -180,10 +185,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     replay_cb_footprint += reduce_w ? w_scratch_single_tile_size : 0;
     replay_cb_footprint += reduce_hw ? 4 * partial_single_tile_size + combined_single_tile_size : 0;
 
-    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
-    const auto cb_l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const std::uint64_t available_cb_l1_bytes = lowest_occupied_l1 > cb_l1_base ? lowest_occupied_l1 - cb_l1_base : 0;
-    const std::uint64_t usable_cb_l1_bytes = available_cb_l1_bytes * 95 / 100;
+    const std::uint64_t usable_cb_l1_bytes = ttnn::operations::core::program_cache_l1_capacity(device);
     const bool two_pass_l1_replay =
         two_pass_l1_replay_tiles >= two_pass_l1_replay_min_tiles && replay_cb_footprint < usable_cb_l1_bytes;
 
@@ -244,8 +246,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // precision and collapsed large-offset inputs to a constant before the multiply. The
     // post-multiplier follows var(s*x)=s^2 var(x) and std(s*x)=|s| std(x):
     //   var: scalar^2   std: |scalar|.
-    const float post_mul_scaler =
-        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
     const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(post_mul_scaler);
 
     // cb_partial (c_21): HW-reduce only -- holds per-column mean+var tile pairs

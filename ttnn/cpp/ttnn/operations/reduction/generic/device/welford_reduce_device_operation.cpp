@@ -10,6 +10,7 @@
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/program_cache_l1.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 
 namespace ttnn::prim {
@@ -23,10 +24,9 @@ WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::se
 
 ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto* device = tensor_args.device();
-    const auto lowest_occupied_l1 = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    const auto l1_capacity = ttnn::operations::core::program_cache_l1_capacity(tensor_args.device());
     return ttsl::hash::hash_objects_with_default_seed(
-        ttsl::hash::type_hash<WelfordReduceDeviceOperation>, operation_attributes, tensor_args, lowest_occupied_l1);
+        ttsl::hash::type_hash<WelfordReduceDeviceOperation>, operation_attributes, tensor_args, l1_capacity);
 }
 
 void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
