@@ -187,7 +187,7 @@ inline void calculate_sine() {
 
     sfpi::vFloat C3, C2, C1, C0;
 
-    // Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
+    // space Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
     if (is_fp32_dest_acc_en) {
         C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
