@@ -3257,6 +3257,17 @@ COVERED = "covered"
 #: this is the state the ratchet exists to shrink.
 UNRECORDED = "unrecorded"
 
+# The two classes an integer-only op cannot have, written once because the ledger reaches them
+# by subtraction rather than by a table -- see SuiteCoverage.float_driven.
+_CAT_B_INTEGER_ONLY = (
+    "integer-only op: no IEEE specials to inject, so format_specials() returns the integer "
+    "extremes instead and the question is cat C's"
+)
+_CAT_F_INTEGER_ONLY = (
+    "integer-only op: no subnormal band and no float ceiling, so format_extremes() raises "
+    "for its formats by design"
+)
+
 
 @dataclass(frozen=True)
 class SuiteCoverage:
@@ -3278,6 +3289,16 @@ class SuiteCoverage:
     integer_extremes: FrozenSet[MathOperation] = frozenset()
     #: Ops driven on an integer format at all. Outside this, cat C does not apply.
     integer_driven: FrozenSet[MathOperation] = frozenset()
+    #: Ops driven on a float format at all. The complement of this within *integer_driven* is
+    #: the integer-only set, for which cat B and cat F do not apply -- an integer op has no
+    #: IEEE specials to be given and no subnormal band to probe. Derived by subtraction rather
+    #: than declared, so an op that gains a float sweep stops being integer-only on its own.
+    #:
+    #: Supplying *integer_driven* without this one makes every integer-driven op look
+    #: integer-only. That is right today -- the two sets are disjoint, and test_sfpu_domains
+    #: asserts it -- and would stop being right for an op driven on both, which is why the
+    #: assertion is there rather than a comment.
+    float_driven: FrozenSet[MathOperation] = frozenset()
     #: Ops taking an operand as a parameter -- a shift amount, a compile-time scalar (cat E).
     operand_parameters: FrozenSet[MathOperation] = frozenset()
     #: Ops driven at a magnitude extreme by a purpose-built saturation sweep rather than
@@ -3348,6 +3369,7 @@ def coverage_ledger(
     rather than a second table.
     """
     suite = suite or SuiteCoverage()
+    integer_only = suite.integer_driven - suite.float_driven
     ledger: Dict[MathOperation, Dict[EdgeClass, str]] = {}
     for op in _ledger_ops(suite):
         cells: Dict[EdgeClass, str] = {}
@@ -3362,6 +3384,8 @@ def coverage_ledger(
             cells[EdgeClass.B] = COVERED
         elif op in _CAT_B_NOT_READY:
             cells[EdgeClass.B] = _CAT_B_NOT_READY[op]
+        elif op in integer_only:
+            cells[EdgeClass.B] = _CAT_B_INTEGER_ONLY
         else:
             cells[EdgeClass.B] = UNRECORDED
 
@@ -3384,11 +3408,12 @@ def coverage_ledger(
             else "takes no operand as a parameter (no shift amount, no compile-time scalar)"
         )
 
-        cells[EdgeClass.F] = (
-            COVERED
-            if op in EXTREMES_READY_OPS or op in suite.saturation
-            else UNRECORDED
-        )
+        if op in EXTREMES_READY_OPS or op in suite.saturation:
+            cells[EdgeClass.F] = COVERED
+        elif op in integer_only:
+            cells[EdgeClass.F] = _CAT_F_INTEGER_ONLY
+        else:
+            cells[EdgeClass.F] = UNRECORDED
 
         cells[EdgeClass.G] = (
             UNRECORDED
@@ -3457,7 +3482,10 @@ def suite_coverage_from_tests() -> SuiteCoverage:
     import test_sfpu_ternary as ternary
 
     return SuiteCoverage(
+        # The shift ops belong here: _SHIFT_EDGE_VALUES contains INT32_MAX, and INT32_MIN with
+        # its own filter and xfail, so the shift edge sweeps do drive the integer extremes.
         integer_extremes=frozenset(binary._INT_EXTREME_OPS)
+        | frozenset(binary._SHIFT_EDGE_OPS)
         | frozenset(unary._INT_UNARY_OPS),
         integer_driven=frozenset(binary._INT_DRIVEN_BINARY_OPS)
         | frozenset(binary._INT_BINARY_STIMULI)
@@ -3467,6 +3495,9 @@ def suite_coverage_from_tests() -> SuiteCoverage:
         | frozenset(ternary._SCALAR_OPS),
         saturation=frozenset(unary._SATURATION_PROBES)
         | frozenset(binary._BINARY_SATURATION_PAIRS),
+        float_driven=frozenset(binary._CLASSIFIED_STIMULI_OPS)
+        - frozenset(binary._INT_DRIVEN_BINARY_OPS)
+        | frozenset(unary._EDGE_SWEEP_OPS),
         extra_ops=frozenset(binary._INT_DRIVEN_BINARY_OPS)
         | frozenset(binary._INT_BINARY_STIMULI),
     )

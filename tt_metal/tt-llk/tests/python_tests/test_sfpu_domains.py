@@ -732,7 +732,7 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
 _COVERAGE_FLOORS = {
     "A": 20,
     "B": 76,
-    "C": 5,
+    "C": 8,
     "D": 45,
     "E": 5,
     "F": 23,
@@ -759,6 +759,83 @@ def test_coverage_does_not_regress():
     )
 
 
+def test_the_suites_partition_their_ops_by_format():
+    """No op is driven on both an integer and a float format.
+
+    The ledger reaches the integer-only set by subtracting float_driven from integer_driven,
+    which is only a sound derivation while the two are disjoint. They are today -- 27 ops on the
+    integer side, none of them in a float sweep -- and an op driven on both would silently be
+    classified integer-only, losing its cat-B and cat-F verdicts to a "not applicable" that is
+    not true of it. Asserted rather than commented, because the subtraction looks correct either
+    way.
+    """
+    from helpers.sfpu_domains import suite_coverage_from_tests
+
+    suite = suite_coverage_from_tests()
+    both = sorted(op.name for op in suite.integer_driven & suite.float_driven)
+    assert not both, (
+        f"these ops are driven on both an integer and a float format: {both}. The ledger's "
+        "integer-only derivation (integer_driven - float_driven) would drop their cat-B and "
+        "cat-F verdicts — give them a real verdict instead of letting the subtraction guess."
+    )
+    assert suite.integer_driven - suite.float_driven, (
+        "no integer-only ops at all, which means float_driven has swallowed the integer side "
+        "and cat B/cat F are about to read 'unrecorded' for every one of them again"
+    )
+
+
+def test_integer_only_cells_are_integer_only_ops():
+    """A cat-B or cat-F 'not applicable' must be an op with no float form.
+
+    The converse of test_coverage_ledger_never_claims_more_than_the_machinery_delivers: that
+    test stops the ledger claiming coverage it does not have, this one stops it excusing a class
+    it *should* have. Marking a float op integer-only would retire a real gap without anyone
+    driving anything.
+    """
+    from helpers.sfpu_domains import (
+        _CAT_B_INTEGER_ONLY,
+        _CAT_F_INTEGER_ONLY,
+        EdgeClass,
+        suite_coverage_from_tests,
+    )
+
+    suite = suite_coverage_from_tests()
+    integer_only = suite.integer_driven - suite.float_driven
+    for op, cells in _ledger().items():
+        for edge_class, excuse in (
+            (EdgeClass.B, _CAT_B_INTEGER_ONLY),
+            (EdgeClass.F, _CAT_F_INTEGER_ONLY),
+        ):
+            if cells[edge_class] == excuse:
+                assert op in integer_only, (
+                    f"{op.name} is excused from {edge_class.name} as integer-only, but a suite "
+                    "drives it on a float format"
+                )
+
+
+def test_shift_ops_really_do_drive_the_integer_extremes():
+    """The shift sweeps are counted for cat C, so their value list has to contain an extreme.
+
+    This is the cell the ledger got wrong before W13 -- it read 'unrecorded' for three ops that
+    were being driven at INT32_MAX all along, because SuiteCoverage was built from
+    _INT_EXTREME_OPS and the shift sweeps are not in it. Counting them is only honest while the
+    values are still there, so the claim is checked against the list rather than against the
+    memory of having checked it.
+    """
+    import test_eltwise_binary_sfpu as binary
+    from helpers.sfpu_domains import integer_specials
+
+    extremes = set(integer_specials(DataFormat.Int32))
+    driven = set(binary._SHIFT_EDGE_VALUES)
+    assert extremes & driven, (
+        "_SHIFT_EDGE_VALUES no longer contains an int32 extreme, so the shift ops must come "
+        "back out of SuiteCoverage.integer_extremes"
+    )
+    # INT32_MAX specifically: INT32_MIN is filtered per-op (sign-magnitude Dst cannot hold it)
+    # and has its own xfail, so it is present in the list but never actually driven.
+    assert 2**31 - 1 in driven
+
+
 def test_suite_coverage_is_resolved_from_the_suites():
     """SuiteCoverage's fields must be non-empty, or the ledger under-reports in silence.
 
@@ -774,6 +851,7 @@ def test_suite_coverage_is_resolved_from_the_suites():
         "integer_driven",
         "operand_parameters",
         "saturation",
+        "float_driven",
         "extra_ops",
     ):
         assert getattr(suite, field), (
