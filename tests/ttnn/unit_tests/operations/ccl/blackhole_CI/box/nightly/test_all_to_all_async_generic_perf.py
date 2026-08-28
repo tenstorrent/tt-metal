@@ -206,17 +206,21 @@ def test_all_to_all_async_generic_production_perf_and_accuracy(mesh_device):
     """Verify both GLM reshards on the complete physical Ring and gate their traced device bandwidth."""
     require_realtime_profiler("generic all-to-all production perf checks")
     assert ttnn.get_num_devices() == math.prod(mesh_device.shape)
-    # The control plane consolidates torus axes no mesh realizes (a wrapped dimension needs more than
-    # 2 devices). On the 4-device QuietBox the underlying mesh is 2x2 — neither axis can ring, so the
-    # requested TORUS_XY consolidates all the way to FABRIC_2D. Larger boxes keep the surviving axes.
-    if ttnn.get_num_devices() == 4:
+    # The control plane consolidates torus axes whose wrapped dimension has 2 or fewer devices, so
+    # the latched config is a function of the underlying system mesh shape:
+    num_devices = ttnn.get_num_devices()
+    if num_devices == 4:
+        # QuietBox is a 2x2: neither axis has more than 2 devices, both torus axes consolidate away.
         assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D
+    elif num_devices == 8:
+        # LoudBox is a 2x4 (orientation depends on discovery): only the extent-4 axis can ring, so
+        # the requested TORUS_XY keeps exactly that axis — TORUS_X wraps the column axis of a
+        # [2, 4] system mesh, TORUS_Y the row axis of a [4, 2].
+        rows, cols = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
+        expected = ttnn.FabricConfig.FABRIC_2D_TORUS_X if cols == 4 else ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+        assert ttnn.get_fabric_config() == expected
     else:
-        assert ttnn.get_fabric_config() in (
-            ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-            ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        )
+        pytest.fail(f"unexpected device count {num_devices}: add its consolidated fabric config expectation here")
     assert ttnn.get_tt_fabric_max_payload_size_bytes() == _MAX_PACKET_PAYLOAD_SIZE
 
     for case in _reshard_cases(mesh_device.shape[0]):
