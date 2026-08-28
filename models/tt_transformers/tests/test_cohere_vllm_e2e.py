@@ -32,6 +32,7 @@ MESH_DEVICES = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [pytest.param((1, 4), id="qb2-4xbh")],
