@@ -5,14 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 
 # SFPU input-value coverage: what is still outstanding
 
-Companion to [`sfpu_edge_coverage_plan.md`](sfpu_edge_coverage_plan.md), which holds the two
-items that still have a written plan (W1 and W9). This file holds everything else the coverage
-ledger shows as open, and it exists because the ledger surfaced work the original plan could
-not have listed — it was written by reading code, and three of the items below are things it
-had no way to see.
+Companion to [`sfpu_edge_coverage_plan.md`](sfpu_edge_coverage_plan.md), which holds W9 — the
+one item there that is still open. This file holds everything else the coverage
+ledger shows as open. It exists because the ledger surfaced work the original plan could not
+have listed: that plan was written by reading code, and several of the items below are things
+no amount of reading would have found.
 
 Numbering continues the plan's series, so the two files share one namespace and a reference to
-"W14" is unambiguous. W2–W8, W10, W11 and W13 are closed.
+"W14" is unambiguous. W1–W8, W10, W11 and W13 are closed.
 
 **Regenerate the numbers before trusting them:**
 
@@ -28,7 +28,6 @@ Every count in this document came from that command. It needs no hardware.
 
 | # | Gap | Effort | Value | Blocked by |
 |---|---|---|---|---|
-| [W1](sfpu_edge_coverage_plan.md#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a registered pole — the whole of cat G | S | High | — |
 | [W12](#w12--the-unary-family-has-no-cat-b-verdict-table) | 29 float ops have no cat-B verdict: not enrolled, no reason recorded | M | High | — |
 | [W14](#w14--integer-extremes-record-the-exclusions) | 13 int ops are not driven at the format extremes and nothing says why | S | Medium | — |
 | [W15](#w15--eighteen-float-ops-have-no-deliberate-edge-value-at-all) | 18 float ops are driven only by the random sweep | M | Medium | W12 settles most of it |
@@ -37,13 +36,9 @@ Every count in this document came from that command. It needs no hardware.
 | [W18](#w18--cat-fs-remaining-tranches) | 85 float ops are outside `EXTREMES_READY_OPS` | L | Low | — |
 | [W9](sfpu_edge_coverage_plan.md#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | M | Medium | needs a kernel-contract ruling |
 
-Suggested order: **W1 → W12 → W14** (each small or already understood), then
+Suggested order: **W12 → W14** (each small or already understood), then
 **W15 → W16 → W17**, then **W18** and **W9** last — W18 for diminishing returns, W9 because it
 cannot start until someone rules on what the trig kernels promise.
-
-W13 is closed and its section is gone. It drove nothing new; it stopped the ledger overstating
-the gap, so the counts below are now the real ones — cat B's backlog is 29 ops rather than the
-50 it read before, cat C's is 13 rather than 16, and cat F's 85 rather than 106.
 
 ---
 
@@ -56,7 +51,7 @@ C integer_extremes       covered   8  n/a 108  unrecorded  13
 D knees                  covered  45  n/a  84  unrecorded   0
 E operand_parameters     covered   5  n/a 124  unrecorded   0
 F magnitude_extremes     covered  23  n/a  21  unrecorded  85
-G signed_zero_at_a_pole  covered   0  n/a 115  unrecorded  14
+G signed_zero_at_a_pole  covered  14  n/a 115  unrecorded   0
 ```
 
 `unrecorded` is a distinct state from `n/a` on purpose: it means nothing records whether the
@@ -277,9 +272,9 @@ the lattice is the only verdict. So this is about Bfp8_b alone.
 ### Problem
 
 `EXTREMES_READY_OPS` holds 14 ops and the saturation sweep covers nine more, so 23 of 129 are
-covered for cat F. The rest are unrecorded — 21 of them integer-only and therefore W13's
-problem, leaving ~85 float ops that have never been driven at their format's ceiling, its
-neighbour, its smallest normal or a subnormal.
+covered for cat F. The other 21 integer-only ops read "not applicable" — no subnormal band, no
+float ceiling — which leaves 85 float ops that have never been driven at their format's
+ceiling, its neighbour, its smallest normal or a subnormal.
 
 This is last on the list on purpose. Cat F is opt-in per op precisely because driving an
 unenrolled op at an extreme produces a wall of failures with one root cause, and the first
@@ -305,6 +300,6 @@ its own measurement, and the yield falls off: the first tranche found one real f
 
 Unchanged from the plan's own section, and repeated here only as a pointer:
 `INT32_MIN` through any int32 kernel, the gamma family at their poles, a zero's sign in the
-*result* (which bounds what W1 can achieve — it fixes the input side only), and a generated
-NaN's sign on Wormhole. See
+*result* — the signed-zero work drives a `-0.0` *into* a pole and cannot check the sign of a
+zero that comes back out — and a generated NaN's sign on Wormhole. See
 [`sfpu_edge_coverage_plan.md`](sfpu_edge_coverage_plan.md#what-stays-uncovered-and-why).

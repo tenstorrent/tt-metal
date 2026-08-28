@@ -1685,6 +1685,20 @@ def boundary_probes(
     if singularities:
         for point, side in singularities:
             probes.append(point)
+            if point == 0.0:
+                # A zero pole is two probes, not one: 1/+0 is +inf and 1/-0 is -inf, and the
+                # same split runs through div, fmod, remainder, xlogy, atan2, addcdiv and
+                # snake_beta. _dedup_representable() keys zeros by sign rather than by value,
+                # so both survive it.
+                #
+                # copysign rather than a -0.0 literal because the registered point is only
+                # *conventionally* +0.0 -- deriving the opposite sign keeps this correct if an
+                # entry is ever written as -0.0.
+                #
+                # Emitted unconditionally here. edge_values() drops it again on the pipelines
+                # that flatten a -0.0 to +0.0, which is a delivery question this function has
+                # no dest_acc to answer.
+                probes.append(math.copysign(0.0, -math.copysign(1.0, point)))
             if include_undefined or side in (
                 SingularitySide.BOTH,
                 SingularitySide.BELOW,
@@ -3033,27 +3047,11 @@ def edge_values(
     # Cat D, per operand. For A this is _OP_EDGE_POINTS, the op's own knees; a binary op's
     # B-side knees are domain boundaries and come from cat A instead. A *ternary* op's third
     # operand can have knees of its own (lerp's weight), so every operand is asked.
-    edge_points = list(op_edge_points(op, operand))
-    if not range_fmt.is_integer() and not negative_zero_delivered(
-        input_format, dest_acc
-    ):
-        # The same gate the cat-B injection below uses, applied to cat D's zero knees: the
-        # comparison-to-zero ops list -0.0 as a knee, and on the datacopy path it arrives as
-        # +0.0, which is what six standing Signbit xfails were recording.
-        edge_points = [v for v in edge_points if not _is_negative_zero(v)]
-    vals += edge_points
+    vals += list(op_edge_points(op, operand))
     if specials:
         # Specials are an exponent-range property, so they key off range_fmt: it is what
         # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.
-        injected = list(format_specials(range_fmt))
-        if not range_fmt.is_integer() and not negative_zero_delivered(
-            input_format, dest_acc
-        ):
-            # Drop -0.0 where the datacopy path would hand the kernel +0.0 instead. The
-            # probe keys off input_format, not range_fmt: delivery is a property of how the
-            # datum reaches the LREG, not of the magnitudes the pipeline can represent.
-            injected = [v for v in injected if not _is_negative_zero(v)]
-        vals += injected
+        vals += list(format_specials(range_fmt))
     if extremes:
         # Cat F off range_fmt for the same reason cat B is: the ceiling and the subnormal band
         # are properties of the narrowest exponent range in the pipeline, and format_extremes()
@@ -3061,6 +3059,20 @@ def edge_values(
         # then dropped. The caller has already asked extremes_safe(), which rejects the integer
         # and block-float legs format_extremes() would raise on.
         vals += _deliverable_extremes(range_fmt, input_format, dest_acc)
+
+    if not range_fmt.is_integer() and not negative_zero_delivered(
+        input_format, dest_acc
+    ):
+        # One pass over every source, not one per source. -0.0 now arrives from three of them
+        # -- a registered zero pole (cat A), the comparison-to-zero ops' knees (cat D) and
+        # FLOAT_SPECIALS (cat B) -- and a filter applied per source is a filter a fourth source
+        # can be added without. On the datacopy path the LREG holds +0.0, so sending the probe
+        # there blames the kernel for a datum it never received; six standing Signbit xfails
+        # were recording exactly that before the gate existed.
+        #
+        # The gate keys off input_format, not range_fmt: delivery is a property of how the datum
+        # reaches the LREG, not of the magnitudes the pipeline can represent.
+        vals = [v for v in vals if not _is_negative_zero(v)]
     return _dedup_representable(clip_to_format(vals, range_fmt), range_fmt)
 
 
@@ -3346,17 +3358,22 @@ def _has_knee(op: MathOperation) -> bool:
     )
 
 
-def _has_zero_pole(op: MathOperation) -> bool:
-    """Does *op* have a singularity registered at exactly zero, on any operand?
+def _emits_negative_zero_at_a_pole(op: MathOperation) -> bool:
+    """Does boundary_probes() actually emit a -0.0 for *op*, on any operand?
 
-    Cat G is "a -0.0 delivered to a pole", so an op with no zero pole has nowhere to deliver
-    one and the class does not apply to it. reciprocal, div, fmod, remainder, xlogy, atan2,
-    addcdiv and snake_beta are the ones that do.
+    Cat G is "a -0.0 delivered to a registered pole", so an op with no zero pole has nowhere to
+    deliver one and the class does not apply to it -- reciprocal, div, fmod, remainder, xlogy,
+    atan2, addcdiv, snake_beta and the compat variants are the ones that do.
+
+    Asked of the probe builder rather than of _OP_SINGULARITIES directly, which is the ledger's
+    standing rule: a cell reads COVERED only if the machinery that builds stimuli emits the
+    value. Reading the table instead would report coverage from the moment a pole was
+    *registered*, which was true for years before anything drove the second zero at it.
     """
     return any(
-        point == 0.0
-        for entries in _OP_SINGULARITIES.get(op, {}).values()
-        for point, _side in entries
+        _is_negative_zero(value)
+        for operand in Operand
+        for value in boundary_probes(op, operand, DataFormat.Float32)
     )
 
 
@@ -3416,8 +3433,8 @@ def coverage_ledger(
             cells[EdgeClass.F] = UNRECORDED
 
         cells[EdgeClass.G] = (
-            UNRECORDED
-            if _has_zero_pole(op)
+            COVERED
+            if _emits_negative_zero_at_a_pole(op)
             else "no singularity at zero, so there is no pole to deliver a -0.0 to"
         )
 

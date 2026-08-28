@@ -32,6 +32,8 @@ from helpers.llk_params import (
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
+    _is_negative_zero,
+    boundary_probes,
     edge_pair_values,
     edge_values,
     extremes_safe,
@@ -716,6 +718,12 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
             assert op_edge_points(op) or any(
                 op_edge_points(op, operand) for operand in Operand
             ), f"{op.name} has no registered knee"
+        if cells[EdgeClass.G] == COVERED:
+            assert any(
+                _is_negative_zero(v)
+                for operand in Operand
+                for v in boundary_probes(op, operand, DataFormat.Float32)
+            ), f"{op.name} is marked covered for cat G but emits no -0.0 probe"
         if cells[EdgeClass.F] == COVERED:
             assert (
                 op in EXTREMES_READY_OPS or op in suite.saturation
@@ -736,7 +744,7 @@ _COVERAGE_FLOORS = {
     "D": 45,
     "E": 5,
     "F": 23,
-    "G": 0,
+    "G": 14,
 }
 
 
@@ -757,6 +765,67 @@ def test_coverage_does_not_regress():
         "coverage went backwards (class: got, floor): "
         f"{shortfalls}. Either an op lost its enrolment or a table entry was dropped."
     )
+
+
+@pytest.mark.parametrize(
+    "op,operand",
+    [
+        (MathOperation.SfpuElwdiv, Operand.B),
+        (MathOperation.SfpuAtan2, Operand.B),
+        (MathOperation.Reciprocal, Operand.A),
+        (MathOperation.SfpuAddcdiv, Operand.C),
+        (MathOperation.SfpuSnakeBeta, Operand.C),
+        (MathOperation.SfpuBinaryFmod, Operand.B),
+    ],
+)
+def test_zero_poles_are_probed_with_both_signs(op, operand):
+    """A zero pole is two probes, not one: 1/+0 and 1/-0 differ in the result's sign.
+
+    The whole of cat G. Before this, boundary_probes() emitted only the +0.0 the table records,
+    and the other zero arrived only through FLOAT_SPECIALS -- which is gated on
+    *_SPECIALS_READY_OPS, and every op with a zero pole was outside it. So `div(x, -0.0)`, which
+    must be the opposite sign from `div(x, +0.0)`, was driven nowhere in the suite.
+    """
+    values = edge_values(
+        op,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        operand=operand,
+        dest_acc=DestAccumulation.Yes,
+    )
+    signs = {math.copysign(1.0, v) for v in values if v == 0.0}
+    assert signs == {1.0, -1.0}, f"{op.name} operand {operand.name} probes {values}"
+
+
+def test_negative_zero_pole_probe_is_dropped_where_it_cannot_be_delivered():
+    """Not sent on the datacopy path -- the LREG holds +0.0 there, so the probe is vacuous.
+
+    The same gate cat B and cat D go through, and the reason Signbit's six former xfails were
+    retired rather than kept: an xfail on a pipeline that flattens the datum blames the kernel
+    for something it never received, and no kernel change could ever clear it.
+    """
+    values = edge_values(
+        MathOperation.SfpuElwdiv,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+        operand=Operand.B,
+        dest_acc=DestAccumulation.Yes,
+    )
+    assert not any(_is_negative_zero(v) for v in values), values
+
+
+def test_signed_zero_probe_survives_the_dedup():
+    """_dedup_representable keys zeros by sign, so both survive a list that holds them.
+
+    Load-bearing and easy to break: the two zeros are numerically equal and zero ULPs apart, so
+    any dedup written on `==` or on a distance threshold would silently drop one of them and
+    take the whole of cat G with it.
+    """
+    from helpers.sfpu_domains import _dedup_representable
+
+    kept = _dedup_representable([0.0, -0.0, 1.0], DataFormat.Float32)
+    signs = {math.copysign(1.0, v) for v in kept if v == 0.0}
+    assert signs == {1.0, -1.0}, kept
 
 
 def test_the_suites_partition_their_ops_by_format():
@@ -1915,10 +1984,6 @@ def test_zero_pole_probes_are_not_loosened(op):
         op, DataFormat.Float32, DataFormat.Float32, dest_acc=DestAccumulation.No
     )
     assert min(abs(v) for v in probes if v != 0.0) == 2 * 2**-23
-
-
-def _is_negative_zero(value: float) -> bool:
-    return value == 0.0 and math.copysign(1.0, value) < 0.0
 
 
 def test_pow_edge_pairs_include_negative_zero_exponent():

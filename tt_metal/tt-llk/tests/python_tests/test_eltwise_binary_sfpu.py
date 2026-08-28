@@ -39,6 +39,7 @@ from helpers.sfpu_domains import (
     format_extremes,
     generated_nan_sign_is_asserted,
     integer_specials,
+    negative_zero_delivered,
     op_edge_points,
     ops_with_singularity,
     specials_safe,
@@ -1837,31 +1838,46 @@ assert _BINARY_EDGE_OPS, (
 # XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by predicate so
 # a combination drifting in or out shows up here. Keyed by (op, edge class): a class XPASSing
 # across the board loses its entry, one XPASSing on Blackhole alone becomes arch-gated.
+# Keyed by (op, edge class), not by op. The two used to be separable because every divergence
+# an op had belonged to one class and one set of cells; the signed-zero *pole* probe broke that.
+# fmod's lost zero sign is a bfloat16-path story and its `fmod(0, -0.0)` is an unpack-to-dest
+# one, so a single per-op cell list would have to be the union and would then xfail each class
+# on cells where it passes -- reporting XPASS forever, which is exactly the drift convention 4's
+# per-cell enumeration exists to catch.
+_ZERO_SIGN_CELLS = (
+    (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+    (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
+    (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
+    (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
+)
+
+
+def _signed_zero_pole_cells():
+    """The cells where a -0.0 driven *into* a registered pole actually reaches the LREG.
+
+    Derived from negative_zero_delivered() rather than listed, so a revision to the delivery
+    measurement moves these entries with it instead of leaving them behind. Distinct from
+    _ZERO_SIGN_CELLS above, which is about the sign of a zero *result* on the SFPMAD path.
+    """
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        if negative_zero_delivered(fmt.input_format, dest_acc)
+    )
+
+
 _BINARY_EDGE_COMBINATIONS = {
-    MathOperation.SfpuElwdiv: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuXlogy: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryFmod: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
-    MathOperation.SfpuBinaryRemainder: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-    ),
+    (MathOperation.SfpuElwdiv, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    (MathOperation.SfpuXlogy, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    (MathOperation.SfpuBinaryFmod, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    (MathOperation.SfpuBinaryRemainder, _EDGE_CLASS_NEGATIVE_ZERO): _ZERO_SIGN_CELLS,
+    # What driving a -0.0 *into* the pole found, measured on a Blackhole p150. Two ops of the
+    # six with a zero pole; div and atan2 agree, which is the result worth having -- the whole
+    # point of the probe is that div(x, -0.0) must be the opposite sign from div(x, +0.0), and
+    # it is.
+    (MathOperation.SfpuBinaryFmod, _EDGE_CLASS_BOTH_ZERO): _signed_zero_pole_cells(),
+    (MathOperation.SfpuXlogy, _EDGE_CLASS_ORDINARY): _signed_zero_pole_cells(),
 }
 
 _ZERO_SIGN_ISA_NOTE = (
@@ -1880,10 +1896,18 @@ _BINARY_EDGE_REASON = {
     MathOperation.SfpuXlogy: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"xlogy(0, tiny) returns +0.0, not -0.0 "
         f"({_ZERO_SIGN_ISA_NOTE}).",
+        _EDGE_CLASS_ORDINARY: "xlogy(x, -0.0) returns NaN; IEEE gives x * log(-0) = -inf. "
+        "The log is a composition the ISA specifies only inside a stated range, so what it "
+        "does at a signed zero is an LLK decision -- the same section 5.6 Q1 question that "
+        "keeps this op out of cat B. Only on the cells that deliver a real -0.0.",
     },
     MathOperation.SfpuBinaryFmod: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"fmod loses the sign of a zero result "
         f"({_ZERO_SIGN_ISA_NOTE}).",
+        _EDGE_CLASS_BOTH_ZERO: "fmod(0, -0.0) returns +0.0; IEEE gives NaN, as it does for "
+        "fmod(0, +0.0), which this kernel gets right. So the divergence is the *signed* zero "
+        "divisor specifically, reached through the quotient's reciprocal composition. Only on "
+        "the cells that deliver a real -0.0.",
     },
     MathOperation.SfpuBinaryRemainder: {
         _EDGE_CLASS_NEGATIVE_ZERO: f"remainder loses the sign of a zero result "
@@ -1906,13 +1930,19 @@ _BINARY_EDGE_REASON = {
 
 # No op may claim a divergence without a combination list to apply it to, and none may
 # list combinations with nothing to apply them to.
-assert set(_BINARY_EDGE_REASON) == set(_BINARY_EDGE_COMBINATIONS), (
-    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which ops diverge: "
-    f"{set(_BINARY_EDGE_REASON) ^ set(_BINARY_EDGE_COMBINATIONS)}"
+_REASON_KEYS = {
+    (op, cls) for op, classes in _BINARY_EDGE_REASON.items() for cls in classes
+}
+assert _REASON_KEYS == set(_BINARY_EDGE_COMBINATIONS), (
+    "_BINARY_EDGE_REASON and _BINARY_EDGE_COMBINATIONS disagree on which (op, class) pairs "
+    f"diverge: {sorted((o.name, c) for o, c in _REASON_KEYS ^ set(_BINARY_EDGE_COMBINATIONS))}"
 )
 assert all(
     cls in _EDGE_CLASSES for classes in _BINARY_EDGE_REASON.values() for cls in classes
 ), "_BINARY_EDGE_REASON names an edge class that _classify_edge_pair never returns"
+assert all(
+    cells for cells in _BINARY_EDGE_COMBINATIONS.values()
+), "an (op, class) claiming a divergence with no cell to apply it to is a dead xfail"
 
 # Edge classes whose divergence is a *Wormhole* limitation, so on Blackhole the case is
 # asserted rather than tolerated.
@@ -1958,7 +1988,7 @@ def test_eltwise_binary_sfpu_edges(request, formats, dest_acc, mathop, edge_clas
         and not arch_fixed
         and (
             (formats.input_format, formats.output_format, dest_acc)
-            in _BINARY_EDGE_COMBINATIONS[mathop]
+            in _BINARY_EDGE_COMBINATIONS[(mathop, edge_class)]
         )
     ):
         request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))

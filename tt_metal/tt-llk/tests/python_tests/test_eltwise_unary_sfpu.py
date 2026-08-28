@@ -598,6 +598,31 @@ _EDGE_KNOWN_DIVERGENCES.update(
     }
 )
 
+
+# The cat-A twin of _cat_b_divergences, for the -0.0 that now arrives at a *registered zero
+# pole* rather than through FLOAT_SPECIALS. The distinction matters: a cat-B probe is gated on
+# specials_safe() as well, and these ops are not in SPECIALS_READY_OPS at all -- their -0.0
+# comes from boundary_probes() and is gated on delivery alone.
+def _signed_zero_pole_divergences():
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        if negative_zero_delivered(fmt.input_format, dest_acc)
+    )
+
+
+# RsqrtCompat is the one op the signed-zero pole probe found. Measured on a Blackhole p150 at
+# Float32->Float32, dest_acc=Yes: rsqrt_compat(-0.0) returns +inf where IEEE and the golden give
+# -inf. Recorded on its own rather than folded in with Rsqrt, because the two do *not* agree:
+# Rsqrt(-0.0) returns NaN and this returns a wrongly-signed infinity, so one entry covering both
+# would be a claim about the hardware that is false of one of them.
+#
+# The other five ops with a zero pole that the probe newly reaches all agree with their goldens:
+# ReciprocalCompat(-0.0) = -inf, Log(-0.0) = -inf, LogWithBase, Rdiv and SqrtCustom likewise.
+# That is the headline result of driving it -- the divergence is the exception.
+_EDGE_KNOWN_DIVERGENCES[MathOperation.RsqrtCompat] = _signed_zero_pole_divergences()
+
 # The three whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
 # specials surviving the NaN-sign gate; see where the marker is applied.
 _CAT_B_DERIVED_DIVERGENCES = frozenset(
@@ -623,6 +648,11 @@ _EDGE_DIVERGENCE_REASON = {
     "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
     MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
     "and same unpack-to-dest scoping as Sqrt.",
+    MathOperation.RsqrtCompat: "rsqrt_compat(-0.0) returns +inf; IEEE and the golden give "
+    "-inf. A wrongly-signed infinity, not the NaN Rsqrt returns for the same input, so the "
+    "two are recorded separately. Reached through the cat-A zero pole rather than cat B -- "
+    "this op is not in SPECIALS_READY_OPS -- so it is scoped by delivery alone, to the "
+    "unpack-to-dest combinations where a real -0.0 arrives.",
 }
 
 
