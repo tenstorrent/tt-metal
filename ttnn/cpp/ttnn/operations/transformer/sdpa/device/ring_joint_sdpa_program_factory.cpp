@@ -714,9 +714,14 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
         enable_kv_chains && k_uses_batch_chain ? (kRingJointChainConfigArgCount + kReaderBatchChainExtraArgCount) : 0;
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
-    layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
+    // reference_kv address is always pushed (nullptr buffer when disabled), right after attention_sink,
+    // so every reader RT arg after it shifts by one.
+    const uint32_t reference_buffer_args = 1;
+    layout.reader_kv_cache_batch_idx =
+        kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + reference_buffer_args + 2;
     layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+                               reference_buffer_args + kReaderQWorkArgCount + head_chain_args + batch_chain_args +
+                               gqa_chain_args;
     layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
     layout.writer_logical_nt = kWriterBaseArgCount;
     layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
