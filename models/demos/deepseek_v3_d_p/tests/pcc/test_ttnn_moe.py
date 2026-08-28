@@ -116,7 +116,6 @@ def run_model(
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     shared_activation=ACTIVATION_SILU,
-    routed_expert_hybrid_token_threshold=None,
     measure=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
@@ -404,7 +403,12 @@ def run_model(
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         routed_expert_activation=routed_activation,
-        routed_expert_hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+        # Straight off the variant's own dimension-constants class, which is where TtPrefillBlock
+        # takes it too, so every variant this file can run is graded on the dispatch it ships --
+        # 768 for K3, the fused-only sentinel for K2.6/2.7, absent (single-op) for DSv3.
+        routed_expert_hybrid_token_threshold=getattr(
+            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -1082,6 +1086,4 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
-        # What TtPrefillBlock reads from the model config, so this graded path is the shipped one.
-        routed_expert_hybrid_token_threshold=KimiK3Config.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD,
     )
