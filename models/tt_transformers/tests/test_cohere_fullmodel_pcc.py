@@ -329,6 +329,29 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
     # 2026-08-28: tensor_spec.cpp:161 !shard_grid_fit_error.has_value()). Rows 0:32
     # cover all real tokens for these prompts (seq_len <= 32 by construction).
     lm_head_input_mem_cfg = model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
+    # seq_len > 32: check BOTH 32-row windows — the head window (rows 0:32) AND the
+    # tail window (rows seq_len-32:seq_len, which carries the serving-relevant LAST
+    # prompt position whose logits produce the first generated token). Quality
+    # root-cause follow-up 2026-08-28: served battery 2/3 (math-422 wrong on a
+    # near-tie first token — CPU top-5 gaps ~0.12 logits); discriminate a systematic
+    # last-position residual from bf16 numerics.
+    starts = [0] if seq_len <= 32 else [0, seq_len - 32]
+    for start in starts:
+        tt_head_in = ttnn.slice(tt_normed, (0, 0, start, 0), (1, 1, start + 32, tt_normed.shape[-1]))
+        if lm_head_input_mem_cfg.is_sharded():
+            tt_head_in = ttnn.interleaved_to_sharded(tt_head_in, lm_head_input_mem_cfg)
+        tt_logits = tt_head(tt_head_in)
+        logits_w = ttnn.to_torch(
+            tt_logits,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        logits_w = logits_w.reshape(1, -1, logits_w.shape[-1])[:, :32, : model_args.vocab_size]
+        rows = logits_w.shape[1]
+        passing_w, pcc_msg_w, pcc_w = _pcc(ref_logits[:, start : start + rows], logits_w.float())
+        logger.info(
+            f"[cohere-head] logits window rows {start}:{start+rows} pcc={pcc_w:.6f} "
+            f"gate={'PASS' if passing_w else 'FAIL'} ({pcc_msg_w})"
+        )
     tt_head_in = ttnn.slice(tt_normed, (0, 0, 0, 0), (1, 1, 32, tt_normed.shape[-1]))
     if lm_head_input_mem_cfg.is_sharded():
         tt_head_in = ttnn.interleaved_to_sharded(tt_head_in, lm_head_input_mem_cfg)
