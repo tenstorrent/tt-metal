@@ -138,48 +138,59 @@ inline void _llk_math_sub_bcast_cols_compensated_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+inline void _compensated_move_broadcast_col_to_dest_(const std::uint32_t src_row, const std::uint32_t dst_row)
+{
+    TTI_MOVB2D(0, src_row + 0, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 0);
+    TTI_MOVB2D(0, src_row + 4, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 4);
+    TTI_MOVB2D(0, src_row + 8, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 8);
+    TTI_MOVB2D(0, src_row + 12, ADDR_MOD_3, p_movb2d::MOV_4_ROWS_D0_BRCST, dst_row + 12);
+}
+
 inline void _llk_math_sub_bcast_cols_compensated_(
     const std::uint32_t ct_dim, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     LLK_ASSERT(tensor_shape.total_num_faces() == 4, "compensated column broadcast requires 32x32 tiles");
+
+    // On Wormhole, MOVB2D uses SrcA's format to select a 32-bit DEST write and
+    // SrcB's format to decide whether to retain the low three TF32 mantissa
+    // bits. Override both while this operation consumes the split statistic;
+    // BF16 input remains a valid TF32 bit pattern with those low bits zero.
+    math::_configure_mov_ops_zero_flag_state_();
+    constexpr std::uint32_t src_fmt_override_mask =
+        ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
+    constexpr std::uint32_t tf32_src_fmt_overrides =
+        (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcA_override_SHAMT) |
+        (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcB_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcB_override_SHAMT);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(tf32_src_fmt_overrides);
 
     for (std::uint32_t tile = 0; tile < ct_dim; ++tile)
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + tile);
         math::clear_dst_reg_addr();
 
-        // First form x - anchor. The anchor occupies faces 0 and 2 of the
-        // split statistic tile and is exactly representable at the input's
-        // precision.
+        // Seed DEST with anchor - mean. The split statistic tile stores the
+        // upper and lower row halves in faces 1 and 3 respectively.
+        _compensated_move_broadcast_col_to_dest_(16, 0);
+        _compensated_move_broadcast_col_to_dest_(16, 16);
+        _compensated_move_broadcast_col_to_dest_(48, 32);
+        _compensated_move_broadcast_col_to_dest_(48, 48);
+
+        // Accumulate x - anchor into the correction already in DEST.
         for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
         {
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
-        }
-
-        // Wormhole's UnpackToSrc path retains the correction as TF32, but a
-        // MOVB2D seed only transfers its BF16 high half. Reuse each completed
-        // DEST face as SrcA and add the correction through the FPU so the
-        // retained TF32 mantissa bits participate in the result.
-        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD);
-        TTI_INCRWC(0, 0, 8, 0);
-        TTI_INCRWC(0, 0, 8, 0);
-        for (std::uint32_t face_row = 0; face_row < tensor_shape.num_faces_r_dim; ++face_row)
-        {
-            move_d2a_fixed_face(ADDR_MOD_3);
-            TTI_ELWADD(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-            TTI_ELWADD(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
-
-            move_d2a_fixed_face(ADDR_MOD_3);
-            TTI_ELWADD(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
-            TTI_ELWADD(p_setrwc::CLR_NONE, 0, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_1, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_0, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
         }
 
         // Publish SrcA for the next input tile while keeping the split mean resident.
         TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
     }
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+
+    // Restore the state_configure baseline for subsequent math operations.
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
+    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
     math::clear_dst_reg_addr();
 }
