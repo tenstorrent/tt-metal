@@ -132,8 +132,8 @@ def test_cohere_layernorm_pcc(mesh_device, reset_seeds, ensure_gc):
     tt_out = tt_norm(tt_input, mode="prefill")
     tt_output_torch = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    ).reshape(1, -1, model_args.dim)  # reassembled width shards — [1, S_pad, 8192]
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape),
+    )[:1, :1].reshape(1, -1, model_args.dim)  # first replica — forward() all-gathers the normed output to full width (DistributedNorm contract)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
     logger.info(comp_allclose(reference_output, tt_output_torch))

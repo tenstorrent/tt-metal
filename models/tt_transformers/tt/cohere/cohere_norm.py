@@ -117,7 +117,9 @@ class TtCohereLayerNorm(LightweightModule):
 
         pre_all_gather computes per-row partial stats on each device's width shard;
         the stats are all-gathered along cluster axis 1; post_all_gather combines
-        them into the true row mean/variance and applies the per-device gamma shard.
+        them into the true row mean/variance and applies the per-device gamma shard;
+        the result is then all-gathered back to full width (replicated) — the same
+        contract DistributedNorm gives the stock blocks (enable_all_gather=True).
         """
         # Proven pattern from the image's own tests
         # (tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py):
@@ -143,6 +145,19 @@ class TtCohereLayerNorm(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
         tt_stats_gathered.deallocate(True)
+
+        # Output all-gather: mirrors DistributedNorm (distributed_norm.py forward,
+        # enable_all_gather=True) — the normed tensor is REPLICATED back to full
+        # width so the downstream column-parallel attention / row-parallel MLP
+        # matmuls see the full 8192-wide input per device (observed on-box
+        # 2026-08-28: without this gather the qkv matmul fatals width=2048 vs
+        # height=8192).
+        x = ttnn.all_gather(
+            x,
+            dim=3,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         return x
 
     def forward(
