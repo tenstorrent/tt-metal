@@ -24,16 +24,8 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-
-constexpr uint32_t largest_divisor_at_most(uint32_t value, uint32_t limit) {
-    for (uint32_t divisor = limit; divisor > 1; --divisor) {
-        if (value % divisor == 0) {
-            return divisor;
-        }
-    }
-    return 1;
-}
 
 constexpr uint32_t max_dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -44,9 +36,8 @@ enum class ElementwiseBinaryOp { Add, Subtract, Multiply };
 // subblocks that exactly divide the output and fit in destination registers.
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
 inline void matmul_blocks(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& o) {
-    constexpr uint32_t subblock_columns = largest_divisor_at_most(Nt, max_dst_tiles);
-    constexpr uint32_t subblock_rows = largest_divisor_at_most(Mt, max_dst_tiles / subblock_columns);
-    static_assert(subblock_rows * subblock_columns <= max_dst_tiles);
+    constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
+    constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t o_id = o.get_id();
