@@ -57,8 +57,8 @@
 # =============================================================================
 
 import os
-import re
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -79,6 +79,7 @@ from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from .common_av import is_host
 
 _LOCAL_MIRROR = "/data/cglagovich/MiniMax-H3-diffusers"
 _HF_REPO = "MiniMaxAI/MiniMax-H3"
@@ -118,7 +119,7 @@ FUSED_MAX_MEDIAN_ROW_ERROR = 0.15  # measured median 0.0901 over all rows
 MASSIVE_ROW_MULTIPLE = 10.0
 
 
-def _test_image(size):
+def _test_image(size, seed: int):
     """A real keyframe on the production canvas: frame 0 of the calibrated t2va generation.
 
     **Content is part of the gate, not a detail.** The measured spread on the released weights is 3.4
@@ -147,7 +148,7 @@ def _test_image(size):
     # image, which separates "the port regressed" from "the metric is content-sensitive" when a number
     # moves after a content change. Default is the production content.
     if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
-        generator = torch.Generator().manual_seed(0)
+        generator = torch.Generator().manual_seed(seed)
         pixels = (torch.rand(size[1], size[0], 3, generator=generator) * 255).to(torch.uint8)
         return Image.fromarray(pixels.numpy())
 
@@ -172,12 +173,10 @@ def _test_image(size):
 _TWO_REFS_TARGETS = ((2048, 2048), (2048, 2720))
 
 
-def _reference_images() -> list[Image.Image]:
+def _reference_images(seed: int) -> list[Image.Image]:
     """Two reference images at the ref2va geometry, producing the `two_refs` grids. Same t2va-frame
     content as `_test_image` (its content-sensitivity note applies), resized to each reference
     resolution via the pipeline's own `prepare_reference_image`."""
-    from pathlib import Path
-
     import imageio.v3 as iio
 
     from ....pipelines.minimax_h3.packing_ref2va import prepare_reference_image
@@ -186,7 +185,7 @@ def _reference_images() -> list[Image.Image]:
     # noise so a timing pass needs no artifact. Degenerate for the PCC metric (see `_test_image`), so it
     # is for timing / "does it run", not fidelity -- the shapes and the pipeline are still exercised.
     if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise":
-        generator = torch.Generator().manual_seed(0)
+        generator = torch.Generator().manual_seed(seed)
         return [
             Image.fromarray((torch.rand(height, width, 3, generator=generator) * 255).to(torch.uint8).numpy())
             for (height, width) in _TWO_REFS_TARGETS
@@ -197,6 +196,14 @@ def _reference_images() -> list[Image.Image]:
         pytest.skip(f"no calibrated t2va artifact at {source}; run test_pipeline_minimax_h3.py first")
     frame = Image.fromarray(np.asarray(iio.imread(source, index=0, plugin="pyav"))).convert("RGB")
     return [prepare_reference_image(frame, height, width) for (height, width) in _TWO_REFS_TARGETS]
+
+
+def _two_refs_golden_path(seed: int) -> Path:
+    root = Path(
+        os.environ.get("TT_DIT_CACHE_DIR") or os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts"
+    )
+    content = "noise" if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise" else "artifact"
+    return root / "two_refs_golden" / f"hidden_states_{TAP}_seed{seed}_{content}.pt"
 
 
 def _conditioner_dir() -> str:
@@ -262,14 +269,17 @@ def _tower(reference_visual, submesh, parallel_config=None, ccl_manager=None):
 
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
-    [pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1")],
+    [
+        pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
+        pytest.param((4, 32), (4, 32), 0, 2, id="4x32"),
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
 )
 @pytest.mark.parametrize("size", [KEYFRAME_IMAGE, SQUARE_CANVAS], ids=["keyframe_768x1344", "square_768"])
-def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
+def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size, seed=0):
     """The released vision tower: merged tokens and all three deepstack features.
 
     `head_dim` is 72 here, the misalignment the padding exists for, and the 48x48 position table is
@@ -279,7 +289,7 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     processor = transformers.AutoImageProcessor.from_pretrained(path)
 
-    vision = processor(images=[_test_image(size)], return_tensors="pt")
+    vision = processor(images=[_test_image(size, seed)], return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
     vc = reference.visual.config
     assert vc.hidden_size // vc.num_heads == 72, "the padding path is not being exercised"
@@ -323,7 +333,7 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     ),
 )
 @pytest.mark.parametrize("size", [KEYFRAME_IMAGE], ids=["keyframe_768x1344"])
-def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size):
+def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size, seed=0):
     """The `fl2va` conditioner with an image, on released weights, at the production canvas and tap.
 
     Three properties this gate depends on, all named in STATE.md amendments 90 and 95:
@@ -359,7 +369,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(path)
     processor = transformers.AutoImageProcessor.from_pretrained(path)
-    vision = processor(images=[_test_image(size)], return_tensors="pt")
+    vision = processor(images=[_test_image(size, seed)], return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
     merge = reference.visual.config.spatial_merge_size**2
     num_image_tokens = int(grid[0].prod()) // merge
@@ -417,10 +427,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
 
     # The production builder, not an inline construction: it is what the pipeline calls, so this gates
     # the depth (TAP layers, not 64), the tap (`activation_layers=(TAP - 1,)`) and the explicit
-    # `head_dim` from config all at once. Built without weights and fed the reference's own state dict
-    # rather than re-reading 50 GB from disk, since the reference is already in RAM -- and truncated to
-    # the layers this stack has, because `load_torch_state_dict` is strict and layers TAP..63 are never
-    # evaluated.
+    # `head_dim` from config all at once. Weights go through `cache.load_model`.
     encoder, _ = build_minimax_h3_text_encoder(
         path,
         mesh_device=submesh,
@@ -428,15 +435,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
         is_fsdp=False,
         num_layers=TAP,
-        load_weights=False,
     )
-    layer_re = re.compile(r"^layers\.(\d+)\.")
-    truncated = {
-        key: value
-        for key, value in reference.language_model.state_dict().items()
-        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
-    }
-    encoder.load_torch_state_dict(truncated)
 
     # A vision run makes the three M-RoPE axes diverge, so the interleaved layout is load-bearing here.
     assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
@@ -576,7 +575,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     ],
 )
 def test_fused_conditioner_two_refs_real_weights(
-    conditioner, mesh_device, submesh_shape, tp_axis, num_links, check_pcc
+    conditioner, mesh_device, submesh_shape, tp_axis, num_links, check_pcc, seed=0
 ):
     """The `ref2va` conditioner with TWO reference images, on released weights, with the vision tower
     run under windowed SDPA -- tp8_sp4 on (4, 8), tp32_sp4 on (4, 32) -- feeding the causal decoder
@@ -607,7 +606,7 @@ def test_fused_conditioner_two_refs_real_weights(
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(path)
     processor = transformers.AutoImageProcessor.from_pretrained(path)
-    vision = processor(images=_reference_images(), return_tensors="pt")
+    vision = processor(images=_reference_images(seed), return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
     assert grid.tolist() == [[1, 128, 128], [1, 128, 170]], f"unexpected two_refs grid: {grid.tolist()}"
     merge = reference.visual.config.spatial_merge_size**2
@@ -631,29 +630,43 @@ def test_fused_conditioner_two_refs_real_weights(
     cfg = reference.language_model.config
     logger.info(f"[two_refs] presentation built: seq={seq_len}, image tokens={per_image_tokens}.")
 
-    # --- golden (check only): the tensor production reads, via the API it reads it with (fl2va sibling).
-    # In `perf` this whole forward is skipped -- it is the long pole (a fp32 CPU forward of the 32B
-    # reference), and perf gates on shape + finiteness, not PCC. ---
+    # --- golden (check only). Rank 0 writes it once; everyone else loads. `perf` skips it. ---
     golden = None
     if check_pcc:
-        logger.info(
-            f"[two_refs] computing the HF golden -- a slow fp32 CPU forward (vision tower over "
-            f"{int(grid.prod(dim=1).sum())} patches, then {TAP} decoder layers over {seq_len} tokens). "
-            "This is the long pole; not a hang."
-        )
-        with torch.no_grad():
-            outputs = reference(
-                input_ids=ids,
-                attention_mask=torch.ones_like(ids),
-                mm_token_type_ids=type_ids,
-                pixel_values=pixel_values,
-                image_grid_thw=grid,
-                use_cache=False,
-                output_hidden_states=True,
+        golden_path = _two_refs_golden_path(seed)
+        if golden_path.is_file():
+            logger.info(f"[two_refs] loading HF golden from {golden_path}")
+            golden = torch.load(golden_path, map_location="cpu", weights_only=True)
+        elif is_host():
+            logger.info(
+                f"[two_refs] computing the HF golden -- a slow fp32 CPU forward (vision tower over "
+                f"{int(grid.prod(dim=1).sum())} patches, then {TAP} decoder layers over {seq_len} tokens). "
+                "This is the long pole; not a hang."
             )
-        golden = outputs.hidden_states[TAP].float()
+            with torch.no_grad():
+                outputs = reference(
+                    input_ids=ids,
+                    attention_mask=torch.ones_like(ids),
+                    mm_token_type_ids=type_ids,
+                    pixel_values=pixel_values,
+                    image_grid_thw=grid,
+                    use_cache=False,
+                    output_hidden_states=True,
+                )
+            golden = outputs.hidden_states[TAP].float()
+            assert golden.shape == (1, seq_len, cfg.hidden_size)
+            golden_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = golden_path.with_suffix(".pt.tmp")
+            torch.save(golden, tmp)
+            tmp.replace(golden_path)
+            logger.info(f"[two_refs] HF golden done: hidden_states[{TAP}] {tuple(golden.shape)}, saved {golden_path}.")
+        if ttnn.using_distributed_env():
+            ttnn.distributed_context_barrier()
+        if golden is None:
+            assert golden_path.is_file(), f"host did not write golden at {golden_path}"
+            logger.info(f"[two_refs] loading HF golden from {golden_path}")
+            golden = torch.load(golden_path, map_location="cpu", weights_only=True)
         assert golden.shape == (1, seq_len, cfg.hidden_size)
-        logger.info(f"[two_refs] HF golden done: hidden_states[{TAP}] {tuple(golden.shape)}.")
     else:
         logger.info("[two_refs] perf mode: skipping the HF golden; timing the device pipeline only.")
 
@@ -684,15 +697,7 @@ def test_fused_conditioner_two_refs_real_weights(
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
         is_fsdp=False,
         num_layers=TAP,
-        load_weights=False,
     )
-    layer_re = re.compile(r"^layers\.(\d+)\.")
-    truncated = {
-        key: value
-        for key, value in reference.language_model.state_dict().items()
-        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
-    }
-    encoder.load_torch_state_dict(truncated)
 
     assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
     position_ids = mrope_position_ids(
