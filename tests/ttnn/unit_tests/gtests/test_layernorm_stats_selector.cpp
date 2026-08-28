@@ -79,6 +79,12 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
     auto bf16_gamma_only_below = bf16_gamma_only;
     bf16_gamma_only_below.padded_width = 3231;
 
+    auto bf16_beta_only = bf16_plain_at;
+    bf16_beta_only.has_beta = true;
+
+    auto bf16_beta_only_below = bf16_beta_only;
+    bf16_beta_only_below.padded_width = 3231;
+
     auto bfp8_affine = default_params();
     bfp8_affine.input_format = tt::DataFormat::Bfp8_b;
 
@@ -115,8 +121,10 @@ TEST(LayerNormStatsSelector, BlackholeCalibratedBoundaries) {
         {"bf16 parameter-free narrow", bf16_plain_narrow, true},
         {"bf16 parameter-free at crossover", bf16_plain_at, true},
         {"bf16 parameter-free large tensor", bf16_plain_large, true},
-        {"bf16 gamma-only below crossover", bf16_gamma_only_below, false},
-        {"bf16 gamma-only at parameter-free crossover", bf16_gamma_only, true},
+        {"bf16 gamma-only below single-affine crossover", bf16_gamma_only_below, false},
+        {"bf16 gamma-only at single-affine crossover", bf16_gamma_only, true},
+        {"bf16 beta-only below single-affine crossover", bf16_beta_only_below, false},
+        {"bf16 beta-only at single-affine crossover", bf16_beta_only, true},
         {"bfp8 affine", bfp8_affine, false},
         {"bfp8 residual affine", bfp8_residual, true},
         {"bfp8 residual affine below crossover", bfp8_residual_below, false},

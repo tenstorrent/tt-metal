@@ -321,7 +321,7 @@ def test_group_norm_DRAM_row_major_rejects_two_pass(device, input_layout, output
     if input_layout == ttnn.TILE_LAYOUT:
         tt_input = ttnn.tilize_with_zero_padding(tt_input, use_multicore=True)
 
-    with expect_error(RuntimeError, "not supported on the two-pass path"):
+    with expect_error(RuntimeError, "not supported on the SFPU two-pass path"):
         ttnn.group_norm(
             tt_input,
             num_groups=num_groups,

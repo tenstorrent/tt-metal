@@ -28,6 +28,9 @@ struct BlackholeStatsSelectorParams {
 // Parameter-free BF16 uses shifted two-pass statistics at every width to avoid
 // cancellation when subtracting a large row mean. It is faster through width
 // 128 and costs at most 3% in the measured 256-2880 range.
+// Gamma-only and beta-only BF16 use tile reductions below width 3232 and
+// shifted two-pass statistics at and above it. The paths are neutral at the
+// crossover, while two-pass is 16-20% faster in the measured width-4096 cases.
 // BFP8 remains on tile reductions except for the calibrated fused residual and
 // full-affine case.
 constexpr bool use_blackhole_sfpu_stats(const BlackholeStatsSelectorParams& params) {

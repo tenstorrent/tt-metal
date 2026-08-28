@@ -416,10 +416,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             !selected_cb_fits_in_l1) {
             // In the case that the required space is larger than what can be handled by the single pass
             large_tensor_needed = true;
-            Wt_next_block_up = with_weights_max_size;
+            Wt_next_block_up = std::min(Wt_next_block_up, with_weights_max_size);
         } else if (!selected_cb_fits_in_l1) {
             large_tensor_needed = true;
-            Wt_next_block_up = without_weights_max_size;
+            Wt_next_block_up = std::min(Wt_next_block_up, without_weights_max_size);
         }
     }
     // The compact Blackhole kernel can keep compensated centring in DEST and
@@ -431,7 +431,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     if (fp32_sfpu_finalizer && !compact_fp32_finalizer) {
         large_tensor_needed = true;
     }
-    if (large_tensor_needed) {
+    const auto configure_large_tensor_buffers = [&]() {
         in0_t = Wt_next_block_up;
         im0_t = Wt_next_block_up;  // buffer for saving xmm
         im3_t = Wt_next_block_up;  // buffer for xmm^2
@@ -442,21 +442,28 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             in0_t = 2 * block_size;
         }
         if (input_is_row_major) {
-            out0_t = Wt_next_block_up;  // keep in sync with capped value
+            // layernorm_large_tensor.cpp interleaves tilize / compute / untilize per block, so
+            // dfb_in and dfb_out only ever hold one block at a time. Move the double-buffering to
+            // dfb_in_rm / dfb_out_rm so the reader prefetches the next DRAM block while compute
+            // processes the current one, and the writer drains concurrently.
+            in0_t = block_size;
+            out0_t = block_size;
         }
-    }
+    };
 
-    if (input_is_row_major && large_tensor_needed) {
-        // layernorm_large_tensor.cpp interleaves tilize / compute / untilize per block, so
-        // dfb_in and dfb_out only ever hold one block at a time. Move the double-buffering to
-        // dfb_in_rm / dfb_out_rm so the reader prefetches the next DRAM block while compute
-        // processes the current one, and the writer drains concurrently.
-        //
-        // layernorm.cpp (large_tensor_needed=false) pre-fills ALL Wt tiles into dfb_in before
-        // starting the variance loop, and similarly accumulates all Wt tiles in dfb_out before
-        // UNTILIZE_OUT. Those paths must keep dfb_in = dfb_out = Wt_next_block_up.
-        in0_t = block_size;
-        out0_t = block_size;
+    if (large_tensor_needed) {
+        configure_large_tensor_buffers();
+        while (Wt_next_block_up > block_size && !make_cb_footprint(use_welford).fits(usable_cb_l1_bytes)) {
+            Wt_next_block_up -= block_size;
+            configure_large_tensor_buffers();
+        }
+        const auto streaming_cb_footprint = make_cb_footprint(use_welford);
+        TT_FATAL(
+            streaming_cb_footprint.fits(usable_cb_l1_bytes),
+            "LayerNorm streaming circular buffers require {} bytes, but only {} bytes of the allocator's L1 span "
+            "are available",
+            streaming_cb_footprint.total(),
+            usable_cb_l1_bytes);
     }
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
