@@ -192,6 +192,12 @@ skus:
     runs_on:
       - exabox-multihost-ci-sc4
 
+  # Like bh_sc4, but high-power pool (exabox.tenstorrent.com/power=14kw).
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
+  bh_sc4_high_power:
+    runs_on:
+      - exabox-multihost-ci-sc4-hp
+
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
     runs_on:
