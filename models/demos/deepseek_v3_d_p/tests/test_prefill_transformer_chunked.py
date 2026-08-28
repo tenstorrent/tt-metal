@@ -1199,6 +1199,7 @@ def run_chunked_transformer_updated(
     preload_isl=0,
     check_pcc=False,
     use_trace=False,
+    tp_shard_kv=False,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1380,6 +1381,7 @@ def run_chunked_transformer_updated(
         lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
+        tp_shard_kv=tp_shard_kv,
         # Strip the tail (LM head + final norm + sampling): the populated KV cache is this runner's
         # output, so the tail is dead work that would otherwise land inside the measured per-chunk
         # time. It is also what makes the forward DEVICE-ONLY and therefore capturable — the LM head
@@ -1405,6 +1407,7 @@ def run_chunked_transformer_updated(
         seq_len=SEQ_CACHE_NOPCC,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
+        tp_axis=tp_axis if tp_shard_kv else None,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
     )
@@ -1422,6 +1425,7 @@ def run_chunked_transformer_updated(
             seq_len=SEQ_CACHE_NOPCC,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
+            tp_axis=tp_axis if tp_shard_kv else None,
             num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
             num_users=1,
             dtype=ttnn.bfloat8_b,
@@ -1445,6 +1449,7 @@ def run_chunked_transformer_updated(
             sp_axis,
             cache_format.storage_dtype,
             cache_format.storage_layout,
+            tp_shard_kv=tp_shard_kv,
         )
         if tt_index_kv_cache is not None:
             _preload_indexer_k_prefix_from_trace(
@@ -1460,6 +1465,7 @@ def run_chunked_transformer_updated(
                 config.index_head_dim,
                 mesh_device,
                 sp_axis,
+                tp_shard_kv=tp_shard_kv,
             )
 
     # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
@@ -2065,6 +2071,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     ],
     indirect=["mesh_device", "device_params"],
 )
+# KV dedup on the perf path: same sp*tp cache striping the accuracy test asserts PCC for, measured here.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.skipif(
@@ -2083,6 +2091,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
     num_iters,
     num_links,
     preload_isl,
+    tp_shard_kv,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -2100,6 +2109,7 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
+        tp_shard_kv=tp_shard_kv,
     )
 
 
