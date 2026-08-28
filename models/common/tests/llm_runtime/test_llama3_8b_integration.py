@@ -15,6 +15,7 @@ import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.models import llama3_executor as llama3_family_executor
 from models.common.models.llama3_8b import executor as llama_executor
 from models.common.models.llama3_8b import generator as llama_generator
 from models.common.models.llama3_8b import model as llama_model
@@ -143,8 +144,8 @@ def test_executor_resolves_batched_prefill_policy(
             def release(self, *args, **kwargs):
                 return None
 
-        monkeypatch.setattr(llama_executor, "Sampling1D", _Sampling)
-        monkeypatch.setattr(llama_executor, "SamplingState1D", _SamplingState)
+        monkeypatch.setattr(llama3_family_executor, "Sampling1D", _Sampling)
+        monkeypatch.setattr(llama3_family_executor, "SamplingState1D", _SamplingState)
         sampler = _Sampling()
         sampler.config = SimpleNamespace(
             is_resolved=lambda: True,

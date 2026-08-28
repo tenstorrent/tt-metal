@@ -16,6 +16,9 @@ import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.models import executor as shared_model_executor
+from models.common.models import llama3_executor as llama3_family_executor
+from models.common.models import qwen2_executor as qwen2_family_executor
 from models.common.models.deepseek_r1_distill_qwen_14b import executor as deepseek_executor
 from models.common.models.deepseek_r1_distill_qwen_14b import generator as deepseek_generator
 from models.common.models.llama32_1b import executor as llama32_executor
@@ -257,6 +260,34 @@ GENERATOR_PATHS = {
 @pytest.fixture(params=EXECUTOR_BINDINGS.items(), ids=lambda item: item[0])
 def binding(request):
     return request.param[1]
+
+
+_LLAMA_FAMILY_EXECUTOR_MODULES = (llama32_executor, llama32_3b_executor, llama33_70b_executor)
+_QWEN2_FAMILY_EXECUTOR_MODULES = (
+    qwen2_executor,
+    qwen25_executor,
+    qwen25_72b_executor,
+    qwen25_coder_32b_executor,
+)
+_SHARED_MODEL_EXECUTOR_MODULES = (
+    *_LLAMA_FAMILY_EXECUTOR_MODULES,
+    *_QWEN2_FAMILY_EXECUTOR_MODULES,
+    qwen3_32b_executor,
+)
+
+
+def _composition_module(binding):
+    if binding.executor_module in _SHARED_MODEL_EXECUTOR_MODULES:
+        return shared_model_executor
+    return binding.executor_module
+
+
+def _sampling_policy_module(binding):
+    if binding.executor_module in _LLAMA_FAMILY_EXECUTOR_MODULES:
+        return llama3_family_executor
+    if binding.executor_module in _QWEN2_FAMILY_EXECUTOR_MODULES:
+        return qwen2_family_executor
+    return binding.executor_module
 
 
 class _Mesh:
@@ -619,10 +650,11 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
         "TracedExecutor",
         "WarmupCoordinator",
     )
+    composition_module = _composition_module(binding)
     owner_factories = {}
     for name in owner_names:
-        factory = MagicMock(wraps=getattr(binding.executor_module, name))
-        monkeypatch.setattr(binding.executor_module, name, factory)
+        factory = MagicMock(wraps=getattr(composition_module, name))
+        monkeypatch.setattr(composition_module, name, factory)
         owner_factories[name] = factory
 
     executor = binding.executor_class(
@@ -671,7 +703,8 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
         def decode_forward(self):
             raise AssertionError("construction-policy test must not execute sampling")
 
-    monkeypatch.setattr(binding.executor_module, "Sampling1D", FakeSampling1D)
+    sampling_policy_module = _sampling_policy_module(binding)
+    monkeypatch.setattr(sampling_policy_module, "Sampling1D", FakeSampling1D)
     model = binding.make_model()
     model.sampling = FakeSampling1D()
     if binding.executor_module in (llama33_70b_executor, qwen3_32b_executor):
@@ -693,7 +726,7 @@ def _device_sampling_executor(binding, monkeypatch, *, runtime_disable: bool):
             def release(self, *args, **kwargs):
                 return None
 
-        monkeypatch.setattr(binding.executor_module, "SamplingState1D", FakeSamplingState1D)
+        monkeypatch.setattr(sampling_policy_module, "SamplingState1D", FakeSamplingState1D)
     runtime_config = binding.make_runtime_config()
     runtime_config.disable_batched_prefill = runtime_disable
     config = replace(
