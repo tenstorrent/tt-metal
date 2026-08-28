@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,55 @@ get_bank_owned_slice(uint32_t output_page_base, uint32_t valid_pages, uint32_t b
         first_page_offset < valid_pages ? 1 + (valid_pages - 1 - first_page_offset) / num_dram_banks : 0;
     return {first_page_offset, page_count};
 }
+
+// Produce packet-sized runs from a worker's owned DRAM banks in round-robin order. Each run remains
+// physically contiguous within one interleaved DRAM bank, while consecutive runs target different
+// banks so a reader prefetch batch can keep several banks busy at once.
+template <size_t NumDramBanks>
+struct BankOwnedPacketSchedule {
+    std::array<BankOwnedSlice, NumDramBanks> slices{};
+    std::array<uint32_t, NumDramBanks> pages_consumed{};
+    uint32_t first_bank = 0;
+    uint32_t bank_stride = 1;
+    uint32_t next_bank = 0;
+    uint32_t packets_remaining = 0;
+
+    FORCE_INLINE BankOwnedPacketSchedule(
+        uint32_t output_page_base,
+        uint32_t valid_pages,
+        uint32_t worker_first_bank,
+        uint32_t worker_bank_stride,
+        uint32_t packet_size_in_pages) :
+        first_bank(worker_first_bank), bank_stride(worker_bank_stride), next_bank(worker_first_bank) {
+        for (uint32_t bank = first_bank; bank < NumDramBanks; bank += bank_stride) {
+            slices[bank] = get_bank_owned_slice(output_page_base, valid_pages, bank, NumDramBanks);
+            packets_remaining += (slices[bank].page_count + packet_size_in_pages - 1) / packet_size_in_pages;
+        }
+    }
+
+    FORCE_INLINE bool next_packet(uint32_t packet_size_in_pages, uint32_t& first_page_offset, uint32_t& page_count) {
+        if (packets_remaining == 0) {
+            return false;
+        }
+        for (uint32_t candidate = 0; candidate < NumDramBanks; ++candidate) {
+            const uint32_t bank = next_bank;
+            next_bank += bank_stride;
+            if (next_bank >= NumDramBanks) {
+                next_bank = first_bank;
+            }
+            if (pages_consumed[bank] == slices[bank].page_count) {
+                continue;
+            }
+            page_count = std::min(packet_size_in_pages, slices[bank].page_count - pages_consumed[bank]);
+            first_page_offset =
+                slices[bank].first_page_offset + pages_consumed[bank] * static_cast<uint32_t>(NumDramBanks);
+            pages_consumed[bank] += page_count;
+            --packets_remaining;
+            return true;
+        }
+        return false;
+    }
+};
 
 // Partition a valid page prefix as evenly as possible across links. Earlier links receive one
 // additional page when the prefix is not evenly divisible. Reader and writer must use the same

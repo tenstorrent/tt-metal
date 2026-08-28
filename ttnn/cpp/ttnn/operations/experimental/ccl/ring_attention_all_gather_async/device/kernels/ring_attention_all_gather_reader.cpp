@@ -44,6 +44,59 @@ constexpr uint32_t num_dram_banks = get_compile_time_arg_val(15);
 // CB depth must be >= 2 * PREFETCH_PACKETS * packet_size_in_pages (see program_factory cb_num_pages).
 constexpr uint32_t PREFETCH_PACKETS = get_compile_time_arg_val(16);
 
+template <bool physically_contiguous, typename Accessor>
+FORCE_INLINE void prefetch_bank_owned_pages(
+    const Noc& noc,
+    CircularBuffer& cb_output,
+    uint32_t cb_fifo_limit,
+    uint32_t cb_fifo_size,
+    const Accessor& accessor,
+    uint32_t source_page_base,
+    uint32_t output_page_base,
+    uint32_t valid_pages,
+    uint32_t first_bank,
+    uint32_t bank_stride) {
+    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+        output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
+    while (schedule.packets_remaining > 0) {
+        const uint32_t batch_packets = std::min(schedule.packets_remaining, PREFETCH_PACKETS);
+        cb_output.reserve_back(batch_packets * packet_size_in_pages);
+        uint32_t l1_write_addr = cb_output.get_write_ptr();
+        for (uint32_t packet = 0; packet < batch_packets; ++packet) {
+            if (l1_write_addr >= cb_fifo_limit) {
+                l1_write_addr -= cb_fifo_size;
+            }
+            uint32_t first_page_offset = 0;
+            uint32_t pages_to_read = 0;
+            schedule.next_packet(packet_size_in_pages, first_page_offset, pages_to_read);
+            if constexpr (physically_contiguous) {
+                const uint64_t first_noc_addr =
+                    accessor.get_noc_addr(source_page_base + first_page_offset, 0, noc.get_noc_id());
+                noc.async_read(
+                    tensor_accessor::Page(first_noc_addr, 0),
+                    CoreLocalMem<uint8_t>(l1_write_addr),
+                    pages_to_read * input_tensor_page_size,
+                    {},
+                    {});
+            } else {
+                for (uint32_t page = 0; page < pages_to_read; ++page) {
+                    noc.async_read(
+                        accessor,
+                        CoreLocalMem<uint8_t>(l1_write_addr + page * input_tensor_page_size),
+                        input_tensor_page_size,
+                        {.page_id = source_page_base + first_page_offset + page * num_dram_banks},
+                        {});
+                }
+            }
+            l1_write_addr += packet_size_in_pages * input_tensor_page_size;
+        }
+        noc.async_read_barrier();
+        for (uint32_t packet = 0; packet < batch_packets; ++packet) {
+            cb_output.push_back(packet_size_in_pages);
+        }
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t page_size_base_idx = 17;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
@@ -162,28 +215,18 @@ void kernel_main() {
                 const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_chip_id * input_pages_per_batch_head;
-                for (uint32_t bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
-                     bank < num_dram_banks;
-                     bank += num_links * workers_on_link[input_idx]) {
-                    const auto bank_slice = ring_attention_all_gather::get_bank_owned_slice(
-                        output_page_base, input_valid_pages[input_idx], bank, num_dram_banks);
-                    uint32_t pages_read = 0;
-                    prefetch_batch_read_tiles<
-                        input_tensor_page_size,
-                        packet_size_in_pages,
-                        PREFETCH_PACKETS,
-                        contig_pages_advanced>(
-                        noc_obj,
-                        cb_output,
-                        pages_read,
-                        bank_slice.page_count,
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        input_tensor_addrgens[input_idx],
-                        [&](uint32_t page) {
-                            return input_page_base + bank_slice.first_page_offset + page * num_dram_banks;
-                        });
-                }
+                const uint32_t first_bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
+                prefetch_bank_owned_pages<false>(
+                    noc_obj,
+                    cb_output,
+                    cb_fifo_limit,
+                    cb_fifo_size,
+                    input_tensor_addrgens[input_idx],
+                    input_page_base,
+                    output_page_base,
+                    input_valid_pages[input_idx],
+                    first_bank,
+                    num_links * workers_on_link[input_idx]);
             }
         } else {
             // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
@@ -278,27 +321,19 @@ void kernel_main() {
                     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                         const uint32_t output_page_base =
                             bh_idx * output_pages_per_batch_head + actual_sender_chip_id * input_pages_per_batch_head;
-                        for (uint32_t bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
-                             bank < num_dram_banks;
-                             bank += num_links * workers_on_link[input_idx]) {
-                            const auto bank_slice = ring_attention_all_gather::get_bank_owned_slice(
-                                output_page_base, input_valid_pages[input_idx], bank, num_dram_banks);
-                            uint32_t pages_read = 0;
-                            prefetch_batch_read_physically_contiguous_tiles<
-                                input_tensor_page_size,
-                                packet_size_in_pages,
-                                PREFETCH_PACKETS>(
-                                noc_obj,
-                                cb_output,
-                                pages_read,
-                                bank_slice.page_count,
-                                cb_fifo_limit,
-                                cb_fifo_size,
-                                output_tensor_addrgens[input_idx],
-                                [&](uint32_t page) {
-                                    return output_page_base + bank_slice.first_page_offset + page * num_dram_banks;
-                                });
-                        }
+                        const uint32_t first_bank =
+                            worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
+                        prefetch_bank_owned_pages<true>(
+                            noc_obj,
+                            cb_output,
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            output_tensor_addrgens[input_idx],
+                            output_page_base,
+                            output_page_base,
+                            input_valid_pages[input_idx],
+                            first_bank,
+                            num_links * workers_on_link[input_idx]);
                     }
                 } else {
                     uint32_t tiles_read = input_tile_id_start[input_idx];

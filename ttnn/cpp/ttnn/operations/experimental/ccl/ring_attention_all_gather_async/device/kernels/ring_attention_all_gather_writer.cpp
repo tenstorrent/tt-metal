@@ -125,31 +125,36 @@ FORCE_INLINE void write_bank_owned_slice(
     FabricSender& fabric_direction_connection,
     uint32_t output_page_base,
     uint32_t valid_pages,
-    uint32_t bank) {
-    const auto bank_slice =
-        ring_attention_all_gather::get_bank_owned_slice(output_page_base, valid_pages, bank, num_dram_banks);
-    for (uint32_t pages_sent = 0; pages_sent < bank_slice.page_count;) {
-        const uint32_t batch = std::min(packet_size_in_pages, bank_slice.page_count - pages_sent);
+    uint32_t first_bank,
+    uint32_t bank_stride) {
+    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+        output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
+    uint32_t first_page_offset = 0;
+    uint32_t batch = 0;
+    while (schedule.next_packet(packet_size_in_pages, first_page_offset, batch)) {
         cb_output.wait_front(packet_size_in_pages);
-        const uint32_t first_output_page =
-            output_page_base + bank_slice.first_page_offset + pages_sent * num_dram_banks;
         ring_fabric_write_unidir(
-            first_output_page,
+            output_page_base + first_page_offset,
             output_addrgen,
             pkt_hdr,
             fabric_direction_connection,
             cb_output.get_read_ptr(),
             batch * output_page_size);
         cb_output.pop_front(packet_size_in_pages);
-        pages_sent += batch;
     }
 }
 
 FORCE_INLINE void discard_bank_owned_slice(
-    CircularBuffer& cb_output, uint32_t output_page_base, uint32_t valid_pages, uint32_t bank) {
-    const uint32_t page_count =
-        ring_attention_all_gather::get_bank_owned_slice(output_page_base, valid_pages, bank, num_dram_banks).page_count;
-    for (uint32_t pages_discarded = 0; pages_discarded < page_count; pages_discarded += packet_size_in_pages) {
+    CircularBuffer& cb_output,
+    uint32_t output_page_base,
+    uint32_t valid_pages,
+    uint32_t first_bank,
+    uint32_t bank_stride) {
+    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+        output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
+    uint32_t first_page_offset = 0;
+    uint32_t batch = 0;
+    while (schedule.next_packet(packet_size_in_pages, first_page_offset, batch)) {
         cb_output.wait_front(packet_size_in_pages);
         cb_output.pop_front(packet_size_in_pages);
     }
@@ -369,21 +374,21 @@ FORCE_INLINE void kernel_main_impl() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_chip_id * input_pages_per_batch_head;
-                for (uint32_t bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
-                     bank < num_dram_banks;
-                     bank += num_links * workers_on_link[input_idx]) {
-                    if constexpr (num_targets_in_direction) {
-                        write_bank_owned_slice(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base,
-                            input_valid_pages[input_idx],
-                            bank);
-                    } else {
-                        discard_bank_owned_slice(cb_output, output_page_base, input_valid_pages[input_idx], bank);
-                    }
+                const uint32_t first_bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
+                const uint32_t bank_stride = num_links * workers_on_link[input_idx];
+                if constexpr (num_targets_in_direction) {
+                    write_bank_owned_slice(
+                        cb_output,
+                        output_addrgens[input_idx],
+                        pkt_hdr,
+                        *fabric_direction_connection,
+                        output_page_base,
+                        input_valid_pages[input_idx],
+                        first_bank,
+                        bank_stride);
+                } else {
+                    discard_bank_owned_slice(
+                        cb_output, output_page_base, input_valid_pages[input_idx], first_bank, bank_stride);
                 }
             }
         } else {
@@ -532,18 +537,16 @@ FORCE_INLINE void kernel_main_impl() {
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                     const uint32_t output_page_base =
                         bh_idx * output_pages_per_batch_head + actual_slice_chip_id * input_pages_per_batch_head;
-                    for (uint32_t bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
-                         bank < num_dram_banks;
-                         bank += num_links * workers_on_link[input_idx]) {
-                        write_bank_owned_slice(
-                            cb_output,
-                            output_addrgens[input_idx],
-                            pkt_hdr,
-                            *fabric_direction_connection,
-                            output_page_base,
-                            input_valid_pages[input_idx],
-                            bank);
-                    }
+                    const uint32_t first_bank = worker_link[input_idx] + worker_index_in_link[input_idx] * num_links;
+                    write_bank_owned_slice(
+                        cb_output,
+                        output_addrgens[input_idx],
+                        pkt_hdr,
+                        *fabric_direction_connection,
+                        output_page_base,
+                        input_valid_pages[input_idx],
+                        first_bank,
+                        num_links * workers_on_link[input_idx]);
                 }
             } else {
                 uint32_t tiles_read = input_tile_id_start[input_idx];
