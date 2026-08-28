@@ -272,31 +272,22 @@ inline void calculate_cosine() {
         C0 = -0x1.5554a4p-3f;
     }
 
-    const float ROUNDING_BIAS = 12582912.0f;
-    const float NEG_ROUNDING_BIAS = -12582912.0f;
-
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
 
-        // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
-        sfpi::vFloat half = sfpi::sFloat16b(0.5f);
-        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
-
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
-        // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat j = v * inv_pi + 0.5f;
 
-        // sfpi::vFloat rounding_bias;
-        // rounding_bias = sfpi::sFloat16b(0x1.8p23f);
-        // j = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-
-        j = j + ROUNDING_BIAS;
+        // rounding_bias shifts mantissa bits to perform round-to-nearest.
+        sfpi::vFloat rounding_bias = 12582912.0f;
+        j = j + rounding_bias;
 
         // At this point, the mantissa bits of j contain the rounded integer.
         // Store for later; the LSB tracks quadrant parity for sign selection.
         sfpi::vInt q = sfpi::as<sfpi::vInt>(j);
 
-        j = j + NEG_ROUNDING_BIAS;
+        j = j - rounding_bias;
 
         j = j * 2.0f - 1.0f;
 
