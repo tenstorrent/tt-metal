@@ -34,7 +34,7 @@ target_link_libraries(
         fmt::fmt-header-only
 )
 target_include_directories(ttnn_pch_lean PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
-# tt_disable_ccache_for_pch already applied to TT::CommonPCH in root CMakeLists.txt.
+# tt_configure_ccache_for_pch already applied to TT::CommonPCH in root CMakeLists.txt.
 
 # ── Full PCH: lean + volatile TT headers — for targets with device operations ──
 # Invalidated on any TT::Metalium change; only use for targets that actually
@@ -74,8 +74,8 @@ target_link_libraries(
         fmt::fmt-header-only
 )
 target_include_directories(ttnn_pch_full PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/api)
-if(COMMAND tt_disable_ccache_for_pch)
-    tt_disable_ccache_for_pch(ttnn_pch_full)
+if(COMMAND tt_configure_ccache_for_pch)
+    tt_configure_ccache_for_pch(ttnn_pch_full)
 endif()
 
 # NOTE: Legacy TTNN::PCH alias removed — all consumers migrated to PCHLean or PCHFull.
