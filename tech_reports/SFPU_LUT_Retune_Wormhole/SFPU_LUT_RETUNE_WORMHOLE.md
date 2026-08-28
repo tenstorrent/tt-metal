@@ -519,8 +519,10 @@ Small, and that is the main caveat on this gain:
   discriminates for `sigmoid_appx` and `gelu_appx`, whose `CUSTOM_TOLERANCES` are wide enough to
   swallow the old tables.
 * **`tanh_derivative_init()` holds a second, independent copy of the old table**
-  (`ckernel_sfpu_tanh_derivative.h`), and this branch **leaves it frozen on purpose**, with a
-  comment saying so. The legacy `tanh_derivative_lut` computes `1 − lut(x)²` and its golden
+  (`ckernel_sfpu_tanh_derivative.h`), and this branch **leaves it frozen on purpose**. That file is
+  therefore byte-identical to `main` and outside this diff entirely; the note recording the
+  divergence sits in `ckernel_sfpu_tanh.h`, beside the table that did move. The legacy
+  `tanh_derivative_lut` computes `1 − lut(x)²` and its golden
   (`_tanh_derivative_lut` in `golden_generators.py`) hardcodes `0.90625 / 0.09375 / 0.8125` as
   *the model of the LUT*, so retuning here needs the golden updated in lockstep. Worth knowing
   what that follow-up would buy: against true `sech²` on `[0, 3]`, `max|err|` would drop

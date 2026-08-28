@@ -44,11 +44,6 @@ inline void calculate_tanh_derivative() {
     l_reg[LRegs::LReg2] = l2;
 }
 
-// Deliberately still the pre-retune tanh table. calculate_tanh's copy was refitted for
-// accuracy; this one is the contract of a deprecated kernel whose golden models these exact
-// coefficients as "the LUT", so the two copies diverge on purpose. Retuning here would need
-// the golden updated in lockstep, and would improve a result the header already documents as
-// cancellation-dominated (Max ULP = 15,140) -- use calculate_tanh_derivative_sech2 instead.
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
     l_reg[LRegs::LReg0] = vUInt(static_cast<std::uint16_t>(0x1DFF));  // 0.90625*x

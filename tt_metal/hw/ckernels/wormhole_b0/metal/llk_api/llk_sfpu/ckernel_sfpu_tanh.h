@@ -221,6 +221,10 @@ inline void tanh_init() {
         // atol + rtol*|golden|, and at the worst point (|x| ~ 0.56, tanh ~ 0.51) that is
         // 0.0755. So test_eltwise_unary_sfpu's blanket skip of Tanh/approx=Yes is gone --
         // all 80 variants pass here, 56 of them fail on the pre-retune table.
+        // ckernel_sfpu_tanh_derivative.h holds a second, independent copy of this table and
+        // deliberately stays on the pre-retune values: its golden hardcodes those exact
+        // coefficients as the model of the LUT, so the two must be retuned in lockstep or not
+        // at all. tech_reports/SFPU_LUT_Retune_Wormhole/ has the numbers for that follow-up.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1AFF);  // 0.8125*x
         sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x3814);  // 0.1875*x + 0.625
         sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
