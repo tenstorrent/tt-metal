@@ -89,6 +89,12 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 constexpr size_t k_program_dispatch_fanout_limit = 64;
+// A worker wake costs about 1.4 us while command streams copy at roughly 20 GB/s, giving a
+// 28 KB crossover. Use more than twice that size and at least four devices so the decision
+// stays comfortably away from the measured two-device/model-stream regressions.
+constexpr size_t k_program_dispatch_default_fanout = 4;
+constexpr size_t k_program_dispatch_default_min_bytes_per_device = 64 * 1024;
+constexpr size_t k_program_dispatch_min_devices = 4;
 
 size_t parse_size_env(const char* name, size_t default_value) {
     const char* value = std::getenv(name);
@@ -101,8 +107,8 @@ size_t parse_size_env(const char* name, size_t default_value) {
 }
 
 struct ProgramDispatchExperimentConfig {
-    size_t fanout = 1;
-    size_t min_bytes_per_device = 0;
+    size_t fanout = k_program_dispatch_default_fanout;
+    size_t min_bytes_per_device = k_program_dispatch_default_min_bytes_per_device;
     bool prepare_on_caller = true;
     bool collect_stats = false;
 };
@@ -511,9 +517,6 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
-    const auto& experiment_config = program_dispatch_experiment_config();
-    const auto stats_start =
-        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
@@ -608,10 +611,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         }
     }
 
+    const auto program_config_sizes = mesh_workload.impl().get_program_config_sizes();
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
-        mesh_workload.impl().get_program_config_sizes(),
+        program_config_sizes,
         mesh_workload.impl().get_program_binary_status(mesh_device_id),
         num_workers,
         expected_num_workers_completed,
@@ -638,6 +642,86 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // prefetcher cache will be overwritten, reset for next workload
         this->reset_prefetcher_cache_manager();
     }
+
+    const auto& experiment_config = program_dispatch_experiment_config();
+    size_t estimated_bytes_per_device = 0;
+    for (const uint32_t config_size : program_config_sizes) {
+        estimated_bytes_per_device += config_size;
+    }
+    const bool use_parallel_dispatch = experiment_config.fanout > 1 &&
+                                       mesh_device_->num_devices() >= k_program_dispatch_min_devices &&
+                                       estimated_bytes_per_device >= experiment_config.min_bytes_per_device;
+    if (!use_parallel_dispatch) {
+        std::unordered_set<uint32_t> chip_ids_in_workload = {};
+
+        // Preserve the established serial path without constructing task vectors or synchronization
+        // objects. Small command streams cannot repay that setup cost.
+        for (auto& [device_range, program] : mesh_workload.get_programs()) {
+            auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
+            TT_ASSERT(
+                use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
+                "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
+                use_prefetcher_cache,
+                program_cmd_seq.prefetcher_cache_used);
+            program_dispatch::update_program_dispatch_commands(
+                program.impl(),
+                program_cmd_seq,
+                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
+                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
+                expected_num_workers_completed,
+                this->virtual_program_dispatch_core(),
+                sub_device_id,
+                dispatch_metadata,
+                mesh_workload.impl().get_program_binary_status(mesh_device_id),
+                std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
+                static_cast<uint8_t>(this->id()));
+
+            record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
+            this->write_program_cmds_to_subgrid(
+                device_range,
+                program_cmd_seq,
+                dispatch_metadata.stall_first,
+                dispatch_metadata.stall_before_program,
+                chip_ids_in_workload);
+
+            if (!tt::tt_metal::getDeviceProfilerState()) {
+                std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
+                TracyMessage(msg.c_str(), msg.size());
+            }
+        }
+
+        for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+            (void)device_range;
+            if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
+                cross_node_program_completion_counts_[*sub_device_id][program.impl().get_id()] =
+                    updated_worker_counts.current;
+            }
+        }
+
+        this->write_go_signal_sequences_to_unused_sub_grids(
+            chip_ids_in_workload,
+            sub_device_id,
+            expected_num_workers_completed,
+            mcast_go_signals,
+            unicast_go_signals,
+            dispatch_metadata);
+        if (mcast_go_signals) {
+            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_mcast_wptr(1);
+        }
+        if (unicast_go_signals) {
+            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_unicast_wptr(1);
+        }
+        mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
+        mesh_workload.set_last_used_command_queue_for_testing(this);
+
+        if (blocking) {
+            this->finish_nolock({{sub_device_id}});
+        }
+        return;
+    }
+
+    const auto stats_start =
+        experiment_config.collect_stats ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     // Values that are constant across the whole workload, hoisted so that the per-device tasks below
     // never have to reach back into this command queue or into cq_shared_state_.
     const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
@@ -1513,6 +1597,20 @@ void FDMeshCommandQueue::reset_worker_state(
             this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
             std::mem_fn(&LaunchMessageRingBufferState::reset));
     }
+}
+
+void FDMeshCommandQueue::write_program_cmds_to_subgrid(
+    const MeshCoordinateRange& sub_grid,
+    ProgramCommandSequence& program_cmd_seq,
+    bool stall_first,
+    bool stall_before_program,
+    std::unordered_set<uint32_t>& chip_ids_in_workload) {
+    for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
+        auto device = mesh_device_->impl().get_device(coord);
+        program_dispatch::write_program_command_sequence(
+            program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
+        chip_ids_in_workload.insert(device->id());
+    });
 }
 
 void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(

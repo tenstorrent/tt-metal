@@ -574,16 +574,18 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-// Compare model-like and RTA-heavy command streams on a full Galaxy-sized mesh. This test reports
-// distributions rather than enforcing a machine-specific golden; CI experiment runs select the fanout
-// through TT_METAL_PROGRAM_DISPATCH_FANOUT.
-TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
-    constexpr uint32_t num_devices = 32;
-    constexpr uint32_t num_model_programs = 8;
+// Compare model-like and RTA-heavy command streams on the available mesh. This test reports distributions
+// rather than enforcing a machine-specific golden; experiment runs select the fanout through
+// TT_METAL_PROGRAM_DISPATCH_FANOUT.
+TEST_F(MeshWorkloadTestSuite, ParallelizationBenchmark) {
     constexpr uint32_t timed_iterations = 200;
     constexpr uint32_t target_runtime_arg_bytes = 8 * 1024;
     constexpr uint32_t kernels_per_program = 3;
 
+    const MeshShape mesh_shape = mesh_device_->shape();
+    TT_ASSERT(mesh_shape.dims() == 2);
+    const uint32_t num_devices = mesh_device_->num_devices();
+    const uint32_t num_model_programs = std::min<uint32_t>(8, mesh_shape[1]);
     const CoreCoord worker_grid = mesh_device_->compute_with_storage_grid_size();
     const uint32_t num_worker_cores = worker_grid.x * worker_grid.y;
     const uint32_t runtime_arg_bytes_per_value = num_worker_cores * kernels_per_program * sizeof(uint32_t);
@@ -595,7 +597,7 @@ TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
     MeshWorkload model_workload;
     for (uint32_t column = 0; column < num_model_programs; column++) {
         model_workload.add_program(
-            MeshCoordinateRange(MeshCoordinate{0, column}, MeshCoordinate{3, column}),
+            MeshCoordinateRange(MeshCoordinate{0, column}, MeshCoordinate{mesh_shape[0] - 1, column}),
             std::move(*model_programs[column]));
     }
 
