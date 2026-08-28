@@ -14,11 +14,12 @@ namespace ttnn::experimental {
 // Computes, for each (n=b*H, q):
 //   out[n, q, :] = sum over p in [0, P) of
 //     attention_weights[n, q, p]
-//     * bilinear_sample(value[n, :, :, :], grid[n, q*P + p, 0, :])
+//     * bilinear_sample(value[n, :, :, :], point p of query q in grid[n])
 //
 // Inputs:
 //   value:  (N, h_in, w_in, D) ROW_MAJOR bfloat16, where N = B * num_heads
-//   grid:   (N, Q*P, 1, 2)     ROW_MAJOR bfloat16, normalized to [-1, 1]
+//   grid:   (N, Q, 1, P*2)     ROW_MAJOR bfloat16, (x, y) per point, normalized to [-1, 1]
+//                              (N, Q*P, 1, 2) also accepted, at P NoC reads per query instead of 1
 //   attn:   (N, Q, P)          ROW_MAJOR bfloat16
 //
 // Output:

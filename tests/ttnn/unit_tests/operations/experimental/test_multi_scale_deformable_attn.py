@@ -79,3 +79,42 @@ def test_msda_rejects_non_multiple_of_16(device, expect_error, D):
 
     with expect_error(RuntimeError, "multiple of 16"):
         ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t)
+
+
+@pytest.mark.parametrize("P", [4, 8])
+@pytest.mark.parametrize("pts_per_page", [1, 2, 4])
+def test_msda_grid_point_folding(device, P, pts_per_page):
+    """Every folding of the point axis into the grid's last dimension gives the same answer.
+
+    A ROW_MAJOR page is the last dimension, so (N, Q, 1, P*2) is one NoC read per query where
+    (N, Q*P, 1, 2) is P reads of four bytes.
+    """
+    N, h_in, w_in, D, Q = 2, 16, 16, 32, 32
+    torch.manual_seed(0)
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.rand(N, Q * P, 1, 2, dtype=torch.float32) * 2.0 - 1.0
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda(value, grid, attn, align_corners=False)
+
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_t = ttnn.from_torch(value.to(torch.bfloat16), **rm)
+    attn_t = ttnn.from_torch(attn.to(torch.bfloat16), **rm)
+    folded = grid.reshape(N, Q * P // pts_per_page, 1, 2 * pts_per_page)
+    grid_t = ttnn.from_torch(folded.to(torch.bfloat16), **rm)
+
+    out = ttnn.to_torch(ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t))
+    assert_with_pcc(ref, out.to(torch.float32), pcc=0.99)
+
+
+def test_msda_rejects_grid_width_not_dividing_p(device, expect_error):
+    """A grid page must hold a divisor of P points; the reader indexes points modulo it."""
+    # 4 points per page against P = 6: the page count still matches Q*P, only the stride does not.
+    N, h_in, w_in, D, Q, P = 1, 10, 10, 16, 16, 6
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_t = ttnn.from_torch(torch.randn(N, h_in, w_in, D).to(torch.bfloat16), **rm)
+    grid_t = ttnn.from_torch((torch.rand(N, Q * P // 4, 1, 8) * 2.0 - 1.0).to(torch.bfloat16), **rm)
+    attn_t = ttnn.from_torch(torch.softmax(torch.randn(N, Q, P), dim=-1).to(torch.bfloat16), **rm)
+
+    with expect_error(RuntimeError, "divisor of P"):
+        ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t)

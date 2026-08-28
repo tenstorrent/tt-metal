@@ -21,7 +21,7 @@ void bind_multi_scale_deformable_attn(nb::module_& mod) {
 
         Args:
             * :attr:`value`: (N, h_in, w_in, D) ROW_MAJOR bfloat16, N = B * num_heads
-            * :attr:`grid`: (N, Q*P, 1, 2) ROW_MAJOR bfloat16, normalized to [-1, 1]
+            * :attr:`grid`: (N, Q, 1, P*2) ROW_MAJOR bfloat16, (x, y) interleaved per point, normalized to [-1, 1]. (N, Q*P, 1, 2) is also accepted but costs P NoC reads per query instead of one.
             * :attr:`attn`: (N, Q, P) ROW_MAJOR bfloat16
             * :attr:`memory_config`: output memory config
             * :attr:`align_corners`: bilinear pixel-coord mapping

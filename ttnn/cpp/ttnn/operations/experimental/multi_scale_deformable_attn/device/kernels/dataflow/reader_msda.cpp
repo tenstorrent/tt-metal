@@ -84,7 +84,10 @@ constexpr uint32_t w_in = get_compile_time_arg_val(12);
 constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(13);
 constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(14);
 constexpr uint32_t attn_stick_nbytes = get_compile_time_arg_val(15);
-constexpr auto value_args = TensorAccessorArgs<16>();
+// Points sharing one grid page: P when the caller folds the point axis into the
+// last dimension, 1 for the (N, Q*P, 1, 2) form. Divides P either way.
+constexpr uint32_t grid_pts_per_stick = get_compile_time_arg_val(16);
+constexpr auto value_args = TensorAccessorArgs<17>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
@@ -92,6 +95,7 @@ constexpr uint32_t TILE_MAX_ROWS = 32;
 constexpr uint32_t HALF_STICK_NBYTES = 32;  // one face-row half: 16 bf16 (TL or TR portion of one row)
 constexpr uint32_t HALF_WORDS = HALF_STICK_NBYTES / sizeof(uint32_t);
 constexpr uint32_t TILE_NBYTES = 2048;  // bf16 32x32 tile
+constexpr uint32_t GRID_STICKS_PER_QUERY = P / grid_pts_per_stick;
 
 // A value stick carries D bf16 values (= D/2 uint32 words). One tile row
 // holds 32 values (lo + hi face halves), so a stick spans N_D_TILES tiles
@@ -131,7 +135,7 @@ void kernel_main() {
     constexpr int32_t w_in_i = static_cast<int32_t>(w_in);
 
     // Reserve scratch CBs once and treat them as fixed linear L1 arenas.
-    grid_cb.reserve_back(TILE_MAX_ROWS * P);
+    grid_cb.reserve_back(TILE_MAX_ROWS * GRID_STICKS_PER_QUERY);
     const uint32_t grid_scratch_l1 = grid_cb.get_write_ptr();
     attn_cb.reserve_back(TILE_MAX_ROWS);
     const uint32_t attn_scratch_l1 = attn_cb.get_write_ptr();
@@ -155,12 +159,13 @@ void kernel_main() {
             CoreLocalMem<uint32_t> dst(attn_scratch_l1 + r * attn_stick_nbytes);
             noc.async_read(attn_acc, dst, attn_stick_nbytes, {.page_id = n * Q + (q_start + r)}, {.offset_bytes = 0});
         }
-        // Stage grid for v_rows * P points (two bf16 each).
+        // Stage grid for v_rows queries: GRID_STICKS_PER_QUERY sticks each, holding
+        // grid_pts_per_stick points of (x, y).
         for (uint32_t r = 0; r < v_rows; ++r) {
-            const uint32_t base = n * (Q * P) + (q_start + r) * P;
-            for (uint32_t p = 0; p < P; ++p) {
-                CoreLocalMem<uint32_t> dst(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
-                noc.async_read(grid_acc, dst, grid_stick_nbytes, {.page_id = base + p}, {.offset_bytes = 0});
+            const uint32_t base = (n * Q + (q_start + r)) * GRID_STICKS_PER_QUERY;
+            for (uint32_t g = 0; g < GRID_STICKS_PER_QUERY; ++g) {
+                CoreLocalMem<uint32_t> dst(grid_scratch_l1 + (r * GRID_STICKS_PER_QUERY + g) * grid_stick_nbytes);
+                noc.async_read(grid_acc, dst, grid_stick_nbytes, {.page_id = base + g}, {.offset_bytes = 0});
             }
         }
         noc.async_read_barrier();
@@ -211,10 +216,12 @@ void kernel_main() {
                 uint16_t gy = 0;
                 uint16_t av = 0;
                 if (r < v_rows) {
-                    CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
+                    const uint32_t stick = r * GRID_STICKS_PER_QUERY + p / grid_pts_per_stick;
+                    const uint32_t lane = 2 * (p % grid_pts_per_stick);
+                    CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + stick * grid_stick_nbytes);
                     CoreLocalMem<volatile uint16_t> attn_ptr(attn_scratch_l1 + r * attn_stick_nbytes);
-                    gx = grid_ptr[0];
-                    gy = grid_ptr[1];
+                    gx = grid_ptr[lane];
+                    gy = grid_ptr[lane + 1];
                     av = attn_ptr[p];
                 }
                 const uint32_t col0 = msda_tile_layout::tile_col0_offset(r);

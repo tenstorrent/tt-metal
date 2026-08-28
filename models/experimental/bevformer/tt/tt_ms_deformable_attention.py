@@ -51,8 +51,8 @@ def multi_scale_deformable_attn_ttnn(
             last dimension 2 represent (h, w)
         sampling_grids (ttnn.Tensor): The location of sampling points, already
             rescaled to grid_sample's [-1, 1], head-major and in ROW_MAJOR, has
-            shape (bs, num_heads, num_queries, num_levels, num_points, 2),
-            the last dimension 2 represent (x, y).
+            shape (bs, num_heads, num_queries, num_levels * num_points * 2),
+            innermost (point, (x, y)) within a level.
         attention_weights (ttnn.Tensor): The weight of sampling points used
             when calculate the attention, has shape
             (bs, num_queries, num_heads, num_levels, num_points),
@@ -62,7 +62,7 @@ def multi_scale_deformable_attn_ttnn(
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
     bs, _, num_heads, head_dim = value.shape
-    _, num_heads, num_queries, num_levels, num_points, _ = sampling_grids.shape
+    _, num_queries, _, num_levels, num_points = attention_weights.shape
 
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
@@ -87,14 +87,18 @@ def multi_scale_deformable_attn_ttnn(
         value_l_ = ttnn.permute(value_list[level], (0, 2, 1, 3))  # Move heads to dimension 1
         value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
 
-        # Already head-major, so the level slice is the fused op's grid up to a reshape.
+        # Already head-major, so the level slice is the fused op's grid up to a reshape. The point
+        # axis stays folded into the last dimension: a ROW_MAJOR page is the last dimension, so
+        # spelling it out would rewrite the grid at a 4-byte page. Folded, the reshape only merges
+        # leading dimensions and the page is untouched.
         sampling_grid_l_ = ttnn.reshape(
-            sampling_grids[:, :, :, level, :, :], (bs * num_heads, num_queries * num_points, 1, 2)
-        )  # [N, H_out, W_out, 2] = [bs*num_heads, num_queries*num_points, 1, 2]
+            sampling_grids[:, :, :, level * num_points * 2 : (level + 1) * num_points * 2],
+            (bs * num_heads, num_queries, 1, num_points * 2),
+        )  # [N, Q, 1, P*2] = [bs*num_heads, num_queries, 1, num_points*2]
 
         attn_l_ = ttnn.reshape(attention_weights[:, :, :, level, :], (bs * num_heads, num_queries, num_points))
 
-        # value (N, H_, W_, head_dim), grid (N, num_queries*num_points, 1, 2), attn (N, num_queries,
+        # value (N, H_, W_, head_dim), grid (N, num_queries, 1, num_points*2), attn (N, num_queries,
         # num_points) -> (N, num_queries, head_dim), with N = bs * num_heads.
         output_l_ = ttnn.experimental.multi_scale_deformable_attn(value_l_, sampling_grid_l_, attn_l_)
         output = output_l_ if output is None else ttnn.add(output, output_l_)
@@ -313,8 +317,9 @@ class TTMSDeformableAttention:
             sampling_grids = ttnn.add(reference_rows, sampling_offsets)
             sampling_grids = ttnn.sub(ttnn.mul(sampling_grids, 2.0), 1.0)
 
-            # Only now spell the axes out, and in ROW_MAJOR, where the degenerate trailing dims
-            # cost nothing.
+            # Only the head axis is spelled out, and only because the permute needs it; the level,
+            # point and (x, y) axes stay folded into the last dimension all the way into the core,
+            # so no op here ever writes a page narrower than num_points * 2.
             #
             # Head-major, because the core attention slices a level per fused call and each slice
             # would otherwise need its own permute. One permute over the whole tensor beats
@@ -326,10 +331,6 @@ class TTMSDeformableAttention:
                 (bs, num_queries, self.num_heads, self.num_levels * self.num_points * 2),
             )
             sampling_grids = ttnn.permute(sampling_grids, (0, 2, 1, 3))
-            sampling_grids = ttnn.reshape(
-                sampling_grids,
-                (bs, self.num_heads, num_queries, self.num_levels, self.num_points, 2),
-            )
         else:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
 

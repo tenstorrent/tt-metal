@@ -83,7 +83,11 @@ ProgramDescriptor MSDAOperation::create_descriptor(
 
     // Stick sizes (raw, before alignment).
     const uint32_t value_stick_raw = D * value.element_size();
-    const uint32_t grid_stick_raw = 2u * grid.element_size();
+    // Either grid form is accepted: (N, Q, 1, P*2) puts a query's whole point run in one page,
+    // (N, Q*P, 1, 2) one point per page. The wide form is one NoC read per query instead of P, and
+    // spares the caller a ROW_MAJOR rewrite down to a 4-byte page.
+    const uint32_t grid_pts_per_stick = static_cast<uint32_t>(grid.logical_shape()[-1]) / 2u;
+    const uint32_t grid_stick_raw = 2u * grid_pts_per_stick * grid.element_size();
     const uint32_t attn_stick_raw = P * attn.element_size();
     const uint32_t output_stick_raw = D * output.element_size();
 
@@ -136,7 +140,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // Reader-only scratches sized to hold one full output tile worth of
     // staging (up to 32 queries per tile). Reader reserves the whole CB
     // once at startup and treats each as a linear L1 arena.
-    push_cb(grid_cb, TILE_MAX_ROWS * P, grid_stick_aligned, grid_fmt);
+    push_cb(grid_cb, TILE_MAX_ROWS * (P / grid_pts_per_stick), grid_stick_aligned, grid_fmt);
     push_cb(attn_cb, TILE_MAX_ROWS, attn_stick_aligned, attn_fmt);
     // Reader -> compute pipes: double-buffered blocks of n_d_tiles tiles.
     push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
@@ -176,6 +180,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         value_stick_aligned,
         grid_stick_aligned,
         attn_stick_aligned,
+        grid_pts_per_stick,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);

@@ -51,10 +51,9 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     const auto& as = attn.logical_shape();
 
     TT_FATAL(vs.rank() == 4, "value rank must be 4 (N, h_in, w_in, D), got {}", vs);
-    TT_FATAL(gs.rank() == 4, "grid rank must be 4 (N, Q*P, 1, 2), got {}", gs);
+    TT_FATAL(gs.rank() == 4, "grid rank must be 4 (N, Q, 1, P*2) or (N, Q*P, 1, 2), got {}", gs);
     TT_FATAL(as.rank() == 3, "attn rank must be 3 (N, Q, P), got {}", as);
-    TT_FATAL(gs[-1] == 2, "grid last dim must be 2 (x, y)");
-    TT_FATAL(gs[-2] == 1, "grid 3rd dim must be 1 (single sample per row)");
+    TT_FATAL(gs[-2] == 1, "grid 3rd dim must be 1 (single sample row per query)");
     TT_FATAL(vs[0] == gs[0] && vs[0] == as[0], "N (batch*head) dim mismatch");
 
     // Reject zero-sized inputs: split_work_to_cores(grid, 0) and zero-page
@@ -73,10 +72,19 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
         "value's last dim (D) must be a positive multiple of 16, got {}",
         static_cast<uint32_t>(vs[-1]));
 
-    const uint32_t qp = static_cast<uint32_t>(gs[1]);
     const uint32_t q = static_cast<uint32_t>(as[1]);
     const uint32_t p = static_cast<uint32_t>(as[2]);
-    TT_FATAL(qp == q * p, "grid dim 1 (= Q*P = {}) must equal attn Q*P (= {} * {} = {})", qp, q, p, q * p);
+    const uint32_t gw = static_cast<uint32_t>(gs[-1]);
+    // A ROW_MAJOR page is the last dimension, so the point axis is left to the caller: folded into
+    // the page it is one NoC read per query, spelled out it is P reads of four bytes and a rewrite
+    // on the caller's side to produce them. Any divisor of P in between is legal.
+    TT_FATAL(gw % 2 == 0 && gw > 0, "grid last dim (= {}) must be a positive multiple of 2 (x, y)", gw);
+    TT_FATAL(p % (gw / 2) == 0, "grid last dim (= {}) must hold a divisor of P (= {}) points", gw, p);
+    TT_FATAL(
+        static_cast<uint32_t>(gs[1]) * (gw / 2) == q * p,
+        "grid holds {} points, attn expects Q*P = {}",
+        static_cast<uint32_t>(gs[1]) * (gw / 2),
+        q * p);
 }
 
 void MSDAOperation::validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& args) {
