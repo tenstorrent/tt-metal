@@ -284,8 +284,6 @@ def tt_all_gather(
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
     subdevice_id=None,
-    num_workers_per_link=2,
-    chunks_per_sync=10,
 ):
     """
     Perform an all-gather operation across devices in a mesh.
@@ -301,8 +299,6 @@ def tt_all_gather(
         sharded: Whether to use sharded memory config.
         topology: The topology to use (default: ttnn.Topology.Linear).
         dtype: Data type for CCL operations.
-        num_workers_per_link: Worker cores per link (default: 2, the prior hardcoded value).
-        chunks_per_sync: Chunks per sync (default: 10, the prior hardcoded value).
 
     Returns:
         The gathered tensor.
@@ -336,8 +332,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
@@ -352,8 +348,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
             num_buffers_per_channel=2,
             subdevice_id=subdevice_id,
         )
