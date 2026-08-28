@@ -730,19 +730,19 @@ fi # bh-blitz-decode
 
 ######################################
 # BH Galaxy: ring-mapping stress test (LONG RUNNING -- own group)
-# Blitz-decode ring lengths 16/64/96/112/128/144 swept over every subtorus cluster mock large
+# Blitz-decode ring lengths 16/64 (plus 128/144 on SC36) swept over every subtorus cluster mock large
 # enough to hold them (a ring of N stages needs N mesh slots = N/4 hosts). Rings shorter than the
 # cluster's slot count are the ring-embedded-into-a-larger-graph host-minimization SAT case; the
 # length equal to the slot count is the exact-fit packing. The subtorus wrap-around lets every
 # length close and map.
 # Cluster mocks swept x fitting stage counts:
-#   - SC36 revC subtorus aisleD (full 36-host mapping, 144 slots): 16-144; 144 is exact fit.
+#   - SC36 revC subtorus aisleD (full 36-host mapping, 144 slots): 16/64/128/144; 144 is exact fit.
 #   - SC36 revAB subtorus aisleC: only 20 of the 36 hosts were captured, so its largest mapping is
 #     the SC20 one (80 slots) -- 16/64 only (96+ need >= 24 hosts).
 #   - SC28 revC subtorus aisleD (28-host SC28-ring subset of the aisleD capture, 112 slots):
-#     16-112; 112 is exact fit.
+#     16/64 (96/112 disabled, see #51629 note below).
 #   - SC24 revC subtorus aisleC (24 hosts, 96 slots; pending tt-cluster-descriptors PR 17 +
-#     submodule bump): 16-96; 96 is exact fit.
+#     submodule bump): 16/64 (96 disabled, see #51629 note below).
 # Own shard; see tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml for the CI budget.
 ######################################
 if run_group "bh-ring-stress"; then
@@ -753,11 +753,18 @@ if run_group "bh-ring-stress"; then
 # The 96+ stage rings get the longer SC24-style budget (their solves are much bigger).
 RING_STRESS_TIMEOUT=300
 LONG_RING_STRESS_TIMEOUT=600
+# TODO(https://github.com/tenstorrent/tt-metal/issues/51629): the 96- and 112-stage 4x2 multimesh
+# rings are DISABLED in this sweep for mapper performance: on these lengths the pipeline builder /
+# general-SAT host-minimization solve does not finish in a CI-compatible budget (the 112-stage
+# exact-fit solve was still running after ~5.5 min locally on a 64-core host; the
+# embedded-into-a-larger-mock variants are worse). Re-add "96"/"112" to the stage lists below once
+# #51629 lands. (The standalone SC24 96-stage exact-fit entry further down stays: its solve is
+# ~27 s. The 128/144-stage lengths remain as the SC36 scaling canaries under the 600 s watchdog.)
 for entry in \
-    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112 128 144" \
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 128 144" \
     "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112" \
-    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64 96" ; do
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
     mgd_var="MGD_BLITZ_${stage}"
