@@ -82,6 +82,10 @@
 #include "api/tensor/tensor_accessor_args.h"
 #else
 #include "api/dataflow/dataflow_api.h"
+// Metal 2.0's NOC handle. Data movement only -- api/dataflow/noc.h declares nothing under
+// COMPILE_FOR_TRISC -- which is why the transaction handles carry a noc INDEX rather than one
+// of these: the handles are declared on every projection.
+#include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/tensor_accessor_args.h"
@@ -166,6 +170,26 @@ inline constexpr uint8_t noc_index = 0;
 inline void noc_async_read_barrier(uint8_t = 0) { ASSERT(false); }
 inline void noc_async_write_barrier(uint8_t = 0) { ASSERT(false); }
 inline void noc_async_writes_flushed(uint8_t = 0) { ASSERT(false); }
+inline void noc_async_atomic_barrier(uint8_t = 0) { ASSERT(false); }
+
+// Metal's Noc, as an unreachable stand-in.
+//
+// api/dataflow/noc.h declares nothing under COMPILE_FOR_TRISC, and the multicast noc_load
+// barriers inside `if constexpr (thread == TT_DM_THREAD_ID)` rather than behind a preprocessor
+// guard -- so its body is COMPILED on compute even though it never runs there, and a name it
+// mentions has to resolve. Exactly the reason the free NOC intrinsics above are stubbed; this
+// is the same stub for the object that replaces them.
+//
+// Asserts rather than sitting empty, for the same reason they do: nothing on a compute thread
+// has any business touching the NOC, and the dead bodies strip out of the TRISC binary.
+struct Noc {
+    Noc() = default;
+    explicit Noc(uint8_t) {}
+    void async_read_barrier() const { ASSERT(false); }
+    void async_write_barrier() const { ASSERT(false); }
+    void async_writes_flushed() const { ASSERT(false); }
+    void async_atomic_barrier() const { ASSERT(false); }
+};
 #endif
 
 namespace tt {
