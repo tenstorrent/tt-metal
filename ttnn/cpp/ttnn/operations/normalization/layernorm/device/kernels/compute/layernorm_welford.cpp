@@ -403,14 +403,16 @@ void kernel_main() {
                 for (uint32_t i = 0; i < block.size(); i += 2) {
                     const bool has_second_tile = i + 1 < block.size();
                     tile_regs_acquire();
-                    copy_tile_to_dst_init_short(dfb_x_welford);
+                    copy_init(dfb_x_welford);
                     copy_tile(dfb_x_welford, i, data_dst);
                     if (has_second_tile) {
                         copy_tile(dfb_x_welford, i + 1, second_data_dst);
                     }
-                    copy_tile_to_dst_init_short_with_dt(dfb_x_welford, dfb_ex_welford);
+                    reconfig_data_format_srca(dfb_x_welford, dfb_ex_welford);
+                    copy_init(dfb_ex_welford);
                     copy_tile(dfb_ex_welford, 0, mean_col_dst);
-                    copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2pe_fp32);
+                    reconfig_data_format_srca(dfb_ex_welford, dfb_ex2pe_fp32);
+                    copy_init(dfb_ex2pe_fp32);
                     copy_tile(dfb_ex2pe_fp32, 0, inv_std_col_dst);
                     sfpu_normalize_bcast_col(data_dst, mean_col_dst, inv_std_col_dst);
                     if (has_second_tile) {

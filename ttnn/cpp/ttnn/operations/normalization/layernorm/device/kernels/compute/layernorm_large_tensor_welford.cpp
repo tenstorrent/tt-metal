@@ -82,17 +82,20 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         if constexpr (fp32_sfpu_finalizer) {
             dfb_in_fp32_obj.wait_front(block.full_block_size());
             dfb_inb_fp32_obj.wait_front(block.full_block_size());
-            copy_tile_to_dst_init_short(dfb_in_fp32);
+            copy_init(dfb_in_fp32);
             for (uint32_t i = 0; i < block.local().size(); i += 2) {
                 const bool has_second_tile = i + 1 < block.local().size();
                 tile_regs_acquire();
                 copy_tile(dfb_in_fp32, i, 0);
-                copy_tile_to_dst_init_short_with_dt(dfb_in_fp32, dfb_inb_fp32);
+                reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
+                copy_init(dfb_inb_fp32);
                 copy_tile(dfb_inb_fp32, i, 1);
                 if (has_second_tile) {
-                    copy_tile_to_dst_init_short_with_dt(dfb_inb_fp32, dfb_in_fp32);
+                    reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);
+                    copy_init(dfb_in_fp32);
                     copy_tile(dfb_in_fp32, i + 1, 2);
-                    copy_tile_to_dst_init_short_with_dt(dfb_in_fp32, dfb_inb_fp32);
+                    reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
+                    copy_init(dfb_inb_fp32);
                     copy_tile(dfb_inb_fp32, i + 1, 3);
                 }
                 add_binary_tile_init();
@@ -107,7 +110,8 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
                     pack_tile(2, dfb_interm_pre_add);
                 }
                 tile_regs_release();
-                copy_tile_to_dst_init_short_with_dt(dfb_inb_fp32, dfb_in_fp32);
+                reconfig_data_format_srca(dfb_inb_fp32, dfb_in_fp32);
+                copy_init(dfb_in_fp32);
             }
             dfb_in_fp32_obj.pop_front(block.full_block_size());
             dfb_inb_fp32_obj.pop_front(block.full_block_size());
@@ -151,10 +155,10 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             // tiles. The SFPU Chan merge consumes them after this block's M2
             // has been accumulated in LREG4/5/6.
             reconfig_data_format_srca(dfb_ex_welford);
-            copy_tile_init(dfb_ex_welford);
+            copy_init(dfb_ex_welford);
             copy_tile(dfb_ex_welford, 0, mean_dst);
             reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
-            copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2_welford);
+            copy_init(dfb_ex2_welford);
             copy_tile(dfb_ex2_welford, 0, var_dst);
         }
 
@@ -242,10 +246,10 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     }
     tile_regs_acquire();
     reconfig_data_format_srca(dfb_ex_welford);
-    copy_tile_init(dfb_ex_welford);
+    copy_init(dfb_ex_welford);
     copy_tile(dfb_ex_welford, 0, mean_dst);
     reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
-    copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2_welford);
+    copy_init(dfb_ex2_welford);
     copy_tile(dfb_ex2_welford, 0, var_dst);
     welford_restore_state(mean_dst);
     if constexpr (fp32_sfpu_finalizer) {
@@ -739,7 +743,7 @@ void kernel_main() {
                 constexpr uint32_t mean_col_dst = 2;
                 constexpr uint32_t inv_std_col_dst = 3;
                 constexpr auto first_input_dfb = fused_pre_add_replay ? dfb_x_replay : dfb_in_fp32;
-                copy_tile_to_dst_init_short(first_input_dfb);
+                copy_init(first_input_dfb);
                 // Reuse each mean/inverse-standard-deviation load for two tiles
                 // whenever the data is already materialised as a single stream.
                 if constexpr (fused_pre_add_replay || !fuse_pre_add) {
@@ -750,9 +754,11 @@ void kernel_main() {
                         if (has_second_tile) {
                             copy_tile(first_input_dfb, i + 1, residual_dst);
                         }
-                        copy_tile_to_dst_init_short_with_dt(first_input_dfb, dfb_ex_welford);
+                        reconfig_data_format_srca(first_input_dfb, dfb_ex_welford);
+                        copy_init(dfb_ex_welford);
                         copy_tile(dfb_ex_welford, 0, mean_col_dst);
-                        copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2pe_fp32);
+                        reconfig_data_format_srca(dfb_ex_welford, dfb_ex2pe_fp32);
+                        copy_init(dfb_ex2pe_fp32);
                         copy_tile(dfb_ex2pe_fp32, 0, inv_std_col_dst);
                         sfpu_normalize_bcast_col(data_dst, mean_col_dst, inv_std_col_dst);
                         if (has_second_tile) {
@@ -765,21 +771,26 @@ void kernel_main() {
                             pack_tile(residual_dst, dfb_xmm);
                         }
                         tile_regs_release();
-                        copy_tile_to_dst_init_short_with_dt(dfb_ex2pe_fp32, first_input_dfb);
+                        reconfig_data_format_srca(dfb_ex2pe_fp32, first_input_dfb);
+                        copy_init(first_input_dfb);
                     }
                 } else {
                     for (auto i : block.local()) {
                         tile_regs_acquire();
                         copy_tile(first_input_dfb, i, data_dst);
                         if constexpr (fuse_pre_add && !fused_pre_add_replay) {
-                            copy_tile_to_dst_init_short_with_dt(dfb_in_fp32, dfb_inb_fp32);
+                            reconfig_data_format_srca(dfb_in_fp32, dfb_inb_fp32);
+                            copy_init(dfb_inb_fp32);
                             copy_tile(dfb_inb_fp32, i, residual_dst);
-                            copy_tile_to_dst_init_short_with_dt(dfb_inb_fp32, dfb_ex_welford);
+                            reconfig_data_format_srca(dfb_inb_fp32, dfb_ex_welford);
+                            copy_init(dfb_ex_welford);
                         } else {
-                            copy_tile_to_dst_init_short_with_dt(first_input_dfb, dfb_ex_welford);
+                            reconfig_data_format_srca(first_input_dfb, dfb_ex_welford);
+                            copy_init(dfb_ex_welford);
                         }
                         copy_tile(dfb_ex_welford, 0, mean_col_dst);
-                        copy_tile_to_dst_init_short_with_dt(dfb_ex_welford, dfb_ex2pe_fp32);
+                        reconfig_data_format_srca(dfb_ex_welford, dfb_ex2pe_fp32);
+                        copy_init(dfb_ex2pe_fp32);
                         copy_tile(dfb_ex2pe_fp32, 0, inv_std_col_dst);
                         if constexpr (fuse_pre_add && !fused_pre_add_replay) {
                             sfpu_residual_normalize_bcast_col(data_dst, residual_dst, mean_col_dst, inv_std_col_dst);
@@ -790,7 +801,8 @@ void kernel_main() {
                         tile_regs_wait();
                         pack_tile(data_dst, dfb_xmm);
                         tile_regs_release();
-                        copy_tile_to_dst_init_short_with_dt(dfb_ex2pe_fp32, first_input_dfb);
+                        reconfig_data_format_srca(dfb_ex2pe_fp32, first_input_dfb);
+                        copy_init(first_input_dfb);
                     }
                 }
                 dfb_normalized.push_back(block.full_block_size());

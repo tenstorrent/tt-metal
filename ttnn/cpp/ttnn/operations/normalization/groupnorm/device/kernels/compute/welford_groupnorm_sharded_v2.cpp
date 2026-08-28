@@ -429,15 +429,17 @@ void kernel_main() {
                         constexpr std::uint32_t inv_std_dst = 2;
                         tile_regs_acquire();
 #ifdef TILIZE_IN
-                        copy_tile_to_dst_init_short(dfb_in_welford_id);
+                        copy_init(dfb_in_welford_id);
                         copy_tile(dfb_in_welford_id, tile_id, data_dst);
 #else
-                        copy_tile_to_dst_init_short(dfb_in0_welford_id);
+                        copy_init(dfb_in0_welford_id);
                         copy_tile(dfb_in0_welford_id, tile_id, data_dst);
 #endif
-                        copy_tile_to_dst_init_short_with_dt(dfb_in0_welford_id, dfb_ex_global_fp32_id);
+                        reconfig_data_format_srca(dfb_in0_welford_id, dfb_ex_global_fp32_id);
+                        copy_init(dfb_ex_global_fp32_id);
                         copy_tile(dfb_ex_global_fp32_id, g << 1, mean_dst);
-                        copy_tile_to_dst_init_short_with_dt(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
+                        reconfig_data_format_srca(dfb_ex_global_fp32_id, dfb_ex2pe_fp32_id);
+                        copy_init(dfb_ex2pe_fp32_id);
                         copy_tile(dfb_ex2pe_fp32_id, g, inv_std_dst);
                         sfpu_normalize_bcast_scalar(data_dst, mean_dst, inv_std_dst);
                         tile_regs_commit();
@@ -445,7 +447,8 @@ void kernel_main() {
                         pack_tile(data_dst, dfb_xmm_id);
                         tile_regs_release();
                         dfb_xmm.push_back(1);
-                        copy_tile_to_dst_init_short_with_dt(dfb_ex2pe_fp32_id, dfb_in0_welford_id);
+                        reconfig_data_format_srca(dfb_ex2pe_fp32_id, dfb_in0_welford_id);
+                        copy_init(dfb_in0_welford_id);
                     } else {
                         reconfig_data_format(dfb_in0_id, dfb_ex_global_id);
                         sub_bcast_scalar_init(dfb_in0_id, dfb_ex_global_id);
@@ -587,7 +590,7 @@ void kernel_main() {
                     reconfig_data_format_srca(dfb_x_id);
                 }
                 reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                copy_tile_init(dfb_x_id);
+                copy_init(dfb_x_id);
 
                 dfb_x.wait_front(1);
                 tile_regs_acquire();
