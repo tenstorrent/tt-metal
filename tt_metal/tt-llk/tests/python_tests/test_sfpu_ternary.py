@@ -732,6 +732,42 @@ def _run_ttnn_where(formats, dest_acc, mathop, cond, true_value, false_value):
     assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 
 
+# The condition for the `mixed` variant, mixed *by construction* on every format.
+#
+# `uniform(0.0, 1.0)` is what this used to be, and on a float format it produced no exact
+# zeros at all -- 0 in 4096 on Float32, 20 on Float16_b and only because bf16 rounds small
+# draws down. So `mixed` was bit-for-bit `all_ones` on Float32: the false branch was never
+# taken by the one variant whose entire purpose is to take it. Int32 was the accident that
+# hid it, its integer narrowing giving a genuine ~50/50.
+#
+# `uniform(intervals=[(0.0, 0.0), (0.5, 1.0)])` looks like the fix and is not: an interval is
+# selected with probability proportional to its *length*, so a zero-length one is never
+# selected and the float formats come out with no zeros again. A callable is the honest way
+# to say "exactly half of these must be zero".
+#
+# The non-zero half is a spread of small magnitudes rather than a constant 1.0, and both signs:
+# `where` selects on `cond != 0`, so a negative condition and a condition of 2 must both take
+# the true branch, and a constant would assert neither. They are small integers because the
+# same tensor is driven on Int32, where anything in (0, 1) would quantize to zero and turn the
+# spread back into the bug this replaces.
+_WHERE_MIXED_NONZERO = (1.0, 2.0, -1.0, -2.0)
+
+
+def _where_mixed_condition(size, dtype, generator):
+    """Exactly half zeros, the rest a signed spread of small non-zero magnitudes."""
+    draw = torch.rand(size, generator=generator, dtype=torch.float32)
+    # Eight uniform buckets: the low four are the false branch, the high four index the
+    # spread. Bucketing rather than thresholding twice keeps the split exact at 50% and the
+    # spread uniform within its half, from one draw.
+    bucket = (draw * 8.0).floor().clamp(max=7.0)
+    nonzero = torch.tensor(_WHERE_MIXED_NONZERO, dtype=torch.float32)
+    return torch.where(
+        bucket < 4.0,
+        torch.zeros_like(draw),
+        nonzero[(bucket - 4.0).long()],
+    ).to(dtype)
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -756,12 +792,17 @@ def test_ttnn_where(
     # 64x64 = 2x2 tiles: exercises the multi-tile block loop in sfpu_ternary_test.cpp.
     input_dimensions = [64, 64]
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    cond_spec = (
+        StimuliSpec(distribution=_where_mixed_condition, seed=0)
+        if test_case == "mixed"
+        else sfpu_false_spec
+    )
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        spec_A=sfpu_false_spec,
+        spec_A=cond_spec,
         spec_B=sfpu_false_spec,
     )
 
@@ -779,7 +820,16 @@ def test_ttnn_where(
         src_A = torch.ones_like(src_A)
     elif test_case == "all_zeros":
         src_A = torch.zeros_like(src_A)
-    # For "mixed" case, use the generated stimuli as-is
+    else:
+        # The failure this variant was in is silent -- a condition that is all-true still
+        # passes, against a golden that is also all-true -- so assert the stimulus itself
+        # rather than trusting the spec to have produced it. Wide bounds: the claim is "both
+        # branches are exercised", not a distribution.
+        frac_true = float((src_A.flatten().to(torch.float32) != 0.0).float().mean())
+        assert 0.2 < frac_true < 0.8, (
+            f"the 'mixed' condition is {frac_true:.1%} true — this variant is a duplicate "
+            "of all_ones/all_zeros and asserts nothing about the select"
+        )
 
     _run_ttnn_where(formats, dest_acc, mathop, src_A, src_B, src_C)
 

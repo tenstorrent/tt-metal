@@ -26,7 +26,6 @@ the concrete steps to reach them.
 |---|---|---|---|---|---|
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
 | [W3](#w3--integer-binary-ops-never-see-zero-negatives-or-the-uint32-upper-half) | Int binary ops: no `0`, no negatives, uint32 capped at 1e6 | binary | M | High | partly HW (sign-magnitude Dst) |
-| [W4](#w4--ttnn_wheremixed-is-not-mixed) | `test_ttnn_where[mixed]` is all-true on Float32 | ternary | S | High | — |
 | [W6](#w6--the-ternary-scalar-is-hardcoded-to-20) | `SFPU_TERNARY_SCALAR` never varies | ternary | S | Medium | — |
 | [W7](#w7--the-overflow-producing-ops-are-not-driven-at-their-ceiling) | Nothing asserts that a result too large for the output format saturates rather than wraps | unary, binary | M | High | — |
 | [W8](#w8--logsigmoids-x--4-branch-is-never-driven) | `SfpuLogsigmoid` never executes the only branch that reads operand B | binary | S | Medium | — |
@@ -34,8 +33,8 @@ the concrete steps to reach them.
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 | [W11](#w11--a-coverage-ledger-so-the-next-gap-is-visible) | No machine-checked record of which value classes each op has seen | infra | M | High | the items above |
 
-Suggested order: **W1 → W4 → W6 → W8** (small, unblocked, each independently mergeable),
-then **W3 → W11**, then **W7 → W9 → W10** (each needs a measurement pass, and W9 a
+Suggested order: **W1 → W6 → W8** (small, unblocked, each independently mergeable), then
+**W3 → W11**, then **W7 → W9 → W10** (each needs a measurement pass, and W9 a
 kernel-contract ruling).
 
 **Already landed**, in the commit this document arrives with: the whole of the original W5
@@ -43,8 +42,9 @@ kernel-contract ruling).
 Dest/pack modelling that blocked it), and all of the original W7 except its overflow half —
 `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis on
 `edge_values()`/`edge_spec()`, `EXTREMES_READY_OPS` with its first tranche enrolled, and one
-saturation test. W7 below is what is left of it. Also the whole of W2 — `StimuliSpec.cycle`,
-honoured by `CustomStrategy`, on by default in `edge_spec()`. The numbering is unchanged so
+saturation test. Also the whole of W2 — `StimuliSpec.cycle`, honoured by `CustomStrategy`,
+on by default in `edge_spec()` — and the whole of W4, whose cat-B half the ternary specials
+work had already closed. W7 below is what is left of it. The numbering is unchanged so
 that references from commit messages and reviews still resolve; the closed items are simply
 gone.
 
@@ -295,71 +295,6 @@ CHIP_ARCH=blackhole pytest test_sfpu_binary.py -q -k "int_zero or uint32_high or
 ```
 
 **Cost:** three new nightly tests, ~30 new ELFs.
-
----
-
-## W4 — `test_ttnn_where[mixed]` is not mixed
-
-### Problem
-
-`test_ttnn_where` draws the condition tensor from `StimuliSpec.uniform(0.0, 1.0)`, and
-`WhereGolden` selects on `cond != 0.0`. Measured over 4096 elements at seed 0:
-
-| format | exact zeros in the condition |
-|---|---|
-| Float32 | **0** |
-| Float16_b | 20 (0.5%, and only because bf16 rounds small draws to zero) |
-| Int32 | 2090 (genuinely ~50/50 — the integer path narrows `uniform(0,1)` to `randint(0,2)`) |
-
-So on Float32 the `mixed` case is bit-for-bit identical in coverage to `all_ones`: the
-false branch is never taken. `test_ttnn_where_mcw`'s alternating pattern rescues the
-family's overall coverage, but the variant whose entire purpose is the mixed case is not
-testing it.
-
-The cat-B half of this item is done: `test_ttnn_where_specials` drives `±inf`, NaN and both
-zeros into each of the three operands in turn, and it settled the `SFPSETCC` question that was
-open here. NaN and `±inf` in the condition agree with the golden; `where(-0.0, t, f)` returns
-`t` on the unpack-to-dest path, which is the same negative-zero caveat that scopes `Sign` and
-`Heaviside`, and it carries a non-strict `xfail` derived from `negative_zero_delivered()`. What
-is left is the `mixed` variant itself.
-
-### Steps
-
-1. **Fix `mixed`.** Replace the condition spec with one that is mixed by construction on
-   every format, not by accident of quantization:
-
-   ```python
-   _WHERE_MIXED_COND = StimuliSpec.uniform(intervals=[(0.0, 0.0), (0.5, 1.0)], seed=0)
-   ```
-
-   or, clearer, a face callable alternating `0.0` and a ramp — the same shape
-   `_eq_ne_stimuli_specs()` uses on the binary side. Keep the true/false *value* tensors
-   on their existing spec; only the condition changes.
-
-2. **Assert the mix.** The failure mode this fixes is silent, so make it loud:
-
-   ```python
-   frac_true = float((src_A.flatten().to(torch.float32) != 0.0).float().mean())
-   assert 0.2 < frac_true < 0.8, (
-       f"the 'mixed' condition is {frac_true:.1%} true — this variant is a duplicate of "
-       "all_ones/all_zeros and asserts nothing about the select"
-   )
-   ```
-
-   Guard it on `test_case == "mixed"`.
-
-3. **Reuse the shared driver.** `_run_ttnn_where(formats, dest_acc, mathop, cond, t, f)` and
-   `_skip_unsupported_where()` already exist — `test_ttnn_where`, `test_ttnn_where_mcw` and
-   `test_ttnn_where_specials` all go through them — so this item is a change to one tensor and
-   one assertion, not to a TestConfig block.
-
-### Verify
-
-```bash
-CHIP_ARCH=blackhole pytest test_sfpu_ternary.py -q -k where
-```
-
-**Cost:** nothing beyond the assertion; `mixed` is already a variant.
 
 ---
 

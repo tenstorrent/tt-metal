@@ -646,6 +646,46 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
             )
 
 
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32]
+)
+def test_where_mixed_condition_is_mixed_on_every_format(fmt):
+    """Both branches of the `mixed` where variant must be reachable, on every format.
+
+    The in-test assertion catches this too, but only on a lane with hardware. This is the
+    failure mode that motivated the whole check: a condition that is all-true passes against a
+    golden that is also all-true, so the variant reports green while testing half of what it
+    claims. `uniform(0.0, 1.0)` produced 0 exact zeros in 4096 on Float32 and 20 on Float16_b;
+    only Int32's integer narrowing made it look mixed.
+
+    Pinned per format because the two ways to get this wrong are format-specific: a float
+    format rounds nothing to zero, and an integer one quantizes a fractional non-zero *to*
+    zero -- so a spread chosen for one silently degenerates on the other.
+    """
+    import test_sfpu_ternary
+    import torch
+    from helpers.stimuli_generator import generate_stimuli
+
+    spec = StimuliSpec(distribution=test_sfpu_ternary._where_mixed_condition, seed=0)
+    src, _, _, _ = generate_stimuli(
+        stimuli_format_A=fmt,
+        input_dimensions_A=[64, 64],
+        stimuli_format_B=fmt,
+        input_dimensions_B=[64, 64],
+        spec_A=spec,
+        spec_B=spec,
+    )
+    values = src.flatten().to(torch.float32)
+    frac_true = float((values != 0.0).float().mean())
+    assert 0.2 < frac_true < 0.8, f"{fmt.name}: condition is {frac_true:.1%} true"
+    # Both signs on the non-zero half, so the variant asserts that `cond != 0` and not
+    # `cond > 0` is what selects the true branch.
+    assert bool((values > 0).any()) and bool((values < 0).any()), (
+        f"{fmt.name}: the non-zero half of the condition is single-signed, so a kernel "
+        "selecting on cond > 0 would pass"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # How the probe fills the face
 #
