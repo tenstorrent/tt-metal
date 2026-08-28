@@ -3825,6 +3825,9 @@ TEST_F(ProgramSpecTestGen1, CPU_UnresolvedTensorBindingIsNull) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     static_assert(is_null_binding(tensor::input_ta));
+    // Is compileable, but will trip if watcher assert is on.
+    TensorAccessor accessor(tensor::input_ta);
+    (void)accessor;
 }
 )"};
     BindTensorParameterToKernel(dm_kernel, "nonexistent_tensor", "input_ta");
@@ -3848,6 +3851,8 @@ TEST_F(ProgramSpecTestGen1, CPU_UnresolvedDfbBindingIsNull) {
     kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     static_assert(is_null_binding(dfb::accessor));
+    DataflowBuffer buf(dfb::accessor);
+    (void)buf;
 }
 )"};
     kernel.dfb_bindings.push_back(ProducerOf(DFBSpecName{"nonexistent_dfb"}, "accessor"));
@@ -3871,6 +3876,9 @@ TEST_F(ProgramSpecTestGen1, CPU_UnresolvedScratchpadBindingIsNull) {
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
     static_assert(is_null_binding(scratch::s));
+    // Is compileable, but will trip if watcher assert is on.
+    Scratchpad<uint32_t> pad(scratch::s);
+    (void)pad;
 }
 )"};
     dm_kernel.scratchpad_bindings = {KernelSpec::ScratchpadBinding{
@@ -3996,11 +4004,9 @@ TEST_F(ProgramSpecTestGen1, CPU_OptionalBindingProbeBuildsWithNullAndReal) {
     // Per-resource null token is_null_binding JIT coverage:
     // UnresolvedTensor/Dfb/ScratchpadBindingIsNull.
     //
-    // Construction from a possibly-null name must go through an overload or a function template
-    // so the DataflowBuffer / Scratchpad ctor call is on a parameter. A direct
-    //   if constexpr (!is_null_binding(dfb::optional_dfb)) { DataflowBuffer(dfb::optional_dfb); }
-    // is still ill-formed when the symbol is a null type: the discarded branch is non-dependent,
-    // and the deleted null ctor is diagnosed anyway.
+    // Construction from a null token compiles and trips ASSERT(false) at runtime.
+    // if constexpr in kernel_main is well-formed because the null ctor is not deleted.
+    // Overloads / function templates remain a way to skip construction when null.
     const auto kernel_src = KernelSpec::SourceCode{R"(
 void maybe_use_dfb(DFBBindingToken tok) {
     DataflowBuffer opt(tok);
@@ -4008,13 +4014,11 @@ void maybe_use_dfb(DFBBindingToken tok) {
 }
 void maybe_use_dfb(NullDFBBindingToken) {}
 
-template <typename Tok>
-void maybe_use_scratch(Tok tok) {
-    if constexpr (!is_null_binding(tok)) {
-        Scratchpad<uint32_t> pad(tok);
-        (void)pad;
-    }
+void maybe_use_scratch(ScratchpadBindingToken tok) {
+    Scratchpad<uint32_t> pad(tok);
+    (void)pad;
 }
+void maybe_use_scratch(NullScratchpadBindingToken) {}
 
 void kernel_main() {
     DataflowBuffer always(dfb::always);
@@ -4022,10 +4026,13 @@ void kernel_main() {
     maybe_use_dfb(dfb::optional_dfb);
     maybe_use_scratch(scratch::optional_pad);
 
-    auto tok = dfb::optional_dfb;
-    (void)tok;
-    if constexpr (is_null_binding(tok)) {
-        // this KernelSpec did not attach dfb::optional_dfb
+    if constexpr (!is_null_binding(dfb::optional_dfb)) {
+        DataflowBuffer opt(dfb::optional_dfb);
+        (void)opt;
+    }
+    if constexpr (!is_null_binding(scratch::optional_pad)) {
+        Scratchpad<uint32_t> pad(scratch::optional_pad);
+        (void)pad;
     }
 }
 )"};

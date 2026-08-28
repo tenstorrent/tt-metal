@@ -25,7 +25,8 @@
 // Here my_scratchpad_name is a constexpr ScratchpadBindingToken, auto-included in
 // kernel_bindings_generated.h.
 // If this ProgramSpec did not declare the named Scratchpad, codegen emits a
-// NullScratchpadBindingToken instead. Ask presence with is_null_binding.
+// NullScratchpadBindingToken instead. Constructing a Scratchpad from that token
+// trips ASSERT(false) at runtime. Ask presence with is_null_binding.
 //
 class ScratchpadBindingToken {
 public:
@@ -42,7 +43,7 @@ private:
 
 // Emitted when this ProgramSpec did not declare the named Scratchpad.
 // Used as stand-in type to describe null-bindings.
-// Cannot be used to construct a Scratchpad.
+// Constructing a Scratchpad from this token trips ASSERT(false) at runtime.
 struct NullScratchpadBindingToken {};
 
 constexpr bool is_null_binding(ScratchpadBindingToken) { return false; }
@@ -90,9 +91,12 @@ public:
     [[nodiscard]] explicit Scratchpad(const ScratchpadBindingToken& token) noexcept :
         Scratchpad(pointer{get_common_arg_val<uint32_t>(token.crta_offset_)}, token.size_in_bytes_) {}
 
-    // Cannot construct a Scratchpad from a NullScratchpadBindingToken, consider binding the token to an actual resource
-    // on host. See: ProgramSpec on host.
-    explicit Scratchpad(const NullScratchpadBindingToken&) = delete;
+    // Construction from nullbinding will result in an assertion failure at runtime,
+    // If assertion is not on, the behavior of produced object is undefined.
+    explicit Scratchpad(const NullScratchpadBindingToken&) noexcept :
+        start_addr_(uintptr_t{0}), sentinel_addr_(uintptr_t{0}) {
+        ASSERT(false);
+    }
 
     /** @brief Get the element at the given index
      *

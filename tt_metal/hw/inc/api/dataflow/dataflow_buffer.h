@@ -83,7 +83,8 @@ template <bool IsWrite, typename ReleaseFunc>
 //
 // If this ProgramSpec did not declare the named DFB, codegen emits a NullDFBBindingToken
 // instead. Naming the symbol always compiles. Constructing a DataflowBuffer from a
-// NullDFBBindingToken does not. Ask presence with is_null_binding.
+// NullDFBBindingToken compiles and trips ASSERT(false) at runtime. Ask presence with
+// is_null_binding.
 //
 struct DFBBindingToken {
     // DFBBindingToken is backed by a compile-time ID (an implicit CTA).
@@ -103,7 +104,7 @@ private:
 
 // Emitted when this ProgramSpec did not declare the named DFB.
 // Used as stand-in type to describe null-bindings.
-// Cannot be used to construct a DataflowBuffer.
+// Constructing a DataflowBuffer from this token trips ASSERT(false) at runtime.
 struct NullDFBBindingToken {};
 
 constexpr bool is_null_binding(DFBBindingToken) { return false; }
@@ -122,9 +123,22 @@ public:
     //   DataflowBuffer dfb(my_dfb_name);
     DataflowBuffer(DFBBindingToken token) : DataflowBuffer(token.id()) {}
 
-    // Cannot construct a DataflowBuffer from a NullDFBBindingToken, consider binding the token to an actual resource on
-    // host. See: ProgramSpec on host.
-    explicit DataflowBuffer(NullDFBBindingToken) = delete;
+    // Construction from nullbinding will result in an assertion failure at runtime,
+    // If assertion is not on, the behavior of produced object is undefined.
+    explicit DataflowBuffer(NullDFBBindingToken) :
+        logical_dfb_id_(0)
+#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
+#ifdef ARCH_QUASAR
+        ,
+        local_dfb_interface_(get_local_dfb_interface(0))
+#else
+        ,
+        local_dfb_interface_(get_local_cb_interface(0))
+#endif
+#endif
+    {
+        ASSERT(false);
+    }
 
     // Low-level constructor: prefer DFBBindingToken overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);

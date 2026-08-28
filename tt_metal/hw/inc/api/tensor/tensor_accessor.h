@@ -105,9 +105,9 @@ public:
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
-    // Cannot construct a TensorAccessor from a NullTensorBindingToken, consider binding the token to an actual resource
-    // on host. See: ProgramSpec on host.
-    explicit TensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
+    // Construction from nullbinding will result in an assertion failure at runtime,
+    // If assertion is not on, the behavior of produced object is undefined.
+    explicit TensorAccessor(tensor_accessor::NullTensorBindingToken) { ASSERT(false); }
 
     constexpr const auto& dspec() const {
         if constexpr (DSpec::is_static) {
@@ -425,9 +425,12 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
-    // Cannot construct a TensorAccessor from a NullTensorBindingToken, consider binding the token to an actual resource
-    // on host. See: ProgramSpec on host.
-    TensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
+    // Construction from nullbinding will result in an assertion failure at runtime,
+    // If assertion is not on, the behavior of produced object is undefined.
+    explicit TensorAccessor(tensor_accessor::NullTensorBindingToken) :
+        InterleavedAddrGen<IsDram>({.bank_base_address = 0, .page_size = 0}) {
+        ASSERT(false);
+    }
 
     template <typename DSpec_ = DSpec, std::enable_if_t<std::is_same_v<std::decay_t<DSpec_>, DSpec>, int> = 0>
     constexpr explicit TensorAccessor(
@@ -570,6 +573,16 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
         /* IsShardContiguous */
         TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
+
+// CTAD for a null Metal 2.0 binding token. The dummy DSpec is fully static so the
+// accessor can be constructed without CTA/CRTA payload; the matching constructor
+// trips ASSERT(false) at runtime.
+TensorAccessor(tensor_accessor::NullTensorBindingToken) -> TensorAccessor<tensor_accessor::DistributionSpec<
+    /* RankCT */ 1,
+    /* NumBanksCT */ 1,
+    tensor_accessor::ArrayStaticWrapperU32<1>,
+    tensor_accessor::ArrayStaticWrapperU32<1>,
+    tensor_accessor::ArrayStaticWrapperU16<0>>>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)

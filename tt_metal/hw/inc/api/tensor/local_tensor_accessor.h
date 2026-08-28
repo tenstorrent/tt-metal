@@ -67,9 +67,11 @@ public:
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0, "TensorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
     }
 
-    // Cannot construct a LocalTensorAccessor from a NullTensorBindingToken, consider binding the token to an actual
-    // resource on host. See: ProgramSpec on host.
-    explicit LocalTensorAccessor(tensor_accessor::NullTensorBindingToken) = delete;
+    // Construction from nullbinding will result in an assertion failure at runtime,
+    // If assertion is not on, the behavior of produced object is undefined.
+    explicit LocalTensorAccessor(tensor_accessor::NullTensorBindingToken) noexcept : LocalTensorAccessor(uint32_t{0}) {
+        ASSERT(false);
+    }
 
     // Legacy constructor: from a raw node-local L1 base address (a byte address).
     // (Typically a legacy Buffer's address passed into the kernel as a CRTA.)
