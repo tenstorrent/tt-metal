@@ -35,7 +35,7 @@ FORCE_INLINE void matrix_multiply(uint32_t a_id, uint32_t b_id, uint32_t output_
     static_assert(subblock_rows * subblock_columns <= dst_tiles);
 
     output.reserve_back(Mt * Nt);
-    reconfig_data_format(b_id, a_id);
+    reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
     matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
     for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
         for (uint32_t column_start = 0; column_start < Nt; column_start += subblock_columns) {
