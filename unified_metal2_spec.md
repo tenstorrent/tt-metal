@@ -593,26 +593,37 @@ program from `ttnn::CoreIDs`, the same counter ttnn uses, so ids stay unique acr
 8 tiles, 0.148us per input tile for a reduce against 0.234us per input-plus-output tile, so
 0.086us for the acquire and pack alone.
 
-### 7.5 One open failure: mcast_share, in sequence only
+### 7.5 One open failure: mcast_share, and a methodology error that hid it
 
-`test_unified_mcast_share` hangs partway through a full `run_unified_tests.sh` sequence, twice
-reproducibly, at the transition from its dedicated-NOC configurations to its `DM_DYNAMIC_NOC`
-ones -- all four dedicated configurations pass first. Everything after it in that run is then
-unreliable, because a hung program leaves the device stopped until reset.
+**`test_unified_mcast_share` hangs when kernel asserts are compiled in, and only then.**
+Isolated to one variable, same device, same reset, nothing else changed:
 
-What has been ruled out, each on a freshly reset device:
+    TT_METAL_HOME=$PWD                                          ./test_unified_mcast_share.py   8/8 configs ok
+    TT_METAL_HOME=$PWD TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1     ./test_unified_mcast_share.py   hangs
 
-- **Standalone**: passes 8/8, including the whole dynamic-NOC matrix. Twice.
-- **Twice back to back with no reset between**: passes 8/8 both times, so it is not residual
-  state from a previous run of itself.
-- **After `custom_compute`, its immediate predecessor in the runner**: both pass.
+Under the WATCHER -- asserts also on, different reporting -- it passes in 8s. That combination
+is what `unified_api_hazards.md` already warns about under "the two assert modes are not
+interchangeable": lightweight is an `ebreak` that halts the RISC and is indistinguishable from
+a hang, so an assert firing and a deadlock look identical from the host. Which of the two this
+is has not been established. mcast_share is also the suite built to be timing-sensitive --
+handshake-pair sharing and deliberate skew -- so a build that changes kernel size changing its
+behaviour is not surprising, and that cuts both ways: it could be a real assert, or a race the
+watcher's timing avoids.
 
-So it needs a longer run to appear -- it is the thirteenth suite, and the fifth since the
-runner's last reset. The likeliest suspect is program churn: `run_program_spec` deliberately
-rebuilds the workload on every call, so a full sequence constructs and destroys thousands of
-Programs, and anything that does not fully release accumulates. That is a guess, not a
-finding. Adding the caching that is wanted for benchmarking anyway is the next thing to try,
-and it would settle it either way.
+**Two earlier explanations were wrong, and both were mine.** The first was per-launch program
+churn; caching the workload changed nothing. The second was a preceding multicast, from
+bisecting that appeared to show `matmul_mcast + mcast_share` and `matmul_blocked +
+mcast_share` failing where `custom_compute + mcast_share` passed. Re-run on a quiet machine,
+`custom_compute + mcast_share` fails too -- and `mcast_share` ALONE through the runner fails.
+There was never a prefix.
+
+**The methodology error is worth more than the bug.** Every "passes standalone" run in this
+session set `LIGHTWEIGHT_KERNEL_ASSERTS=1`, which metal does not read -- the variable is
+`TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS`. So those runs had asserts OFF while appearing to have
+them on, which is exactly why mcast_share looked fine standalone and broke under the runner,
+and why two wrong theories survived as long as they did. The suite-level results stand,
+because `run_unified_tests.sh` exports the right name; the individual spot-checks were weaker
+than they looked.
 
 ## 8. What this buys, against the hazard ledger
 
