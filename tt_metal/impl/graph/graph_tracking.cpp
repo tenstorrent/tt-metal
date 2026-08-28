@@ -37,9 +37,8 @@ void GraphTracker::track_function_abort(std::string_view reason) {
         return;
     }
     std::any payload{GraphFunctionAbort{std::string(reason), false}};
-    for (auto& it : processors) {
-        it->track_function_end(payload);
-    }
+    std::for_each(
+        processors.begin(), processors.end(), [&](auto& processor) { processor->track_function_end(payload); });
 }
 
 void GraphTracker::unwind_open_functions(std::string_view reason) {
@@ -47,9 +46,8 @@ void GraphTracker::unwind_open_functions(std::string_view reason) {
         return;
     }
     std::any payload{GraphFunctionAbort{std::string(reason), true}};
-    for (auto& it : processors) {
-        it->track_function_end(payload);
-    }
+    std::for_each(
+        processors.begin(), processors.end(), [&](auto& processor) { processor->track_function_end(payload); });
 }
 
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
