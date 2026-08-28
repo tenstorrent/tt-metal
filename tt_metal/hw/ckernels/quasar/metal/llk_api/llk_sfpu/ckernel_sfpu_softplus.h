@@ -51,11 +51,12 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
     sfpi::vFloat val = sfpi::dst_reg[0]; // load x from dest (SFPLOAD)
     sfpi::vFloat t   = beta * val;
 
-    // Linear region (t > threshold): softplus(x) = x; default for every lane so the single store covers it.
+    // Linear region (t >= threshold): softplus(x) = x; default for every lane so the single store covers it.
     sfpi::vFloat result = val;
 
-    // `t <= threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
-    v_if(t <= threshold) {
+    // `t < threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
+    v_if (t < threshold)
+    {
         sfpi::vFloat a = sfpi::abs(t);
         sfpi::vFloat residual;
 
@@ -122,7 +123,7 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  * @brief Compute softplus (1/beta * ln(1 + exp(beta * x))) in-place over a Dest tile.
  *
  * Uses the abs(x) symmetry: with f(a) = ln(1 + exp(-a)) and t = beta * x,
- * softplus(x) = 1/beta * (t + f(t)) for t >= 0 and 1/beta * f(-t) for t < 0. Strictly above `threshold` the op
+ * softplus(x) = 1/beta * (t + f(t)) for t >= 0 and 1/beta * f(-t) for t < 0. Above `threshold` the op
  * is linear (returns x). is_fp32_dest_acc_en selects a degree-8 polynomial on [0, 5] plus an exp
  * Taylor tail (32-bit Dest) or a bf16-accurate degree-6 polynomial with the tail dropped (16-bit
  * Dest). APPROXIMATION_MODE is accepted for ABI parity but ignored (softplus is exact).
@@ -132,9 +133,8 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  * @tparam ITERATIONS: Number of SFPU loop iterations over the Dest tile.
  * @param beta: Sharpness parameter beta, as an fp32 bit pattern.
  * @param beta_reciprocal: 1/beta, as an fp32 bit pattern.
- * @param threshold: Linear-region threshold on beta*x strictly above which softplus(x) = x, as an fp32 bit
- *                  pattern. At beta*x == threshold softplus is evaluated, matching torch.
- * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t <= threshold` compare relies on
+ * @param threshold: Linear-region threshold on beta*x above which softplus(x) = x, as an fp32 bit pattern.
+ * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t < threshold` compare relies on
  *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_, so there
  *       is no op-specific init step to pair with.
  */
