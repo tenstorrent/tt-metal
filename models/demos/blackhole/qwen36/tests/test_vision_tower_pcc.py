@@ -28,7 +28,7 @@ TWO CASES, EACH AT THE DEPTH THAT SUITS IT
     block every block op appears exactly once, so the perf report needs no dividing and no "read the
     second instance" caveat. A window is ``head + depth x block + tail``, so window totals are only
     comparable at equal depth -- keeping the profiled depth pinned at 1 is what makes the numbers in
-    ``../VISION_TOWER_PERF.md`` mean the same thing run to run.
+    ``../README-N300-9B.md`` ("Tower kernel tuning") mean the same thing run to run.
 
 ``fulldepth`` -- ALL ``vision_config.depth`` blocks, no warmup, no signposts. Depth matters for
     numerics: error compounds block over block, so a shallow check flatters the tower -- on the 9B,
