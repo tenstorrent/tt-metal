@@ -229,6 +229,18 @@ def file_issue(
     if dedup_label:
         existing = _find_open_dupe(base, email, token, project, dedup_label)
         if existing:
+            # Merge this filing's labels onto the existing ticket (adding a
+            # label an issue already has is a no-op). Notably the per-ref
+            # label close-on-green searches by, which older tickets predate.
+            if labels:
+                _api(
+                    base,
+                    email,
+                    token,
+                    "PUT",
+                    f"/rest/api/3/issue/{existing}",
+                    {"update": {"labels": [{"add": label} for label in labels]}},
+                )
             _api(
                 base,
                 email,

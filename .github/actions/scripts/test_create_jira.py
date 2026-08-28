@@ -298,3 +298,30 @@ def test_close_action_is_selected_by_env(monkeypatch, capsys):
         monkeypatch.setenv(k, v)
     jira_client.main()
     assert "nothing to close" in capsys.readouterr().out
+
+
+def test_dedup_comment_also_merges_labels_onto_the_existing_issue(monkeypatch):
+    """An old ticket must pick up the per-ref label so close-on-green finds it."""
+    import jira_client
+
+    calls = []
+
+    def fake_api(base, email, token, method, path, body=None):
+        calls.append((method, path, body))
+        if path.startswith("/rest/api/3/search/jql"):
+            return {"issues": [{"key": "RELEASE-6"}]}
+        return {}
+
+    monkeypatch.setattr(jira_client, "_api", fake_api)
+    out = jira_client.file_issue(
+        "https://j.test", "e", "t", "RELEASE",
+        summary="s", description="d",
+        labels=["ci-failure", "package-release-ref:stable"],
+        dedup_label="package-release-failure:abc",
+    )
+    assert "commented on existing RELEASE-6" in out
+    puts = [c for c in calls if c[0] == "PUT" and c[1] == "/rest/api/3/issue/RELEASE-6"]
+    assert len(puts) == 1
+    added = {a["add"] for a in puts[0][2]["update"]["labels"]}
+    assert {"package-release-ref:stable", "package-release-failure:abc"} <= added
+    assert ("POST", "/rest/api/3/issue/RELEASE-6/comment") in [(c[0], c[1]) for c in calls]
