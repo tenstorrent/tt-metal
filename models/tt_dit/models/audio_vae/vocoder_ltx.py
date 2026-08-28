@@ -54,7 +54,6 @@ class DilatedConv1d(_AlignedOutConv1d):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -69,7 +68,6 @@ class DilatedConv1d(_AlignedOutConv1d):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
 
@@ -88,7 +86,6 @@ class AMPBlock1(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -111,7 +108,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -129,7 +125,6 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_branches)
             ]
@@ -234,7 +229,6 @@ class Vocoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        tap_matmul: bool = False,
     ) -> None:
         super().__init__()
 
@@ -289,7 +283,6 @@ class Vocoder(Module):
             parallel_config=None if self._conv_pre_unsharded else parallel_config,
             ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
         self.ups = ModuleList(
@@ -305,7 +298,6 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
-                    tap_matmul=tap_matmul,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -327,7 +319,6 @@ class Vocoder(Module):
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
-                        tap_matmul=tap_matmul,
                     )
                 )
 
@@ -362,7 +353,6 @@ class Vocoder(Module):
             # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
             split_mode=split_mode,
-            tap_matmul=tap_matmul,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

@@ -302,7 +302,7 @@ measured denoise 85.3 s / total 118.0 s. One run does not establish a direction.
 
 The audio row is **not** a like-for-like comparison and the total inherits that. The 4x8 column was
 taken with the audio precision levers off, which was their default when it was measured; they are now
-on by default (`split_mode="full"`, `tap_matmul=True` on `MiniMaxH3AudioDecoder`),
+on by default (`split_mode="full"` on `MiniMaxH3AudioDecoder`),
 which is an accuracy choice, not a regression -- the same levers cost the same on a single Galaxy.
 Denoise, the row the mesh actually changes, is 2.7-3.0x.
 
@@ -411,19 +411,21 @@ conditioner fidelity rather than output quality.
 ## Audio decode precision
 
 The audio VAE constructs in **accurate mode by default**: `MiniMaxH3AudioDecoder` /
-`MiniMaxH3AudioEncoder` take `split_mode="full"`, `tap_matmul=True` (and `max_c_in_block=128`) as
-constructor defaults, and register the H3 conv blockings themselves. Both levers answer the same
-hardware fact, that an fp32 **multiply** through SrcA/SrcB keeps only ~11 significand bits (the FPU
+`MiniMaxH3AudioEncoder` take `split_mode="full"` (and `max_c_in_block=128`) as constructor
+defaults, and register the H3 conv blockings themselves. The one remaining lever answers a
+hardware fact: an fp32 **multiply** through SrcA/SrcB keeps only ~11 significand bits (the FPU
 takes ~5 mantissa bits per fidelity pass and HiFi4's 4 passes is the ceiling), so the error is
-*flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher fidelity can help. Elementwise
-fp32 ops, by contrast, are exact.
+*flat in reduction depth* and neither `fp32_dest_acc_en` nor a higher fidelity can help.
 
 - **`split_mode`** (`weight` = 2 convs, `full` = 3) splits a conv3d operand into `bf16 hi` plus its
   exact residual, so a second conv carries the mantissa bits the first dropped. A **3-way** split is
   bit-identical to a 2-way one, so 2-way already recovers the whole operand mantissa.
-- **`tap_matmul`** runs stride-1 convs as `sum_j W_j @ x[t + dilation*j]`. conv3d's residual *after*
-  splitting is partial-sum rounding across `C_in_block`, which matmul does not have; worth 1.8–3.5x per
-  conv.
+
+The retired `tap_matmul` lever reformulated stride-1 convs as per-tap matmuls to dodge conv3d's
+partial-sum and output-path roundings; those are now fixed in the conv3d kernel itself (fp32
+partials reduced on the SFPU, bias/untilize reading `UnpackToDestFp32` CBs — see
+`conv3d/device/kernels/compute.cpp`), so conv3d+split matches the old tap+split accuracy in one
+op with none of the per-tap weights or layout traffic.
 
 The depthwise resample filters (`depthwise_tap_filter`) need no lever: their `ttnn.conv1d` kernel
 accumulates on the SFPU for fp32 operands (`compute_depthwise_conv1d.cpp`) and measures bit-equal to
