@@ -497,10 +497,12 @@ def test_gpt_oss_demo(
         # step repeats the same ops, so a handful covers the decode surface while 200 steps only
         # multiply the record count -- a 200-token capture of a comparable model produced ~750k
         # records and 5 GB. Fewer steps make `count` in a generated suite smaller, not the set of
-        # captured calls narrower.
-        if max_generated_tokens > _CAPTURE_MAX_GENERATED_TOKENS:
+        # captured calls narrower. Gated on enable_graph_report, not enable_logging: only a run
+        # writing a report has a capture to keep small, and enable_logging alone is a diagnostics
+        # flag that must not quietly shorten a long-generation debug run.
+        if ttnn.CONFIG.enable_graph_report and max_generated_tokens > _CAPTURE_MAX_GENERATED_TOKENS:
             logger.info(
-                f"ttnn logging is enabled: generating {_CAPTURE_MAX_GENERATED_TOKENS} tokens instead of "
+                f"ttnn graph reporting is enabled: generating {_CAPTURE_MAX_GENERATED_TOKENS} tokens instead of "
                 f"{max_generated_tokens} to keep the capture readable"
             )
             max_generated_tokens = _CAPTURE_MAX_GENERATED_TOKENS

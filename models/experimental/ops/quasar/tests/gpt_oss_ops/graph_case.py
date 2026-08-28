@@ -547,7 +547,23 @@ def _ref_identity(inputs, kwargs, case):
 
 
 def _ref_matmul(inputs, kwargs, case):
-    return inputs["0"].float() @ inputs["1"].float()
+    """a @ b, plus the captured bias where ttnn.linear supplied one.
+
+    Three of gpt-oss's four linear cases pass a bias (the router's [1, 32] and the MLP's [5120]);
+    leaving it out of the reference means an op that dropped the bias would agree with it. The
+    flatten-and-trim mirrors how rms_norm's gamma is handled, so a tile-padded bias lines up with
+    the output row too; a bias too short to cover the row is not something this can align, so the
+    case falls back to the structural checks rather than a reference that is quietly wrong.
+    """
+    out = inputs["0"].float() @ inputs["1"].float()
+    bias = inputs.get("bias")
+    if bias is None:
+        return out
+    flat = bias.float().reshape(-1)
+    width = out.shape[-1]
+    if flat.numel() < width:
+        return None
+    return out + flat[:width]
 
 
 def _second_operand(inputs, case):
