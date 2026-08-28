@@ -106,34 +106,42 @@ run the untouched accurate polynomial and serve as a **control** that should com
 
 | op | approx | dest_acc | retuned table? | main | retuned | Δ mean | ranges overlap |
 |----|:------:|:--------:|:--------------:|-----:|--------:|-------:|:--------------:|
-| `GeluAppx` | No | No | yes | 32753..32759 | 32753..32759 | +0.5 | **identical** |
-| `GeluAppx` | No | Yes | yes | 32754..32762 | 32754..32756 | -3.5 | yes |
-| `GeluAppx` | Yes | No | yes | 32753..32759 | 32753..32759 | +2.0 | **identical** |
-| `GeluAppx` | Yes | Yes | yes | 32749..32762 | 32754..32762 | +1.5 | yes |
-| `SigmoidAppx` | No | No | yes | 32777..32778 | 32777..32778 | +0.6 | **identical** |
-| `SigmoidAppx` | No | Yes | yes | 32774..32782 | 32762..32774 | -7.2 | yes |
-| `SigmoidAppx` | Yes | No | yes | 32777..32779 | 32777..32779 | -0.2 | **identical** |
-| `SigmoidAppx` | Yes | Yes | yes | 32774..32782 | 32774..32782 | +0.0 | **identical** |
-| `Tanh` | No | No | no (control) | 67845..67855 | 67855 | +5.0 | yes |
-| `Tanh` | No | Yes | no (control) | 204967..204972 | 204967 | -1.2 | yes |
+| `GeluAppx` | No | No | yes | 32753..32760 | 32753..32759 | +2.7 | yes |
+| `GeluAppx` | No | Yes | yes | 32754..32762 | 32754 | -2.0 | yes |
+| `GeluAppx` | Yes | No | yes | 32753..32759 | 32753..32759 | -0.5 | **identical** |
+| `GeluAppx` | Yes | Yes | yes | 32754 | 32754..32762 | +2.5 | yes |
+| `SigmoidAppx` | No | No | yes | 32777..32779 | 32777..32778 | +0.0 | yes |
+| `SigmoidAppx` | No | Yes | yes | 32774..32782 | 32773..32781 | -2.5 | yes |
+| `SigmoidAppx` | Yes | No | yes | 32777..32778 | 32777 | -0.8 | yes |
+| `SigmoidAppx` | Yes | Yes | yes | 32773..32782 | 32774..32782 | -1.8 | yes |
+| `Tanh` | No | No | no (control) | 67855 | 67845..67855 | -2.5 | yes |
+| `Tanh` | No | Yes | no (control) | 204967 | 204967 | +0.0 | **identical** |
 | `Tanh` | Yes | No | yes | 24593..24602 | 24593..24602 | +0.0 | **identical** |
-| `Tanh` | Yes | Yes | yes | 24579 | 24579 | +0.0 | **identical** |
+| `Tanh` | Yes | Yes | yes | 24579..24580 | 24579..24586 | +1.6 | yes |
 
-**Widest within-state spread: 13 cycles. Worst |Δ mean| between states: 7.2 cycles.** Every
+**Widest within-state spread: 10 cycles. Worst |Δ mean| between states: 2.7 cycles.** Every
 difference is smaller than the noise the harness produces against itself, and **all 12 variants'
-ranges overlap** — 7 of them are bit-identical in both min and max. The two rows that matter most
-are the ones where the LUT is the entire kernel rather than a fifth of it: `Tanh` `approx=Yes`
-came out **exactly identical on both sides**, `24593..24602` and `24579..24579`, four sessions each.
+ranges overlap** — 3 of them are bit-identical in both min and max. The row that matters most is
+the one where the LUT is the entire kernel rather than a fifth of it: `Tanh` `approx=Yes`
+`dest_acc=No` came out **bit-identical on both sides**, `24593..24602` against `24593..24602`,
+four sessions each.
 
-Two Δ values are worth naming rather than glossing. `SigmoidAppx|No|Yes` is **7.2 cycles faster**
-retuned and `GeluAppx|No|Yes` 3.5 faster; both are the wrong sign for a cost and both are inside
-the 13-cycle spread, so they are noise, not a speedup. Nothing here moved in the direction of
-slower by more than 5 cycles on a ~32 750-cycle loop (0.015 %).
+The largest Δ in either direction is 2.7 cycles on a ~32 750-cycle loop — **0.008 %** — and the
+second and third largest are *negative* (`SigmoidAppx|No|Yes` and the `Tanh|No|No` control, both
+2.5 cycles faster), which is the wrong sign for a cost. Nothing in this table is a measurement of
+the patch; it is all spread.
 
-The `Tanh` `approx=No` control rows behave as they should: 67 845..67 855 and 204 967..204 972 on
-main against 67 855 and 204 967 retuned — an untouched code path measuring as untouched, which is
-the cheapest available check that the two build caches really are separate trees and not the same
+The `Tanh` `approx=No` control rows behave as they should: 67 855 and 204 967 on main against
+67 845..67 855 and 204 967 retuned — an untouched code path measuring as untouched, which is the
+cheapest available check that the two build caches really are separate trees and not the same
 ELF twice.
+
+> **This table is the second independent capture.** The first gave a 13-cycle within-state spread
+> and a worst |Δ mean| of 7.2 cycles, with 7 rows bit-identical rather than 3 — different noise,
+> same verdict: 12/12 overlapping, largest movement well under 0.02 %. Two captures agreeing that
+> every difference sits inside the spread is the claim this section supports. The individual cycle
+> counts are not reproducible to the cycle and are not asserted anywhere, which is the honest
+> distinction between this section and §0.5's accuracy artefacts.
 
 > An earlier pass at this work reported that "`tanh` has no entry in the perf sweep". That was
 > wrong, and worth recording as a harness trap: a bare `-k Tanh` also selects `Atanh`,
@@ -223,7 +231,9 @@ deleted first. Two things came out of that worth recording.
 
 **The accuracy capture is bit-reproducible.** `curves_{main,retuned}.json` and
 `accuracy_{main,retuned}.txt` — 4500 measured points across the two states — came back
-**byte-for-byte identical** to the earlier capture. The SFPU is deterministic here and the
+**byte-for-byte identical** across three independent captures, the third in a third clone. The
+five rendered figures reproduce byte-for-byte too, as PNG; their SVG forms differ only in an
+embedded `dc:date` and matplotlib's generated clip-path ids. The SFPU is deterministic here and the
 instrument has no hidden state, so a difference in these files would mean a real change, not
 noise. That is the property that makes the before/after comparison worth anything — and the
 reason none of the captured data is archived in this PR: it is a pure function of the kernel,
@@ -270,10 +280,10 @@ the three old tables fails it. That test *is* committed; the instruments below a
 | instrument | committed | what it produces | result |
 |---|---|---|---|
 | `test_sfpu_wh_lut_retune.py` | **yes** | per-segment `max\|err\|` bounds + invariants | 3 + 3 assertions; passes retuned, fails main |
-| `test_sfpu_wh_lut_curves.py` | no | 250 pts × segment → `curves_<tag>.json` | 9 + 9 variants pass; output byte-identical to the prior capture |
-| `test_sfpu_wh_lut_accuracy.py` | no | per-segment max/mean \|err\|, recorded not asserted | 3 + 3 pass; output byte-identical |
+| `test_sfpu_wh_lut_curves.py` | no | 250 pts × segment → `curves_<tag>.json` | 9 + 9 variants pass; byte-identical across three captures |
+| `test_sfpu_wh_lut_accuracy.py` | no | per-segment max/mean \|err\|, recorded not asserted | 3 + 3 pass; byte-identical across three captures |
 | `test_sfpu_wh_lut_probe.py` | no | raw results + slopes, per probe point | 3 + 3 pass; output identical |
-| `perf_eltwise_unary_sfpu.py` | pre-existing | `MATH_ISOLATE` cycles, 12 variants | 4 + 4 clean sessions, no retries (§0.2) |
+| `perf_eltwise_unary_sfpu.py` | pre-existing | `MATH_ISOLATE` cycles, 12 variants | 4 + 4 clean sessions per capture, two captures, no retries (§0.2) |
 | `test_eltwise_unary_sfpu.py` | pre-existing, skip deleted here | goldens + tolerances, 200 variants | retuned 177 passed / 23 skipped / 0 failed; `main` headers **56 failed** — all `tanh` approx |
 | `accuracy/test_sfpu_accuracy.py` | pre-existing, `Tanh` enrolled here | per-sample error + ULP, recorded not gated | retuned approx `tanh`: max \|err\| 0.0566–0.0586, max rel 0.191 |
 | `test_unary.py::test_unary_tanh_approx_ttnn` | pre-existing | public `ttnn.tanh` approx path, `atol = 0.15` | passes both states — executes the kernel, does not discriminate |
