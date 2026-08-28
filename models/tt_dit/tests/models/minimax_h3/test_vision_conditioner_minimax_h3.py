@@ -73,7 +73,7 @@ import ttnn
 from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
 from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
 from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
@@ -711,16 +711,26 @@ def test_fused_conditioner_two_refs_real_weights(
     for i in range(_PERF_ITERS):
         ttnn.synchronize_device(submesh)
         t0 = time.time()
-        # vision tower: host build + H2D
+        # vision tower: host build + H2D. pad_patches_for_sp aligns the patch count to the tower's
+        # sp * 32 (a no-op on grids that already divide it, e.g. two_refs at sp=4/8); the pad rides a
+        # phantom window and its merged garbage is trimmed off via logical_patches. This is what lets
+        # the 4x32 case (alignment 1024, which 38,144 misses) run.
         vc, vs = tower.prepare_rope(grid)
-        tt_patches = bf16_tensor(pixel_values.float(), **sp)
-        tt_pos = bf16_tensor(tower.prepare_pos_embeds(grid), **sp)
-        tt_vcos, tt_vsin = bf16_tensor(vc, **sp), bf16_tensor(vs, **sp)
+        p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+            pixel_values.float(),
+            tower.prepare_pos_embeds(grid),
+            (vc, vs),
+            vision_cu_seqlens(grid),
+            sp_factor=tower_sp_factor,
+        )
+        tt_patches = bf16_tensor(p_patches, **sp)
+        tt_pos = bf16_tensor(p_pos, **sp)
+        tt_vcos, tt_vsin = bf16_tensor(p_cos, **sp), bf16_tensor(p_sin, **sp)
         ttnn.synchronize_device(submesh)
         t1 = time.time()
         # vision tower: forward (windowed multi-block SP attention)
         merged, deepstack = tower.forward(
-            tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=vision_cu_seqlens(grid)
+            tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=p_cu, logical_patches=logical
         )
         ttnn.synchronize_device(submesh)
         t2 = time.time()
