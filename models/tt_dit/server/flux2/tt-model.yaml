@@ -25,9 +25,29 @@ source:
   tt_metal: /home/stisi/tt-metal
   # EXACTLY what ships. An allowlist, never a denylist — under-shipping is an error, so a
   # missing entry fails the build rather than surfacing on a consumer's first boot.
+  # Narrow on purpose. Naming the two parent directories would ship 405 files this model
+  # never imports: both test trees, experimental/, the LLM runtime, and other models
+  # entirely. code/ is published as "byte-identical to what runs inside the image", so
+  # every entry below is one the runtime import closure actually reaches.
   code:
-    - models/common # utility_functions + modules/tt_ccl, imported throughout tt_dit
-    - models/tt_dit # the pipeline, the model code, and server/flux2 itself
+    # The only models/common module on the path: tt_dit's linear and attention import
+    # is_blackhole from it. modules/tt_ccl is NOT needed — only utils/test.py imports
+    # that, and the server inlines the helpers rather than depending on the test tree.
+    - models/common/__init__.py
+    - models/common/utility_functions.py
+    # The pipeline, the model code, and server/flux2 itself. Sibling DiT models under
+    # models/ and pipelines/ come along with their packages; splitting those out per
+    # file would risk under-shipping for a few MB.
+    - models/tt_dit/__init__.py
+    - models/tt_dit/blocks
+    - models/tt_dit/encoders
+    - models/tt_dit/layers
+    - models/tt_dit/models
+    - models/tt_dit/parallel
+    - models/tt_dit/pipelines
+    - models/tt_dit/utils
+    - models/tt_dit/server/__init__.py
+    - models/tt_dit/server/flux2
   ubuntu: "24.04"
   python: "3.12"
 
@@ -41,11 +61,80 @@ runtime:
     - "pydantic>=2"
     - pillow
     # The pipeline builds its torch reference modules from diffusers and tokenizes the
-    # prompt with transformers, so both are runtime dependencies, not dev extras.
-    - diffusers
-    - transformers
+    # prompt with transformers, so both are runtime dependencies, not dev extras. Pinned
+    # to the versions this model was validated against: a newer diffusers has changed
+    # Flux2 class names before, and the image would resolve one silently.
+    # torch is added automatically at tt-metal's own pin.
+    - diffusers==0.38.0
+    - transformers==5.12.1
     - sentencepiece
     - protobuf
+
+card:
+  quickstart: |
+    FLUX.2 [dev] generating 1024x1024 images on four Blackhole chips, served over HTTP.
+
+    ### Before you start
+
+    **The weights are gated.** They are a pointer, not part of this image, so `pull`
+    fetches them into your own HF cache under your own token. Accept the licence at
+    [black-forest-labs/FLUX.2-dev](https://huggingface.co/black-forest-labs/FLUX.2-dev)
+    and run `huggingface-cli login` first, or the pull fails partway with a 403.
+
+    Budget roughly 106 GB of disk and a long first pull. Weights dominate: the image
+    itself is 1.2 GB.
+
+    **Hardware: four Blackhole chips**, opened as a 2x2 mesh (`p300x2` / `QB2`). This is
+    not a preference. FLUX.2 needs its sequence and tensor parallel factors both above 1,
+    so a four-chip *line* cannot run it, and the server refuses such a mesh at startup
+    rather than producing images that are quietly wrong.
+
+    ### Generate an image
+
+    ```bash
+    tt-model serve stisiTT/flux2-dev-qb2
+
+    # wait for readiness (first boot converts weights to device layout: several minutes)
+    curl -s localhost:8000/health
+
+    JOB=$(curl -s -X POST localhost:8000/generate \
+            -H 'Content-Type: application/json' \
+            -d '{"prompt": "a lighthouse in a thunderstorm", "seed": 3}' \
+          | python -c 'import sys,json; print(json.load(sys.stdin)["job_id"])')
+
+    curl -s localhost:8000/jobs/$JOB                 # queued | running | done | error
+    curl -s -o out.png localhost:8000/jobs/$JOB/image
+    ```
+
+    ### API
+
+    | route | purpose |
+    | --- | --- |
+    | `GET /health` | readiness, model id, mesh shape, served resolution |
+    | `POST /generate` | enqueue a prompt; returns `202` and a `job_id` |
+    | `GET /jobs` | every job this process knows about |
+    | `GET /jobs/{id}` | one job's status |
+    | `GET /jobs/{id}/image` | the finished PNG |
+    | `POST /jobs/{id}/cancel` | cancel a job that has not started |
+
+    `POST /generate` takes `prompt` (required), plus optional `num_inference_steps`,
+    `guidance_scale` and `seed`.
+
+    ### Worth knowing
+
+    Generation is serialized. One device, one warm pipeline, one worker: concurrent
+    requests queue rather than collide, and the API stays responsive while one runs.
+
+    The served resolution is fixed at startup. The pipeline builds its position
+    embeddings and captures its trace for one shape, so a request asking for a different
+    `height`/`width` is refused instead of silently rebuilding the pipeline. Serve a
+    second instance with `FLUX2_HEIGHT` / `FLUX2_WIDTH` to offer another size.
+
+    Finished jobs and their PNGs are reaped an hour after completion. Download what you
+    want to keep.
+
+    First boot is minutes, not seconds, and nearly all of it is converting weights to
+    device layout.
 
 serve:
   hardware: p300x2
