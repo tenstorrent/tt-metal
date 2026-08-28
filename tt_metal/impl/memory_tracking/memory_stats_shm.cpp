@@ -118,18 +118,13 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
         region_->version.load(std::memory_order_relaxed) == DEVICE_MEMORY_REGION_VERSION) {
         // Fully initialized region of the expected layout: attach to it as-is.
     } else if (observed_state == SHM_INIT_READY) {
-        // Ready, but a layout we do not understand. Reclaim it if nobody is using it.
-        // reference_count alone cannot decide that -- an older writer leaks it when killed,
-        // which would make the upgrade one-way -- so where `processes` is known to be at a
-        // known offset, ask whether an owner is still alive instead.
+        // Ready, but a layout we do not understand. Reclaim it only if nobody is using it;
+        // see legacy_region_is_reclaimable() for what decides that. The test is read-only:
+        // nothing is written to a foreign-layout region unless we go on to reinitialize the
+        // whole thing.
         const uint32_t found_version = region_->version.load(std::memory_order_relaxed);
         const uint32_t attached = region_->reference_count.load(std::memory_order_acquire);
-        bool reclaimable = attached == 0;
-        if (!reclaimable && process_table_layout_is_known(found_version)) {
-            // Read-only: nothing is written to a foreign-layout region unless we go on to
-            // reinitialize the whole thing.
-            reclaimable = !region_has_live_process();
-        }
+        const bool reclaimable = legacy_region_is_reclaimable(found_version);
 
         uint32_t expected = SHM_INIT_READY;
         if (reclaimable && region_->init_state.compare_exchange_strong(
@@ -154,14 +149,43 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
                 DEVICE_MEMORY_REGION_VERSION,
                 attached,
                 asic_id_);
-            munmap(region_, sizeof(DeviceMemoryRegion));
-            region_ = nullptr;
-            close(shm_fd_);
-            shm_fd_ = -1;
+            detach_region();
             return;
         }
     } else {
-        // Zero-filled (brand new) or somebody is mid-initialization.
+        // Zero-filled (brand new), somebody is mid-initialization, or -- the case this
+        // branch has to be careful about -- a region written by a layout that predates
+        // init_state.
+        //
+        // A pre-v4 region publishes no init_state at all: the field is appended last, so it
+        // reads UNINITIALIZED whether it lands in that layout's tail padding or in bytes
+        // ftruncate appended here. Either way those bytes were zero-filled at creation and
+        // never written, so init_state alone cannot tell a fresh region from a live v2/v3
+        // one -- and claiming initialization on the strength of it would run
+        // initialize_region() over a region an older process is still writing, zeroing its
+        // totals and its whole process table.
+        //
+        // `version` is the field that does separate them: an initializer publishes it before
+        // anything observes the region as ready, so nonzero means some layout wrote here.
+        // Such a region may only be taken over on the live-owner test, exactly like the
+        // wrong-version READY case above.
+        const uint32_t found_version = region_->version.load(std::memory_order_acquire);
+        if (found_version != 0 && found_version != DEVICE_MEMORY_REGION_VERSION &&
+            !legacy_region_is_reclaimable(found_version)) {
+            log_warning(
+                tt::LogMetal,
+                "SHM region for asic_id=0x{:x} was written by an older layout (found v{}, expected v{}) that "
+                "publishes no readiness flag, and a live process still owns a slot in it; disabling SHM tracking "
+                "for this provider rather than reinitializing it underneath that process. If no tt-metal process "
+                "is running, the region is stale and can be removed with: rm /dev/shm/tt_device_{}_memory",
+                asic_id_,
+                found_version,
+                DEVICE_MEMORY_REGION_VERSION,
+                asic_id_);
+            detach_region();
+            return;
+        }
+
         uint32_t expected = SHM_INIT_UNINITIALIZED;
         if (region_->init_state.compare_exchange_strong(
                 expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed)) {
@@ -172,16 +196,14 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
             // IN_PROGRESS and would wedge this region for every later process, exactly the
             // one-way dead end that a leaked reference_count used to cause.
             //
-            // Take it over when nothing can be using it: either the region was never
-            // initialized (version still 0, so it is zero-filled and there is nothing to lose)
-            // or its layout is one we know and no live process owns a slot. Reset to
-            // UNINITIALIZED and re-claim, so that two processes timing out together still leave
-            // exactly one initializer -- the loser's CAS fails and it waits for READY.
+            // Take it over when nothing can be using it -- the same test the branches above
+            // use. Reset to UNINITIALIZED and re-claim, so that two processes timing out
+            // together still leave exactly one initializer: the loser's CAS fails and it waits
+            // for READY.
             bool taken_over = false;
-            const uint32_t found_version = region_->version.load(std::memory_order_relaxed);
-            const bool inspectable = found_version == 0 || process_table_layout_is_known(found_version);
-            if (region_->init_state.load(std::memory_order_acquire) == SHM_INIT_IN_PROGRESS && inspectable &&
-                !region_has_live_process()) {
+            const uint32_t stalled_version = region_->version.load(std::memory_order_relaxed);
+            if (region_->init_state.load(std::memory_order_acquire) == SHM_INIT_IN_PROGRESS &&
+                legacy_region_is_reclaimable(stalled_version)) {
                 uint32_t expected = SHM_INIT_IN_PROGRESS;
                 if (region_->init_state.compare_exchange_strong(
                         expected, SHM_INIT_UNINITIALIZED, std::memory_order_acq_rel, std::memory_order_relaxed)) {
@@ -204,10 +226,7 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
                     "Timed out waiting for another process to initialize SHM region for asic_id=0x{:x}; "
                     "disabling SHM tracking for this provider",
                     asic_id_);
-                munmap(region_, sizeof(DeviceMemoryRegion));
-                region_ = nullptr;
-                close(shm_fd_);
-                shm_fd_ = -1;
+                detach_region();
                 return;
             }
         }
@@ -704,6 +723,35 @@ bool SharedMemoryStatsProvider::process_table_layout_is_known(uint32_t version) 
     // predates it, and a higher version belongs to a writer newer than us, so in both cases we
     // must not assume where the table is.
     return version >= 2 && version <= DEVICE_MEMORY_REGION_VERSION;
+}
+
+void SharedMemoryStatsProvider::detach_region() {
+    if (region_ != nullptr && region_ != MAP_FAILED) {
+        munmap(region_, sizeof(DeviceMemoryRegion));
+    }
+    region_ = nullptr;
+    if (shm_fd_ != -1) {
+        close(shm_fd_);
+        shm_fd_ = -1;
+    }
+}
+
+bool SharedMemoryStatsProvider::legacy_region_is_reclaimable(uint32_t found_version) const {
+    if (!region_) {
+        return false;
+    }
+    if (found_version == 0) {
+        // Never initialized by anybody: the region is zero-filled and there is nothing to lose.
+        return true;
+    }
+    if (process_table_layout_is_known(found_version)) {
+        // The table is the authority. reference_count is not: an older writer leaks it
+        // permanently when killed, which would make the upgrade one-way.
+        return !region_has_live_process();
+    }
+    // A layout that puts `processes` somewhere we cannot guess (v1, or a writer newer than
+    // us). All that is left is the count, and only its zero is safe to act on.
+    return region_->reference_count.load(std::memory_order_acquire) == 0;
 }
 
 bool SharedMemoryStatsProvider::region_has_live_process() const {

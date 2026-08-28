@@ -46,7 +46,12 @@ constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 4;
 // A region of an older layout is taken over only when no owning process is still alive.
 // reference_count cannot decide it: an older writer leaks it permanently when killed, which
 // would make the upgrade one-way. Requires knowing where `processes` is; see
-// process_table_layout_is_known().
+// process_table_layout_is_known() and legacy_region_is_reclaimable().
+//
+// Note that a pre-v4 region cannot be recognised by init_state, which it never published: the
+// field is appended last, so it reads UNINITIALIZED in any older layout. `version` is what
+// separates "never written" from "written by a layout that predates init_state", and attach
+// applies the live-owner test to the latter rather than treating it as a fresh region.
 
 // Values for DeviceMemoryRegion::init_state. A freshly created SHM region is
 // zero-filled, so UNINITIALIZED must be 0.
@@ -260,6 +265,20 @@ private:
 
     // Read-only; valid only when process_table_layout_is_known() for the region's version.
     bool region_has_live_process() const;
+
+    // May this process take over a region that `found_version` wrote and reinitialize it to
+    // the current layout? True only when nothing can still be using it: either the region was
+    // never written (version 0, so it is zero-filled and there is nothing to lose) or its
+    // layout is one we know and no live process owns a slot there.
+    //
+    // reference_count cannot answer this on its own -- an older writer leaks it permanently
+    // when killed, which would make the upgrade one-way -- so the process table is what
+    // decides, wherever we know where to find it.
+    bool legacy_region_is_reclaimable(uint32_t found_version) const;
+
+    // Helper: unmap the region and close the fd, leaving this provider disabled. Used
+    // wherever attach decides it must not touch a region it cannot safely take over.
+    void detach_region();
 
     // Helper: wait (bounded) for another process to finish initializing the region.
     // Returns false on timeout, in which case this provider disables itself rather

@@ -111,6 +111,76 @@ std::string dump_raw_pids(uint64_t asic_id) {
     return out;
 }
 
+// Build the region a pre-v4 writer leaves behind, as a v4 process finds it.
+//
+// The important property is that init_state reads UNINITIALIZED: it is appended last in v4, so
+// an older layout never wrote it, and whether it lands in that layout's tail padding or in
+// bytes ftruncate appends here, it was zero-filled at creation and stayed that way. Everything
+// else -- version, reference_count, the process table -- is written as that older layout would
+// have left it. Creating the object at the current size and only setting the earlier fields
+// reproduces exactly that, without needing the old struct definition.
+void write_legacy_region(uint64_t asic_id, uint32_t version, pid_t owner_pid, uint64_t dram_bytes) {
+    const int fd = shm_open(shm_object_name(asic_id).c_str(), O_CREAT | O_RDWR, 0600);
+    ASSERT_NE(fd, -1) << "could not create synthetic region";
+    ASSERT_EQ(ftruncate(fd, sizeof(DeviceMemoryRegion)), 0);
+    auto* region = static_cast<DeviceMemoryRegion*>(
+        mmap(nullptr, sizeof(DeviceMemoryRegion), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0));
+    close(fd);
+    ASSERT_NE(region, MAP_FAILED);
+
+    region->version.store(version, std::memory_order_relaxed);
+    region->asic_id.store(asic_id, std::memory_order_relaxed);
+    region->device_id.store(0, std::memory_order_relaxed);
+    region->reference_count.store(1, std::memory_order_relaxed);
+    region->num_active_processes.store(1, std::memory_order_relaxed);
+    region->total_dram_allocated.store(dram_bytes, std::memory_order_relaxed);
+    region->processes[0].pid.store(owner_pid, std::memory_order_relaxed);
+    region->processes[0].dram_allocated.store(dram_bytes, std::memory_order_relaxed);
+    // Left exactly as an older layout left it: never written, so still zero.
+    ASSERT_EQ(region->init_state.load(std::memory_order_relaxed), SHM_INIT_UNINITIALIZED);
+
+    munmap(region, sizeof(DeviceMemoryRegion));
+}
+
+struct LegacyRegionState {
+    uint32_t version = 0;
+    uint32_t init_state = 0;
+    pid_t slot0_pid = 0;
+    uint64_t total_dram = 0;
+};
+
+LegacyRegionState read_legacy_region(uint64_t asic_id) {
+    LegacyRegionState state;
+    const int fd = shm_open(shm_object_name(asic_id).c_str(), O_RDONLY, 0600);
+    if (fd < 0) {
+        return state;
+    }
+    auto* region =
+        static_cast<DeviceMemoryRegion*>(mmap(nullptr, sizeof(DeviceMemoryRegion), PROT_READ, MAP_SHARED, fd, 0));
+    close(fd);
+    if (region == MAP_FAILED) {
+        return state;
+    }
+    state.version = region->version.load(std::memory_order_acquire);
+    state.init_state = region->init_state.load(std::memory_order_acquire);
+    state.slot0_pid = region->processes[0].pid.load(std::memory_order_acquire);
+    state.total_dram = region->total_dram_allocated.load(std::memory_order_acquire);
+    munmap(region, sizeof(DeviceMemoryRegion));
+    return state;
+}
+
+// A pid that is definitely not running: fork a child that exits immediately and reap it.
+pid_t make_dead_pid() {
+    const pid_t pid = fork();
+    if (pid == 0) {
+        _exit(0);
+    }
+    EXPECT_NE(pid, -1);
+    int status = 0;
+    EXPECT_EQ(waitpid(pid, &status, 0), pid);
+    return pid;
+}
+
 HeaderCounts read_header_counts(uint64_t asic_id) {
     HeaderCounts counts;
     const int fd = shm_open(shm_object_name(asic_id).c_str(), O_RDONLY, 0600);
@@ -538,6 +608,71 @@ TEST_F(ShmMemoryTrackingMultiProcess, DISABLED_ConcurrentAttachersDoNotMiscountA
         close(gate[1]);
         close(done[0]);
     }
+}
+
+// A region written by a layout older than v4 publishes no init_state -- the field is appended
+// last, so an older writer never set it and it reads UNINITIALIZED. That is the same value a
+// brand-new zero-filled region has, so init_state alone cannot tell them apart, and attaching
+// on the strength of it would claim the right to initialize and run initialize_region() over a
+// region an older process is still using: totals zeroed, process table wiped, that process
+// left attached to a region that no longer knows about it.
+//
+// `version` is what separates the two, so a nonzero version has to be put through the same
+// live-owner test as a wrong-version region that *did* publish READY.
+TEST_F(ShmMemoryTrackingMultiProcess, LegacyRegionWithLiveOwnerIsNotReinitialized) {
+    constexpr uint64_t kOwnerBytes = 32 * 1024 * 1024;
+
+    // A child that does nothing but stay alive, so its pid in the table is a live owner.
+    int gate[2];
+    ASSERT_EQ(pipe(gate), 0);
+    const pid_t owner = fork();
+    ASSERT_NE(owner, -1);
+    if (owner == 0) {
+        close(gate[1]);
+        char go = 0;
+        ssize_t got = read(gate[0], &go, 1);  // blocks until the parent closes its end
+        (void)got;
+        _exit(0);
+    }
+    close(gate[0]);
+
+    shm_unlink(shm_object_name(asic_id_).c_str());  // drop the fixture's v4 probe region
+    write_legacy_region(asic_id_, /*version=*/3, owner, kOwnerBytes);
+
+    auto provider = attach(asic_id_);
+    EXPECT_FALSE(provider->is_initialized())
+        << "attached to a v3 region whose owner is still running; it should have disabled itself";
+
+    const LegacyRegionState state = read_legacy_region(asic_id_);
+    EXPECT_EQ(state.version, 3u) << "the older layout's region was reinitialized underneath its owner";
+    EXPECT_EQ(state.init_state, SHM_INIT_UNINITIALIZED) << "init_state was published into a foreign layout";
+    EXPECT_EQ(state.slot0_pid, owner) << "the live owner's slot was cleared";
+    EXPECT_EQ(state.total_dram, kOwnerBytes) << "the live owner's bytes were erased";
+
+    close(gate[1]);
+    int status = 0;
+    ASSERT_EQ(waitpid(owner, &status, 0), owner);
+}
+
+// The other half: the guard must not be one-way. A pre-v4 region whose owner is gone -- the
+// ordinary case after an upgrade, and the one a killed older process leaves -- is still taken
+// over, because the process table says nobody is there. reference_count cannot be what decides
+// it: an older writer leaks it permanently when killed, which would wedge the region forever.
+TEST_F(ShmMemoryTrackingMultiProcess, LegacyRegionWithNoLiveOwnerIsReclaimed) {
+    const pid_t dead = make_dead_pid();
+
+    shm_unlink(shm_object_name(asic_id_).c_str());
+    // reference_count is left at 1, as a killed owner would have left it.
+    write_legacy_region(asic_id_, /*version=*/3, dead, /*dram_bytes=*/64 * 1024 * 1024);
+
+    auto provider = attach(asic_id_);
+    ASSERT_TRUE(provider->is_initialized()) << "a v3 region with no live owner must be reclaimed, not refused";
+
+    const LegacyRegionState state = read_legacy_region(asic_id_);
+    EXPECT_EQ(state.version, DEVICE_MEMORY_REGION_VERSION) << "region was not upgraded to the current layout";
+    EXPECT_EQ(state.init_state, SHM_INIT_READY) << "reinitialized region never published readiness";
+    EXPECT_EQ(state.slot0_pid, getpid()) << "expected this process to take the freed first slot";
+    EXPECT_EQ(state.total_dram, 0u) << "the dead owner's bytes survived the reinitialization";
 }
 
 }  // namespace
