@@ -12,7 +12,7 @@ have listed: that plan was written by reading code, and several of the items bel
 no amount of reading would have found.
 
 Numbering continues the plan's series, so the two files share one namespace and a reference to
-"W18" is unambiguous. W1–W8 and W10–W17 are closed.
+"W19" is unambiguous. W1–W8 and W10–W18 are closed.
 
 **Regenerate the numbers before trusting them:**
 
@@ -28,13 +28,18 @@ Every count in this document came from that command. It needs no hardware.
 
 | # | Gap | Effort | Value | Blocked by |
 |---|---|---|---|---|
-| [W18](#w18--cat-fs-remaining-tranches) | 99 float ops are outside `EXTREMES_READY_OPS` | L | Low | — |
+| [W19](#w19--cat-f-has-no-sweep-for-the-binary-and-ternary-families) | 25 binary and ternary ops have no cat-F sweep to be enrolled into | M | Medium | — |
 | [W9](sfpu_edge_coverage_plan.md#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | M | Medium | needs a kernel-contract ruling |
 
-Two items left. **W18** is open-ended with falling yield; **W9** cannot start until someone
-rules on what the trig kernels promise outside ±π.
+Two items left. **W19** is the one gap with real work in it; **W9** cannot start until someone
+rules on what the trig kernels promise outside ±π — a ruling that now blocks two coverage
+classes rather than one, since W18 found `sin`/`cos`/`tan` returning ±inf at 3.39e38 against a
+bounded golden.
 
-Six of the seven classes have nothing unrecorded. Cat F is the exception, and it is W18.
+**Every class now reports nothing unrecorded.** Each of the 143 ops has a verdict for all seven
+classes: covered, not applicable, or a recorded reason. `test_no_class_has_anything_unrecorded`
+is what keeps it that way — a new op or a new sweep can put cells back, and the fix is a verdict
+rather than a floor bump.
 
 Four ops still have no *covered* class at all, and all four are explained rather than
 outstanding: `Digamma`, `Lgamma` and `Polygamma` have poles at zero and registered domains that
@@ -52,7 +57,7 @@ B ieee_specials          covered  88  n/a  55  unrecorded   0
 C integer_extremes       covered  24  n/a 119  unrecorded   0
 D knees                  covered  59  n/a  84  unrecorded   0
 E operand_parameters     covered   5  n/a 138  unrecorded   0
-F magnitude_extremes     covered  23  n/a  21  unrecorded  99
+F magnitude_extremes     covered  78  n/a  65  unrecorded   0
 G signed_zero_at_a_pole  covered  17  n/a 126  unrecorded   0
 ```
 
@@ -62,32 +67,52 @@ below is turning `unrecorded` into one or the other.
 
 ---
 
-## W18 — Cat F's remaining tranches
+## W19 — Cat F has no sweep for the binary and ternary families
 
 ### Problem
 
-`EXTREMES_READY_OPS` holds 14 ops and the saturation sweep covers nine more, so 23 of 143 are
-covered for cat F. The other 21 integer-only ops read "not applicable" — no subnormal band, no
-float ceiling — which leaves 99 float ops that have never been driven at their format's
-ceiling, its neighbour, its smallest normal or a subnormal.
+W18 closed cat F for the unary family and, in doing so, showed that the class was never
+*reachable* for the other two. `test_eltwise_unary_sfpu_extremes` is unary-only, and the
+saturation sweep covers `SfpuElwmul` and `SfpuElwadd`. That leaves 25 ops with nothing to be
+enrolled into:
 
-This is last on the list on purpose. Cat F is opt-in per op precisely because driving an
-unenrolled op at an extreme produces a wall of failures with one root cause, and the first
-tranche was chosen as the ops whose behaviour there is uncontroversial. Every op after that is
-its own measurement, and the yield falls off: the first tranche found one real fact
-(`subnormal_delivered`), and it found it with four ops.
+```
+SfpuAddTopRow  SfpuAddcdiv  SfpuAddcmul  SfpuAtan2  SfpuBinaryFmod  SfpuBinaryMax
+SfpuBinaryMin  SfpuBinaryRemainder  SfpuElwEq  SfpuElwGe  SfpuElwGt  SfpuElwLe
+SfpuElwLt  SfpuElwNe  SfpuElwdiv  SfpuElwpow  SfpuElwrsub  SfpuElwsub  SfpuIsclose
+SfpuLerp  SfpuLogsigmoid  SfpuMask  SfpuSnakeBeta  SfpuWhere  SfpuXlogy
+```
+
+The ledger reports these as *not applicable* with a reason naming the missing sweep, rather
+than as unrecorded — a missing sweep and an undecided op are different problems, and reading
+25 of the first as 25 of the second would invent a backlog of decisions nobody owes.
+
+Nothing here is known to be wrong. A magnitude extreme has simply never been driven into a
+binary or ternary operand.
 
 ### Steps
 
-1. **Enrol in tranches, cheapest first**, as the first one was: ops whose golden is plain
-   arithmetic and whose behaviour at an extreme is not in question.
+1. **Binary first, and one operand at a time.** `extreme_values()` already returns the cat-F
+   list for a pipeline; the shape to copy is `test_sfpu_ternary_operand_edges`' operand axis —
+   the probed operand takes the extremes, the other keeps its random domain, so one variant
+   asks one question. A product of two extreme lists would pair index-wise rather than crossing,
+   which is the trap recorded there.
 
-2. **Raise `_COVERAGE_FLOORS["F"]`** with each tranche. That is the ratchet working as intended
-   and is the natural last step of enrolling an op.
+2. **Expect the divergences W18 already found, in binary form.** `div` and `xlogy` compose a
+   reciprocal and a log, so the input-FTZ group's subnormal behaviour should reappear;
+   `SfpuElwpow` cannot reach its ceiling inside its registered domain, as the saturation sweep
+   already records. Enrol per op against a measurement, not against the unary verdict.
 
-3. **Stop when a tranche finds nothing.** The measurement is the product, not the count.
+3. **Ternary after binary.** `addcdiv` and `snake_beta` divide by operand C, so an extreme
+   there interacts with the pole already registered on it — drive them as separate classes, the
+   way `test_sfpu_ternary_operand_edges` separates `pole` from `specials_in`, or one xfail will
+   cover two causes.
 
-**Cost:** open-ended. Budget one tranche at a time and re-read the report between them.
+4. **Raise `_COVERAGE_FLOORS["F"]`** as each family lands, and drop the ops from
+   `SuiteCoverage.extremes_sweepable`'s complement — the ledger stops calling the class
+   inapplicable for them the moment a sweep can reach them.
+
+**Cost:** one variant per family, plus a measurement pass each.
 
 ---
 
