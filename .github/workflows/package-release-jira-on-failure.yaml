@@ -61,8 +61,6 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
-          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           # Only real releases reach the RELEASE board. Package and release also
@@ -72,8 +70,10 @@ jobs:
           #
           # Resolved from the run itself rather than the trigger, because
           # `on.workflow_run.branches` cannot express tags and does not apply to
-          # workflow_dispatch at all. One check, both entry points.
-          BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
+          # workflow_dispatch at all (which also has no head_sha in its event
+          # payload). One check, both entry points.
+          read -r BRANCH HEAD_SHA < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
+            --jq '"\(.head_branch) \(.head_sha)"')
           case "$BRANCH" in
             stable|v[0-9]*) ;;
             *)
@@ -134,6 +134,7 @@ jobs:
           fi
           echo "file=true" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
           summary=$(printf '%s\n' "${failed[@]}" \
             | python3 .github/actions/scripts/failure_title.py "$BRANCH")
@@ -204,8 +205,10 @@ jobs:
           JIRA_DRY_RUN: ${{ inputs.dry-run && '1' || '' }}
           # While one issue is open for this pipeline, later failures comment on it.
           # Scope per commit: re-runs of the same release de-dupe onto one
-          # ticket, a later release failure opens a new one.
-          JIRA_DEDUP_LABEL: "package-release-failure:${{ github.event.workflow_run.head_sha || inputs.run-id }}"
+          # ticket, a later release failure opens a new one. The sha comes from
+          # the collect step so a manual dispatch dedups exactly like the
+          # workflow_run path.
+          JIRA_DEDUP_LABEL: "package-release-failure:${{ steps.collect.outputs.sha }}"
         run: |
           if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
             echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
