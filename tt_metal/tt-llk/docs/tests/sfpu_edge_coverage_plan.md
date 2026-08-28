@@ -26,15 +26,13 @@ the concrete steps to reach them.
 |---|---|---|---|---|---|
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
 | [W9](#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | unary | M | Medium | needs a kernel-contract ruling |
-| [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 
-Suggested order: **W1** (small, unblocked, independently mergeable), then **W10**, then
-**W9** — which needs a kernel-contract ruling before any of it can be written.
+Two items left. **W1** is small, unblocked and independently mergeable. **W9** needs a
+kernel-contract ruling before any of it can be written.
 
-`python -m helpers.sfpu_domains --report` prints the coverage ledger, which is now the fastest
-way to see where each remaining item moves the needle: W1 is cat G (0 covered, of the 14 ops
-that have a zero pole to deliver one to), W9 is cat A, and W10 is a delivery question that cuts
-across every class.
+`python -m helpers.sfpu_domains --report` prints the coverage ledger, which is the fastest way
+to see where each moves the needle: W1 is cat G, which stands at 0 covered of the 14 ops that
+have a zero pole to deliver one to, and W9 is cat A.
 
 **Already landed.** These items are closed and their sections are gone; the numbering of what
 remains is unchanged so that references from commit messages and reviews still resolve.
@@ -48,6 +46,7 @@ remains is unchanged so that references from commit messages and reviews still r
 | W6 | the addc multiplier as a compile-time axis, with the `value = 0` identity asserted bit for bit |
 | W7 | all of it: `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis and `EXTREMES_READY_OPS` for the ops that cannot overflow, then a table-driven saturation sweep for the nine that can — seven unary and two binary |
 | W8 | logsigmoid's `x > 4` branch, the golden that models it, and the paired operand B it needs — which also retired the "effectively unary" justification keeping the op out of cat B |
+| W10 | a block spread that actually spans the shared exponent, on the broad-profile ops at Bfp8_b and on all three block formats. One expectation did not hold and is recorded in the section comment: on a Bfp8_b output the tolerance accepts every element, so `_bfp_block_aware_compare`'s lattice path is still never reached — it is reached for Bfp4_b and Bfp2_b outputs, where it is the only verdict |
 | W11 | the coverage ledger, `python -m helpers.sfpu_domains --report`, and the ratchet that stops a class losing coverage silently |
 
 ---
@@ -280,44 +279,6 @@ not, nothing records that limitation.
    should be per-decade rather than one loose number that hides the trend.
 
 **Cost:** 6 new ELFs for the trig test; the tan change is metadata only.
-
----
-
-## W10 — Block-float inputs never see a mixed-magnitude block
-
-### Problem
-
-Bfp8_b, Bfp4_b and Bfp2_b share one exponent across each 16-element block, so the
-stimulus that actually exercises the format is a block holding one large element and
-fifteen small ones — where the small values quantize hard, or to zero. Every current
-stimulus is a narrow-range uniform or gaussian, so the shared exponent never bites, and
-`_bfp_block_aware_compare`'s lattice fallback in `helpers/utils.py` is never stressed.
-
-The edge sweeps cannot reach this at all: their format axis is `Float16_b` / `Float32`,
-and block-float inputs are excluded from cat B on the (correct) grounds that
-`quantize_input_to_unpack_format()` destroys a NaN.
-
-### Steps
-
-1. **Add a distribution.** A `DistributionKind.BLOCK_SPREAD` (or a face callable, if a new
-   enum member is too heavy) writing, per 16-element block, one element at
-   `high` and fifteen log-spaced down to `high * 2**-k`. Parameterise `k` so the test can
-   walk from "all values keep full mantissa" to "the small ones flush".
-
-2. **Drive it on the ops already swept at Bfp8_b** — the `BROAD_SWEEP_OPS` list in
-   `test_sfpu_unary.py` and `SfpuAddcmul` on the ternary side — as a separate nightly
-   variant, not as a replacement for the existing uniform stimuli.
-
-3. **Check the golden first.** The BFP helpers in `golden_generators.py` no longer FTZ
-   internally and funnel through the centralised `_apply_ftz`; confirm the host-side
-   quantization models a mixed block the same way the unpacker does before treating a
-   mismatch as a kernel finding.
-
-4. **Expect the verdict to come from the lattice check, not the atol.** `passed_test`
-   already has a block-aware path for exactly this; this work item is what makes it earn
-   its keep.
-
-**Cost:** one distribution + one nightly variant per family.
 
 ---
 

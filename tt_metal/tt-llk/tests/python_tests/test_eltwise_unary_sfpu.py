@@ -28,6 +28,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
@@ -38,6 +39,7 @@ from helpers.sfpu_domains import (
     exclude_undefined,
     extreme_values,
     extremes_safe,
+    for_op,
     for_op_pipeline,
     format_extremes,
     negative_zero_delivered,
@@ -1018,6 +1020,188 @@ def test_eltwise_unary_sfpu_saturation(
         ),
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mixed-magnitude block-float blocks
+#
+# Bfp8_b, Bfp4_b and Bfp2_b share one exponent across each 16-element block, so the stimulus
+# that actually exercises the format is a block holding one large element and fifteen small
+# ones -- where the small values quantize hard, or to zero. Every other stimulus in this suite
+# is a narrow-range uniform or gaussian, so the shared exponent never bites and
+# `_bfp_block_aware_compare`'s lattice fallback in helpers/utils.py is never stressed. The edge
+# sweeps cannot reach it either: their format axis is Float16_b / Float32, and block-float
+# inputs are excluded from cat B on the correct grounds that the unpack quantization destroys a
+# NaN.
+#
+# A face callable rather than a new DistributionKind member: the pattern is one op's stimulus,
+# not a distribution the generator needs to know about, and a callable keeps the strategy
+# registry out of it.
+#
+# THE GOLDEN WAS CHECKED FIRST, which is what step 3 of the plan asks. Abs at Bfp8_b, Bfp4_b
+# and Bfp2_b over spreads of 2**-4 through 2**-24 on a Blackhole p150: zero mismatching lanes
+# in every case, so the host quantizer models a mixed block exactly the way the unpacker does
+# and any failure here is the op, not the model. The spread does bite -- at 2**-8 in Bfp8_b,
+# 512 of 4096 elements flush to zero, and at 2**-24, 2816 do; Bfp2_b collapses fifteen of every
+# sixteen at every spread, which is its one-magnitude-bit encoding doing exactly what its
+# docstring says.
+#
+# TWO VARIANTS, because there are two questions and their product is not needed. The op sweep
+# asks whether each op survives a block whose small elements have been quantized away; the
+# format sweep asks whether each block format quantizes as modelled, which is op-independent
+# and so uses one pass-through op as its instrument.
+#
+# ONE EXPECTATION DID NOT HOLD, and it is worth writing down rather than implying. The plan
+# expected the verdict here to come from `_bfp_block_aware_compare`'s lattice path rather than
+# from the tolerance -- "this work item is what makes it earn its keep". On a Bfp8_b *output*
+# it does not: measured over Exp, Gelu, Silu and Sqrt at every spread, torch.isclose accepts
+# all 4096 elements, so the lattice is never reached (passed_test only falls through to it when
+# the tolerance has rejected something). That is not a gap in the stimulus -- the block really
+# does span the shared exponent, and 2816 of 4096 elements are flushed to zero at 2**-24 -- it
+# is that golden and hardware agree closely once both have been through the same output
+# quantization. Reaching the lattice would take an op whose *approximation* error is large
+# relative to its block, which is an accuracy question and not something to engineer into a
+# stimulus.
+#
+# The format variant does exercise it, by construction rather than by luck: for a Bfp4_b or
+# Bfp2_b output passed_test has no tolerance pre-check at all and the lattice is the only
+# verdict.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BLOCK_ELEMENTS = 16
+
+# The spread, in binary decades below the block's largest element. 4 keeps every element inside
+# Bfp8_b's 7 magnitude bits, 12 flushes the tail of the block, and 24 flushes most of it -- the
+# walk from "all values keep full mantissa" to "the small ones are gone" that makes the lattice
+# check earn its keep.
+_BLOCK_SPREAD_DECADES = (4, 12, 24)
+
+# The largest element of every block. 1.0 rather than the op's domain ceiling: it is exact in
+# every format, and it keeps the whole spread inside the domain of every op selected below,
+# which is what makes the selection a domain question rather than a magnitude one.
+_BLOCK_SPREAD_HIGH = 1.0
+
+
+def _block_spread_spec(decades):
+    """One element at _BLOCK_SPREAD_HIGH per 16-element block, the rest log-spaced below it.
+
+    Log-spaced rather than linear so the block spans the exponent range evenly: what the shared
+    exponent does to an element depends on its distance from the block maximum in *binades*, so
+    a linear ramp would put almost every element in the top binade and quantize none of them.
+    """
+
+    def face(size, dtype, generator):
+        steps = torch.tensor(
+            [0.0]
+            + [
+                -(decades * i) / (_BLOCK_ELEMENTS - 1)
+                for i in range(1, _BLOCK_ELEMENTS)
+            ],
+            dtype=torch.float32,
+        )
+        block = _BLOCK_SPREAD_HIGH * torch.pow(2.0, steps)
+        return block.repeat(-(-size // _BLOCK_ELEMENTS))[:size].to(dtype)
+
+    return StimuliSpec(distribution=face, seed=0)
+
+
+def _block_spread_ops():
+    """The broad-profile ops whose registered domain contains the whole spread.
+
+    Derived rather than listed, so an op joins by having a domain wide enough to take it. The
+    five it leaves out -- Atanh, Acosh, Log, Reciprocal, Rsqrt -- are excluded because the
+    spread would leave their domain, not because of anything about block floats: driving
+    Reciprocal at an element the block flushed to zero would be a pole probe wearing a
+    quantization probe's clothes, and the pole is cat A's job.
+    """
+    floor = _BLOCK_SPREAD_HIGH * 2.0 ** -max(_BLOCK_SPREAD_DECADES)
+    selected = []
+    for mathop in BROAD_SWEEP_OPS:
+        try:
+            spec = for_op(mathop, DataFormat.Bfp8_b).spec_A
+        except KeyError:
+            continue
+        if spec.intervals or spec.low is None or spec.high is None:
+            continue
+        if spec.low <= floor and spec.high >= _BLOCK_SPREAD_HIGH:
+            selected.append(mathop)
+    return selected
+
+
+_BLOCK_SPREAD_OPS = _block_spread_ops()
+
+assert _BLOCK_SPREAD_OPS, (
+    "no broad-profile op has a domain wide enough for the block spread, so "
+    "test_eltwise_unary_sfpu_block_spread would collect nothing"
+)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Bfp8_b]),
+    mathop=_BLOCK_SPREAD_OPS,
+    dest_acc=[DestAccumulation.Yes],
+    # runtime(): the spread changes the tensor and nothing about the kernel, so the three
+    # share one ELF per op.
+    decades=runtime(list(_BLOCK_SPREAD_DECADES)),
+)
+def test_eltwise_unary_sfpu_block_spread(
+    formats: list[InputOutputFormat],
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    decades: int,
+):
+    """Each op against a block whose small elements the shared exponent has quantized away."""
+    _skip_coverage_unsupported(mathop)
+
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=_block_spread_spec(decades),
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+    )
+
+
+# Abs is the instrument, not the subject: it is a pass-through in magnitude, so a mismatch here
+# is the block-float quantization model and cannot be the op. That is what lets this variant
+# carry the format axis on its own instead of crossing it with the op sweep above.
+_BLOCK_SPREAD_FORMAT_OPS = [MathOperation.Abs]
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b], same=True
+    ),
+    mathop=_BLOCK_SPREAD_FORMAT_OPS,
+    dest_acc=[DestAccumulation.Yes],
+    decades=runtime(list(_BLOCK_SPREAD_DECADES)),
+)
+def test_eltwise_unary_sfpu_block_spread_formats(
+    formats: list[InputOutputFormat],
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    decades: int,
+):
+    """Each block-float format's shared exponent, against a block that actually spans one."""
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=_block_spread_spec(decades),
     )
 
 

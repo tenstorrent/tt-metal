@@ -729,6 +729,65 @@ def test_sfpu_addcmul_cancellation(formats, dest_acc, mathop):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Mixed-magnitude block-float blocks, ternary side
+#
+# The unary half is test_eltwise_unary_sfpu_block_spread, and the reasoning is there. addcmul
+# is the only ternary op the suite drives on Bfp8_b, and it is a good subject for this: it has
+# no pole and no knee, so a mixed block is the only thing the variant is asking about, and its
+# three operands each carry their own shared exponent.
+#
+# The spread is driven on all three, not one. A block-float operand's quantization is per
+# operand, so pinning two of them to a narrow range would leave two thirds of the question
+# untested -- and unlike the pole sweeps there is no second failure class here to keep separate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BLOCK_ELEMENTS = 16
+_BLOCK_SPREAD_DECADES = (4, 12, 24)
+
+
+def _block_spread_spec(decades, seed):
+    """One element at 1.0 per 16-element block, the rest log-spaced 2**-decades below it.
+
+    Seeded per operand only so the three specs are distinguishable objects; the pattern is
+    deterministic and identical across them, which is what makes the product a + value*b*c
+    exactly reproducible.
+    """
+
+    def face(size, dtype, generator):
+        steps = torch.tensor(
+            [0.0]
+            + [
+                -(decades * i) / (_BLOCK_ELEMENTS - 1)
+                for i in range(1, _BLOCK_ELEMENTS)
+            ],
+            dtype=torch.float32,
+        )
+        block = torch.pow(2.0, steps)
+        return block.repeat(-(-size // _BLOCK_ELEMENTS))[:size].to(dtype)
+
+    return StimuliSpec(distribution=face, seed=seed)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Bfp8_b], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuAddcmul,
+    decades=runtime(list(_BLOCK_SPREAD_DECADES)),
+)
+def test_sfpu_ternary_block_spread(formats, dest_acc, mathop, decades):
+    """addcmul on three Bfp8_b operands whose blocks span the shared exponent."""
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=_block_spread_spec(decades, seed=0),
+        spec_B=_block_spread_spec(decades, seed=1),
+        spec_C=_block_spread_spec(decades, seed=2),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # TTNNWhere
 #
 # where(cond, t, f) is a select, not an arithmetic op: the result is one of the two data
