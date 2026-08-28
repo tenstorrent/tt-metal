@@ -27,16 +27,19 @@ from helpers.llk_params import (
     DestAccumulation,
     MathOperation,
     ReducePool,
+    format_dict,
 )
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
     edge_pair_values,
     edge_values,
+    extremes_safe,
     for_op,
     generated_nan_sign_is_asserted,
     nan_sign_is_unspecified,
     nan_survives_to_l1,
+    narrowest_range_format,
     ops_with_singularity,
     probe_spacing_format,
     sfpu_unary_ops,
@@ -495,6 +498,339 @@ def test_every_float_binary_op_is_classified_for_cat_b():
 
     for op, reason in BINARY_SPECIALS_READY_OPS.items():
         assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_every_ternary_op_is_classified_for_cat_b():
+    """Enrolled or recorded-as-not-ready, for every op in the ternary family.
+
+    Totality, the same check test_every_float_binary_op_is_classified_for_cat_b makes: an op in
+    neither dict keeps cat B switched off while looking, to a reader, as though it had been
+    considered. The candidate set is _SFPU_TERNARY_OPS itself rather than a list here, so adding
+    a ternary op is a one-line decision and not a test edit.
+    """
+    from helpers.sfpu_domains import (
+        _SFPU_TERNARY_OPS,
+        _TERNARY_SPECIALS_NOT_READY,
+        TERNARY_SPECIALS_READY_OPS,
+    )
+
+    classified = set(TERNARY_SPECIALS_READY_OPS) | set(_TERNARY_SPECIALS_NOT_READY)
+    unclassified = sorted(op.name for op in _SFPU_TERNARY_OPS - classified)
+    assert not unclassified, (
+        "these ternary ops appear in neither TERNARY_SPECIALS_READY_OPS nor "
+        "_TERNARY_SPECIALS_NOT_READY, so nothing records whether cat B is off for them by "
+        f"decision or by omission: {unclassified}"
+    )
+    stale = sorted(op.name for op in classified - _SFPU_TERNARY_OPS)
+    assert (
+        not stale
+    ), f"these ops carry a cat-B verdict but are not in the ternary family: {stale}"
+
+    for op, reason in TERNARY_SPECIALS_READY_OPS.items():
+        assert len(reason) > 20, f"{op.name}'s cat-B reason is too short to be a claim"
+
+
+def test_ternary_golden_dest_format_matches_the_domains_rule():
+    """The shared sfpu_dest_format() and nan_survives_to_l1 must derive the same Dest.
+
+    The ternary half of test_binary_golden_dest_format_matches_the_domains_rule. Both goldens
+    now delegate to one function, so this pins the *function* rather than a third copy of the
+    rule -- and it is worth pinning separately because the ternary suite passes it the input
+    format where the binary one passes data_format, and a transposed pair would put the NaN
+    substitution on the wrong cells without failing anything else.
+    """
+    from helpers.golden_generators import sfpu_dest_format
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        dst = sfpu_dest_format(input_format, output_format, dest_acc)
+        preserves = (dst, output_format) in {
+            (DataFormat.Float16, DataFormat.Float16),
+            (DataFormat.Float32, DataFormat.Float16),
+            (DataFormat.Float32, DataFormat.Float32),
+        }
+        assert preserves == nan_survives_to_l1(input_format, output_format, dest_acc), (
+            f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: "
+            f"sfpu_dest_format derives Dest={dst.name}, which disagrees with "
+            "nan_survives_to_l1"
+        )
+
+
+def test_ternary_goldens_require_their_format_arguments_together():
+    """Supplying part of the Dest/pack contract is rejected rather than half-modelled.
+
+    Same reasoning as test_binary_golden_requires_dest_acc_and_output_format_together: half the
+    contract is worse than none of it, because the golden would then be wrong in a new way
+    rather than in the documented old one.
+    """
+    import torch
+    from helpers.golden_generators import TernarySFPUGolden, WhereGolden
+
+    tile = torch.zeros(1024, dtype=torch.float32)
+
+    for missing in ("input_format", "dest_acc"):
+        kwargs = {
+            "input_format": DataFormat.Float32,
+            "dest_acc": DestAccumulation.Yes,
+        }
+        del kwargs[missing]
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="must be supplied together"
+        ):
+            TernarySFPUGolden()(
+                MathOperation.SfpuAddcmul,
+                tile.clone(),
+                tile.clone(),
+                tile.clone(),
+                0,
+                DataFormat.Float32,
+                **kwargs,
+            )
+
+    for missing in ("input_format", "output_format", "dest_acc"):
+        kwargs = {
+            "input_format": DataFormat.Float32,
+            "output_format": DataFormat.Float32,
+            "dest_acc": DestAccumulation.Yes,
+        }
+        del kwargs[missing]
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="must be supplied together"
+        ):
+            WhereGolden()(tile.clone(), tile.clone(), tile.clone(), **kwargs)
+
+
+def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
+    """The NaN a ternary op emits reaches L1 as a NaN, or as an infinity, per the gate.
+
+    This is the modelling that made the specials_in class assertable: without it, a probe on a
+    narrowing pipeline read the packer's substituted infinity as the kernel having computed one.
+    Pinned on both sides so a change to either the golden or nan_survives_to_l1 fails here
+    rather than turning a green cell into a wall of xfails.
+
+    lerp(inf, b, 1) is `inf + 1*(b - inf)` = inf - inf = NaN for a finite b, so this drives an
+    emitted NaN rather than one that arrived on an operand.
+    """
+    import torch
+    from helpers.golden_generators import TernarySFPUGolden
+
+    a = torch.tensor([float("inf")] * 1024, dtype=torch.float32)
+    b = torch.zeros(1024, dtype=torch.float32)
+    c = torch.ones(1024, dtype=torch.float32)
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        out = TernarySFPUGolden()(
+            MathOperation.SfpuLerp,
+            a,
+            b,
+            c,
+            0,
+            output_format,
+            input_format=input_format,
+            dest_acc=dest_acc,
+        )
+        survives = nan_survives_to_l1(input_format, output_format, dest_acc)
+        got_nan = bool(torch.isnan(out[0]))
+        assert got_nan == survives, (
+            f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: golden returns "
+            f"{'NaN' if got_nan else float(out[0])}, but nan_survives_to_l1 says "
+            f"{survives}"
+        )
+        if not survives:
+            # The substituted infinity is positive: the golden clears the sign of every NaN it
+            # emits, because SFPMAD promises the canonical 0x7fc00000 on Blackhole and leaves
+            # the sign open on Wormhole -- so exporting one would be inventing it.
+            assert float(out[0]) == float("inf"), (
+                f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: an emitted "
+                f"NaN packed to {float(out[0])}, not +inf"
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cat F — format extremes and the subnormal band
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16]
+)
+def test_format_extremes_straddle_the_ftz_cliff(fmt):
+    """The subnormal probe must be below the smallest normal and the min-normal probe at it.
+
+    A probe placed on the wrong side of the flush-to-zero cliff tests nothing and looks like it
+    tests everything: the pair exists to put one value where the hardware keeps it and one where
+    the hardware (or the golden's _apply_ftz) does not, and if both land on the same side the
+    variant still passes.
+
+    Checked against golden_generators._FTZ_THRESHOLD rather than against a literal, because that
+    is the number the goldens actually flush by -- the two are built from the same torch.finfo
+    call and this is what keeps them so.
+    """
+    from helpers.golden_generators import _FTZ_THRESHOLD
+    from helpers.sfpu_domains import _FORMAT_MIN_NORMAL, format_extremes
+
+    magnitudes = sorted({abs(v) for v in format_extremes(fmt)})
+    subnormal, min_normal = magnitudes[0], magnitudes[1]
+
+    assert min_normal == _FORMAT_MIN_NORMAL[fmt]
+    assert subnormal < min_normal, (
+        f"{fmt.name}: the subnormal probe {subnormal} is not below the smallest normal "
+        f"{min_normal}, so the pair asserts nothing about the subnormal band"
+    )
+
+    threshold = _FTZ_THRESHOLD[fmt]
+    if fmt is DataFormat.Float16:
+        # Float16 keeps subnormals, so its cliff is below the smallest *subnormal* and this
+        # probe is a real value the hardware holds rather than one it flushes.
+        assert subnormal > threshold, (
+            f"{fmt.name} keeps subnormals, so the probe {subnormal} must be above the FTZ "
+            f"threshold {threshold} -- otherwise it is a flushed value, not a subnormal one"
+        )
+    else:
+        # Float32 and Float16_b flush the whole subnormal band, so the cliff sits at the
+        # smallest normal and the probe must be on the flushed side of it.
+        assert threshold == min_normal
+        assert subnormal < threshold, (
+            f"{fmt.name} flushes subnormals below {threshold}, and the probe {subnormal} is "
+            "not below it"
+        )
+
+
+@pytest.mark.parametrize(
+    "fmt", [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Float16]
+)
+def test_format_extremes_are_exactly_representable(fmt):
+    """Every cat-F probe must survive a round trip through the format it is a probe for.
+
+    The trap this closes is the one the plan names for the saturation probes and which applies
+    just as hard here: a value written near a threshold gets pinned to a value other than the
+    one it names. _FORMAT_MAX_MAGNITUDE's bfloat16 fallback is a decimal literal that sits a
+    hair *above* the true bfloat16 maximum, so an unrounded ceiling probe would quantize on the
+    way in and stop being the ceiling.
+    """
+    import torch
+    from helpers.sfpu_domains import format_extremes
+
+    dtype = format_dict[fmt]
+    for value in format_extremes(fmt):
+        round_tripped = float(
+            torch.tensor([value], dtype=torch.float32).to(dtype).float()
+        )
+        assert round_tripped == value, (
+            f"{fmt.name}: the probe {value!r} arrives as {round_tripped!r}, so it pins a "
+            "value other than the one it names"
+        )
+
+
+def test_format_extremes_are_never_clipped_away():
+    """clip_to_format() must keep every probe format_extremes() emits, on every pipeline.
+
+    The two read the same table, and this is what keeps them reading it the same way: a ceiling
+    derived from the format's own maximum but clipped against the *pipeline's* would silently
+    drop the one probe the sweep exists to drive, leaving a variant that passes on six values
+    instead of eight and says nothing about it.
+    """
+    from helpers.sfpu_domains import clip_to_format, format_extremes
+
+    for input_format, output_format, dest_acc in _EDGE_SWEEP_CELLS:
+        if not extremes_safe(input_format, output_format, dest_acc):
+            continue
+        range_fmt = narrowest_range_format(input_format, output_format)
+        emitted = list(format_extremes(range_fmt))
+        assert clip_to_format(emitted, range_fmt) == emitted, (
+            f"{input_format.name}->{output_format.name}: clip_to_format drops "
+            f"{sorted(set(emitted) - set(clip_to_format(emitted, range_fmt)))}"
+        )
+
+
+@pytest.mark.parametrize("dest_acc", [DestAccumulation.No, DestAccumulation.Yes])
+@pytest.mark.parametrize("input_format", [DataFormat.Float32, DataFormat.Float16_b])
+def test_subnormal_probe_is_sent_only_where_it_can_be_delivered(input_format, dest_acc):
+    """The subnormal is dropped off the unpack-to-dest path; the other three probes are not.
+
+    The measured half of cat F (see subnormal_delivered): Ceil, Floor, Sign and Signbit all
+    answered as though the input were +0.0 on every pipeline but Float32 at dest_acc=Yes.
+    Dropping the probe rather than xfailing it is the same decision Signbit's six retired
+    entries record -- an xfail there blames the kernel for a datum it never received.
+    """
+    from helpers.sfpu_domains import _FORMAT_MIN_NORMAL, extreme_values
+
+    values = extreme_values(input_format, input_format, dest_acc)
+    subnormals = [
+        v for v in values if v != 0.0 and abs(v) < _FORMAT_MIN_NORMAL[input_format]
+    ]
+    delivered = input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+    assert bool(subnormals) == delivered, (
+        f"{input_format.name} dest_acc={dest_acc}: subnormal probes {subnormals}, but "
+        f"subnormal_delivered says {delivered}"
+    )
+    # The ceiling, its neighbour and the smallest normal are unaffected either way, so the
+    # gate must never be doing more than it claims.
+    assert len(values) == (8 if delivered else 6), (
+        f"{input_format.name} dest_acc={dest_acc}: {len(values)} probes, expected the four "
+        "magnitudes in both signs minus the subnormal pair where it is not delivered"
+    )
+
+
+def test_extremes_gate_is_not_the_specials_gate():
+    """extremes_safe() and specials_safe() must not collapse into each other.
+
+    They answer different questions -- whether a finite datum with an extreme exponent arrives,
+    against whether a non-finite one does -- and the whole reason cat F has its own flag is that
+    specials_safe()'s two measured breakers (a Float16 anywhere, a 16-bit input into a 32-bit
+    Dest) are about non-finites and do not apply to a subnormal or a ceiling. If someone
+    "simplifies" one into the other, this fails rather than silently taking cat F off the cells
+    where it is the whole point.
+    """
+    from helpers.sfpu_domains import extremes_safe
+
+    differ = [
+        cell
+        for cell in _EDGE_SWEEP_CELLS
+        if extremes_safe(*cell) != specials_safe(*cell)
+    ]
+    assert differ, (
+        "extremes_safe() now agrees with specials_safe() on every cell the edge sweep "
+        "reaches, which means one of them has been redefined in terms of the other"
+    )
+    # Every cell specials_safe accepts, extremes_safe must accept too: a pipeline that carries
+    # a NaN certainly carries a large finite number. The converse is what differs.
+    for cell in _EDGE_SWEEP_CELLS:
+        if specials_safe(*cell):
+            assert extremes_safe(
+                *cell
+            ), f"{cell} carries specials but not extremes, which cannot be right"
+
+
+def test_format_extremes_rejects_formats_with_no_per_element_small_end():
+    """Integer and block-float formats raise rather than returning a plausible number.
+
+    Bfp8_b's smallest element is set by the exponent shared across its 16-element block, so any
+    single number returned for it would be wrong for every block but one -- and would look
+    entirely reasonable in a probe list.
+    """
+    from helpers.sfpu_domains import format_extremes
+
+    for fmt in (DataFormat.Int32, DataFormat.UInt32):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="cat C"
+        ):
+            format_extremes(fmt)
+
+    for fmt in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            ValueError, match="shared across a block"
+        ):
+            format_extremes(fmt)
+
+
+def test_every_extremes_enrolment_carries_a_claim():
+    """A cat-F reason string has to say something, as the cat-B ones do."""
+    from helpers.sfpu_domains import EXTREMES_READY_OPS
+
+    assert EXTREMES_READY_OPS, "the cat-F tranche is empty, so nothing is ever driven"
+    for op, reason in EXTREMES_READY_OPS.items():
+        assert len(reason) > 20, f"{op.name}'s cat-F reason is too short to be a claim"
 
 
 def test_total_order_key_matches_the_isa_remap():

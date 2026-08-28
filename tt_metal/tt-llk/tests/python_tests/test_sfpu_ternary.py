@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -17,17 +19,22 @@ from helpers.llk_params import (
     MathOperation,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
+    TERNARY_SPECIALS_READY_OPS,
     Operand,
-    edge_spec,
+    edge_values,
     exclude_undefined_pair,
     for_op,
+    generated_nan_sign_is_asserted,
+    nan_survives_to_l1,
+    negative_zero_delivered,
+    specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
@@ -37,6 +44,7 @@ from helpers.test_variant_parameters import (
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
+from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.utils import passed_test
 
 _SCALAR_VALUE = 2.0
@@ -83,7 +91,21 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    unspecified_nonfinite_sign=False,
 ):
+    """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
+
+    For the one case where the sign genuinely is not specified: a NaN the kernel emitted,
+    packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole, where
+    `SFPMAD.md` says that NaN's sign "might or might not be set". Better than withdrawing the
+    variant -- the magnitude, the finiteness and every finite lane stay checked, so a kernel
+    returning a finite value, a zero or a NaN where an infinity is due still fails.
+
+    Scoped per lane, from the mask the golden records while the NaN is still a NaN, because one
+    tensor holds both kinds of non-finite at once: the specials_in class drives `inf + (-inf)`,
+    whose sign the ISA leaves open, alongside `lerp(a, b, 0) = a` at `a = -inf`, whose `-inf`
+    IEEE fully specifies. Same per-lane scoping test_eltwise_binary_sfpu uses.
+    """
     # The specs below carry no seed, so seed here: an unseeded redraw makes a variant
     # sitting near its tolerance pass or fail by luck. Same as the binary driver.
     torch.manual_seed(0)
@@ -113,6 +135,11 @@ def _run_sfpu_ternary(
         spec_B=spec_c,
     )
 
+    # input_format and dest_acc turn on the Dest-width and pack-path modelling: the SFPU
+    # evaluates in fp32 and stores into a Dest whose width dest_acc selects, and the packer
+    # substitutes a signed infinity for a NaN a narrower pipeline cannot hold. Both steps are
+    # sub-ULP on a finite value and decisive on a non-finite one, so they are what makes the
+    # specials_in class assertable rather than a wall of "returns inf where IEEE says nan".
     generate_golden = get_golden_generator(TernarySFPUGolden)
     golden = generate_golden(
         mathop,
@@ -121,7 +148,13 @@ def _run_sfpu_ternary(
         src_C,
         _SCALAR_VALUE_BITS,
         formats.output_format,
+        input_format=formats.input_format,
+        dest_acc=dest_acc,
+        collect_generated_nan=unspecified_nonfinite_sign,
     )
+    emitted_nan = None
+    if unspecified_nonfinite_sign:
+        golden, emitted_nan = golden
 
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
@@ -163,6 +196,20 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
+    if emitted_nan is not None:
+        # Clear the sign only on the lanes that held an emitted NaN *and* where both sides are
+        # non-finite. A golden +inf against a hardware 5.0 still compares +inf vs 5.0 and still
+        # fails; a golden +inf against a hardware NaN likewise, because abs() leaves a NaN a NaN
+        # and passed_test's both-NaN clause needs both. So this excuses one bit on the lanes the
+        # ISA declines to pin, and nothing else anywhere.
+        unspecified = (
+            emitted_nan[: len(golden_tensor)]
+            & ~torch.isfinite(golden_tensor)
+            & ~torch.isfinite(res_tensor)
+        )
+        golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
+        res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
+
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
@@ -198,19 +245,49 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Deliberate edge values on the third operand
+# Deliberate edge values, per operand and per failure class
 #
 # The random sweep holds c in uniform(1, 2) for addcdiv and snake_beta because both divide by
-# it, so the pole is unreachable by construction; this drives it.
-# `edge_spec(op, ..., operand=Operand.C)` resolves it through the usual metadata:
+# it, so the pole is unreachable by construction; this drives it -- and, now, drives the two
+# operands the previous version of this sweep never touched.
+#
+# `edge_values(op, ..., operand=X)` resolves the whole thing through the usual metadata:
 #
 #   addcdiv    a + value * b / c    -> _OP_SINGULARITIES C = (0.0, BOTH)
 #   snake_beta a + sin(b*a)^2 / c   -> _OP_SINGULARITIES C = (0.0, BOTH)
 #   lerp       a + c * (b - a)      -> _OP_OPERAND_EDGE_POINTS C = (-1, 0, 1, 2)
-#   addcmul    a + value * b * c    -> nothing; a multiply has no pole, so edge_spec is None
+#   addcmul    a + value * b * c    -> nothing finite; a multiply has no pole and no knee
 #
-# Only C gets edge values; A and B keep their random domains, since the divisor is the
-# interesting operand and pinning all three would test one point rather than a spread.
+# so an op joins by gaining a table entry, never by being listed here.
+#
+# TWO AXES, AND WHY EACH IS SEPARATE.
+#
+# *operand* says which of a, b, c carries the probe. The other two keep their random domains,
+# so each probe value meets a fresh random pair in every face it is repeated into -- sixteen of
+# them at [64, 64], since StimuliSpec.custom fills per face. Pinning two operands instead would
+# pair their value lists *index-wise*: generate_stimuli fills each operand independently and
+# tilize pairs by position, so this is not the cartesian product edge_pair_values() gives the
+# binary suite. Five probes against five probes would test five combinations rather than
+# twenty-five, and would spend the rest of every face on the (0, 0, 0) that
+# StimuliSpec.custom zero-fills with.
+#
+# *edge_class* partitions the probe by failure class before it is driven, which is convention 5
+# and the same split _EDGE_CLASSES makes in test_eltwise_binary_sfpu:
+#
+#   pole         the finite edges -- the registered singularity straddled by a ULP step (cat A),
+#                the op's knees (cat D), and the signed zeros.
+#   specials_in  the non-finite ones (cat B), gated on TERNARY_SPECIALS_READY_OPS and
+#                specials_safe().
+#
+# Classified by `math.isfinite` on the probe, exactly as _classify_edge_pair() tests its
+# operands before anything else: a non-finite *operand* is a different question from a pole,
+# and one tensor holding both means one xfail covering two causes. Without the split,
+# addcdiv's c = 0 pole and c = inf would share a variant and a regression in either would be
+# invisible while the other stayed broken.
+#
+# `test_sfpu_ternary_operand_edges[..., operand:C-edge_class:pole]` is the sweep that used to be
+# spelled test_sfpu_ternary_edges; it is the same stimulus, reached through the same
+# edge_values() metadata, so nothing that was covered has been dropped.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TERNARY_EDGE_OPS = [
@@ -219,6 +296,17 @@ _TERNARY_EDGE_OPS = [
     MathOperation.SfpuLerp,
     MathOperation.SfpuSnakeBeta,
 ]
+
+_TERNARY_EDGE_CLASS_POLE = "pole"
+_TERNARY_EDGE_CLASS_SPECIALS = "specials_in"
+
+# Order is documentation, not mechanism -- but the first entry is the one that builds the
+# shared ELF under --compile-producer (conftest._collapse_runtime_only_variants keeps one item
+# per compile key), so the class most likely to be non-empty goes first. See the PRODUCE guard
+# in the test body for what happens when it is not.
+_TERNARY_EDGE_CLASSES = (_TERNARY_EDGE_CLASS_POLE, _TERNARY_EDGE_CLASS_SPECIALS)
+
+_TERNARY_OPERANDS = (Operand.A, Operand.B, Operand.C)
 
 # Ops that divide by c, and therefore need a numerator held away from zero.
 #
@@ -244,43 +332,398 @@ _TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], s
 _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
 
 
+def _ternary_cat_b_enabled(mathop, formats, dest_acc):
+    """Two independent gates, and both must pass.
+
+    TERNARY_SPECIALS_READY_OPS says this op's *golden* defines an answer at a non-finite
+    operand; specials_safe() says this *pipeline* delivers one intact. Neither implies the
+    other, so both are asked -- the same shape the unary and binary edge sweeps use.
+    """
+    return mathop in TERNARY_SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+
+
+def _ternary_edge_class_values(
+    mathop, formats, operand, edge_class, dest_acc, specials
+):
+    """The probe values of *edge_class* for (*mathop*, *operand*) on this pipeline.
+
+    One edge_values() call partitioned by finiteness rather than two calls with different
+    `specials`, so the two classes cannot come to disagree about which value belongs where.
+    """
+    vals = edge_values(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        operand=operand,
+        specials=specials,
+        dest_acc=dest_acc,
+    )
+    if edge_class == _TERNARY_EDGE_CLASS_SPECIALS:
+        return [v for v in vals if not math.isfinite(v)]
+    return [v for v in vals if math.isfinite(v)]
+
+
+# The cells this sweep's format axis can reach, so the divergence sets below are derived from
+# the same gates the stimulus is, rather than transcribed.
+_TERNARY_EDGE_CELLS = tuple(
+    (fmt.input_format, fmt.output_format, dest_acc)
+    for fmt in input_output_formats(
+        [DataFormat.Float16_b, DataFormat.Float32], same=True
+    )
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+)
+
+
+def _cat_b_cells(applies=lambda _in_fmt, _out_fmt, _dest_acc: True):
+    """The specials-carrying cells of this sweep for which *applies* is true."""
+    return tuple(
+        cell for cell in _TERNARY_EDGE_CELLS if specials_safe(*cell) and applies(*cell)
+    )
+
+
+# What driving the ternary specials found on a Blackhole p150, once both goldens modelled the
+# Dest write and the pack (see sfpu_domains' cat-B ternary section for the 10 cells that
+# accounted for). Keyed by (op, operand) and scoped to the specials_in class: every entry below
+# is a non-finite *operand*, and the pole class agreed everywhere.
+#
+# Non-strict per Phase 0's approximate-exp precedent, so each case still executes and reports
+# XPASS if the behaviour changes, and derived from the delivery gates rather than listed so a
+# cell drifting in or out shows up as a behaviour change rather than as a stale table.
+#
+# TWO CAUSES, NOT FOUR:
+#
+#   c = NaN through the reciprocal (addcdiv and snake_beta, operand C). Both divide by c, both
+#   build the divide on SFPARECIP, and the kernel returns +0 for 1/NaN rather than propagating
+#   -- so the result is `a` where the golden says NaN. Identical to the divergence already
+#   recorded against unary Reciprocal ("1/NaN returns +0"), reached through the same primitive,
+#   and it is section 5.6 Q1's composition question rather than a new one. Applies on every
+#   specials-carrying cell, because it is arithmetic and not a delivery fact. Measured: c =
+#   +/-inf agrees on both cells (value*b/+/-inf = +/-0, so the result is a), which is what makes
+#   this the NaN probe alone.
+#
+#   A non-finite reaching the sin (snake_beta, operands A and B). sin(b*a) with either operand
+#   non-finite gives the kernel something whose square is +inf, against a golden NaN; SFPLUTFP32
+#   documents no NaN/inf handling, so what the polynomial does there is an LLK decision rather
+#   than an ISA one -- section 5.6 Q1 again. Scoped to the cells where a NaN *survives to L1*:
+#   where it does not, the golden's NaN is packed to the same +inf the kernel produced and the
+#   two agree by substitution. That scoping is the interesting half of the measurement, and it
+#   is derived from nan_survives_to_l1() rather than transcribed so it cannot go stale.
+_TERNARY_EDGE_KNOWN_DIVERGENCES = {
+    (MathOperation.SfpuAddcdiv, Operand.C): _cat_b_cells(),
+    (MathOperation.SfpuSnakeBeta, Operand.C): _cat_b_cells(),
+    (MathOperation.SfpuSnakeBeta, Operand.A): _cat_b_cells(nan_survives_to_l1),
+    (MathOperation.SfpuSnakeBeta, Operand.B): _cat_b_cells(nan_survives_to_l1),
+}
+
+_RECIPROCAL_NAN_NOTE = (
+    "the kernel's reciprocal returns +0 for 1/NaN instead of propagating, so the quotient "
+    "vanishes and the result is `a`; the same divergence unary Reciprocal carries, through the "
+    "same SFPARECIP composition. c = +/-inf agrees, so this is the NaN probe alone"
+)
+
+_TERNARY_EDGE_REASON = {
+    (MathOperation.SfpuAddcdiv, Operand.C): f"addcdiv(a, b, NaN) returns a, not NaN "
+    f"({_RECIPROCAL_NAN_NOTE}).",
+    (
+        MathOperation.SfpuSnakeBeta,
+        Operand.C,
+    ): f"snake_beta(a, b, NaN) returns a, not NaN "
+    f"({_RECIPROCAL_NAN_NOTE}).",
+    (
+        MathOperation.SfpuSnakeBeta,
+        Operand.A,
+    ): "sin(b*a) with a non-finite gives the kernel a "
+    "value whose square is +inf, where torch gives NaN, so the result is +inf against a golden "
+    "NaN. SFPLUTFP32 documents no NaN/inf handling, so this is an LLK decision with no ISA "
+    "ruling. Only on the cells where a NaN survives to L1 -- elsewhere the pack substitutes the "
+    "same +inf and the two agree.",
+    (
+        MathOperation.SfpuSnakeBeta,
+        Operand.B,
+    ): "As operand A: the non-finite reaches the same "
+    "sin through the b*a product.",
+}
+
+assert set(_TERNARY_EDGE_REASON) == set(_TERNARY_EDGE_KNOWN_DIVERGENCES), (
+    "_TERNARY_EDGE_REASON and _TERNARY_EDGE_KNOWN_DIVERGENCES disagree on which (op, operand) "
+    f"pairs diverge: {set(_TERNARY_EDGE_REASON) ^ set(_TERNARY_EDGE_KNOWN_DIVERGENCES)}"
+)
+assert all(
+    cells for cells in _TERNARY_EDGE_KNOWN_DIVERGENCES.values()
+), "an (op, operand) claiming a divergence with no cell to apply it to is a dead xfail"
+
+
 @pytest.mark.nightly
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=_TERNARY_EDGE_OPS,
+    # runtime(): both axes select which values go into which operand tensor and nothing
+    # else, so all six share the one ELF the (op, formats, dest_acc) triple decides.
+    operand=runtime(list(_TERNARY_OPERANDS)),
+    edge_class=runtime(list(_TERNARY_EDGE_CLASSES)),
 )
-def test_sfpu_ternary_edges(formats, dest_acc, mathop):
-    """Drive each ternary op's operand-C pole or knee, where it has one."""
+def test_sfpu_ternary_operand_edges(
+    request, formats, dest_acc, mathop, operand, edge_class
+):
+    """Drive one class of one ternary operand's edges against random values on the other two."""
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
 
-    spec_C = edge_spec(
-        mathop,
-        formats.input_format,
-        formats.output_format,
-        operand=Operand.C,
-        dest_acc=dest_acc,
+    specials = _ternary_cat_b_enabled(mathop, formats, dest_acc)
+
+    # Marked before the stimulus is built, but only for the specials_in class: every recorded
+    # divergence is a non-finite operand, and the pole class shares neither the cause nor the
+    # cells. Where the class is empty the variant skips below and the marker never fires.
+    reason = _TERNARY_EDGE_REASON.get((mathop, operand))
+    if (
+        reason is not None
+        and edge_class == _TERNARY_EDGE_CLASS_SPECIALS
+        and (formats.input_format, formats.output_format, dest_acc)
+        in _TERNARY_EDGE_KNOWN_DIVERGENCES[(mathop, operand)]
+    ):
+        request.node.add_marker(pytest.mark.xfail(reason=reason, strict=False))
+
+    vals = _ternary_edge_class_values(
+        mathop, formats, operand, edge_class, dest_acc, specials
     )
-    if spec_C is None:
-        # addcmul: c is a multiplicand, so it has no pole and no knee, and cat B is gated on
-        # SPECIALS_READY_OPS. The random sweep already covers everything a probe could add.
-        pytest.skip(
-            reason=f"{mathop.name} has no operand-C edge (no pole, no knee) for this "
-            "pipeline"
+
+    if not vals and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        # The compile-producer pass must not skip on a runtime-only axis. `operand` and
+        # `edge_class` are both runtime(), so conftest._collapse_runtime_only_variants keeps
+        # one item per compile key and *that* item builds the ELF the other five share; a skip
+        # here leaves them running against a binary that was never built, which presents as
+        # TENSIX TIMED OUT rather than as a skip. The ELF depends only on the compile-time axes
+        # (op, formats, dest_acc), never on which values go in the tensor, so any non-empty
+        # list compiles the right kernel -- take the unpartitioned one. The consumer still
+        # partitions and still skips.
+        vals = edge_values(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            operand=operand,
+            specials=specials,
+            dest_acc=dest_acc,
         )
 
-    # Keep the numerator off zero for the dividing ops, so the variant asserts the pole
-    # rather than the 0/0 indeterminate form. See _TERNARY_DIVIDES_BY_C.
-    nonzero = mathop in _TERNARY_DIVIDES_BY_C
+    if not vals:
+        pytest.skip(
+            reason=f"{mathop.name} operand {operand.name} has no {edge_class} edge for "
+            "this pipeline"
+            + (
+                ""
+                if edge_class != _TERNARY_EDGE_CLASS_SPECIALS or specials
+                else " (cat B is off for this op or this pipeline)"
+            )
+        )
+
+    # Keep the numerator off zero when the probed operand is the divisor, so the variant
+    # asserts the pole (and c = ±inf, which gives an exact zero quotient) rather than the 0/0
+    # indeterminate form. See _TERNARY_DIVIDES_BY_C. Probing a or b instead leaves c on its
+    # uniform(1, 2) default, which is already off the pole, so no guard is needed there.
+    guard = operand == Operand.C and mathop in _TERNARY_DIVIDES_BY_C
+    specs = {
+        Operand.A: _TERNARY_NONZERO_A if guard else None,
+        Operand.B: _TERNARY_NONZERO_B if guard else None,
+        Operand.C: None,
+    }
+    specs[operand] = StimuliSpec.custom(values=vals, seed=0)
+
+    # Where the golden's answer is a NaN the op emitted, a narrowing pipeline turns its sign
+    # into the observable result, and Wormhole's SFPMAD leaves that sign unspecified -- so
+    # assert the magnitude there rather than withdrawing the variant. Blackhole specifies the
+    # canonical NaN and keeps the full assertion. Pipeline and arch only: which lanes hold an
+    # emitted NaN is the golden's own mask, since one tensor carries `inf + (-inf)` alongside
+    # `lerp(-inf, b, 0) = -inf`.
+    unspecified_sign = generated_nan_sign_is_asserted(
+        formats.input_format,
+        formats.output_format,
+        dest_acc,
+        on_wormhole=TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE,
+    )
+
     _run_sfpu_ternary(
         formats,
         dest_acc,
         mathop,
-        spec_A=_TERNARY_NONZERO_A if nonzero else None,
-        spec_B=_TERNARY_NONZERO_B if nonzero else None,
+        spec_A=specs[Operand.A],
+        spec_B=specs[Operand.B],
+        spec_C=specs[Operand.C],
+        unspecified_nonfinite_sign=unspecified_sign,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# addcmul's cancellation edge
+#
+# addcmul is the one ternary op with nothing in _OP_SINGULARITIES or
+# _OP_OPERAND_EDGE_POINTS -- `a + value * b * c` is smooth in all three operands -- so the
+# sweep above gives it only its cat-B class, and before cat B existed it had no deliberate
+# edge at all.
+#
+# What it does have is exact cancellation: choose a = -value * b * c and the result must be
+# zero. That is worth driving on its own because the *sign* of that zero is a real question on
+# this hardware rather than a matter of taste -- SFPMAD "flushed to positive zero" on Wormhole
+# against "flushed to sign-preserved zero" on Blackhole, the same split that arch-gates
+# _EDGE_CLASS_NEGATIVE_ZERO in the binary suite.
+#
+# Built as an explicit triple rather than a StimuliSpec because the relation is between the
+# three operands: no per-operand domain can express "a is the exact negation of value*b*c".
+# Every b and c below is a power of two and value is 2.0, so value*b*c is exact in every format
+# this runs on and the cancellation is not an artifact of rounding.
+#
+# What the comparator can and cannot see: passed_test() judges by torch.isclose, a both-NaN
+# clause and PCC, under all of which -0.0 == +0.0. So this variant asserts that the result is
+# *zero*, which is the part that can fail; the zero's sign would need a bitwise comparator, and
+# that is a suite-wide change (the same limitation recorded against Neg(+0) in
+# sfpu_domains.SPECIALS_READY_OPS).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# (b, c) pairs; a is derived as -_SCALAR_VALUE * b * c. Powers of two on both operands, spanning
+# both signs and three decades of magnitude, so the product is exact and the cancellation is
+# tested across the exponent range rather than at one point.
+_ADDCMUL_CANCELLATION_BC = (
+    (1.0, 1.0),
+    (1.0, -1.0),
+    (-1.0, 1.0),
+    (-1.0, -1.0),
+    (0.5, 0.5),
+    (-0.25, 8.0),
+    (64.0, 0.125),
+    (-16.0, -4.0),
+    (
+        0.0,
+        1.0,
+    ),  # a = -0.0 exactly: 0 + value*0*1, the signed-zero case of the same relation
+    (1.0, 0.0),
+)
+
+
+def _addcmul_cancellation_specs():
+    """(spec_A, spec_B, spec_C) whose lanes satisfy a + value*b*c == 0 exactly."""
+    b = [b for b, _ in _ADDCMUL_CANCELLATION_BC]
+    c = [c for _, c in _ADDCMUL_CANCELLATION_BC]
+    a = [-_SCALAR_VALUE * bv * cv for bv, cv in _ADDCMUL_CANCELLATION_BC]
+    return (
+        StimuliSpec.custom(values=a, seed=0),
+        StimuliSpec.custom(values=b, seed=0),
+        StimuliSpec.custom(values=c, seed=0),
+    )
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.SfpuAddcmul,
+)
+def test_sfpu_addcmul_cancellation(formats, dest_acc, mathop):
+    """a + value*b*c with a chosen to cancel the product exactly: the result must be zero."""
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    spec_A, spec_B, spec_C = _addcmul_cancellation_specs()
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=spec_A,
+        spec_B=spec_B,
         spec_C=spec_C,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TTNNWhere
+#
+# where(cond, t, f) is a select, not an arithmetic op: the result is one of the two data
+# verbatim. That makes the driver below shared rather than copied -- the three variants differ
+# only in the three tensors they hand it, and a third transcription of the TestConfig block is
+# how they would come to disagree about unpack_to_dest or the comparator.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _skip_unsupported_where(formats, dest_acc):
+    """The two (format, dest_acc) pairs the where kernel does not support."""
+    if (
+        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
+    ) and dest_acc == DestAccumulation.No:
+        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
+
+    if (
+        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
+    ) and dest_acc == DestAccumulation.Yes:
+        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
+
+
+def _run_ttnn_where(formats, dest_acc, mathop, cond, true_value, false_value):
+    """Drive the where kernel on three prepared tensors and assert against WhereGolden.
+
+    The formats are handed to the golden as well as to the kernel, which is what turns on the
+    pack-path modelling: a NaN selected into a pipeline too narrow to hold one arrives as a
+    signed infinity. Nothing changes for finite data, where the substitution never fires.
+    """
+    tile_count = cond.numel() // (DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM)
+
+    golden_generator = get_golden_generator(WhereGolden)
+    golden = golden_generator(
+        cond,
+        true_value,
+        false_value,
+        input_format=formats.input_format,
+        output_format=formats.output_format,
+        dest_acc=dest_acc,
+    )
+
+    configuration = TestConfig(
+        "sources/sfpu_ternary_test.cpp",
+        formats,
+        templates=[
+            SFPU_TERNARY_OP(mathop),
+            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+            APPROX_MODE(ApproximationMode.No),
+            DISABLE_SRC_ZERO_FLAG(True),
+            DEST_SYNC(),
+        ],
+        runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
+        variant_stimuli=StimuliConfig(
+            cond.flatten(),
+            formats.input_format,
+            true_value.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_count,
+            tile_count_B=tile_count,
+            tile_count_res=tile_count,
+            buffer_C=false_value.flatten(),
+            stimuli_C_format=formats.input_format,
+            tile_count_C=tile_count,
+        ),
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    res_from_L1 = configuration.run().result
+    res_from_L1 = res_from_L1[: len(golden)]
+
+    assert len(res_from_L1) == len(
+        golden
+    ), "Result tensor and golden tensor are not of the same length"
+
+    # Int32 is compared as bfloat16: the where kernel moves raw bits, so the comparison only
+    # has to be exact and reinterpreting both sides the same way keeps it so.
+    dtype = (
+        format_dict[formats.output_format]
+        if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
+        else torch.bfloat16
+    )
+    golden_tensor = torch.tensor(golden, dtype=dtype).flatten()
+    res_tensor = torch.tensor(res_from_L1, dtype=dtype).flatten()
+
+    assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
 
 
 @parametrize(
@@ -302,21 +745,12 @@ def test_ttnn_where(
     mathop,
     test_case,
 ):
-
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
+    _skip_unsupported_where(formats, dest_acc)
 
     # 64x64 = 2x2 tiles: exercises the multi-tile block loop in sfpu_ternary_test.cpp.
     input_dimensions = [64, 64]
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -325,7 +759,7 @@ def test_ttnn_where(
         spec_B=sfpu_false_spec,
     )
 
-    src_C, tile_cnt_C, _, _ = generate_stimuli(
+    src_C, _, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -341,63 +775,7 @@ def test_ttnn_where(
         src_A = torch.zeros_like(src_A)
     # For "mixed" case, use the generated stimuli as-is
 
-    golden_generator = get_golden_generator(WhereGolden)
-    golden = golden_generator(src_A, src_B, src_C)
-
-    configuration = TestConfig(
-        "sources/sfpu_ternary_test.cpp",
-        formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-        ],
-        runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
-        variant_stimuli=StimuliConfig(
-            src_A.flatten(),
-            formats.input_format,
-            src_B.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            buffer_C=src_C.flatten(),
-            stimuli_C_format=formats.input_format,
-            tile_count_C=tile_cnt_C,
-        ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
-    )
-
-    res_from_L1 = configuration.run().result
-    res_from_L1 = res_from_L1[: len(golden)]
-
-    assert len(res_from_L1) == len(
-        golden
-    ), "Result tensor and golden tensor are not of the same length"
-
-    golden_tensor = torch.tensor(
-        golden,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
-            else torch.bfloat16
-        ),
-    )
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
-            else torch.bfloat16
-        ),
-    )
-
-    assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"
+    _run_ttnn_where(formats, dest_acc, mathop, src_A, src_B, src_C)
 
 
 # MCW test with dynamic format sweeping like main test
@@ -423,17 +801,7 @@ def test_ttnn_where_mcw(
     height = 64
     width = 64
 
-    # Generate dtype dynamically based on current input format
-
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
+    _skip_unsupported_where(formats, dest_acc)
 
     # Create alternating pattern for condition (0, 1, 0, 1, ...)
     pattern = torch.arange(height * width) % 2
@@ -443,63 +811,131 @@ def test_ttnn_where_mcw(
     T = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 2
     F = torch.ones(height, width, dtype=format_dict[formats.input_format]) * 11
 
-    golden_generator = get_golden_generator(WhereGolden)
-    golden = golden_generator(C, T, F)
-    tile_count = height * width // (32 * 32)
+    _run_ttnn_where(formats, dest_acc, mathop, C, T, F)
 
-    configuration = TestConfig(
-        "sources/sfpu_ternary_test.cpp",
-        formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(ApproximationMode.No),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-        ],
-        runtimes=[NUM_BLOCKS(tile_count), NUM_TILES_IN_BLOCK(1)],
-        variant_stimuli=StimuliConfig(
-            C.flatten(),
-            formats.input_format,
-            T.flatten(),
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IEEE specials through where, one operand at a time
+#
+# where selects rather than computes, so the three operands ask three different questions and
+# only one of them is about the SFPU's arithmetic at all:
+#
+#   condition   is `cond != 0` still right when cond is +/-inf, NaN or -0.0? The kernel builds
+#               the predicate on SFPSETCC, whose contract is stated "provided that VC is neither
+#               negative zero nor any kind of NaN" -- so both of those are outside what the
+#               primitive promises, and driving them is the point.
+#   true/false  does a special survive being selected and packed? A raw LO16 move should carry
+#               anything, and the interesting case is the one where it cannot: a NaN through a
+#               pipeline that substitutes an infinity for it.
+#
+# The non-probed operands are held at constants rather than at random values, and the condition
+# is pinned to the branch under test (all-ones while probing `true`, all-zeros while probing
+# `false`), so every probe value is definitely the one selected. An alternating condition would
+# leave half the probe list unobserved and the variant would still pass.
+#
+# Values come from edge_values() like every other cat-B sweep, so where enrols by its entry in
+# TERNARY_SPECIALS_READY_OPS rather than by a list here, and the -0.0 probe is dropped on the
+# pipelines that flatten it by the same negative_zero_delivered() gate.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Constants for the two operands not under test. Exact in every format this sweep runs on, and
+# distinct from each other so the result says which branch was taken.
+_WHERE_TRUE_CONST = 2.0
+_WHERE_FALSE_CONST = 11.0
+
+
+def _where_const_tile(value, fmt, dimensions):
+    return torch.full(dimensions, value, dtype=format_dict[fmt])
+
+
+def _where_probe_tile(values, fmt, dimensions):
+    """*values* at the head of the tensor, the constant 1.0 everywhere else.
+
+    Not zero-filled: a zero in the *condition* operand selects the false branch, which is a
+    perfectly good case but not the one this variant is driving, and it would put two questions
+    in one tensor. 1.0 is in-range for every format here and selects the true branch, so the
+    filler lanes assert the ordinary behaviour while the head lanes assert the probe.
+    """
+    flat = torch.ones(dimensions[0] * dimensions[1], dtype=format_dict[fmt])
+    for i, v in enumerate(values):
+        flat[i] = v
+    return flat.view(*dimensions)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.TTNNWhere,
+    # runtime(): the operand axis changes the three tensors and nothing about the kernel.
+    operand=runtime(list(_TERNARY_OPERANDS)),
+)
+def test_ttnn_where_specials(request, formats, dest_acc, mathop, operand):
+    """Drive IEEE specials into one where operand, with the other two held at constants."""
+    _skip_unsupported_where(formats, dest_acc)
+
+    specials = _ternary_cat_b_enabled(mathop, formats, dest_acc)
+    vals = [
+        v
+        for v in edge_values(
+            mathop,
             formats.input_format,
             formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
-            buffer_C=F.flatten(),
-            stimuli_C_format=formats.input_format,
-            tile_count_C=tile_count,
+            operand=operand,
+            specials=specials,
+            dest_acc=dest_acc,
+        )
+        # where has no pole and no knee, so without cat B edge_values() returns nothing at all;
+        # the finiteness filter is here to keep the two zeros, which are cat B's and are the
+        # condition operand's most interesting probe.
+    ]
+    if not vals:
+        pytest.skip(
+            reason=f"cat B is off for {mathop.name} on this pipeline, and where has no "
+            "other edge"
+        )
+
+    # A -0.0 *condition* selects the true branch on the unpack-to-dest path, where a real -0.0
+    # reaches the LREG; `-0.0 == 0` makes it the false branch. Outside the documented contract
+    # rather than a hardware fault: SFPSETCC is specified only for inputs that are not negative
+    # zero (tt-isa-documentation WormholeB0/.../VectorUnit.md, identically on Blackhole), which
+    # is the same caveat that scopes Sign's and Heaviside's divergences in the unary suite -- and
+    # to the same set of cells, since negative_zero_delivered() is what decides both. Measured on
+    # a Blackhole p150: the only divergent lane, on the only cell that delivers the probe.
+    #
+    # Non-strict, and derived from the delivery gate rather than listed, so a cell drifting in or
+    # out of it reports a behaviour change instead of leaving a stale table.
+    if operand == Operand.A and negative_zero_delivered(formats.input_format, dest_acc):
+        request.node.add_marker(
+            pytest.mark.xfail(
+                reason="where(-0.0, t, f) returns t; -0.0 == 0 makes it f. Outside the "
+                "documented contract: SFPSETCC is specified only for inputs that are not "
+                "negative zero. Same caveat and same unpack-to-dest scoping as Sign and "
+                "Heaviside.",
+                strict=False,
+            )
+        )
+
+    dimensions = (64, 64)
+    tiles = {
+        Operand.A: _where_const_tile(1.0, formats.input_format, dimensions),
+        Operand.B: _where_const_tile(
+            _WHERE_TRUE_CONST, formats.input_format, dimensions
         ),
-        unpack_to_dest=formats.input_format.is_32_bit(),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
-    )
-
-    res_from_L1 = configuration.run().result
-    res_from_L1 = res_from_L1[: len(golden)]
-
-    golden_tensor = torch.tensor(
-        golden,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
-            else torch.bfloat16
+        Operand.C: _where_const_tile(
+            _WHERE_FALSE_CONST, formats.input_format, dimensions
         ),
+    }
+    if operand == Operand.C:
+        # Probing the false branch, so the condition has to select it.
+        tiles[Operand.A] = _where_const_tile(0.0, formats.input_format, dimensions)
+    tiles[operand] = _where_probe_tile(vals, formats.input_format, dimensions)
+
+    _run_ttnn_where(
+        formats,
+        dest_acc,
+        mathop,
+        tiles[Operand.A],
+        tiles[Operand.B],
+        tiles[Operand.C],
     )
-
-    golden_tensor = golden_tensor.flatten()
-
-    res_tensor = torch.tensor(
-        res_from_L1,
-        dtype=(
-            format_dict[formats.output_format]
-            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
-            else torch.bfloat16
-        ),
-    )
-
-    assert len(res_tensor) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-    assert torch_equal_nan(golden_tensor, res_tensor), "Assert against golden failed"

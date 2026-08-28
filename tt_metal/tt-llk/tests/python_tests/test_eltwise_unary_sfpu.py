@@ -29,11 +29,15 @@ from helpers.param_config import (
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
+    EXTREMES_READY_OPS,
     SHIFT_EDGE_AMOUNTS,
     SPECIALS_READY_OPS,
     edge_spec,
     exclude_undefined,
+    extreme_values,
+    extremes_safe,
     for_op_pipeline,
+    format_extremes,
     negative_zero_delivered,
     op_edge_points,
     sfpu_unary_ops,
@@ -760,6 +764,181 @@ def test_eltwise_unary_sfpu_edges(
         spec_A=spec_A,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Format extremes and the subnormal band (cat F)
+#
+# The registry's widest domain is Square at +/-1000, so the sweeps above jump from ~10 straight
+# to infinity and nothing occupies the thirty-odd decades in between or the band immediately
+# above zero. That band is not decoration: the goldens model flush-to-zero carefully
+# (golden_generators._FTZ_THRESHOLD, _apply_ftz), stimuli_generator's
+# _format_elem_min_magnitude() exists specifically to keep random draws *away* from denormals,
+# and until this nothing drove an input that reached either.
+#
+# ITS OWN VARIANT, NOT AN EXTRA FLAG ON test_eltwise_unary_sfpu_edges. Convention: one failure
+# class per variant. A saturation failure at the ceiling and a signed-zero failure at a pole
+# have nothing to do with each other, and sharing a tensor means one xfail covers both and the
+# second is invisible for as long as the first survives. extreme_values() returns cat F alone
+# for exactly this reason.
+#
+# Two independent gates, as everywhere else: EXTREMES_READY_OPS says the op's *golden* defines
+# an answer at a format extreme, extremes_safe() says the *pipeline* delivers one. The second
+# is not specials_safe() -- a finite datum with an extreme exponent is not a non-finite, and the
+# breakers that stop a NaN reaching the SFPU do not apply to it. See extremes_safe().
+#
+# WHAT THE FIRST TRANCHE IS FOR. These are the ops whose behaviour at an extreme is
+# uncontroversial and whose golden is plain arithmetic -- magnitude, sign, the rounding family,
+# the pass-throughs and the comparisons. They also settle a second question for free: above
+# 2**mantissa every float is already an integer, so floor, ceil, round and trunc must be the
+# identity there, and nothing else in the suite checks that.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EXTREME_SWEEP_OPS = sorted(
+    set(EXTREMES_READY_OPS) & set(_EDGE_SWEEP_OPS), key=lambda op: op.name
+)
+
+assert set(EXTREMES_READY_OPS) <= set(_EDGE_SWEEP_OPS), (
+    "these ops are enrolled for cat F but the unary edge sweep cannot drive them, so the "
+    "enrolment reaches nothing: "
+    f"{sorted(op.name for op in set(EXTREMES_READY_OPS) - set(_EDGE_SWEEP_OPS))}"
+)
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=_EXTREME_SWEEP_OPS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_extremes(
+    formats: list[InputOutputFormat],
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Drive the format's ceiling, its neighbour, its smallest normal and one subnormal."""
+    _skip_coverage_unsupported(mathop)
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    if not extremes_safe(formats.input_format, formats.output_format, dest_acc):
+        pytest.skip(
+            reason="this pipeline cannot deliver a magnitude extreme intact "
+            "(see sfpu_domains.extremes_safe)"
+        )
+
+    custom_atol, custom_rtol = CUSTOM_TOLERANCES.get(mathop, (None, None))
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        # dest_acc decides whether the subnormal probe is sent at all: on the datacopy path
+        # the LREG holds +0.0, and a probe there would blame the kernel for a datum it never
+        # received. See sfpu_domains.subnormal_delivered().
+        spec_A=StimuliSpec.custom(
+            values=extreme_values(
+                formats.input_format, formats.output_format, dest_acc
+            ),
+            seed=0,
+        ),
+        custom_atol=custom_atol,
+        custom_rtol=custom_rtol,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Overflow saturation, one op at a time
+#
+# The cat-F tranche above is deliberately the ops that *cannot* overflow: every one of them
+# returns its input, a bounded constant, or a magnitude no larger than the input, so the
+# ceiling probe asks whether the pipeline delivered the datum and nothing more. The other
+# half of cat F is the ops whose *result* leaves the format, and that is a different
+# assertion with a different failure mode.
+#
+# It is worth its own test because the failure is invisible to everything else in the suite.
+# The convert from the SFPU's fp32 to a narrower output must saturate to +/-inf; if it ever
+# wrapped instead, +/-inf would still come out right for a non-finite *input* -- so every cat-B
+# probe would keep passing -- while every large finite input silently returned a tiny wrong
+# value, which no random sweep would reach because the registered domain for Square stops at
+# +/-1000.
+#
+# Square first, and one op per follow-up rather than a shared harness now: exp, exp2,
+# expwithbase, expm1, sinh, cosh and the binary mul/add/pow all overflow too, and the shared
+# shape is only obvious once two or three of them have been written. Derived early it fits
+# whichever op it was written against and nothing else.
+#
+# Every probe is a power of two, so `x*x` is exact in every format this runs on and the
+# saturation is a property of the exponent range rather than of a rounding. A probe written as
+# a decimal near the threshold is the trap here: 1.9e19 is not representable in bfloat16 and
+# arrives as something else, so the test would pin a threshold other than the one it names.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 2**63 squared is 2**126, the largest power-of-two square inside the bfloat16 exponent range;
+# 2**64 squared is 2**128, the first one outside it. So this list straddles the ceiling with an
+# exact pair, and carries a smaller finite control and a larger overflowing one either side.
+# Both signs, because square is even and a sign-handling defect at the ceiling would otherwise
+# only be visible on half the domain.
+_SQUARE_SATURATION_MAGNITUDES = (2.0**62, 2.0**63, 2.0**64, 2.0**65)
+_SQUARE_SATURATION_PROBES = (
+    tuple(-m for m in _SQUARE_SATURATION_MAGNITUDES) + _SQUARE_SATURATION_MAGNITUDES
+)
+
+
+def _assert_square_probes_straddle_the_ceiling():
+    """The probe list must contain both a finite square and an overflowing one, per format.
+
+    Without this the list is a set of literals that stays plausible while the thing it was
+    chosen to straddle moves: a wider ceiling makes every probe finite and the test asserts
+    ordinary arithmetic, a narrower one makes every probe overflow and it asserts saturation
+    without a control. Either way it still passes, which is the failure mode worth an assert.
+    """
+    for fmt in (DataFormat.Float16_b, DataFormat.Float32):
+        ceiling = max(abs(v) for v in format_extremes(fmt))
+        squares = [m * m for m in _SQUARE_SATURATION_MAGNITUDES]
+        assert any(sq <= ceiling for sq in squares) and any(
+            sq > ceiling for sq in squares
+        ), (
+            f"_SQUARE_SATURATION_MAGNITUDES no longer straddles {fmt.name}'s ceiling "
+            f"{ceiling}: squares are {squares}. Re-choose the exponents rather than widening "
+            "the list."
+        )
+
+
+_assert_square_probes_straddle_the_ceiling()
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
+    mathop=MathOperation.Square,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_square_saturation(
+    formats: list[InputOutputFormat],
+    mathop: MathOperation,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """square(x) for a large finite x must saturate to +inf, not wrap to a small finite value."""
+    _skip_bh_unless_fp32(formats, dest_acc)
+
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=StimuliSpec.custom(values=list(_SQUARE_SATURATION_PROBES), seed=0),
     )
 
 
