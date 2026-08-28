@@ -126,6 +126,29 @@ inline bool write_barrier_bounded(uint64_t deadline) {
     return true;
 }
 
+// dma_async_write/read (gddr_dma.h) poll the engine's ready status before every issue -- an MMIO round
+// trip plus a per-iteration stack bounce (the volatile union: lw/sw/lw/andi/beqz in the compiled ELF).
+// The poll guards the queue-full case, which the filler's pipeline makes unreachable by construction:
+// the generation gate keeps stream-0 writes at most ~10 of the 15 the queue holds, and the pump keeps
+// stream-1 reads at most 2 of 255. These variants are the same register programming with the poll gone.
+inline void dma_write_unchecked(uint8_t stream, uint32_t src_l1, uint64_t dst_gddr, uint32_t size_bytes) {
+    DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
+    attrs.f.transfer_size_words = size_bytes >> 4;
+    attrs.f.start_of_packet = 0;
+    attrs.f.end_of_packet = 0;
+    attrs.f.transfer_start_raw = 1;
+    experimental::program_dma_write_addresses_(stream, src_l1, dst_gddr);
+    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
+}
+
+inline void dma_read_unchecked(uint8_t stream, uint64_t src_gddr, uint32_t dst_l1, uint32_t size_bytes) {
+    DmaTxqTransferAttrs_u attrs = {.val = DmaTxqTransferAttrs_DEFAULT};
+    attrs.f.transfer_size_words = size_bytes >> 4;
+    attrs.f.transfer_start_read = 1;
+    experimental::program_dma_read_addresses_(stream, src_gddr, dst_l1);
+    WRITE_TX_STREAM_REG(stream, TX_REG_STREAM_TRANSFER_ATTRIBUTES_REG_OFFSET, attrs.val);
+}
+
 // Bounded dma_async_write_wait_n (gddr_dma.h): the spool-mode staging-reuse gate. Completion, not "sent" --
 // the DMA engine has no sent analog, and completion (AXI write response received) is also what makes the
 // spool bytes observable to the stream-1 reads that consume them.

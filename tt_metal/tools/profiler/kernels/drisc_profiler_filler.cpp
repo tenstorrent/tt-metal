@@ -177,6 +177,21 @@ void kernel_main() {
     static_assert(
         (kSelfZones != 0 ? (kPrefix + kCtrlWords + kRingWords) * 4u : 0u) + kCvReadBytes * kMaxCores <= kSlotBytes,
         "CV staging must fit inside the slot past the pipeline");
+    // The drain's bounce buffers. CV staging holds at most kCvReadBytes * kMaxCores (4 KiB) of the slot it
+    // owns and its tail is contiguous with the bounce slots, so the bounces span the remainder: 27,776 B
+    // as two 13,888 B chunks, +31% drain bytes per pump pass at identical pass cost -- the surplus that
+    // pulls the sustained cap-riding equilibrium below the cap. Self-zone builds keep whole-slot bounces
+    // (their CV staging shares the self slot instead).
+    constexpr uint32_t kBounceBase0 = kSelfZones != 0 ? kStageBase + kBounceSlot0 * kSlotBytes
+                                                      : kCvBase + kCvReadBytes * kMaxCores;
+    constexpr uint32_t kBounceBytes =
+        kSelfZones != 0 ? kSlotBytes
+                        : (((kNBounce + 1u) * kSlotBytes - kCvReadBytes * kMaxCores) / 2u) &
+                              ~(kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4u - 1u);
+    static_assert(kBounceBase0 % (kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4u) == 0, "bounces start on a page");
+    static_assert(
+        !kSpool || kBounceBase0 + kNBounce * kBounceBytes <= kStageBase + kNStage * kSlotBytes,
+        "bounces must fit inside the mapped staging arena");
     // Per-sweep PP_DATA series FORCED OFF: zones + footprint + CV-first measured 396 B over the
     // 11,264 B code region, and the out[] byte totals answer the traffic questions without it.
     constexpr uint32_t kNocFpSeries = 0u;
@@ -409,6 +424,9 @@ void kernel_main() {
     uint32_t b_off[2] = {};         // bytes of those already pushed to the host (partial ships under credit)
     uint32_t b_ack_target[2] = {};  // noc_nonposted_writes_acked snapshot at ship: this bounce's flush line
     uint32_t b_seq[2] = {};         // refill order, so a both-READY pass ships the older bytes first
+    uint32_t b_rd_mark[2] = {};     // dma_rd_issued as of each bounce's refill: its completion line
+    uint64_t b_rd_end[2] = {};      // spool_rd_iss after its refill: what spool_rd advances to on READY
+    uint32_t dma_rd_issued = 0;     // cumulative stream-1 reads
     bool notify_pending = false;    // pump ships owe the host a bytes_sent notify (batched per sweep)
     bool pump_pressure = false;     // hysteresis state of the on-sweep pressure pump
     bool spool_lossy = false;  // a full-spool wait expired: consumer gone, later frames drop without waiting
@@ -588,41 +606,50 @@ void kernel_main() {
                     did = true;
                 }
             }
-            // READING -> READY when the stream-1 reads retire; the spool region they covered is then
-            // rewritable (spool_rd is the SHIP side's free-space fence).
-            for (uint32_t i = 0; i < 2; i++) {
-                if (b_state[i] == kBounceReading && experimental::dma_get_reads_outstanding(kDmaDrain) == 0) {
-                    b_state[i] = kBounceReady;
-                    spool_rd = spool_rd_iss;
-                    did = true;
+            // READING -> READY when a bounce's stream-1 reads retire; the spool region it covered is then
+            // rewritable (spool_rd is the SHIP side's free-space fence). FIFO completion order gives each
+            // bounce its own line from one outstanding count, so BOTH bounces can be filling at once --
+            // one-at-a-time refills serialized the chunk cadence on the GDDR read round trip.
+            if (b_state[0] == kBounceReading || b_state[1] == kBounceReading) {
+                const uint32_t rd_out = experimental::dma_get_reads_outstanding(kDmaDrain);
+                for (uint32_t i = 0; i < 2; i++) {
+                    if (b_state[i] == kBounceReading && rd_out <= dma_rd_issued - b_rd_mark[i]) {
+                        b_state[i] = kBounceReady;
+                        if (b_rd_end[i] > spool_rd) {
+                            spool_rd = b_rd_end[i];
+                        }
+                        did = true;
+                    }
                 }
             }
             // Refill an EMPTY bounce BEFORE shipping the READY one, so the stream-1 read runs under the
             // ship's NoC issue and the next pass finds it READY. Only SHIP-COMPLETED bytes are readable: a
             // stream-1 read is ordered behind a stream-0 write of the same address by nothing short of the
             // write's completion.
-            if (experimental::dma_get_writes_outstanding(kDmaShip) == 0) {
+            if (spool_done != spool_wr && experimental::dma_get_writes_outstanding(kDmaShip) == 0) {
                 spool_done = spool_wr;
             }
+            // The SECOND concurrent refill only under pressure: at a burst the extra in-flight GDDR read
+            // deepens the bank queue exactly when the hot loop's ship DMA needs it, and the generation
+            // gate eats that latency (d8: 0 -> 3.2k stalls). Sustained cap-riding is where the dual
+            // refill's cadence matters, and pressure is already its signature.
             const uint32_t emp = b_state[0] == kBounceEmpty ? 0u : (b_state[1] == kBounceEmpty ? 1u : 2u);
-            if (emp != 2u && b_state[emp ^ 1u] != kBounceReading && spool_done != spool_rd_iss) {
+            if (emp != 2u && (pump_pressure || b_state[emp ^ 1u] != kBounceReading) && spool_done != spool_rd_iss) {
                 uint32_t len = static_cast<uint32_t>(spool_done - spool_rd_iss);
-                if (len > kSlotBytes) {
-                    len = kSlotBytes;
+                if (len > kBounceBytes) {
+                    len = kBounceBytes;
                 }
                 if (len > kSpoolBytes - spool_rd_iss_off) {
                     len = kSpoolBytes - spool_rd_iss_off;
                 }
-                experimental::dma_async_read(
-                    kDmaDrain,
-                    kSpoolBase + spool_rd_iss_off,
-                    kStageBase + (kBounceSlot0 + emp) * kSlotBytes,
-                    len);
+                dma_read_unchecked(kDmaDrain, kSpoolBase + spool_rd_iss_off, kBounceBase0 + emp * kBounceBytes, len);
                 spool_rd_iss += len;
                 spool_rd_iss_off += len;
                 if (spool_rd_iss_off == kSpoolBytes) {
                     spool_rd_iss_off = 0;
                 }
+                b_rd_mark[emp] = ++dma_rd_issued;
+                b_rd_end[emp] = spool_rd_iss;
                 b_bytes[emp] = len;
                 b_off[emp] = 0;
                 b_seq[emp] = drain_chunks;
@@ -661,7 +688,7 @@ void kernel_main() {
                     if (wr >= fifo_size) {
                         wr -= fifo_size;
                     }
-                    const uint32_t src = kStageBase + (kBounceSlot0 + rdy) * kSlotBytes + b_off[rdy];
+                    const uint32_t src = kBounceBase0 + rdy * kBounceBytes + b_off[rdy];
                     const uint32_t first = (wr + nb > fifo_size) ? fifo_size - wr : nb;
                     write_to_host_chunked(pcie_xy_enc, src, pcie_base + wr, first);
                     if (first < nb) {
@@ -743,7 +770,7 @@ void kernel_main() {
                 uint32_t len = kernel_profiler::spsc_span_frame_words(slot_payload[start + f]) * 4u;
                 while (len != 0) {
                     const uint32_t piece = len > kSpoolBytes - spool_wr_off ? kSpoolBytes - spool_wr_off : len;
-                    experimental::dma_async_write(kDmaShip, src, kSpoolBase + spool_wr_off, piece);
+                    dma_write_unchecked(kDmaShip, src, kSpoolBase + spool_wr_off, piece);
                     dma_issued++;
                     spool_wr += piece;
                     spool_wr_off += piece;
@@ -1469,7 +1496,10 @@ void kernel_main() {
                         // peaks ~42% and never gets here.
                         if (occ > kSpoolBytes / 2u + kSpoolBytes / 8u) {
                             pump_pressure = true;
-                        } else if (occ < kSpoolBytes / 4u) {
+                        } else if (occ < kSpoolBytes / 16u) {
+                            // Release near EMPTY: with the shadow pump also pressure-gated, a 1/4 release
+                            // left drain-less windows in the sustained oscillation and occupancy snapped
+                            // back to the cap (d10: 3-25 -> ~175 stalls). Bursts never engage either way.
                             pump_pressure = false;
                         }
                         if (pump_pressure) {
@@ -1486,11 +1516,15 @@ void kernel_main() {
                         // The barrier spin is the pump's slot: these are cycles the core burns anyway, so
                         // drain passes here cost the sweep at most one pass's overshoot past the reads
                         // landing -- unlike a pass after the ship, which is pure added sweep time and put
-                        // ~1k stalls back on the d8 burst even with the cheap ships. Same predicate +
-                        // trailing invalidate as noc.async_read_barrier().
+                        // ~1k stalls back on the d8 burst even with the cheap ships. UNDER PRESSURE ONLY,
+                        // even here: at a burst the pump's GDDR reads and bounce-L1 writes contend with
+                        // the ship DMA and the landing gather responses (the poll-free DMA issue made
+                        // passes cheap enough to drain ~35% more mid-burst, and d8 paid 3.5k stalls for
+                        // drain the spool did not need). Same predicate + trailing invalidate as
+                        // noc.async_read_barrier().
                         while (!ncrisc_noc_reads_flushed(kReadNoc)) {
                             if constexpr (kSpool) {
-                                if (spool_wr != spool_rd) {
+                                if (pump_pressure && spool_wr != spool_rd) {
                                     drain_pump();
                                 }
                             }
