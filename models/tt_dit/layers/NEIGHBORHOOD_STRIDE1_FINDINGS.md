@@ -297,6 +297,9 @@ against 32.3 s gated, so the gate alone is worth ~15 s.
 
 ## 9. After the relative table: the bound is the gather-slot walk, so two kernels
 
+**Handoff (full measurements, file map, DCE traps, what we tried):**
+[`NEIGHBORHOOD_SECOND_KERNEL.md`](NEIGHBORHOOD_SECOND_KERNEL.md).
+
 The relative table and the host-stamped interior gate landed. Decode `neighborhood-sdpa` is still
 ~737 ms for n=2 stage-5 calls (~370 ms each). The target for those two was ~400 ms **total**
 (~200–250 ms each). Softmax is not that gap.
