@@ -59,8 +59,10 @@ static_assert(
 
 #if defined(TRISC_MATH) || defined(LWT_SCHEME_HEADER)
 #define WAVELET_1D_STEP_ATTRIBUTES inline
+constexpr bool kSpecializePredictUpdateStep = true;
 #else
 #define WAVELET_1D_STEP_ATTRIBUTES __attribute__((noinline, noclone))
+constexpr bool kSpecializePredictUpdateStep = false;
 #endif
 
 template <typename Scheme, uint32_t Index = 0>
@@ -171,7 +173,7 @@ WAVELET_1D_STEP_ATTRIBUTES void run_predict_update_step(
     const uint32_t cb_output,
     const std::array<uint32_t, K> h_coeffs,
     const uint32_t output_group_count) {
-    static_assert(K > 0, "Predict/update steps must have at least one coefficient");
+    static_assert(K > 0 || !kSpecializePredictUpdateStep, "Predict/update steps must have at least one coefficient");
     static_assert(K <= device_protocol::kStepCoeffCapacity, "Step coefficient count exceeds device capacity");
     CircularBuffer input0_buffer(cb_input0);
     CircularBuffer input1_buffer(cb_input1);
@@ -304,14 +306,19 @@ inline void run_static_steps(
             constexpr uint32_t base_scale_bits = predict ? OddScalePacked : EvenScalePacked;
             constexpr StepType scale_type = inline_terminal_scale_type<Scheme>();
             constexpr uint32_t scale_bits = terminal_scale_bits<Scheme, scale_type>();
-            run_predict_update_step<
-                Step::k,
-                inline_terminal_scale,
-                scale_bits,
-                scale_source,
-                scale_base,
-                source_scale_bits,
-                base_scale_bits>(cb_input0, cb_input1, cb_base, cb_output, Step::coeff_bits, output_group_count);
+            if constexpr (kSpecializePredictUpdateStep) {
+                run_predict_update_step<
+                    Step::k,
+                    inline_terminal_scale,
+                    scale_bits,
+                    scale_source,
+                    scale_base,
+                    source_scale_bits,
+                    base_scale_bits>(cb_input0, cb_input1, cb_base, cb_output, Step::coeff_bits, output_group_count);
+            } else {
+                run_predict_update_step<0, false, 0, false, false, 0, 0>(
+                    cb_input0, cb_input1, cb_base, cb_output, std::array<uint32_t, 0>{}, output_group_count);
+            }
             run_static_steps<
                 Scheme,
                 InlineTerminalScale,
