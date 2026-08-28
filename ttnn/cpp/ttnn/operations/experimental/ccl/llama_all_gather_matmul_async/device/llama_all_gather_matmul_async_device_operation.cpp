@@ -37,12 +37,15 @@ void LlamaAllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     // The all-gather half is only partly tile-aware: it derives the weight tensor width as
     // padded_shape[3] / 32 and both shard page counts by dividing by TILE_HW, so a non-standard tile
     // compiles a mis-sized program even though the tile is now in the key. Guard rather than rely on
-    // hashing, which would only give a wrong program its own cache entry. This op has no cache-hit
-    // validator, so the miss validator runs on both paths.
+    // hashing, which would only give a wrong program its own cache entry. Those same divisions are
+    // meaningless for a row-major operand, and no other check in this op requires TILE, so the layout
+    // is pinned here too. This op has no cache-hit validator, so the miss validator runs on both paths.
     const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
-        if (tensor.layout() != Layout::TILE) {
-            return;
-        }
+        TT_FATAL(
+            tensor.layout() == Layout::TILE,
+            "llama_all_gather_matmul_async requires TILE layout, but {} has {} layout",
+            name,
+            tensor.layout());
         const auto tile = tensor.tensor_spec().tile();
         TT_FATAL(
             tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,

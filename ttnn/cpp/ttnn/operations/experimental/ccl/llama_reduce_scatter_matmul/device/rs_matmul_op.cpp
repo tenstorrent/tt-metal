@@ -21,13 +21,16 @@ namespace {
 // The shared reduce-scatter factory sizes its pages with the two-argument tile_size(), which assumes
 // the architectural 32x32 tile, and derives the per-packet page counts from it. Keying page_config
 // stops a non-standard tile from aliasing onto a cached program, but the program it would compile for
-// itself is still mis-sized, so reject it outright. Called from both validators because the op defines
+// itself is still mis-sized, so reject it outright. That page sizing is equally wrong for a row-major
+// input: the delegated matmul validation pins TILE on the matmul operands only, and the reduce-scatter
+// half never checks layout, so it is pinned here. Called from both validators because the op defines
 // its own cache-hit validator, which would otherwise drop the check on hits.
 void validate_standard_tile(const Matmul_RS::tensor_args_t& tensor_args) {
     const auto& input = tensor_args.rs.input_tensor;
-    if (input.layout() != Layout::TILE) {
-        return;
-    }
+    TT_FATAL(
+        input.layout() == Layout::TILE,
+        "llama_rs_matmul requires TILE layout on the reduce-scatter input, but it has {} layout",
+        input.layout());
     const auto tile = input.tensor_spec().tile();
     TT_FATAL(
         tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
