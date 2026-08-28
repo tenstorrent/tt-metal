@@ -744,7 +744,9 @@ def resolve_gemma4_prefill_trace_enable(
     # eager deferred-fill path (flush only after lm_head). Disable TRACE for all
     # bounded prefills (B=1 short nightly prompts included); eager deferred-fill
     # remains. Batched+bounded also cannot refresh the scalar fill-cap tensor.
-    if getattr(model, "bounded_sliding_kv_cache", False):
+    if getattr(model, "bounded_sliding_kv_cache", False) and (
+        os.environ.get("GEMMA4_ALLOW_BOUNDED_PREFILL_TRACE", "0").lower() not in ("1", "true", "yes")
+    ):
         if enable_trace:
             logger.info(
                 "Disabling prefill trace for bounded sliding "

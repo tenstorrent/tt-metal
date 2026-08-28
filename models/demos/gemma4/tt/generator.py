@@ -853,7 +853,10 @@ class ChunkedPrefillPageTableGuardMixin:
             # Bounded final-chunk K/V must be stashed eagerly and committed only
             # after lm_head. A captured chunk has get_last_token=-1 and cannot
             # perform the host-side boundary merge safely after the trace.
-            and not self._uses_bounded_sliding_kv(model_id)
+            and (
+                not self._uses_bounded_sliding_kv(model_id)
+                or os.environ.get("GEMMA4_ALLOW_BOUNDED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
+            )
         )
         if not use_traced_chunks:
             # Eager path stays in gemma4 (do not patch models/tt_transformers):
@@ -920,6 +923,63 @@ class ChunkedPrefillPageTableGuardMixin:
                 chunk_last_token_idx = last_token_idx
             else:
                 chunk_last_token_idx = chunk_start + chunk_size - 1
+
+            # Bounded sliding: a captured chunk runs with get_last_token=-1, so
+            # attention takes the mid-forward ``paged_fill_cache`` branch and the
+            # fill lands *before* lm_head -- which corrupts token-0 on TP
+            # (measured: degenerate "A. < add quote>" output). Intermediate
+            # chunks never run lm_head, so tracing them is safe; only the final
+            # chunk needs the eager deferred-fill with a true last-token index.
+            # Trace N-1 chunks, run the last one eagerly.
+            if is_last_chunk and self._uses_bounded_sliding_kv(model_id):
+                chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                chunk_inputs = self.model[model_id].prepare_inputs_prefill(
+                    chunk_tokens,
+                    start_pos=chunk_start,
+                    page_table=page_table_user_padded,
+                    chunk_page_table=chunk_page_table,
+                    batch_size=1,
+                    user_id=CHUNK_USER_ID,
+                )
+                (
+                    chunk_prefill_input,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
+                    page_table_tt,
+                    chunk_page_table_tt,
+                    _chunk_start_idx_tt,
+                ) = chunk_inputs
+                self._refresh_prefill_valid_seq_len(
+                    model_id=model_id,
+                    last_token_idx=last_token_idx,
+                    num_cached_tokens=chunk_start,
+                )
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
+                    chunk_prefill_input,
+                    rot_mats_global=chunk_rot_mats_global_prefill,
+                    rot_mats_local=chunk_rot_mats_local_prefill,
+                    user_id=CHUNK_USER_ID,
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
+                    get_last_token=self._chunk_prefill_get_last_token(
+                        is_last_chunk=True,
+                        last_token_idx_in_chunk=last_token_idx_in_chunk,
+                        chunk_size=chunk_size,
+                    ),
+                    kv_cache=kv_cache,
+                    batch_size=1,
+                )
+                # This chunk ran eagerly, so ``_copy_sliding_tail_into_persistent``
+                # adopted *eager-scoped* tensors as the persistent ring. Those do
+                # not survive like trace-bound buffers, and the next prefill's
+                # capture would find ``sliding_prefill_tail_persistent`` non-None
+                # but pointing at freed memory -> ttnn.copy TT_FATALs on
+                # ``input_tensor.is_allocated()``. The final chunk's tail has no
+                # successor chunk to feed, so drop it and let the next prefill
+                # take the first-alloc path.
+                self._release_all_sliding_prefill_tails(model_id, clear_persistent=True)
+                return tt_logits
 
             tt_out = self._easy_trace_prefill(
                 chunk_tokens,
