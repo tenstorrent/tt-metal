@@ -26,13 +26,17 @@ Tensor unary_impl(
         if (optional_output_tensor.has_value()) {
             TT_FATAL(
                 (output_dtype == optional_output_tensor->dtype()),
-                "Preallocated tensor's dtype is not compatible with the expected dtype");
+                "Preallocated tensor's dtype {} is not compatible with the expected dtype {}.",
+                static_cast<int>(optional_output_tensor->dtype()),
+                static_cast<int>(output_dtype));
         }
     } else if (optional_output_tensor.has_value()) {
         output_dtype = optional_output_tensor->dtype();
         TT_FATAL(
             (output_dtype == input_dtype) || (is_floating_point(output_dtype) && is_floating_point(input_dtype)),
-            "Preallocated tensor's dtype is not compatible with the expected dtype");
+            "Preallocated tensor's dtype {} is not compatible with the expected dtype {}.",
+            static_cast<int>(output_dtype),
+            static_cast<int>(input_dtype));
     }
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
