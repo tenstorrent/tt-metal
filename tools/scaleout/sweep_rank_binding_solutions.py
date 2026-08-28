@@ -357,6 +357,28 @@ def _read_index_safe(solutions_dir: Path) -> Optional[dict]:
         return None
 
 
+def _index_enumeration_complete(solutions_dir: Path) -> bool:
+    """True once the on-disk index is the producer's FINAL write, i.e. enumeration is over.
+
+    Mid-stream index rewrites always carry ``truncated: true``; the final rewrite carries the
+    definitive flag: ``false`` when the enumeration genuinely exhausted, or ``true`` with
+    ``found == max_solutions`` when a positive cap bounded it. This lets the consumer conclude
+    "no more solutions are coming" from the index CONTENT, independent of producer process
+    liveness -- an MPI rank wedged in device teardown can keep the producer's mpirun alive
+    forever after the enumeration (and even the final index write) completed."""
+    idx = _read_index_safe(solutions_dir)
+    if idx is None:
+        return False
+    enum = idx.get("enumeration")
+    if not isinstance(enum, dict):
+        return False
+    if enum.get("truncated") is False:
+        return True
+    max_solutions = enum.get("max_solutions") or 0
+    found = enum.get("found", len(idx.get("solutions", []) or []))
+    return max_solutions > 0 and found >= max_solutions
+
+
 def _select_solutions(index: dict, select: Optional[str], limit: Optional[int]) -> List[dict]:
     solutions = list(index.get("solutions", []))
     if select:
@@ -908,6 +930,9 @@ class SolutionConsumer:
         self.results: List[dict] = []
         self.stopped_early = False
         self.recover_exhausted = False
+        # Set when we killed a producer that lingered after its FINAL index write (enumeration was
+        # already complete) -- distinguishes that deliberate stop from a producer crash.
+        self.producer_finalized = False
 
     def _available(self) -> List[dict]:
         """Solutions on offer right now: the fixed list, or the producer's streaming index (may be empty)."""
@@ -1043,6 +1068,24 @@ class SolutionConsumer:
                 continue
 
             # Nothing new to consume yet.
+            # Final-index short-circuit: once the index content says enumeration is over and every
+            # listed solution has been swept, the stream is done -- regardless of whether the
+            # producer PROCESS has exited. This is what ends the sweep when a rank wedges in device
+            # teardown and keeps mpirun alive forever (otherwise the heartbeat below spins for good,
+            # e.g. "generating: 0 swept, 0 found" on a 0-solution enumeration).
+            if (
+                self.producer is not None
+                and len(avail) == len(consumed)
+                and _index_enumeration_complete(self.cfg.sol_dir)
+            ):
+                if self.producer.alive():
+                    self.log.line(
+                        f"■ enumeration complete per final index ({len(avail)} solution(s), all swept) "
+                        f"but the producer process is still running (likely wedged in teardown); stopping it."
+                    )
+                    self.producer.stop()
+                    self.producer_finalized = True
+                break
             if self.producer is not None and self.producer.alive():
                 if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL_S:
                     self.log.line(f"… generating: {len(consumed)} swept, {len(avail)} found so far")
@@ -1367,6 +1410,11 @@ def main(
         if producer.alive():
             log.line("■ stopping producer (sweep ending)")
             producer.stop()
+        elif consumer.producer_finalized:
+            # The consumer killed a producer that lingered after its final index write -- the
+            # enumeration itself completed, so the (kill-induced) exit code is not a crash. A
+            # 0-solution enumeration still fails below via the "No solutions were swept" guard.
+            pass
         elif producer_rc not in (None, 0):
             # Producer exited non-zero on its OWN (a crash -- us stopping it leaves it alive, handled above).
             # Generation is therefore incomplete, so this is an error even if some solutions were already
