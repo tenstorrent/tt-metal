@@ -79,7 +79,16 @@ _INT32 = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
 
 _INT_SPEC = StimuliSpec.uniform(low=0.0, high=float(2**16 - 1))
 
-_IMPL_IDS = {0: "blaze_original", 2: "semantic_lift", 3: "semantic_lift_walk", 4: "crosslane"}
+_IMPL_IDS = {
+    0: "blaze_original",
+    2: "semantic_lift",
+    3: "semantic_lift_walk",
+    4: "crosslane",
+    5: "uniform",
+    6: "uniform_walk8",
+    7: "uniform_half",
+    8: "uniform_seq",
+}
 
 
 # --------------------------------------------------------------------------
@@ -515,7 +524,7 @@ def test_sfpu_blaze_rope(impl):
     )
 
 
-@pytest.mark.parametrize("impl", [0, 2, 3, 4], ids=lambda i: _IMPL_IDS[i])
+@pytest.mark.parametrize("impl", [0, 2, 3, 4, 5, 6, 7, 8], ids=lambda i: _IMPL_IDS[i])
 @pytest.mark.parametrize("pool", ["max", "sum"], ids=["MAX", "SUM"])
 def test_sfpu_blaze_sdpa_reduce_row(pool, impl):
     """blaze RAW-TTI sdpa_reduce_row vs lane-EW typed lift (lift 2).
@@ -564,6 +573,16 @@ _PERF_POINTS = {
     "sdpareducerow-sum-walk": dict(op=13, subop=1, impl=3),
     "sdpareducerow-max-cl": dict(op=13, impl=4),
     "sdpareducerow-sum-cl": dict(op=13, subop=1, impl=4),
+    # Lane IE uniform-block twins (seeded accumulators + encodable walk;
+    # helpers/include/blaze_twins/sdpa_reduce_row_uniform.hpp).
+    "sdpareducerow-max-uni": dict(op=13, impl=5),
+    "sdpareducerow-sum-uni": dict(op=13, subop=1, impl=5),
+    "sdpareducerow-max-uni8": dict(op=13, impl=6),
+    "sdpareducerow-sum-uni8": dict(op=13, subop=1, impl=6),
+    "sdpareducerow-max-unih": dict(op=13, impl=7),
+    "sdpareducerow-sum-unih": dict(op=13, subop=1, impl=7),
+    "sdpareducerow-max-useq": dict(op=13, impl=8),
+    "sdpareducerow-sum-useq": dict(op=13, subop=1, impl=8),
 }
 
 
@@ -744,6 +763,14 @@ _MT_CORR = {
     "sdpareducerow-sum-walk": dict(pool="sum"),
     "sdpareducerow-max-cl": dict(pool="max"),
     "sdpareducerow-sum-cl": dict(pool="sum"),
+    "sdpareducerow-max-uni": dict(pool="max"),
+    "sdpareducerow-sum-uni": dict(pool="sum"),
+    "sdpareducerow-max-uni8": dict(pool="max"),
+    "sdpareducerow-sum-uni8": dict(pool="sum"),
+    "sdpareducerow-max-unih": dict(pool="max"),
+    "sdpareducerow-sum-unih": dict(pool="sum"),
+    "sdpareducerow-max-useq": dict(pool="max"),
+    "sdpareducerow-sum-useq": dict(pool="sum"),
 }
 
 

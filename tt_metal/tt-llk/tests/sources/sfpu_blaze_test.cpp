@@ -158,6 +158,7 @@ using namespace ckernel;
 #include "blaze/kernels/sfpu/silu_scaled.hpp"
 #include "blaze/kernels/sfpu/sparse_k_filter_sfpu.hpp"
 #include "blaze/kernels/sfpu/zero_pad_sfpu.hpp"
+#include "blaze_twins/sdpa_reduce_row_uniform.hpp" // lane-IE uniform twin (test-side, outside the vendored root — R7)
 
 // Per-op init frame (shared by both arms; protocol, not the raced math).
 static inline void blaze_op_init()
@@ -368,6 +369,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
             0u /* src_index */,
             0u /* dst_index */,
             false /* prev_sum */);
+#endif
+#elif BLAZE_IMPL == 5 || BLAZE_IMPL == 6 || BLAZE_IMPL == 7 || BLAZE_IMPL == 8 // lane-IE uniform twins (5 pair-step / 6 walk8 / 7 half / 8 seq)
+#define BLAZE_UNI_SHAPE (BLAZE_IMPL == 5 ? 0 : (BLAZE_IMPL == 6 ? 1 : (BLAZE_IMPL == 7 ? 2 : 3)))
+#if BLAZE_SUBOP == 0
+            SFPU_UNARY_CALL(
+                DstSync::SyncHalf,
+                is_fp32_dest_acc_en,
+                semantic::_calculate_sdpa_reduce_max_row_8x32_uniform_,
+                (DataFormat::Float16_b, 4 /* block_width */, BLAZE_UNI_SHAPE /* shape */, true /* skip_signalling */, 1),
+                0,
+                VectorMode::RC_custom,
+                0u /* src_index */,
+                0u /* dst_index */,
+                false /* prev_max */);
+#else
+            SFPU_UNARY_CALL(
+                DstSync::SyncHalf,
+                is_fp32_dest_acc_en,
+                semantic::_calculate_sdpa_reduce_sum_row_8x32_uniform_,
+                (DataFormat::Float16_b, 4 /* block_width */, BLAZE_UNI_SHAPE /* shape */, true /* skip_signalling */),
+                0,
+                VectorMode::RC_custom,
+                0u /* src_index */,
+                0u /* dst_index */,
+                false /* prev_sum */);
 #endif
 #elif BLAZE_IMPL == 3 // lane-FI walk variant of the lift (address-invariant blocks)
 #if BLAZE_SUBOP == 0
