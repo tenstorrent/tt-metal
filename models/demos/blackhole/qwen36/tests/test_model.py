@@ -109,7 +109,6 @@ def test_vision_model_inference(
 
     # Create reference model
     reference_model = model_args.reference_vision_model(depth=model_args.hf_config.vision_config.depth)
-    # reference_model = Qwen2_5_VisionTransformerPretrainedModel(model_args.hf_config.vision_config)
     # reference_model.load_state_dict(model_args.reference_vision_model().state_dict(), strict=False)
     # FIXME: state_dict = model_args.load_state_dict()
     state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
