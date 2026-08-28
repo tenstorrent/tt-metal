@@ -47,8 +47,18 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 from helpers.utils import passed_test
 
+
+def _scalar_bits(value: float) -> int:
+    """*value* as the raw fp32 bit pattern the kernel receives in SFPU_TERNARY_SCALAR.
+
+    The kernel decodes it with Converter::as_float / SFPLOADI, and TernarySFPUGolden decodes
+    it the same way, so this is the one place a scalar becomes a template argument.
+    """
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
 _SCALAR_VALUE = 2.0
-_SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
+_SCALAR_VALUE_BITS = _scalar_bits(_SCALAR_VALUE)
 
 
 # Helper check function
@@ -92,8 +102,16 @@ def _run_sfpu_ternary(
     spec_B=None,
     spec_C=None,
     unspecified_nonfinite_sign=False,
+    scalar_bits=_SCALAR_VALUE_BITS,
 ):
-    """*unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
+    """Drive one ternary variant; returns (src_A, golden_tensor, res_tensor) for extra checks.
+
+    *scalar_bits* is the addc multiplier as a raw fp32 bit pattern. It reaches the kernel as a
+    `constexpr std::uint32_t SFPU_TERNARY_SCALAR`, so it is a *compile-time* axis -- one
+    argument rather than a module constant read twice, so the templates list and the golden
+    call cannot come to disagree about which value was driven.
+
+    *unspecified_nonfinite_sign* compares a non-finite result by magnitude only.
 
     For the one case where the sign genuinely is not specified: a NaN the kernel emitted,
     packed as a signed infinity through a pipeline too narrow to hold it, on Wormhole, where
@@ -146,7 +164,7 @@ def _run_sfpu_ternary(
         src_A,
         src_B,
         src_C,
-        _SCALAR_VALUE_BITS,
+        scalar_bits,
         formats.output_format,
         input_format=formats.input_format,
         dest_acc=dest_acc,
@@ -161,7 +179,7 @@ def _run_sfpu_ternary(
         formats,
         templates=[
             SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+            SFPU_TERNARY_SCALAR(scalar_bits),
             APPROX_MODE(ApproximationMode.No),
             DISABLE_SRC_ZERO_FLAG(True),
             DEST_SYNC(),
@@ -213,6 +231,8 @@ def _run_sfpu_ternary(
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
+
+    return src_A, golden_tensor, res_tensor
 
 
 @parametrize(
@@ -555,6 +575,73 @@ def test_sfpu_ternary_operand_edges(
         spec_B=specs[Operand.B],
         spec_C=specs[Operand.C],
         unspecified_nonfinite_sign=unspecified_sign,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The addc multiplier
+#
+# `value` reaches the kernel as a `constexpr std::uint32_t SFPU_TERNARY_SCALAR`, so varying it
+# is a compile-time axis -- and until now it was not an axis at all: 2.0 in the main sweep, the
+# edge sweep and the perf test alike. Three probes are worth the six ELFs:
+#
+#   0.0    both ops collapse to the identity in `a`. A very cheap, very strong check that
+#          neither kernel is reading the wrong Dst tile -- a kernel that returned `b` or `c`
+#          instead would pass every other variant in this file, since all three operands carry
+#          plausible random values there.
+#   1.0    removes the multiply, so the addc path is `a + b*c` / `a + b/c` with no scaling.
+#   -2.0   flips a sign the golden and the kernel have to agree on.
+#
+# Format axis reduced to one column and dest_acc to one value on purpose: the scalar is
+# orthogonal to both, and crossing it with the full profile would multiply the ELF count for no
+# new question. The main sweep stays at 2.0 for the same reason.
+#
+# Scoped to the ops' *ordinary* domains, so the identity at value = 0 is a clean assertion. The
+# interesting interaction is with addcdiv's pole, and it is measured rather than guessed: at
+# value = 0 and c = 0 the kernel returns NaN on Blackhole, matching the golden's IEEE reading
+# (0 * inf is NaN, and the kernel does not short-circuit the multiply). addcmul returns `a`
+# exactly on all 4096 lanes there. Driving that here would put the pole and the scalar in one
+# variant, which is what the edge_class split exists to prevent, so it is recorded and not
+# driven.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SCALAR_PROBES = (0.0, 1.0, -2.0)
+
+# The two ops that read the scalar at all. lerp's weight is operand C and snake_beta has no
+# multiplier, so SFPU_TERNARY_SCALAR is dead template argument for both.
+_SCALAR_OPS = [MathOperation.SfpuAddcmul, MathOperation.SfpuAddcdiv]
+
+
+@pytest.mark.nightly
+@parametrize(
+    formats=input_output_formats([DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+    scalar=list(_SCALAR_PROBES),
+)
+def test_sfpu_ternary_scalar(formats, dest_acc, mathop, scalar):
+    """Drive addcmul and addcdiv at a multiplier other than the hardcoded 2.0."""
+    src_A, _, res_tensor = _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        scalar_bits=_scalar_bits(scalar),
+    )
+
+    if scalar != 0.0:
+        return
+
+    # value = 0 makes both ops the identity in `a`, and it has to hold *exactly* rather than
+    # within a tolerance: `a + 0*x` is `a` for every finite x, with no rounding anywhere to
+    # excuse a difference. passed_test() has already compared against the golden, which says
+    # the same thing -- this asserts it against the stimulus instead, so a golden that made
+    # the same mistake as the kernel could not hide it.
+    expected = src_A.flatten().to(format_dict[formats.output_format])[: len(res_tensor)]
+    mismatched = int((res_tensor != expected).sum())
+    assert mismatched == 0, (
+        f"{mathop.name} with value = 0 must return `a` bit for bit, but {mismatched} of "
+        f"{len(res_tensor)} lanes differ — the kernel is reading an operand it should be "
+        "multiplying away"
     )
 
 

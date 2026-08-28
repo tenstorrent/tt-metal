@@ -26,14 +26,13 @@ the concrete steps to reach them.
 |---|---|---|---|---|---|
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
 | [W3](#w3--integer-binary-ops-never-see-zero-negatives-or-the-uint32-upper-half) | Int binary ops: no `0`, no negatives, uint32 capped at 1e6 | binary | M | High | partly HW (sign-magnitude Dst) |
-| [W6](#w6--the-ternary-scalar-is-hardcoded-to-20) | `SFPU_TERNARY_SCALAR` never varies | ternary | S | Medium | — |
 | [W7](#w7--the-overflow-producing-ops-are-not-driven-at-their-ceiling) | Nothing asserts that a result too large for the output format saturates rather than wraps | unary, binary | M | High | — |
 | [W8](#w8--logsigmoids-x--4-branch-is-never-driven) | `SfpuLogsigmoid` never executes the only branch that reads operand B | binary | S | Medium | — |
 | [W9](#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | unary | M | Medium | needs a kernel-contract ruling |
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 | [W11](#w11--a-coverage-ledger-so-the-next-gap-is-visible) | No machine-checked record of which value classes each op has seen | infra | M | High | the items above |
 
-Suggested order: **W1 → W6 → W8** (small, unblocked, each independently mergeable), then
+Suggested order: **W1 → W8** (small, unblocked, each independently mergeable), then
 **W3 → W11**, then **W7 → W9 → W10** (each needs a measurement pass, and W9 a
 kernel-contract ruling).
 
@@ -43,8 +42,9 @@ Dest/pack modelling that blocked it), and all of the original W7 except its over
 `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis on
 `edge_values()`/`edge_spec()`, `EXTREMES_READY_OPS` with its first tranche enrolled, and one
 saturation test. Also the whole of W2 — `StimuliSpec.cycle`, honoured by `CustomStrategy`,
-on by default in `edge_spec()` — and the whole of W4, whose cat-B half the ternary specials
-work had already closed. W7 below is what is left of it. The numbering is unchanged so
+on by default in `edge_spec()` — the whole of W4, whose cat-B half the ternary specials work
+had already closed, and the whole of W6. W7 below is what is left of it. The numbering is
+unchanged so
 that references from commit messages and reviews still resolve; the closed items are simply
 gone.
 
@@ -295,56 +295,6 @@ CHIP_ARCH=blackhole pytest test_sfpu_binary.py -q -k "int_zero or uint32_high or
 ```
 
 **Cost:** three new nightly tests, ~30 new ELFs.
-
----
-
-## W6 — The ternary scalar is hardcoded to 2.0
-
-### Problem
-
-`_SCALAR_VALUE = 2.0` in `test_sfpu_ternary.py` is the only multiplier `addcmul` and
-`addcdiv` are ever given, in the main sweep, the edge sweep and the perf test. It reaches
-the kernel as `constexpr std::uint32_t SFPU_TERNARY_SCALAR` — a compile-time constant, so
-varying it is a compile-time axis, and it is currently not an axis at all.
-
-`value = 0.0` makes both ops reduce to identity in `a`, which is a strong and very cheap
-check that neither kernel is reading the wrong Dst tile. `value = 1.0` removes the
-multiply. A negative value flips a sign the golden and kernel must agree on.
-
-### Steps
-
-1. **Leave the main sweep at 2.0.** Widening the scalar on the existing sweep multiplies
-   its ELF count; the value is in a separate, narrow variant.
-
-2. **Add `test_sfpu_ternary_scalar`** (nightly), scalar as a compile-time axis, format
-   axis reduced to one column to keep the ELF count honest:
-
-   ```python
-   _SCALAR_PROBES = [0.0, 1.0, -2.0]   # identity-in-a, no-op multiply, sign flip
-
-   @pytest.mark.nightly
-   @parametrize(
-       formats=input_output_formats([DataFormat.Float32], same=True),
-       dest_acc=[DestAccumulation.Yes],
-       mathop=[MathOperation.SfpuAddcmul, MathOperation.SfpuAddcdiv],
-       scalar=_SCALAR_PROBES,
-   )
-   def test_sfpu_ternary_scalar(formats, dest_acc, mathop, scalar):
-       ...
-   ```
-
-3. **Parameterise `_run_sfpu_ternary`** with a `scalar_bits` argument defaulting to
-   `_SCALAR_VALUE_BITS`, so both the templates list and the golden call read the same
-   value. They already both read the module constant; the change is to thread one
-   argument through instead.
-
-4. **Assert the identity explicitly for `scalar = 0.0`.** With `value = 0`, `addcmul` and
-   `addcdiv` must both return `a` exactly, bit for bit, for *any* `b` and `c` — including
-   `c = 0`, where `0 * (b/0)` is `0 * inf = NaN` in IEEE but the kernel may short-circuit.
-   Decide which answer is intended before writing the assertion; the golden currently says
-   NaN (`a + 0.0 * (b/0.0)`).
-
-**Cost:** 6 new ELFs.
 
 ---
 
