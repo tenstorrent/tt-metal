@@ -8,7 +8,7 @@ PCC ~1.0), so matching it here is a real correctness statement, not a self-compa
 
 Skips cleanly without ttnn, a device, or the checkpoint.
 
-    pytest -svv models/experimental/voxtral_tts/tests/test_codec_ttnn_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_codec_pcc.py
 """
 
 import os
@@ -18,6 +18,7 @@ import torch
 
 from models.experimental.voxtral_tts.reference import voxtral_codec_ref as ref
 from models.experimental.voxtral_tts.reference.voxtral_common_ref import DEFAULT_CKPT, pcc
+from models.experimental.voxtral_tts.tests.reference_helpers import long_frame_cases, real_frames_long
 
 ttnn = pytest.importorskip("ttnn", reason="ttnn not importable")
 # Every test here opens a device, so `slow` joins the checkpoint guard: `-m "not slow"` is
@@ -29,6 +30,10 @@ pytestmark = [
 ]
 
 WAVE_PCC = 0.999  # the gate XTTS-v2's HiFi-GAN port shipped at (0.99946)
+# Real codes are far kinder than synthetic ones, so the real-input gates are tighter. Measured over
+# all 15 captured utterances (1754 frames, 140 s): PCC 0.999959 .. 1.000000, worst-sample 0.77-3.22%.
+REAL_LONG_PCC = 0.9999
+REAL_LONG_WORST_PCT = 5.0  # above the 64-frame test's 2%: a whole utterance draws more samples
 STAGE_PCC = 0.996  # per-stage; the final window-16 stage amplifies inherited error (see below)
 
 
@@ -157,6 +162,26 @@ def test_real_speech_frames_decode_correctly(device):
     # also bound the worst single sample, which PCC can hide
     peak = exp.abs().max().item()
     assert (got - exp).abs().max().item() < 0.02 * peak, "worst-sample error above 2% of peak"
+
+
+@pytest.mark.parametrize("case", long_frame_cases())
+def test_real_utterance_decodes_correctly(pair, case):
+    """Real frames over a WHOLE utterance, 16 to 470 frames (1.3 to 37.6 s), against fp32.
+
+    The other real-input test is one 64-frame capture, and the 469-frame checks compare the chunked
+    and unchunked device paths to each other. This is the only comparison of full-length output to
+    the reference, so it is what would catch an error the two device paths share.
+    """
+    gen, w = pair
+    codes = ref.strip_offset_and_trim(real_frames_long(case))
+    T = codes.shape[2]
+    exp = ref.reference_decode(codes, w)
+    got = gen(codes)
+    assert got.shape == exp.shape == (1, 1, T * 1920)
+    p = pcc(got, exp)
+    assert p > REAL_LONG_PCC, f"case {case} PCC {p:.6f} at T={T}"
+    worst = (got - exp).abs().max().item() / exp.abs().max().item() * 100
+    assert worst < REAL_LONG_WORST_PCT, f"case {case} worst-sample {worst:.2f}% at T={T}"
 
 
 def test_causal_padding_matches_torch(pair):
