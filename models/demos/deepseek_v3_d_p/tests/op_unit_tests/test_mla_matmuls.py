@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 
 PCC_REQUIRED = 0.99
 
@@ -20,163 +21,111 @@ PCC_REQUIRED = 0.99
 compute_with_storage_grid_size_bh_orig = (12, 10)
 compute_with_storage_grid_size_11x10 = (11, 10)
 
+# DeepSeek-V3 geometry. The Kimi generations that also run this chunk length carry 64 or 96 heads,
+# so only q_a_proj and kv_a_proj_with_mqa (head-count independent) share a per-chip shape with the
+# MLA_MATMUL_CONFIG[...][640] entries; the other four are wider here and are tuned in this file.
+HIDDEN_SIZE = 7168
+NUM_HEADS = 128
+
+# Production prefill chunk. The parametrized shapes below are global; SP sharding on dim 2 over the
+# 8 rows of the 8x4 mesh is what makes M per chip 640 rows == 20 tiles.
+SEQ_LEN = PREFILL_CHUNK_TOKENS
+
+# Every per_core_M below is sized for exactly that M. Fail at collection with a readable message if
+# the production chunk moves, rather than deep inside the matmul validator.
+assert PREFILL_CHUNK_TOKENS_PER_CHIP == 640, (
+    f"program configs below are tuned for 640 rows/chip, got {PREFILL_CHUNK_TOKENS_PER_CHIP}; retune "
+    "per_core_M (and the batched matmuls' block count) before changing the chunk size"
+)
+
+# Every program config below is tuned at that per-chip M. K and N do not depend on the sequence
+# length, so they carry over from the previously tuned shapes; only the M split changes. per_core_M
+# = 2 covers 20 tiles over the 10 grid rows for the 2D mcast matmuls, which measured flat in the
+# output subblock width.
+#
+# The two batched matmuls use MatmulMultiCoreReuse, which is what MLA_MATMUL_CONFIG picks for them
+# at 640 and which measured 3.8x / 2.7x faster here than the multicast config the retired 6400-row
+# rows used. That factory spreads batch * (M_t / per_core_M) * (N_t / per_core_N) output blocks over
+# the grid and writes one block per core, so asking for more blocks than the 110 cores hold leaves
+# the tail of the output silently never written (#54798 -- the existing divisibility guard only
+# fires for L1-sharded inputs, and these are interleaved). per_core_M = 10 holds both at 32 * 2 = 64
+# blocks.
+#
+# Tile counts in the comments are per chip: [M, K] * [K, N].
+
+# q_a_proj: [20, 56] * [56, 48]. Same per-chip shape as MLA_MATMUL_CONFIG["q_a_proj"][640],
+# whose tiling this mirrors.
 prog_config_mm0_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=14,
+    in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=5,
-    per_core_M=13,
+    per_core_M=2,
     per_core_N=5,
     transpose_mcast=False,
     fuse_batch=False,
     fused_activation=None,
 )
 
-prog_config_mm0_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=14,
-    out_subblock_h=5,
-    out_subblock_w=1,
-    per_core_M=10,
-    per_core_N=5,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
+# q_b_proj: [20, 48] * [48, 192]
 prog_config_mm1_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=4,
+    in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=6,
-    per_core_M=13,
-    per_core_N=18,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
-prog_config_mm1_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=4,
-    out_subblock_h=1,
-    out_subblock_w=6,
-    per_core_M=10,
-    per_core_N=18,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
-prog_config_mm2_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=4,
-    out_subblock_h=1,
-    out_subblock_w=8,
     per_core_M=2,
-    per_core_N=16,
+    per_core_N=18,
+    transpose_mcast=False,
     fuse_batch=False,
-    mcast_in0=False,
+    fused_activation=None,
 )
 
-prog_config_mm2_bh_25k = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+# wkv_b1: batch 32, [20, 4] * [4, 16]. 64 output blocks.
+prog_config_mm2_bh = ttnn.MatmulMultiCoreReuseProgramConfig(
     compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
     in0_block_w=4,
-    out_subblock_h=1,
-    out_subblock_w=8,
-    per_core_M=1,
+    out_subblock_h=2,
+    out_subblock_w=4,
+    per_core_M=10,
     per_core_N=16,
-    fuse_batch=False,
-    mcast_in0=False,
 )
 
+# kv_a_proj_with_mqa: [20, 56] * [56, 18]. Same per-chip shape as
+# MLA_MATMUL_CONFIG["kv_a_proj_with_mqa"][640], whose tiling this mirrors.
+prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    in0_block_w=14,
+    out_subblock_h=2,
+    out_subblock_w=1,
+    per_core_M=2,
+    per_core_N=2,
+    transpose_mcast=False,
+    fuse_batch=False,
+    fused_activation=None,
+)
 
-# [128, 128] * [128, 224]
+# wkv_b2: batch 32, [20, 16] * [16, 4]. 64 output blocks.
+prog_config_mm4_bh = ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    in0_block_w=2,
+    out_subblock_h=1,
+    out_subblock_w=4,
+    per_core_M=10,
+    per_core_N=4,
+)
+
+# o_proj: [20, 128] * [128, 224]
 prog_config_mm5_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
     in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=7,
-    per_core_M=13,
-    per_core_N=21,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
-# [100, 128] * [128, 224]
-prog_config_mm5_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=8,
-    out_subblock_h=1,
-    out_subblock_w=7,
-    per_core_M=10,
-    per_core_N=21,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
-# [128, 56] * [56, 18]
-prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=8,
-    out_subblock_h=1,
-    out_subblock_w=2,
-    per_core_M=13,
-    per_core_N=2,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
-# [100, 56] * [56, 18]
-prog_config_mm3_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=8,
-    out_subblock_h=2,
-    out_subblock_w=2,
-    per_core_M=10,
-    per_core_N=2,
-    transpose_mcast=False,
-    fuse_batch=False,
-    fused_activation=None,
-)
-
-# [32, 128, 16] * [32, 16, 4]
-prog_config_mm4_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=8,
-    out_subblock_h=2,
-    out_subblock_w=4,
     per_core_M=2,
-    per_core_N=4,
+    per_core_N=21,
+    transpose_mcast=False,
     fuse_batch=False,
     fused_activation=None,
-    mcast_in0=False,
 )
-
-# [32, 100, 16] * [32, 16, 4]
-prog_config_mm4_bh_25k = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
-    in0_block_w=16,
-    out_subblock_h=1,
-    out_subblock_w=4,
-    per_core_M=1,
-    per_core_N=4,
-    fuse_batch=False,
-    fused_activation=None,
-    mcast_in0=False,
-)
-
-HIDDEN_SIZE = 7168
-NUM_HEADS = 128
-
-# Obtained by dividing 128 * 1024 over 4 galaxies
-SEQ_LEN_32K = 8192
-
-# Obtained by dividing 100 * 1024 over 4 galaxies
-SEQ_LEN_25K = 6400
 
 
 # Mesh configuration: (sp_axis=0, tp_axis=1)
@@ -196,10 +145,11 @@ SEQ_LEN_25K = 6400
 @pytest.mark.parametrize(
     "in0_x, in0_y, in0_z, in0_w, in0_sp_sharded, in0_tp_sharded, in0_tp_shard_dim, in0_dtype, in1_x, in1_y, in1_z, in1_w, in1_tp_sharded, in1_tp_shard_dim, in1_dtype, out_dtype, prog_config, act_mem_config, out_mem_config",
     [
+        # mm0 -- q_a_proj
         (
             1,
             1,
-            SEQ_LEN_32K,
+            SEQ_LEN,
             HIDDEN_SIZE,
             True,
             True,
@@ -217,10 +167,11 @@ SEQ_LEN_25K = 6400
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.L1_MEMORY_CONFIG,
         ),
+        # mm1 -- q_b_proj
         (
             1,
             1,
-            SEQ_LEN_32K,
+            SEQ_LEN,
             1536,
             True,
             False,
@@ -238,10 +189,11 @@ SEQ_LEN_25K = 6400
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.L1_MEMORY_CONFIG,
         ),
+        # mm2 -- wkv_b1
         (
             1,
             NUM_HEADS,
-            SEQ_LEN_32K,
+            SEQ_LEN,
             128,
             True,
             True,
@@ -259,10 +211,11 @@ SEQ_LEN_25K = 6400
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.L1_MEMORY_CONFIG,
         ),
+        # mm3 -- kv_a_proj_with_mqa
         (
             1,
             1,
-            SEQ_LEN_32K,
+            SEQ_LEN,
             HIDDEN_SIZE,
             True,
             True,
@@ -280,10 +233,11 @@ SEQ_LEN_25K = 6400
             ttnn.L1_MEMORY_CONFIG,
             ttnn.DRAM_MEMORY_CONFIG,
         ),
+        # mm4 -- wkv_b2
         (
             1,
             NUM_HEADS,
-            SEQ_LEN_32K,
+            SEQ_LEN,
             512,
             True,
             True,
@@ -301,10 +255,11 @@ SEQ_LEN_25K = 6400
             ttnn.L1_MEMORY_CONFIG,
             ttnn.DRAM_MEMORY_CONFIG,
         ),
+        # mm5 -- o_proj
         (
             1,
             1,
-            SEQ_LEN_32K,
+            SEQ_LEN,
             16384,
             True,
             True,
@@ -319,132 +274,6 @@ SEQ_LEN_25K = 6400
             ttnn.bfloat8_b,
             ttnn.bfloat16,
             prog_config_mm5_bh,
-            ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        (
-            1,
-            1,
-            SEQ_LEN_25K,
-            HIDDEN_SIZE,
-            True,
-            True,
-            3,
-            ttnn.bfloat16,
-            1,
-            1,
-            HIDDEN_SIZE,
-            1536,
-            True,
-            2,
-            ttnn.bfloat8_b,
-            ttnn.bfloat16,
-            prog_config_mm0_bh_25k,
-            ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.L1_MEMORY_CONFIG,
-        ),
-        (
-            1,
-            1,
-            SEQ_LEN_25K,
-            1536,
-            True,
-            False,
-            None,
-            ttnn.bfloat16,
-            1,
-            1,
-            1536,
-            24576,
-            True,
-            3,
-            ttnn.bfloat8_b,
-            ttnn.bfloat16,
-            prog_config_mm1_bh_25k,
-            ttnn.DRAM_MEMORY_CONFIG,
-            ttnn.L1_MEMORY_CONFIG,
-        ),
-        (
-            1,
-            NUM_HEADS,
-            SEQ_LEN_25K,
-            128,
-            True,
-            True,
-            1,
-            ttnn.bfloat16,
-            1,
-            NUM_HEADS,
-            128,
-            512,
-            True,
-            1,
-            ttnn.bfloat8_b,
-            ttnn.bfloat16,
-            prog_config_mm2_bh_25k,
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.L1_MEMORY_CONFIG,
-        ),
-        (
-            1,
-            1,
-            SEQ_LEN_25K,
-            HIDDEN_SIZE,
-            True,
-            True,
-            3,
-            ttnn.bfloat16,
-            1,
-            1,
-            HIDDEN_SIZE,
-            576,
-            True,
-            2,
-            ttnn.bfloat8_b,
-            ttnn.bfloat16,
-            prog_config_mm3_bh_25k,
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        (
-            1,
-            NUM_HEADS,
-            SEQ_LEN_25K,
-            512,
-            True,
-            True,
-            1,
-            ttnn.bfloat16,
-            1,
-            NUM_HEADS,
-            512,
-            128,
-            True,
-            1,
-            ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
-            prog_config_mm4_bh_25k,
-            ttnn.L1_MEMORY_CONFIG,
-            ttnn.DRAM_MEMORY_CONFIG,
-        ),
-        (
-            1,
-            1,
-            SEQ_LEN_25K,
-            16384,
-            True,
-            True,
-            3,
-            ttnn.bfloat16,
-            1,
-            1,
-            16384,
-            7168,
-            True,
-            2,
-            ttnn.bfloat8_b,
-            ttnn.bfloat16,
-            prog_config_mm5_bh_25k,
             ttnn.DRAM_MEMORY_CONFIG,
             ttnn.DRAM_MEMORY_CONFIG,
         ),
@@ -477,14 +306,6 @@ def test_mla_mm(
     out_mem_config,
     skip_host_comparison,
 ):
-    # prog_config_*_bh_25k are hand-tuned for 6400 rows (200 tiles); the ISL is now 20 tiles, so
-    # per_core_M / out_subblock_h are invalid at the new shape.
-    if in0_z == SEQ_LEN_25K:
-        pytest.skip(
-            "tuned program configs are sized for 6400 rows (3200 tokens/chip); needs re-tuning for "
-            "the 640-token ISL -- see the ds_prefill tracking issue"
-        )
-
     torch.manual_seed(42)
     hidden_states = torch.randn(in0_x, in0_y, in0_z, in0_w, dtype=torch.bfloat16)
     weight = torch.randn(in1_x, in1_y, in1_z, in1_w, dtype=torch.bfloat16) * 0.02
