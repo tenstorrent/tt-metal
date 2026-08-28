@@ -10,9 +10,11 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/welford.h"
 #include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
@@ -128,10 +130,6 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in, dfb_ex);
     pack_reconfig_data_format(dfb_ex);
 #endif
-
-    // Get pointer to the reciprocal LUT
-    using recip_lut_t = std::array<uint32_t, W>;
-    auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals, 0);
 
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
@@ -262,7 +260,14 @@ void kernel_main() {
         welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
 
         // Store the mean and variance to the destination registers
-        two_pass_stats_finalize_split_mean_to_row(mean_dst, (*p_reciprocals)[W - 1]);
+        if constexpr (compact_fp32_finalizer) {
+            two_pass_stats_finalize_to_row(mean_dst, reciprocal_w);
+        } else {
+            two_pass_stats_finalize_split_mean_to_row(mean_dst, reciprocal_w);
+        }
+        transpose_dest_init<DST_ACCUM_MODE>();
+        transpose_dest<DST_ACCUM_MODE>(mean_dst);
+        transpose_dest<DST_ACCUM_MODE>(var_dst);
         tile_regs_commit();
 
         // Pop dfb_x_welford so its rd_ptr advances in lock-step with dfb_x's pop in the eltwise
@@ -275,68 +280,52 @@ void kernel_main() {
         dfb_x_welford_obj.pop_front(total_buffer_size);
 #endif
 
-        // Transpose mean and var back to columns
+        // Mean and variance are already in column orientation in DEST.
         dfb_ex_obj.reserve_back(onetile);
         dfb_ex2_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_reconfig_data_format(dfb_ex);
-        pack_tile(mean_dst, dfb_ex);
-        pack_reconfig_data_format(dfb_ex2);
-        pack_tile(var_dst, dfb_ex2);
-        tile_regs_release();
-        dfb_ex_obj.push_back(onetile);
-        dfb_ex2_obj.push_back(onetile);
-
-        dfb_ex_obj.wait_front(onetile);
-        dfb_ex2_obj.wait_front(onetile);
-        reconfig_data_format_srca(dfb_ex);
-        transpose_init(dfb_ex);
-        tile_regs_acquire();
-        transpose_tile(dfb_ex, 0, mean_dst);
-        transpose_tile(dfb_ex2, 0, var_dst);
-        tile_regs_commit();
-
-        dfb_ex_obj.pop_front(onetile);
-        dfb_ex2_obj.pop_front(onetile);
-
-        dfb_ex_obj.reserve_back(onetile);
-        dfb_ex2_obj.reserve_back(onetile);
-
-        pack_reconfig_data_format(dfb_ex);
-        tile_regs_wait();
-        pack_tile(mean_dst, dfb_ex);
-        pack_reconfig_data_format(dfb_ex2);
-        pack_tile(var_dst, dfb_ex2);
-        tile_regs_release();
-
-        dfb_ex_obj.push_back(onetile);
-        dfb_ex2_obj.push_back(onetile);
-
-        // x - E[x]
-        // Reuse dfb_x since we didn't pop anything from it
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(dfb_x, dfb_ex);
+        if constexpr (compact_fp32_finalizer) {
+            dfb_ex_welford_obj.reserve_back(onetile);
         }
-        dfb_ex_obj.wait_front(onetile);  // packed anchor and low correction
-        dfb_xmm_obj.reserve_back(total_buffer_size);
-        sub_bcast_cols_compensated_init(dfb_x, dfb_ex);
-        for (auto block : generic::blocks(Wt, blk)) {
-            tile_regs_acquire();
-            sub_bcast_cols_compensated(dfb_x, dfb_ex, 0, 0, block.size());
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, dfb_xmm);
+
+        pack_reconfig_data_format(dfb_ex);
+        tile_regs_wait();
+        pack_tile(mean_dst, dfb_ex);
+        pack_reconfig_data_format(dfb_ex2);
+        pack_tile(var_dst, dfb_ex2);
+        tile_regs_release();
+
+        dfb_ex_obj.push_back(onetile);
+        dfb_ex2_obj.push_back(onetile);
+        if constexpr (compact_fp32_finalizer) {
+            dfb_ex_welford_obj.push_back(onetile);
+        }
+
+        if constexpr (!compact_fp32_finalizer) {
+            // x - E[x]. Reuse dfb_x since statistics did not pop it.
+            if constexpr (FLOAT32_DTYPE) {
+                reconfig_data_format(dfb_x, dfb_ex);
             }
-            tile_regs_release();
-            dfb_xmm_obj.push_back(block.full_block_size());
-            dfb_x_obj.pop_front(block.full_block_size());
-        }
-        dfb_ex_obj.pop_front(onetile);
-        dfb_xmm_obj.wait_front(total_buffer_size);
+            dfb_ex_obj.wait_front(onetile);  // packed anchor and low correction
+            dfb_xmm_obj.reserve_back(total_buffer_size);
+            sub_bcast_cols_compensated_init(dfb_x, dfb_ex);
+            for (auto block : generic::blocks(Wt, blk)) {
+                tile_regs_acquire();
+                sub_bcast_cols_compensated(dfb_x, dfb_ex, 0, 0, block.size());
+                tile_regs_commit();
+                tile_regs_wait();
+                for (auto i : block.local()) {
+                    pack_tile(i, dfb_xmm);
+                }
+                tile_regs_release();
+                dfb_xmm_obj.push_back(block.full_block_size());
+                dfb_x_obj.pop_front(block.full_block_size());
+            }
+            dfb_ex_obj.pop_front(onetile);
+            dfb_xmm_obj.wait_front(total_buffer_size);
 
-        if constexpr (!fuse_pre_add) {
-            reconfig_data_format_srca(dfb_x, dfb_xmm);
+            if constexpr (!fuse_pre_add) {
+                reconfig_data_format_srca(dfb_x, dfb_xmm);
+            }
         }
 
         // Var(x) + eps
@@ -353,16 +342,51 @@ void kernel_main() {
         dfb_ex2_obj.pop_front(onetile);
 
         dfb_ex2pe_obj.reserve_back(onetile);
+        if constexpr (compact_fp32_finalizer) {
+            dfb_ex2pe_fp32_obj.reserve_back(onetile);
+        }
         tile_regs_wait();
         pack_tile(dst0, dfb_ex2pe);
         tile_regs_release();
         dfb_ex2pe_obj.push_back(onetile);
+        if constexpr (compact_fp32_finalizer) {
+            dfb_ex2pe_fp32_obj.push_back(onetile);
+
+            // The SFPU broadcast helper consumes a dense tile. The inactive
+            // variance lanes contain zero, whose rsqrt is inf, so materialise
+            // the column broadcast once before reusing it for every input tile.
+            dfb_ex2pe_obj.wait_front(onetile);
+            dfb_ex2pe_fp32_obj.wait_front(onetile);
+            tile_regs_acquire();
+            reconfig_data_format_srca(dfb_ex2pe);
+            compute_kernel_hw_startup(dfb_ex2pe, dfb_ex2pe);
+            unary_bcast_init<BroadcastType::COL>(dfb_ex2pe);
+            unary_bcast<BroadcastType::COL>(dfb_ex2pe, 0, dst0);
+            dfb_ex2pe_obj.pop_front(onetile);
+            dfb_ex2pe_fp32_obj.pop_front(onetile);
+            tile_regs_commit();
+
+            dfb_ex2pe_obj.reserve_back(onetile);
+            dfb_ex2pe_fp32_obj.reserve_back(onetile);
+            tile_regs_wait();
+            pack_tile(dst0, dfb_ex2pe);
+            tile_regs_release();
+            dfb_ex2pe_obj.push_back(onetile);
+            dfb_ex2pe_fp32_obj.push_back(onetile);
+        }
 
         // Remainder of the layernorm operation
         // norm(x) * gamma + beta,
         // where norm(x) is:
         // (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
         dfb_ex2pe_obj.wait_front(onetile);
+        if constexpr (compact_fp32_finalizer) {
+            dfb_ex_obj.wait_front(onetile);
+            dfb_ex_welford_obj.wait_front(onetile);
+            dfb_ex2pe_fp32_obj.wait_front(onetile);
+            dfb_x_welford_obj.wait_front(total_buffer_size);
+            sfpu_bcast_col_init();
+        }
         for (auto block : generic::blocks(Wt, blk)) {
             reconfig_data_format(dfb_xmm, dfb_ex2pe);
 #if !defined(FUSE_GAMMA) && !defined(FUSE_BETA)
@@ -384,7 +408,7 @@ void kernel_main() {
             for (auto i : block.local()) {
                 pack_tile(i, dfb_im_or_out);  // pack either to intermediate (dfb_fusion or dfb_out)
             }
-            tile_regs_release();
+
             dfb_im_or_out_obj.push_back(
                 block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
 
@@ -460,7 +484,13 @@ void kernel_main() {
 #endif
         }
         dfb_ex2pe_obj.pop_front(onetile);
-        dfb_xmm_obj.pop_front(total_buffer_size);
+        if constexpr (compact_fp32_finalizer) {
+            dfb_ex_obj.pop_front(onetile);
+            dfb_ex_welford_obj.pop_front(onetile);
+            dfb_ex2pe_fp32_obj.pop_front(onetile);
+        } else {
+            dfb_xmm_obj.pop_front(total_buffer_size);
+        }
 
     }  // NCHt loop
 }

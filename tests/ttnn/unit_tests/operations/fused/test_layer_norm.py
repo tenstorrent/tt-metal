@@ -755,19 +755,19 @@ def test_l1_interleaved_near_capacity(device, enabled_program_cache):
     assert l1_pressure.is_allocated()
 
 
-@run_for_blackhole("Blackhole selects the tile backend for parameter-free FP32 LayerNorm")
+@run_for_blackhole("Blackhole selects the tile backend for parameter-free BFP8 LayerNorm")
 def test_layer_norm_tile_backend_does_not_require_reciprocal(device):
     torch.manual_seed(20260824)
     torch_input = torch.rand((32, 4096), dtype=torch.float32)
     reference = torch.nn.functional.layer_norm(torch_input, normalized_shape=[4096])
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.layer_norm(
         input_tensor,
         program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
     )
 
-    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+    assert_output_accuracy(reference, ttnn.to_torch(output))
 
 
 @run_for_blackhole("Blackhole uses two-pass statistics for wide fused BFP8 LayerNorm")

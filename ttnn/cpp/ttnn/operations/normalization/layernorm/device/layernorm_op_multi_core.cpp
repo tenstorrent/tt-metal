@@ -386,11 +386,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
             Wt_next_block_up = without_weights_max_size;
         }
     }
-    // The compact kernel forms fused pre-add through TF32 and its final
-    // normalisation consumes SrcA/SrcB. Use the streaming kernel for every
-    // tiled FP32 two-pass case so its UnpackToDestFp32 aliases and SFPU
-    // finaliser preserve the complete mantissa.
-    if (fp32_sfpu_finalizer) {
+    // The compact Blackhole kernel can keep compensated centring in DEST and
+    // multiply by the column-broadcast inverse standard deviation without an
+    // intermediate spill. Residual and oversized cases retain the streaming
+    // SFPU finaliser.
+    const bool compact_fp32_finalizer =
+        device->arch() == tt::ARCH::BLACKHOLE && fp32_sfpu_finalizer && !b.has_value() && !large_tensor_needed;
+    if (fp32_sfpu_finalizer && !compact_fp32_finalizer) {
         large_tensor_needed = true;
     }
     if (large_tensor_needed) {
