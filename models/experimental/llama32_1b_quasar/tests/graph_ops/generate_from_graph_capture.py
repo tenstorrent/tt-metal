@@ -74,6 +74,8 @@ _SHARD_SHAPE_RE = re.compile(r"shape=\[(\d+), *(\d+)\]")
 _SHARD_ORIENT_RE = re.compile(r"orientation=ShardOrientation::(\w+)")
 _CONFIG_RE = re.compile(r"^(?P<kind>[A-Z]\w*(?:ProgramConfig|Config))\((?P<body>.*)\)$")
 _TENSOR_ID_RE = re.compile(r"tensor_id=(\d+)")
+# ttnn.Tile's repr, e.g. gpt-oss's sparse_matmul(output_tile=ttnn.Tile([32, 32])).
+_TILE_RE = re.compile(r"^Tile with shape: \[(?P<h>\d+), (?P<w>\d+)\]$")
 _GRID_RE = re.compile(r"^(\d+)-(\d+)$")
 
 _DTYPE_TAG = {
@@ -262,6 +264,9 @@ def parse_argument(text: str):
         return {"k": "layout", "v": text.split(".", 1)[1]}
     if text.startswith("MeshDevice("):
         return {"k": "device"}
+    tile = _TILE_RE.match(text)
+    if tile:
+        return {"k": "tile", "shape": [int(tile.group("h")), int(tile.group("w"))]}
     if text.startswith("[UnaryOpType."):
         return {"k": "acts", "v": re.findall(r"UnaryOpType\.(\w+)", text)}
     if text.startswith("slice(") or text.startswith("(slice("):
