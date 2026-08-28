@@ -262,6 +262,39 @@ def test_lfm_demo_supplies_every_decode_update_command():
         assert required <= {keyword.arg for keyword in call.keywords}
 
 
+def test_gemma4_override_uses_only_explicit_decode_update_commands():
+    source_path = Path("models/demos/gemma4/tt/generator.py")
+    tree = ast.parse(source_path.read_text())
+    mixin = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "ChunkedPrefillPageTableGuardMixin"
+    )
+    decode = next(node for node in mixin.body if isinstance(node, ast.FunctionDef) and node.name == "decode_forward")
+    trace_decode = next(
+        node for node in mixin.body if isinstance(node, ast.FunctionDef) and node.name == "_decode_forward_trace_text"
+    )
+    required = {
+        "reload_inputs",
+        "reload_page_table",
+        "reload_sampling_params",
+        "reset_sampling_state",
+    }
+
+    decode_params = {arg.arg for arg in decode.args.kwonlyargs}
+    trace_params = {arg.arg for arg in trace_decode.args.kwonlyargs}
+    assert required <= decode_params
+    assert {"reload_inputs", "reload_page_table"} <= trace_params
+    assert "reset_batch" not in {arg.arg for arg in decode.args.args}
+    assert "reset_batch" not in {arg.arg for arg in trace_decode.args.args}
+
+    source = ast.get_source_segment(source_path.read_text(), trace_decode)
+    assert source is not None
+    assert "_prev_on_device_sampling" not in source
+    assert "_tt_vllm_always_refresh_decode_trace_inputs" not in source
+    assert "torch.equal" not in source
+
+
 def test_galaxy_reset_only_formats_seed_slots(monkeypatch):
     from models.demos.llama3_70b_galaxy.tt import generator as galaxy_generator
 

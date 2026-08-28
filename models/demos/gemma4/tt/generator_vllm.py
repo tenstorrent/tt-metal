@@ -226,8 +226,8 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     # Requires on-device token feedback + position plus_one (non-PLI only;
     # see ``Gemma4Model._tt_vllm_always_refresh_decode_trace_inputs``).
     #
-    # Default ON for non-PLI. Token-doubling under async is mitigated by
-    # ``merge_async_ahead_decode_tokens`` + vLLM preempt bookkeeping. Kill-switch:
+    # Default ON for non-PLI. The plugin drains and applies pending results
+    # before commanding a host-authoritative reload. Kill-switch:
     # ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models force False in ``__init__``.
     model_capabilities = {
         "supports_prefix_caching": False,
@@ -1289,10 +1289,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         t0 = time.perf_counter()
         with self._route_per_layer_page_tables(per_submesh):
             # Route through ``ChunkedPrefillPageTableGuardMixin.decode_forward``
-            # (Gemma4-safe async-ahead merge). Do not call
-            # ``super(HybridAttentionForCausalLM, ...)`` — that skips the mixin
-            # and hits shared ``Generator.decode_forward`` (OOB slot_remap /
-            # bucket IndexError under concurrent vLLM). Also avoid plain
+            # (Gemma4's batch-keyed trace path). Do not call
+            # ``super(HybridAttentionForCausalLM, ...)`` because that skips the
+            # mixin and loses the decode-bucket trace key. Also avoid plain
             # ``HybridAttentionForCausalLM.decode_forward`` (NotImplementedError).
             out = super().decode_forward(*args, **kwargs)
         self._perf_decode_tokens += 1

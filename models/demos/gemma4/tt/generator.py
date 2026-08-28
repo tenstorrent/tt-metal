@@ -10,7 +10,6 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
-from models.demos.gemma4.tt.async_decode import merge_async_ahead_decode_tokens
 from models.demos.gemma4.tt.common import create_tt_model
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
@@ -1186,11 +1185,14 @@ class ChunkedPrefillPageTableGuardMixin:
         tt_logits,
         sampling_params,
         start_pos=None,
-        reset_batch=False,
         prompt_tokens=None,
         output_tokens=None,
         slot_remap=None,
         enable_trace=False,
+        *,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        skip_precompile: bool = False,
     ):
         """Eager ``tt_out_tok`` inject for padded decode feedback (#51186).
 
@@ -1245,11 +1247,13 @@ class ChunkedPrefillPageTableGuardMixin:
                 tt_logits,
                 sampling_params,
                 start_pos=start_pos,
-                reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                skip_precompile=skip_precompile,
             )
             if host_commit:
                 try:
@@ -1291,96 +1295,38 @@ class ChunkedPrefillPageTableGuardMixin:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,
-        reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
         slot_remap=None,
         defer_device_sampling: bool = False,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        reload_sampling_params: bool,
+        reset_sampling_state: bool,
+        skip_trace_precompile: bool = False,
         **kwargs,
     ):
-        """Gemma4 decode with safe async-ahead merge (no ``tt_transformers`` edits).
-
-        Same control flow as ``Generator.decode_forward``, but merges host/device
-        tokens via :func:`merge_async_ahead_decode_tokens` so bucket changes and
-        OOB ``slot_remap`` fall back instead of ``IndexError``.
-        """
-        del kwargs  # Generator accepts extras; Gemma4 path ignores them.
-        mode_switched = False
+        """Gemma4 decode with batch-keyed traces and explicit reload commands."""
+        if "reset_batch" in kwargs:
+            raise TypeError("reset_batch is not supported by decode input update contract v1")
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
-            mode_switched = True
 
         for i in range(len(self.model)):
             self.model[i].switch_mode(Mode.DECODE)
 
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
+        if not enable_trace and not reload_inputs:
+            raise ValueError("Non-traced decode rebuilds all forward inputs and requires reload_inputs=True")
 
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
-        # Match _decode_forward_trace_text: (sampling, per-DP chunk batch).
-        decode_trace_key = (
-            on_device_sampling,
-            int(tokens[0].shape[0]) if tokens else 1,
-        )
-
-        # Only merge device token/pos feedback when async decode is actually
-        # enabled. ``model_capabilities["supports_async_decode"]`` is the single
-        # source of truth (tt-inference-server llm.yaml -> GEMMA4_SUPPORTS_ASYNC_DECODE
-        # -> capability, resolved once in Gemma4ForCausalLM); previously this path
-        # ran regardless, so disabling async in config turned off vLLM's async
-        # scheduler while Gemma4 kept doing async-ahead device feedback. With async
-        # off the host tokens are authoritative and there is nothing to merge.
-        async_decode_enabled = bool(getattr(self, "model_capabilities", {}).get("supports_async_decode", False))
-        if (
-            async_decode_enabled
-            and on_device_sampling
-            and (reset_batch or mode_switched)
-            and enable_trace
-            and self.trace_inputs_decode[decode_trace_key]
-        ):
-            new_tokens = []
-            new_start_pos = []
-            for i, tok_chunk in enumerate(tokens):
-                trace_in = self.trace_inputs_decode[decode_trace_key][i]
-                host_pos = start_pos[i].reshape(-1).to(torch.int64)
-                host_toks = tok_chunk.reshape(-1)
-                host_b = int(host_toks.shape[0])
-                # Read the full device buffer before truncating. Nearest-bucket
-                # B changes and mesh-row sharding can make shard-0 narrower than
-                # host_b; the gemma4 helper falls back before any gather.
-                dev_toks_full = ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0]).reshape(-1).to(tok_chunk.dtype)
-                dev_pos_full = ttnn.to_torch(ttnn.get_device_tensors(trace_in[1])[0]).reshape(-1).to(torch.int64)
-                slot_remap_local = None
-                if slot_remap is not None:
-                    remap = slot_remap[i * host_b : (i + 1) * host_b]
-                    remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
-                    slot_remap_local = remap_t - i * host_b
-                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
-                prefilled_local = None
-                if prefilled:
-                    bs = tok_chunk.shape[0]
-                    prefilled_local = {slot - i * bs for slot in prefilled if i * bs <= slot < (i + 1) * bs}
-                merged, merged_pos, src = merge_async_ahead_decode_tokens(
-                    host_toks,
-                    host_pos,
-                    dev_toks_full,
-                    dev_pos_full,
-                    slot_remap_local=slot_remap_local,
-                    prefilled_local=prefilled_local,
-                )
-                if src != "merged" or int(dev_toks_full.shape[0]) != int(host_toks.shape[0]):
-                    logger.info(
-                        "async_ahead_merge src={} host_b={} dev_len={}",
-                        src,
-                        int(host_toks.shape[0]),
-                        int(dev_toks_full.shape[0]),
-                    )
-                new_tokens.append(merged.view(tok_chunk.shape).to(tok_chunk.dtype))
-                new_start_pos.append(merged_pos.view(start_pos[i].shape).to(start_pos[i].dtype))
-            tokens = new_tokens
-            start_pos = new_start_pos
-        self._slots_prefilled_since_decode = set()
+        # Gemma4 keeps a trace for each sampling mode and decode bucket. This
+        # records the current trace key for its token-feedback buffer; it does
+        # not decide whether any input is reloaded.
+        self._prev_decode_batch = int(tokens[0].shape[0]) if tokens else 1
 
         decode_kwargs = {
             "current_pos": start_pos,
@@ -1393,7 +1339,9 @@ class ChunkedPrefillPageTableGuardMixin:
         if enable_trace:
             tt_decode_output = self._decode_forward_trace_text(
                 **decode_kwargs,
-                reset_batch=reset_batch or mode_switched,
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
+                skip_precompile=skip_trace_precompile,
             )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(
@@ -1407,15 +1355,22 @@ class ChunkedPrefillPageTableGuardMixin:
                 tt_decode_output,
                 sampling_params=sampling_params,
                 start_pos=start_pos,
-                reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
+                reload_sampling_params=reload_sampling_params,
+                reset_sampling_state=reset_sampling_state,
+                skip_precompile=skip_trace_precompile,
             )
         if read_from_device:
             to_host = self.read_decode_output(tt_decode_output)
-            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+            output = self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+            if sampling_params is None:
+                self._apply_sampling_slot_remap(slot_remap)
+            return output
+        if sampling_params is None:
+            self._apply_sampling_slot_remap(slot_remap)
         return tt_decode_output
 
     def _decode_forward_trace_text(
@@ -1425,15 +1380,17 @@ class ChunkedPrefillPageTableGuardMixin:
         page_table=None,
         kv_cache=None,
         on_device_sampling=False,
-        reset_batch=False,
-        skip_precompile=False,
+        *,
+        reload_inputs: bool,
+        reload_page_table: bool,
+        skip_precompile: bool = False,
     ):
         """Gemma4 decode traces keyed by ``(on_device_sampling, batch)``.
 
         Shared ``Generator`` keys traces by sampling mode only. Gemma4 warms
         B=1 and B=max separately (vLLM nearest-bucket / P150x8), so the key
-        must include per-DP chunk batch or async-ahead keep and replay hit the
-        wrong Metal graph. Kept local to this mixin — no ``tt_transformers`` edits.
+        must include the per-DP chunk batch or replay hits the wrong Metal
+        graph. Reload decisions are supplied by the caller.
         """
         from models.tt_transformers.tt.common import copy_host_to_device
         from models.tt_transformers.tt.generator import DECODE_PAGE_TABLE_INPUT_IDX
@@ -1453,39 +1410,22 @@ class ChunkedPrefillPageTableGuardMixin:
             self.trace_inputs_decode[decode_trace_key] = device_inputs
             self.trace_output_decode[decode_trace_key] = tt_out_trace
 
-        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
-        self._prev_on_device_sampling = on_device_sampling
-        prev_decode_batch = getattr(self, "_prev_decode_batch", None)
-        self._prev_decode_batch = batch
-        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
-        batch_changed = prev_decode_batch is not None and prev_decode_batch != batch
-        reset_inputs = reset_batch or not on_device_sampling or sampling_mode_changed or batch_changed
-        page_table_changed = page_table is not None and (
-            self.prev_page_table is None
-            or any(not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table))
-        )
-
         for i in range(self.data_parallel):
-            refresh_trace_inputs = reset_inputs or getattr(
-                self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False
-            )
             user_page_table = page_table[i] if page_table is not None else None
 
-            if refresh_trace_inputs:
+            if reload_inputs:
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_decode[decode_trace_key][i],
                 )
-            elif page_table_changed:
+            elif reload_page_table:
                 host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
                 host_page_table = host_inputs_i[DECODE_PAGE_TABLE_INPUT_IDX]
                 device_page_table = self.trace_inputs_decode[decode_trace_key][i][DECODE_PAGE_TABLE_INPUT_IDX]
                 if host_page_table is not None:
                     ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
 
-        if page_table_changed:
-            self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[decode_trace_key].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         return self.trace_output_decode[decode_trace_key]
