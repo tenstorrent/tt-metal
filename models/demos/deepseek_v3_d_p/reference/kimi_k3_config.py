@@ -103,19 +103,6 @@ class KimiK3Config:
     KDA_GATE_LOWER_BOUND = -5.0
     KDA_USE_FULL_RANK_GATE = True
 
-    # TT KDA layer implementation constants (models/demos/deepseek_v3_d_p/tt/kda).
-    # 0-indexed model layer used by the KDA layer tests; layer 0 is the dense layer, so the first
-    # KDA layer is 1 (FULL_ATTN_LAYERS_1BASED starts at 4, so layers 1-3 are KDA).
-    FIRST_KDA_LAYER = 1
-    # Chunks composed per summary group by the chunk-recurrence scan.
-    KDA_SUMMARY_GROUP_CHUNKS = 20
-    # Output-projection matmul block width, in tiles.
-    KDA_OUTPUT_PROJECTION_OUT_BLOCK_W = 4
-
-    # Checkpoint the real-weight tests are pinned to.
-    HF_REPO_ID = "moonshotai/Kimi-K3"
-    HF_REVISION = "9f62e4e9fffbd0a83ddd60e1c209d828994b3569"
-
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
 

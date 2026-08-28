@@ -9,12 +9,14 @@
     "batch": 1,
     "sequence": 5120,
     "dtype": "bfloat16",
-    "repetitions": 10
+    "repetitions": 10,
+    "timing_samples": 5
   },
   "provenance": {
     "measured_at_commit": "003156d7b4a053876991ebe8e7de2a9ce15306ae",
+    "runtime_contract_reviewed_through_commit": "43cb43e9f07",
     "measured_at_utc": "2026-08-28",
-    "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample"
+    "method": "median of five warm synchronized samples per session, then median across five independent sessions; 10 replays per sample; later runtime commits through 43cb43e9f07 were reviewed as behavior-preserving"
   },
   "targets": {
     "SP1xTP8": {
