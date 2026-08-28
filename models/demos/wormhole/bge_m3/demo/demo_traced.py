@@ -129,12 +129,18 @@ def main() -> None:
         mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0) if args.data_parallel else None
 
         logger.info(f"Encoding {len(prompts)} prompts to [{args.batch}, {args.seq_len}]")
-        encoded = model_args.encode_prompts(prompts, prompt_length=args.seq_len, inputs_mesh_mapper=mesh_mapper)
+        # The data-parallel path takes compact [B, 1] valid lengths. Ask for the
+        # 2D keep-mask so encode_prompts does not build the dense [B, 1, S, S]
+        # mask, which costs about 1.5 GiB at B12/S8192.
+        encoded = model_args.encode_prompts(
+            prompts,
+            prompt_length=args.seq_len,
+            attention_mask_4d=not args.data_parallel,
+            inputs_mesh_mapper=mesh_mapper,
+        )
         staged = encoded["model_inputs"]
         if args.data_parallel:
-            # The data-parallel path takes compact [B, 1] valid lengths, not the
-            # dense mask that encode_prompts stages. The kernels then build only
-            # the boundary mask tiles.
+            # The kernels build only the boundary mask tiles from these lengths.
             valid_lengths = encoded["tokenizer_attention_mask"].sum(dim=1, keepdim=True)
             staged["attention_mask"] = ttnn.from_torch(
                 valid_lengths.int(),

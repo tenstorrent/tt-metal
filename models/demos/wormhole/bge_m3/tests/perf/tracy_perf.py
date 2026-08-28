@@ -37,18 +37,15 @@ SEQ_LEN_8192 = 8192
 def prepare_inputs(tokenizer, batch_size, seq_len, pad_token_id):
     """Generate synthetic token inputs on host. Returns dict of torch tensors."""
     input_ids = torch.randint(1, 1000, (batch_size, seq_len), dtype=torch.long)
-    attention_mask = torch.ones(batch_size, seq_len, dtype=torch.long)
     token_type_ids = torch.zeros(batch_size, seq_len, dtype=torch.long)
 
     mask = (input_ids != pad_token_id).to(torch.int64)
     position_ids = (torch.cumsum(mask, dim=1) * mask + pad_token_id).to(torch.long)
 
-    keep = attention_mask.to(torch.bfloat16)
-    additive_mask = ((1.0 - keep) * -100000.0).unsqueeze(1).unsqueeze(1).expand(-1, -1, seq_len, -1).contiguous()
-
+    # The profiled forward reads the token inputs only. A dense [B,1,S,S] mask
+    # costs about 1.5 GiB at B12/S8192, so this function does not build one.
     return {
         "input_ids": input_ids,
-        "attention_mask": additive_mask,
         "token_type_ids": token_type_ids,
         "position_ids": position_ids,
     }
