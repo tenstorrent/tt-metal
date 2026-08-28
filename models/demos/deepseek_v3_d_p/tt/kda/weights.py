@@ -95,8 +95,8 @@ class KDAWeights:
         state_dict: Mapping[str, torch.Tensor],
         cache_path: Path,
         cache_name_prefix: str,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
         config: KDAConfig,
+        mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
     ) -> None:
@@ -147,6 +147,8 @@ def load_kda_weights(
 ) -> KDAWeights | None:
     """Fuse compatible projections and place whole-head shards on device."""
     mesh_shape, tensor_parallel_size = _parallel_geometry(device, tensor_parallel_axis)
+    if state_dict is not None and not state_dict:
+        state_dict = None
     if config.num_heads % tensor_parallel_size != 0:
         raise ValueError(
             f"num_heads {config.num_heads} must be divisible by tensor parallel size {tensor_parallel_size}"

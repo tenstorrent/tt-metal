@@ -95,8 +95,9 @@ class _KDAInputs:
 class KdaState:
     """Caller-owned KDA carries.
 
-    ``recurrent`` is TP-local and must be replicated across the SP axis;
-    ``convolution`` is partition-local along SP. Construct state with
+    ``recurrent`` is TP-local and must be replicated across the SP axis.
+    ``convolution`` is an SP-replicated stream tail; the halo exchange derives
+    each partition entry carry from it. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
     """
 
@@ -131,7 +132,7 @@ class ttKDA:
         tp_axis: int = 1,
     ) -> None:
         KDAWeights.build_ttnn_cache(
-            state_dict, cache_path, f"layer_{layer_idx}.kda", mesh_device, config, tensor_parallel_axis=tp_axis
+            state_dict, cache_path, f"layer_{layer_idx}.kda", config, mesh_device, tensor_parallel_axis=tp_axis
         )
 
     def __init__(
@@ -185,11 +186,6 @@ class ttKDA:
             )
         self.weights = weights
         self.tensor_parallel_size = self.weights.tensor_parallel_size
-        self.global_config = config
-        if self.sequence_parallel_size > 1 and config.head_k_dim != config.head_v_dim:
-            raise ValueError(
-                f"sequence-parallel KDA currently requires K == V, got {config.head_k_dim} and {config.head_v_dim}"
-            )
         self.config = replace(config, num_heads=config.num_heads // self.tensor_parallel_size)
         if self.tensor_parallel_size > 1 and tt_ccl is None:
             raise ValueError("tt_ccl is required for tensor-parallel KDA")
@@ -284,10 +280,16 @@ class ttKDA:
             )
         local_chunks = sequence // KDA_CHUNK_SIZE
         summary_group_chunks = self.recurrence_config.summary_group_chunks
-        uses_grouped_scan = self.sequence_parallel_size > 1 or (
-            local_chunks >= self.recurrence_config.grouped_scan_min_chunks and local_chunks % summary_group_chunks == 0
-        )
-        if uses_grouped_scan:
+        sequence_parallel_axis = self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None
+        if ops._uses_grouped_scan(
+            num_chunks=local_chunks,
+            program_config=self.recurrence_config,
+            sequence_parallel_axis=sequence_parallel_axis,
+        ):
+            if self.config.head_k_dim != self.config.head_v_dim:
+                raise ValueError(
+                    f"grouped KDA currently requires K == V, got {self.config.head_k_dim} and {self.config.head_v_dim}"
+                )
             ops._validate_grouped_scan_capacity(
                 batch_heads=batch * self.config.num_heads,
                 num_chunks=local_chunks,
@@ -569,7 +571,9 @@ class ttKDA:
         """Run prefill KDA and return replacement logical carries.
 
         The input state is only read. No tensor reachable from it is used as a
-        ``ttnn.copy`` destination or retained on this layer.
+        ``ttnn.copy`` destination or retained on this layer. The returned output
+        is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
+        the hidden dimension; TP == 1 returns the full hidden dimension.
         """
         batch, sequence = self._validate_forward(hidden_states, state)
         projected = self._project_inputs(hidden_states)

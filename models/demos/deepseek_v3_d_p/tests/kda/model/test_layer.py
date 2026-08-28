@@ -88,10 +88,11 @@ def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: P
     with expect_error(FileNotFoundError, "incomplete KDA TTNN cache"):
         KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
 
-    KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, device, config)
+    KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, config, device)
     assert KDAWeights.check_cache_complete(tmp_path, cache_prefix, config, device)
     cached_weights = KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
-    layer = ttKDA(device, config, weights=cached_weights)
+    assert cached_weights is not None
+    layer = ttKDA(device, config, {}, weight_cache_path=tmp_path, layer_idx=0)
     actual_output, _ = _forward(layer, hidden, layer.allocate_state())
     assert_accurate(golden_output, actual_output, name="cache-only output", pcc_threshold=0.999)
 
@@ -99,7 +100,7 @@ def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: P
 def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
     config = make_config()
     cache_prefix = "layer_0.kda"
-    KDAWeights.build_ttnn_cache(random_weights(config), tmp_path, cache_prefix, device, config)
+    KDAWeights.build_ttnn_cache(random_weights(config), tmp_path, cache_prefix, config, device)
     next(tmp_path.glob("*.tensorbin")).write_bytes(b"corrupt")
 
     with expect_error(RuntimeError, "too small"):
@@ -123,6 +124,24 @@ def test_non_tile_aligned_sequence_is_rejected(device: ttnn.Device, expect_error
     ).to(torch.bfloat16)
     layer = ttKDA(device, config, random_weights(config))
     with expect_error(ValueError, r"requires local T .* divisible by 32, got T=4"):
+        _forward(layer, hidden, layer.allocate_state())
+
+
+def test_grouped_scan_rejects_unequal_key_value_dims_at_forward_boundary(device: ttnn.Device, expect_error) -> None:
+    config = replace(make_config(), head_v_dim=64)
+    base_program_config = make_program_config()
+    program_config = replace(
+        base_program_config,
+        recurrence=replace(
+            base_program_config.recurrence,
+            grouped_scan_min_chunks=1,
+            summary_group_chunks=1,
+        ),
+    )
+    layer = ttKDA(device, config, random_weights(config), program_config=program_config)
+    hidden = torch.randn(1, 32, config.hidden_size, dtype=torch.bfloat16)
+
+    with expect_error(ValueError, "grouped KDA currently requires K == V"):
         _forward(layer, hidden, layer.allocate_state())
 
 
