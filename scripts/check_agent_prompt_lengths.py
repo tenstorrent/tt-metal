@@ -9,7 +9,8 @@ from pathlib import Path
 import sys
 
 
-DEFAULT_PROMPT_ROOT = Path(".agents/prompts")
+TT_METAL_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_PROMPT_ROOT = TT_METAL_ROOT / ".agents" / "prompts"
 
 
 def _prompt_files(filenames: list[str]) -> list[Path]:
