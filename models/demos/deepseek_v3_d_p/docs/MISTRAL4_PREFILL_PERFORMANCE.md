@@ -527,3 +527,30 @@ A failure at *fixture setup*, before any model code, is usually contention. Two 
 Both are fixed by `tt-smi -r`, and both are worth reaching for immediately rather than debugging.
 Check `/dev/shm` for `tt_h2d_<pid>_*` whose pid is still alive — `fuser` will not show another user's
 process.
+
+---
+
+## 9. `kmabee/mistral4-prefill-full-rebased.aug27` — rebase onto the refined shared fixes, full current-fabric sweep
+
+Measured 2026-08-28 on `bh-glx-b03u02` (a third 32-chip Blackhole galaxy, distinct from the 8 kW and 12 kW boxes named above — treat as a data point, not a repeat of either target) at `399cc0712f4` (`kmabee/mistral4-prefill-full-rebased.aug27`, `FABRIC_2D_TORUS_XY`), in `/data/kmabee/tt-metal-2`.
+
+This branch rebases `kmabee/mistral4-prefill-full-rebased` onto `kmabee/issue_54515-54519_integration` (squashed to one commit), which carries refined, individually-reviewed versions of five fixes this branch already had cruder versions of from 2026-08-20/21: MoE routed-expert cache dtype-awareness (#54515), the reference rope built from config not model (#54516), the MLA tuned-matmul-config K guard (#54517, byte-identical to what this branch already had), the KVPE-compare fix (#54519), and — the one with an actual device-time delta — the distributed RMSNorm TP=1 guard (#54518). This branch's own version of that guard (`59ac0719ff2`, 2026-08-20) kept the two-op `rms_norm_pre_all_gather`/`rms_norm_post_all_gather` pair and only skipped the collective at TP=1; #54518 instead takes the single fused `ttnn.rms_norm` op at TP=1, verified bit-identical and claimed 2.7x faster device-side.
+
+**Single-layer profile confirms the norm win directly.** Re-running the PP=4-stage (TP=1) single-layer capture from §HANDOFF_TRACY_PERF_SINGLE_LAYER (window 5,120) on this branch: the two `LayerNormPreAllGatherDeviceOperation`/`LayerNormPostAllGatherDeviceOperation` ops (0.359 ms combined pre-rebase) are gone, replaced by a single fused `LayerNormDeviceOperation` at 0.164 ms — **2.19x faster**, consistent with the claimed 2.7x. The single-rank (TP=4) capture is unchanged (3.274 ms vs 3.473 ms pre-rebase, within noise) as expected: the guard only fires at `cluster_axis` length 1, which TP=4 never is.
+
+**Full sweep, both parallelisations, all four production windows:**
+
+| window | single-rank (SP8×TP4) | PP=4×(8,1) | ratio |
+|---:|---:|---:|---:|
+| 5,120 | 29,767 | 35,003 (min) / 34,583 (med) | 1.17–1.18x |
+| 25,600 | 25,754 | 45,604 (min) / 45,541 (med) | 1.77x |
+| 102,400 | 19,814 | 24,157 total / **27,791 steady** | 1.22x total / **1.40x steady** |
+| 261,120 | 13,407 | 16,794 total / **17,907 steady** | 1.25x total / **1.34x steady** |
+
+All rows `PASSED`, traced, `PP_HANDOFF=none`, single-shot windows via `test_mistral4_pp4_concurrent_throughput`, chunked long-context windows via `test_mistral4_pp4_concurrent_longctx` and `test_mistral4_prefill_transformer_chunked_no_pcc`, same node IDs as §4 except `mesh-8x4` renamed to `torus-xy-8x4` for the chunked-transformer test post-fabric-migration. No PCC re-check in this sweep (the norm fix's correctness is covered by its own bit-identical PCC test, §4.2's node IDs elsewhere carry the model's PCC coverage); this section is throughput-only.
+
+**This closes `LLM_PERF_INVESTIGATION_FINDINGS.md` rev 2's still-open item #1** — current-fabric (`FABRIC_2D_TORUS_XY`) single-rank and PP=4 numbers at 102,400 and 261,120 had never been measured; §0b only had 5,120/25,600 on this fabric (8 kW: single-rank 29,595/24,854, PP=4 35,110/42,473, ratios 1.19x/1.71x), which this sweep's 5,120/25,600 rows match within noise, confirming the rebase changed nothing at short context.
+
+**At long context, both configs beat the stale `FABRIC_1D` baseline** (§1, 8 kW, pre-rebase): single-rank 13,407 here vs 10,888 there at 261,120; PP=4 steady 17,907 here vs 12,408 there. The `FABRIC_1D` numbers were never valid on current `main` anyway (§0b), so this is not a "fabric migration helped" claim — it is the first honest long-context number on the fabric that actually ships.
+
+**Standing recommendation still holds and is now on firmer ground**: PP=4×(8,1) wins every window measured, by a wider margin at long context (1.34–1.40x steady) than the short-context-only data previously supported.
