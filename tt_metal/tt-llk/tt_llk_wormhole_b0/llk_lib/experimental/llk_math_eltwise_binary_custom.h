@@ -155,7 +155,7 @@ inline void _llk_math_sub_bcast_cols_compensated_(
     // SrcB's format to decide whether to retain the low three TF32 mantissa
     // bits. Override both while this operation consumes the split statistic;
     // BF16 input remains a valid TF32 bit pattern with those low bits zero.
-    math::_configure_mov_ops_zero_flag_state_();
+    math::_configure_preserve_zero_flag_state_();
     constexpr std::uint32_t src_fmt_override_mask =
         ALU_FORMAT_SPEC_REG_SrcA_val_MASK | ALU_FORMAT_SPEC_REG_SrcA_override_MASK | ALU_FORMAT_SPEC_REG_SrcB_val_MASK | ALU_FORMAT_SPEC_REG_SrcB_override_MASK;
     constexpr std::uint32_t tf32_src_fmt_overrides =
@@ -191,6 +191,6 @@ inline void _llk_math_sub_bcast_cols_compensated_(
 
     // Restore the state_configure baseline for subsequent math operations.
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(0);
-    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
+    math::_configure_default_zero_flag_state_();
     math::clear_dst_reg_addr();
 }
