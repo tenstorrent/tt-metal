@@ -7,6 +7,8 @@
 #include "mesh_command_queue_base.hpp"
 
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "tt_metal/common/multi_producer_single_consumer_queue.hpp"
 #include "dispatch/cq_shared_state.hpp"
@@ -54,17 +56,17 @@ private:
     // Workload dispatch utility functions
     // Write dispatch commands associated with running a program on a Virtual Mesh subgrid
     void write_program_cmds_to_subgrid(
-        const MeshCoordinateRange& sub_grid,
+        const std::vector<IDevice*>& devices,
         ProgramCommandSequence& program_cmd_seq,
         bool stall_first,
         bool stall_before_program,
-        std::unordered_set<uint32_t>& chip_ids_in_workload);
+        std::unordered_set<uint32_t>* chip_ids_in_workload);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Dispatch sequences
     // must be sent to this subgrid to ensure consistent global state across the Virtual Mesh.
     // This function generates and writes dispatch commands forwarding go signal sequences to
     // these subgrids.
     void write_go_signal_sequences_to_unused_sub_grids(
-        std::unordered_set<uint32_t>& chip_ids_in_workload,
+        const std::unordered_set<uint32_t>& chip_ids_in_workload,
         const SubDeviceId& sub_device_id,
         uint32_t expected_num_workers_completed,
         bool mcast_go_signals,

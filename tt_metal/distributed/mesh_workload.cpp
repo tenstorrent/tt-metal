@@ -95,7 +95,24 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         device_range,
         *potential_intersection);
     Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
+    num_program_devices_ += device_range.shape().mesh_size();
     programs_[device_range] = std::move(program);
+}
+
+const std::vector<IDevice*>& MeshWorkloadImpl::get_local_devices(
+    MeshDevice* mesh_device, const MeshCoordinateRange& device_range) {
+    auto& devices_by_range = local_devices_by_mesh_[mesh_device->id()];
+    auto [entry, inserted] = devices_by_range.try_emplace(device_range);
+    auto& local_devices = entry->second;
+    if (inserted) {
+        local_devices.reserve(device_range.shape().mesh_size());
+        for (const auto& coord : device_range) {
+            if (mesh_device->impl().is_local(coord)) {
+                local_devices.push_back(mesh_device->impl().get_device(coord));
+            }
+        }
+    }
+    return local_devices;
 }
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
@@ -238,23 +255,21 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 }
 
 bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
-    // Return true if any program in the MeshWorkload runs on cores
-    // that can be multicasted to
-    bool ret = false;
-    for (auto& [device_range, program] : programs_) {
-        ret = ret || (program.impl().runs_on_noc_multicast_only_cores());
+    if (!runs_on_noc_multicast_only_cores_.has_value()) {
+        runs_on_noc_multicast_only_cores_ = std::any_of(programs_.begin(), programs_.end(), [](auto& program_on_grid) {
+            return program_on_grid.second.impl().runs_on_noc_multicast_only_cores();
+        });
     }
-    return ret;
+    return *runs_on_noc_multicast_only_cores_;
 }
 
 bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
-    // Return true if any program in the MeshWorkload runs on cores
-    // that can only be unicasted to
-    bool ret = false;
-    for (auto& [device_range, program] : programs_) {
-        ret = ret || (program.impl().runs_on_noc_unicast_only_cores());
+    if (!runs_on_noc_unicast_only_cores_.has_value()) {
+        runs_on_noc_unicast_only_cores_ = std::any_of(programs_.begin(), programs_.end(), [](auto& program_on_grid) {
+            return program_on_grid.second.impl().runs_on_noc_unicast_only_cores();
+        });
     }
-    return ret;
+    return *runs_on_noc_unicast_only_cores_;
 }
 
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkloadImpl::get_kernels(
@@ -301,33 +316,47 @@ std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     return semaphores_;
 }
 
-std::vector<uint32_t> MeshWorkloadImpl::get_program_config_sizes() {
-    // Get the config sizes for all L1 Program Data Structures
-    std::vector<uint32_t> global_program_config_sizes;
-    for (auto& program_on_grid : programs_) {
-        if (!global_program_config_sizes.empty()) {
-            for (int i = 0; i < global_program_config_sizes.size(); i++) {
-                TT_FATAL(
-                    global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
-                    "Expected config sizes to be identical across all programs in a MeshWorkload.");
+const std::vector<uint32_t>& MeshWorkloadImpl::get_program_config_sizes() {
+    if (!program_config_sizes_.has_value()) {
+        auto& global_program_config_sizes = program_config_sizes_.emplace();
+        for (auto& program_on_grid : programs_) {
+            if (!global_program_config_sizes.empty()) {
+                for (size_t i = 0; i < global_program_config_sizes.size(); i++) {
+                    TT_FATAL(
+                        global_program_config_sizes[i] == program_on_grid.second.impl().get_program_config_sizes()[i],
+                        "Expected config sizes to be identical across all programs in a MeshWorkload.");
+                }
+            } else {
+                global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
             }
-        } else {
-            global_program_config_sizes = program_on_grid.second.impl().get_program_config_sizes();
         }
     }
-    return global_program_config_sizes;
+    return *program_config_sizes_;
 }
 
-std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshDevice* mesh_device) {
-    // Get the sub device ids for all program across all devices in the Workload
-    std::unordered_set<SubDeviceId> sub_devices_;
-    for (auto& [device_range, program] : programs_) {
-        auto sub_devs_for_program = program.impl().determine_sub_device_ids(mesh_device);
-        for (auto& sub_dev : sub_devs_for_program) {
-            sub_devices_.insert(sub_dev);
+const std::vector<Program*>& MeshWorkloadImpl::get_cross_node_programs() {
+    if (!cross_node_programs_.has_value()) {
+        auto& cross_node_programs = cross_node_programs_.emplace();
+        for (auto& [device_range, program] : programs_) {
+            if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
+                cross_node_programs.push_back(&program);
+            }
         }
     }
-    return sub_devices_;
+    return *cross_node_programs_;
+}
+
+const std::unordered_set<SubDeviceId>& MeshWorkloadImpl::determine_sub_device_ids(
+    MeshDevice* mesh_device, uint64_t sub_device_manager_id) {
+    auto [entry, inserted] = sub_device_ids_by_mesh_and_manager_[mesh_device->id()].try_emplace(sub_device_manager_id);
+    auto& sub_device_ids = entry->second;
+    if (inserted) {
+        for (auto& [device_range, program] : programs_) {
+            auto sub_devices_for_program = program.impl().determine_sub_device_ids(mesh_device);
+            sub_device_ids.insert(sub_devices_for_program.begin(), sub_devices_for_program.end());
+        }
+    }
+    return sub_device_ids;
 }
 
 ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {

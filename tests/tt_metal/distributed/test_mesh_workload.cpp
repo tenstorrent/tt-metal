@@ -585,7 +585,8 @@ TEST_F(MeshWorkloadTestSuite, ParallelizationBenchmark) {
     const MeshShape mesh_shape = mesh_device_->shape();
     TT_ASSERT(mesh_shape.dims() == 2);
     const uint32_t num_devices = mesh_device_->num_devices();
-    const uint32_t num_model_programs = std::min<uint32_t>(8, mesh_shape[1]);
+    const bool partition_by_column = mesh_shape[1] > 1;
+    const uint32_t num_model_programs = std::min<uint32_t>(8, partition_by_column ? mesh_shape[1] : mesh_shape[0]);
     const CoreCoord worker_grid = mesh_device_->compute_with_storage_grid_size();
     const uint32_t num_worker_cores = worker_grid.x * worker_grid.y;
     const uint32_t runtime_arg_bytes_per_value = num_worker_cores * kernels_per_program * sizeof(uint32_t);
@@ -595,10 +596,12 @@ TEST_F(MeshWorkloadTestSuite, ParallelizationBenchmark) {
     auto model_programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(
         num_model_programs, worker_grid, false, model_runtime_args);
     MeshWorkload model_workload;
-    for (uint32_t column = 0; column < num_model_programs; column++) {
-        model_workload.add_program(
-            MeshCoordinateRange(MeshCoordinate{0, column}, MeshCoordinate{mesh_shape[0] - 1, column}),
-            std::move(*model_programs[column]));
+    for (uint32_t program_idx = 0; program_idx < num_model_programs; program_idx++) {
+        const MeshCoordinateRange device_range =
+            partition_by_column
+                ? MeshCoordinateRange(MeshCoordinate{0, program_idx}, MeshCoordinate{mesh_shape[0] - 1, program_idx})
+                : MeshCoordinateRange(MeshCoordinate{program_idx, 0});
+        model_workload.add_program(device_range, std::move(*model_programs[program_idx]));
     }
 
     auto heavy_programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(1, worker_grid, false);

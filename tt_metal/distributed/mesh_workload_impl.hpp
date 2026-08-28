@@ -47,14 +47,17 @@ private:
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);
     std::vector<Semaphore>& semaphores();
-    std::vector<uint32_t> get_program_config_sizes();
-    std::unordered_set<SubDeviceId> determine_sub_device_ids(MeshDevice* mesh_device);
+    const std::vector<uint32_t>& get_program_config_sizes();
+    const std::unordered_set<SubDeviceId>& determine_sub_device_ids(
+        MeshDevice* mesh_device, uint64_t sub_device_manager_id);
     bool is_finalized() const { return this->finalized_; }
     void set_finalized() { this->finalized_ = true; };
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
     ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
+    const std::vector<Program*>& get_cross_node_programs();
+    const std::vector<IDevice*>& get_local_devices(MeshDevice* mesh_device, const MeshCoordinateRange& device_range);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
 
@@ -64,6 +67,17 @@ private:
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
     std::unordered_map<MeshCoordinateRange, Program> programs_;
+    // Programs and their device ranges cannot change after finalization. Cache the derived topology
+    // and command-layout properties that EnqueueMeshWorkload otherwise recomputes for every operation.
+    std::unordered_map<std::size_t, std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>>>
+        local_devices_by_mesh_;
+    std::unordered_map<std::size_t, std::unordered_map<uint64_t, std::unordered_set<SubDeviceId>>>
+        sub_device_ids_by_mesh_and_manager_;
+    std::optional<std::vector<uint32_t>> program_config_sizes_;
+    std::optional<std::vector<Program*>> cross_node_programs_;
+    std::optional<bool> runs_on_noc_multicast_only_cores_;
+    std::optional<bool> runs_on_noc_unicast_only_cores_;
+    size_t num_program_devices_ = 0;
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;

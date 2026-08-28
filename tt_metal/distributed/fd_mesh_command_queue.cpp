@@ -519,10 +519,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
-    std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
+    const auto& sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_, command_hash);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
     auto mesh_device_id = mesh_device_->id();
+    const ProgramBinaryStatus program_binary_status = mesh_workload.impl().get_program_binary_status(mesh_device_id);
     auto& sysmem_manager = this->reference_sysmem_manager();
     if (!sysmem_manager.get_bypass_mode()) {
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
@@ -531,7 +532,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
 
     TT_FATAL(
-        mesh_workload.impl().get_program_binary_status(mesh_device_id) != ProgramBinaryStatus::NotSent,
+        program_binary_status != ProgramBinaryStatus::NotSent,
         "Expected program binaries to be written to the MeshDevice.");
 
     // Compute number of workers being used for this workload.
@@ -600,23 +601,20 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Only order CrossNode config Buffer rewrites when this workload re-launches a
     // program that previously used CrossNode on this CQ. Non-zero sync_count means "wait until that prior launch."
     uint32_t program_ordering_sync_count = 0;
-    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-        (void)device_range;
-        if (program.impl().get_per_core_cross_node_dfbs().empty()) {
-            continue;
-        }
-        const auto it = cross_node_program_completion_counts_[*sub_device_id].find(program.impl().get_id());
+    const auto& cross_node_programs = mesh_workload.impl().get_cross_node_programs();
+    for (const auto* program : cross_node_programs) {
+        const auto it = cross_node_program_completion_counts_[*sub_device_id].find(program->impl().get_id());
         if (it != cross_node_program_completion_counts_[*sub_device_id].end()) {
             program_ordering_sync_count = std::max(program_ordering_sync_count, it->second);
         }
     }
 
-    const auto program_config_sizes = mesh_workload.impl().get_program_config_sizes();
+    const auto& program_config_sizes = mesh_workload.impl().get_program_config_sizes();
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
         program_config_sizes,
-        mesh_workload.impl().get_program_binary_status(mesh_device_id),
+        program_binary_status,
         num_workers,
         expected_num_workers_completed,
         program_ordering_sync_count,
@@ -652,7 +650,21 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                                        mesh_device_->num_devices() >= k_program_dispatch_min_devices &&
                                        estimated_bytes_per_device >= experiment_config.min_bytes_per_device;
     if (!use_parallel_dispatch) {
-        std::unordered_set<uint32_t> chip_ids_in_workload = {};
+        const bool covers_entire_mesh = mesh_workload.impl().num_program_devices_ == mesh_device_->shape().mesh_size();
+        std::unordered_set<uint32_t> chip_ids_in_workload;
+        if (!covers_entire_mesh) {
+            chip_ids_in_workload.reserve(mesh_device_->get_devices().size());
+        }
+        const uint32_t mcast_launch_msg_wptr =
+            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
+        const uint32_t unicast_launch_msg_wptr =
+            cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr();
+        const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
+        const uint64_t active_sub_device_manager_id = *mesh_device_->get_active_sub_device_manager_id();
+        const bool record_sub_device =
+            active_sub_device_manager_id != *mesh_device_->get_default_sub_device_manager_id();
+        const uint32_t num_available_worker_cores =
+            record_sub_device ? mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) : 0;
 
         // Preserve the established serial path without constructing task vectors or synchronization
         // objects. Small command streams cannot repay that setup cost.
@@ -666,45 +678,57 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_dispatch::update_program_dispatch_commands(
                 program.impl(),
                 program_cmd_seq,
-                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr(),
-                cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr(),
+                mcast_launch_msg_wptr,
+                unicast_launch_msg_wptr,
                 expected_num_workers_completed,
-                this->virtual_program_dispatch_core(),
+                dispatch_core,
                 sub_device_id,
                 dispatch_metadata,
-                mesh_workload.impl().get_program_binary_status(mesh_device_id),
+                program_binary_status,
                 std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
                 static_cast<uint8_t>(this->id()));
 
-            record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
+            const auto& local_devices = mesh_workload.impl().get_local_devices(mesh_device_, device_range);
+            if (record_sub_device) {
+                for (const auto* device : local_devices) {
+                    tt::RecordProgramSubDevice(
+                        extract_context_id(mesh_device_),
+                        device->id(),
+                        active_sub_device_manager_id,
+                        program.get_runtime_id(),
+                        sub_device_id,
+                        num_available_worker_cores);
+                }
+            }
             this->write_program_cmds_to_subgrid(
-                device_range,
+                local_devices,
                 program_cmd_seq,
                 dispatch_metadata.stall_first,
                 dispatch_metadata.stall_before_program,
-                chip_ids_in_workload);
+                covers_entire_mesh ? nullptr : &chip_ids_in_workload);
 
+#if defined(TRACY_ENABLE)
             if (!tt::tt_metal::getDeviceProfilerState()) {
                 std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
                 TracyMessage(msg.c_str(), msg.size());
             }
+#endif
         }
 
-        for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-            (void)device_range;
-            if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
-                cross_node_program_completion_counts_[*sub_device_id][program.impl().get_id()] =
-                    updated_worker_counts.current;
-            }
+        for (const auto* program : cross_node_programs) {
+            cross_node_program_completion_counts_[*sub_device_id][program->impl().get_id()] =
+                updated_worker_counts.current;
         }
 
-        this->write_go_signal_sequences_to_unused_sub_grids(
-            chip_ids_in_workload,
-            sub_device_id,
-            expected_num_workers_completed,
-            mcast_go_signals,
-            unicast_go_signals,
-            dispatch_metadata);
+        if (!covers_entire_mesh) {
+            this->write_go_signal_sequences_to_unused_sub_grids(
+                chip_ids_in_workload,
+                sub_device_id,
+                expected_num_workers_completed,
+                mcast_go_signals,
+                unicast_go_signals,
+                dispatch_metadata);
+        }
         if (mcast_go_signals) {
             cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_mcast_wptr(1);
         }
@@ -729,7 +753,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
     const uint32_t unicast_launch_msg_wptr =
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_unicast_wptr();
-    const ProgramBinaryStatus program_binary_status = mesh_workload.impl().get_program_binary_status(mesh_device_id);
     // Same guards record_program_sub_device_for_range() applies, evaluated once: sub_device_id is
     // fixed for the whole workload, so whether to record and how many worker cores to record are
     // workload constants rather than per-device queries.
@@ -764,7 +787,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     std::vector<ProgramDispatchEntry> program_entries(programs.size());
     std::vector<DeviceDispatchTask> program_tasks;
     program_tasks.reserve(mesh_device_->shape().mesh_size());
-    std::unordered_set<uint32_t> chip_ids_in_workload = {};
+    std::unordered_set<uint32_t> chip_ids_in_workload;
+    chip_ids_in_workload.reserve(mesh_device_->get_devices().size());
     size_t total_command_bytes = 0;
 
     uint32_t program_idx = 0;
@@ -779,11 +803,10 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             entry.cmd_seq->prefetcher_cache_used);
 
         const size_t tasks_before_program = program_tasks.size();
-        for_each_local(mesh_device_, device_range, [&](const auto& coord) {
-            auto* device = mesh_device_->impl().get_device(coord);
+        for (auto* device : mesh_workload.impl().get_local_devices(mesh_device_, device_range)) {
             program_tasks.push_back(DeviceDispatchTask{device, &entry});
             chip_ids_in_workload.insert(device->id());
-        });
+        }
         entry.cmd_bytes = entry.cmd_seq->get_one_shot_fetch_size(
             dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true);
         total_command_bytes += entry.cmd_bytes * (program_tasks.size() - tasks_before_program);
@@ -799,20 +822,18 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler. Emitted from the calling
         // thread, so that it lands inside this function's zone rather than on a worker's timeline.
+#if defined(TRACY_ENABLE)
         if (!tt::tt_metal::getDeviceProfilerState()) {
             std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
             TracyMessage(msg.c_str(), msg.size());
         }
+#endif
     }
 
     // Remember when this CrossNode launch will complete so a later re-enqueue of the
     // same program can wait only for that launch.
-    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
-        (void)device_range;
-        if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
-            cross_node_program_completion_counts_[*sub_device_id][program.impl().get_id()] =
-                updated_worker_counts.current;
-        }
+    for (const auto* program : cross_node_programs) {
+        cross_node_program_completion_counts_[*sub_device_id][program->impl().get_id()] = updated_worker_counts.current;
     }
 
     std::atomic<uint64_t> first_write_done_ns = std::numeric_limits<uint64_t>::max();
@@ -913,13 +934,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         }
         // A go signal is a few hundred bytes, far less work than waking a worker to hand one over,
         // so the calling thread issues them itself here, overlapping them with the workers above.
-        this->write_go_signal_sequences_to_unused_sub_grids(
-            chip_ids_in_workload,
-            sub_device_id,
-            expected_num_workers_completed,
-            mcast_go_signals,
-            unicast_go_signals,
-            dispatch_metadata);
+        if (chip_ids_in_workload.size() != mesh_device_->get_devices().size()) {
+            this->write_go_signal_sequences_to_unused_sub_grids(
+                chip_ids_in_workload,
+                sub_device_id,
+                expected_num_workers_completed,
+                mcast_go_signals,
+                unicast_go_signals,
+                dispatch_metadata);
+        }
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
@@ -1600,21 +1623,22 @@ void FDMeshCommandQueue::reset_worker_state(
 }
 
 void FDMeshCommandQueue::write_program_cmds_to_subgrid(
-    const MeshCoordinateRange& sub_grid,
+    const std::vector<IDevice*>& devices,
     ProgramCommandSequence& program_cmd_seq,
     bool stall_first,
     bool stall_before_program,
-    std::unordered_set<uint32_t>& chip_ids_in_workload) {
-    for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
-        auto device = mesh_device_->impl().get_device(coord);
+    std::unordered_set<uint32_t>* chip_ids_in_workload) {
+    for (auto* device : devices) {
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, stall_first, stall_before_program);
-        chip_ids_in_workload.insert(device->id());
-    });
+        if (chip_ids_in_workload != nullptr) {
+            chip_ids_in_workload->insert(device->id());
+        }
+    }
 }
 
 void FDMeshCommandQueue::write_go_signal_sequences_to_unused_sub_grids(
-    std::unordered_set<uint32_t>& chip_ids_in_workload,
+    const std::unordered_set<uint32_t>& chip_ids_in_workload,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
