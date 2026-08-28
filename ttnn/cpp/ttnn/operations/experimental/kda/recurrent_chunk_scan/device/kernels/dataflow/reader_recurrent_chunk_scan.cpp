@@ -53,19 +53,18 @@ FORCE_INLINE void read_value_slice(
 }
 
 template <uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void seed_identity(DataflowBuffer& buffer, uint32_t value_block) {
+FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value_block) {
     constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
     constexpr uint32_t face_elements = tt::constants::FACE_HW;
     constexpr uint32_t tile_elements = tt::constants::TILE_HW;
     constexpr uint32_t tile_count = Kt * Vt;
 
     buffer.reserve_back(tile_count);
+    noc.async_write_zeros(buffer, tile_count * buffer.get_entry_size());
+    noc.write_zeros_l1_barrier();
     {
         auto lock = buffer.scoped_write_lock(tile_count);
         auto state_ptr = lock.get_ptr<volatile uint32_t>();
-        for (uint32_t index = 0; index < tile_count * tile_elements; ++index) {
-            state_ptr[index] = 0;
-        }
         for (uint32_t local_col = 0; local_col < Vt; ++local_col) {
             const uint32_t global_col = value_block * Vt + local_col;
             if (global_col < Kt) {
@@ -109,7 +108,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         noc.async_write_zeros(state, key_value_tiles * state.get_entry_size());
         noc.write_zeros_l1_barrier();
         state.push_back(key_value_tiles);
-        seed_identity<Kt, Vt>(summary_seed, value_block);
+        seed_identity<Kt, Vt>(summary_seed, noc, value_block);
     } else {
         const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
         read_value_slice<Vt, Vt_full>(initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
