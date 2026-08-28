@@ -8,6 +8,7 @@ training_config:
   # Only max_sequence_length is read from here; the Qwen3 architecture comes
   # from the HuggingFace config of the model source.
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_06b.yaml"
+  model_source: "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
 
   optimizer:
     type: MorehAdamW
@@ -32,6 +33,12 @@ training_config:
     max_completion_length: 384
     num_generations: 16
     warmup_steps: 2
+    # Logging surface: the reverse-text run prints one sample generation per
+    # step (previously done manually inside the reward function). The built-in
+    # GRPOMonitor picks these up when log_completions is on.
+    log_completions: true
+    num_completions_to_print: 1
+    report_to: none
 
 device_config:
   enable_ddp: false

@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -112,7 +113,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelSameRuntimeArgs) {
     set_rt_args(program, reader_kernel_id, all_cores, unary_reader_args);
     set_rt_args(program, writer_kernel_id, all_cores, unary_writer_args);
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
@@ -167,7 +168,7 @@ TEST_F(UnitMeshFixture, MultiCoreKernelUniqueRuntimeArgs) {
         set_rt_args(program, writer_kernel_id, core_range, rt_args.at(core_range_idx++));
     }
 
-    slow_dispatch::LaunchProgram(this->device(), program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec_1;
     slow_dispatch::ReadFromBuffer(*dst_dram_buffer_1, result_vec_1);

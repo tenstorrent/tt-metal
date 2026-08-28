@@ -35,42 +35,22 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // Fill the RHS scalar tile ONCE (coherent uncached-L1-alias store on Quasar DM cores; offset 0
-    // elsewhere). A plain cacheable RISC store fill does NOT work on Quasar: the DM core's write-back
-    // L1 D$ + shared L2 are INCOHERENT with the TL1 SRAM the compute consumer + NOC engine read, so a
-    // cacheable fill stays dirty in the D$ -- invisible to the consumer AND later evicted over the
-    // neighbor DFB, corrupting it. Writing through the NON-CACHEABLE L1 alias (MEM_L1_UNCACHED_BASE)
-    // bypasses the D$/L2 and goes straight to TL1, so the consumer sees the fill and no dirty line can
-    // clobber a neighbor -- no cache flush needed. WH/BH DFB is CB-backed shared L1 with no incoherent
-    // write-back D$, so the plain fill is already visible there -- the alias offset is 0 (compiled out).
-    // See reader_row_col_mixed_bcast_dfb.cpp for the full D$/TL1 incoherence rationale.
-    //
-    // TODO(#51291): the alias makes the fill COHERENT but not ORDERED. dev_mem_map.h states "only plain
-    // loads/stores WITH FENCES work uncached", and DataflowBuffer::push_back publishes the credit via an
-    // overlay register write with no fence of its own -- so on silicon the credit may be observed before
-    // the fill lands in TL1, and the consumer unpacks a stale scalar tile. Both stores are volatile, so
-    // this is a hardware store-ordering hazard, not a compiler one. NOT mitigated here: craq-sim applies
-    // every store synchronously and has no store-buffer state, so the hazard is unreproducible on the only
-    // substrate we have, and it is a platform-wide contract gap rather than ours -- Semaphore::up()
-    // (api/dataflow/noc_semaphore.h) publishes through the same uncached alias with no fence. Stopgap if
-    // this ships to HW first: one `fence` before the push_back below -- bare `fence` = iorw,iorw;
-    // __atomic_thread_fence(RELEASE) emits only `fence rw,w`, which does NOT order I/O-region accesses such
-    // as the overlay write. Not free on craq-sim: a bare fence there maps to a full DM L1 D$ flush-all.
+    // Fill the RHS scalar tile ONCE, holding a scoped_write_lock over the entry. The lock handles both
+    // cache coherence and store ordering: the fill is visible to the compute consumer, and is ordered
+    // ahead of the push_back that publishes the entry.
     DataflowBuffer dfb_in1(dfb::in1);
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    const uint32_t scalar_uncached_off = MEM_L1_UNCACHED_BASE;
-#else
-    const uint32_t scalar_uncached_off = 0;
-#endif
     dfb_in1.reserve_back(onetile);
+    {
+        const auto lock = dfb_in1.scoped_write_lock(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
-    const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
-    FILL_WITH_VALUE_FLOAT(dfb_in1.get_write_ptr() + scalar_uncached_off, *float_ptr);
+        const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
+        FILL_WITH_VALUE_FLOAT(static_cast<uint32_t>(lock.get_ptr().get_address()), *float_ptr);
 #endif
 #ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(dfb_in1.get_write_ptr() + scalar_uncached_off, packed_scalar);
+        FILL_WITH_VALUE(static_cast<uint32_t>(lock.get_ptr().get_address()), packed_scalar);
 #endif
-    dfb_in1.push_back(onetile);  // TODO(#51291): unordered vs. the fill stores above -- see note at the fill
+    }  // lock released before the credit post
+    dfb_in1.push_back(onetile);
 
     DataflowBuffer dfb_out(dfb::out);
 

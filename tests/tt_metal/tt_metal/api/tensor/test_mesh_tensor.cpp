@@ -728,7 +728,7 @@ TEST_F(MeshTensorDataMovementTest, UniformCopyToDevice_WithCoreFilter_WritesOnly
 
 TEST_F(MeshTensorDataMovementTest, EnqueueWriteTensor_FilterEmpty_Noop) {
     const Shape shape{1, 1, 64, 32};
-    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(0, 1)));
+    CoreRangeSet shard_grid(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     ShardSpec shard_spec(shard_grid, {32, 32});
     MemoryConfig mem_cfg(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::DRAM, shard_spec);
     auto spec = TensorSpec(shape, TensorLayout(DataType::UINT32, Layout::ROW_MAJOR, mem_cfg));

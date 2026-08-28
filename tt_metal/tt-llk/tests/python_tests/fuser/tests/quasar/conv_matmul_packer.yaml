@@ -1,0 +1,26 @@
+# 1x1 convolution using MatmulPacker for output.
+# Tests the matmul packer path for convolution-style workloads.
+
+operands:
+  - name: "activations"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "weights"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "conv_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "activations"
+        src_b: "weights"
+        operation: "Matmul"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 64]
+    pack:
+      - output: "conv_out"
+        packer: "MatmulPacker"

@@ -36,10 +36,10 @@ inline void _llk_math_eltwise_sfpu_uninit_()
     // No state to restore - all states are transient or default
 }
 
-template <DstSync Dst, bool Accum>
+template <DstSync Dst>
 inline void _llk_math_eltwise_sfpu_assert_dst_index_(std::uint32_t dst_index, [[maybe_unused]] const char* message)
 {
-    LLK_ASSERT((dst_index < get_dest_max_tiles<Dst, Accum, DstTileShape::Tile32x32>()), message);
+    LLK_ASSERT((dst_index < get_dest_max_tiles_rt<Dst, DstTileShape::Tile32x32>()), message);
 }
 
 template <typename Callable, typename... Args>

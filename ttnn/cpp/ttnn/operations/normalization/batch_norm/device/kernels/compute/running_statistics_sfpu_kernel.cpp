@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/dest_format_helpers.hpp"
@@ -23,7 +24,8 @@ ALWI void maybe_typecast_stat(
         dst_obj.reserve_back(onetile);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_dfb, src_dfb);
+        reconfig_data_format_srca(last_srca_dfb, src_dfb);
+        copy_init(src_dfb);
         last_srca_dfb = src_dfb;
         copy_tile(src_dfb, tile_index, tile_index * 2);
         typecast_tile_init<TcInFmt, TcOutFmt>();
@@ -88,7 +90,8 @@ void kernel_main() {
     DataflowBuffer dfb_tmp2_obj(dfb::tmp2);
     DataflowBuffer dfb_tmp3_obj(dfb::tmp3);
 
-    unary_op_init_common(dfb::batch_mean, dfb::out);
+    compute_kernel_hw_startup(dfb::batch_mean, dfb::out);
+    copy_init(dfb::batch_mean);
     uint32_t last_srca_dfb = dfb::batch_mean;
     constexpr uint32_t onetile = 1;
 
@@ -109,10 +112,12 @@ void kernel_main() {
             dfb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
             sub_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::one);
+            reconfig_data_format_srca(last_srca_dfb, dfb::one);
+            copy_init(dfb::one);
             last_srca_dfb = dfb::one;
             copy_tile(dfb::one, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::momentum);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
             copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -128,10 +133,12 @@ void kernel_main() {
             dfb_tmp2_obj.reserve_back(onetile);
             tile_regs_acquire();
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::batch_mean);
+            reconfig_data_format_srca(last_srca_dfb, dfb::batch_mean);
+            copy_init(dfb::batch_mean);
             last_srca_dfb = dfb::batch_mean;
             copy_tile(dfb::batch_mean, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::momentum);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
             copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -148,10 +155,12 @@ void kernel_main() {
             dfb_old_running_mean_obj.wait_front(onetile);
             dfb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::old_running_mean);
+            reconfig_data_format_srca(last_srca_dfb, dfb::old_running_mean);
+            copy_init(dfb::old_running_mean);
             last_srca_dfb = dfb::old_running_mean;
             copy_tile(dfb::old_running_mean, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::tmp1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp1);
+            copy_init(dfb::tmp1);
             last_srca_dfb = dfb::tmp1;
             copy_tile(dfb::tmp1, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -172,10 +181,12 @@ void kernel_main() {
             dfb_updated_running_mean_obj.reserve_back(onetile);
             tile_regs_acquire();
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::tmp3);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp3);
+            copy_init(dfb::tmp3);
             last_srca_dfb = dfb::tmp3;
             copy_tile(dfb::tmp3, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::tmp2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp2);
+            copy_init(dfb::tmp2);
             last_srca_dfb = dfb::tmp2;
             copy_tile(dfb::tmp2, tile_index, tile_index * 2 + 1);
             add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -204,10 +215,12 @@ void kernel_main() {
             dfb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
             sub_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::one);
+            reconfig_data_format_srca(last_srca_dfb, dfb::one);
+            copy_init(dfb::one);
             last_srca_dfb = dfb::one;
             copy_tile(dfb::one, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::momentum);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
             copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             sub_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -223,10 +236,12 @@ void kernel_main() {
             dfb_tmp2_obj.reserve_back(onetile);
             tile_regs_acquire();
             mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::batch_var);
+            reconfig_data_format_srca(last_srca_dfb, dfb::batch_var);
+            copy_init(dfb::batch_var);
             last_srca_dfb = dfb::batch_var;
             copy_tile(dfb::batch_var, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::momentum);
+            reconfig_data_format_srca(last_srca_dfb, dfb::momentum);
+            copy_init(dfb::momentum);
             last_srca_dfb = dfb::momentum;
             copy_tile(dfb::momentum, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -242,10 +257,12 @@ void kernel_main() {
             dfb_old_running_var_obj.wait_front(onetile);
             dfb_tmp3_obj.reserve_back(onetile);
             tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::old_running_var);
+            reconfig_data_format_srca(last_srca_dfb, dfb::old_running_var);
+            copy_init(dfb::old_running_var);
             last_srca_dfb = dfb::old_running_var;
             copy_tile(dfb::old_running_var, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::tmp1);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp1);
+            copy_init(dfb::tmp1);
             last_srca_dfb = dfb::tmp1;
             copy_tile(dfb::tmp1, tile_index, tile_index * 2 + 1);
             mul_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);
@@ -265,10 +282,12 @@ void kernel_main() {
             dfb_updated_running_var_obj.reserve_back(onetile);
             tile_regs_acquire();
             add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::tmp3);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp3);
+            copy_init(dfb::tmp3);
             last_srca_dfb = dfb::tmp3;
             copy_tile(dfb::tmp3, tile_index, tile_index * 2);
-            copy_tile_to_dst_init_short_with_dt(last_srca_dfb, dfb::tmp2);
+            reconfig_data_format_srca(last_srca_dfb, dfb::tmp2);
+            copy_init(dfb::tmp2);
             last_srca_dfb = dfb::tmp2;
             copy_tile(dfb::tmp2, tile_index, tile_index * 2 + 1);
             add_binary_tile(tile_index * 2, tile_index * 2 + 1, tile_index * 2);

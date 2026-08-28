@@ -56,11 +56,15 @@ def _descriptor_allowed_roots() -> list[str]:
     return roots
 
 
-def _safe_read_text(path_arg: str) -> str:
+def read_descriptor_text(path_arg: str) -> str:
     """Read a descriptor file after validating the path stays in an allowed root.
 
     Uses the OWASP-recommended absolute-path safelist check so dynamic CLI input
     cannot be used to read files outside the intended scope (path traversal).
+
+    Raises:
+        ValueError: Invalid path, symlink, or path outside allowed descriptor roots.
+        OSError: Path is not a regular file, or the file cannot be read.
     """
     if not path_arg or "\x00" in path_arg:
         raise ValueError(f"invalid descriptor path: {path_arg!r}")
@@ -221,7 +225,7 @@ def _build_adjacency_from_fsd(fsd: dict) -> tuple[dict[int, str], dict[int, set[
 # ---------------------------------------------------------------------------
 
 
-def _resolve_leaf_host_ids(
+def resolve_leaf_host_ids(
     instance: dict,
     templates: dict[str, dict],
 ) -> dict[str, int]:
@@ -239,7 +243,7 @@ def _resolve_leaf_host_ids(
                 result[key] = int(mapping["host_id"])
             elif "sub_instance" in mapping:
                 sub = mapping["sub_instance"]
-                sub_map = _resolve_leaf_host_ids(sub, templates)
+                sub_map = resolve_leaf_host_ids(sub, templates)
                 for sub_key, hid in sub_map.items():
                     result[f"{key}/{sub_key}"] = hid
         else:
@@ -327,7 +331,7 @@ def _build_adjacency_from_cabling(cabling: dict, deployment: dict) -> tuple[dict
     templates = _normalize_map(cabling.get("graph_templates", {}))
 
     root_instance = cabling.get("root_instance", {})
-    path_to_hid = _resolve_leaf_host_ids(root_instance, templates)
+    path_to_hid = resolve_leaf_host_ids(root_instance, templates)
 
     adjacency: dict[int, set[int]] = defaultdict(set)
     root_template = root_instance.get("template_name", "")
@@ -472,12 +476,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.fsd:
-            text = _safe_read_text(args.fsd)
+            text = read_descriptor_text(args.fsd)
             fsd = parse_textproto(text)
             host_id_to_name, adjacency = _build_adjacency_from_fsd(fsd)
         else:
-            cabling_text = _safe_read_text(args.cabling)
-            deployment_text = _safe_read_text(args.deployment)
+            cabling_text = read_descriptor_text(args.cabling)
+            deployment_text = read_descriptor_text(args.deployment)
             cabling = parse_textproto(cabling_text)
             deployment = parse_textproto(deployment_text)
             host_id_to_name, adjacency = _build_adjacency_from_cabling(cabling, deployment)

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
@@ -23,6 +25,7 @@ struct RepeatParams {
 
 struct RepeatInputs {
     Tensor input;
+    std::optional<Tensor> optional_output_tensor;
 };
 
 }  // namespace ttnn::prim

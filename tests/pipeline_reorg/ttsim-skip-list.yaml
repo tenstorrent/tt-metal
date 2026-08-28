@@ -30,10 +30,6 @@ wormhole_b0:
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
-  # Numeric mismatches, not root caused
-  # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -61,7 +57,3 @@ blackhole:
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
-
-  # Numeric mismatches, not root caused
-  # https://github.com/tenstorrent/tt-metal/issues/41530
-  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py

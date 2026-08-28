@@ -33,6 +33,7 @@
 // Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr
 #include "impl/program/program_impl.hpp"
 #include "impl/program/dispatch.hpp"
+#include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/api/cross_node_dfb_test_utils.hpp"
 
@@ -100,7 +101,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
         EXPECT_EQ(remote_dfb_id, 0u);
 
-        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
 
         const auto& hal = MetalContext::instance().hal();
@@ -121,7 +122,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
         const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, mesh_device.get(), mapping, 256, 4);
-        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
 
         const uint32_t original_data_addr = program.impl().get_cross_node_dfb(remote_dfb_id).buffer_address();
@@ -152,7 +153,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
         const CoreRangeSet dummy_all_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0))).merge(dummy_receiver_cores);
         auto dummy_data = cross_node_dfb_test::make_cross_node_data_buffer(
             mesh_device.get(), dummy_all_cores, /*entry_size=*/256, /*num_entries=*/4);
-        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
         EXPECT_THROW(
             experimental::UpdateDynamicCrossNodeDFBAddress(program, remote_dfb_id, *dummy_data), std::exception);
@@ -166,7 +167,7 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI) {
             all_cores,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-        tt::tt_metal::detail::CompileProgram(mesh_device.get(), program);
+        program.impl().compile(mesh_device.get());
         program.impl().finalize_offsets(mesh_device.get());
         const auto& hal = MetalContext::instance().hal();
         uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -207,7 +208,8 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     program_with_cn.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
     program_without_cn.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
 
-    const auto& hal = MetalContext::instance().hal();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
+    const auto& hal = metal_ctx.hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     ASSERT_FALSE(program_with_cn.impl().get_kernel_groups(index).empty());
     ASSERT_FALSE(program_without_cn.impl().get_kernel_groups(index).empty());
@@ -216,7 +218,7 @@ TEST_F(CrossNodeDFBFixture, MeshWorkload_CrossNodeOffsetUsesPerProgramParticipan
     // Any L1-aligned offset that is not the NONE sentinel.
     constexpr uint32_t kSharedRegionOffset = 256;
     program_dispatch::finalize_cross_node_dfbs(
-        index, ttsl::Span<detail::ProgramImpl*>(programs.data(), programs.size()), kSharedRegionOffset);
+        metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs.data(), programs.size()), kSharedRegionOffset);
 
     for (const auto& kg : program_with_cn.impl().get_kernel_groups(index)) {
         EXPECT_EQ(
@@ -259,7 +261,8 @@ TEST_F(CrossNodeDFBFixture, DispatchPartitionsHeterogeneousKernelGroupByPayload)
 
     program.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
 
-    const auto& hal = MetalContext::instance().hal();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
+    const auto& hal = metal_ctx.hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     const auto& kernel_groups = program.impl().get_kernel_groups(index);
     ASSERT_EQ(kernel_groups.size(), 1u);
@@ -426,13 +429,14 @@ TEST_F(CrossNodeDFBFixture, ProgramCrossNodeDFBsAPI_IndependentTopologiesUseProg
     // finalize sizes only the shared dense index from the program-wide slot count (2),
     // not from any one core's sparse participant count (1).
     program.impl().compile_and_allocate(mesh_device.get(), /*force_slow_dispatch=*/false);
-    const auto& hal = MetalContext::instance().hal();
+    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
+    const auto& hal = metal_ctx.hal();
     const uint32_t index = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     detail::ProgramImpl* programs[] = {&program.impl()};
     constexpr uint32_t kBase = 256;
-    const uint32_t next =
-        program_dispatch::finalize_cross_node_dfbs(index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
-    const uint32_t l1_align = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t next = program_dispatch::finalize_cross_node_dfbs(
+        metal_ctx, index, ttsl::Span<detail::ProgramImpl*>(programs, 1), kBase);
+    const uint32_t l1_align = hal.get_alignment(HalMemType::L1);
     const uint32_t region_bytes = cross_node_dfb_config_region_words(2) * sizeof(uint32_t);
     const uint32_t expected_next = (kBase + region_bytes + l1_align - 1) & ~(l1_align - 1);
     EXPECT_EQ(next, expected_next);
@@ -630,7 +634,7 @@ static uint32_t run_1toN_program(
     const auto sender_staging_bytes = cross_node_dfb_test::build_sender_staging_bytes(
         data_pattern, entry_size, num_entries, num_receivers, counter_base);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, sender_cores, gdfb, data_pattern, entry_size, num_entries, num_receivers, counter_base);
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, num_receivers, counter_base);
 
     log_info(
         tt::LogTest,
@@ -662,7 +666,7 @@ static uint32_t run_1toN_program(
         const auto expected = cross_node_dfb_test::expected_receiver_ring_bytes(
             data_pattern, entry_size, num_entries, ri, num_receivers, counter_base);
         const auto received = cross_node_dfb_test::read_receiver_ring_bytes(
-            device, gdfb, recvs[ri], static_cast<uint32_t>(expected.size()));
+            *mesh_device, gdfb, recvs[ri], static_cast<uint32_t>(expected.size()));
         const bool match = (received == expected);
 
         log_info(
@@ -684,7 +688,7 @@ static uint32_t run_1toN_program(
     }
 
     const bool credits_ok = cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries);
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries);
     log_info(tt::LogTest, "credits drained verify {}", credits_ok ? "PASS" : "FAIL");
     if (!credits_ok) {
         return 0;
@@ -720,9 +724,10 @@ static uint32_t run_relay_program(
 
     // Reserve tracked L1 allocations for sender payload and TRISC results.
     auto staging_buffer =
-        cross_node_dfb_test::make_cross_node_data_buffer(device, sender_cores, entry_size, total_entries);
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), sender_cores, entry_size, total_entries);
     constexpr uint32_t result_page_size = 32;
-    auto result_buffer = cross_node_dfb_test::make_cross_node_data_buffer(device, receiver_cores, result_page_size, 1);
+    auto result_buffer =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), receiver_cores, result_page_size, 1);
 
     const uint32_t num_receivers = receiver_cores.num_cores();
     const auto staging_bytes = cross_node_dfb_test::build_sender_staging_bytes(
@@ -732,12 +737,8 @@ static uint32_t run_relay_program(
         num_receivers);
     std::vector<uint32_t> staging_words((staging_bytes.size() + sizeof(uint32_t) - 1) / sizeof(uint32_t), 0);
     std::memcpy(staging_words.data(), staging_bytes.data(), staging_bytes.size());
-    detail::WriteToDeviceL1(
-        cross_node_dfb_test::local_physical_device(device),
-        sender_core,
-        static_cast<uint32_t>(staging_buffer->address()),
-        staging_words,
-        CoreType::WORKER);
+    slow_dispatch::WriteToL1(
+        *mesh_device, sender_core, static_cast<uint32_t>(staging_buffer->address()), staging_words, CoreType::WORKER);
 
     Program program = CreateProgram();
     const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, ring_depth);
@@ -784,11 +785,10 @@ static uint32_t run_relay_program(
 
     const uint32_t expected_checksum = relay_expected_checksum(total_entries);
     uint32_t pass_count = 0;
-    IDevice* physical_device = cross_node_dfb_test::local_physical_device(device);
     for (const CoreCoord& receiver_core : corerange_to_cores(receiver_cores)) {
         std::vector<uint32_t> result(2, 0);
-        detail::ReadFromDeviceL1(
-            physical_device,
+        slow_dispatch::ReadFromL1(
+            *mesh_device,
             receiver_core,
             static_cast<uint32_t>(result_buffer->address()),
             std::span<uint8_t>(reinterpret_cast<uint8_t*>(result.data()), result.size() * sizeof(uint32_t)),
@@ -808,7 +808,7 @@ static uint32_t run_relay_program(
     }
 
     const bool credits_ok = cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, total_entries);
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, total_entries);
     return credits_ok ? pass_count : 0;
 }
 
@@ -1017,7 +1017,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_MultipleSenders_MtoN) {
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, sender_cores, gdfb, data_pattern, entry_size, num_entries, num_receivers);
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, num_receivers);
 
     distributed::MeshWorkload workload;
     Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
@@ -1025,16 +1025,16 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_MultipleSenders_MtoN) {
     uint32_t pass_count = 0;
     for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
         if (cross_node_dfb_test::verify_receiver_ring(
-                device, gdfb, recvs[ri], data_pattern, entry_size, num_entries, ri, num_receivers)) {
+                *mesh_device, gdfb, recvs[ri], data_pattern, entry_size, num_entries, ri, num_receivers)) {
             pass_count++;
         }
     }
     EXPECT_EQ(pass_count, 4u) << "Not all M:N receivers received expected data";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender0, recv0, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender0, recv0, entry_size, num_entries))
         << "M:N sender0 credits not drained";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender1, recv1, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender1, recv1, entry_size, num_entries))
         << "M:N sender1 credits not drained";
 }
 
@@ -1058,7 +1058,8 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
     constexpr uint32_t program2_counter_base = 0xA0;
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto user_data =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
 
     auto build_and_run = [&](uint32_t counter_base) {
         tt_metal::Program program = CreateProgram();
@@ -1095,18 +1096,12 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
                 .compile_args = {remote_dfb_id, entry_size, entries_per_program, 0u}});
         cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
         cross_node_dfb_test::write_sender_l1_staging(
-            device, sender_cores, gdfb, data_pattern, entry_size, entries_per_program, 1, counter_base);
+            *mesh_device, sender_cores, gdfb, data_pattern, entry_size, entries_per_program, 1, counter_base);
 
         distributed::MeshWorkload workload;
         Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
         EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-            mesh_device.get(),
-            program_ref,
-            remote_dfb_id,
-            sender_core,
-            receiver_cores,
-            entry_size,
-            entries_per_program))
+            *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, entries_per_program))
             << "Program-init reset: credits not drained";
         return gdfb;
     };
@@ -1116,7 +1111,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
     {
         experimental::CrossNodeDFB gdfb = build_and_run(0);
         EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-            device,
+            *mesh_device,
             gdfb,
             receiver_core,
             static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter),
@@ -1131,7 +1126,7 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_ProgramInitResetsPointers) {
     {
         experimental::CrossNodeDFB gdfb = build_and_run(program2_counter_base);
         EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-            device,
+            *mesh_device,
             gdfb,
             receiver_core,
             static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::MulticastCounter),
@@ -1162,7 +1157,8 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
     constexpr uint32_t counter_base = 0x40;
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto data_b =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
     const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
     // Keep a copy of the original ring for "untouched" checks after UpdateDynamic.
@@ -1198,24 +1194,24 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_UpdateDynamicCrossNodeDFBAddressFunctio
     // Staging / RTAs must track the live addresses after UpdateDynamic.
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1, counter_base);
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1, counter_base);
 
     // Rings are not zeroed by Create; clear both so "a untouched" is meaningful and b starts clean.
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb_a, receiver_core);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb, receiver_core);
 
     distributed::MeshWorkload workload;
     Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
+        *mesh_device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
         << "UpdateDynamic: expected payload in retargeted ring";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
         << "UpdateDynamic: retargeted credits not drained";
 
     const auto a_ring =
-        cross_node_dfb_test::read_receiver_ring_bytes(device, gdfb_a, receiver_core, entry_size * num_entries);
+        cross_node_dfb_test::read_receiver_ring_bytes(*mesh_device, gdfb_a, receiver_core, entry_size * num_entries);
     const auto expected_payload = cross_node_dfb_test::expected_receiver_ring_bytes(
         data_pattern, entry_size, num_entries, /*receiver_idx=*/0, /*num_receivers=*/1, counter_base);
     const bool a_untouched = std::all_of(a_ring.begin(), a_ring.end(), [](uint8_t b) { return b == 0; });
@@ -1265,7 +1261,8 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
     }
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, send_k, sender_cores, gdfb, staging_size);
-    cross_node_dfb_test::write_sender_l1_staging(device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 4);
+    cross_node_dfb_test::write_sender_l1_staging(
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 4);
 
     distributed::MeshWorkload workload;
     Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
@@ -1275,13 +1272,13 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BarrierCompletesAll) {
     uint32_t recv_pass_count = 0;
     for (uint32_t ri = 0; ri < static_cast<uint32_t>(recvs.size()); ++ri) {
         if (cross_node_dfb_test::verify_receiver_ring(
-                device, gdfb, recvs[ri], data_pattern, entry_size, num_entries, ri, 4)) {
+                *mesh_device, gdfb, recvs[ri], data_pattern, entry_size, num_entries, ri, 4)) {
             recv_pass_count++;
         }
     }
     EXPECT_EQ(recv_pass_count, 4u) << "Not all receivers received expected data in barrier test";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
         << "BarrierCompletesAll: credits not drained after barrier";
 }
 
@@ -1301,7 +1298,8 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
         static_cast<uint32_t>(cross_node_dfb_test::SenderDataPattern::PerReceiverConstant);
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto user_data = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto user_data =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, *user_data);
@@ -1330,17 +1328,18 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedMemoryPushPop_1to1) {
             .compile_args = {remote_dfb_id, entry_size, num_entries, 0u}});
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
-    cross_node_dfb_test::write_sender_l1_staging(device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb, receiver_core);
+    cross_node_dfb_test::write_sender_l1_staging(
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb, receiver_core);
 
     distributed::MeshWorkload workload;
     Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1))
+        *mesh_device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1))
         << "BorrowedMemoryPushPop_1to1: payload mismatch in user data ring";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
         << "BorrowedMemoryPushPop_1to1: credits not drained";
 }
 
@@ -1431,8 +1430,10 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
     constexpr uint32_t counter_base = 0x40;
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto user_a = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
-    auto user_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto user_a =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
+    auto user_b =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
     tt_metal::Program program = CreateProgram();
     const uint8_t remote_dfb_id =
         experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries, *user_a);
@@ -1462,22 +1463,22 @@ TEST_F(CrossNodeDFBFixture, CrossNodeDFB_BorrowedUpdateDynamic) {
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1, counter_base);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb_a, receiver_core);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb, receiver_core);
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1, counter_base);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb, receiver_core);
 
     distributed::MeshWorkload workload;
     Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
+        *mesh_device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
         << "BorrowedUpdateDynamic: expected payload in user_b ring";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
         << "BorrowedUpdateDynamic: retargeted credits not drained";
 
     const auto a_ring =
-        cross_node_dfb_test::read_receiver_ring_bytes(device, gdfb_a, receiver_core, entry_size * num_entries);
+        cross_node_dfb_test::read_receiver_ring_bytes(*mesh_device, gdfb_a, receiver_core, entry_size * num_entries);
     EXPECT_TRUE(std::all_of(a_ring.begin(), a_ring.end(), [](uint8_t b) { return b == 0; }))
         << "BorrowedUpdateDynamic: gdfb_a / user_a ring should remain zero";
 }
@@ -1498,7 +1499,8 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     const uint32_t num_entries = 4;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
 
-    auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto data_b =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
     Program program = CreateProgram();
     CreateKernel(
         program,
@@ -1513,11 +1515,10 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     distributed::MeshWorkload workload1;
     Program& program_ref = run_on_mesh_device(mesh_device, std::move(program), workload1);
     const uint32_t page_addr = cross_node_dfb_test::cross_node_config_page_l1_address(program_ref, remote_dfb_id);
-    IDevice* physical = cross_node_dfb_test::local_physical_device(device);
     std::vector<uint32_t> page_words(
         program_ref.impl().get_cross_node_dfb(remote_dfb_id).config_page_size() / sizeof(uint32_t), 0);
-    detail::ReadFromDeviceL1(
-        physical,
+    slow_dispatch::ReadFromL1(
+        *mesh_device,
         sender_core,
         page_addr,
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(page_words.data()), page_words.size() * sizeof(uint32_t)),
@@ -1534,8 +1535,8 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
         static_cast<uint32_t>(data_b->address()))
         << "Host config image must reflect the retargeted fifo_start";
 
-    detail::ReadFromDeviceL1(
-        physical,
+    slow_dispatch::ReadFromL1(
+        *mesh_device,
         sender_core,
         page_addr,
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(page_words.data()), page_words.size() * sizeof(uint32_t)),
@@ -1548,8 +1549,8 @@ TEST_F(CrossNodeDFBFixture, UpdateDynamicDoesNotEagerlyWriteDeviceConfig) {
     // rewriting the shared program-owned page.
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload1, false);
     distributed::Finish(mesh_device->mesh_command_queue());
-    detail::ReadFromDeviceL1(
-        physical,
+    slow_dispatch::ReadFromL1(
+        *mesh_device,
         sender_core,
         page_addr,
         std::span<uint8_t>(reinterpret_cast<uint8_t*>(page_words.data()), page_words.size() * sizeof(uint32_t)),
@@ -1603,8 +1604,8 @@ TEST_F(CrossNodeDFBFixture, BackToBackRelaunchOrdersConfigRewrite) {
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1, counter_base);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb, receiver_core);
+        *mesh_device, sender_cores, gdfb, data_pattern, entry_size, num_entries, 1, counter_base);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb, receiver_core);
 
     distributed::MeshWorkload workload;
     const auto device_range = unit_mesh_device_range();
@@ -1616,10 +1617,10 @@ TEST_F(CrossNodeDFBFixture, BackToBackRelaunchOrdersConfigRewrite) {
     Program& program_ref = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
+        *mesh_device, gdfb, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
         << "Receiver ring corrupted across back-to-back relaunches";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
         << "Credits not drained after back-to-back relaunches";
 }
 
@@ -1662,12 +1663,13 @@ struct CrossNodeTracePushPop {
 
 // Build a 1:1 CrossNode push/pop MeshWorkload. Staging is host-written once and
 // reused across warmup / capture / replay / relaunch.
-CrossNodeTracePushPop make_1to1_trace_push_pop(IDevice* device) {
+CrossNodeTracePushPop make_1to1_trace_push_pop(distributed::MeshDevice& mesh_device) {
     CrossNodeTracePushPop ctx;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{ctx.sender_core, ctx.receiver_cores}};
 
     Program program = CreateProgram();
-    ctx.remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, ctx.entry_size, ctx.num_entries);
+    ctx.remote_dfb_id =
+        experimental::CreateCrossNodeDFB(program, &mesh_device, mapping, ctx.entry_size, ctx.num_entries);
     ctx.gdfb = program.impl().get_cross_node_dfb(ctx.remote_dfb_id);
 
     const uint32_t staging_size =
@@ -1692,20 +1694,24 @@ CrossNodeTracePushPop make_1to1_trace_push_pop(IDevice* device) {
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(
         program, sender_k, ctx.sender_cores, *ctx.gdfb, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, ctx.sender_cores, *ctx.gdfb, ctx.data_pattern, ctx.entry_size, ctx.num_entries, 1, ctx.counter_base);
+        mesh_device,
+        ctx.sender_cores,
+        *ctx.gdfb,
+        ctx.data_pattern,
+        ctx.entry_size,
+        ctx.num_entries,
+        1,
+        ctx.counter_base);
 
     ctx.workload.add_program(unit_mesh_device_range(), std::move(program));
     return ctx;
 }
 
 void expect_1to1_ring_and_credits(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-    IDevice* device,
-    CrossNodeTracePushPop& ctx,
-    const char* failure_context) {
+    distributed::MeshDevice& mesh_device, CrossNodeTracePushPop& ctx, const char* failure_context) {
     Program& program_ref = ctx.workload.get_programs().at(unit_mesh_device_range());
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device,
+        mesh_device,
         *ctx.gdfb,
         ctx.receiver_core,
         ctx.data_pattern,
@@ -1716,7 +1722,7 @@ void expect_1to1_ring_and_credits(
         ctx.counter_base))
         << failure_context << ": receiver ring mismatch";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(),
+        mesh_device,
         program_ref,
         ctx.remote_dfb_id,
         ctx.sender_core,
@@ -1732,14 +1738,13 @@ void expect_1to1_ring_and_credits(
 // order config-Buffer rewrites within the trace via SimpleTraceAllocator.
 TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-    auto ctx = make_1to1_trace_push_pop(device);
+    auto ctx = make_1to1_trace_push_pop(*mesh_device);
     auto& cq = mesh_device->mesh_command_queue();
 
     // Warmup: capture cannot load binaries.
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
 
-    cross_node_dfb_test::zero_receiver_ring(device, *ctx.gdfb, ctx.receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
     const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     // Second enqueue of the same CrossNode program inside the capture: the
@@ -1747,9 +1752,9 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     mesh_device->end_mesh_trace(cq.id(), tid);
 
-    cross_node_dfb_test::zero_receiver_ring(device, *ctx.gdfb, ctx.receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
     mesh_device->replay_mesh_trace(cq.id(), tid, true);
-    expect_1to1_ring_and_credits(mesh_device, device, ctx, "CaptureReplay");
+    expect_1to1_ring_and_credits(*mesh_device, ctx, "CaptureReplay");
     mesh_device->release_mesh_trace(tid);
 }
 
@@ -1758,8 +1763,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_OrdersConfigRewrite) {
 // the trace before rewriting CrossNode config
 TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
     auto mesh_device = devices_[0];
-    IDevice* device = mesh_device.get();
-    auto ctx = make_1to1_trace_push_pop(device);
+    auto ctx = make_1to1_trace_push_pop(*mesh_device);
     auto& cq = mesh_device->mesh_command_queue();
 
     distributed::EnqueueMeshWorkload(cq, ctx.workload, true);
@@ -1768,14 +1772,14 @@ TEST_F(CrossNodeDFBTraceFixture, ReplayThenRelaunch_OrdersConfigRewrite) {
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     mesh_device->end_mesh_trace(cq.id(), tid);
 
-    cross_node_dfb_test::zero_receiver_ring(device, *ctx.gdfb, ctx.receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
     mesh_device->replay_mesh_trace(cq.id(), tid, true);
-    expect_1to1_ring_and_credits(mesh_device, device, ctx, "Replay");
+    expect_1to1_ring_and_credits(*mesh_device, ctx, "Replay");
 
-    cross_node_dfb_test::zero_receiver_ring(device, *ctx.gdfb, ctx.receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, *ctx.gdfb, ctx.receiver_core);
     distributed::EnqueueMeshWorkload(cq, ctx.workload, false);
     distributed::Finish(cq);
-    expect_1to1_ring_and_credits(mesh_device, device, ctx, "PostReplayRelaunch");
+    expect_1to1_ring_and_credits(*mesh_device, ctx, "PostReplayRelaunch");
     mesh_device->release_mesh_trace(tid);
 }
 
@@ -1798,7 +1802,8 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
     constexpr uint32_t counter_base = 0x40;
 
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping = {{sender_core, receiver_cores}};
-    auto data_b = cross_node_dfb_test::make_cross_node_data_buffer(device, all_cores, entry_size, num_entries);
+    auto data_b =
+        cross_node_dfb_test::make_cross_node_data_buffer(mesh_device.get(), all_cores, entry_size, num_entries);
 
     Program program = CreateProgram();
     const uint8_t remote_dfb_id = experimental::CreateCrossNodeDFB(program, device, mapping, entry_size, num_entries);
@@ -1831,7 +1836,7 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
 
     cross_node_dfb_test::set_sender_l1_staging_runtime_args(program, sender_k, sender_cores, gdfb_b, staging_size);
     cross_node_dfb_test::write_sender_l1_staging(
-        device, sender_cores, gdfb_b, data_pattern, entry_size, num_entries, 1, counter_base);
+        *mesh_device, sender_cores, gdfb_b, data_pattern, entry_size, num_entries, 1, counter_base);
 
     distributed::MeshWorkload workload;
     workload.add_program(unit_mesh_device_range(), std::move(program));
@@ -1840,26 +1845,26 @@ TEST_F(CrossNodeDFBTraceFixture, CaptureReplay_UpdateDynamicSnapshot) {
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb_a, receiver_core);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb_b, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
 
     const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
     distributed::EnqueueMeshWorkload(cq, workload, false);
     mesh_device->end_mesh_trace(cq.id(), tid);
 
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb_a, receiver_core);
-    cross_node_dfb_test::zero_receiver_ring(device, gdfb_b, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_a, receiver_core);
+    cross_node_dfb_test::zero_receiver_ring(*mesh_device, gdfb_b, receiver_core);
     mesh_device->replay_mesh_trace(cq.id(), tid, true);
 
     EXPECT_TRUE(cross_node_dfb_test::verify_receiver_ring(
-        device, gdfb_b, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
+        *mesh_device, gdfb_b, receiver_core, data_pattern, entry_size, num_entries, 0, 1, counter_base))
         << "Trace replay must use capture-time UpdateDynamic fifo_start (ring B)";
     EXPECT_TRUE(cross_node_dfb_test::verify_credits_drained(
-        mesh_device.get(), program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
+        *mesh_device, program_ref, remote_dfb_id, sender_core, receiver_cores, entry_size, num_entries))
         << "Credits not drained after UpdateDynamic trace replay";
 
     const auto a_ring =
-        cross_node_dfb_test::read_receiver_ring_bytes(device, gdfb_a, receiver_core, entry_size * num_entries);
+        cross_node_dfb_test::read_receiver_ring_bytes(*mesh_device, gdfb_a, receiver_core, entry_size * num_entries);
     EXPECT_TRUE(std::all_of(a_ring.begin(), a_ring.end(), [](uint8_t b) { return b == 0; }))
         << "Ring A must remain untouched when the traced snapshot targets ring B";
 

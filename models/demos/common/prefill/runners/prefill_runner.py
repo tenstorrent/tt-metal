@@ -7,7 +7,7 @@
 Model-agnostic: the model is selected by PREFILL_MODEL and driven through a PrefillModelAdapter
 (see ../adapter.py and ADDING_A_PREFILL_MODEL.md). This driver wires rank topology, input,
 transport, and the per-chunk schedule; the adapter supplies how to build the model, allocate the KV
-cache, run a chunk, and validate/migrate it.
+cache, run a chunk, and describe the cache's layout as a KV-chunk address table.
 
 The model is split across N ranks under tt-run: each rank owns a contiguous layer slice and builds
 the same TtPrefillRuntime (first_layer_idx / is_first_rank / is_last_rank). With >1 rank the cross-rank
@@ -39,7 +39,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import migration_file_export_enabled, serialize_device_map
+from models.demos.common.prefill.runners.migration import (
+    migration_file_export_enabled,
+    remove_stale_device_map_sidecars,
+    serialize_device_map,
+)
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -55,9 +59,9 @@ from models.demos.common.prefill.runners.runner_utils import (
 
 def _apply_manifest_env():
     """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
-    the runner (and migration/validation helpers) read. setdefault => an explicitly
-    exported env var still wins over the manifest. Must be invoked before the
-    module-level env reads below (e.g. PREFILL_MAX_SEQ_LEN) so the values take effect."""
+    the runner reads. setdefault => an explicitly exported env var still wins over the
+    manifest. Must be invoked before the module-level env reads below (e.g.
+    PREFILL_MAX_SEQ_LEN) so the values take effect."""
     manifest_path = os.environ.get("PREFILL_MANIFEST")
     if not manifest_path:
         return
@@ -74,49 +78,6 @@ def _apply_manifest_env():
     # manifest for all model config — PREFILL_MODEL, fabric mode, chunk count, etc.
     for key, val in manifest.get("env", {}).items():
         sd(key, val)
-
-    # The migration/pairwise-validation runs additionally carry a users[] + migration{} block. A
-    # plain model-config manifest omits it (env-only), so it's optional.
-    users = manifest.get("users")
-    if not users:
-        return
-    N = len(users)
-
-    model = manifest.get("model", {})
-    mig = manifest.get("migration", {})
-    paths = manifest.get("paths", {})
-
-    sd("PREFILL_MODEL", model.get("variant"))
-    sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
-    sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
-    sd("PREFILL_NUM_USERS", 2 * N)
-    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
-    sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
-    sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
-    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u.get("kv_cache", "") for u in users))
-
-    # Mode: default to pairwise
-    mode = mig.get("mode") or "pairwise"
-    # Loud failure for incorrect mode
-    if mode != "pairwise":
-        raise ValueError(f"manifest migration.mode must be 'pairwise', got: {mode}")
-    # Loud failure for empty users
-    if N < 1:
-        raise ValueError(f"manifest migration.mode 'pairwise' requires at least 1 user, got {N}")
-    sd("PREFILL_MIGRATE", mode)
-
-    # Each non-empty kv_cache must exist on disk.
-    for i, u in enumerate(users):
-        kv = u.get("kv_cache", "")
-        if kv and not os.path.exists(kv):
-            raise FileNotFoundError(f"PREFILL_MANIFEST user {i} kv_cache not found: {kv}")
-
-    # PREFILL_NUM_USERS (derived or explicitly exported) must equal 2*N.
-    num_users = int(os.environ["PREFILL_NUM_USERS"])
-    if num_users != 2 * N:
-        raise ValueError(
-            f"PREFILL_NUM_USERS ({num_users}) inconsistent with manifest " f"({N} users => expected {2 * N})"
-        )
 
 
 # Populate env from the manifest BEFORE the module-level env reads below.
@@ -168,16 +129,20 @@ CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Per-user KV cache length. In request mode the external producer decides the chunk count, so this is
 # the one cache-sizing knob; a chunk must not push a slot past it. Default holds 11 chunks.
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
-# Chunks one slot's cache holds. Only the migration self-test needs a chunk count (it bounds the
-# otherwise-unbounded loop so the post-loop verify can run); the producer fills a slot to its cache
-# depth there, so the two agree by construction.
-CHUNKS_PER_SLOT = MAX_SEQ_LEN // CHUNK_SIZE
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 # When on (default), the last transformer layer runs kv-only: it fills the KV cache for migration and
 # skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head. In a pipeline only the last rank applies it.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
+# Build the DFlash drafter context-KV cache during this prefill. Three gates, ALL required: the selected
+# model declares the capability (ADAPTER.supports_dflash — only Kimi K2.6/K2.7), the run explicitly opts in
+# (PREFILL_DFLASH=1), and a drafter checkpoint is provided (DFLASH_HF_MODEL, resolved by the runtime). The
+# capability gate keeps a non-dflash model from ever building a Kimi drafter; the explicit PREFILL_DFLASH
+# switch keeps it off unless asked for, even when a checkpoint happens to be on disk.
+DFLASH_ENABLED = (
+    ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
+)
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
@@ -190,6 +155,13 @@ _L1_SMALL_SIZE = ADAPTER.l1_small_size
 # swaps + per-layer acks) is handled by SubDeviceTraceController inside the runtime.
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0
+# DFlash is not trace-compatible: the drafter tap / pack-unpack / KV finalize run outside the runtime's
+# captured per-chunk segment, so a replayed trace would silently skip them. Fail loudly rather than
+# produce meaningless drafter KV. (Per offline discussion — keep DFlash on the eager per-op path.)
+assert not (DFLASH_ENABLED and USE_TRACE), (
+    "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
+    "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
+)
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
@@ -504,21 +476,12 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
-    migration_driver=None,
-) -> tuple:
+) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
     closes the stream with the all -1 shutdown sentinel (each rank forwards it and exits gracefully) or,
-    as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC.
-
-    Exception: in migration-validation mode (PREFILL_VALIDATE_MIGRATION=1) the scheduler driver never
-    pushes the shutdown sentinel — it pushes PREFILL_STANDALONE_CHUNKED_NCHUNKS chunks, migrates, then
-    writes the DONE sentinel for the runner to poll. So the loop exits after that many chunks and returns
-    to validate_after_prefill. Returns (chunks_per_slot, real_end_per_slot, total_chunks).
-
-    PREFILL_REQUEST_LOOP_PCC=1 (single-rank, bring-up only) PCC-checks the populated KV against the golden
-    trace once the stream closes — the production analogue of standalone's per-rank KV check, driven by the
-    real H2D producer path (and, under use_trace, the replayed forward + post-compile LayerAck)."""
+    as a hard fallback, until SIGTERM/SIGKILL. No fixed chunk bound, no trace input, no PCC, no
+    migration — the runner serves; migration is issued from outside (migration_driver.py)."""
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
@@ -526,28 +489,10 @@ def run_request_loop(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
-    # Self-test bound: PREFILL_MIGRATION_SELFTEST=1 makes the loop run exactly CHUNKS_PER_SLOT chunks
-    # then exit CLEANLY so the post-loop migrate + verify can run — without it the unbounded loop blocks
-    # in recv and only SIGKILL exits, which kills before the verify. 0 == unbounded serving.
-    n_selftest = CHUNKS_PER_SLOT if os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1" else 0
     t0 = time.perf_counter()
     c = 0
     first = None
-    # Per-slot bookkeeping for the optional post-loop migration validation (validate_after_prefill):
-    # how many chunks each slot received and its highest real (non-pad) end position.
-    chunks_per_slot: dict = {}
-    real_end_per_slot: dict = {}
-    # If we run prefill validation, we need to know the expected number of chunks to exit the loop.
-    # PREFILL_STANDALONE_CHUNKED_* is migration-validation config, not a serving-mode knob.
-    _expected_chunks = (
-        int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "0"))
-        if os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1"
-        else 0
-    )
-    slot_id = 0  # last chunk's slot — the PREFILL_REQUEST_LOOP_PCC check below reads the slice this rank populated
     while not _shutdown:
-        if n_selftest and c >= n_selftest:
-            break
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
             inp, meta, metadata_device = _socket_next(h2d_service)  # slot/start/end from the producer
@@ -562,64 +507,13 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        slot = meta["slot_id"]
-        slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
-        chunks_per_slot[slot] = chunks_per_slot.get(slot, 0) + 1
-        # Track the real (non-pad) end position per slot: the producer clamps actual_end to the real
-        # ISL, so the max over a slot's chunks is that slot's prompt length (== blaze's S).
-        real_end_per_slot[slot] = max(real_end_per_slot.get(slot, 0), meta["actual_end"])
         t = _compute_and_send(
             runtime, kv_caches, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
         )
-        # Interleaved migration: register this chunk's correlation, then migrate any chunk whose layers
-        # have all acked. Acks arrive ASYNCHRONOUSLY on the D2H path (the LayerAckService reader thread
-        # injects them; _compute_and_send does not sync), so chunk c's acks may still be in flight here —
-        # pump() is cursor-based and picks them up on a later call, with the tail drain below as backstop.
-        if migration_driver is not None:
-            migration_driver.record_chunk(c, meta["slot_id"], meta["actual_start"], meta["actual_end"])
-            logger.info(
-                f"[interleave] prefilled chunk {c} (slot{meta['slot_id']} "
-                f"pos[{meta['actual_start']},{meta['actual_end']})); pumping migration driver"
-            )
-            migration_driver.pump(current_prefill_chunk=c)
         if first is None:
             first = t
         c += 1
-        if _expected_chunks and c >= _expected_chunks:
-            logger.info(
-                f"[pp rank {rank}] processed {c}/{_expected_chunks} chunks "
-                "(PREFILL_STANDALONE_CHUNKED_NCHUNKS reached); exiting request loop for migration validation"
-            )
-            if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
-            break
-    if num_ranks > 1 and n_selftest:
-        ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
-
-    # MUST stay above the return: this block sat BELOW it and was silently dead, so
-    # PREFILL_REQUEST_LOOP_PCC=1 ran no check at all and reported nothing — a green run that had
-    # verified nothing. Runs after _drain_and_log_e2e so the chunk's KV writes are flushed first.
-    if os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1" and c > 0:
-        # Bring-up validation of the production path (golden-trace input): the same optional runtime hook
-        # standalone uses. n_chunks = the count the producer actually pushed. Single-rank only (a pipeline
-        # rank owns a layer slice; kv_cache_pcc_check offsets by first_layer_idx, but multi-rank KV PCC is
-        # driven via the standalone loop).
-        pcc_check = getattr(runtime, "kv_cache_pcc_check", None)
-        if pcc_check is None:
-            raise RuntimeError(
-                f"PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements no kv_cache_pcc_check "
-                "(optional bring-up hook; see ADDING_A_PREFILL_MODEL.md §2)."
-            )
-        pcc_check(
-            kv_caches,
-            slot_id=slot_id,
-            n_chunks=c,
-            trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
-            first_layer_idx=cfg.first_layer_idx,
-        )
-
-    return chunks_per_slot, real_end_per_slot, c
 
 
 # ---------------------------------------------------------------------------
@@ -641,6 +535,11 @@ def _print_config() -> None:
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
+        (
+            "DFLASH_ENABLED",
+            f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
+            f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
+        ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -651,14 +550,8 @@ def _print_config() -> None:
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default)),
-        ("PREFILL_STANDALONE_CHUNKED_PCC", os.environ.get("PREFILL_STANDALONE_CHUNKED_PCC", "0.88")),
-        (
-            "PREFILL_STANDALONE_CHUNKED_RECORD_ONLY",
-            os.environ.get("PREFILL_STANDALONE_CHUNKED_RECORD_ONLY", "0"),
-        ),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
         ("PREFILL_MOCK_MIGRATION", os.environ.get("PREFILL_MOCK_MIGRATION", "0")),
-        ("PREFILL_REQUEST_LOOP_PCC", os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0")),
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
@@ -669,7 +562,6 @@ def _print_config() -> None:
             "PREFILL_MIGRATION_DEVICE_MAP_PATH",
             os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "<transport-dependent default>"),
         ),
-        ("MIGRATION_DONE_FILE", os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")),
     ]
     sep = "=" * 70
     lines = [sep, "prefill_runner configuration", sep]
@@ -769,6 +661,9 @@ def main() -> None:
         # headless: its last layer runs KV-only and no norm/LM-head is built. Only the last rank does
         # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
         kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
+        # NOT gated on is_last_rank: every rank builds its owned fc slices; the runtime derives the
+        # last-rank KV tail from is_last_rank.
+        dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
@@ -809,6 +704,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     num_ranks>1. Shutdown for num_ranks>1 is rough: downstream ranks block in D2D recv when rank 0
     stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
+    # DFlash packs the drafter's FC partial alongside the hidden (concat on the feature dim), so the D2D
+    # activation is 2H wide when enabled; the non-dflash path (every other model) stays H.
+    d2d_activation_width = hf_config.hidden_size * (2 if DFLASH_ENABLED else 1)
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
 
@@ -837,7 +735,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2d_in = d2d_out = None
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
-        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, d2d_activation_width)
         # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
         # a rank can reach the loop's first fabric-link lease while an upstream/downstream rank is still
         # in rendezvous, deadlocking the lease handshake before any chunk flows.
@@ -863,12 +761,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     d2h_service = None
     layer_ack_service = None
     producer = None
-    # Completion checking (master rank only, test-only): a consumer that stands in for the scheduler
-    # on the master's counter channel, to verify aggregated per-(chunk, layer) completions. See
-    # scheduler_standins.CompletionCheckConsumer. Gated by PREFILL_CHECK_COMPLETIONS=1 so it never competes with a real
-    # scheduler consuming the same channel in production.
-    completion_check = None
-    check_completions = os.environ.get("PREFILL_CHECK_COMPLETIONS", "0") == "1"
     # The single-rank LayerAck channel is the scheduler's per-layer signal (it drives migration).
     # Opt-in: creating it unconditionally makes two concurrent single-rank runs sharing a service_id
     # collide on the same /dev/shm segment. Defaults on when migration is enabled (its only consumer);
@@ -888,47 +780,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # every rank joins the cross-host all-gather (barrier) that merges the table, then ONLY the first
     # rank asks its model runtime to build the merged table and sends it to the worker (mirroring
     # tt-blaze where all ranks all-gather but only mesh 0 builds + sends). Previously single-rank only.
+    # The runner never migrates; it only publishes. Rank 0 holds the client here for the process's
+    # lifetime because dropping the reference destroys it and the worker loses the table it gated on.
     migration_endpoint = None
-    # Single opt-in: PREFILL_MIGRATION_SELFTEST=1 runs the migrate + slot==slot verify AND implies the
-    # table publish it depends on, so you don't also have to set PREFILL_ENABLE_MIGRATION. The latter
-    # still works on its own for production publish-without-selftest.
-    _selftest = os.environ.get("PREFILL_MIGRATION_SELFTEST", "0") == "1"
     # Mock integration: publish the KV chunk table + device map for an external reader
     # (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC) with NO migration worker. It must open this
     # block ON ITS OWN — gating it behind _migration_enabled made it unreachable, since
     # PREFILL_ENABLE_MIGRATION additionally drives the publish-and-block-on-WORKER_READY path below.
     _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
-    _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
-    _interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
-
+    _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
     _file_export = migration_file_export_enabled()
-    # The selftest/interleaved paths drive migrate()/wait_complete() through the MigrationLayerClient,
-    # which file-export mode never creates — reject the combination up front (rank-invariant:
-    # env-only) rather than fail an assert after bring-up.
-    if _file_export and (_selftest or _interleaved):
-        raise ValueError(
-            "PREFILL_MIGRATION_EXPORT_TO_FILE=1 is incompatible with PREFILL_MIGRATION_SELFTEST=1 / "
-            "PREFILL_MIGRATION_INTERLEAVED=1: file-export mode has no MigrationLayerClient, "
-            "so the runner cannot issue migrate() itself."
-        )
-
-    # Both flags put a scheduler stand-in on the master's ack channel, and try_consume_all() is a
-    # destructive read against one shared cursor -- two consumers split the ack stream instead of each
-    # seeing it whole. Rank-invariant (env + num_ranks only) and checked before the bring-up all-gather,
-    # so every rank raises together rather than deadlocking the survivors. Single-rank never builds the
-    # check consumer, so the combination is harmless there.
-    if num_ranks > 1 and check_completions and _selftest and _interleaved:
-        raise ValueError(
-            "PREFILL_CHECK_COMPLETIONS=1 and PREFILL_MIGRATION_INTERLEAVED=1 cannot both be set in "
-            f"pipeline mode (num_ranks={num_ranks}): both consume {ack_shm_name}, so each sees only part "
-            "of the ack stream (the completion check can still report PASS while interleaved migration "
-            "silently drops its tail chunks). Set exactly one."
-        )
 
     # Mock integration (prefill_producer.py's PREFILL_PRODUCER_CHECK_PCC): publish the KV chunk table +
     # device map for an external device-less reader, with NO migration worker. Deliberately OUTSIDE the
     # _migration_enabled block below: that block's first step is
-    # deliver_device_map_and_gather_stage_layout(), which imports the _migration_client .so and joins a
+    # deliver_device_map_and_gather_stage_layouts(), which imports the _migration_client .so and joins a
     # cross-rank all-gather. Mock has neither a client nor peers, so routing it through there raises
     # ImportError(_migration_client) — which is exactly what happens if you only make the old in-block
     # `elif PREFILL_MOCK_MIGRATION` reachable. Both writes here are local (build table + serialize map).
@@ -937,7 +803,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         _mock_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
         runtime.build_kv_chunk_table(kv_caches, path=_mock_table_path)
         # fabric_node -> ASIC unique_id, so the producer can resolve chips for read_dram_umd without
-        # touching the ControlPlane.
+        # touching the ControlPlane. Stale rank-scoped siblings from a prior multi-rank run would
+        # merge into the reader's map, so drop them first.
+        remove_stale_device_map_sidecars(_mock_map_path)
         serialize_device_map(mesh_device, _mock_map_path)
         logger.info(
             f"[mock-migration] KV chunk table -> {_mock_table_path}, device map -> {_mock_map_path} "
@@ -945,14 +813,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         )
 
     if _migration_enabled:
-        if is_first_rank:
-            # Clear a stale DONE sentinel from a prior run so the validator can't read its pairs.
-            # First rank only -- it owns the publish + validation handshake.
-            _done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
-            if os.path.exists(_done_file):
-                logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
-                os.remove(_done_file)
-
         # Migration bring-up, split by ownership before the request loop opens (the worker gates on
         # SetTable + AssignDevMap, so this must finish first):
         #   * ALL RANKS deliver their local device map + join the all-gather barrier (COLLECTIVE —
@@ -963,17 +823,24 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # With PREFILL_MIGRATION_EXPORT_TO_FILE=1 the device map goes to a host-local text file
         # and the table stays on disk instead; no worker handshake.
         from models.demos.common.prefill.runners.migration import (
-            allgather_kv_stage_layout,
-            deliver_device_map_and_gather_stage_layout,
-            export_device_map_file_and_gather_stage_layout,
+            KvCacheStage,
+            allgather_kv_stage_layouts,
+            deliver_device_map_and_gather_stage_layouts,
+            export_device_map_file_and_gather_stage_layouts,
             migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
+            rank_scoped_device_map_path,
+            remove_stale_device_map_sidecars,
         )
 
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
-        # rank's range (same split the runtime/cache was built with).
-        first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
+        # rank's range -- via the adapter's boundaries, so it is the split the MODEL was built with in
+        # main(). Without them a cross-layer-reuse model (GLM-5.2 snaps 39/39 to 38/40) describes a
+        # partition its KV cache does not hold, mismapping every layer of the second stage.
+        first_layer_idx, num_my_layers = compute_layer_split(
+            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+        )[rank]
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
@@ -996,37 +863,49 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             logger.warning(f"[migration] removing stale KV chunk table {table_path} from a prior run")
             os.remove(table_path)
 
+        # Same rationale for the JSON device-map sidecars: a leftover rank-scoped file from a run with
+        # a different rank count would silently merge into this run's map. Must stay BEFORE the
+        # all-gather barrier below — every rank writes its fresh map only after it.
+        if not _file_export:
+            remove_stale_device_map_sidecars(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            )
+
         # ALL RANKS join the stage-layout all-gather (collective barrier; rank 0 needs the merged
         # layout to build the table). Real migration also delivers this rank's local FNID->UMD map to
         # its co-located worker first; mock has no worker (the producer reads a serialized JSON map),
         # so it joins the gather directly and never imports the worker client extension.
         #
-        # Ask the runtime for this stage's KV base -- the engine must not introspect the opaque
-        # KvCaches struct, whose shape is per-model.
-        if not hasattr(runtime, "kv_migration_base_address"):
+        # Ask the runtime to describe its migratable caches -- the engine must not introspect the opaque
+        # KvCaches struct, whose shape is per-model. One stage per config of the model's table, since a
+        # layout carries one cache's DRAM base and one layer-index space. A runtime predating
+        # `kv_migration_stages` exposes only the single-cache base address.
+        _multi_cache_runtime = hasattr(runtime, "kv_migration_stages")
+        if _multi_cache_runtime:
+            kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
+        elif hasattr(runtime, "kv_migration_base_address"):
+            kv_stages = [KvCacheStage(runtime.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
+        else:
             raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} implements no "
-                "kv_migration_base_address (see docs/ADDING_A_PREFILL_MODEL.md §2)."
+                f"migration enabled but runtime {type(runtime).__name__} implements neither "
+                "kv_migration_stages nor kv_migration_base_address "
+                "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
-        kv_base_addr = runtime.kv_migration_base_address(kv_caches)
         _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
         if _mock_migration:
-            stage_layout = allgather_kv_stage_layout(
-                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
-            )
+            stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
         elif _file_export:
-            stage_layout = export_device_map_file_and_gather_stage_layout(
-                mesh_device,
-                kv_base_addr,
-                GLOBAL_MESH_SHAPE,
-                first_layer_idx,
-                num_my_layers,
-                migration_device_map_file_path(),
+            stage_layouts = export_device_map_file_and_gather_stage_layouts(
+                mesh_device, kv_stages, GLOBAL_MESH_SHAPE, migration_device_map_file_path()
             )
         else:
-            stage_layout = deliver_device_map_and_gather_stage_layout(
-                mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
-            )
+            stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
+
+        # A runtime predating `kv_migration_stages` describes ONE cache and takes the singular
+        # `stage_layout=` -- its single gathered layout. Keep calling it that way: its single-rank guard
+        # counts stages in that layout, and handing it the outer per-cache list would count caches (always
+        # 1) and silently stop rejecting multi-rank migration.
+        _layout_kwarg = {"stage_layouts": stage_layouts} if _multi_cache_runtime else {"stage_layout": stage_layouts[0]}
 
         if _mock_migration:
             # Mock integration (prefill_producer.py): the SAME merged table the real publish builds, but
@@ -1037,11 +916,16 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             #
             # EVERY rank serializes its OWN local fabric_node -> ASIC unique_id device map so each
             # co-located producer can resolve only its host's chips for read_dram_umd (the multi-rank
-            # merged table carries every host's fnids; a producer with just its local map naturally
-            # filters to its own layers). The device-map path is host-local (each rank overwrites the
-            # same name on its own host); the table path MUST be on shared storage (only rank 0 writes
-            # it, but every host's reader resolves the same path) — enforced above for num_ranks > 1.
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # merged table carries every host's fnids; a producer merges the local maps and skips
+            # layers owned by another host). Rank-scoped filename for num_ranks > 1 — co-located ranks
+            # would otherwise overwrite each other at the shared host-local path; the table path MUST
+            # be on shared storage (only rank 0 writes it, but every host's reader resolves the same
+            # path) — enforced above for num_ranks > 1.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             if is_first_rank:
                 # RANK 0 builds the merged table spanning every gathered stage — identical to the real
@@ -1051,7 +935,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
@@ -1063,7 +947,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
             logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
@@ -1073,9 +957,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # device-less reader downstream: migration_driver's destination verification
             # (--verify-migration, both dst-bytes and dst-golden) and prefill_producer's source-KV
             # PCC each resolve chips through this file, log "device map ... not found", and FAIL —
-            # so a real migration run could never verify what it copied. Host-local by design (one
-            # file per host, each rank overwriting its own).
-            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            # so a real migration run could never verify what it copied. Host-local by design;
+            # rank-scoped filename for num_ranks > 1 so co-located ranks don't overwrite each other.
+            device_map_path = rank_scoped_device_map_path(
+                os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json"),
+                rank,
+                num_ranks,
+            )
             serialize_device_map(mesh_device, device_map_path)
             logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
 
@@ -1087,7 +975,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    stage_layout=stage_layout,
+                    **_layout_kwarg,
                 )
                 migration_endpoint = publish_serialized_table_and_wait_ready(
                     table_path=table_path,
@@ -1113,7 +1001,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # out of the pre-#48826 `if single_rank:` wrapper, so with num_ranks>1 every rank would build
         # a table covering only ITS layer slice and publish over the same paths -- and co-located
         # ranks would race serialize_device_map's `<path>.tmp` -> os.replace as well. Only the real
-        # migration path merges stages (deliver_device_map_and_gather_stage_layout), and that needs
+        # migration path merges stages (deliver_device_map_and_gather_stage_layouts), and that needs
         # the worker. Same guard #48826 removed for PREFILL_ENABLE_MIGRATION, kept for the mock path.
         if not single_rank:
             raise ValueError(
@@ -1230,11 +1118,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             f"ring={ring_shm_name} source={source_desc} "
             + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
         )
-
-        if rank == master_rank and check_completions:
-            from models.demos.common.prefill.runners.scheduler_standins import CompletionCheckConsumer
-
-            completion_check = CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
     elif single_rank and enable_layer_ack:
         # Single-rank non-D2H direct path: the runtime owns + inject()s the scheduler counter channel
         # directly (on_layer_complete fires per layer inside the model). Works traced or untraced.
@@ -1244,43 +1127,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
     elif single_rank:
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
-
-    # Interleaved migration self-test: rank 0 stands in for the scheduler — consume the per-layer ack
-    # channel and migrate each chunk as its layers complete, overlapping later chunks' prefill (replaces
-    # the post-loop bulk migrate). Rank 0 only (it holds the migration client); other ranks just verify.
-    mig_driver = None
-    if _selftest and is_first_rank and _interleaved:
-        from models.demos.common.prefill.runners.scheduler_standins import InterleavedMigrationDriver
-
-        assert migration_endpoint is not None, "rank 0 must hold the migration client for interleaved migrate"
-        # Granularity flag: "layerwise" (default) migrates each chunk's layers as they ack — finer
-        # overlap; "chunkwise" waits for a chunk's full 61-layer ack then migrates it in one shot.
-        granularity = os.environ.get("PREFILL_MIGRATION_GRANULARITY", "layerwise").strip().lower()
-        if granularity not in ("layerwise", "chunkwise"):
-            raise ValueError(f"PREFILL_MIGRATION_GRANULARITY must be 'layerwise' or 'chunkwise', got {granularity!r}")
-        mig_driver = InterleavedMigrationDriver(
-            ack_shm_name,
-            migration_endpoint,
-            num_layers=NUM_LAYERS,
-            src_slot=int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0")),
-            dst_slot=int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1")),
-            endpoint_id=int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1")),
-            wait_complete_ms=int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000")),
-            # Diagnostics: the master router (pipeline only; None in single-rank) exposes .processed so the
-            # driver can log injected-vs-consumed acks. router is None here in the single-rank path.
-            router=router,
-            granularity=granularity,
-        )
-        logger.info(
-            f"[interleave] migration mode = INTERLEAVED, granularity={granularity} "
-            f"(PREFILL_MIGRATION_INTERLEAVED=1, PREFILL_MIGRATION_GRANULARITY={granularity}): rank 0 migrates "
-            "as layers ack, overlapping later chunks' prefill; one blocking wait at drain"
-        )
-    elif _selftest and is_first_rank:
-        logger.info(
-            "[interleave] migration mode = BULK (single post-loop migrate); set PREFILL_MIGRATION_INTERLEAVED=1 "
-            "to interleave migrates with prefill"
-        )
 
     # Capture the trace (use_trace) after the D2D endpoints AND the per-layer completion wiring
     # (LayerAck channel / layer-completion sink) are set up, but before the request loop: the capture
@@ -1292,97 +1138,21 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
     try:
-        chunks_per_slot, real_end_per_slot, total_chunks = run_request_loop(
+        run_request_loop(
             runtime,
             kv_caches,
             rank,
             num_ranks,
-            hidden_size=hf_config.hidden_size,
+            hidden_size=d2d_activation_width,
             h2d_service=h2d_service,
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
-            migration_driver=mig_driver,
         )
-
-        # Post-loop KV validation (bring-up / migration accuracy; never in production serving). Single-rank
-        # only: only the last/single rank owns the whole cache. By now the scheduler has migrated the slots
-        # out-of-band and written the DONE sentinel; the validator waits for it and PCCs the migrated pairs.
-        if single_rank and os.environ.get("PREFILL_VALIDATE_MIGRATION", "0") == "1":
-            from models.demos.common.prefill.runners.validation import validate_after_prefill
-
-            validate_after_prefill(
-                runtime,
-                kv_caches,
-                chunks_per_slot=chunks_per_slot,
-                real_end_per_slot=real_end_per_slot,
-                num_users=NUM_USERS,
-                total_chunks=total_chunks,
-            )
-
-        # Release services while the mesh + command queues are still alive (their dtors free a command
-        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
-        import gc
-
-        if _selftest:
-            src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
-            dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
-
-            # Interleaved-vs-bulk MUST be decided by an all-ranks-agree predicate (the env flag), NOT by
-            # `mig_driver is None`: mig_driver is set ONLY on rank 0, so keying the pre-migrate barrier on it
-            # made non-first ranks (mig_driver None) run an EXTRA barrier that rank 0 (draining) skipped ->
-            # distributed_context_barrier() is an anonymous collective, so the mismatched count deadlocks
-            # (rank 0's post-migrate barrier pairs with the others' pre-migrate barrier, then the others
-            # block forever on their second barrier). Every rank evaluates `_interleaved` identically.
-            if not _interleaved:
-                # Bulk migrate path: ALL ranks sync + barrier so the KV cache is fully written before rank 0
-                # issues the single post-loop migrate. (Interleaved mode instead drains on rank 0 below.)
-                ttnn.synchronize_device(runtime.mesh_device)
-                if num_ranks > 1:
-                    ttnn.distributed_context_barrier()
-
-            # RANK 0 ONLY issues the migrate (it holds the MigrationLayerClient).
-            if is_first_rank and mig_driver is not None:
-                # Interleaved: per-chunk migrates were already issued during the loop; drain the tail
-                # (consume any remaining acks + wait_complete the deferred copies).
-                mig_driver.drain(expected_chunks=CHUNKS_PER_SLOT)
-            elif is_first_rank:
-                assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
-                # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
-                self_ep = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
-                # Position range = the src slot's real prefilled length, aligned UP to the 32-token KV
-                # migration chunk (blaze's _align_up(S)). Migrate the FULL global layer range [0, NUM_LAYERS)
-                # the merged table was built for — the worker routes each layer to its owning stage.
-                POS_CHUNK = 32
-                real_end = real_end_per_slot.get(src_slot, 0)
-                pos_end = ((real_end + POS_CHUNK - 1) // POS_CHUNK) * POS_CHUNK
-                logger.info(
-                    f"[migration-selftest] loopback migrate slot{src_slot}->slot{dst_slot} "
-                    f"layers[0,{NUM_LAYERS}) pos[0,{pos_end}) (real_end={real_end}, self_ep={self_ep})"
-                )
-                # wait_complete's C++ default is only 30s; a full-prefill loopback copy (here ~2 GB:
-                # 56320 pos x 61 layers) can exceed that, so make it configurable.
-                wait_complete_ms = int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000"))
-                tok = migration_endpoint.migrate(1, self_ep, src_slot, dst_slot, 0, NUM_LAYERS, 0, pos_end)
-                migration_endpoint.wait_complete(tok, wait_complete_ms)
-                logger.success(f"[migration-selftest] migrate slot{src_slot}->slot{dst_slot} complete")
-
-            # Barrier: every rank must wait for rank 0's migrate to finish before reading its local
-            # dst slot (the migrate covers all stages; each rank then verifies its own layers).
-            if num_ranks > 1:
-                ttnn.distributed_context_barrier()
-            ttnn.synchronize_device(runtime.mesh_device)
-
-            from models.demos.common.prefill.runners.validation import validate_migrations_pairwise
-
-            validate_migrations_pairwise(runtime, kv_caches, [(src_slot, dst_slot)])
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
         # spin timing out on a stalled router); without this, producer/router/ack segments + the
         # router listener thread leak, and a downstream peer blocked in D2D recv deadlocks the pipeline.
-        # Release services while the mesh + command queues are still alive (their dtors free a command
-        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
-
         # Release services while the mesh + command queues are still alive (their dtors free a command
         # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
         import gc
@@ -1400,12 +1170,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             producer.shutdown()
         if router is not None:
             router.stop()  # joins the listener; the master's final ring-drain + inject happens HERE
-        if completion_check is not None:
-            # Tally AFTER router.stop(): the master injects its own trailing completions during the
-            # listener's final drain (inside stop()). The consumer's mapping survives the owner's
-            # shm_unlink (POSIX), so it still reads those — tallying earlier would miss them and
-            # falsely report "count short". router.stop() unlinks the channel on the master.
-            completion_check.stop_and_report()
         if ack_channel is not None:
             ack_channel.shutdown()  # munmap + shm_unlink
             ack_channel = None

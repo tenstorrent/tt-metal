@@ -27,13 +27,21 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE, TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+# Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
+#
+#   emb_dim            7168  model hidden. Gate input, shared-expert input, block in/out.
+#   routed_emb_dim     3584  width the routed experts run at (K3's latent space); defaults to emb_dim.
+#   hidden_dim         3072  per-routed-expert FFN intermediate.
+#   shared_hidden_dim  6144  shared-expert FFN intermediate; defaults to hidden_dim.
 
 
 class TtMoe(LightweightModule):
@@ -59,14 +67,36 @@ class TtMoe(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
-        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        experts_per_chip: int,
+        use_latent_moe: bool = False,
+        latent_use_norm: bool = True,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ) -> bool:
+        """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
+
+        ``use_latent_moe`` must be passed for Kimi-K3, otherwise a cache missing the latent
+        projections would be reported complete and __init__ would then fail loading them.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
+        """
         prefix = f"layer_{layer_idx}"
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
             return False
-        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
+        if not TtRoutedExpert.check_cache_complete(
+            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+        ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
+            return False
+        if use_latent_moe and not TtLatentMoeProjections.check_cache_complete(
+            cache_path, f"{prefix}.latent_proj", use_norm=latent_use_norm
+        ):
             return False
         return True
 
@@ -83,8 +113,20 @@ class TtMoe(LightweightModule):
         shared_expert_weights_dtype: ttnn.DataType,
         cache_path: Path,
         layer_idx: int,
+        shared_hidden_dim: int | None = None,
+        routed_emb_dim: int | None = None,
+        latent_weights: dict | None = None,
+        latent_use_norm: bool = True,
     ):
-        """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy."""
+        """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
+
+        ``shared_hidden_dim`` defaults to ``hidden_dim``; pass it separately when the shared expert's
+        intermediate differs from the routed experts' (Kimi-K3: 6144 vs 3072). Note the routed-expert
+        cache needs no dim arguments -- it derives shapes from the weight tensors themselves -- so
+        ``routed_emb_dim`` does not appear here.
+        """
+        if shared_hidden_dim is None:
+            shared_hidden_dim = hidden_dim
         # Build gate cache (delegate to TtMoEGatePrefill)
         if gate_weights:
             from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
@@ -120,11 +162,25 @@ class TtMoe(LightweightModule):
             TtSharedExpert.build_ttnn_cache(
                 shared_expert_weights,
                 emb_dim,
-                hidden_dim,
+                shared_hidden_dim,
                 mesh_device,
                 shared_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.shared_expert",
+            )
+
+        # Gated on the weights, not the dims alone: without weights the placeholder branch would write
+        # uninitialised tensorbins that check_cache_complete then reports as a complete cache.
+        if latent_weights and routed_emb_dim is not None and routed_emb_dim != emb_dim:
+            TtLatentMoeProjections.build_ttnn_cache(
+                torch_weights=latent_weights,
+                emb_dim=emb_dim,
+                routed_emb_dim=routed_emb_dim,
+                mesh_device=mesh_device,
+                weights_dtype=shared_expert_weights_dtype,
+                cache_path=cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.latent_proj",
+                use_norm=latent_use_norm,
             )
 
     def __init__(
@@ -150,15 +206,25 @@ class TtMoe(LightweightModule):
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
+        shared_expert_activation: str = ACTIVATION_SILU,
+        shared_expert_situ_beta: float | None = None,
+        shared_expert_situ_linear_beta: float | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
         routing_use_l1_small_for_semaphores: bool = False,
         is_balanced: bool = False,
+        routed_emb_dim: Optional[int] = None,
+        shared_hidden_dim: Optional[int] = None,
+        latent_weights: dict = None,
+        latent_use_norm: bool = True,
+        rms_norm_eps: float = 1e-5,
+        max_gate_seq_len_per_chip: Optional[int] = None,
     ):
         """
         Initialize TtMoe module.
@@ -190,6 +256,11 @@ class TtMoe(LightweightModule):
             routed_expert_weights_dtype: Data type for routed expert weights
             shared_expert_activations_dtype: Data type for shared expert activations
             shared_expert_weights_dtype: Data type for shared expert weights
+            shared_expert_activation: GLU activation the shared expert runs -- "silu" (default) or
+                "situ" for Kimi-K3's SiTU-GLU. Independent of routed_expert_activation: the two
+                sites run different ops (Python-composed vs fused kernel) at different widths.
+            shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
+                when shared_expert_activation == "situ".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
@@ -197,6 +268,25 @@ class TtMoe(LightweightModule):
                 setup and run them sequentially on the full Tensix grid.
             is_balanced: If True, uses zigzag sequence placement for padding awareness.
                 Should match the is_balanced flag used in MLA/transformer.
+            routed_emb_dim: Width the ROUTED side runs at -- dispatch, routed experts, combine and
+                reduce. Defaults to emb_dim, which is every model except Kimi-K3. K3 sets it to 3584
+                against an emb_dim of 7168 ("LatentMoE"), halving the bytes each dispatched token
+                moves over fabric. The gate is unaffected and still reads the full emb_dim, as does
+                the shared expert.
+            shared_hidden_dim: The SHARED expert's FFN intermediate. Defaults to hidden_dim. K3 needs
+                it separate because its shared expert is a single MLP at moe_intermediate_size *
+                num_shared_experts (6144), while hidden_dim is the per-routed-expert intermediate
+                (3072). Every prior model has num_shared_experts == 1, so the two coincided and one
+                parameter sufficed.
+            latent_weights: Dict with down_proj / up_proj / norm for the LatentMoE projections.
+                Only read when routed_emb_dim implies a latent space; None when the TTNN cache exists.
+            latent_use_norm: Whether a latent RMSNorm sits between the reduce and the up-projection
+                (K3: latent_moe_use_norm=True).
+            rms_norm_eps: eps for that latent norm. Passed explicitly because
+                TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
+            routed_expert_activation: GLU activation the fused routed-expert kernel runs.
+                Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only --
+                the shared expert takes shared_expert_activation, which is a separate knob.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -211,6 +301,9 @@ class TtMoe(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+        self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
+        self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
+        self.use_latent_moe = self.routed_emb_dim != emb_dim
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -264,6 +357,7 @@ class TtMoe(LightweightModule):
             n_expert_groups=n_expert_groups,
             n_limited_groups=n_limited_groups,
             route_scale=route_scale,
+            max_sp_dim=max_gate_seq_len_per_chip,
         )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
         # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
@@ -356,7 +450,7 @@ class TtMoe(LightweightModule):
             metadata_len=metadata_len,
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
-            emb_dim=emb_dim,
+            emb_dim=self.routed_emb_dim,
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
@@ -400,7 +494,7 @@ class TtMoe(LightweightModule):
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
             global_expert_idx_table=global_expert_idx_tt,
-            emb_dim=emb_dim,
+            emb_dim=self.routed_emb_dim,
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,
             torch_weights=routed_expert_weights,
@@ -408,14 +502,15 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=ttnn.RoutedExpertActivation.Silu,
+            activation=routed_expert_activation,
         )
 
         # Initialize shared expert (col axis: axis 1)
         self.shared_expert = TtSharedExpert(
             mesh_device=mesh_device,
+            # The shared expert reads the pre-projection hidden, so it stays at the full emb_dim.
             emb_dim=emb_dim,
-            hidden_dim=hidden_dim,
+            hidden_dim=self.shared_hidden_dim,
             torch_weights=shared_expert_weights,
             num_links=self.col_num_links,
             topology=self.shared_expert_topology,
@@ -425,6 +520,28 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
             subdevice_id=self.shared_sd_id,
             subdevice_cores=self.shared_sd_cores,
+            activation=shared_expert_activation,
+            situ_beta=shared_expert_situ_beta,
+            situ_linear_beta=shared_expert_situ_linear_beta,
+        )
+
+        self.latent_projections = (
+            TtLatentMoeProjections(
+                mesh_device=mesh_device,
+                emb_dim=emb_dim,
+                routed_emb_dim=self.routed_emb_dim,
+                torch_weights=latent_weights,
+                use_norm=latent_use_norm,
+                rms_norm_eps=rms_norm_eps,
+                # ~10% of routed-expert FLOPs, so they take the shared expert's precision.
+                weights_dtype=shared_expert_weights_dtype,
+                num_links=self.col_num_links,
+                topology=self.col_topology,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.latent_proj",
+            )
+            if self.use_latent_moe
+            else None
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -616,6 +733,15 @@ class TtMoe(LightweightModule):
             )
         logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
+        # ========================================
+        # Step 0b: LatentMoE -- project into the latent space (Kimi-K3 only)
+        # ========================================
+        # Outside the sub-device window below: the down-projection feeds dispatch, so it cannot
+        # overlap it. x stays full-width for the shared expert, which reads the pre-projection hidden.
+        routed_x = self.latent_projections.to_latent(x) if self.use_latent_moe else x
+        if self.use_latent_moe:
+            logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
+
         signpost("shared_expert_and_dispatch_start")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -636,10 +762,11 @@ class TtMoe(LightweightModule):
         # ========================================
         # Step 2: Dispatch (enabled)
         # ========================================
-        # Dispatch expects full emb_dim on each device (x already has this)
-        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
+        # Dispatch expects complete routed-side rows on each device: full emb_dim normally, or the
+        # all-gathered latent under LatentMoE (routed_x is x itself when there is no latent space).
+        logger.debug(f"[TtMoe.forward] {routed_x.shape=} {routed_x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
+            routed_x,
             scores,
             indices,
             tt_expert_offsets,
@@ -655,7 +782,23 @@ class TtMoe(LightweightModule):
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
         # would leave the cache holding a deallocated tensor (next forward's cache hit fails is_allocated()).
-        x = ttnn.deallocate(x)
+        # Dispatch has consumed routed_x by here. Under LatentMoE it is the latent buffer, a distinct
+        # allocation needing its own free; without a latent space it IS x, so it is only an alias to
+        # drop so that the deallocate below sees a single reference to the buffer.
+        latent_input = None
+        if not self.use_latent_moe:
+            routed_x = None
+        elif return_intermediates:
+            # to_memory_config short-circuits when the config already matches, handing back a tensor
+            # that SHARES routed_x's buffer instead of copying it -- and routed_x is interleaved-DRAM
+            # on every path run today. Freeing it then would leave the PCC path reading freed memory,
+            # so release routed_x only when a real copy was made.
+            latent_input = ttnn.to_memory_config(routed_x, ttnn.DRAM_MEMORY_CONFIG)
+            if routed_x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                routed_x = ttnn.deallocate(routed_x, force=True)
+        else:
+            routed_x = ttnn.deallocate(routed_x, force=True)
+        x = ttnn.deallocate(x, force=True)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
@@ -716,6 +859,18 @@ class TtMoe(LightweightModule):
             expert_dispatch_table=self.tt_expert_dispatch_table,
         )
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+
+        # ========================================
+        # Step 5b: LatentMoE -- project back out of the latent space (Kimi-K3 only)
+        # ========================================
+        # Must stay above the squeeze: the distributed norm inside from_latent() is rank-4 only.
+        latent_routed_output = None
+        if self.use_latent_moe:
+            if return_intermediates:
+                # Reshape only; from_latent() reads routed_output without mutating it.
+                latent_routed_output = ttnn.squeeze(routed_output, dim=0)
+            routed_output = self.latent_projections.from_latent(routed_output)
+            logger.debug(f"[TtMoe.forward] routed_output (after latent up_proj) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
         # (1, 1, 256, 512) -> (1, 256, 512)
@@ -791,6 +946,8 @@ class TtMoe(LightweightModule):
                 shared_output=shared_output,
                 combined_output=combined_output,
                 routed_output=routed_output,
+                latent_routed_output=latent_routed_output,
+                latent_input=latent_input,
                 expert_token_counts=tt_expert_token_counts,
             )
 

@@ -12,33 +12,45 @@ Tests that hidden dimension sharding across chips produces correct results when
 using the distributed RMSNorm approach with all-gather for global statistics.
 """
 
+
 import pytest
 import torch
 from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    isl_per_chip = params["isl_per_chip"]
+
+    if not on_ci:
+        return False
+    if isl_per_chip == 4096:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
-    "isl_per_chip, emb_dim, epsilon, num_links", [(3200, 7168, 1e-6, 1), (4096, 7168, 1e-6, 1)], ids=["3.2K", "4K"]
+    "isl_per_chip, emb_dim, epsilon, num_links",
+    [(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 1e-6, 1)],
+    ids=["isl_5k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            torus_x_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            id="torus-x-1x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -60,7 +72,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
-    per_device_width = emb_dim // num_devices
+    per_device_width = emb_dim // mesh_shape[1]
 
     # 4D shapes for distributed RMSNorm
     inp_shape_full = (1, 1, isl_per_chip, emb_dim)
@@ -69,9 +81,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     logger.debug(f"Full input: {inp_shape_full}, per-device: {inp_shape_per_device}")
 
-    # Determine topology from fabric config
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     logger.debug(f"Using topology: {topology}")
 
     signpost(f"RMSNorm PCC test - {mesh_shape=} {isl_per_chip=} {emb_dim=} {num_links=} {topology=}")
@@ -131,6 +141,9 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     # Compare output against PyTorch reference
     # ============================================
     logger.debug("Comparing distributed RMSNorm vs PyTorch reference")
+    # The 2x4 Fabric2D profile replicates the TP-sharded tensor across the two SP rows. The composer
+    # concatenates those replicas on dim 0, so validate every replica against the same reference.
+    torch_reference = torch_reference.expand(mesh_shape[0], -1, -1, -1)
     pcc_passed, pcc_message = assert_with_pcc(
         torch_reference.to(torch.float32),
         tt_distributed_torch.to(torch.float32),
@@ -142,7 +155,10 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug("PCC test passed!")
 
 
-@pytest.mark.parametrize("isl_per_chip, emb_dim, epsilon", [(3200, 7168, 1e-6), (4096, 7168, 1e-6)], ids=["3.2K", "4K"])
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+@pytest.mark.parametrize(
+    "isl_per_chip, emb_dim, epsilon", [(PREFILL_CHUNK_TOKENS_PER_CHIP, 7168, 1e-6)], ids=["isl_5k"]
+)
 def test_rmsnorm_single_chip(device, isl_per_chip, emb_dim, epsilon):
     """
     Test single-chip full dimension RMSNorm against PyTorch reference.

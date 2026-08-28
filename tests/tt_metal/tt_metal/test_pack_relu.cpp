@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -175,7 +176,7 @@ static void run_pack_relu_test(
     };
     experimental::SetProgramRunArgs(program, params);
 
-    detail::LaunchProgram(dev, program, true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
     detail::ReadFromBuffer(dst_dram_buffer, result_vec);

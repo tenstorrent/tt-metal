@@ -531,3 +531,21 @@ def test_concat_int32_2d_dim1_regression(device):
 
     tt_output_torch = ttnn.to_torch(tt_output)
     assert torch.equal(torch_output, tt_output_torch)
+
+
+@pytest.mark.parametrize("width", [32, 20])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_concat_fp32_last_dim_mantissa_not_truncated(device, width, layout):
+    """fp32 concat on the last dim must be bitwise exact, aligned or not."""
+    shape = (1, 1, 32, width)
+    numel = 32 * width
+    k = torch.arange(numel, dtype=torch.int64) % 23 + 1
+    torch_input = (1.0 + torch.pow(2.0, -k.to(torch.float64))).to(torch.float32).reshape(shape)
+    torch_output = torch.cat([torch_input, torch_input], dim=3)
+
+    tt_a = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.float32)
+    tt_b = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.float32)
+    tt_output = ttnn.concat([tt_a, tt_b], dim=3)
+
+    assert tt_output.dtype == ttnn.float32
+    assert_equal(torch_output, ttnn.to_torch(tt_output))

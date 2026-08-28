@@ -24,6 +24,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.submodule-changed }}
   any-code-changed:
     value: ${{ steps.find-changed-files.outputs.any-code-changed }}
+  run-clang-tidy:
+    value: ${{ steps.find-changed-files.outputs.run-clang-tidy }}
   docs-changed:
     value: ${{ steps.find-changed-files.outputs.docs-changed }}
   model-charts-changed:

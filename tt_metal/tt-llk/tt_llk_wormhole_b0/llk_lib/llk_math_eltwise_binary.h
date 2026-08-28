@@ -643,6 +643,12 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape &tensor_sh
     {
         _llk_math_eltwise_binary_with_dest_reuse_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest>(tensor_shape, acc_to_dest);
     }
+
+    // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag but
+    // eltwise-binary init never sets it, so re-establish the operand-driven DEFAULT here — otherwise a preceding
+    // copy_init/datacopy op that left PRESERVE leaks into the MOP (denormal Src results differ). Also
+    // covers bcast add/sub/mul, which route through this init. Mirrors reduce/transpose/datacopy.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -672,6 +678,14 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const ckernel::TensorShape &tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc = false)
 {
+    // Zero-flag leak guard. ELWADD/ELWMUL/ELWSUB honor ALU_ACC_CTRL_Zero_Flag_disabled_src; a prior
+    // copy_init/datacopy op leaking PRESERVE here changes denormal Src results. eltwise_binary_init
+    // must have re-established the format-driven DEFAULT (fires only under LLK asserts).
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "eltwise_binary: Src zero-substitution flag is not in DEFAULT state — a prior op (copy_init/datacopy) leaked "
+        "PRESERVE into ELWADD/ELWMUL/ELWSUB without a format-changing reconfig; denormal Src results will differ");
+
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
     {
         _llk_math_eltwise_binary_standard_<eltwise_binary_type, src_b_bcast_type, Dst, is_fp32_dest_acc_en, math_fidelity>(tensor_shape, dst_index);
@@ -824,6 +838,10 @@ inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // SDPA SrcA-broadcast binary path also consumes the Src zero flag —
+    // re-establish the operand-driven DEFAULT so a preceding copy_init/unary leak can't reach the MOP.
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -834,6 +852,12 @@ inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
  */
 inline void _llk_math_eltwise_binary_(std::uint32_t dst_index)
 {
+    // Zero-flag leak guard — see the TensorShape overload above.
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "eltwise_binary (SDPA): Src zero-substitution flag is not in DEFAULT state — a prior op leaked "
+        "PRESERVE into ELWADD/ELWMUL/ELWSUB without a format-changing reconfig; denormal Src results will differ");
+
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);

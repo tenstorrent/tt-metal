@@ -264,14 +264,15 @@ ProgramDescriptor build_ring_program_descriptor(
         num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
     uint32_t max_bands = 0;
     {
-        const uint32_t bands_per_block = band_count / num_blocks, blk_extra = band_count % num_blocks;
-        uint32_t blk_off = 0;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            const uint32_t blk_bands = bands_per_block + (blk < blk_extra ? 1u : 0u);
             uint32_t col_cursor = 0;
             for (uint32_t rlevel = 0; rlevel < ring_size; ++rlevel) {
-                for (uint32_t i = 0; i < blk_bands; ++i) {
-                    const uint32_t band_abs = blk_off + i;
+                // Keep every row-block useful when kv_len is a runtime prefix of the persistent K capacity.
+                // A contiguous split would give block 0 [0, capacity/blocks), block 1 the next range, etc.
+                // Consequently a short valid prefix activates only block 0 even though all row-blocks are live.
+                // Deal bands round-robin across blocks instead: every prefix is balanced to within one band, while
+                // each block still has a disjoint band set and its K-mcast remains lockstep down the block's rows.
+                for (uint32_t band_abs = blk; band_abs < band_count; band_abs += num_blocks) {
                     if (band_readiness(band_abs) != rlevel) {
                         continue;
                     }
@@ -279,7 +280,6 @@ ProgramDescriptor build_ring_program_descriptor(
                     ++col_cursor;
                 }
             }
-            blk_off += blk_bands;
             for (uint32_t col = 0; col < cols_used; ++col) {
                 max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(band_list[blk][col].size()));
             }
@@ -766,6 +766,22 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
                 }
             }
         };
+
+        // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
+        // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
+        // program. Runtime-arg layouts are declared in ring_attention_all_gather_async_detail.
+        const auto& ag_semaphores = args.fused_ring->ag_semaphore;
+        TT_FATAL(
+            ag_semaphores.size() >= 2,
+            "indexer_score fused override: expected at least 2 AG semaphores, got {}",
+            ag_semaphores.size());
+        const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
+        const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
+        patch_ag_field(/*reader forward=*/3, /*out_ready_sem=*/2, forward_semaphore);
+        patch_ag_field(/*writer forward=*/4, /*out_ready_sem=*/4, forward_semaphore);
+        patch_ag_field(/*reader backward=*/5, /*out_ready_sem=*/2, backward_semaphore);
+        patch_ag_field(/*writer backward=*/6, /*out_ready_sem=*/4, backward_semaphore);
+
         constexpr uint32_t ag_reader_input_base =
             ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
         constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
