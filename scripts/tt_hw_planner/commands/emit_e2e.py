@@ -2158,6 +2158,11 @@ A recorded ceiling changes what the pipeline DOES, never what the tests CLAIM. A
 smaller batch than it says it runs is worse than one that fails: it reports coverage nobody has. So
 every test states the batch it actually drives -- read it from the pipeline rather than typing a
 number -- and no docstring may name a batch its body does not run.
+A ceiling is a measurement, and measurements go stale. Before you finish, RE-TEST every ceiling you
+recorded: the work you did after recording it -- a kernel taught to chunk, a buffer made smaller, a
+stage taught to recover -- may have removed the very constraint that forced it, and a ceiling that
+outlives its cause silently costs throughput on every later run. Re-measure, then keep it only if it
+still reproduces.
 """
 
 

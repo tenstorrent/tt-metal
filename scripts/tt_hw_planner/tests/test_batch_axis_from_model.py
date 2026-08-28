@@ -149,3 +149,18 @@ def test_rules_forbid_a_test_claiming_a_batch_it_does_not_run():
     assert "never what the tests CLAIM" in flat
     assert "read it from the pipeline rather than typing a number" in flat
     assert "no docstring may name a batch its body does not run" in flat
+
+
+def test_rules_require_recorded_ceilings_to_be_retested():
+    """A ceiling recorded early must be re-measured before the run ends.
+
+    Observed: a run measured a stage ceiling from a real L1 overflow, capped that stage, then
+    later taught the offending kernel to recover from the same overflow -- and never revisited
+    the cap. Lifting it afterwards ran the full batch with no error AND 12% faster, so the
+    stale ceiling was costing throughput on every run.
+    """
+    rules = _BATCH_COMMON_RULES.format(batch=32)
+    flat = " ".join(rules.split())
+    assert "RE-TEST every ceiling you recorded" in flat
+    assert "may have removed the very constraint that forced it" in flat
+    assert "keep it only if it still reproduces" in flat
