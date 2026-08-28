@@ -541,31 +541,21 @@ static_assert(sizeof(fabric_connection_info_t) == 24, "Struct size mismatch!");
 static_assert(sizeof(fabric_connection_info_t) % 4 == 0, "Struct size must be 4-byte aligned");
 
 struct fabric_aligned_connection_info_t {
-    // Every field here is a NoC read/write target, and NOC_L1_READ_ALIGNMENT_BYTES ==
-    // NOC_L1_WRITE_ALIGNMENT_BYTES == 16 on Blackhole, so each owns a full 16 B slot.
-    // Packing two semaphores into one slot is invalid, not merely tight.
-
     // 16-byte aligned semaphore address for flow control
     uint32_t worker_flow_control_semaphore;
     uint32_t padding_0[3];
 
-    // The teardown semaphore itself, not a pointer to one. The EDM writes its ack here over
-    // NoC after the worker publishes this address in open_start(). Holding it here rather
-    // than in a program-semaphore slot is what keeps fabric off the 16-slot per-core budget.
+    // 16-byte aligned teardown semaphore. EDM increments it at the address the worker
+    // publishes in open_start()
     uint32_t worker_teardown_semaphore;
     uint32_t padding_1[3];
 
-    // Landing zone for the SenderChannelProducerCursor block read issued in open_start().
-    // That type is asserted to be exactly 16 B (fabric_edm_types.hpp), so this must own the
-    // whole slot -- a whole-block read here must not disturb a neighbour.
+    // 16-byte landing zone for the SenderChannelProducerCursor block read in open_start().
+    // sizeof(SenderChannelProducerCursor) == 16, see fabric_edm_types.hpp
     uint32_t worker_producer_cursor[4];
 };
 
-// The padding above is load-bearing, not cosmetic: each of these fields is a NoC
-// read/write target and must start on a 16 B boundary. Enforce it rather than trusting
-// the pad widths to stay correct if a field is added or resized. (This header is shared
-// host/device and the neighbouring structs all use explicit padding rather than alignas,
-// so the layout stays literal across both toolchains and the asserts do the checking.)
+// NOTE: Every field above is a NoC read/write target and must start on a 16-byte boundary
 static_assert(sizeof(fabric_aligned_connection_info_t) == 48, "Struct size mismatch!");
 static_assert(offsetof(fabric_aligned_connection_info_t, worker_flow_control_semaphore) % 16 == 0);
 static_assert(offsetof(fabric_aligned_connection_info_t, worker_teardown_semaphore) % 16 == 0);

@@ -39,9 +39,8 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     tt::tt_fabric::FabricApiType api_type = tt::tt_fabric::FabricApiType::Linear);
 
 // Compute fabric connection RT args without any PD mutation.
-// Pure computation — resolves routing and assembles RT args; allocates nothing. Worker
-// teardown and the producer cursor live in the fabric connection table, so no semaphore
-// ids are needed or accepted.
+// Pure computation — resolves routing and assembles RT args. Teardown and the producer
+// cursor come from the conn table, so only [direction, eth_channel] is emitted.
 // Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,

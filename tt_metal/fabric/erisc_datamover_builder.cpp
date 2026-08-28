@@ -556,9 +556,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-// VC0 (Tensix worker) path. The connection table is indexed by eth channel and holds the
-// worker teardown semaphore and producer cursor as storage, so the kernel derives both
-// addresses itself -- the channel is the only thing that has to be passed.
+// VC0 worker path: the kernel indexes the conn table by eth channel for teardown and the
+// producer cursor.
 void append_worker_to_fabric_edm_sender_rt_args(chan_id_t eth_channel, std::vector<uint32_t>& args_out) {
     args_out.push_back(eth_channel);
 }

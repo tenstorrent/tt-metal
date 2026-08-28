@@ -103,9 +103,8 @@ struct WorkerToFabricEdmSenderBase {
         volatile uint32_t* writer_send_sem_addr;
         uint32_t worker_free_slots_stream_id;  // used to update the available buffer slot on the receiving router
                                                // (decrement by 1 from the sending side for each packet)
-        // Worker teardown flag and producer-cursor landing zone. On VC0 these are storage in
-        // the per-channel connection table; on VC2 they arrive as program-semaphore ids in
-        // rt args. Assigned in the branch below, validated and used after it.
+        // Worker teardown flag and producer-cursor landing zone; assigned in the branch
+        // below, from the conn table on VC0 and from rt args on VC2.
         uintptr_t worker_teardown_raw = 0;
         uintptr_t worker_buffer_index_semaphore_addr = 0;
 
@@ -131,10 +130,7 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
             worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
-            // Teardown and the producer cursor are storage in the same per-channel entry as
-            // worker_flow_control_semaphore above, so their addresses are derived here rather
-            // than allocated host-side and passed in. Nothing is published or plumbed -- the
-            // field IS the semaphore, which is why this path consumes no semaphore rt args.
+            // Storage in the same per-channel entry as worker_flow_control_semaphore above
             worker_teardown_raw = reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore);
             worker_buffer_index_semaphore_addr =
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_producer_cursor[0]);
@@ -157,8 +153,7 @@ struct WorkerToFabricEdmSenderBase {
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
             worker_free_slots_stream_id = STREAM_ID;
-            // No connection table on this path, so these two remain program-semaphore ids
-            // passed in rt args and resolved here.
+            // VC2: no conn table, so these are program-semaphore ids read from rt args.
             worker_teardown_raw = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
             worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
         }

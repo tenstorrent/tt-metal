@@ -199,10 +199,8 @@ void append_fabric_connection_rt_args(
     uint32_t worker_buffer_index_semaphore_id = 0;
     uint32_t worker_flow_control_semaphore_id = 0;
 
-    // Only the non-WORKER (VC2 / ethernet dispatch) path needs these as program semaphores.
-    // A Tensix worker is on VC0, where teardown and the producer cursor are storage in the
-    // per-channel connection table and the kernel addresses them directly, so allocating
-    // here would burn two of that core's 16 slots for values nothing reads.
+    // Ethernet dispatch resolves teardown and buffer index from semaphore ids; a Tensix
+    // worker is on VC0 and reads both from the conn table.
     if (core_type != CoreType::WORKER) {
         if constexpr (std::is_same_v<ProgramOrDescriptor, tt::tt_metal::ProgramDescriptor>) {
             auto teardown_sem_id_opt = worker_program_or_desc.find_available_semaphore_id(worker_core, core_type);
@@ -700,10 +698,8 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Emits 2 args per connection: [direction, eth_channel]. The worker teardown flag and
-// producer-cursor landing zone are storage in the per-channel fabric connection table
-// (fabric_aligned_connection_info_t), addressed directly by the kernel, so no semaphore
-// is allocated or passed for them.
+// Emits [direction, eth_channel] per connection; the kernel reads teardown and the producer
+// cursor from the conn table.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
