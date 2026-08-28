@@ -37,6 +37,11 @@ def test_assert_accurate_rejects_non_finite_tensor(side: str, value: float, expe
         assert_accurate(golden, actual)
 
 
+def test_assert_accurate_rejects_shape_change(expect_error) -> None:
+    with expect_error(AssertionError, "shape"):
+        assert_accurate(torch.arange(4).reshape(1, 4), torch.arange(4).reshape(1, 1, 4))
+
+
 def test_assert_accurate_rejects_low_pcc(expect_error) -> None:
     golden = torch.tensor([0.0, 1.0, 2.0, 4.0])
     actual = torch.tensor([4.0, 2.0, 1.0, 0.0])
@@ -70,6 +75,24 @@ def test_assert_equal_rejects_non_finite_tensor(side: str, value: float, expecte
 
     with expect_error(AssertionError, expected_field):
         assert_equal(expected, actual)
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [assert_equal, assert_bit_identical],
+)
+def test_equality_contracts_reject_shape_change(contract, expect_error) -> None:
+    with expect_error(AssertionError, "shape"):
+        contract(torch.tensor([1.0, 2.0]), torch.tensor([[1.0, 2.0]]))
+
+
+@pytest.mark.parametrize(
+    "contract",
+    [assert_equal, assert_bit_identical],
+)
+def test_equality_contracts_reject_dtype_change(contract, expect_error) -> None:
+    with expect_error(AssertionError, "dtype"):
+        contract(torch.tensor([1.0, 2.0]), torch.tensor([1, 2]))
 
 
 def test_assert_equal_rejects_changed_value(expect_error) -> None:
