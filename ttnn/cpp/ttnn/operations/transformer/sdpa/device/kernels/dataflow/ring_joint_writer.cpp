@@ -630,7 +630,10 @@ void kernel_main() {
 
     // Track non-skipped iters so the first active iter starts with fresh accumulators (matches compute).
     bool seen_active_iter = false;
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    // Windowed gather: match the reader's iteration count (1 + fwd + bwd delivered shards; this equals
+    // ring_size for a dense gather but is fewer when the AG num_targets are clamped to a window radius).
+    const uint32_t sdpa_ring_iterations =
+        has_sliding_window ? 1u : (1u + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1]);
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         // Sliding compute consumes all local/halo source ranges in one logical pass, so the
         // writer sees exactly one final output per Q and never enters deferred staging.

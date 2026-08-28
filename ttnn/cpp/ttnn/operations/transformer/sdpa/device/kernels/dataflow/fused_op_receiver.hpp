@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/assert.h"
+#include "api/debug/dprint.h"
 #include "ring_utils.hpp"
 #include <array>
 
@@ -37,7 +38,11 @@ struct RingSDPAOpReceiver {
         ASSERT(initialized);
         return seq.get_next_ring_id([&](uint32_t dir, uint32_t val) {
             if (this->wait_for_op_signal) {
+                // DEBUG (windowed-gather bring-up): the last "seqwait" with no matching "seqok" is the
+                // hanging wait -- it names the direction and the threshold the clamped AG never reached.
+                DPRINT("seqwait dir{} want{}\n", (uint32_t)dir, (uint32_t)val);
                 Semaphore<>(this->signal_op_semaphore_ids[dir]).wait_min(val);
+                DPRINT("seqok dir{} want{}\n", (uint32_t)dir, (uint32_t)val);
             }
         });
     }

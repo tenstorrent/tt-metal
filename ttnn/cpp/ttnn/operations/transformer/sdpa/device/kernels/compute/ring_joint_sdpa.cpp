@@ -274,7 +274,10 @@ void kernel_main() {
         q_shard_start_tile = ring_index * q_local_padded_Nt;
     }
 
-    constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
+    // Windowed gather: match the reader's iteration count (1 + fwd + bwd delivered shards; this equals
+    // ring_size for a dense gather but is fewer when the AG num_targets are clamped to a window radius).
+    const uint32_t sdpa_ring_iterations =
+        has_sliding_window ? 1u : (1u + forward_writes_expected + backward_writes_expected);
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
         // The dataflow reader has already waited for the required halo completion signals.
