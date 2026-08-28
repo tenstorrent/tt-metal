@@ -3046,10 +3046,21 @@ def edge_spec(
     domain: 47 of the 97 unary SFPU ops are smooth everywhere with no knee and no pole,
     and for those an edge sweep has nothing to add beyond cat B.
 
-    ``custom`` places the values at the head of every face and zero-fills the remainder,
-    which is what we want — a face is far larger than these lists, and 0.0 is itself a
-    useful probe. Note it is per-face only (generate_full_tensor raises), so the values
-    repeat in every face; ``custom_faces`` is available when faces must differ.
+    ``custom`` with ``cycle=True``: the values are tiled across every face rather than
+    written at its head with a zero tail. The zero tail was not free. The median edge list
+    across the swept unary ops is four values against a 256-element face, so ~98% of the
+    tensor was 0.0 — which put the probes in lanes 0-3 of the first vector op only, hiding
+    any lane-position-dependent defect, and left PCC and every other aggregate a statement
+    about the filler rather than about the probe. It also drove an out-of-domain 0.0 into
+    Acosh, Log and Rsqrt on every edge variant without recording that it was doing so.
+    ``0.0`` is a registered pole or knee wherever it is meaningful, so cycling loses nothing
+    and an op that wants it gets it from _OP_SINGULARITIES or _OP_EDGE_POINTS explicitly.
+
+    A caller can pass ``cycle=False`` to get the old behaviour back for a probe that
+    genuinely depends on the tail — the int comparison sweep is the one place that does.
+
+    Note ``custom`` is per-face only (generate_full_tensor raises), so the pattern repeats
+    in every face; ``custom_faces`` is available when faces must differ.
 
     Integer formats: format_specials() returns the integer extremes, but INT_MIN cannot
     be delivered through any spec — CustomStrategy clamps through _get_integer_bounds,
@@ -3074,6 +3085,7 @@ def edge_spec(
             f"{input_format.name}: StimuliSpec.custom clamps INT_MIN to INT_MIN + 1. "
             f"Use a raw src_A_override tensor instead."
         )
+    kwargs.setdefault("cycle", True)
     return StimuliSpec.custom(values=vals, seed=0, **kwargs)
 
 

@@ -847,6 +847,7 @@ def test_eltwise_unary_sfpu_extremes(
                 formats.input_format, formats.output_format, dest_acc
             ),
             seed=0,
+            cycle=True,
         ),
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
@@ -938,7 +939,11 @@ def test_eltwise_unary_sfpu_square_saturation(
         mathop,
         FastMode.No,
         input_dimensions,
-        spec_A=StimuliSpec.custom(values=list(_SQUARE_SATURATION_PROBES), seed=0),
+        # cycle=True for the reason edge_spec() gives: a zero tail would make the verdict a
+        # statement about square(0), and 0 is the one input that cannot saturate.
+        spec_A=StimuliSpec.custom(
+            values=list(_SQUARE_SATURATION_PROBES), seed=0, cycle=True
+        ),
     )
 
 

@@ -25,7 +25,6 @@ the concrete steps to reach them.
 | # | Gap | Family | Effort | Value | Blocked by |
 |---|---|---|---|---|---|
 | [W1](#w1--signed-zero-at-a-registered-pole) | `-0.0` never reaches a pole operand (`div(x, -0.0)`, `atan2(y, -0.0)`) | binary, ternary | S | High | — |
-| [W2](#w2--edge-probes-occupy-ten-lanes-out-of-a-tile) | Unary edge probes fill ~4–10 of 256 elements per face; rest is `0.0` | unary | S | High | — |
 | [W3](#w3--integer-binary-ops-never-see-zero-negatives-or-the-uint32-upper-half) | Int binary ops: no `0`, no negatives, uint32 capped at 1e6 | binary | M | High | partly HW (sign-magnitude Dst) |
 | [W4](#w4--ttnn_wheremixed-is-not-mixed) | `test_ttnn_where[mixed]` is all-true on Float32 | ternary | S | High | — |
 | [W6](#w6--the-ternary-scalar-is-hardcoded-to-20) | `SFPU_TERNARY_SCALAR` never varies | ternary | S | Medium | — |
@@ -35,17 +34,19 @@ the concrete steps to reach them.
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
 | [W11](#w11--a-coverage-ledger-so-the-next-gap-is-visible) | No machine-checked record of which value classes each op has seen | infra | M | High | the items above |
 
-Suggested order: **W1 → W2 → W4 → W6 → W8** (small, unblocked, each independently
-mergeable), then **W3 → W11**, then **W7 → W9 → W10** (each needs a measurement pass, and
-W9 a kernel-contract ruling).
+Suggested order: **W1 → W4 → W6 → W8** (small, unblocked, each independently mergeable),
+then **W3 → W11**, then **W7 → W9 → W10** (each needs a measurement pass, and W9 a
+kernel-contract ruling).
 
 **Already landed**, in the commit this document arrives with: the whole of the original W5
 (IEEE specials for the ternary family, including the `TernarySFPUGolden` and `WhereGolden`
 Dest/pack modelling that blocked it), and all of the original W7 except its overflow half —
 `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis on
 `edge_values()`/`edge_spec()`, `EXTREMES_READY_OPS` with its first tranche enrolled, and one
-saturation test. W7 below is what is left of it. The numbering is unchanged so that
-references from commit messages and reviews still resolve; W5 is simply gone.
+saturation test. W7 below is what is left of it. Also the whole of W2 — `StimuliSpec.cycle`,
+honoured by `CustomStrategy`, on by default in `edge_spec()`. The numbering is unchanged so
+that references from commit messages and reviews still resolve; the closed items are simply
+gone.
 
 ---
 
@@ -217,97 +218,6 @@ tensor.
 
 ---
 
-## W2 — Edge probes occupy ten lanes out of a tile
-
-### Problem
-
-`edge_spec()` returns `StimuliSpec.custom(values=vals)`, and `CustomStrategy.generate_face`
-writes those values at the head of each 256-element face and **zero-fills the remaining
-~250**. Measured across the 95 swept unary ops, the median edge list is **4 values** and
-the longest is 10 (`Round`).
-
-Two consequences:
-
-- Probe values only ever occupy lanes 0–9 of the first vector operation in each face. A
-  lane-position-dependent defect at an edge value is invisible.
-- The tolerance verdict is computed over a tensor that is ~96% `0.0`. PCC and any
-  aggregate statistic are dominated by a value that is not the probe.
-
-There is also an accidental side effect worth deciding about deliberately: for ops whose
-domain excludes zero (`Acosh`, `Log`, `Rsqrt`), the zero fill is silently driving an
-out-of-domain input on every edge variant, and nothing records that it is being tested.
-
-The binary suite already solved this. `_build_paired_tile_override()` in
-`test_sfpu_binary.py` **cycles** the pair list to fill a whole tile, "so the override
-divides evenly into whatever buffer the driver picks and every element is a pair the
-caller meant to drive". The unary and ternary sides should match.
-
-### Steps
-
-1. **`helpers/stimuli_generator/spec.py`.** Add a field to `StimuliSpec`:
-
-   ```python
-   cycle: bool = False   # "custom" only: repeat *values* to fill the face instead of
-                         # zero-filling the remainder.
-   ```
-
-   Document it under the `"custom"` entry of the class docstring, next to the existing
-   "Values are not repeated." sentence — which becomes "…unless `cycle=True`."
-
-2. **`helpers/stimuli_generator/strategies/structured.py` — `CustomStrategy.generate_face`.**
-   Honour it, and drop the `len(values) > size` error only in the cycling case (cycling a
-   long list is well defined):
-
-   ```python
-   if spec.cycle:
-       reps = -(-size // len(vals))            # ceil-div
-       tensor = torch.tensor((vals * reps)[:size], dtype=dtype)
-   else:
-       tensor = torch.zeros(size, dtype=dtype)
-       tensor[: len(vals)] = torch.tensor(vals, dtype=dtype)
-   return tensor
-   ```
-
-3. **`helpers/sfpu_domains.py` — `edge_spec()`.** Pass `cycle=True`, and update the
-   docstring paragraph that currently justifies the zero fill ("a face is far larger than
-   these lists, and 0.0 is itself a useful probe"). The replacement rationale: `0.0` is
-   already a registered pole or knee wherever it is meaningful, and cycling both spreads
-   the probes across every lane and stops the verdict being computed mostly over a
-   filler value.
-
-4. **Re-baseline.** Ops whose domain excludes zero will stop receiving the accidental
-   `0.0`. If any of them *loses* coverage you care about, that value belongs in
-   `_OP_SINGULARITIES` or `_OP_EDGE_POINTS` explicitly — which is the right place for it.
-
-### Pin it
-
-```python
-def test_edge_spec_cycles_probes_across_the_whole_face():
-    spec = edge_spec(MathOperation.Reciprocal, DataFormat.Float32, DataFormat.Float32,
-                     dest_acc=DestAccumulation.Yes)
-    assert spec.cycle, "edge probes must fill the face; a zero-filled tail makes the " \
-                       "verdict a statement about 0.0, not about the probe"
-```
-
-and a strategy-level test that a 4-element list produces no zeros in a 256-element face
-unless `0.0` is one of the four.
-
-### Verify
-
-```bash
-pytest test_sfpu_domains.py -q
-CHIP_ARCH=blackhole pytest test_sfpu_unary.py -q -m nightly -k edges
-```
-
-### Expect
-
-Some variants that passed on the strength of a mostly-zero tensor may now fail. That is
-the gap closing, not a regression — triage per convention 3.
-
-**Cost:** zero. Same tensor size, same ELFs.
-
----
-
 ## W3 — Integer binary ops never see zero, negatives, or the uint32 upper half
 
 ### Problem
@@ -351,7 +261,7 @@ It does **not** block zero, and it does not block the uint32 upper half.
    ```
 
    Deliver `must_include` the same way `_int_unary_stimuli_spec` does — a
-   `StimuliSpec.custom(values=straddle + spread, cycle=True)` (see W2), not a second
+   `StimuliSpec.custom(values=straddle + spread, cycle=True)`, not a second
    tensor.
 
 2. **Add `test_sfpu_binary_int_zero_operands`** (nightly), driving the cartesian product

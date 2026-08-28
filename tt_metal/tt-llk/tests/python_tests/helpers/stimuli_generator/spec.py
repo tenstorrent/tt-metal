@@ -106,7 +106,9 @@ class StimuliSpec:
         "custom"
             Explicit per-face values: the elements from *values* are
             written at the start of the flattened face, and every
-            remaining element is zero.  Values are not repeated.
+            remaining element is zero.  Values are not repeated unless
+            *cycle* is set, in which case they are tiled across the whole
+            face and there is no zero tail.
             Participates in the normal face loop, so it works naturally
             with face_specs and masked_faces.  Ignores *low*,
             *high*, *seed*, *value*.
@@ -149,9 +151,21 @@ class StimuliSpec:
         elements).  Defaults to 1.0.
     values: list[float], optional
         Explicit value list for "custom".  Written at the start of
-        the flattened face; remaining elements are zero.  For integer
-        formats each value is rounded and clamped to the representable
-        range.  Must not be empty when distribution="custom".
+        the flattened face; remaining elements are zero unless *cycle*
+        is set.  For integer formats each value is rounded and clamped
+        to the representable range.  Must not be empty when
+        distribution="custom".
+    cycle: bool
+        "custom" only.  Tile *values* across the face instead of
+        zero-filling the remainder, so every lane carries a value the
+        caller meant to drive rather than a filler.  Two things follow.
+        A probe reaches every lane position, so a lane-dependent defect
+        at an edge value is visible; and the tolerance verdict is
+        computed over the probes rather than over a tensor that is
+        mostly 0.0, which otherwise dominates PCC and every aggregate.
+        The *values* list may also be longer than a face when this is
+        set — tiling a long list is well defined, where writing one at
+        the head is not.  Defaults to False.
     mean: float
         Mean for "gaussian" and "gaussian_linspace".  Defaults to
         0.0.
@@ -210,6 +224,7 @@ class StimuliSpec:
     high: float = 1.0
     value: float = 1.0
     values: Optional[List[float]] = None
+    cycle: bool = False
     mean: float = 0.0
     std: float = 1.0
     seed: Optional[int] = None
@@ -250,7 +265,7 @@ class StimuliSpec:
 
     @classmethod
     def custom(cls, values: List[float], **kwargs) -> "StimuliSpec":
-        """Explicit values at the start of each face, zero-filled remainder."""
+        """Explicit values at the start of each face; zero-filled remainder unless cycle=True."""
         return cls(distribution=DistributionKind.CUSTOM, values=list(values), **kwargs)
 
     @classmethod

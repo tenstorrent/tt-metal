@@ -57,7 +57,7 @@ class FaceIdentityStrategy:
 
 
 class CustomStrategy:
-    """Explicit values at the head of each face; remainder zero-filled."""
+    """Explicit values at the head of each face; remainder zero-filled, or tiled if cycle."""
 
     short_circuit = False
 
@@ -71,11 +71,16 @@ class CustomStrategy:
     ) -> torch.Tensor:
         if spec.values is None or len(spec.values) == 0:
             raise ValueError("distribution='custom' requires a non-empty 'values' list")
-        if len(spec.values) > size:
+        # The over-long check applies to the head-write branch only: writing 300 values at the
+        # head of a 256-element face silently drops 44 of them, which is worth an error, while
+        # tiling a list longer than the face is well defined -- it simply truncates at a value
+        # boundary and every element is still one the caller asked for.
+        if not spec.cycle and len(spec.values) > size:
             raise ValueError(
                 f"custom values list has {len(spec.values)} elements "
                 f"but face has only {size} "
-                f"({face_r_dim} rows × {FACE_C_DIM} cols)"
+                f"({face_r_dim} rows × {FACE_C_DIM} cols). "
+                "Pass cycle=True to tile the list across the face instead."
             )
         dtype = _get_dtype_for_format(stimuli_format)
         if stimuli_format.is_integer():
@@ -83,6 +88,9 @@ class CustomStrategy:
             vals = [max(int_min, min(int(round(v)), int_max)) for v in spec.values]
         else:
             vals = list(spec.values)
+        if spec.cycle:
+            reps = -(-size // len(vals))  # ceil-div
+            return torch.tensor((vals * reps)[:size], dtype=dtype)
         tensor = torch.zeros(size, dtype=dtype)
         tensor[: len(vals)] = torch.tensor(vals, dtype=dtype)
         return tensor

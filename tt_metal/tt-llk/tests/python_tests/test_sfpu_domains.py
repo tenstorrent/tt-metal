@@ -46,6 +46,7 @@ from helpers.sfpu_domains import (
     specials_safe,
     specials_safe_formats,
 )
+from helpers.stimuli_generator import StimuliSpec
 
 # The formats the measurement covered: the 5x5 matrix driven over the isinf / isposinf /
 # isneginf / isnan / isfinite predicates on Wormhole n150. Integer and Fp8/MX *output*
@@ -643,6 +644,125 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
                 f"{input_format.name}->{output_format.name} dest_acc={dest_acc}: an emitted "
                 f"NaN packed to {float(out[0])}, not +inf"
             )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# How the probe fills the face
+#
+# Not metadata, but the mechanism that delivers it, and the failure mode is the same shape as
+# everything else here: a probe that reaches only lanes 0-3 still reads as coverage, and no
+# hardware run reports it -- the variant passes, having tested four lanes and 252 zeros.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_edge_spec_cycles_probes_across_the_whole_face():
+    """Edge probes must fill the face rather than leaving a zero tail.
+
+    With a four-value median list against a 256-element face, a zero-filled tail makes the
+    tolerance verdict a statement about 0.0: PCC and every aggregate are dominated by the
+    filler, and the probes never leave the first vector operation of each face.
+    """
+    from helpers.sfpu_domains import edge_spec
+
+    spec = edge_spec(
+        MathOperation.Reciprocal,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+    )
+    assert spec.cycle, (
+        "edge probes must fill the face; a zero-filled tail makes the verdict a statement "
+        "about 0.0, not about the probe"
+    )
+
+
+def test_edge_spec_lets_a_caller_opt_out_of_cycling():
+    """cycle=True is a default, not a fixed policy.
+
+    The int comparison sweep builds its own spec around a zero tail on purpose -- the tail is
+    its below-threshold probe -- so the knob has to stay reachable, or that sweep would have to
+    stop using this builder to keep its stimulus.
+    """
+    from helpers.sfpu_domains import edge_spec
+
+    spec = edge_spec(
+        MathOperation.Reciprocal,
+        DataFormat.Float32,
+        DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+        cycle=False,
+    )
+    assert not spec.cycle
+
+
+def test_cycled_custom_face_holds_only_probe_values():
+    """A cycled face contains the probe values and nothing else -- no filler, in any lane.
+
+    The strategy-level half of the same claim: `test_edge_spec_cycles_probes_across_the_whole_face`
+    pins the flag, this pins what the flag does. A four-value list must produce a face with no
+    zeros in it unless 0.0 is one of the four, and every lane must hold a value the caller asked
+    for.
+    """
+    from helpers.stimuli_generator.strategies.structured import CustomStrategy
+
+    size = 256
+    values = [-2.5, -1.5, 1.5, 2.5]
+    face = CustomStrategy().generate_face(
+        StimuliSpec.custom(values=values, cycle=True),
+        DataFormat.Float32,
+        16,
+        size,
+        None,
+    )
+    assert face.numel() == size
+    assert not bool((face == 0.0).any()), "a cycled face must have no filler lanes"
+    assert set(face.tolist()) == set(values)
+    # Tiled in order and truncated at the end, so a face that is not a multiple of the list
+    # length still starts every repeat at values[0].
+    assert face[: len(values)].tolist() == values
+    assert face[len(values) : 2 * len(values)].tolist() == values
+
+
+def test_uncycled_custom_face_still_zero_fills():
+    """The default is unchanged, so a caller that relied on the tail still gets it."""
+    from helpers.stimuli_generator.strategies.structured import CustomStrategy
+
+    face = CustomStrategy().generate_face(
+        StimuliSpec.custom(values=[1.0, 2.0]),
+        DataFormat.Float32,
+        16,
+        256,
+        None,
+    )
+    assert face[:2].tolist() == [1.0, 2.0]
+    assert int((face == 0.0).sum()) == 254
+
+
+def test_custom_rejects_an_over_long_list_only_when_it_would_drop_values():
+    """Longer than a face is an error when writing at the head, and fine when tiling.
+
+    Writing 300 values at the head of a 256-element face silently drops 44 of them, which is
+    the worst failure mode an edge list can have. Tiling truncates at a value boundary instead,
+    and every element is still one the caller asked for.
+    """
+    from helpers.stimuli_generator.strategies.structured import CustomStrategy
+
+    long_list = [float(i) for i in range(300)]
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="cycle=True"
+    ):
+        CustomStrategy().generate_face(
+            StimuliSpec.custom(values=long_list), DataFormat.Float32, 16, 256, None
+        )
+
+    face = CustomStrategy().generate_face(
+        StimuliSpec.custom(values=long_list, cycle=True),
+        DataFormat.Float32,
+        16,
+        256,
+        None,
+    )
+    assert face.tolist() == long_list[:256]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

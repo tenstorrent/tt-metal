@@ -529,7 +529,10 @@ def test_sfpu_ternary_operand_edges(
         Operand.B: _TERNARY_NONZERO_B if guard else None,
         Operand.C: None,
     }
-    specs[operand] = StimuliSpec.custom(values=vals, seed=0)
+    # cycle=True: the probed operand fills its face instead of leaving a zero tail, so the
+    # probe meets a fresh random pair in every lane rather than in the first few, and the
+    # verdict is not dominated by the (0, random, random) triples the tail would create.
+    specs[operand] = StimuliSpec.custom(values=vals, seed=0, cycle=True)
 
     # Where the golden's answer is a NaN the op emitted, a narrowing pipeline turns its sign
     # into the observable result, and Wormhole's SFPMAD leaves that sign unspecified -- so
@@ -606,10 +609,13 @@ def _addcmul_cancellation_specs():
     b = [b for b, _ in _ADDCMUL_CANCELLATION_BC]
     c = [c for _, c in _ADDCMUL_CANCELLATION_BC]
     a = [-_SCALAR_VALUE * bv * cv for bv, cv in _ADDCMUL_CANCELLATION_BC]
+    # cycle=True on all three so the relation a == -value*b*c holds in every lane. A zero
+    # tail would leave 0 + value*0*0 == 0 across ~96% of the tensor, which is a true
+    # statement about zero and not the cancellation this variant exists to drive.
     return (
-        StimuliSpec.custom(values=a, seed=0),
-        StimuliSpec.custom(values=b, seed=0),
-        StimuliSpec.custom(values=c, seed=0),
+        StimuliSpec.custom(values=a, seed=0, cycle=True),
+        StimuliSpec.custom(values=b, seed=0, cycle=True),
+        StimuliSpec.custom(values=c, seed=0, cycle=True),
     )
 
 
@@ -849,16 +855,19 @@ def _where_const_tile(value, fmt, dimensions):
 
 
 def _where_probe_tile(values, fmt, dimensions):
-    """*values* at the head of the tensor, the constant 1.0 everywhere else.
+    """*values* tiled across the whole tensor.
 
-    Not zero-filled: a zero in the *condition* operand selects the false branch, which is a
-    perfectly good case but not the one this variant is driving, and it would put two questions
-    in one tensor. 1.0 is in-range for every format here and selects the true branch, so the
-    filler lanes assert the ordinary behaviour while the head lanes assert the probe.
+    Tiled rather than written at the head with a filler tail, for the reason edge_spec() gives:
+    a probe confined to the first few lanes hides any lane-position-dependent defect, and the
+    verdict is then mostly a statement about the filler. Tiling also removes the question of
+    what the filler should be -- a zero in the *condition* operand would silently add the
+    false-branch case to a variant driving the true one.
     """
-    flat = torch.ones(dimensions[0] * dimensions[1], dtype=format_dict[fmt])
-    for i, v in enumerate(values):
-        flat[i] = v
+    total = dimensions[0] * dimensions[1]
+    reps = -(-total // len(values))
+    flat = torch.tensor((list(values) * reps)[:total], dtype=torch.float32).to(
+        format_dict[fmt]
+    )
     return flat.view(*dimensions)
 
 
