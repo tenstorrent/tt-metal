@@ -364,19 +364,12 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
             rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
         } else {
             // The first-hop neighbor is invariant per ConnectionKey and was recorded on
-            // the Connection at registration time (multi-Z disambiguation is encoded in the
-            // eth_chan / link_idx, so this dst is uniquely determined per key).
+            // the Connection at registration time.
             const auto& neighbor_node_id = conn.next_hop_dst;
             if (key.use_vc2()) {
                 append_fabric_vc2_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
             } else {
-                // VC0 connections are held in a RoutingPlaneConnectionManager on the device, which
-                // wants an eth_chan_directions tag ahead of each sender block. VC2 above keeps the
-                // bare adapter block, since the manager cannot parse a VC2 sender.
-                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-                rt_args.push_back(
-                    static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(key.direction)));
                 append_fabric_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
             }
