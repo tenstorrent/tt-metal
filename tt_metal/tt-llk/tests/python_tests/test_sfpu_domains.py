@@ -546,6 +546,62 @@ def test_exact_at_zero_probe_reaches_the_edge_sweep():
         assert 0.0 in knees, f"{op.name} has no zero probe: {knees}"
 
 
+def test_every_sweepable_op_is_classified_for_cat_f():
+    """Enrolled or recorded-as-not-ready, for every op a cat-F sweep can actually reach.
+
+    The last of the four totality checks, and the one that took two tranches: the first was
+    hand-picked as the ops that cannot overflow, the second measured the remaining 74 and split
+    55 / 19. Scoped to what a sweep can reach, because an op with no sweep is a different
+    problem from an undecided one -- the ledger says so in its own cell and this check would
+    otherwise conflate them.
+    """
+    import test_eltwise_unary_sfpu as unary
+    from helpers.sfpu_domains import (
+        _EXTREMES_NOT_READY,
+        EXTREMES_READY_OPS,
+        suite_coverage_from_tests,
+    )
+
+    # The saturation ops are covered by their own sweep rather than by EXTREMES_READY_OPS --
+    # cat F has two halves, and a check that knew only about the enrolment half would demand a
+    # verdict for ops that already have one.
+    candidates = set(unary._EDGE_SWEEP_OPS)
+    classified = (
+        set(EXTREMES_READY_OPS)
+        | set(_EXTREMES_NOT_READY)
+        | suite_coverage_from_tests().saturation
+    )
+    unclassified = sorted(op.name for op in candidates - classified)
+    assert not unclassified, (
+        "these ops are reachable by the cat-F sweep but appear in neither EXTREMES_READY_OPS "
+        f"nor _EXTREMES_NOT_READY: {unclassified}"
+    )
+    for op, reason in _EXTREMES_NOT_READY.items():
+        assert len(reason) > 20, f"{op.name}'s cat-F reason is too short to be a claim"
+
+
+def test_no_class_has_anything_unrecorded():
+    """Every cell is covered, not applicable, or explained -- none is undecided.
+
+    The point the four totality checks add up to. `unrecorded` was the honest state for most of
+    this table not long ago; it is now empty, which means every (op, class) pair has had a
+    decision taken and written down. A new op, or a new sweep, can put cells back into it --
+    that is what this is here to catch, and the fix is a verdict rather than a floor bump.
+    """
+    from helpers.sfpu_domains import UNRECORDED, EdgeClass, coverage_counts
+
+    counts = coverage_counts(_ledger())
+    undecided = {
+        edge_class.name: counts[edge_class][UNRECORDED]
+        for edge_class in EdgeClass
+        if counts[edge_class][UNRECORDED]
+    }
+    assert not undecided, (
+        f"these classes have undecided cells: {undecided}. Every (op, class) pair needs a "
+        "verdict -- covered, not applicable, or a recorded reason."
+    )
+
+
 def test_every_unary_op_is_classified_for_cat_b():
     """Enrolled or recorded-as-not-ready, for every unary op the sweep drives.
 
@@ -821,7 +877,7 @@ _COVERAGE_FLOORS = {
     "C": 24,
     "D": 59,
     "E": 5,
-    "F": 23,
+    "F": 78,
     "G": 17,
 }
 
@@ -999,6 +1055,7 @@ def test_suite_coverage_is_resolved_from_the_suites():
         "operand_parameters",
         "integer_extremes_excluded",
         "specials_derived",
+        "extremes_sweepable",
         "saturation",
         "float_driven",
         "extra_ops",

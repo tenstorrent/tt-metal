@@ -3113,6 +3113,185 @@ def _deliverable_extremes(
     ]
 
 
+# The second cat-F tranche, and the one that made the class total.
+#
+# The first tranche was chosen by hand as the ops that cannot overflow. This one was measured:
+# all 74 remaining sweep-reachable float ops driven at format_extremes() on both specials-safe
+# cells of the standard axis, on a Blackhole p150. 55 agree and are enrolled; 19 diverge and
+# are recorded below in five groups.
+#
+# What the enrolled 55 assert is narrower than it looks, and worth stating: cat F asks whether
+# the pipeline delivers a magnitude extreme and the op does not corrupt it. For the ops whose
+# registered domain is a *definedness* bound -- asin, acos, atanh, acosh -- the answer at
+# 3.39e38 is NaN on both sides, and agreeing on NaN is a real assertion about delivery even
+# though it says nothing about the mathematics. That is the class's question, not a weakness in
+# it; what would be wrong is reading it as accuracy coverage.
+_EXTREMES_READY_TRANCHE_2: Tuple[MathOperation, ...] = (
+    MathOperation.Acos,
+    MathOperation.Acosh,
+    MathOperation.Add1,
+    MathOperation.Asin,
+    MathOperation.Asinh,
+    MathOperation.Atan,
+    MathOperation.Atanh,
+    MathOperation.CastFp32ToFp16a,
+    MathOperation.Cbrt,
+    MathOperation.Celu,
+    MathOperation.Clamp,
+    MathOperation.Elu,
+    MathOperation.EqualZero,
+    MathOperation.Erf,
+    MathOperation.Erfc,
+    MathOperation.Fmod,
+    MathOperation.Frac,
+    MathOperation.Gelu,
+    MathOperation.GeluAppx,
+    MathOperation.GeluDerivative,
+    MathOperation.GeluTanh,
+    MathOperation.GreaterThanEqualZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.Hardmish,
+    MathOperation.Hardshrink,
+    MathOperation.Hardsigmoid,
+    MathOperation.Hardtanh,
+    MathOperation.Heaviside,
+    MathOperation.I0,
+    MathOperation.LessThanEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.Log1p,
+    MathOperation.Lrelu,
+    MathOperation.Mish,
+    MathOperation.NotEqualZero,
+    MathOperation.Prelu,
+    MathOperation.Rdiv,
+    MathOperation.ReluMax,
+    MathOperation.ReluMin,
+    MathOperation.Selu,
+    MathOperation.Sigmoid,
+    MathOperation.SigmoidAppx,
+    MathOperation.Silu,
+    MathOperation.Softplus,
+    MathOperation.Softshrink,
+    MathOperation.Sqrt,
+    MathOperation.Tanh,
+    MathOperation.TanhDerivative,
+    MathOperation.TanhDerivativeLut,
+    MathOperation.Tanhshrink,
+    MathOperation.Threshold,
+    MathOperation.UnaryMax,
+    MathOperation.UnaryMin,
+    MathOperation.UnaryPower,
+    MathOperation.Xielu,
+)
+
+EXTREMES_READY_OPS.update(
+    {
+        op: "Second tranche: driven at format_extremes() on both specials-safe cells and "
+        "agreed with its golden at every probe. See _EXTREMES_READY_TRANCHE_2 for what that "
+        "does and does not establish -- for an op whose domain is a definedness bound the "
+        "agreement is about delivery, not about the mathematics."
+        for op in _EXTREMES_READY_TRANCHE_2
+    }
+)
+
+# The 19 that diverge, in five groups. Each says what was measured; none claims the op has been
+# investigated on its own.
+
+# (1) Trig at a magnitude no range reduction reaches. sin/cos/tan return +/-inf or NaN at
+# 3.39e38 where the golden gives a bounded value -- there is no argument reduction that far, and
+# whether there should be is the open kernel-contract question W9 exists to settle.
+_EXTREMES_NOT_READY_TRIG: Tuple[MathOperation, ...] = (
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Tan,
+)
+
+# (2) The op's arithmetic flushes a *subnormal input* where the golden does not. Measured at
+# 2**-127: log gives -inf against the golden's -88.03, reciprocal gives +inf against 1.70e38,
+# remainder gives 0 against 2. The datum reaches the LREG intact -- these are the
+# unpack-to-dest cells subnormal_delivered() says deliver it -- and the flush happens inside the
+# SFPU's own arithmetic afterwards.
+#
+# This is the suite-wide gap subnormal_delivered()'s docstring predicted: the goldens model
+# flush-to-zero on the *result* (_apply_ftz) and not on the input, so closing it is a change to
+# every golden rather than a probe.
+_EXTREMES_NOT_READY_INPUT_FTZ: Tuple[MathOperation, ...] = (
+    MathOperation.Log,
+    MathOperation.LogWithBase,
+    MathOperation.Reciprocal,
+    MathOperation.ReciprocalCompat,
+    MathOperation.Rsqrt,
+    MathOperation.Remainder,
+)
+
+# (3) The composition overflows or loses the sign at the ceiling. softsign is x/(1+|x|), whose
+# denominator overflows so the kernel returns 0 against the golden's +/-1; expm1_cw and erfinv
+# return a wrongly-signed infinity; rpow and sqrt_custom return +inf where the golden gives 0
+# and NaN; rsqrt_compat returns 0 and +inf where the golden gives NaN. Each is its own
+# composition and none is covered by the saturation sweep, whose ops were chosen for having a
+# golden that models saturation.
+_EXTREMES_NOT_READY_COMPOSITION: Tuple[MathOperation, ...] = (
+    MathOperation.Softsign,
+    MathOperation.Expm1Cw,
+    MathOperation.Erfinv,
+    MathOperation.Rpow,
+    MathOperation.SqrtCustom,
+    MathOperation.RsqrtCompat,
+)
+
+# (4) Saturates a non-finite result to +/-1.1547668e37 rather than to an infinity, which I1's
+# own golden comment already records for a non-finite *input*. The same constant appears here
+# from a finite one.
+_EXTREMES_NOT_READY_SATURATES: Tuple[MathOperation, ...] = (MathOperation.I1,)
+
+# (5) The gamma family, excluded for the reason recorded above _OP_SINGULARITIES for their
+# poles: their kernels are polynomial and LUT fits that claim accuracy only well inside a
+# positive domain -- 0.1, 1.0 and 0.5 upward -- so every probe in format_extremes() is outside
+# what they promise at both ends.
+_EXTREMES_NOT_READY_GAMMA: Tuple[MathOperation, ...] = (
+    MathOperation.Digamma,
+    MathOperation.Lgamma,
+    MathOperation.Polygamma,
+)
+
+_EXTREMES_NOT_READY: Dict[MathOperation, str] = {}
+for _ops, _reason in (
+    (
+        _EXTREMES_NOT_READY_TRIG,
+        "no argument reduction reaches 3.39e38, so the result is +/-inf or NaN against a "
+        "bounded golden. Whether the kernel should reduce that far is an open contract "
+        "question.",
+    ),
+    (
+        _EXTREMES_NOT_READY_INPUT_FTZ,
+        "the SFPU's arithmetic flushes a subnormal *input* and the golden does not -- the "
+        "goldens model flush-to-zero on the result only. Closing this is a change to every "
+        "golden rather than a probe.",
+    ),
+    (
+        _EXTREMES_NOT_READY_COMPOSITION,
+        "the op's composition overflows or loses a sign at the ceiling; each is its own "
+        "question and none has a golden that models saturation.",
+    ),
+    (
+        _EXTREMES_NOT_READY_SATURATES,
+        "saturates to +/-1.1547668e37 rather than to an infinity, the same constant this "
+        "op's golden comment records for a non-finite input.",
+    ),
+    (
+        _EXTREMES_NOT_READY_GAMMA,
+        "a polynomial or LUT fit valid only well inside a positive domain, so every cat-F "
+        "probe is outside what the kernel promises -- the reason already recorded for these "
+        "ops' poles.",
+    ),
+):
+    _EXTREMES_NOT_READY.update({op: _reason for op in _ops})
+
+assert not (
+    set(EXTREMES_READY_OPS) & set(_EXTREMES_NOT_READY)
+), "an op cannot be both enrolled in cat F and recorded as not ready for it"
+
+
 def extreme_values(
     input_format: DataFormat,
     output_format: Optional[DataFormat] = None,
@@ -3478,6 +3657,11 @@ _CAT_C_OUT_OF_RANGE = (
     "the kernel is documented invalid at the format extremes and measured wrong there; see "
     "_INT_EXTREMES_OUT_OF_RANGE in the binary suite for the bound and the values"
 )
+_CAT_F_NO_SWEEP = (
+    "no cat-F sweep reaches this op: test_eltwise_unary_sfpu_extremes is unary-only and the "
+    "saturation sweep covers two binary ops, so the binary and ternary families have nothing "
+    "to be enrolled into. A missing sweep, not an undecided op."
+)
 _CAT_F_INTEGER_ONLY = (
     "integer-only op: no subnormal band and no float ceiling, so format_extremes() raises "
     "for its formats by design"
@@ -3525,6 +3709,12 @@ class SuiteCoverage:
     #: *_SPECIALS_READY_OPS gate governs the shared sweep only, so without this the ledger
     #: reports "explained" for an op that is in fact covered.
     specials_derived: FrozenSet[MathOperation] = frozenset()
+    #: Ops any cat-F sweep can reach at all. Today that is the unary edge sweep's op set plus
+    #: the saturation pairs: test_eltwise_unary_sfpu_extremes is unary-only and the binary
+    #: saturation sweep covers two ops, so the rest of the binary and ternary families have no
+    #: cat-F sweep to be enrolled *into*. Without this the ledger reports them as "unrecorded",
+    #: which reads as an undecided op rather than a missing sweep.
+    extremes_sweepable: FrozenSet[MathOperation] = frozenset()
     #: Ops driven at a magnitude extreme by a purpose-built saturation sweep rather than
     #: through EXTREMES_READY_OPS (cat F). The two halves of cat F have different gates --
     #: enrolment for the ops that cannot overflow, a hand-chosen probe list for the ones whose
@@ -3644,6 +3834,10 @@ def coverage_ledger(
             cells[EdgeClass.F] = COVERED
         elif op in integer_only:
             cells[EdgeClass.F] = _CAT_F_INTEGER_ONLY
+        elif op in _EXTREMES_NOT_READY:
+            cells[EdgeClass.F] = _EXTREMES_NOT_READY[op]
+        elif suite.extremes_sweepable and op not in suite.extremes_sweepable:
+            cells[EdgeClass.F] = _CAT_F_NO_SWEEP
         else:
             cells[EdgeClass.F] = UNRECORDED
 
@@ -3731,6 +3925,9 @@ def suite_coverage_from_tests() -> SuiteCoverage:
         operand_parameters=frozenset(unary._UNARY_SHIFT_OPS)
         | frozenset(binary._SHIFT_EDGE_OPS)
         | frozenset(ternary._SCALAR_OPS),
+        extremes_sweepable=frozenset(unary._EDGE_SWEEP_OPS)
+        | frozenset(unary._SATURATION_PROBES)
+        | frozenset(binary._BINARY_SATURATION_PAIRS),
         specials_derived=frozenset({MathOperation.SfpuLogsigmoid}),
         saturation=frozenset(unary._SATURATION_PROBES)
         | frozenset(binary._BINARY_SATURATION_PAIRS),
