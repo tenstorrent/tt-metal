@@ -294,9 +294,8 @@ class TtMoe(LightweightModule):
                 unified_routed_expert_moe; each op reads the same device-resident counts and
                 drops the experts outside its band, so the split needs no extra tensor and no
                 host sync. The crossover is per model and per shape, not a constant -- measure
-                before choosing T with
-                tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/
-                test_moe_fused_swiglu_vs_unified.py, which times both ops in one harness.
+                before choosing T: the two ops' per-shape device times are gated by
+                test_moe_fused_swiglu_perf.py and test_single_routed_expert_perf.py.
         """
         super().__init__()
         self.mesh_device = mesh_device
