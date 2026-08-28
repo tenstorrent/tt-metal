@@ -1134,6 +1134,55 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
 
+// Windowed gather: derive the gather radius (in shards) from the packed frame mask. For each ring
+// device, take the farthest shard holding ANY k-frame that the device's local q-frames attend; W = max
+// over devices. This covers every attended shard, so the windowed gather is correct for any mask (it
+// over-gathers the windowed+reference pattern to near-full since the reference frame is far -- a later
+// pass excludes the globally-attended reference and broadcasts it separately for the bandwidth win).
+// 0 means full-ring gather (dense path).
+static uint32_t compute_sparse_window_radius(
+    const std::vector<uint32_t>& mask, uint32_t nf_pad, uint32_t tpf, uint32_t ring_size) {
+    if (tpf == 0 || ring_size <= 1) {
+        return 0;
+    }
+    const uint32_t per_dev = (nf_pad * tpf) / ring_size;  // padded per-device tokens (shards evenly)
+    if (per_dev == 0) {
+        return 0;
+    }
+    auto attends = [&](uint32_t q, uint32_t k) -> bool {
+        const uint32_t bit = q * nf_pad + k;
+        return (bit / 32u < mask.size()) && ((mask[bit / 32u] >> (bit % 32u)) & 1u);
+    };
+    auto absdiff = [](uint32_t a, uint32_t b) -> uint32_t { return a > b ? a - b : b - a; };
+    uint32_t radius = 0;
+    for (uint32_t d = 0; d < ring_size; ++d) {
+        const uint32_t lo_f = (d * per_dev) / tpf;
+        const uint32_t hi_f = ((d + 1u) * per_dev - 1u) / tpf;
+        for (uint32_t k = 0; k < nf_pad; ++k) {
+            bool any = false;
+            for (uint32_t q = lo_f; q <= hi_f && q < nf_pad; ++q) {
+                if (attends(q, k)) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) {
+                continue;
+            }
+            // Shards spanned by k-frame k; the farthest from this device bounds the required radius.
+            const uint32_t shard_lo = (k * tpf) / per_dev;
+            const uint32_t shard_hi = ((k + 1u) * tpf - 1u) / per_dev;
+            const uint32_t dist_lo = absdiff(d, shard_lo);
+            const uint32_t dist_hi = absdiff(d, shard_hi);
+            const uint32_t dist = dist_lo > dist_hi ? dist_lo : dist_hi;
+            if (dist > radius) {
+                radius = dist;
+            }
+        }
+    }
+    return radius;
+}
+
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -1227,9 +1276,15 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         subdevice_id,
         cluster_axis,
         core_allocation_strategy,
-        // Windowed gather radius. PHASE-0 PROTOTYPE: hard-coded 1 for the sparse-frames path to prove the
-        // clamped-AG + reader-sequencer path stays balanced; will become the mask-derived window span W.
-        /*window_radius=*/sparse_frames ? 1u : 0u};
+        // Windowed gather radius: the mask-derived window span (excludes the reference frame, delivered
+        // separately). 0 for the dense path = full-ring gather.
+        /*window_radius=*/
+        sparse_frames ? compute_sparse_window_radius(
+                            sparse_frame_mask,
+                            num_frames_padded.value(),
+                            tokens_per_frame.value(),
+                            static_cast<uint32_t>(num_devices))
+                      : 0u};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {
