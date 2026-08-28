@@ -202,7 +202,12 @@ Blocking::Blocking(
         wd_mgroups = false;
         wd_ec_max = ec_max;
     }
-    if (x_is_rm && depth_x > 1 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
+    // Last lever, and it costs the cross-M-block x prefetch: with one slot the reader cannot stage
+    // block b+1 while compute still holds b. Tiled x pays more for it than row-major -- it prefetches
+    // into cb_x_tiles itself rather than into cb_x_in -- so the reader drops the prefetch entirely
+    // there (CAN_PREFETCH_X). Taken only when the wider levers above have not brought the working set
+    // under budget.
+    if (depth_x > 1 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
         depth_x = 1;
     }
     if (depth_h > 2 && l1_bytes(x_is_rm, out_tile, enable_phase_alias) > l1_budget) {
