@@ -165,17 +165,10 @@ def run_moe_fused_swiglu(
 # Known-unfittable (grid, dims, layout) combinations -> reason. Strict, so making one fit turns CI
 # red on XPASS rather than leaving a stale entry. Each key is a space-separated set of id tokens that
 # must ALL appear in the param id.
-_XFAIL = {
-    # dsv4_pro is the only model at emb 7168 AND hidden 3072 (kr_pad 28), where both x layouts
-    # overshoot the CB budget. The geometry's last lever is `depth_x` 2 -> 1, and it is gated on
-    # x_is_rm, so only ROW_MAJOR takes it. That gate is load-bearing, not an oversight: the reader
-    # prefetches block b+1 into cb_x_in on the BF16 path but into cb_x_tiles itself on the tiled
-    # path, so a sole slot either deadlocks against compute or, if the reserve is skipped, takes
-    # next_x_base = 0 and writes over the base of L1. Fitting this shape means a wider grid (which
-    # shrinks kr_pad/hn_pad), not a depth_x fallback.
-    "x_tile dsv4_pro": "CB L1 budget exceeded at 11x8 for emb 7168 / hidden 3072; the depth_x "
-    "fallback is ROW_MAJOR-only because tiled x prefetches into cb_x_tiles",
-}
+# Empty: the `depth_x` 2 -> 1 fallback now serves tiled x as well as row-major, and the reader drops
+# its cross-M-block prefetch there rather than aiming at a slot that does not exist, so dsv4_pro on
+# TILE x (emb 7168 / hidden 3072, the only shape that overshot at 11x8) fits.
+_XFAIL = {}
 
 
 @pytest.fixture(autouse=True)
