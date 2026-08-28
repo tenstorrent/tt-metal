@@ -65,6 +65,11 @@ The layering it describes is the right one, and the port is a test of whether it
           expr.hpp     -- op-agnostic tree, allocator, method syntax   <- unchanged
       impl_v1.hpp      -- definitions for the v1 target                <- REPLACED
 
+> **Filenames, as of the rename.** `adaptor_v1.hpp` and `impl_v1.hpp` are now `adaptor.hpp`
+> and `impl.hpp`, and `core` is no longer a version selector -- see §7.7. Sections 1-6 keep
+> the original names on purpose: they are the record of a decision taken when a v2 pair was
+> still a live option, and rewriting them to match the outcome would erase why.
+
 **The compute layer does not move.** `math.hpp` (2049 lines) and `expr.hpp` (494) call
 `api/compute/*` — `matmul.h`, `eltwise_binary.h`, `reduce.h`, `pack.h` — and those headers are
 arch-generic, gating `ARCH_QUASAR` internally rather than being replaced. That is 2543 of the
@@ -375,7 +380,10 @@ ending with the full suite green:
    handle's `Noc`. This is step 1 of `unified_explicit_noc_spec.md`, done with metal's own type —
    and it is the step that is silently wrong if half-done, so it goes alone.
 3. **Delete `impl_v1.hpp` and `adaptor_v1.hpp`.** End of stage 1: one implementation, still on the
-   legacy host.
+   legacy host. **Became a rename, not a deletion** -- see §7.7. These files were only ever
+   going to be deleted if a v2 pair replaced them; Option A means they ARE the one
+   implementation, so what was owed was dropping a version suffix that no longer distinguishes
+   anything.
 4. **Roles on the host.** `make_cb(..., role=Role.INPUT_ON(0))`, harness emits `dfb_bindings`,
    `Storage` takes `dfb::name`. Kills D20.
 5. **`tensor::name` accessors.** Kills D18 outright — better than `unified_named_args_spec.md`
@@ -405,11 +413,11 @@ Four things came out of it that this document did not know.
 `ProgramSpec` compiles one source for all five projections and binds one DFB with a DM producer and
 a compute consumer. Gen1 emits the same `COMPILE_FOR_BRISC` / `COMPILE_FOR_NCRISC` /
 `UCK_CHLKC_{UNPACK,MATH,PACK}` defines on the 2.0 path as on the legacy one, so
-`adaptor_v1.hpp`'s projection detection works untouched.
+`adaptor.hpp`'s projection detection works untouched.
 
 **2. Gate B is the load-bearing result: the unified library runs under a ProgramSpec with ONE
 additive line of change.** `Storage`, `Block`, `ComputeBlock`, `store()`, `noc_load`, `noc_store`
-and the whole expression layer went across unmodified. The one change is in `adaptor_v1.hpp`: the
+and the whole expression layer went across unmodified. The one change is in `adaptor.hpp`: the
 compute-projection `TensorAccessor` stand-in gained a one-argument constructor so
 `TensorAccessor(tensor::in)` compiles on a TRISC, exactly as `TensorAccessor(args, addr)` already
 did. That reorders the plan's risk: **stage 2 is not the leap this document treated it as**, and
@@ -513,7 +521,7 @@ the build, and each trips both assertions.
 **Metal 2.0 refuses semaphore bindings on a compute kernel** (`program_spec.cpp:1088), which
 was not anticipated anywhere in this document. It turns out to agree with the model rather
 than fight it: `api.h` already says a `Semaphore` is projected onto one DM thread and is a
-no-op elsewhere, and `impl_v1.hpp` keeps metal's `Semaphore` behind an `IS_DM_THREAD` guard,
+no-op elsewhere, and `impl.hpp` keeps metal's `Semaphore` behind an `IS_DM_THREAD` guard,
 so compute has never touched one. **The rule the model documented is now the rule the host
 enforces** -- the same shape of win as the DFB endpoint roles, and again one the port
 discovers rather than imports.
@@ -690,6 +698,43 @@ is a strict improvement on the spec's own design, arrived at by trying to write 
 So: not now. Revisit if and when a caller genuinely needs a foreign NOC, and take the `Noc`
 parameter when it happens.
 
+### 7.7 Step 3, which was a rename
+
+Step 3 of the plan says "delete `impl_v1.hpp` and `adaptor_v1.hpp`". That wording assumed
+Option C's shape, where a v2 pair is built beside the v1 pair and the v1 pair is dropped when
+the last caller moves. Option A is what happened: the port went THROUGH those files, so they
+are not a legacy implementation waiting to be deleted -- they are the implementation. What was
+actually owed was the version suffix, which by then named a distinction that did not exist.
+
+    adaptor_v1.hpp -> adaptor.hpp
+    impl_v1.hpp    -> impl.hpp
+
+`core` was the more misleading of the two. It described itself as "the version selector",
+said "today there is one target -- Metal v1", and promised that "as other metal versions
+arrive the choice happens here". Every clause of that is now wrong, and it is the first file
+a reader opens. It selects a BINDING -- metal, or `TT_UNIFIED_CUSTOM_BINDING` for the host
+trace harness -- and there is one implementation behind it. The rewritten comment says so, and
+says the thing the old one got wrong on purpose: a new arch is expected to be absorbed by a
+branch INSIDE `adaptor.hpp`, the way `api/compute/*` already gates `ARCH_QUASAR` internally,
+rather than by a second implementation beside it. That is the lesson of §5.4 and of this port
+both -- the layering held, and the version axis it was drawn against turned out not to be one.
+
+Two smaller pieces of the same debt went with it:
+
+**`Semaphore::l1_addr()` is gone.** It was declared, defined, and called from nowhere. All it
+did was recompute, by hand, an address metal's `Semaphore` deliberately keeps private -- the
+same shape as the Gen2 core-to-core finding in §7.6, where the absence of a public route to a
+peer address is the design and not an oversight. A routine that needs to address a semaphore
+should take the `Semaphore`. The `id` member stays, because `semaphore_id()` is real: a
+pair-derived multicast builds its semaphores as locals inside `noc_load`, so a handle that
+outlives them has to carry an id rather than a reference.
+
+**§9's open questions were stale.** Questions 2-5 had all been answered by work recorded
+elsewhere in this document, and question 5 -- is the `Noc` object as cheap as the free
+function? -- had been answered by a measurement it explicitly asked for. Leaving them marked
+open invites someone to re-run settled experiments, which on this project costs a device and
+half a day.
+
 ## 8. What this buys, against the hazard ledger
 
 | hazard | today | after |
@@ -711,19 +756,24 @@ sentinel and a set of asserts precisely because none of this was reachable.
 1. ~~**The gate (§7).**~~ **Answered: yes**, on hardware. See §7.1. It also settled the shape of
    the answer for buffer slots (values, never `dfb::` tokens) and cost the unified library exactly
    one additive line.
-2. **Does a DFB tolerate a producer that never pops** (`fill_reduce_scaler`) and a buffer with only
-   one live endpoint? §5.1.
-3. **`role` carries a thread number the kernel also knows** (§5.1). Is a launch-time error good
-   enough, or should the thread be derivable from one place? I think it is good enough and it is
-   still an improvement on today, but it is a new two-places-must-agree contract in a project whose
-   hazard list is mostly those.
-4. **Does the multicast handshake survive 2.0's semaphore binding?** The class is unchanged, but
-   ids come from `sem::name`, and `api.h` derives six ids arithmetically from one base
-   (`kMcastSemBase + 2*thread`). Named bindings want six names; the arithmetic wants a base. UNVERIFIED
-   which the 2.0 path permits.
-5. **Is the `Noc` object as cheap as the free function?** It holds one `uint8_t` and every method
-   forwards, so it should vanish under `-O2` — but the noc spec measured dynamic-NOC mode at +2.7%
-   on a claim that also looked free, so this deserves a measurement rather than an argument.
+2. ~~**Does a DFB tolerate a producer that never pops** (`fill_reduce_scaler`) and a buffer with only
+   one live endpoint?~~ **Answered: yes.** `fill_reduce_scaler` is live in `rmsnorm`, `attention`,
+   `reduction_tree` and `passcost` on the 2.0 path, and those suites are green with asserts on.
+3. ~~**`role` carries a thread number the kernel also knows** (§5.1).~~ **Answered by not doing it.**
+   The worry was a new two-places-must-agree contract, and the answer was to have only one place:
+   `derive_roles` reads the roles off the kernel source, so the host does not restate what the
+   kernel already says. That is better than the launch-time error this question was weighing, and
+   it matters more than it looks -- §5.1 recorded that a wrong endpoint role is SILENT on Gen1.
+4. ~~**Does the multicast handshake survive 2.0's semaphore binding?**~~ **Answered: yes, and it is
+   checked.** The harness names its semaphores and allocates the six reserved ones above the
+   caller's, and `api.h` static_asserts the derived base against `sem::u_mcast_ready0` and the end
+   of the run against `sem::u_copy_arrived1`. Both ends, so the whole run is pinned. See hazard 21,
+   verified non-vacuous twice.
+5. ~~**Is the `Noc` object as cheap as the free function?**~~ **Answered: yes, measured.** It was
+   right to ask for a measurement rather than an argument -- the noc spec's +2.7% is the precedent
+   -- so: over the 43-cell baseline, `pre-metal2 -> stage1-done` is mean **-0.48%** with not one
+   cell slower (the single non-negative delta is Gemma 3 1B at 307.50us both times). The object
+   does vanish. `unified_perf.py compare pre-metal2 stage1-done` reproduces it.
 6. **Should stage 1 happen at all if stage 2 is not funded?** §6 Option C's honest weakness. My
    answer is yes — the object model is where metal is going and the free functions will bit-rot —
    but it is a judgement call, not a finding.

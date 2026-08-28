@@ -17,7 +17,7 @@ NUM_BLOCKS = 4
 NUM_TILES = TILES_PER_BLOCK * NUM_BLOCKS  # 16 tiles == 128 x 128
 TILE_BYTES = 32 * 32 * 2  # bfloat16
 
-# The kernel's DM thread numbering is adaptor_v1's, not the host's: COMPILE_FOR_BRISC is
+# The kernel's DM thread numbering is adaptor's, not the host's: COMPILE_FOR_BRISC is
 # thread 0 and COMPILE_FOR_NCRISC is thread 1. gate_b.cpp does noc_load<0> and
 # noc_store<1>, so dm0 (RISCV_0) produces `in` and dm1 (RISCV_1) consumes `out`. The DFB
 # bindings below have to agree with that, and nothing but this comment says so.
