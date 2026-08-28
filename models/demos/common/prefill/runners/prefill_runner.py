@@ -146,6 +146,7 @@ DFLASH_ENABLED = (
 # Measurement-only: synchronize the device after each chunk's forward and log the isolated per-rank
 # compute (CHUNK_COMPUTE). Off in production — the sync serializes dispatch and kills pipeline overlap.
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Some models (e.g. Kimi: single expert group, device gate) route the MoE routing all-gather's global
 # semaphores to L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static
 # CBs, which needs the mesh opened with an L1_SMALL region. The adapter owns both knobs.
@@ -414,6 +415,21 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
+def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: float) -> None:
+    """Append one chunk's timing to this rank's CSV via a single O_APPEND write (per-rank file => lone
+    writer, atomic even on NFS). Telemetry must never take down the run, so any write error is swallowed."""
+    if not TIMING_DIR:
+        return
+    try:
+        fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
 def _compute_and_send(
     runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out, d2h_service=None, record_dev=None
 ) -> float:
@@ -422,7 +438,10 @@ def _compute_and_send(
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
     slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
     compute_start so the c=/compute_start= fields stay parseable (plot_pipeline_trace.py)."""
+    if SYNC_PER_CHUNK:
+        ttnn.synchronize_device(runtime.mesh_device)
     t_start = time.time()
+    t_perf = time.perf_counter()
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} "
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
@@ -441,7 +460,9 @@ def _compute_and_send(
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
         # proxy. Serializes dispatch (no overlap) — measurement runs only.
         ttnn.synchronize_device(runtime.mesh_device)
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={(time.time() - t_start) * 1000.0:.3f}")
+        compute_ms = (time.perf_counter() - t_perf) * 1000.0
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
+        _record_chunk_timing(rank, c, t_start, compute_ms)
     if not runtime.config.is_last_rank:
         # Traced: `out` is the runtime's persistent _trace_output (the next replay overwrites it in place),
         # so the send copies it into the socket backing but must not free it. Eager: `out` is fresh — free it.
@@ -1065,6 +1086,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             master_rank=master_rank,
             ring_shm_name=ring_shm_name,
             scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+            teardown_timeout_ms=30000,
         )
         if use_d2h:
             # Device-record source. The reader thread reconstructs (chunk, global-layer) from a per-rank
