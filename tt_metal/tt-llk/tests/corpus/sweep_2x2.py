@@ -1150,6 +1150,16 @@ KNOBS = {
     # scratch-web span), hand emitted 92 — the post-fix residual is the
     # constrained floor (region barriers + LREG file), certified in
     # laneIJ-evidence-20260828.
+    # MEASURED (laneIJ-evidence-20260828, BH, 3 reps ALL cycle-identical,
+    # corr-first PASS every session, paired CRAQ 4 legs x 2 nodes rc=0 at
+    # pinned sim 1d162f0adf67): anchors reproduce EXACT (sem 406712 /
+    # hand 385199 / reclaim+stoch 391610 / same-session off 421946);
+    # matrix crs-alone 402744, crs+reclaim 391736, crs+stoch 398649,
+    # TRIPLE crs+reclaim+stoch 387641 (monotone best) -> vs_hand
+    # +1.66 -> +0.63, causal -4.69 (vs-off -8.13); delivered oracle II
+    # 94 -> 93 = the region-local floor; SAME-LEG hand note: the knob
+    # reorders the hand row too (381105, -1.06%) — the booked comparator
+    # stays the hand arm's own booked leg (the II/IG convention).
     "cyclic-region-schedule": "-mtt-tensix-optimize-cyclic-region-schedule",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
