@@ -201,6 +201,12 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const bool welford_fp32_alias = welford_unpack_fp32_active;  // tilize_in == false
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+    // V1 accepts tiled BF16 input, so the FP32 aliases remain inactive. Its input CB holds one streamed
+    // block rather than the complete local input, requiring the reader to supply both statistics passes.
+    const bool fp32_sfpu_normalizer = welford_unpack_fp32_active;
+    constexpr uint32_t cb_ex_global_index = tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
+    constexpr bool sfpu_two_pass_l1_replay = false;
 
     const bool has_gamma = gamma.has_value();
     const bool has_beta = beta.has_value();
@@ -492,6 +498,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
     };
 
     std::map<std::string, std::string> reader_defines;
@@ -631,12 +638,19 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"num_tiles_input_mask", num_groups_per_core * block_wt},
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
-        {"reciprocal_size", 0u},  // welford native
         {"TILE_WIDTH", tile_w},
         {"cb_in0_welford", cb_in0_welford_index},
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"welford_unpack_fp32_active", static_cast<uint32_t>(welford_unpack_fp32_active)},
         {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
+        {"fp32_sfpu_normalizer", static_cast<uint32_t>(fp32_sfpu_normalizer)},
+        {"cb_normalize_in_fp32", cb_in0_welford_index},
+        {"cb_ex_global_fp32", cb_ex_global_index},
+        {"cb_ex2pe_fp32", cb_ex2pe_index},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)))},
     };
     // Optional fused unary activation. "dst0" is the DEST index the final output tile lives in
     // when the compute kernel applies the activation (see welford_groupnorm.cpp).

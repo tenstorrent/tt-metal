@@ -304,19 +304,19 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         "sfpu_bcast: only EltwiseBinaryType::ELW{ADD,SUB,MUL} are supported");
     if constexpr (Dim == BroadcastType::COL) {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else {
-            sfpu_mul_bcast_col(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_col<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
     } else {
         if constexpr (Op == EltwiseBinaryType::ELWADD) {
-            sfpu_add_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_add_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else if constexpr (Op == EltwiseBinaryType::ELWSUB) {
-            sfpu_sub_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_sub_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         } else {
-            sfpu_mul_bcast_row(dst_data_idx, dst_bcast_idx);
+            sfpu_mul_bcast_row<is_fp32_dest_acc_en>(dst_data_idx, dst_bcast_idx);
         }
     }
 }
