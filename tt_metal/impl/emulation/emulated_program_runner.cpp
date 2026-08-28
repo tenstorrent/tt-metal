@@ -3578,6 +3578,11 @@ static void launch_cores(
     // (yields its worker) instead of blocking an OS thread — no thread ceiling, no spin.
     // See docs/fiber-engine.md.
     auto& sched = tt::tt_metal::emule_fiber::FiberScheduler::instance();
+    const uint32_t fabric_device_id =
+        tt::tt_metal::MetalContext::instance()
+            .get_control_plane()
+            .get_fabric_node_id_from_physical_chip_id(device_id)
+            .chip_id;
 
     // The fibers borrow the per-core DFB interface arrays; own them here so they
     // outlive run_until_idle.
@@ -3666,6 +3671,7 @@ static void launch_cores(
             ctx->core_obj = core;
             ctx->device = nullptr;
             ctx->chip_id = static_cast<uint32_t>(device_id);
+            ctx->fabric_device_id = fabric_device_id;
             ctx->core_map = core_map_ptr;
             ctx->neo_id = ki.is_tensix ? ki.processor_id : 0;
             ctx->trisc_id = 0;
