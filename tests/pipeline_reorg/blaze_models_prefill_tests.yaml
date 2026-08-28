@@ -827,3 +827,44 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   sp_config: sc1
+
+
+- name: "high_bw_all_gather 32-rank snake-ring CCL perf + accuracy"
+  # Companion to the 8-rank axis gate above, on the same full 8x4 Blackhole-Galaxy
+  # Fabric2D XY-torus. cluster_axis=None linearizes all 32 devices into one
+  # direct-neighbour snake ring (row snake, 8 even lanes, closing through the Y
+  # torus wrap), so this is the only gate that exercises the transport-rank ->
+  # tensor-rank mapping: on an 8x4 the permutation is non-identity
+  # (transport 4 -> tensor 7), so a broken mapping fails rather than passing by
+  # coincidence.
+  #
+  # The 32-rank accuracy case stays behind its own opt-in env var, set here, so
+  # collecting this file elsewhere cannot pull a 32-device test onto a smaller box.
+  #
+  # Two perf gates, deliberately: matched_local matches the axis gate's
+  # rows-per-device so per-hop payload is identical and only hop count (31 vs 7)
+  # differs -- that is the comparable number and it carries the axis floors.
+  # ci_perf matches global volume instead, which shrinks the snake's per-hop
+  # payload 4x and so carries its own lower floors.
+  cmd: |
+    export MESH_DEVICE=TG
+    export TT_METAL_HIGH_BW_ALL_GATHER_RUN_32_RANK_ACCURACY=1
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      rc=0
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_axis_ring_regression -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
+      exit $rc
+    '
+  test_type: high_bw_all_gather_snake_perf
+  test_tags: [ccl]
+  test_group: sdpa_perf
+  skus:
+    bh_sc1_high_power:
+      timeout: 20
+  owner_id: U07N3CUUN05 # Iva Potkonjak
+  team: ttnn
+  sp_config: sc1
