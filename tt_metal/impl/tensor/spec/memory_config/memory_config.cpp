@@ -9,6 +9,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 #include "memory_config_impl.hpp"
 
@@ -122,6 +123,13 @@ bool operator==(const MemoryConfig& config_a, const MemoryConfig& config_b) {
         experimental::per_core_allocation::is_per_core_allocation(config_b)) {
         return false;
     }
+    // range_lockstep_allocation likewise changes allocator semantics -- the buffer still takes one
+    // address, but the allocator only keeps it clear of per-core allocations on the cores the buffer
+    // occupies -- so it is part of the config's identity too.
+    if (experimental::range_lockstep_allocation::is_range_lockstep_allocation(config_a) !=
+        experimental::range_lockstep_allocation::is_range_lockstep_allocation(config_b)) {
+        return false;
+    }
     // Compare only the authoritative shard spec based on creation path.
     // After creating a memory_config with an nd_shard_spec or a shard_spec,
     // when that memory_config gets passed into TensorSpec, TensorSpec auto-populates
@@ -162,6 +170,8 @@ nlohmann::json ttsl::json::to_json_t<tt::tt_metal::MemoryConfig>::operator()(
     json_object["created_with_nd_shard_spec"] = config.created_with_nd_shard_spec();
     json_object["per_core_allocation"] =
         tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config);
+    json_object["range_lockstep_allocation"] =
+        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(config);
     if (config.created_with_nd_shard_spec()) {
         if (config.nd_shard_spec().has_value()) {
             json_object["nd_shard_spec"] = ttsl::json::to_json(config.nd_shard_spec().value());
@@ -181,11 +191,20 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     auto created_with_nd_shard_spec = json_object["created_with_nd_shard_spec"].get<bool>();
     // Absent in JSON written before per_core_allocation was serialized; those configs are lockstep.
     const bool per_core_allocation = json_object.value("per_core_allocation", false);
+    // Likewise absent in JSON written before range_lockstep_allocation was serialized; those
+    // configs scope their lockstep address to every core, which is the default.
+    const bool range_lockstep_allocation = json_object.value("range_lockstep_allocation", false);
     if (created_with_nd_shard_spec) {
         TT_FATAL(
             !per_core_allocation, "per_core_allocation is not supported with NdShardSpec, but JSON requested both");
         auto nd_shard_spec = ttsl::json::from_json<tt::tt_metal::NdShardSpec>(json_object["nd_shard_spec"]);
-        return tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
+        auto memory_config = tt::tt_metal::MemoryConfig(buffer_type, std::move(nd_shard_spec));
+        // Unlike per_core_allocation, range lockstep works with an NdShardSpec: it is served by the
+        // buffer distribution spec branch in AllocatorImpl::allocate_buffer.
+        if (range_lockstep_allocation) {
+            tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(memory_config, true);
+        }
+        return memory_config;
     }
     std::optional<tt::tt_metal::ShardSpec> shard_spec;
     if (json_object.contains("shard_spec")) {
@@ -194,6 +213,11 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     auto memory_config = tt::tt_metal::MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
     if (per_core_allocation) {
         tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    }
+    // Set after per_core_allocation so JSON asking for both trips the mutual-exclusion check
+    // rather than silently keeping whichever was applied last.
+    if (range_lockstep_allocation) {
+        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(memory_config, true);
     }
     return memory_config;
 }
