@@ -218,6 +218,7 @@ class TPAttention:
         self.tt_ccl = tt_ccl
         self.B = args.max_batch_size
         self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
+        self._kv_fused_shard_cfg_cache = {}  # active-width B -> (K, V) disjoint fused-write shard cfgs
         self.NH = args.n_local_heads
         self.NKV = args.n_local_kv_heads
         self.HD = args.head_dim
@@ -815,6 +816,48 @@ class TPAttention:
             self._kv_shard_cfg_cache[B] = cfg
         return cfg
 
+    def _kv_fused_shard_cfgs(self, B):
+        """Disjoint K/V height-shard grids for the fused paged-cache write, sized to the ACTIVE
+        width B. Returns the precomputed max-batch configs unchanged when B==self.B (byte-identical
+        prod path); builds width-B disjoint grids for bucketed decode. Mirrors _kv_shard_cfg and
+        model_config.kv_cache_write_{k,v}_shard_cfg -- same natural/shifted-half split (V on rows
+        0..rows-1, K on rows..2*rows-1), just re-cut to B's cols/rows instead of max_batch_size's.
+
+        Without this, the fused write used max_batch_size's grid at every active B: every core in
+        that grid runs (ttnn's paged_fused_update_cache marks the whole supplied grid active), and a
+        core past the true active width reads update_idxs_tensor/page_table out of its real range --
+        an out-of-bounds read that can write cache data to an arbitrary location. The non-fused path
+        (the branch below) already avoids this via _kv_shard_cfg(B); this mirrors it for the fused one.
+
+        The grid-fits-both-halves precondition that gates kv_cache_write_fused_enabled at max B
+        holds at any B <= max B too (fewer rows needed), so it is not re-checked here.
+        """
+        if B == self.B:
+            return self.args.kv_cache_write_k_shard_cfg, self.args.kv_cache_write_v_shard_cfg
+        cfgs = self._kv_fused_shard_cfg_cache.get(B)
+        if cfgs is None:
+            cols = next(c for c in range(min(8, B), 0, -1) if B % c == 0)
+            rows = B // cols
+            k_cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.HD),
+                core_grid=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(cols - 1, 2 * rows - 1))}
+                ),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            v_cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.HD),
+                core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))}),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            cfgs = (k_cfg, v_cfg)
+            self._kv_fused_shard_cfg_cache[B] = cfgs
+        return cfgs
+
     def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
@@ -955,15 +998,21 @@ class TPAttention:
                 # With permuted RoPE, K is ALREADY on this grid -- the sharded rotary copies its
                 # output shard spec from its input, and _rope_decode fed it rope_k_shard_cfg (this
                 # config) precisely so the write needs no reshard. Same guard style as V's below.
-                if k.memory_config() == self.args.kv_cache_write_k_shard_cfg:
+                #
+                # Re-cut to the ACTIVE width B (bucketed decode), not max_batch_size: the fused op
+                # activates every core in the supplied grid, so at the precomputed max-batch grid a
+                # smaller active B leaves cores past B reading update_idxs_tensor/page_table out of
+                # range. _kv_fused_shard_cfgs(B) mirrors _kv_shard_cfg(B) below for this fused path.
+                _fused_k_cfg, _fused_v_cfg = self._kv_fused_shard_cfgs(B)
+                if k.memory_config() == _fused_k_cfg:
                     k_sh = k
                 else:
-                    k_sh = ttnn.to_memory_config(k, self.args.kv_cache_write_k_shard_cfg)
+                    k_sh = ttnn.to_memory_config(k, _fused_k_cfg)
                     ttnn.deallocate(k)
-                if v.memory_config() == self.args.kv_cache_write_v_shard_cfg:
+                if v.memory_config() == _fused_v_cfg:
                     v_sh = v  # already on the natural half straight from the head split; no reshard
                 else:
-                    v_sh = ttnn.to_memory_config(v, self.args.kv_cache_write_v_shard_cfg)
+                    v_sh = ttnn.to_memory_config(v, _fused_v_cfg)
                     ttnn.deallocate(v)
                 ttnn.experimental.paged_fused_update_cache(
                     keys, k_sh, values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table
