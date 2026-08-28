@@ -22,9 +22,9 @@ uint32_t ceil_div(uint32_t numerator, uint32_t denominator) { return (numerator 
 
 // Bricking is over the RESIDENT extent (this device's shard plus halo), not the global volume:
 // brick indices address the local tensor. Window placement stays global -- see the config.
-Extent3 volume_in_bricks(const NeighborhoodConfig& config) {
-    const Extent3 resident = config.resident_extent();
-    Extent3 result;
+ShapeInBricks volume_in_bricks(const NeighborhoodConfig& config) {
+    const ShapeInSites resident = config.resident_extent();
+    ShapeInBricks result;
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         result.by_axis[axis_index] = ceil_div(resident.by_axis[axis_index], config.brick.by_axis[axis_index]);
     }
@@ -56,26 +56,22 @@ uint32_t gather_extent_on_axis(
 // Where one chunk starts, in sites, local to this device's tensor.
 // The query region in bricks, and where it starts inside the resident brick grid. Both are exact
 // divisions: validate_config requires the query origin and extent to be brick-aligned.
-Extent3 query_in_bricks(const NeighborhoodConfig& config) {
-    const Extent3 query = config.query_region();
-    Extent3 result;
+ShapeInBricks query_in_bricks(const NeighborhoodConfig& config) {
+    const ShapeInSites query = config.query_region();
+    ShapeInBricks result;
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         result.by_axis[axis_index] = ceil_div(query.by_axis[axis_index], config.brick.by_axis[axis_index]);
     }
     return result;
 }
 
-Extent3 query_origin_in_bricks(const NeighborhoodConfig& config) {
-    Extent3 result;
-    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
-        result.by_axis[axis_index] = config.query_origin.by_axis[axis_index] / config.brick.by_axis[axis_index];
-    }
-    return result;
+BrickPoint query_origin_in_bricks(const NeighborhoodConfig& config) {
+    return containing_brick(config.query_origin, config.brick);
 }
 
 // A chunk's origin, in QUERY-region-local sites. Add config.query_origin for resident-local.
 Site chunk_index_to_origin(uint32_t chunk_index, const NeighborhoodPlan& plan) {
-    const Extent3 chunk = plan.config.query_chunk_sites();
+    const ShapeInSites chunk = plan.config.query_chunk_sites();
     const uint32_t chunks_per_time_slice = plan.volume_chunks.height() * plan.volume_chunks.width();
     const uint32_t time_index = chunk_index / chunks_per_time_slice;
     const uint32_t remainder = chunk_index % chunks_per_time_slice;
@@ -93,8 +89,8 @@ void require(bool condition, const std::string& message) {
 
 }  // namespace
 
-Extent3 choose_brick(Extent3 context_window) {
-    Extent3 best_brick = Extent3::of(1, 1, SITES_PER_BRICK);
+BrickShapeInSites choose_brick(ShapeInSites context_window) {
+    BrickShapeInSites best_brick = BrickShapeInSites::of(1, 1, SITES_PER_BRICK);
     uint64_t best_union_sites = UINT64_MAX;
     uint32_t best_largest_extent = UINT32_MAX;
 
@@ -105,7 +101,7 @@ Extent3 choose_brick(Extent3 context_window) {
                 continue;
             }
             const uint32_t width_extent = SITES_PER_BRICK / planar_sites;
-            const Extent3 brick_candidate = Extent3::of(time_extent, height_extent, width_extent);
+            const BrickShapeInSites brick_candidate = BrickShapeInSites::of(time_extent, height_extent, width_extent);
 
             // The union one brick must gather at stride 1 -- the shape-sensitive cost.
             uint64_t union_sites = 1;
@@ -166,28 +162,26 @@ ContextWindow context_window_for(Site query_group_origin, const NeighborhoodConf
 }
 
 uint32_t site_to_brick_index(Site site, const NeighborhoodConfig& config) {
-    const Extent3 volume_bricks = volume_in_bricks(config);
-    const uint32_t brick_index_time = site.time() / config.brick.time();
-    const uint32_t brick_index_height = site.height() / config.brick.height();
-    const uint32_t brick_index_width = site.width() / config.brick.width();
+    const ShapeInBricks volume_bricks = volume_in_bricks(config);
+    const BrickPoint brick = containing_brick(site, config.brick);
 
-    return brick_index_time * (volume_bricks.height() * volume_bricks.width()) +
-           brick_index_height * volume_bricks.width() + brick_index_width;
+    return brick.time() * (volume_bricks.height() * volume_bricks.width()) + brick.height() * volume_bricks.width() +
+           brick.width();
 }
 
 Site brick_index_to_origin(uint32_t brick_index, const NeighborhoodConfig& config) {
-    const Extent3 volume_bricks = volume_in_bricks(config);
+    const ShapeInBricks volume_bricks = volume_in_bricks(config);
     const uint32_t bricks_per_time_slice = volume_bricks.height() * volume_bricks.width();
 
     const uint32_t brick_index_time = brick_index / bricks_per_time_slice;
     const uint32_t remainder_after_time = brick_index % bricks_per_time_slice;
-    const uint32_t brick_index_height = remainder_after_time / volume_bricks.width();
-    const uint32_t brick_index_width = remainder_after_time % volume_bricks.width();
 
-    return Site::at(
-        brick_index_time * config.brick.time(),
-        brick_index_height * config.brick.height(),
-        brick_index_width * config.brick.width());
+    return first_site_of(
+        BrickPoint::at(
+            brick_index_time,
+            remainder_after_time / volume_bricks.width(),
+            remainder_after_time % volume_bricks.width()),
+        config.brick);
 }
 
 uint32_t site_to_bricked_index(Site site, const NeighborhoodConfig& config) {
@@ -222,7 +216,7 @@ Site bricked_index_to_site(uint32_t bricked_index, const NeighborhoodConfig& con
 }
 
 void validate_config(const NeighborhoodConfig& config) {
-    require(config.brick.sites() == SITES_PER_BRICK, "brick must hold exactly 32 sites");
+    require(config.brick.count() == SITES_PER_BRICK, "brick must hold exactly 32 sites");
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         require(config.query_chunk_bricks.by_axis[axis_index] > 0, "query_chunk_bricks must be non-zero on every axis");
     }
@@ -252,7 +246,7 @@ void validate_config(const NeighborhoodConfig& config) {
         }
     }
 
-    const Extent3 resident = config.resident_extent();
+    const ShapeInSites resident = config.resident_extent();
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         const int32_t shard_start = config.shard_origin.by_axis[axis_index];
         const int32_t brick_extent = static_cast<int32_t>(config.brick.by_axis[axis_index]);
@@ -272,8 +266,8 @@ void validate_config(const NeighborhoodConfig& config) {
     // The query sub-region. Brick-aligned on both ends, and inside the resident region: it is
     // addressed in whole bricks, so a sub-box starting or ending mid-brick would put owned and
     // neighbour sites in the same tile row and there would be no way to write only the owned half.
-    if (config.query_extent.sites() != 0) {
-        const Extent3 query = config.query_region();
+    if (config.query_extent.count() != 0) {
+        const ShapeInSites query = config.query_region();
         for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
             const uint32_t brick_extent = config.brick.by_axis[axis_index];
             require(query.by_axis[axis_index] > 0, "query extent must be non-zero on every axis");
@@ -311,10 +305,10 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
     NeighborhoodPlan plan;
     plan.config = config;
     plan.volume_bricks = volume_in_bricks(config);
-    plan.brick_count = plan.volume_bricks.sites();
+    plan.brick_count = plan.volume_bricks.count();
 
     plan.query_bricks = query_in_bricks(config);
-    plan.query_brick_count = plan.query_bricks.sites();
+    plan.query_brick_count = plan.query_bricks.count();
     plan.query_origin_bricks = query_origin_in_bricks(config);
 
     // Over the QUERY bricks, not the resident ones: a chunk whose output is discarded is work
@@ -323,7 +317,7 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         plan.volume_chunks.by_axis[axis_index] =
             ceil_div(plan.query_bricks.by_axis[axis_index], config.query_chunk_bricks.by_axis[axis_index]);
     }
-    plan.chunk_count = plan.volume_chunks.sites();
+    plan.chunk_count = plan.volume_chunks.count();
 
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         const uint32_t volume_extent_sites = config.volume.by_axis[axis_index];
@@ -335,7 +329,7 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
             window_extent_sites,
             volume_extent_sites);
     }
-    plan.gather_sites = plan.gather_extent.sites();
+    plan.gather_sites = plan.gather_extent.count();
     plan.gather_tiles = ceil_div(plan.gather_sites, SITES_PER_BRICK);
 
     // Where each brick's gather starts, before rounding to a brick boundary. Window origins
@@ -349,7 +343,7 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         const uint32_t window_extent_sites =
             window_extent_on_axis(config.context_window.by_axis[axis_index], volume_extent_sites);
         // Bricks below the volume belong to a halo that hangs off the low edge; clamp so the
-        // group index stays sane. Their windows are never used -- see Offset3.
+        // group index stays sane. Their windows are never used -- see SiteOffset.
         const int32_t signed_global = static_cast<int32_t>(brick_origin.by_axis[axis_index]) +
                                       static_cast<int32_t>(config.query_origin.by_axis[axis_index]) +
                                       config.shard_origin.by_axis[axis_index];
@@ -383,7 +377,7 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         }
         plan.gather_bricks.by_axis[axis_index] = std::min(widest_bricks, plan.volume_bricks.by_axis[axis_index]);
     }
-    plan.gather_brick_count = plan.gather_bricks.sites();
+    plan.gather_brick_count = plan.gather_bricks.count();
 
     plan.gather_origin_by_chunk.reserve(plan.chunk_count);
     for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {

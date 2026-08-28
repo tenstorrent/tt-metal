@@ -27,8 +27,18 @@ using AxisTuple = std::array<uint32_t, 3>;
 // Signed, because a halo at the low edge of the volume puts a shard at a negative origin.
 using SignedAxisTuple = std::array<int32_t, 3>;
 
-neighborhood::Extent3 to_extent(const AxisTuple& value) {
-    return neighborhood::Extent3{{value[0], value[1], value[2]}};
+neighborhood::ShapeInSites to_shape_in_sites(const AxisTuple& value) {
+    return neighborhood::ShapeInSites::of(value[0], value[1], value[2]);
+}
+
+// The two unit RATIOS, which are not extents: sites per brick and bricks per chunk. Separate
+// conversions so a Python-side tuple cannot land in the wrong one -- see Shape.
+neighborhood::BrickShapeInSites to_brick_shape(const AxisTuple& value) {
+    return neighborhood::BrickShapeInSites::of(value[0], value[1], value[2]);
+}
+
+neighborhood::ChunkShapeInBricks to_chunk_shape(const AxisTuple& value) {
+    return neighborhood::ChunkShapeInBricks::of(value[0], value[1], value[2]);
 }
 
 neighborhood::NeighborhoodConfig to_config(
@@ -42,23 +52,23 @@ neighborhood::NeighborhoodConfig to_config(
     const std::optional<AxisTuple>& query_extent = std::nullopt,
     const std::optional<AxisTuple>& query_origin = std::nullopt) {
     neighborhood::NeighborhoodConfig config{
-        to_extent(volume), to_extent(context_window), to_extent(stride), to_extent(brick)};
+        to_shape_in_sites(volume), to_shape_in_sites(context_window), to_shape_in_sites(stride), to_brick_shape(brick)};
     if (query_chunk_bricks.has_value()) {
-        config.query_chunk_bricks = to_extent(*query_chunk_bricks);
+        config.query_chunk_bricks = to_chunk_shape(*query_chunk_bricks);
     }
     if (shard_extent.has_value()) {
-        config.shard_extent = to_extent(*shard_extent);
+        config.shard_extent = to_shape_in_sites(*shard_extent);
     }
     if (shard_origin.has_value()) {
         const SignedAxisTuple& origin = *shard_origin;
-        config.shard_origin = neighborhood::Offset3{{origin[0], origin[1], origin[2]}};
+        config.shard_origin = neighborhood::SiteOffset::at(origin[0], origin[1], origin[2]);
     }
     if (query_extent.has_value()) {
-        config.query_extent = to_extent(*query_extent);
+        config.query_extent = to_shape_in_sites(*query_extent);
     }
     if (query_origin.has_value()) {
         const AxisTuple& origin = *query_origin;
-        config.query_origin = neighborhood::Site{{origin[0], origin[1], origin[2]}};
+        config.query_origin = neighborhood::Site::at(origin[0], origin[1], origin[2]);
     }
     return config;
 }
@@ -69,7 +79,7 @@ void bind_neighborhood_sdpa(nb::module_& mod) {
     mod.def(
         "neighborhood_choose_brick",
         [](const AxisTuple& context_window) {
-            const neighborhood::Extent3 brick = neighborhood::choose_brick(to_extent(context_window));
+            const neighborhood::BrickShapeInSites brick = neighborhood::choose_brick(to_shape_in_sites(context_window));
             return AxisTuple{brick.time(), brick.height(), brick.width()};
         },
         nb::arg("context_window"),

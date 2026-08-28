@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "neighborhood_point3.hpp"
+
 // The argument layout shared by the program factory and the three kernels: circular buffer
 // ids, the compile-time argument slots, and the geometry the reader needs to address bricks.
 //
@@ -216,28 +218,19 @@ enum : uint32_t {
 };
 }  // namespace writer_arg
 
-// The per-axis extents the mask generator needs. Passed as one struct rather than nine loose
-// arguments so a caller cannot transpose height and width without noticing.
-struct SignedAxisOffsets {
-    int32_t time;
-    int32_t height;
-    int32_t width;
-};
-
-struct AxisExtents {
-    uint32_t time;
-    uint32_t height;
-    uint32_t width;
-};
-
+// The per-axis shapes the mask generator needs. Passed as one struct rather than nine loose
+// arguments so a caller cannot transpose height and width without noticing. Every member is a
+// Shape from neighborhood_point3.hpp, so the unit each is measured in is part of its type -- a
+// brick grid cannot be handed where a site region belongs, and the two unit shapes cannot be
+// swapped for each other.
 struct NeighborhoodExtents {
-    AxisExtents brick_sites;         // sites per brick
-    AxisExtents context_window;      // the unclamped window from the config
-    AxisExtents stride;              // query group extent
-    AxisExtents volume;              // the true GLOBAL volume, NOT the brick-padded one
-    AxisExtents query_chunk;         // one query chunk, in sites -- the unit that shares a window
-    SignedAxisOffsets shard_origin;  // where this device's tensor starts in the global volume
-    AxisExtents resident;            // how much of it this device holds (owned + halo)
+    BrickShapeInSites brick_sites;  // sites per brick -- a conversion factor, not a region
+    ShapeInSites context_window;    // the unclamped window from the config
+    ShapeInSites stride;            // query group extent
+    ShapeInSites volume;            // the true GLOBAL volume, NOT the brick-padded one
+    ShapeInSites query_chunk;       // one query chunk, in sites -- the unit that shares a window
+    SiteOffset shard_origin;        // where this device's tensor starts in the global volume; signed
+    ShapeInSites resident;          // how much of it this device holds (owned + halo)
 };
 
 }  // namespace ttnn::transformer::neighborhood::kernel_args
