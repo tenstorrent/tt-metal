@@ -3495,6 +3495,38 @@ def _read_die_temp_c():
     return v
 
 
+def report_board_over_clamp(label: str = "") -> bool:
+    """Record, from the one place that owns the threshold, that the board is above it RIGHT NOW.
+
+    A caller watching a subprocess cannot wait for the board -- the work is in flight -- but it can
+    put a timestamp on the crossing, and on 2026-08-28 that record was the only thing missing. Chip 2
+    stopped answering MID-RUN at 21:43 with all four chips at 98-103C; its telemetry went straight to
+    the 0xffffffff sentinel and the kernel said nothing until 21:51, eight minutes later, when
+    something tried to reopen it. The "Failed to set initial power state" line every previous
+    investigation treated as the failure is the post-mortem, not the event. Temperature was the only
+    warning the board ever gave.
+
+    The clamp threshold is learned from THIS board's history, so the comparison lives here rather
+    than in each watcher. Returns whether it reported, so a caller can rate-limit on real crossings.
+    """
+    try:
+        cur = _read_die_temp_c()
+        if cur is None:
+            return False
+        limit = _clamp_threshold_c()
+        if cur <= limit:
+            return False
+        print(
+            "  [thermal-watch] %s: board at %.1fC, above this board's clamp threshold %.1fC -- work in "
+            "flight is holding it there" % (label or "device subprocess", cur, limit),
+            file=sys.stderr,
+            flush=True,
+        )
+        return True
+    except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+        return False
+
+
 def _wait_for_thermal_headroom():
     """Block until the hottest die is below the AICLK clamp threshold.
 

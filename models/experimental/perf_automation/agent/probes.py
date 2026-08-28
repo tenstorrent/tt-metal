@@ -906,6 +906,39 @@ def _cool_before_remeasure():
         return True, None
 
 
+_THERMAL_YIELD_MIN_GAP_S = 30.0
+_thermal_yield_last = [0.0]
+
+
+def thermal_yield(label: str = "") -> None:
+    """Cool BETWEEN units of a long device run, at a point where nothing is in flight.
+
+    THE GAP THIS CLOSES. Every other cooldown in this tool hangs off a boundary controlled from
+    OUTSIDE the work: before a device subprocess is launched, after a run's log reports a clamp,
+    after a reset. None of them can see inside a single call that holds the device for tens of
+    minutes -- and that is exactly where the board cooks. Measured on this liquid-cooled p300c on
+    2026-08-28: the launch gate last fired at 20:53, one call then held the device while all four
+    chips sat at 98-103C, and at 21:43 chip 2 stopped answering MID-RUN. Its telemetry went straight
+    to the 0xffffffff sentinel with no kernel message, no thermal trip and no PCIe error; the hottest
+    chip followed. A cooldown that runs after the process exits could never have fired, because the
+    card died before the exit.
+
+    Offer this only BETWEEN units of work, never inside a timed region -- a trace replay's timing
+    loop must not contain a sleep. Repeated offers inside the minimum gap return immediately, so a
+    caller may offer the yield as often as it likes; the read itself is a ~0.3 ms sysfs file read.
+    """
+    try:
+        now = time.monotonic()
+        if now - _thermal_yield_last[0] < _THERMAL_YIELD_MIN_GAP_S:
+            return
+        _thermal_yield_last[0] = now
+        from ..cc_optimize.run import _wait_for_thermal_headroom_before_device_work
+
+        _wait_for_thermal_headroom_before_device_work(label or "next unit")
+    except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+        return
+
+
 def detect_overheat(log_text: str) -> str | None:
     """A run's log carrying the device's OWN thermal-distress signal (AICLK failed to settle / clamped /
     possible overheating). Returns the matched phrase, else None. Distinct from a crash: the run may

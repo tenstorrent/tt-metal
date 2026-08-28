@@ -466,6 +466,12 @@ def measure_adapter(adapter, device) -> float:
 
     results = []
     for st in stages:
+        try:
+            from .probes import thermal_yield
+
+            thermal_yield(str(getattr(st, "name", "") or ""))
+        except Exception:  # noqa: BLE001 -- cooling is a courtesy, never a precondition
+            pass
         # ONE STAGE THAT CANNOT BE MEASURED MUST NOT COST THE OTHERS THEIR ROW. The adapter already
         # holds this line for the stage that cannot PREPARE its inputs; the loop that MEASURES them
         # had no such guard, so a raise here lost every stage rather than one -- the whole replay,

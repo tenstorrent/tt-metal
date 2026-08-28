@@ -3322,6 +3322,40 @@ def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
         pass
 
 
+_THERMAL_WATCH_REPORT_S = 300.0
+
+
+def _thermal_watch_new() -> dict:
+    """Fresh state for _thermal_watch_sample: when it last reported a crossing."""
+    return {"last_report": 0.0}
+
+
+def _thermal_watch_sample(state: dict, label: str = "") -> None:
+    """Have the thermal owner record a board running hot WHILE a device subprocess is in flight.
+
+    THE GAP THIS CLOSES. _wait_for_thermal_headroom_before_device_work samples once, at LAUNCH, and
+    nothing samples again until the next launch. A build, a coverage probe or a long agent round holds
+    the device for tens of minutes, so a board that was cool when the process started can bake for the
+    whole run with nobody reading the thermometer. On 2026-08-28 the gate last fired at 20:53, all four
+    chips then sat at 98-103C for fifty minutes inside one call, and chip 2 died mid-run at 21:43.
+
+    This cannot cool -- the work is in flight and freezing a process that holds the device risks a
+    wedge, which is worse than the heat. It records, so the next failure is not silent. Cooling that
+    can actually happen is offered between units of work by probes.thermal_yield, and after the
+    subprocess exits by the post-run call at the end of _run_device_proc.
+    """
+    now = time.monotonic()
+    if now - float(state.get("last_report") or 0.0) < _THERMAL_WATCH_REPORT_S:
+        return
+    try:
+        from .perf_mcp import report_board_over_clamp
+
+        if report_board_over_clamp(label):
+            state["last_report"] = now
+    except Exception:  # noqa: BLE001 -- a watcher that cannot run must not stop the work
+        return
+
+
 def timed_op_for(env, fallback: str = "profile") -> str:
     """DEPRECATED -- kept only so an external caller does not break. Do not route by this.
 
@@ -3381,6 +3415,7 @@ def _run_device_proc(
       ROUND   agent round                                       -> PERF_MCP_ROUND_STALL_SEC   (600s)"""
     _wait_for_thermal_headroom_before_device_work(label)
     _obs_t0 = time.monotonic()
+    _therm = _thermal_watch_new()
     _piped = bool(capture or stall_s)
     proc = subprocess.Popen(
         list(cmd),
@@ -3460,6 +3495,7 @@ def _run_device_proc(
             _ceiling_mult = _hard_ceiling_mult()
             while proc.poll() is None:
                 time.sleep(5)
+                _thermal_watch_sample(_therm, label)
                 now = time.monotonic()
                 # A cooling child is idle ON PURPOSE: it is sleeping against a thermometer, so it
                 # burns no CPU and prints only when the temperature moves. Both of this loop's
@@ -3596,6 +3632,7 @@ def _run_device_proc(
             os.killpg(proc.pid, signal.SIGKILL)
         except Exception:  # noqa: BLE001
             pass
+    _wait_for_thermal_headroom_before_device_work("%s (post-run cooldown)" % (label or "device work"))
     return rc, out
 
 
