@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
-from ....pipelines.minimax_h3.pipeline_minimax_h3_refactor import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
 from .common import GALAXY_MESHES
 from .common_av import (
