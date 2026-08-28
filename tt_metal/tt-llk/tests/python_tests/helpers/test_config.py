@@ -511,13 +511,19 @@ class TestConfig:
             if os.environ.get("TT_LLK_DISABLE_ASSERTS") == "1"
             else "-DENABLE_LLK_ASSERT "
         )
+        # Escape hatch for A/B experiments: extra -D flags from the environment,
+        # so an arm can be selected without editing sources between runs.
+        extra_defines = os.environ.get("TT_LLK_EXTRA_DEFINES", "")
+        if extra_defines:
+            extra_defines = extra_defines.strip() + " "
+
         TestConfig.INITIAL_OPTIONS_COMPILE = (
             "-Wall -Werror -Wno-error=deprecated-declarations "
             "-Wunused-parameter "
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls "
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{extra_defines}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = (

@@ -237,7 +237,7 @@ class ExalensServer:
                 pass
 
             try:
-                self._process.wait(timeout=5)
+                self._process.wait(timeout=900)
             except subprocess.TimeoutExpired:
                 logger.warning(
                     "tt-exalens did not exit gracefully, "
@@ -246,7 +246,7 @@ class ExalensServer:
                 )
                 self._kill_process_group(self._pgid, signal.SIGTERM)
                 try:
-                    self._process.wait(timeout=5)
+                    self._process.wait(timeout=900)
                 except subprocess.TimeoutExpired:
                     logger.warning(
                         "Process group {} did not terminate, sending SIGKILL...",

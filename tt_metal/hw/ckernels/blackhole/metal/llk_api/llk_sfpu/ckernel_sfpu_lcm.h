@@ -26,6 +26,14 @@ template <int ITERATIONS = 8>
 inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Repro for https://github.com/tenstorrent/tt-metal/issues/52997
     // RISC nops in the always-inlined LCM body; hang is codegen-sensitive vs dest SFPLOAD after SFPU.
+    // Arm E overrides the count with -DLCM_AB_NOPS=<n> to probe the pass/hang band.
+    // The default path below is left EXACTLY as-is (eight literal asm statements) so arms
+    // A-D stay byte-identical -- do not "simplify" it into the .rept form.
+#ifdef LCM_AB_NOPS
+#define LCM_AB_STR2(x) #x
+#define LCM_AB_STR(x) LCM_AB_STR2(x)
+    asm volatile(".rept " LCM_AB_STR(LCM_AB_NOPS) "\n\tnop\n\t.endr");
+#else
     asm volatile("nop");
     asm volatile("nop");
     asm volatile("nop");
@@ -34,6 +42,7 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
     asm volatile("nop");
     asm volatile("nop");
     asm volatile("nop");
+#endif
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;

@@ -93,6 +93,14 @@ int main(void)
 
         ckernel::fence_compiler();
 
+#if defined(ARCH_BLACKHOLE) && defined(LCM_AB_DISABLE_GATHERING)
+        // A/B arm A: BH cfg0 bit 18 (DisTriscCache) resets to 0, so this harness
+        // normally runs with instruction gathering ENABLED -- a config tt-metal
+        // firmware never ships. <false> = no padding TTI_NOPs, so the Tensix
+        // instruction stream is identical between arms; only the CSR write differs.
+        ckernel::disable_gathering<false>();
+#endif
+
         run_kernel(temp_args);
 
         ckernel::fence_compiler();

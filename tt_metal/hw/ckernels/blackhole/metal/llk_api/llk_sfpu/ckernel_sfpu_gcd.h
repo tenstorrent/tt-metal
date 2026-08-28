@@ -67,7 +67,32 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
     }
 }
 
+// A/B arms C and D: scope the gathering CSR bit to the replay-buffer LOAD only.
+// The hazard the HW team acknowledges for gathering is replay-buffer load, and
+// load_replay_buf()'s own bracket compiles out here (it is guarded by the
+// ENABLE_GATHERING *build* macro while the hazard is a *runtime* CSR bit), and
+// this site bypasses load_replay_buf with a raw TTI_REPLAY anyway.
+// Both use the no-NOP CSR form so the Tensix instruction stream is unchanged.
+#if defined(LCM_AB_NARROW_ENABLE_GATHERING)
+// Mirror of disable_gathering<false>(), but CLEARING bit 18 (= gathering on).
+// Same bit-1 serialise + fence the vendor helper uses, so the write lands before
+// the replay record -- gathering is resolved early in the pipeline.
+#define LCM_AB_GATHERING_ON()                                  \
+    do {                                                       \
+        asm("csrrs zero, 0x7c0, %0" : : "r"(1 << 1));          \
+        asm("fence");                                          \
+        asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 18));         \
+        asm("csrrc zero, 0x7c0, %0" : : "r"(1 << 1));          \
+        asm("fence");                                          \
+    } while (0)
+#endif
+
 inline void calculate_sfpu_gcd_init() {
+#if defined(LCM_AB_NARROW_DISABLE_GATHERING)
+    ckernel::disable_gathering<false>();
+#elif defined(LCM_AB_NARROW_ENABLE_GATHERING)
+    LCM_AB_GATHERING_ON();
+#endif
     TTI_REPLAY(0, 7 * 4, 0, 1);
     #pragma GCC unroll 4
     for (int i = 0; i < 4; ++i) {
@@ -80,6 +105,11 @@ inline void calculate_sfpu_gcd_init() {
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX); // ensure b < a
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = b - a (now a is even)
     }
+#if defined(LCM_AB_NARROW_DISABLE_GATHERING)
+    ckernel::enable_gathering();
+#elif defined(LCM_AB_NARROW_ENABLE_GATHERING)
+    ckernel::disable_gathering<false>();
+#endif
 }
 
 }  // namespace sfpu
