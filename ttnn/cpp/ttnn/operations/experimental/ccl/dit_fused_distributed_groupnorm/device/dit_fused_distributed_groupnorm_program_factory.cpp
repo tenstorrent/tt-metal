@@ -204,7 +204,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
 
     const bool has_gamma = gamma.has_value();
     const bool has_beta = beta.has_value();
-    const uint32_t groupnorm_mode = static_cast<uint32_t>(ttnn::prim::GroupNormMode::WELFORD_NATIVE);
+    const uint32_t groupnorm_mode = static_cast<uint32_t>(ttnn::prim::GroupNormMode::TWO_PASS);
 
     // ------------------------------------------------------------------------
     // Ring topology (unchanged from CCL scaffold)

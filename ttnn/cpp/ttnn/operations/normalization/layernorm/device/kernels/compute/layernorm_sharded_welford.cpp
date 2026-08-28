@@ -396,37 +396,23 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(dfb_x_welford_id);
     dfb_ex_partial.reserve_back(num_block_ht_result_tiles);
-    // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
+    // Reconfigure the transpose op for the statistics intake buffer. When the alias is active,
     // it has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford_id);
     two_pass_stats_init_shifted();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
         tile_regs_acquire();
-        // Do the full statistics tiles
-        for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
-            if constexpr (welford_fp32_alias && !sfpu_two_pass) {
-                // Initialize the fp32 transpose immediately before use. Online Welford restores
-                // its recurrence after every tile, while two-pass leaves the transpose replay intact.
-                transpose_init(dfb_x_welford_id);
-            }
-            transpose_tile(dfb_x_welford_id, w + index_h_offset, welford_input_dst);
-            if constexpr (welford_fp32_alias) {
-                // transpose_tile took the UnpackToDest path. Its math-side init clobbered
-                // the welford recurrence at SFPU replay slots [16, 32).
-                // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with
-                // the welford recurrence; PreserveStats keeps the running mean / M2 accumulator
-                // in LREG4/5. UNPACK A is left in transpose=1;
-                // welford_update is pure SFPU and does not consume that state, and the next
-                // iteration's transpose_init reprograms it.
-                welford_init<WelfordInitMode::PreserveStats>();
-            }
-            if constexpr (sfpu_two_pass) {
-                two_pass_stats_update_rows<false>(stats_input_dst, 0, tile_width);
-            } else {
-                welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
-            }
-            sample_idx += tile_width;
+        // Retain the first three transposed tiles in otherwise idle DEST slots so the
+        // centred second pass can reuse them without another unpack.
+        if (num_full_welford_tiles > 0) {
+            transpose_tile(dfb_x_welford_id, index_h_offset, retained_welford_input_dst);
+            two_pass_stats_update_shifted_rows<false, true>(retained_welford_input_dst, 0, tile_width);
+        }
+        for (uint32_t w = 1; w < num_full_welford_tiles; ++w) {
+            const uint32_t stats_input_dst = w < 3 ? w : welford_input_dst;
+            transpose_tile(dfb_x_welford_id, w + index_h_offset, stats_input_dst);
+            two_pass_stats_update_shifted_rows<false>(stats_input_dst, 0, tile_width);
         }
         // Do the partial statistics tile, if any. It is the tile immediately after this core's full tiles
         // (index_h_offset + num_full_welford_tiles), i.e. the last real tile of this core's logical

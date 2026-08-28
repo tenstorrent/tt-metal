@@ -21,8 +21,29 @@ void kernel_main() {
     uint32_t NCHt = get_arg(args::NCHt);
     uint32_t Wt = get_arg(args::Wt);
     uint32_t tile_offset = get_arg(args::reader_start);
+#ifdef AFFINE_MCAST_SENDER
+    const uint32_t mcast_start_x = get_arg(args::mcast_start_x);
+    const uint32_t mcast_start_y = get_arg(args::mcast_start_y);
+    const uint32_t mcast_end_x = get_arg(args::mcast_end_x);
+    const uint32_t mcast_end_y = get_arg(args::mcast_end_y);
+    const uint32_t num_mcast_dests = get_arg(args::num_mcast_dests);
+    const uint32_t num_receivers = get_arg(args::num_receivers);
+#elif defined(AFFINE_MCAST_RECEIVER)
+    const uint32_t sender_noc_x = get_arg(args::sender_noc_x);
+    const uint32_t sender_noc_y = get_arg(args::sender_noc_y);
+#endif
 
     Noc noc;
+#ifdef AFFINE_MCAST
+    Semaphore<> affine_ready_sem(sem::affine_ready);
+    Semaphore<> affine_done_sem(sem::affine_done);
+#ifdef AFFINE_MCAST_SENDER
+    MulticastEndpoint mcast_ep;
+#else
+    // Trace and program-cache replay retain semaphore storage.
+    affine_done_sem.set(0);
+#endif
+#endif
     DataflowBuffer dfb_in0(dfb::in);
     // Welford-fp32 alias of dfb_in (non-fused). It shares L1 memory with dfb_in0 but has its own
     // semaphore. The compute kernel waits on dfb_x_welford for the welford section because that
@@ -33,6 +54,19 @@ void kernel_main() {
 #endif
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_in1(dfb::inb);
+#endif
+#ifdef FP32_SFPU_FINALIZER
+    constexpr bool fp32_sfpu_finalizer = true;
+    DataflowBuffer dfb_in0_fp32(dfb::in_fp32);
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_in1_fp32(dfb::inb_fp32);
+#endif
+#else
+    constexpr bool fp32_sfpu_finalizer = false;
+    DataflowBuffer& dfb_in0_fp32 = dfb_in0;
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer& dfb_in1_fp32 = dfb_in1;
+#endif
 #endif
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb::gamma);
@@ -48,7 +82,7 @@ void kernel_main() {
     [[maybe_unused]] constexpr auto W = get_arg(args::W);
 
     const auto src_a = TensorAccessor(tensor::src);
-#ifdef FUSE_GAMMA
+#if defined(FUSE_GAMMA) && !defined(AFFINE_MCAST_RECEIVER)
     const uint32_t gamma_tile_bytes = dfb_gamma.get_tile_size();
     const auto addrg = TensorAccessor(tensor::gamma);
 #endif
@@ -106,6 +140,7 @@ void kernel_main() {
         // Calculate final output
 #if !defined(FUSED_PRE_ADD_REPLAY) || defined(FUSE_GAMMA) || defined(FUSE_BETA)
         for (auto block : generic::blocks(Wt, blk)) {
+#ifndef FUSED_PRE_ADD_REPLAY
             layernorm_dataflow_utils::read_block_to_dfb(
                 noc, dfb_in0, src_a, src0_tile_bytes, offs + block.start() + tile_offset, block);
 #ifdef FUSE_PRE_ADD
