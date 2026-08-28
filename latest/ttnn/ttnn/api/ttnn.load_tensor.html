@@ -376,7 +376,7 @@
 <span class="n">ttnn</span><span class="o">.</span><span class="n">dump_tensor</span><span class="p">(</span><span class="n">file_name</span><span class="o">=</span><span class="s2">"ttnn_tensor.tensorbin"</span><span class="p">,</span> <span class="n">tensor</span><span class="o">=</span><span class="n">ttnn_tensor</span><span class="p">)</span>
 
 <span class="n">loaded_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">load_tensor</span><span class="p">(</span><span class="n">file_name</span><span class="o">=</span><span class="s2">"ttnn_tensor.tensorbin"</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loaded TT-NN tensor shape: </span><span class="si">{</span><span class="n">loaded_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Loaded TT-NN tensor shape"</span><span class="p">,</span> <span class="n">loaded_tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
