@@ -69,6 +69,13 @@ GDDR_INFO_PREFIX = "gddr_info_"
 SEVERITY = {"PASS": 0, "SKIP": 0, "EXCLUDED": 0, "WARN": 1, "FAIL": 2, "UNKNOWN": 3, "ERROR": 3}
 COVERED = {"PASS", "WARN", "FAIL"}
 
+
+# Reset *operation* steps (mirror of utils.report.is_reset_op_check): recorded with
+# their real status but acknowledged, so a recovered reset isn't counted as a fail.
+def is_reset_op_check(name: str) -> bool:
+    return name.startswith("reset_") or name == "cpld_auto_recover"
+
+
 RUNS_COLS = [
     "schema_version",
     "run_id",
@@ -333,7 +340,7 @@ def checks_rows(report: dict, meta: dict):
                 "is_fail": int(st == "FAIL"),
                 "is_skip": int(st == "SKIP"),
                 "is_covered": int(st in COVERED and executed == 1),
-                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded),
+                "acknowledged": int(name in ACKNOWLEDGED_CHECKS or excluded or is_reset_op_check(name)),
                 "testcases_passed": tp,
                 "testcases_failed": tf,
                 "executed": executed,
