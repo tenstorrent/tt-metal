@@ -555,6 +555,66 @@ def test_llama_no_padded_vocabulary_id_is_ever_sampled(mesh_device: ttnn.MeshDev
 @_PARAMS
 @_GALAXY
 @torch.no_grad()
+def test_llama_a_near_zero_temperature_collapses_onto_the_host_argmax(mesh_device: ttnn.MeshDevice):
+    """The one device check for defect D4's temperature inversion.
+
+    ``ttnn.sampling``'s ``temp`` argument is the **reciprocal** temperature and
+    ``Sampling2D`` writes ``1 / T``; ``direct_runner.sample_host`` divides by
+    ``T``. The step-7 brief asks for that pairing to be verified on device rather
+    than assumed, and notes why the obvious test cannot do it: ``T == 1.0`` is its
+    own reciprocal, and every seeded comparison against the host is confounded
+    because ``_device_seed`` and ``_host_seed`` are deliberately different
+    digests, so device and host streams are not expected to match token for token.
+
+    This case avoids both traps. Sample **stochastically** - ``top_k=32``, no
+    forced argmax - at ``T = 0.02``. Under the correct convention the device gets
+    ``temp = 50`` and the distribution is so peaked that every slot must land on
+    its argmax. Under the inverted convention it would get ``temp = 0.02``, which
+    flattens the distribution to near-uniform over 32 candidates, and 32 slots
+    agreeing with argmax would be a ``1 / 32**32`` event. So the assertion below
+    fails loudly on an inversion and cannot pass by luck.
+
+    ``T = 2.0`` is run too and its agreement count is **printed, not asserted**:
+    it is the complementary evidence (a flatter distribution should disagree with
+    argmax sometimes), and turning "sometimes" into an assertion would be a flaky
+    test. Added by `mb-coverage` attempt 2.
+    """
+
+    rows = _distinct_rows(128, GALAXY_PHYSICAL_BATCH)
+    handle = _load(mesh_device, paged_attention_config=_paged_config(context=2048, active_slots=32))
+    try:
+        vocab_size = handle.model.vocab_size
+        with GalaxyDirectRunner(handle.model) as runner:
+            for slot, row in enumerate(rows):
+                runner.prefill_row(row, slot=slot)
+            tokens = [1] * GALAXY_PHYSICAL_BATCH
+            positions = [128] * GALAXY_PHYSICAL_BATCH
+            expected = torch.argmax(runner.decode_logits(tokens, positions)[:, :vocab_size], dim=-1)
+
+            cold = runner.decode_sampled(
+                tokens, positions, GalaxySamplingPolicy(top_k=32, top_p=1.0, temperature=0.02, seed=11, on_device=True)
+            )
+            hot = runner.decode_sampled(
+                tokens, positions, GalaxySamplingPolicy(top_k=32, top_p=1.0, temperature=2.0, seed=11, on_device=True)
+            )
+
+        agree_cold = sum(1 for slot in range(GALAXY_PHYSICAL_BATCH) if int(cold[slot]) == int(expected[slot]))
+        agree_hot = sum(1 for slot in range(GALAXY_PHYSICAL_BATCH) if int(hot[slot]) == int(expected[slot]))
+        print(f"[temperature] T=0.02 agrees with host argmax in {agree_cold}/32 slots; T=2.0 in {agree_hot}/32")
+        mismatched = [slot for slot in range(GALAXY_PHYSICAL_BATCH) if int(cold[slot]) != int(expected[slot])]
+        assert not mismatched, (
+            f"at T=0.02 the device sampled off-argmax in slots {mismatched}; a reciprocal-temperature "
+            f"inversion (defect D4) is the first thing to check"
+        )
+        assert torch.all(cold < vocab_size)
+        assert torch.all(hot < vocab_size)
+    finally:
+        _close(handle)
+
+
+@_PARAMS
+@_GALAXY
+@torch.no_grad()
 def test_llama_a_seeded_slot_repeats_across_runs(mesh_device: ttnn.MeshDevice):
     """Slot stability, first sense: same seed, same slot, same token every time.
 
