@@ -26,7 +26,7 @@ FORCE_INLINE constexpr uint32_t largest_divisor_at_most(uint32_t value, uint32_t
     return 1;
 }
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Tr>
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
 FORCE_INLINE void matrix_multiply(uint32_t a_id, uint32_t b_id, uint32_t output_id, DataflowBuffer& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -36,13 +36,13 @@ FORCE_INLINE void matrix_multiply(uint32_t a_id, uint32_t b_id, uint32_t output_
 
     output.reserve_back(Mt * Nt);
     reconfig_data_format(b_id, a_id);
-    matmul_block_init(a_id, b_id, Tr, subblock_columns, subblock_rows, Kt);
+    matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
     for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
         for (uint32_t column_start = 0; column_start < Nt; column_start += subblock_columns) {
             tile_regs_acquire();
             for (uint32_t k = 0; k < Kt; ++k) {
-                const uint32_t b_index = Tr ? column_start * Kt + k : k * Nt + column_start;
-                matmul_block(a_id, b_id, row_start * Kt + k, b_index, 0, Tr, subblock_columns, subblock_rows, Kt);
+                const uint32_t b_index = k * Nt + column_start;
+                matmul_block(a_id, b_id, row_start * Kt + k, b_index, 0, false, subblock_columns, subblock_rows, Kt);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -131,8 +131,7 @@ FORCE_INLINE void compute_value_new(
         kd.wait_front(ck);
     }
     current_state.wait_front(kv);
-    matrix_multiply<Ct, Kt, Vt, false>(
-        kd.get_id(), current_state.get_id(), state_projection.get_id(), state_projection);
+    matrix_multiply<Ct, Kt, Vt>(kd.get_id(), current_state.get_id(), state_projection.get_id(), state_projection);
     state_projection.wait_front(cv);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         kd.pop_front(ck);
@@ -150,7 +149,7 @@ FORCE_INLINE void compute_value_new(
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         t_inv.wait_front(cc);
     }
-    matrix_multiply<Ct, Ct, Vt, false>(t_inv.get_id(), difference.get_id(), corrected_value.get_id(), corrected_value);
+    matrix_multiply<Ct, Ct, Vt>(t_inv.get_id(), difference.get_id(), corrected_value.get_id(), corrected_value);
     corrected_value.wait_front(cv);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         t_inv.pop_front(cc);
@@ -172,13 +171,11 @@ FORCE_INLINE void compute_chunk_output(
     constexpr uint32_t cv = Ct * Vt;
 
     q_decay.wait_front(ck);
-    matrix_multiply<Ct, Kt, Vt, false>(
-        q_decay.get_id(), current_state.get_id(), state_projection.get_id(), state_projection);
+    matrix_multiply<Ct, Kt, Vt>(q_decay.get_id(), current_state.get_id(), state_projection.get_id(), state_projection);
     state_projection.wait_front(cv);
     q_decay.pop_front(ck);
     intra.wait_front(cc);
-    matrix_multiply<Ct, Ct, Vt, false>(
-        intra.get_id(), corrected_value.get_id(), value_projection.get_id(), value_projection);
+    matrix_multiply<Ct, Ct, Vt>(intra.get_id(), corrected_value.get_id(), value_projection.get_id(), value_projection);
     value_projection.wait_front(cv);
     intra.pop_front(cc);
     pack_reconfig_data_format(output.get_id());
@@ -204,7 +201,7 @@ FORCE_INLINE void update_state(
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         k_decay_transposed.wait_front(kc);
     }
-    matrix_multiply<Kt, Ct, Vt, false>(
+    matrix_multiply<Kt, Ct, Vt>(
         k_decay_transposed.get_id(), corrected_value.get_id(), state_update.get_id(), state_update);
     state_update.wait_front(kv);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
