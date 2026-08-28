@@ -1539,7 +1539,9 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = 0>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1670,9 +1672,22 @@ void sdpa_inner_loop(
             k_chunk_end = iter_k_chunk_end;
         }
 
+        // Windowed K-range narrowing: this Q chunk's [k_lo, k_hi) comes from the reader's ctrl CB —
+        // read via the UNPACK mailbox so all three TRISCs agree — and overrides BOTH bounds. The
+        // reader streams exactly this many K/V chunks and the writer produces exactly this many mask
+        // chunks; any disagreement deadlocks the CBs.
+        uint32_t k_chunk_start = iter_k_chunk_start;
+        if constexpr (use_windowed_narrowing) {
+            CircularBuffer cb_k_range_obj(cb_windowed_k_range);
+            cb_k_range_obj.wait_front(1);
+            k_chunk_start = ckernel::read_tile_value(cb_windowed_k_range, 0, 0);
+            k_chunk_end = ckernel::read_tile_value(cb_windowed_k_range, 0, 1);
+            cb_k_range_obj.pop_front(1);
+        }
+
         uint32_t processed_k_chunks = 0;
 
-        for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+        for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
@@ -2098,7 +2113,9 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = 0>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2157,7 +2174,12 @@ void sdpa_standard(
         is_chunked,
         scale_fp32,
         sliding_window_size,
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        false,  // chunked_enabled (not used)
+        0,      // chunked_q_local_padded_Nt (not used)
+        0,      // chunked_chunk_size_t (not used)
+        use_windowed_narrowing,
+        cb_windowed_k_range>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
