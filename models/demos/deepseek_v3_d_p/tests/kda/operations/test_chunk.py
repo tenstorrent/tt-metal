@@ -23,18 +23,21 @@ pytestmark = [
 def test_chunk_scan_strategy_policy(device: ttnn.Device) -> None:
     compute_config = ops._RecurrenceComputeConfig(None, None, None)
     cases = (
-        (159, None, ops._DirectScan),
-        (160, None, ops._LocalGroupedScan),
-        (161, None, ops._LocalGroupedScan),
-        (8, 0, ops._DistributedGroupedScan),
-        (9, 0, ops._DistributedGroupedScan),
+        (159, None, 1, ops._DirectScan),
+        (160, None, 1, ops._LocalGroupedScan),
+        (161, None, 1, ops._LocalGroupedScan),
+        (161, None, 12, ops._DirectScan),
+        (8, 0, 1, ops._DistributedGroupedScan),
+        (9, 0, 1, ops._DistributedGroupedScan),
     )
-    for num_chunks, sp_axis, expected in cases:
+    for num_chunks, sp_axis, batch_heads, expected in cases:
         actual = ops._select_scan(
             num_chunks=num_chunks,
             program_config=KDARecurrenceProgramConfig(summary_group_chunks=8),
             compute_config=compute_config,
             sequence_parallel_axis=sp_axis,
+            batch_heads=batch_heads,
+            device=device,
         )
         assert isinstance(actual, expected)
 
@@ -164,6 +167,7 @@ def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, ex
         (5120, 2, 32, 32, 8, 160),
         (5120, 1, 128, 128, 8, 160),
         (5152, 2, 32, 32, 8, 160),
+        (5152, 12, 128, 128, 20, 160),
     ],
 )
 def test_chunk_recurrence_pcc(

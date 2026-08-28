@@ -259,6 +259,8 @@ class ttKDA:
             num_chunks=local_chunks,
             program_config=self.recurrence_config,
             sequence_parallel_axis=sequence_parallel_axis,
+            batch_heads=batch * self.config.num_heads,
+            device=hidden_states.device(),
         ):
             if self.config.head_k_dim != self.config.head_v_dim:
                 raise ValueError(
