@@ -56,12 +56,7 @@ from PIL import Image, ImageOps
 
 import ttnn
 
-from ...encoders.qwen3vl.loader_minimax_h3 import (
-    MINIMAX_H3_TEXT_ENCODER_LAYER,
-    build_minimax_h3_text_encoder,
-    build_minimax_h3_vision_tower,
-    load_minimax_h3_text_state_dict,
-)
+from ...encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder, build_minimax_h3_vision_tower
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
@@ -776,27 +771,12 @@ class MiniMaxH3Pipeline:
 
         self._make_resident("text")
         if self._text_encoder is None:
-            # Built without weights, then loaded through the cache: a hit skips the 50 GB
-            # safetensors read entirely, which is the whole cost of this stage.
             self._text_encoder, self._text_config = build_minimax_h3_text_encoder(
                 self.weights_dir / "text_encoder",
                 mesh_device=self.mesh_device,
                 parallel_config=self.encoder_parallel_config,
                 ccl_manager=self.ccl_manager,
                 is_fsdp=True,
-                load_weights=False,
-            )
-            cache.load_model(
-                self._text_encoder,
-                model_name=MODEL_NAME,
-                subfolder="text_encoder",
-                parallel_config=self.encoder_parallel_config,
-                mesh_shape=tuple(self.mesh_device.shape),
-                mesh_device=self.mesh_device,
-                is_fsdp=True,
-                get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(
-                    self.weights_dir / "text_encoder", num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER
-                ),
             )
         config = self._text_config
 
