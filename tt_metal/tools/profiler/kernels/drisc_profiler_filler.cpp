@@ -63,10 +63,30 @@ void kernel_main() {
     constexpr uint32_t kPageBytes = kPageWords * 4u;
     // Reads take the NoC the writes do not; NOC_INDEX (the kernel's configured NoC) carries egress.
     constexpr uint8_t kReadNoc = NOC_INDEX == 0 ? 1 : 0;
-    // Two-core batches; every slot the arena holds beyond the CV slot becomes pipeline depth.
+    // ---- GDDR SPOOL (arg 43 != 0): frames ship by DMA into a ring in this DRISC's own GDDR bank and a
+    // non-blocking drain pump forwards spool bytes to the host FIFO from OFF the service path. The hot
+    // loop then never touches the PCIe tile: its egress is a local DMA whose acceptance is deterministic,
+    // so host-side pressure (decode, memory traffic) lands in spool occupancy instead of in the sweep
+    // interval. 0 = the direct-push path, byte-identical to before the spool existed.
+    constexpr uint32_t kSpoolBase = get_compile_time_arg_val(42);
+    constexpr uint32_t kSpoolBytes = get_compile_time_arg_val(43);
+    constexpr bool kSpool = kSpoolBytes != 0;
+    constexpr uint8_t kDmaShip = 0;   // TX stream 0: staging -> spool
+    constexpr uint8_t kDmaDrain = 1;  // TX stream 1: spool -> bounce
+    // Two-core batches; every slot the arena holds beyond the CV slot becomes pipeline depth. Spool mode
+    // spends two slots on the drain's ping-pong bounce buffers, which costs a staging generation -- paid
+    // for by the egress it removes: the third generation existed to ride out PCIe acceptance jitter, and
+    // a DMA ship has none.
     constexpr uint32_t kGenSlots = 2;
-    constexpr uint32_t kNGens = (kNStage - 1) / kGenSlots;
+    constexpr uint32_t kNBounce = kSpool ? 2u : 0u;
+    // Self-zone builds park the CV staging inside the self slot (past the array), so no array slot is
+    // spent on it; the -1 in the old (kNStage - 1) formula was exactly that CV slot.
+    constexpr uint32_t kCvOwnSlot = kSelfZonesEarly != 0 ? 0u : 1u;
+    constexpr uint32_t kNGens = (kNStage - kCvOwnSlot - kNBounce) / kGenSlots;
     static_assert(kNGens >= 2, "the ship pipeline needs at least two staging generations");
+    constexpr uint32_t kBounceSlot0 = kNGens * kGenSlots + kCvOwnSlot;
+    static_assert(kBounceSlot0 + kNBounce <= kNStage, "bounce slots must fit inside the mapped staging arena");
+    static_assert(!kSpool || kSpoolBytes % (kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4u) == 0, "spool wraps on pages");
     // The static VC this filler's PCIe pushes ride (0 or 1, the two unicast request VCs). Spread across
     // the fillers by the host: per-hop NoC arbitration is per-VC, so six pushers on one VC gave the far
     // cores a geometrically starved share of the PCIe tile while near ones stayed fast.
@@ -362,6 +382,31 @@ void kernel_main() {
     // the pace gap or the next sweep's CV pass instead of on the sweep's critical path.
     bool gen_shipped[kNGens] = {};
 
+    // ---- GDDR spool state (all dead code when kSpool == 0) ----
+    // Byte counters are MONOTONIC 64-bit (long captures exceed 4 GiB per filler); ring offsets are kept
+    // incrementally so the hot path never takes a runtime modulo.
+    uint64_t spool_wr = 0;        // bytes appended by the DMA ship
+    uint64_t spool_done = 0;      // bytes whose DMA writes have completed (observable to stream-1 reads)
+    uint64_t spool_rd_iss = 0;    // bytes a bounce refill has been ISSUED for (the read cursor)
+    uint64_t spool_rd = 0;        // bytes whose refill reads COMPLETED -- only these spool slots may be rewritten
+    uint32_t spool_wr_off = 0;    // spool_wr % kSpoolBytes
+    uint32_t spool_rd_iss_off = 0;  // spool_rd_iss % kSpoolBytes
+    uint32_t spool_max = 0;        // peak occupancy, bytes
+    uint32_t spool_drops = 0;      // frames dropped because the spool was full
+    uint32_t dma_issued = 0;       // cumulative stream-0 writes, for the per-generation completion gate
+    uint32_t gen_dma_mark[kNGens] = {};  // dma_issued as of each generation's ship
+    // Drain bounce buffers: at most one READING (stream-1 reads in flight) and one SHIPPING (egress NoC
+    // writes unflushed) at a time, so every pump pass is a poll and the drain can never stall the sweep.
+    constexpr uint32_t kBounceEmpty = 0, kBounceReading = 1, kBounceReady = 2, kBounceShipping = 3;
+    uint32_t b_state[2] = {kBounceEmpty, kBounceEmpty};
+    uint32_t b_bytes[2] = {};  // spool bytes held
+    uint32_t b_off[2] = {};    // bytes of those already pushed to the host (partial ships under credit)
+    uint32_t drain_chunks = 0;   // bounce fills
+    uint32_t drain_ships = 0;    // host pushes issued by the pump (partials count)
+    uint32_t drain_starved = 0;  // pump passes that held a READY bounce but had zero credit
+    uint64_t c_drain = 0;        // pump cycles OUTSIDE the pace gap (in-gap pumping is already c_pace)
+    bool drain_dead = false;     // exit drain deadline expired: bytes stranded in the spool
+
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
     // ================================ INSTRUMENTATION START (self-zone + NoC-footprint state and marker path) ====
@@ -516,6 +561,53 @@ void kernel_main() {
             dropped_frames += count;
             return;
         }
+        if constexpr (kSpool) {
+            uint32_t bytes = 0;
+            for (uint32_t f = 0; f < count; f++) {
+                bytes += kernel_profiler::spsc_span_frame_words(slot_payload[start + f]) * 4u;
+            }
+            // Full spool -> DROP, the same trade the credit timeout makes below: the heads are already
+            // written back, so the producers keep running and only capture is lost. The knob sizes the spool.
+            if (kSpoolBytes - static_cast<uint32_t>(spool_wr - spool_rd) < bytes) {
+                *phase = kPhDropped;
+                spool_drops += count;
+                dropped_frames += count;
+                return;
+            }
+            // The DMA engine reads the control and length words the scalar core staged; Blackhole stores
+            // can reach SRAM out of order.
+            asm volatile("fence" ::: "memory");
+            const uint64_t t0 = kInstr != 0 ? get_timestamp() : 0;
+            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WRITE, SelfMarkPhase> z_write(self_mark_phase);
+            *phase = kPhaseWrite;
+            for (uint32_t f = 0; f < count; f++) {
+                uint32_t src = kStageBase + (start + f) * kSlotBytes;
+                // WHOLE page-rounded frames, dead tail bytes included: the spool offset then advances in
+                // lockstep with the FIFO write pointer, so the drain's PCIe writes keep the src/dst
+                // congruence the pack pads establish, and the drain needs no frame geometry at all --
+                // the spool is a byte-exact image of the wire.
+                uint32_t len = kernel_profiler::spsc_span_frame_words(slot_payload[start + f]) * 4u;
+                while (len != 0) {
+                    const uint32_t piece = len > kSpoolBytes - spool_wr_off ? kSpoolBytes - spool_wr_off : len;
+                    experimental::dma_async_write(kDmaShip, src, kSpoolBase + spool_wr_off, piece);
+                    dma_issued++;
+                    spool_wr += piece;
+                    spool_wr_off += piece;
+                    if (spool_wr_off == kSpoolBytes) {
+                        spool_wr_off = 0;
+                    }
+                    src += piece;
+                    len -= piece;
+                }
+            }
+            const uint32_t occ = static_cast<uint32_t>(spool_wr - spool_rd);
+            if (occ > spool_max) {
+                spool_max = occ;
+            }
+            c_write += kInstr != 0 ? (get_timestamp() - t0) : 0;
+            *phase = kPhWrDone;
+            return;
+        }
         uint32_t npages = 0;
         for (uint32_t f = 0; f < count; f++) {
             npages += kernel_profiler::spsc_span_frame_words(slot_payload[start + f]) / kPageWords;
@@ -605,6 +697,126 @@ void kernel_main() {
         pushes++;
     };
 
+    // ---- SPOOL DRAIN PUMP: one poll pass, never a spin. At most one bounce is filling (a stream-1 DMA
+    // read) and one is flushing (egress NoC writes) at any time, so every wait this stage could have is a
+    // STATE a later pass observes instead of a stall -- the pump can delay host delivery, never the sweep.
+    // Runs per sweep end, inside the pace gap, and in the exit tail -- NEVER per pipeline batch: a pass
+    // that ships costs ~1.3 us, and paying that inside the batch loop put ~3.4 us back on the worst sweep
+    // (d10: 119k stalls vs 200-400 direct, same era). Bursts are the spool's job to absorb; the pump only
+    // has to win on average.
+    auto drain_pump = [&]() -> bool {
+        if constexpr (!kSpool) {
+            return false;
+        } else {
+            // L1-only early-out so the idle-sweep and pace-gap passes cost no DMA/NIU MMIO reads.
+            if (spool_wr == spool_rd && b_state[0] == kBounceEmpty && b_state[1] == kBounceEmpty) {
+                return false;
+            }
+            bool did = false;
+            // SHIPPING -> EMPTY once the egress writes are ACKED. Full flush, not "sent": the bounce's next
+            // writer is the DMA engine, which the sent-only gate does not fence (measured: 77k/42k decode
+            // order regressions). The flush predicate is per-NoC, which is per-bounce here because only the
+            // pump writes non-posted on NOC_INDEX in spool mode and it keeps at most one bounce SHIPPING.
+            for (uint32_t i = 0; i < 2; i++) {
+                if (b_state[i] == kBounceShipping && ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
+                    b_state[i] = kBounceEmpty;
+                    did = true;
+                }
+            }
+            // READING -> READY when the stream-1 reads retire; the spool region they covered is then
+            // rewritable (spool_rd is the SHIP side's free-space fence).
+            for (uint32_t i = 0; i < 2; i++) {
+                if (b_state[i] == kBounceReading && experimental::dma_get_reads_outstanding(kDmaDrain) == 0) {
+                    b_state[i] = kBounceReady;
+                    spool_rd = spool_rd_iss;
+                    did = true;
+                }
+            }
+            // Ship a READY bounce, as much as the host FIFO has credit for RIGHT NOW -- partial ships keep
+            // the FIFO fed under credit pressure and the remainder rides a later pass. Waiting bounces
+            // count as starved passes, never as spins.
+            const uint32_t rdy = b_state[0] == kBounceReady ? 0u : (b_state[1] == kBounceReady ? 1u : 2u);
+            if (rdy != 2u && !egress_dead && b_state[rdy ^ 1u] != kBounceShipping) {
+                invalidate_l1_cache();
+                const uint32_t bytes_free = sender.downstream_fifo_total_size - (sender.bytes_sent - *acked0);
+                uint32_t nb = b_bytes[rdy] - b_off[rdy];
+                if (bytes_free < nb) {
+                    nb = bytes_free & ~(kPageBytes - 1u);
+                }
+                if (nb == 0) {
+                    drain_starved++;
+                } else {
+                    noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(NOC_INDEX, kWriteVc);
+                    const uint32_t fifo_size = sender.downstream_fifo_curr_size;
+                    uint32_t wr = sender.write_ptr;
+                    if (wr >= fifo_size) {
+                        wr -= fifo_size;
+                    }
+                    const uint32_t src = kStageBase + (kBounceSlot0 + rdy) * kSlotBytes + b_off[rdy];
+                    const uint32_t first = (wr + nb > fifo_size) ? fifo_size - wr : nb;
+                    write_to_host_chunked(pcie_xy_enc, src, pcie_base + wr, first);
+                    if (first < nb) {
+                        write_to_host_chunked(pcie_xy_enc, src + first, pcie_base, nb - first);
+                    }
+                    socket_push_pages(sender, nb / kPageBytes);
+                    volatile tt_l1_ptr sender_socket_md* cfg =
+                        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(sender.config_addr);
+                    cfg->bytes_sent = sender.bytes_sent;
+                    asm volatile("fence" ::: "memory");
+                    // Same cmd state, VC and route as the data above, for the delivery-order argument the
+                    // direct path's notify documents.
+                    write_to_host_chunked(
+                        pcie_xy_enc,
+                        sender.config_addr,
+                        (static_cast<uint64_t>(sender.d2h.bytes_sent_addr_hi) << 32) |
+                            sender.downstream_bytes_sent_addr,
+                        4u);
+                    pages += nb / kPageBytes;
+                    pushes++;
+                    drain_ships++;
+                    b_off[rdy] += nb;
+                    if (b_off[rdy] == b_bytes[rdy]) {
+                        b_state[rdy] = kBounceShipping;
+                        b_off[rdy] = 0;
+                    }
+                    did = true;
+                }
+            }
+            // Refill an EMPTY bounce from the spool. Only SHIP-COMPLETED bytes are readable: a stream-1
+            // read is ordered behind a stream-0 write of the same address by nothing short of the write's
+            // completion.
+            if (experimental::dma_get_writes_outstanding(kDmaShip) == 0) {
+                spool_done = spool_wr;
+            }
+            const uint32_t emp = b_state[0] == kBounceEmpty ? 0u : (b_state[1] == kBounceEmpty ? 1u : 2u);
+            if (emp != 2u && b_state[emp ^ 1u] != kBounceReading && spool_done != spool_rd_iss) {
+                uint32_t len = static_cast<uint32_t>(spool_done - spool_rd_iss);
+                if (len > kSlotBytes) {
+                    len = kSlotBytes;
+                }
+                if (len > kSpoolBytes - spool_rd_iss_off) {
+                    len = kSpoolBytes - spool_rd_iss_off;
+                }
+                experimental::dma_async_read(
+                    kDmaDrain,
+                    kSpoolBase + spool_rd_iss_off,
+                    kStageBase + (kBounceSlot0 + emp) * kSlotBytes,
+                    len);
+                spool_rd_iss += len;
+                spool_rd_iss_off += len;
+                if (spool_rd_iss_off == kSpoolBytes) {
+                    spool_rd_iss_off = 0;
+                }
+                b_bytes[emp] = len;
+                b_off[emp] = 0;
+                b_state[emp] = kBounceReading;
+                drain_chunks++;
+                did = true;
+            }
+            return did;
+        }
+    };
+
     // Barrier AT THE END: after a publish the next marker overwrites a word the in-flight frame is
     // still shipping, so the wait belongs before the NEXT publish, not after the previous one.
     // Phase counters are saved/restored around the egress call so the self frame does not bill itself.
@@ -632,7 +844,9 @@ void kernel_main() {
             pages = s_pages;
             pushes = s_pushes;
             max_reserve = s_maxr;
-            if (write_barrier_bounded(get_timestamp() + kCreditWaitCycles)) {
+            const bool self_out = kSpool ? dma_wait_writes_bounded(kDmaShip, 0, get_timestamp() + kCreditWaitCycles)
+                                         : write_barrier_bounded(get_timestamp() + kCreditWaitCycles);
+            if (self_out) {
                 self_words_shipped += self_tail - self_head;
                 self_head = self_tail;
                 self_frames++;
@@ -1098,6 +1312,9 @@ void kernel_main() {
                         }
                     }
                     emit_slots(g * kGenSlots, n);
+                    if constexpr (kSpool) {
+                        gen_dma_mark[g] = dma_issued;
+                    }
                     if (!egress_dead) {
                         gen_shipped[g] = true;
                     }
@@ -1118,7 +1335,16 @@ void kernel_main() {
                         {
                             kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_WR_BARRIER, SelfMarkPhase> z_bar(
                                 self_mark_phase);
-                            flushed = write_barrier_bounded<true>(t_b0 + kCreditWaitCycles);
+                            if constexpr (kSpool) {
+                                // Completion of THIS generation's ship writes; anything issued since may
+                                // stay in flight (stream completion is FIFO, so outstanding <= later-issues
+                                // means this generation retired).
+                                const uint32_t since = dma_issued - gen_dma_mark[gen];
+                                flushed = dma_wait_writes_bounded(
+                                    kDmaShip, since > 15u ? 15u : static_cast<uint8_t>(since), t_b0 + kCreditWaitCycles);
+                            } else {
+                                flushed = write_barrier_bounded<true>(t_b0 + kCreditWaitCycles);
+                            }
                         }
                         c_barrier += kInstr != 0 ? (get_timestamp() - t_b0) : 0;
                         if (!flushed) {
@@ -1232,6 +1458,13 @@ void kernel_main() {
             const uint32_t b = sweep_peak / (kRingWords >> 3u);  // constexpr divisor: folds to a shift
             fill_hist[b > 7u ? 7u : b]++;
         }
+        // After sweep_cyc is captured, so drain time is never billed to the sweep it trails.
+        if constexpr (kSpool) {
+            const uint64_t t_d0 = kInstr != 0 ? get_timestamp() : 0;
+            kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_DRAIN, SelfMarkNow> z_drain(self_mark_now);
+            drain_pump();
+            c_drain += kInstr != 0 ? (get_timestamp() - t_d0) : 0;
+        }
         // Stamped at the sweep's END so it lines up with the DRISC-SWEEP zone that just closed.
         if constexpr (kNocFpSeries != 0) {
             self_nocfp();
@@ -1281,6 +1514,9 @@ void kernel_main() {
                 kernel_profiler::SpscZoneScope<kernel_profiler::DRISC_ZONE_PACE, SelfMarkNow> z_pace(self_mark_now);
                 const uint64_t until = t_g0 + gap;
                 while (get_timestamp() < until) {
+                    if constexpr (kSpool) {
+                        drain_pump();  // idle time is drain time; billed to pace, as the spin was
+                    }
                 }
             }
             c_pace += get_timestamp() - t_g0;
@@ -1318,9 +1554,25 @@ void kernel_main() {
         }
     }
 
+    // Everything the run spooled must reach the host FIFO before the socket barrier can pass; bounded,
+    // so a consumer that stopped acking strands bytes (counted below) instead of wedging the teardown.
+    if constexpr (kSpool) {
+        if (!egress_dead) {
+            (void)dma_wait_writes_bounded(kDmaShip, 0, get_timestamp() + kCreditWaitCycles);
+            const uint64_t t_dl = get_timestamp() + kStopDrainCycles;
+            while (spool_rd_iss != spool_wr || b_state[0] != kBounceEmpty || b_state[1] != kBounceEmpty) {
+                drain_pump();
+                if (get_timestamp() >= t_dl) {
+                    drain_dead = true;
+                    break;
+                }
+            }
+        }
+    }
+
     // socket_barrier() waits for the host to ack everything, so it hangs on a dead consumer just
     // like the write barrier did. Skip both when we already know the consumer is gone.
-    const bool consumer_gone = egress_dead || credit_timeouts != 0;
+    const bool consumer_gone = egress_dead || credit_timeouts != 0 || drain_dead;
     *phase = kPhSockBar;
     if (!consumer_gone) {
         socket_barrier(sender);
@@ -1377,6 +1629,18 @@ void kernel_main() {
     out[33] = credit_timeouts;
     out[34] = dropped_frames;
     out[35] = egress_dead ? 1u : 0u;
+    // ---- GDDR spool / drain pump (all zero in direct-push builds) ----
+    out[48] = spool_drops;
+    out[49] = drain_chunks;
+    out[50] = drain_starved;
+    out[51] = spool_max;
+    out[52] = drain_ships;
+    out[135] = drain_dead ? 1u : 0u;
+    out[138] = static_cast<uint32_t>(c_drain & 0xFFFFFFFFu);
+    out[139] = static_cast<uint32_t>(c_drain >> 32);
+    out[140] = static_cast<uint32_t>(spool_wr & 0xFFFFFFFFu);
+    out[141] = static_cast<uint32_t>(spool_wr >> 32);
+    out[142] = static_cast<uint32_t>(spool_wr - spool_rd);  // stranded bytes; nonzero only with drain_dead
     out[36] = noc_index_before;
     out[37] = noc_index_after;
     out[38] = NOC_INDEX;

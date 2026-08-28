@@ -39,8 +39,9 @@ TT_ZONE_DEFINE_ID(DRISC_ZONE_READ, "DRISC-READ");                // span-read IS
 TT_ZONE_DEFINE_ID(DRISC_ZONE_READ_WAIT, "DRISC-READ-WAIT");      // read-barrier wait left after proc
 TT_ZONE_DEFINE_ID(DRISC_ZONE_PROC, "DRISC-PROC");                // control-vector scan + head write-back
 TT_ZONE_DEFINE_ID(DRISC_ZONE_CREDIT_WAIT, "DRISC-CREDIT-WAIT");  // socket credit against the host FIFO
-TT_ZONE_DEFINE_ID(DRISC_ZONE_WRITE, "DRISC-WRITE");              // the egress write itself
-TT_ZONE_DEFINE_ID(DRISC_ZONE_WR_BARRIER, "DRISC-WR-BARRIER");    // write barrier before staging is reused
+TT_ZONE_DEFINE_ID(DRISC_ZONE_WRITE, "DRISC-WRITE");              // the egress: PCIe write, or the DMA spool ship
+TT_ZONE_DEFINE_ID(DRISC_ZONE_WR_BARRIER, "DRISC-WR-BARRIER");    // staging-reuse wait: NoC sent, or DMA complete
+TT_ZONE_DEFINE_ID(DRISC_ZONE_DRAIN, "DRISC-DRAIN");              // spool->host drain pump (spool mode only)
 TT_ZONE_DEFINE_ID(DRISC_ZONE_PACE, "DRISC-PACE");                // the inter-sweep pacing gap
 TT_ZONE_DEFINE_ID(DRISC_ZONE_SYNC, "DRISC-SYNC");                // common-trigger sync fiducial
 TT_ZONE_DEFINE_ID(SPSC_DATA_ID_NOCFP, "DRISC-NOC-FOOTPRINT");    // the per-sweep NoC-counter PP_DATA sample
@@ -119,6 +120,18 @@ inline bool write_barrier_bounded(uint64_t deadline) {
                      : !ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
         invalidate_l1_cache();
         if (++spins >= kMaxSpins || get_timestamp() >= deadline) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Bounded dma_async_write_wait_n (gddr_dma.h): the spool-mode staging-reuse gate. Completion, not "sent" --
+// the DMA engine has no sent analog, and completion (AXI write response received) is also what makes the
+// spool bytes observable to the stream-1 reads that consume them.
+inline bool dma_wait_writes_bounded(uint8_t stream, uint8_t n, uint64_t deadline) {
+    while (experimental::dma_get_writes_outstanding(stream) > n) {
+        if (get_timestamp() >= deadline) {
             return false;
         }
     }

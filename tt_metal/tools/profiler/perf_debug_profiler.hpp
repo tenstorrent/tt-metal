@@ -35,6 +35,7 @@ namespace distributed {
 class MeshDevice;
 class MeshCoordinate;
 class D2HSocket;
+class MeshBuffer;
 }  // namespace distributed
 namespace perf_debug {
 class PerfDebugReceiver;
@@ -151,6 +152,9 @@ private:
     void verify_completeness(DeviceCtx& ctx, uint32_t device_index);
 
     std::vector<DeviceCtx> devices_;
+    // The GDDR spool reservation: one replicated mesh buffer, one interleaved page per DRAM bank, so the
+    // same window is reserved in every bank of every device. Held until stop(); nullptr in direct-push runs.
+    std::shared_ptr<distributed::MeshBuffer> spool_buffer_;
     std::unique_ptr<PerfDebugTracyHandler> tracy_;
     std::unique_ptr<perf_debug::PerfDebugTracyConsumer> tracy_consumer_;
     std::unique_ptr<perf_debug::PerfDebugReceiver> receiver_;

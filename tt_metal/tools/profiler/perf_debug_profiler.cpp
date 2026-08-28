@@ -32,6 +32,7 @@
 #include <tt-metalium/kernel_types.hpp>
 
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
@@ -380,6 +381,21 @@ uint32_t ship_min_pct() {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_SHIP_MIN_PCT");
         const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 50u;
         return n > 100 ? 100u : n;
+    }();
+    return v;
+}
+
+// TT_METAL_PERF_DEBUG_DRAM_MB: per-filler GDDR spool ring, in MiB. Non-zero makes each filler ship frames
+// by DMA into a ring in its own DRAM bank and forward them to the host FIFO from a non-blocking pump, so
+// the service loop never touches the PCIe tile and host-side pressure lands in spool occupancy instead of
+// in the sweep interval. The spool is the pipeline's burst elasticity: producers only feel back-pressure
+// once it fills. 0 = the direct-push path, exactly as it was before the spool existed.
+uint32_t dram_spool_mb() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRAM_MB");
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 128u;
+        // A ring beyond 4095 MiB would overflow the kernel's 32-bit ring arithmetic (a bank is 4 GiB anyway).
+        return n > 4095u ? 4095u : n;
     }();
     return v;
 }
@@ -1360,6 +1376,49 @@ bool PerfDebugProfiler::boot_device(
         TT_FATAL(w != 0, "filler weight {} must be non-zero", i);
         wcum[i + 1] = wcum[i] + w;
     }
+    // ---- GDDR spool reservation (TT_METAL_PERF_DEBUG_DRAM_MB; 0 = direct push) ----
+    // One REPLICATED mesh buffer with one interleaved page per DRAM bank: the same [address, address+spool)
+    // window is reserved in every bank of every device, and each filler spools into its own bank through its
+    // local DMA engine, so a single buffer covers all of them. It must be a MESH-level buffer: MeshBuffer
+    // allocations run through the mesh lock-step allocator, which never sees a device-local Buffer::create
+    // and would hand the same region out again.
+    uint32_t spool_bytes = dram_spool_mb() * (1u << 20);
+    uint32_t spool_addr = 0;
+    // Self-zones + spool overflows the 11,264 B DRISC code region (measured 852 B over), so the
+    // drainer-diagnostic build runs the direct path it has always profiled.
+    if (spool_bytes != 0 && drisc_zones()) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] DRISC self-zones build does not fit alongside the GDDR spool; running "
+            "direct push for this capture");
+        spool_bytes = 0;
+    }
+    if (spool_bytes != 0 && spool_buffer_ == nullptr) {
+        const uint32_t nbanks_dram = ctx.device->allocator()->get_num_banks(BufferType::DRAM);
+        try {
+            spool_buffer_ = distributed::MeshBuffer::create(
+                distributed::ReplicatedBufferConfig{static_cast<DeviceAddr>(nbanks_dram) * spool_bytes},
+                distributed::DeviceLocalBufferConfig{.page_size = spool_bytes, .buffer_type = BufferType::DRAM},
+                mesh_device.get());
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] could not reserve {} MiB/bank of DRAM for the GDDR spool ({}); falling "
+                "back to direct push",
+                dram_spool_mb(),
+                e.what());
+        }
+    }
+    if (spool_buffer_ != nullptr) {
+        spool_addr = static_cast<uint32_t>(spool_buffer_->address());
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] GDDR spool: {} MiB per filler at bank offset 0x{:x}",
+            dram_spool_mb(),
+            spool_addr);
+    } else {
+        spool_bytes = 0;
+    }
     // xsplit: a filler serves only the half its own DRAM column reaches without wrapping a row, and the
     // fillers of each column split that half between them.
     std::vector<uint32_t> xs_grp(ctx.n_drisc, 0), xs_rank(ctx.n_drisc, 0);
@@ -1853,7 +1912,22 @@ bool PerfDebugProfiler::boot_device(
                 // sweep, ~1 us of a 15 us knee sweep). Default ON -- the LIFETIME/WINDOW/WORST/read-split
                 // report lines come from it; TT_METAL_PERF_DEBUG_DRISC_INSTR=0 compiles it out for record
                 // runs, and those lines then print zeros.
-                perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_INSTR", true) ? 1u : 0u};
+                perf_debug::env_flag("TT_METAL_PERF_DEBUG_DRISC_INSTR", true) ? 1u : 0u,
+                // args 42/43: the GDDR spool (base offset in this DRISC's own bank, ring bytes; 43 == 0
+                // selects direct push). The bounce slots cost the kernel a staging generation, so the spool
+                // needs the full slot count; a smaller L1 falls back to direct push rather than failing the
+                // kernel's geometry static_asserts.
+                spool_addr,
+                nstage_drain >= (self_frames_base != 0 ? 6u : 7u) ? spool_bytes : 0u};
+            if (spool_bytes != 0 && nstage_drain < (self_frames_base != 0 ? 6u : 7u)) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] Device {}: only {} staging slots fit, too few for the spool's bounce "
+                    "buffers; filler {} runs direct push",
+                    device_id,
+                    nstage,
+                    d);
+            }
             TT_FATAL(
                 (drisc_zones() ? (kernel_profiler::SPSC_SPAN_PREFIX_WORDS +
                                   kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE +
@@ -2302,7 +2376,8 @@ void PerfDebugProfiler::stop() {
             const uint64_t c_read = u64(10), c_proc = u64(12), c_res = u64(14), c_wr = u64(16), c_bar = u64(18);
             const uint64_t c_idle = u64(21), c_busy = u64(23);
             const uint64_t c_pace = u64(136);
-            const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar + c_pace;
+            // u64(138) is the drain pump's off-gap time (its in-gap passes are already inside c_pace).
+            const uint64_t acct = c_read + c_proc + c_res + c_wr + c_bar + c_pace + u64(138);
             auto pct = [cyc](uint64_t v) {
                 return cyc ? (100.0 * static_cast<double>(v) / static_cast<double>(cyc)) : 0.0;
             };
@@ -2390,6 +2465,30 @@ void PerfDebugProfiler::stop() {
                     "[perf-debug profiler] DRISC ship threshold: {} core visits deferred, {} ships forced by age",
                     res[170],
                     res[171]);
+            }
+            if (spool_buffer_ != nullptr) {
+                const uint64_t spooled = u64(140);
+                const uint64_t drain_cyc = u64(138);
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC GDDR spool: {:.1f} MiB spooled, peak occ {} KiB of {} MiB, "
+                    "{} refills, {} host pushes ({} credit-starved passes), pump {:.1f} ms off-gap",
+                    spooled / 1048576.0,
+                    res[51] >> 10,
+                    dram_spool_mb(),
+                    res[49],
+                    res[52],
+                    res[50],
+                    drain_cyc / kCycPerUs / 1000.0);
+            }
+            if (res[48] != 0 || res[135] != 0 || res[142] != 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] GDDR SPOOL LOSS: {} frames dropped on a full spool{}{} -- grow "
+                    "TT_METAL_PERF_DEBUG_DRAM_MB or the host FIFO",
+                    res[48],
+                    res[135] != 0 ? ", exit drain DEADLINE EXPIRED" : "",
+                    res[142] != 0 ? fmt::format(", {} bytes stranded in the spool", res[142]) : "");
             }
             // Distribution of each busy sweep's PEAK unconsumed lane, in eighths of the ring.
             log_info(
@@ -2745,6 +2844,9 @@ void PerfDebugProfiler::stop() {
     tracy_consumer_.reset();
     tracy_.reset();
     devices_.clear();
+    // After the drainers are quiesced (nothing touches the spool any more) and while the mesh allocator
+    // is still alive to take the region back.
+    spool_buffer_.reset();
 }
 
 // One MMIO pass per worker core: the producer-owned stall counters (the knee metric -- nothing downstream
