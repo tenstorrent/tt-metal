@@ -481,13 +481,15 @@ def test_ds_mla(
 #   use_pretrained     random only. This row measures the MLA math, which the random-weight path
 #                      exercises identically; the pretrained checkpoint is covered by the chunked
 #                      rows below and by the transformer row.
-#   seq_len            5k only. 25k roughly quadruples the host reference's attention cost for no
-#                      extra coverage of the config fields under test.
+#   seq_len            5k and 25k, as Kimi. 25k is the row that crosses position 8192, where the
+#                      llama4 query temperature starts to apply (scale 1.139 at 25600, exactly 1.0
+#                      at 5120), so it is the only case here that exercises it.
 #   skip_host_comparison  check_pcc only. skip_check does the device work and computes NO PCC; the
 #                      gate for this step IS the PCC, so that case would be a silent zero-signal run.
 #   is_balanced        sequential only.
-# scale_down_sl stays swept (2 cases): it is the one axis that changes the seq_len actually run
-# (max_sl 5120 vs scaled_sl (5120//32)*8 = 1280), which exercises different padding/rotation paths.
+# scale_down_sl stays swept (2 cases per seq_len): it is the one axis that changes the seq_len
+# actually run (max_sl 5120/25600 vs scaled_sl (sl//32)*8 = 1280/6400), which exercises different
+# padding/rotation paths. Only the max_sl references are staged; the scaled ones recompute.
 #
 # NOT WIRED ON PURPOSE: reference_attention_cls. run_reference_mla returns None for a variant with
 # no reference (reference_runners.py:63), so the [reference_output] PCC is skipped and the three
@@ -508,7 +510,7 @@ def test_ds_mla(
 )
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [PREFILL_CHUNK_TOKENS], ids=["seq5k"])
+@pytest.mark.parametrize("seq_len", [PREFILL_CHUNK_TOKENS, 25 * 1024], ids=["seq5k", "seq25k"])
 @pytest.mark.parametrize("skip_host_comparison", [False], ids=["check_pcc"])
 @pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
 @pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral"])
