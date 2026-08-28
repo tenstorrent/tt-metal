@@ -157,9 +157,7 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 # removes them instead of failing on an unknown column.
 #   TEXT_SIZE(...)  — per-stage ELF code size; not used by the gate
 #   <RUN_TYPE>_<metric>  — counter-derived metrics, only produced under
-#   --enable-perf-counters, which no pipeline passes. They stay in the main CSV;
-#   publishing them would widen the table by 306 columns that are NULL in every
-#   row the gate ever sees. See DATA-1769.
+#   --enable-perf-counters, which no pipeline passes
 DROPPED_COLUMNS = {
     "TEXT_SIZE(L1_TO_L1)",
     "TEXT_SIZE(MATH_ISOLATE)",

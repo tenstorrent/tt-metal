@@ -345,9 +345,6 @@ def test_counter_metric_columns_are_accounted_for():
 
 
 def test_counter_metrics_stay_out_of_the_published_table():
-    # The published table is a data contract (DATA-1652) and counter metrics are
-    # not part of it: no pipeline passes --enable-perf-counters, so every one
-    # would be NULL in every published row.
     published = {c.name for c in DB_SCHEMA}
     forms = {
         metric_column(run_type, base)
