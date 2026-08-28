@@ -85,6 +85,17 @@ if [[ "$DEVICE_JOBS" -gt 1 ]]; then
     fi
 fi
 
+# focus.sh already splices "${PYTEST_SIM_ARGS[@]}" into both pytest calls but
+# never defines it. Wire it up: TTNOP_SIM=1 runs the sweep on the VCS simulator.
+# One simulator instance means one worker, so xdist is forced off.
+PYTEST_SIM_ARGS=()
+if [[ -n "${TTNOP_SIM:-}" ]]; then
+    PYTEST_SIM_ARGS=(--run-simulator --port="${TTNOP_PORT:-5601}")
+    XDIST_ARGS=()
+    DEVICE_JOBS=1
+    echo ">> simulator mode: ${PYTEST_SIM_ARGS[*]} (xdist disabled)"
+fi
+
 build_scanner
 cd "$PYTHON_TESTS"
 

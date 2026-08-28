@@ -192,7 +192,7 @@ class TestConfig:
     # silicon init_ttexalens and the RTL remote connect both happen after it.
     _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
-    SIMULATOR_TIMEOUT: ClassVar[int] = 600
+    SIMULATOR_TIMEOUT: ClassVar[int] = 3600
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
