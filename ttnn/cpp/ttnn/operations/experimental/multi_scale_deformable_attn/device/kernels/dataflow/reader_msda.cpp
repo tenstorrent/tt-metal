@@ -97,7 +97,13 @@ constexpr uint32_t attn_page_nbytes = get_compile_time_arg_val(18);
 constexpr uint32_t attn_n_div = get_compile_time_arg_val(19);
 constexpr uint32_t attn_head_stride_pts = get_compile_time_arg_val(20);
 constexpr uint32_t attn_point_offset = get_compile_time_arg_val(21);
-constexpr auto value_args = TensorAccessorArgs<22>();
+// grid addressing, same three-way shape as attn's: n_div 1 and head stride 0 leave the
+// page carrying the head, which is both rank-4 forms.
+constexpr uint32_t grid_page_nbytes = get_compile_time_arg_val(22);
+constexpr uint32_t grid_n_div = get_compile_time_arg_val(23);
+constexpr uint32_t grid_head_stride_pts = get_compile_time_arg_val(24);
+constexpr uint32_t grid_point_offset = get_compile_time_arg_val(25);
+constexpr auto value_args = TensorAccessorArgs<26>();
 constexpr auto grid_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
 constexpr auto attn_args = TensorAccessorArgs<grid_args.next_compile_time_args_offset()>();
 
@@ -134,7 +140,7 @@ void kernel_main() {
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(3);
 
     const auto value_acc = TensorAccessor(value_args, value_addr, value_stick_nbytes);
-    const auto grid_acc = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);
+    const auto grid_acc = TensorAccessor(grid_args, grid_addr, grid_page_nbytes);
     const auto attn_acc = TensorAccessor(attn_args, attn_addr, attn_page_nbytes);
 
     Noc noc;
@@ -185,12 +191,18 @@ void kernel_main() {
                 attn_acc, dst, attn_bytes, {.page_id = attn_row_base + r, .offset_bytes = attn_read_off}, {});
         }
         // Stage grid for v_rows queries: GRID_STICKS_PER_QUERY sticks each, holding
-        // grid_pts_per_stick points of (x, y).
+        // grid_pts_per_stick points of (x, y). Packed, that is one stick reached by the same
+        // rounded-down offset attn uses; unpacked, the head is already in the page index.
+        const uint32_t grid_off = ((n % grid_n_div) * grid_head_stride_pts + grid_point_offset) * 4;
+        const uint32_t grid_read_off = grid_off & ~(NOC_OFF_ALIGN - 1);
+        const uint32_t grid_lane = (grid_off - grid_read_off) / 2;
+        const uint32_t grid_avail = grid_page_nbytes - grid_read_off;
+        const uint32_t grid_bytes = grid_stick_nbytes < grid_avail ? grid_stick_nbytes : grid_avail;
         for (uint32_t r = 0; r < v_rows; ++r) {
-            const uint32_t base = (n * Q + (q_start + r)) * GRID_STICKS_PER_QUERY;
+            const uint32_t base = ((n / grid_n_div) * Q + (q_start + r)) * GRID_STICKS_PER_QUERY;
             for (uint32_t g = 0; g < GRID_STICKS_PER_QUERY; ++g) {
                 CoreLocalMem<uint32_t> dst(grid_scratch_l1 + (r * GRID_STICKS_PER_QUERY + g) * grid_stick_nbytes);
-                noc.async_read(grid_acc, dst, grid_stick_nbytes, {.page_id = base + g}, {.offset_bytes = 0});
+                noc.async_read(grid_acc, dst, grid_bytes, {.page_id = base + g, .offset_bytes = grid_read_off}, {});
             }
         }
         noc.async_read_barrier();
@@ -243,7 +255,7 @@ void kernel_main() {
                 uint16_t av = 0;
                 if (r < v_rows) {
                     const uint32_t stick = r * GRID_STICKS_PER_QUERY + p / grid_pts_per_stick;
-                    const uint32_t lane = 2 * (p % grid_pts_per_stick);
+                    const uint32_t lane = grid_lane + 2 * (p % grid_pts_per_stick);
                     CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + stick * grid_stick_nbytes);
                     CoreLocalMem<volatile uint16_t> attn_ptr(attn_scratch_l1 + r * ATTN_READ_NBYTES);
                     gx = grid_ptr[lane];

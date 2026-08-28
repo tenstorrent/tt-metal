@@ -51,12 +51,15 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     const auto& as = attn.logical_shape();
 
     TT_FATAL(vs.rank() == 4, "value rank must be 4 (N, h_in, w_in, D), got {}", vs);
-    TT_FATAL(gs.rank() == 4, "grid rank must be 4 (N, Q, 1, P*2) or (N, Q*P, 1, 2), got {}", gs);
+    const bool grid_packed = gs.rank() == 3;
+    TT_FATAL(
+        gs.rank() == 4 || grid_packed,
+        "grid rank must be 4 ((N, Q, 1, P*2) or (N, Q*P, 1, 2)) or 3 ((B, Q, num_heads*stride*2)), got {}",
+        gs);
     TT_FATAL(as.rank() == 3, "attn rank must be 3 (N, Q, P), got {}", as);
-    TT_FATAL(gs[-2] == 1, "grid 3rd dim must be 1 (single sample row per query)");
     const uint32_t n_total = static_cast<uint32_t>(vs[0]) * attrs.num_heads;
     TT_FATAL(
-        static_cast<uint32_t>(gs[0]) == n_total,
+        grid_packed || static_cast<uint32_t>(gs[0]) == n_total,
         "grid's first dim (= {}) must equal value's batch times num_heads (= {})",
         static_cast<uint32_t>(gs[0]),
         n_total);
@@ -118,16 +121,40 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
         p,
         attn_head_stride);
     const uint32_t gw = static_cast<uint32_t>(gs[-1]);
-    // A ROW_MAJOR page is the last dimension, so the point axis is left to the caller: folded into
-    // the page it is one NoC read per query, spelled out it is P reads of four bytes and a rewrite
-    // on the caller's side to produce them. Any divisor of P in between is legal.
     TT_FATAL(gw % 2 == 0 && gw > 0, "grid last dim (= {}) must be a positive multiple of 2 (x, y)", gw);
-    TT_FATAL(p % (gw / 2) == 0, "grid last dim (= {}) must hold a divisor of P (= {}) points", gw, p);
-    TT_FATAL(
-        static_cast<uint32_t>(gs[1]) * (gw / 2) == q * p,
-        "grid holds {} points, attn expects Q*P = {}",
-        static_cast<uint32_t>(gs[1]) * (gw / 2),
-        q * p);
+    if (grid_packed) {
+        // Rank 3 packs every head and level into the row, the same way attn does.
+        TT_FATAL(
+            (gw / 2) % nh == 0,
+            "packed grid's last dim (= {}) must hold a multiple of num_heads (= {}) points",
+            gw,
+            nh);
+        const uint32_t grid_head_stride = (gw / 2) / nh;
+        TT_FATAL(
+            static_cast<uint32_t>(gs[0]) * nh == n_total,
+            "packed grid's first dim (= {}) times num_heads (= {}) must equal N (= {})",
+            static_cast<uint32_t>(gs[0]),
+            nh,
+            n_total);
+        TT_FATAL(static_cast<uint32_t>(gs[1]) == q, "packed grid's Q (= {}) must equal attn Q (= {})", gs[1], q);
+        TT_FATAL(
+            attrs.point_offset + p <= grid_head_stride,
+            "point_offset (= {}) plus P (= {}) overruns the grid's per-head run (= {})",
+            attrs.point_offset,
+            p,
+            grid_head_stride);
+    } else {
+        // A ROW_MAJOR page is the last dimension, so the point axis is left to the caller: folded
+        // into the page it is one NoC read per query, spelled out it is P reads of four bytes and a
+        // rewrite on the caller's side to produce them. Any divisor of P in between is legal.
+        TT_FATAL(p % (gw / 2) == 0, "grid last dim (= {}) must hold a divisor of P (= {}) points", gw, p);
+        TT_FATAL(
+            static_cast<uint32_t>(gs[1]) * (gw / 2) == q * p,
+            "grid holds {} points, attn expects Q*P = {}",
+            static_cast<uint32_t>(gs[1]) * (gw / 2),
+            q * p);
+        TT_FATAL(gs[-2] == 1, "grid 3rd dim must be 1 (single sample row per query)");
+    }
 }
 
 void MSDAOperation::validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& args) {

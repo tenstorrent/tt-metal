@@ -39,34 +39,34 @@ def multi_scale_deformable_attn_ttnn(
     sampling_grids,
     attention_weights,
     device,
+    num_heads,
+    num_points,
 ):
     """
     ttnn implementation of multi-scale deformable attention core logic.
 
     Args:
-        value (ttnn.Tensor): The value has shape
-            (bs, num_keys, num_heads, embed_dims//num_heads)
+        value (ttnn.Tensor): The value has shape (bs, num_keys, embed_dims), heads
+            packed in the last dimension
         value_spatial_shapes (torch.Tensor): Spatial shape of
             each feature map, has shape (num_levels, 2),
             last dimension 2 represent (h, w)
         sampling_grids (ttnn.Tensor): The location of sampling points, already
-            rescaled to grid_sample's [-1, 1], head-major and in ROW_MAJOR, has
-            shape (bs, num_heads, num_queries, num_levels * num_points * 2),
-            innermost (point, (x, y)) within a level.
+            rescaled to grid_sample's [-1, 1] and in ROW_MAJOR, has shape
+            (bs, num_queries, num_heads * num_levels * num_points * 2), innermost
+            (point, (x, y)) within a level within a head.
         attention_weights (ttnn.Tensor): The weight of sampling points used
             when calculate the attention, has shape
-            (bs, num_queries, num_heads, num_levels, num_points),
+            (bs, num_queries, num_heads * num_levels * num_points)
         device: TTNN device
+        num_heads (int): attention heads packed into value, grid and attn
+        num_points (int): sampling points per head per level
 
     Returns:
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
     bs, _, embed_dims = value.shape
-    num_levels = len(value_spatial_shapes)
-    # attn packs (head, level, point) into one row, so the head and point counts come from the
-    # grid, which still spells the head axis out.
-    _, num_heads, num_queries, level_point_width = sampling_grids.shape
-    num_points = level_point_width // (num_levels * 2)
+    _, num_queries, _ = attention_weights.shape
     head_dim = embed_dims // num_heads
 
     if ENABLE_LOGGING:
@@ -92,21 +92,13 @@ def multi_scale_deformable_attn_ttnn(
         # Splitting H_*W_ is a leading-dimension split, so the page is untouched and it is a view.
         value_l_ = ttnn.reshape(value_list[level], (bs, H_, W_, embed_dims))
 
-        # Already head-major, so the level slice is the fused op's grid up to a reshape. The point
-        # axis stays folded into the last dimension: a ROW_MAJOR page is the last dimension, so
-        # spelling it out would rewrite the grid at a 4-byte page. Folded, the reshape only merges
-        # leading dimensions and the page is untouched.
-        sampling_grid_l_ = ttnn.reshape(
-            sampling_grids[:, :, :, level * num_points * 2 : (level + 1) * num_points * 2],
-            (bs * num_heads, num_queries, 1, num_points * 2),
-        )  # [N, Q, 1, P*2] = [bs*num_heads, num_queries, 1, num_points*2]
-
-        # value (bs, H_, W_, embed_dims), grid (N, num_queries, 1, num_points*2), attn
-        # (bs, num_queries, num_heads*num_levels*num_points) -> (N, num_queries, head_dim),
-        # with N = bs * num_heads.
+        # value (bs, H_, W_, embed_dims), grid and attn both
+        # (bs, num_queries, num_heads*num_levels*num_points*{2,1}) -> (N, num_queries, head_dim),
+        # with N = bs * num_heads. Every axis but the query is an offset the op computes, so
+        # nothing here is copied per level.
         output_l_ = ttnn.experimental.multi_scale_deformable_attn(
             value_l_,
-            sampling_grid_l_,
+            sampling_grids,
             attention_weights,
             num_heads=num_heads,
             num_points=num_points,
@@ -328,20 +320,13 @@ class TTMSDeformableAttention:
             sampling_grids = ttnn.add(reference_rows, sampling_offsets)
             sampling_grids = ttnn.sub(ttnn.mul(sampling_grids, 2.0), 1.0)
 
-            # Only the head axis is spelled out, and only because the permute needs it; the level,
-            # point and (x, y) axes stay folded into the last dimension all the way into the core,
-            # so no op here ever writes a page narrower than num_points * 2.
-            #
-            # Head-major, because the core attention slices a level per fused call and each slice
-            # would otherwise need its own permute. One permute over the whole tensor beats
-            # num_levels permutes over slices of it: at these sizes the per-call overhead dominates
-            # the bytes moved, so the small ones run two orders of magnitude below bandwidth.
-            sampling_grids = ttnn.to_layout(sampling_grids, ttnn.ROW_MAJOR_LAYOUT)
+            # No axis is spelled out. The core attention reaches a head's level run by byte
+            # offset, so the (head, level, point, (x, y)) tail stays folded and this is the only
+            # layout op the sampling grid needs.
             sampling_grids = ttnn.reshape(
-                sampling_grids,
-                (bs, num_queries, self.num_heads, self.num_levels * self.num_points * 2),
+                ttnn.to_layout(sampling_grids, ttnn.ROW_MAJOR_LAYOUT),
+                (bs, num_queries, self.num_heads * self.num_levels * self.num_points * 2),
             )
-            sampling_grids = ttnn.permute(sampling_grids, (0, 2, 1, 3))
         else:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
 
@@ -352,6 +337,8 @@ class TTMSDeformableAttention:
             sampling_grids=sampling_grids,
             attention_weights=attention_weights,
             device=self.device,
+            num_heads=self.num_heads,
+            num_points=self.num_points,
         )
 
         if ENABLE_LOGGING:

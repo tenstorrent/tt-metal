@@ -22,6 +22,8 @@ namespace ttnn::experimental {
 //           byte offset inside the stick so no head-major copy is needed
 //   grid:   (N, Q, 1, P*2)     ROW_MAJOR bfloat16, (x, y) per point, normalized to [-1, 1]
 //                              (N, Q*P, 1, 2) also accepted, at P NoC reads per query instead of 1
+//                              (B, Q, num_heads*stride*2) rank 3 packs every head and level,
+//                              read with num_points and point_offset like attn
 //   attn:   (N, Q, P)          ROW_MAJOR bfloat16
 //           with num_heads > 1 it may instead be (B, Q, num_heads*stride), a head's
 //           run starting at h*stride and this call reading P points from

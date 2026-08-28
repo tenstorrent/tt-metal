@@ -23,7 +23,9 @@ void bind_multi_scale_deformable_attn(nb::module_& mod) {
             * :attr:`value`: (N, h_in, w_in, D) ROW_MAJOR bfloat16, N = B * num_heads. With
               num_heads > 1 it is (B, h_in, w_in, num_heads*D) instead: the reader takes head
               n % num_heads out of the stick by byte offset, so no head-major copy is needed.
-            * :attr:`grid`: (N, Q, 1, P*2) ROW_MAJOR bfloat16, (x, y) interleaved per point, normalized to [-1, 1]. (N, Q*P, 1, 2) is also accepted but costs P NoC reads per query instead of one.
+            * :attr:`grid`: (N, Q, 1, P*2) ROW_MAJOR bfloat16, (x, y) interleaved per point, normalized to [-1, 1]. (N, Q*P, 1, 2) is also accepted but costs P NoC reads per query instead of one. Rank 3
+              (B, Q, num_heads*stride*2) packs every head and level, read with num_points and
+              point_offset like attn.
             * :attr:`attn`: (N, Q, P) ROW_MAJOR bfloat16. With num_heads > 1 it may instead be
               (B, Q, num_heads*stride): a head's run starts at h*stride and this call reads
               num_points points from point_offset into it.
@@ -33,7 +35,8 @@ void bind_multi_scale_deformable_attn(nb::module_& mod) {
                 - True:                           pixel = (g + 1) * (size - 1) / 2
             * :attr:`num_heads`: heads packed into value's last dimension (default 1)
             * :attr:`num_points`: points sampled per query; 0 (default) takes attn's last dim
-            * :attr:`point_offset`: points to skip into each head's run (default 0)
+            * :attr:`point_offset`: points to skip into each head's run, in packed attn and grid
+              (default 0)
 
         Returns:
             (N, Q, D) ROW_MAJOR bfloat16.

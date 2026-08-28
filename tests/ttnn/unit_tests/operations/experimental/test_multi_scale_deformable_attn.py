@@ -211,3 +211,57 @@ def test_msda_rejects_point_offset_past_the_head_run(device, expect_error):
         ttnn.experimental.multi_scale_deformable_attn(
             value_t, grid_t, attn_t, num_heads=num_heads, num_points=P, point_offset=num_levels * P
         )
+
+
+@pytest.mark.parametrize("num_heads", [1, 4])
+@pytest.mark.parametrize("num_levels,level", [(1, 0), (4, 0), (4, 2), (4, 3)])
+def test_msda_packed_grid(device, num_heads, num_levels, level):
+    """A rank-3 grid packing (head, level, point, (x, y)) matches the (N, Q*P, 1, 2) form.
+
+    The offsets here are 4 bytes per point rather than 2, so levels 2 and 3 land off the
+    32-byte NoC boundary just as they do for attn.
+    """
+    B, h_in, w_in, D, Q, P = 2, 16, 16, 32, 32, 4
+    N = B * num_heads
+    torch.manual_seed(0)
+    packed_value = torch.randn(B, h_in, w_in, num_heads * D, dtype=torch.float32)
+    major_value = packed_value.reshape(B, h_in, w_in, num_heads, D).permute(0, 3, 1, 2, 4)
+    major_value = major_value.reshape(N, h_in, w_in, D).contiguous()
+
+    # (B, Q, num_heads, num_levels, P, 2) is the logical layout the packed row flattens.
+    full_grid = torch.rand(B, Q, num_heads, num_levels, P, 2, dtype=torch.float32) * 2.0 - 1.0
+    sliced_grid = full_grid[:, :, :, level, :, :].permute(0, 2, 1, 3, 4)
+    sliced_grid = sliced_grid.reshape(N, Q * P, 1, 2).contiguous()
+
+    full_attn = torch.softmax(torch.randn(B, Q, num_heads, num_levels * P, dtype=torch.float32), dim=-1)
+    full_attn = full_attn.reshape(B, Q, num_heads, num_levels, P)
+    sliced_attn = full_attn[:, :, :, level, :].permute(0, 2, 1, 3).reshape(N, Q, P).contiguous()
+
+    ref = _reference_msda(major_value, sliced_grid, sliced_attn, align_corners=False)
+
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_t = ttnn.from_torch(packed_value.to(torch.bfloat16), **rm)
+    grid_t = ttnn.from_torch(full_grid.reshape(B, Q, num_heads * num_levels * P * 2).to(torch.bfloat16), **rm)
+    attn_t = ttnn.from_torch(full_attn.reshape(B, Q, num_heads * num_levels * P).to(torch.bfloat16), **rm)
+
+    out = ttnn.to_torch(
+        ttnn.experimental.multi_scale_deformable_attn(
+            value_t, grid_t, attn_t, num_heads=num_heads, num_points=P, point_offset=level * P
+        )
+    )
+    assert_with_pcc(ref, out.to(torch.float32), pcc=0.99)
+
+
+def test_msda_rejects_packed_grid_point_offset_overrun(device, expect_error):
+    """point_offset + P must stay inside the grid's per-head run as well as attn's."""
+    B, h_in, w_in, D, Q, P, num_heads, num_levels = 1, 10, 10, 16, 16, 4, 2, 2
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_t = ttnn.from_torch(torch.randn(B, h_in, w_in, num_heads * D).to(torch.bfloat16), **rm)
+    # attn's run is long enough, so only the grid's bound can fire.
+    attn_t = ttnn.from_torch(torch.rand(B, Q, num_heads * (num_levels + 1) * P).to(torch.bfloat16), **rm)
+    grid_t = ttnn.from_torch((torch.rand(B, Q, num_heads * num_levels * P * 2) * 2.0 - 1.0).to(torch.bfloat16), **rm)
+
+    with expect_error(RuntimeError, "overruns the grid's per-head run"):
+        ttnn.experimental.multi_scale_deformable_attn(
+            value_t, grid_t, attn_t, num_heads=num_heads, num_points=P, point_offset=num_levels * P
+        )

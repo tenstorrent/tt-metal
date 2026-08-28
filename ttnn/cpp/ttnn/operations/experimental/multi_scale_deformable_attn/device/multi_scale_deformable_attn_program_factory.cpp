@@ -62,7 +62,9 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const bool attn_wide = static_cast<uint32_t>(as[2]) != P;
     const uint32_t attn_n_div = attn_wide ? num_heads : 1;
     const uint32_t attn_head_stride_pts = attn_wide ? static_cast<uint32_t>(as[2]) / num_heads : 0;
-    const uint32_t attn_point_offset = operation_attributes.point_offset;
+    // point_offset names a run inside a packed row. An unpacked input was already sliced by the
+    // caller, so applying it there would read past the end of a single-run page.
+    const uint32_t attn_point_offset = attn_wide ? operation_attributes.point_offset : 0u;
     const uint32_t reduction_size = 4 * P;
 
     constexpr uint32_t TILE_MAX_ROWS = 32;
@@ -93,11 +95,19 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // The value page holds every head's slice; the reader takes one head out of it by
     // byte offset, which is what spares the caller a head-major copy of the whole tensor.
     const uint32_t value_stick_raw = num_heads * D * value.element_size();
-    // Either grid form is accepted: (N, Q, 1, P*2) puts a query's whole point run in one page,
-    // (N, Q*P, 1, 2) one point per page. The wide form is one NoC read per query instead of P, and
-    // spares the caller a ROW_MAJOR rewrite down to a 4-byte page.
-    const uint32_t grid_pts_per_stick = static_cast<uint32_t>(grid.logical_shape()[-1]) / 2u;
-    const uint32_t grid_stick_raw = 2u * grid_pts_per_stick * grid.element_size();
+    // Three grid forms. Rank 4 (N, Q, 1, P*2) puts a query's whole point run in one page and
+    // (N, Q*P, 1, 2) one point per page; rank 3 (B, Q, num_heads*stride*2) packs every head and
+    // level, reached by the same byte offset attn uses. Each step up spares the caller a copy.
+    const auto& gsh = grid.logical_shape();
+    const bool grid_packed = gsh.rank() == 3;
+    const uint32_t grid_pts_per_stick = grid_packed ? P : static_cast<uint32_t>(gsh[-1]) / 2u;
+    const uint32_t grid_n_div = grid_packed ? num_heads : 1u;
+    const uint32_t grid_head_stride_pts = grid_packed ? (static_cast<uint32_t>(gsh[-1]) / 2u) / num_heads : 0u;
+    // Like attn: the run's byte offset is rounded down to the 32-byte NoC boundary, so the scratch
+    // row holds the worst-case lead-in as well.
+    const uint32_t grid_stick_raw =
+        grid_packed ? (32u - 2u) + 2u * P * grid.element_size() : 2u * grid_pts_per_stick * grid.element_size();
+    const uint32_t grid_page_raw = static_cast<uint32_t>(gsh[-1]) * grid.element_size();
     // The reader rounds a run's byte offset down to the 32-byte NoC boundary and indexes the
     // wanted points from there, so a scratch row carries the worst-case lead-in as well.
     // Kernel-side ATTN_READ_NBYTES derives the same number from P.
@@ -107,6 +117,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
 
     const uint32_t value_stick_aligned = aligned_page_size(value_stick_raw, value.buffer()->buffer_type());
     const uint32_t grid_stick_aligned = aligned_page_size(grid_stick_raw, grid.buffer()->buffer_type());
+    const uint32_t grid_page_aligned = aligned_page_size(grid_page_raw, grid.buffer()->buffer_type());
     const uint32_t attn_stick_aligned = aligned_page_size(attn_stick_raw, attn.buffer()->buffer_type());
     const uint32_t attn_page_aligned = aligned_page_size(attn_page_raw, attn.buffer()->buffer_type());
     const uint32_t output_stick_aligned = aligned_page_size(output_stick_raw, output.buffer()->buffer_type());
@@ -201,6 +212,10 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         attn_n_div,
         attn_head_stride_pts,
         attn_point_offset,
+        grid_page_aligned,
+        grid_n_div,
+        grid_head_stride_pts,
+        grid_packed ? operation_attributes.point_offset : 0u,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);
