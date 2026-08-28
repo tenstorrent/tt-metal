@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt_stl/indestructible.hpp>
+#include <optional>
 #include <vector>
 #include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
@@ -95,6 +96,8 @@ public:
 
     dispatch_core_manager& get_dispatch_core_manager();
     const DispatchCoreConfig& get_dispatch_core_config() const { return dispatch_core_config_; }
+    DispatchCoreConfig resolve_dispatch_core_config(
+        std::optional<DispatchCoreType> type = std::nullopt, std::optional<DispatchCoreAxis> axis = std::nullopt) const;
     internal::ServiceCoreManager& get_service_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
 

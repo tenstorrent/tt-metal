@@ -92,7 +92,7 @@ protected:
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
-        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
         shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
             ids, l1_small_size, trace_region_size, 1, dispatch_core_config);
         shared.devices.clear();

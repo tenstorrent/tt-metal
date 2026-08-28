@@ -1207,7 +1207,7 @@ LinkMetricsResult send_traffic_and_validate_links(
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1,
-            tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
     } catch (const std::exception& e) {
         log_info(tt::LogDistributed, "Error starting devices to send traffic on rank: {}", *distributed_context.rank());
         log_output_rank0("Error details: " + std::string(e.what()));

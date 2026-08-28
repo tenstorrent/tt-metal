@@ -567,6 +567,17 @@ const Hal& MetalContext::hal() const {
 
 // ─── Dispatch managers ────────────────────────────────────────────────────────
 
+DispatchCoreConfig MetalContext::resolve_dispatch_core_config(
+    std::optional<DispatchCoreType> type, std::optional<DispatchCoreAxis> axis) const {
+    TT_ASSERT(env_ != nullptr, "Missing MetalEnv for this MetalContext");
+    auto& env = MetalEnvAccessor(*env_).impl();
+    if (!type.has_value()) {
+        type = env.get_rtoptions().get_dispatch_core_type_override();
+    }
+    return tt::tt_metal::resolve_dispatch_core_config(
+        env.get_cluster().arch(), env.get_fabric_tensix_config(), type, axis);
+}
+
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;

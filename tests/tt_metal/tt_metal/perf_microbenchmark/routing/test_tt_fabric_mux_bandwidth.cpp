@@ -376,7 +376,7 @@ int main(int argc, char** argv) {
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1 /* num_command_queues */,
-        tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config());
+        tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
 
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device = mesh_device_map.at(0 /* chip_id */);
     // need device handle to do L1 read/writes

@@ -131,7 +131,7 @@ public:
         std::vector<ChipId> ids(this->num_devices, 0);
         std::iota(ids.begin(), ids.end(), 0);
 
-        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().get_env().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
 
         // Use MeshDevice::create_unit_meshes instead of DevicePool
         auto device_map = tt_metal::distributed::MeshDevice::create_unit_meshes(

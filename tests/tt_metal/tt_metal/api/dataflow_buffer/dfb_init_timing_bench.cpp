@@ -71,7 +71,7 @@ DfbInitTimingBenchContext create_dfb_init_timing_bench_context() {
     }
     TT_FATAL(!ids.empty(), "No MMIO devices available");
 
-    const auto& dispatch_core_config = MetalContext::instance().get_env().get_dispatch_core_config();
+    const auto& dispatch_core_config = MetalContext::instance().resolve_dispatch_core_config();
     auto id_to_device = distributed::MeshDevice::create_unit_meshes(
         ids,
         DEFAULT_L1_SMALL_SIZE,
