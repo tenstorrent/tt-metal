@@ -208,6 +208,10 @@ _MISALIGNED_GRID = [[1, 128, 128], [1, 110, 96]]
     [
         pytest.param((8, 4), (8, 4), 0, 1, 2, FABRIC, id="tp8_sp4"),
         pytest.param((4, 8), (4, 8), 0, 1, 2, FABRIC, id="tp4_sp8"),
+        # Quad galaxy: SP=32 moves the alignment to 1024, which this grid also misses (26,944 % 1024
+        # == 320 -> 704 pad rows, 864 tile-aligned rows/device). The (4, 8)/(8, 4) cases prove the
+        # logic; this one proves it at the 32-shard geometry (32 distinct Q offsets, 32-hop gathers).
+        pytest.param((4, 32), (4, 32), 0, 1, 2, FABRIC, id="tp4_sp32"),
     ],
     indirect=["mesh_device", "device_params"],
 )
