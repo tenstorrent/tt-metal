@@ -99,16 +99,16 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer final_decay(dfb::final_decay);
     Noc noc;
 
-    constexpr uint32_t cc = Ct * Ct;
-    constexpr uint32_t ck = Ct * Kt;
-    constexpr uint32_t kc = Kt * Ct;
-    constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    constexpr uint32_t key_chunk_tiles = Kt * Ct;
+    constexpr uint32_t key_value_tiles = Kt * Vt;
 
     if constexpr (summary_pair) {
-        state.reserve_back(kv);
-        noc.async_write_zeros(state, kv * state.get_entry_size());
+        state.reserve_back(key_value_tiles);
+        noc.async_write_zeros(state, key_value_tiles * state.get_entry_size());
         noc.write_zeros_l1_barrier();
-        state.push_back(kv);
+        state.push_back(key_value_tiles);
         seed_identity<Kt, Vt>(summary_seed, value_block);
     } else {
         const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
@@ -118,21 +118,23 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk;
         if constexpr (summary_pair) {
-            read_contiguous_tiles(kd_accessor, kd, noc, head_chunk * ck, ck);
+            read_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
             read_value_slice<Vt, Vt_full>(v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
-            read_contiguous_tiles(t_inv_accessor, t_inv, noc, head_chunk * cc, cc);
-            read_contiguous_tiles(k_decay_transposed_accessor, k_decay_transposed, noc, head_chunk * kc, kc);
+            read_contiguous_tiles(t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            read_contiguous_tiles(
+                k_decay_transposed_accessor, k_decay_transposed, noc, head_chunk * key_chunk_tiles, key_chunk_tiles);
             read_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
         } else {
             read_value_slice<Vt, Vt_full>(v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
-            read_contiguous_tiles(kd_accessor, kd, noc, head_chunk * ck, ck);
+            read_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
             const auto q_decay_accessor = TensorAccessor(tensor::q_decay);
             const auto intra_accessor = TensorAccessor(tensor::intra);
-            read_contiguous_tiles(q_decay_accessor, q_decay, noc, head_chunk * ck, ck);
-            read_contiguous_tiles(intra_accessor, intra, noc, head_chunk * cc, cc);
-            read_contiguous_tiles(k_decay_transposed_accessor, k_decay_transposed, noc, head_chunk * kc, kc);
+            read_contiguous_tiles(q_decay_accessor, q_decay, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
+            read_contiguous_tiles(intra_accessor, intra, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+            read_contiguous_tiles(
+                k_decay_transposed_accessor, k_decay_transposed, noc, head_chunk * key_chunk_tiles, key_chunk_tiles);
             read_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt);
-            read_contiguous_tiles(t_inv_accessor, t_inv, noc, head_chunk * cc, cc);
+            read_contiguous_tiles(t_inv_accessor, t_inv, noc, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
         }
     }
 }
