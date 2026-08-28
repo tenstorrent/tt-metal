@@ -11,6 +11,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/pair.h>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/internal/cluster_noc_helpers.hpp>
 
@@ -63,6 +64,35 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> import ttnn
                 >>> descriptor_path = ttnn.cluster.serialize_cluster_descriptor()
                 >>> print(f"Cluster descriptor saved to: {descriptor_path}")
+        )doc");
+
+    mod.def(
+        "translate_core_coord",
+        [](int device_id, uint32_t x, uint32_t y, const std::string& from_system, const std::string& to_system) {
+            return ttnn::cluster::translate_core_coord(device_id, x, y, from_system, to_system);
+        },
+        nb::arg("device_id"),
+        nb::arg("x"),
+        nb::arg("y"),
+        nb::arg("from_system"),
+        nb::arg("to_system"),
+        R"doc(
+            Translate a core coordinate between coordinate systems for one chip.
+
+            Systems: "LOGICAL", "NOC0", "NOC1", "TRANSLATED".
+
+            device_id is required and not inferred. The mapping is built from that chip's
+            harvesting configuration, so translating with another chip's mapping is
+            silently wrong -- and on a multi-chip host the harvesting can differ per chip.
+            Pass the id of the chip the coordinate actually came from (for profiler data,
+            the CSV's PCIe slot).
+
+            Returns:
+                tuple[int, int]: The (x, y) pair in `to_system`.
+
+            Example:
+                >>> import ttnn
+                >>> ttnn.cluster.translate_core_coord(5, 14, 11, "TRANSLATED", "NOC0")
         )doc");
 
     mod.def(

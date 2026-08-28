@@ -25,6 +25,7 @@
 #include "hostdev/dev_msgs.h"
 #include "api/tensor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 #include "internal/debug/sanitize.h"
 #include "api/debug/assert.h"
 
@@ -220,6 +221,7 @@ void cb_push_back(const int32_t operand, const int32_t num_pages) {
         // TODO: change this to fifo_wr_ptr
         get_local_cb_interface(operand).fifo_wr_ptr -= get_local_cb_interface(operand).fifo_size;
     }
+    SYNC_SIGNAL("SYNC-CB-PUSH", operand);
 }
 
 // clang-format off
@@ -271,6 +273,7 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
         // TODO: change this to fifo_wr_ptr
         get_local_cb_interface(operand).fifo_rd_ptr -= get_local_cb_interface(operand).fifo_size;
     }
+    SYNC_SIGNAL("SYNC-CB-POP", operand);
 }
 
 #ifdef DATA_FORMATS_DEFINED
@@ -410,15 +413,20 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 
     int32_t free_space_pages;
     WAYPOINT("CRBW");
-    do {
-        // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
-        // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
-        invalidate_l1_cache();
-        uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
-        uint16_t free_space_pages_wrap =
-            get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
-        free_space_pages = (int32_t)free_space_pages_wrap;
-    } while (free_space_pages < num_pages);
+    // The PRODUCER blocked on a FULL CB -- the back-pressure direction. Braced so the zone closes
+    // when the spin ends rather than at the end of the function.
+    {
+        SYNC_WAIT("SYNC-CB-RESERVE", operand);
+        do {
+            // uint16_t's here because Tensix updates the val at tiles_acked_ptr as uint16 in llk_pop_tiles
+            // TODO: I think we could have TRISC update tiles_acked_ptr, and we wouldn't need uint16 here
+            invalidate_l1_cache();
+            uint16_t pages_acked = (uint16_t)reg_read(pages_acked_ptr);
+            uint16_t free_space_pages_wrap =
+                get_local_cb_interface(operand).fifo_num_pages - (pages_received - pages_acked);
+            free_space_pages = (int32_t)free_space_pages_wrap;
+        } while (free_space_pages < num_pages);
+    }
     WAYPOINT("CRBD");
 }
 
@@ -478,9 +486,12 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint16_t pages_received;
 
     WAYPOINT("CWFW");
-    do {
-        pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
-    } while (pages_received < num_pages);
+    {
+        SYNC_WAIT("SYNC-CB-WAIT", operand);
+        do {
+            pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
+        } while (pages_received < num_pages);
+    }
     WAYPOINT("CWFD");
 }
 
@@ -1532,6 +1543,7 @@ inline void noc_semaphore_set_remote(
         NOC_UNICAST_WRITE_VC,
         /*posted=*/false,
         noc);
+    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1600,6 +1612,9 @@ inline void noc_semaphore_set_multicast(
         vc,
         /*posted=*/false,
         noc);
+    // Multicast: the address encodes a rectangle, so one record stands for every
+    // waiter inside it.
+    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast);
     ncrisc_noc_fast_write_any_len<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1664,6 +1679,7 @@ inline void noc_semaphore_set_multicast_loopback_src(
         NOC_MULTICAST_WRITE_VC,
         /*posted=*/false,
         noc);
+    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", dst_noc_addr_multicast);
     ncrisc_noc_fast_write_any_len_loopback_src<noc_mode>(
         noc,
         write_reg_cmd_buf,
@@ -1942,11 +1958,17 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
-
+    // Local L1 offset identifies the semaphore; the waiting core is the recording
+    // core, so its identity is implicit. A remote setter records the full NoC
+    // address instead, which carries the destination coordinates needed to pair
+    // the two sides.
     WAYPOINT("NSW");
-    do {
-        invalidate_l1_cache();
-    } while ((*sem_addr) != val);
+    {
+        SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) != val);
+    }
     WAYPOINT("NSD");
 }
 
@@ -1968,11 +1990,13 @@ void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
 FORCE_INLINE
 void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
-
     WAYPOINT("NSMW");
-    do {
-        invalidate_l1_cache();
-    } while ((*sem_addr) < val);
+    {
+        SYNC_WAIT("SYNC-SEM-WAIT", reinterpret_cast<uintptr_t>(sem_addr));
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) < val);
+    }
     WAYPOINT("NSMD");
 }
 
@@ -1994,6 +2018,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
 FORCE_INLINE
 void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     RECORD_NOC_EVENT(NocEventType::SEMAPHORE_SET, false, -1);
+    SYNC_SIGNAL("SYNC-SEM-SET", reinterpret_cast<uintptr_t>(sem_addr));
 
     // set semaphore value to val
     (*sem_addr) = val;
@@ -2264,6 +2289,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc(
     uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC, 0, addr, 0, vc, posted, noc_id);
+    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", addr);
 
     WAYPOINT("NSIW");
     DEBUG_SANITIZE_NOC_ADDR(noc_id, addr, 4);
@@ -2308,6 +2334,7 @@ template <bool posted = false>
 FORCE_INLINE void noc_semaphore_inc_multicast(
     uint64_t addr, uint32_t incr, uint32_t num_dests, uint8_t noc_id = noc_index, uint8_t vc = NOC_MULTICAST_WRITE_VC) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::SEMAPHORE_INC_MULTICAST, 0, addr, 0, vc, posted, noc_id);
+    SYNC_SIGNAL("SYNC-SEM-SET-REMOTE", addr);
 
     WAYPOINT("NIMW");
     DEBUG_SANITIZE_NOC_MULTI_ADDR(noc_id, addr, 4);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/compute/common_globals.h"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 #ifdef ARCH_QUASAR
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h"
 #endif
@@ -41,7 +42,13 @@ namespace ckernel {
  * | ntiles    | The number of tiles to wait for      | uint32_t | It must be less or equal than the size of the CB (the total number of tiles that fit into the CB) | True     |
  * */
 // clang-format on
-ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles(cbid, ntiles))); }
+ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) {
+    // NOT a sync-event hook site. On TRISC this is a pass-through to llk_wait_tiles, which the
+    // DataflowBuffer API also calls directly (internal/tt-1xx/dataflow_buffer.inl) -- so the hook
+    // lives there, once, and covers both. Hooking here as well would emit a second nested zone for
+    // every legacy compute call while a DFB call emitted one. Same for cb_push_back below.
+    UNPACK((llk_wait_tiles(cbid, ntiles)));
+}
 
 // clang-format off
 /**
