@@ -137,7 +137,7 @@ def test_grouped_scan_rejects_unequal_key_value_dims_at_forward_boundary(device:
         base_program_config,
         recurrence=replace(
             base_program_config.recurrence,
-            grouped_scan_min_chunks=1,
+            local_scan_strategy="grouped",
             summary_group_chunks=1,
         ),
     )

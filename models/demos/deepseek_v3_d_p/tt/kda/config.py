@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 import ttnn
 
@@ -28,14 +29,14 @@ KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 class KDARecurrenceProgramConfig:
     """Tunable recurrence strategy and compute fidelity."""
 
-    grouped_scan_min_chunks: int = 160
+    local_scan_strategy: Literal["direct", "grouped"] = "direct"
     summary_group_chunks: int = 20
     affine_prefix_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
     grouped_scan_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
 
     def __post_init__(self) -> None:
-        if self.grouped_scan_min_chunks <= 0:
-            raise ValueError("grouped_scan_min_chunks must be positive")
+        if self.local_scan_strategy not in ("direct", "grouped"):
+            raise ValueError("local_scan_strategy must be 'direct' or 'grouped'")
         if self.summary_group_chunks <= 0:
             raise ValueError("summary_group_chunks must be positive")
 
@@ -62,7 +63,11 @@ class KDAProgramConfig:
 def kimi_k3_program_config(*, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return measured K3 tuning with caller-owned per-axis CCL topology."""
     return KDAProgramConfig(
-        recurrence=KDARecurrenceProgramConfig(summary_group_chunks=20),
+        # Scan policy is fixed when the layer is constructed, not selected from runtime T. For the Blackhole K3
+        # TP8 geometry at T=5120 (160 chunks, 8 groups/head), grouped scan measured 1.697 ms versus 1.854 ms direct
+        # (9.25% faster). Choose direct for a fixed short-sequence deployment; choose grouped when its N/P local
+        # scans plus log2(P) prefix amortize summary overhead and batch_heads*P fits the device owner capacity.
+        recurrence=KDARecurrenceProgramConfig(local_scan_strategy="grouped", summary_group_chunks=20),
         output_projection_out_block_w=4,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,

@@ -558,38 +558,22 @@ class _DistributedGroupedScan(_GroupedScan):
 
 def _uses_grouped_scan(
     *,
-    num_chunks: int,
     program_config: KDARecurrenceProgramConfig,
     sequence_parallel_axis: int | None,
-    batch_heads: int,
-    device: ttnn.Device | ttnn.MeshDevice,
 ) -> bool:
-    """Return the single canonical grouped-versus-direct scan decision."""
-    if sequence_parallel_axis is not None:
-        return True
-    if num_chunks < program_config.grouped_scan_min_chunks:
-        return False
-    group_chunks = _effective_summary_group_chunks(num_chunks, program_config.summary_group_chunks)
-    group_heads = batch_heads * (num_chunks // group_chunks)
-    grid = device.compute_with_storage_grid_size()
-    return group_heads <= min(grid.x * grid.y, 128)
+    """Return the constructor-fixed local policy; sequence parallelism necessarily uses grouped scan."""
+    return sequence_parallel_axis is not None or program_config.local_scan_strategy == "grouped"
 
 
 def _select_scan(
     *,
-    num_chunks: int,
     program_config: KDARecurrenceProgramConfig,
     compute_config: _RecurrenceComputeConfig,
     sequence_parallel_axis: int | None,
-    batch_heads: int,
-    device: ttnn.Device | ttnn.MeshDevice,
 ) -> _RecurrenceScan:
     if not _uses_grouped_scan(
-        num_chunks=num_chunks,
         program_config=program_config,
         sequence_parallel_axis=sequence_parallel_axis,
-        batch_heads=batch_heads,
-        device=device,
     ):
         return _DirectScan(program_config, compute_config)
     if sequence_parallel_axis is None:
@@ -656,12 +640,9 @@ def _chunk_recurrence(
         (geometry.batch_heads, geometry.key_dim, geometry.value_dim),
     )
     scan_strategy = _select_scan(
-        num_chunks=geometry.num_chunks,
         program_config=program_config,
         compute_config=compute_config,
         sequence_parallel_axis=sequence_parallel_axis,
-        batch_heads=geometry.batch_heads,
-        device=initial_state.device(),
     )
     chunk_inputs = _prepare_chunk_inputs(inputs, geometry)
     prepared = _prepare_chunk_terms(
