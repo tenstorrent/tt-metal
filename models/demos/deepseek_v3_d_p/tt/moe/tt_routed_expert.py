@@ -24,8 +24,6 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
-_TILE_HEIGHT = 32
-
 
 def _fused_compute_config(config):
     """The caller's config with the three flags moe_fused_swiglu forbids cleared.
@@ -43,10 +41,6 @@ def _fused_compute_config(config):
         packer_l1_acc=False,
     )
 
-
-# unified_routed_expert_ffn's program factory hardwires this grid (kMaxGridX / MAX_GRID_Y).
-_HYBRID_GRID_X = 11
-_HYBRID_GRID_Y = 8
 
 # Model configs are torch-only and so name their activation as a string; this is the one place
 # that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
@@ -641,10 +635,11 @@ class TtRoutedExpert(LightweightModule):
                     self.down_projs,
                     expert_token_counts,
                     self.global_expert_idx_table,
-                    input_m_tiles=self.max_tokens // _TILE_HEIGHT,
-                    # Same 11x8 the composite hardwires, so the two halves of a hybrid
-                    # forward run on one grid and the measured crossover still applies.
-                    core_grid=ttnn.CoreCoord(_HYBRID_GRID_X, _HYBRID_GRID_Y),
+                    input_m_tiles=self.max_tokens // ttnn.TILE_SIZE,
+                    # The grid the composite fixes, read from the op rather than restated: the
+                    # two halves of a hybrid forward must block identically or the measured
+                    # crossover between them stops applying.
+                    core_grid=ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID,
                     compute_kernel_config=_fused_compute_config(self.compute_kernel_config),
                     activation=self.activation,
                     output=expert_outputs,
