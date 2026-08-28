@@ -57,6 +57,7 @@
 # =============================================================================
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -171,9 +172,21 @@ def _test_image(size, seed: int):
 # 9,536 image tokens). Forced directly rather than via `resolve_reference_image_size` so the two grids
 # are exactly the ones the block/tower tests validated at tp8_sp4.
 _TWO_REFS_TARGETS = ((2048, 2048), (2048, 2720))
+# The padding-free control: 2048x2688 -> grid [1, 128, 168] (21,504 patches), so the total 37,888
+# = 37 * 1024 divides EVERY SP alignment on both galaxies -- pad_patches_for_sp is a no-op and no
+# phantom window exists. Together with the prompt padded to a 10,240-token presentation (zero decoder
+# pad at sp8 AND sp32), any sp32-vs-sp8 delta on this variant is pure 32-shard execution, not padding.
+_TWO_REFS_ALIGNED_TARGETS = ((2048, 2048), (2048, 2688))
+_TWO_REFS_TARGETS_BY_VARIANT = {"two_refs": _TWO_REFS_TARGETS, "two_refs_aligned": _TWO_REFS_ALIGNED_TARGETS}
+_TWO_REFS_GRIDS_BY_VARIANT = {
+    "two_refs": [[1, 128, 128], [1, 128, 170]],
+    "two_refs_aligned": [[1, 128, 128], [1, 128, 168]],
+}
+# 4096 + 5376 image tokens + labels/markers + prompt padded up to exactly 10 * 1024.
+_TWO_REFS_ALIGNED_SEQ = 10240
 
 
-def _reference_images(seed: int) -> list[Image.Image]:
+def _reference_images(seed: int, targets=_TWO_REFS_TARGETS) -> list[Image.Image]:
     """Two reference images at the ref2va geometry, producing the `two_refs` grids. Same t2va-frame
     content as `_test_image` (its content-sensitivity note applies), resized to each reference
     resolution via the pipeline's own `prepare_reference_image`."""
@@ -188,22 +201,23 @@ def _reference_images(seed: int) -> list[Image.Image]:
         generator = torch.Generator().manual_seed(seed)
         return [
             Image.fromarray((torch.rand(height, width, 3, generator=generator) * 255).to(torch.uint8).numpy())
-            for (height, width) in _TWO_REFS_TARGETS
+            for (height, width) in targets
         ]
 
     source = Path(os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts") / "t2va.mp4"
     if not source.is_file():
         pytest.skip(f"no calibrated t2va artifact at {source}; run test_pipeline_minimax_h3.py first")
     frame = Image.fromarray(np.asarray(iio.imread(source, index=0, plugin="pyav"))).convert("RGB")
-    return [prepare_reference_image(frame, height, width) for (height, width) in _TWO_REFS_TARGETS]
+    return [prepare_reference_image(frame, height, width) for (height, width) in targets]
 
 
-def _two_refs_golden_path(seed: int) -> Path:
+def _two_refs_golden_path(seed: int, variant: str = "two_refs") -> Path:
     root = Path(
         os.environ.get("TT_DIT_CACHE_DIR") or os.environ.get(T2VA_ARTIFACT_ENV) or Path.home() / "h3_t2va_artifacts"
     )
     content = "noise" if os.environ.get("MINIMAX_H3_TEST_CONTENT") == "noise" else "artifact"
-    return root / "two_refs_golden" / f"hidden_states_{TAP}_seed{seed}_{content}.pt"
+    tag = "" if variant == "two_refs" else f"_{variant}"
+    return root / "two_refs_golden" / f"hidden_states_{TAP}_seed{seed}_{content}{tag}.pt"
 
 
 def _conditioner_dir() -> str:
@@ -262,34 +276,53 @@ def _tower(reference_visual, submesh, parallel_config=None, ccl_manager=None):
         mesh_device=submesh,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
+        # HiFi4 tower linears, the production default (see build_minimax_h3_vision_tower);
+        # MINIMAX_H3_TOWER_HIFI4=0 is the diagnostic A/B to measure the HiFi2 behavior.
+        high_fidelity_linears=os.environ.get("MINIMAX_H3_TOWER_HIFI4", "1") == "1",
     )
     tower.load_torch_state_dict(reference_visual.state_dict())
     return tower
 
 
+# Fabric is per-config: FABRIC_1D on a 1x1 mesh has no ethernet partner and times out router init,
+# so the single-device case must not request it (it has no CCLs to need it either).
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params"),
     [
-        pytest.param((4, 8), (4, 8), 1, 2, id="tp8_axis1"),
-        pytest.param((4, 32), (4, 32), 0, 2, id="4x32"),
+        pytest.param(
+            (4, 8), (4, 8), 1, 2, {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}, id="tp8_axis1"
+        ),
+        pytest.param(
+            (4, 8), (4, 8), 0, 2, {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}, id="tp4_axis0"
+        ),
+        pytest.param(
+            (4, 32), (4, 32), 0, 2, {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}, id="4x32"
+        ),
+        pytest.param((1, 1), (1, 1), 0, 1, {"l1_small_size": 32768}, id="single"),
     ],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+    "size", [KEYFRAME_IMAGE, SQUARE_CANVAS, "two_refs"], ids=["keyframe_768x1344", "square_768", "two_refs"]
 )
-@pytest.mark.parametrize("size", [KEYFRAME_IMAGE, SQUARE_CANVAS], ids=["keyframe_768x1344", "square_768"])
-def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size, seed=0):
+@pytest.mark.parametrize("sharded", [False, True], ids=["replicated", "sharded"])
+def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_axis, num_links, size, sharded, seed=0):
     """The released vision tower: merged tokens and all three deepstack features.
 
     `head_dim` is 72 here, the misalignment the padding exists for, and the 48x48 position table is
     smaller than either grid, so the bilinear interpolation is live in both cases.
+
+    `sharded` builds the tower at the fused test's parallelization (TP on `tp_axis`, SP on the other
+    axis) instead of replicated; `two_refs` runs the two-image pair through the multi-block windowed
+    path. Together they isolate real-weights tower fidelity from real-weights SHARDED tower fidelity
+    -- the tower unit tests cover sharding only at random init, which has no massive activations.
     """
     path, reference = conditioner
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     processor = transformers.AutoImageProcessor.from_pretrained(path)
 
-    vision = processor(images=[_test_image(size, seed)], return_tensors="pt")
+    images = _reference_images(seed) if size == "two_refs" else [_test_image(size, seed)]
+    vision = processor(images=images, return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
     vc = reference.visual.config
     assert vc.hidden_size // vc.num_heads == 72, "the padding path is not being exercised"
@@ -298,16 +331,47 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
         ref_out = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
     assert len(ref_out.deepstack_features) == len(vc.deepstack_visual_indexes)
 
-    tower = _tower(reference.visual, submesh)
+    shape = tuple(submesh.shape)
+    sp_axis_ = 1 - tp_axis
+    if sharded:
+        tower = _tower(
+            reference.visual,
+            submesh,
+            parallel_config=EncoderParallelConfig(
+                tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=shape[tp_axis]),
+                sequence_parallel=ParallelFactor(mesh_axis=sp_axis_, factor=shape[sp_axis_]),
+            ),
+            ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+        )
+    else:
+        tower = _tower(reference.visual, submesh)
     cos, sin = tower.prepare_rope(grid)
-    tokens, deepstack = tower.forward(
-        bf16_tensor(pixel_values.float(), device=submesh),
-        pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
-        rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
-        cu_seqlens=vision_cu_seqlens(grid),
-    )
+    if sharded:
+        p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+            pixel_values.float(),
+            tower.prepare_pos_embeds(grid),
+            (cos, sin),
+            vision_cu_seqlens(grid),
+            sp_factor=shape[sp_axis_],
+        )
+        sp = dict(device=submesh, mesh_axis=sp_axis_, shard_dim=0)
+        tokens, deepstack = tower.forward(
+            bf16_tensor(p_patches, **sp),
+            pos_embeds=bf16_tensor(p_pos, **sp),
+            rope=(bf16_tensor(p_cos, **sp), bf16_tensor(p_sin, **sp)),
+            cu_seqlens=p_cu,
+            logical_patches=logical,
+        )
+    else:
+        tokens, deepstack = tower.forward(
+            bf16_tensor(pixel_values.float(), device=submesh),
+            pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid), device=submesh),
+            rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
+            cu_seqlens=vision_cu_seqlens(grid),
+        )
 
-    logger.info(f"minimax-h3 vision tower [real] {size[0]}x{size[1]} grid={grid[0].tolist()}:")
+    tag = "two_refs" if size == "two_refs" else f"{size[0]}x{size[1]}"
+    logger.info(f"minimax-h3 vision tower [real, sharded={sharded}] {tag} grid={grid.tolist()}:")
     assert_quality(ref_out.pooler_output.float(), tensor.to_torch(tokens, mesh_axes=[None, None]), pcc=0.99)
     for i, (feature, golden) in enumerate(zip(deepstack, ref_out.deepstack_features)):
         logger.info(f"  deepstack {i} (vision layer {vc.deepstack_visual_indexes[i]}):")
@@ -575,8 +639,9 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         pytest.param(False, id="perf"),
     ],
 )
+@pytest.mark.parametrize("variant", ["two_refs", "two_refs_aligned"])
 def test_fused_conditioner_two_refs_real_weights(
-    conditioner, mesh_device, submesh_shape, tp_axis, num_links, check_pcc, seed=0
+    conditioner, mesh_device, submesh_shape, tp_axis, num_links, check_pcc, variant, seed=0
 ):
     """The `ref2va` conditioner with TWO reference images, on released weights, with the vision tower
     run under **tp8_sp4 + windowed SDPA** -- the pipeline's configuration -- feeding the TP=8 causal
@@ -602,9 +667,9 @@ def test_fused_conditioner_two_refs_real_weights(
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(path)
     processor = transformers.AutoImageProcessor.from_pretrained(path)
-    vision = processor(images=_reference_images(seed), return_tensors="pt")
+    vision = processor(images=_reference_images(seed, _TWO_REFS_TARGETS_BY_VARIANT[variant]), return_tensors="pt")
     pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
-    assert grid.tolist() == [[1, 128, 128], [1, 128, 170]], f"unexpected two_refs grid: {grid.tolist()}"
+    assert grid.tolist() == _TWO_REFS_GRIDS_BY_VARIANT[variant], f"unexpected {variant} grid: {grid.tolist()}"
     merge = reference.visual.config.spatial_merge_size**2
     per_image_tokens = [int(grid[i].prod()) // merge for i in range(grid.shape[0])]
 
@@ -618,22 +683,32 @@ def test_fused_conditioner_two_refs_real_weights(
         ids_list += tokenizer(f"<Picture {i + 1}>: ", add_special_tokens=False)["input_ids"]
         ids_list += [vstart] + [image_pad] * n_tokens + [vend]
     ids_list += tokenizer("a robot dancing", add_special_tokens=False)["input_ids"]
+    if variant == "two_refs_aligned":
+        # The padding-free control: repeat a filler word until the presentation is exactly 10,240
+        # tokens, a multiple of every decoder SP alignment (sp32's 1024 included), so neither stage
+        # pads anywhere and the run isolates 32-shard execution from the padding machinery.
+        filler = tokenizer(" and", add_special_tokens=False)["input_ids"]
+        assert len(filler) == 1, f"filler must be a single token, got {filler}"
+        assert len(ids_list) <= _TWO_REFS_ALIGNED_SEQ, f"presentation already {len(ids_list)} tokens"
+        ids_list += filler * (_TWO_REFS_ALIGNED_SEQ - len(ids_list))
+        total_patches = int(grid.prod(dim=1).sum())
+        assert total_patches % 1024 == 0, f"{total_patches} patches: the aligned variant is misaligned"
     ids = torch.tensor([ids_list], dtype=torch.long)
     type_ids = (ids == image_pad).long()
     seq_len = ids.shape[1]
     cfg = reference.language_model.config
-    logger.info(f"[two_refs] presentation built: seq={seq_len}, image tokens={per_image_tokens}.")
+    logger.info(f"[{variant}] presentation built: seq={seq_len}, image tokens={per_image_tokens}.")
 
     # --- golden (check only). Rank 0 writes it once; everyone else loads. `perf` skips it. ---
     golden = None
     if check_pcc:
-        golden_path = _two_refs_golden_path(seed)
+        golden_path = _two_refs_golden_path(seed, variant)
         if golden_path.is_file():
-            logger.info(f"[two_refs] loading HF golden from {golden_path}")
+            logger.info(f"[{variant}] loading HF golden from {golden_path}")
             golden = torch.load(golden_path, map_location="cpu", weights_only=True)
         elif is_host():
             logger.info(
-                f"[two_refs] computing the HF golden -- a slow fp32 CPU forward (vision tower over "
+                f"[{variant}] computing the HF golden -- a slow fp32 CPU forward (vision tower over "
                 f"{int(grid.prod(dim=1).sum())} patches, then {TAP} decoder layers over {seq_len} tokens). "
                 "This is the long pole; not a hang."
             )
@@ -653,26 +728,42 @@ def test_fused_conditioner_two_refs_real_weights(
             tmp = golden_path.with_suffix(".pt.tmp")
             torch.save(golden, tmp)
             tmp.replace(golden_path)
-            logger.info(f"[two_refs] HF golden done: hidden_states[{TAP}] {tuple(golden.shape)}, saved {golden_path}.")
+            logger.info(f"[{variant}] HF golden done: hidden_states[{TAP}] {tuple(golden.shape)}, saved {golden_path}.")
         if ttnn.using_distributed_env():
             ttnn.distributed_context_barrier()
         if golden is None:
             assert golden_path.is_file(), f"host did not write golden at {golden_path}"
-            logger.info(f"[two_refs] loading HF golden from {golden_path}")
+            logger.info(f"[{variant}] loading HF golden from {golden_path}")
             golden = torch.load(golden_path, map_location="cpu", weights_only=True)
         assert golden.shape == (1, seq_len, cfg.hidden_size)
     else:
-        logger.info("[two_refs] perf mode: skipping the HF golden; timing the device pipeline only.")
+        logger.info(f"[{variant}] perf mode: skipping the HF golden; timing the device pipeline only.")
+
+    # Diagnostic: `MINIMAX_H3_TOWER_SOURCE=reference` feeds the HF reference tower's outputs
+    # (pooler_output + deepstack_features, bf16-cast) into OUR decoder, isolating decoder-side
+    # vision handling from tower fidelity. The tt tower is not built at all in that mode.
+    tower_source = os.environ.get("MINIMAX_H3_TOWER_SOURCE", "tt")
+    ref_merged = ref_deepstack = None
+    if tower_source == "reference":
+        logger.info(f"[{variant}] computing the REFERENCE tower outputs (fp32 CPU) for golden injection.")
+        with torch.no_grad():
+            ref_vis = reference.visual(pixel_values, grid_thw=grid, return_dict=True)
+        ref_merged = ref_vis.pooler_output.float()
+        ref_deepstack = [f.float() for f in ref_vis.deepstack_features]
 
     # --- port: build both stages once (module weights + the mrope index are one-time setup) ---
-    tower = _tower(
-        reference.visual,
-        submesh,
-        parallel_config=EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),  # TP=8 on the size-8 axis
-            sequence_parallel=ParallelFactor(mesh_axis=tower_sp_axis, factor=tower_sp_factor),  # SP=4 on size-4
-        ),
-        ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+    tower = (
+        None
+        if tower_source == "reference"
+        else _tower(
+            reference.visual,
+            submesh,
+            parallel_config=EncoderParallelConfig(
+                tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),  # TP=8 on the size-8 axis
+                sequence_parallel=ParallelFactor(mesh_axis=tower_sp_axis, factor=tower_sp_factor),  # SP=4 on size-4
+            ),
+            ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+        )
     )
     rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
     head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
@@ -701,7 +792,7 @@ def test_fused_conditioner_two_refs_real_weights(
     assert torch.equal(position_ids, expected_position_ids), "mrope_position_ids no longer matches get_rope_index"
     runs = vision_token_runs(ids, image_pad)
     assert len(runs) == 2 and [n for _, n in runs] == per_image_tokens, f"unexpected two_refs layout: {runs}"
-    logger.info("[two_refs] tt tower + decoder built, weights loaded. Starting the device pipeline loop.")
+    logger.info(f"[{variant}] tt tower + decoder built, weights loaded. Starting the device pipeline loop.")
 
     # --- the full pipeline, tower -> decoder, timed end to end EACH iteration. iter 1 compiles/caches
     # kernels, iter 2 is the measured steady-state pass (read iter 2). Every per-request step is inside
@@ -711,29 +802,36 @@ def test_fused_conditioner_two_refs_real_weights(
     for i in range(_PERF_ITERS):
         ttnn.synchronize_device(submesh)
         t0 = time.time()
-        # vision tower: host build + H2D. pad_patches_for_sp aligns the patch count to the tower's
-        # sp * 32 (a no-op on grids that already divide it, e.g. two_refs at sp=4/8); the pad rides a
-        # phantom window and its merged garbage is trimmed off via logical_patches. This is what lets
-        # the 4x32 case (alignment 1024, which 38,144 misses) run.
-        vc, vs = tower.prepare_rope(grid)
-        p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
-            pixel_values.float(),
-            tower.prepare_pos_embeds(grid),
-            (vc, vs),
-            vision_cu_seqlens(grid),
-            sp_factor=tower_sp_factor,
-        )
-        tt_patches = bf16_tensor(p_patches, **sp)
-        tt_pos = bf16_tensor(p_pos, **sp)
-        tt_vcos, tt_vsin = bf16_tensor(p_cos, **sp), bf16_tensor(p_sin, **sp)
-        ttnn.synchronize_device(submesh)
-        t1 = time.time()
-        # vision tower: forward (windowed multi-block SP attention)
-        merged, deepstack = tower.forward(
-            tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=p_cu, logical_patches=logical
-        )
-        ttnn.synchronize_device(submesh)
-        t2 = time.time()
+        if tower_source == "reference":
+            # Golden injection: upload the reference tower's outputs (replicated) in place of ours.
+            merged = bf16_tensor(ref_merged, device=submesh)
+            deepstack = [bf16_tensor(f, device=submesh) for f in ref_deepstack]
+            ttnn.synchronize_device(submesh)
+            t1 = t2 = time.time()
+        else:
+            # vision tower: host build + H2D. pad_patches_for_sp aligns the patch count to the tower's
+            # sp * 32 (a no-op on grids that already divide it, e.g. two_refs at sp=4/8); the pad rides
+            # a phantom window and its merged garbage is trimmed off via logical_patches. This is what
+            # lets the 4x32 case (alignment 1024, which 38,144 misses) run.
+            vc, vs = tower.prepare_rope(grid)
+            p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+                pixel_values.float(),
+                tower.prepare_pos_embeds(grid),
+                (vc, vs),
+                vision_cu_seqlens(grid),
+                sp_factor=tower_sp_factor,
+            )
+            tt_patches = bf16_tensor(p_patches, **sp)
+            tt_pos = bf16_tensor(p_pos, **sp)
+            tt_vcos, tt_vsin = bf16_tensor(p_cos, **sp), bf16_tensor(p_sin, **sp)
+            ttnn.synchronize_device(submesh)
+            t1 = time.time()
+            # vision tower: forward (windowed multi-block SP attention)
+            merged, deepstack = tower.forward(
+                tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=p_cu, logical_patches=logical
+            )
+            ttnn.synchronize_device(submesh)
+            t2 = time.time()
         # decoder: host build + H2D
         dcos, dsin = create_rope_tensors(
             1,
@@ -761,7 +859,7 @@ def test_fused_conditioner_two_refs_real_weights(
         ttnn.synchronize_device(submesh)
         t4 = time.time()
         logger.info(
-            f"full conditioner [two_refs] tp{tp_factor}_sp{tower_sp_factor} iter {i + 1}/{_PERF_ITERS}: "
+            f"full conditioner [{variant}][tower={tower_source}] tp{tp_factor}_sp{tower_sp_factor} iter {i + 1}/{_PERF_ITERS}: "
             f"tower prep {(t1 - t0) * 1000:8.1f} | tower op {(t2 - t1) * 1000:8.1f} | "
             f"dec prep {(t3 - t2) * 1000:8.1f} | dec op {(t4 - t3) * 1000:8.1f} | "
             f"e2e {(t4 - t0) * 1000:8.1f} ms"
@@ -769,7 +867,7 @@ def test_fused_conditioner_two_refs_real_weights(
     actual = tensor.to_torch(out, mesh_axes=[None, None, None])
 
     logger.info(
-        f"minimax-h3 fused conditioner [real, two_refs] TP={tp_factor} SP={tower_sp_factor} "
+        f"minimax-h3 fused conditioner [real, {variant}] TP={tp_factor} SP={tower_sp_factor} "
         f"hidden_states[{TAP}], grids={grid.tolist()}, seq={seq_len} "
         f"({sum(per_image_tokens)} image tokens = {per_image_tokens}):"
     )
@@ -947,3 +1045,118 @@ def test_fused_conditioner_t2va_real_weights(
         f"massive-activation rows disagree: {missing} missing, {spurious} spurious "
         f"(golden {int(golden_massive.sum())}, ours {int(ours_massive.sum())})"
     )
+
+
+# One-step fidelity probe depths: block 2 (worst measured attention regime -- long near-uniform
+# windows, pre-massive), block 10 (massive-activation onset: the block-input norm-max jumps 37 ->
+# 582 here in the fp32 reference), block 25 (late stack, massive rows in the residual stream).
+_BLOCK_FIDELITY_DEPTHS = (2, 10, 25)
+# Gates: the measured one-step envelope at windowed-SDPA (q64, k1024) + HiFi4 linears (noise
+# content, seed 0): attn <= 0.65 %, mlp <= 0.34 %, block <= 0.66 % across the probe depths.
+# Calibrated so a revert of any fidelity fix FAILS here: (128, 512) chunks measured attn up to
+# 1.02 % (> 0.95), k_chunk=128 measured 1.4-2.3 %, HiFi2 linears measured mlp 0.68-0.83 % (> 0.6).
+# Attention's gate keeps headroom because single-op config changes reshuffle its composed error by
+# ~0.2-0.3 %. The bf16 CPU reference one-steps the same inputs at ~0.2-0.5 % -- logged, not gated.
+_BLOCK_FIDELITY_MAX = {"attn": 0.95, "mlp": 0.6, "block": 1.0}
+
+
+def _one_step_rel(a: torch.Tensor, b: torch.Tensor) -> float:
+    a, b = a.double().flatten(), b.double().flatten()
+    return ((a - b).pow(2).mean().sqrt() / b.std()).item() * 100
+
+
+def _cast_tree_bf16(x):
+    if torch.is_tensor(x):
+        return x.to(torch.bfloat16) if x.is_floating_point() else x
+    if isinstance(x, (tuple, list)):
+        return type(x)(_cast_tree_bf16(v) for v in x)
+    if isinstance(x, dict):
+        return {k: _cast_tree_bf16(v) for k, v in x.items()}
+    return x
+
+
+@pytest.fixture(scope="module")
+def block_fidelity_captures(conditioner):
+    """fp32-reference inputs/outputs for block/attn/mlp at `_BLOCK_FIDELITY_DEPTHS`, from ONE hooked
+    forward over the two_refs grids. The fp32 upcast is the truth reference: the probe measures each
+    device component's ONE-STEP error on a perfect input, so accumulation and the massive-row
+    bistability are factored out entirely -- this is a per-op fidelity regression gate, not a PCC
+    test (the end-to-end tower test covers that)."""
+    import copy
+
+    path, reference = conditioner
+    processor = transformers.AutoImageProcessor.from_pretrained(path)
+    vision = processor(images=_reference_images(0), return_tensors="pt")
+    pixel_values, grid = vision["pixel_values"], vision["image_grid_thw"]
+
+    visual32 = copy.deepcopy(reference.visual).float().eval()
+    cap: dict = {}
+    handles = []
+    for k in _BLOCK_FIDELITY_DEPTHS:
+        blk = visual32.blocks[k]
+        for which, mod in (("block", blk), ("attn", blk.attn), ("mlp", blk.mlp)):
+
+            def hook(m, args, kwargs, out, k=k, which=which):
+                cap[(k, which)] = dict(
+                    args=[a.detach() if torch.is_tensor(a) else a for a in args],
+                    kwargs={kk: (v.detach() if torch.is_tensor(v) else v) for kk, v in kwargs.items()},
+                    out=(out[0] if isinstance(out, tuple) else out).detach(),
+                )
+
+            handles.append(mod.register_forward_hook(hook, with_kwargs=True))
+    with torch.no_grad():
+        visual32(pixel_values, grid_thw=grid, return_dict=True)
+    for h in handles:
+        h.remove()
+    return {"cap": cap, "grid": grid}
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "submesh_shape", "num_links", "device_params"),
+    [pytest.param((1, 1), (1, 1), 1, {"l1_small_size": 32768}, id="single")],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("depth", _BLOCK_FIDELITY_DEPTHS)
+def test_vision_tower_block_fidelity_real_weights(
+    conditioner, block_fidelity_captures, mesh_device, submesh_shape, num_links, depth
+):
+    """One-step fidelity of a single tower block at real weights, against fp32-captured inputs.
+
+    Numerics only, so a single device suffices (sharded and replicated towers measured
+    bit-comparable). Guards the per-step error envelope the 27-depth sweep established; the
+    end-to-end tower/fused tests cannot see a per-op regression through their accumulation and
+    massive-row noise, which is exactly what slipped detection until the golden-injection study.
+    """
+    path, reference = conditioner
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    cap, grid = block_fidelity_captures["cap"], block_fidelity_captures["grid"]
+
+    tower = _tower(reference.visual, submesh)
+    cos, sin = tower.prepare_rope(grid)
+    rope_tt = (bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh))
+    cu = vision_cu_seqlens(grid)
+    blk_tt = tower.blocks[depth]
+    blk16 = reference.visual.blocks[depth]
+
+    failures = []
+    for which, cpu_mod, dev_call in (
+        ("attn", blk16.attn, lambda x: blk_tt.attn.forward(x, pos_embeds=rope_tt, cu_seqlens=cu)),
+        ("mlp", blk16.mlp, lambda x: blk_tt.mlp.forward(x)),
+        ("block", blk16, lambda x: blk_tt.forward(x, pos_embeds=rope_tt, cu_seqlens=cu)),
+    ):
+        c = cap[(depth, which)]
+        gold = c["out"].float()
+        with torch.no_grad():
+            out16 = cpu_mod(*_cast_tree_bf16(c["args"]), **_cast_tree_bf16(c["kwargs"]))
+        out16 = (out16[0] if isinstance(out16, tuple) else out16).float()
+        x_in = c["args"][0] if c["args"] else c["kwargs"]["hidden_states"]
+        dev_out = dev_call(bf16_tensor(x_in.float(), device=submesh))
+        dev = tensor.to_torch(dev_out, mesh_axes=[None, None]).float().reshape(gold.shape)
+        cpu_err, dev_err = _one_step_rel(out16, gold), _one_step_rel(dev, gold)
+        logger.info(
+            f"block {depth} {which:5s}: device one-step {dev_err:6.3f} % "
+            f"(gate {_BLOCK_FIDELITY_MAX[which]} %; bf16-cpu yardstick {cpu_err:.3f} %)"
+        )
+        if dev_err > _BLOCK_FIDELITY_MAX[which]:
+            failures.append(f"{which}: {dev_err:.3f} % > {_BLOCK_FIDELITY_MAX[which]} %")
+    assert not failures, f"block {depth} one-step fidelity regressed: {failures}"
