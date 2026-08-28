@@ -1168,6 +1168,20 @@ def _execute(
     not elapsed time: kill only when the log has not grown AND the process group
     has burned ~no CPU for `stall_timeout_s` (a real stall/deadlock). `timeout_s`
     remains as a generous ABSOLUTE backstop against a pathological busy-spin."""
+    _therm_label = "generated-test run"
+    try:
+        from ..cc_optimize.run import _thermal_watch_new, _thermal_watch_sample
+        from ..cc_optimize.run import _wait_for_thermal_headroom_before_device_work
+
+        _wait_for_thermal_headroom_before_device_work(_therm_label)
+    except Exception:  # noqa: BLE001 -- a gate that cannot run must never stop the work
+
+        def _thermal_watch_new():
+            return {}
+
+        def _thermal_watch_sample(state, label):
+            return None
+
 
     with open(log_path, "w") as log_fh:
         proc = subprocess.Popen(
@@ -1193,6 +1207,7 @@ def _execute(
         _watch = ProgressWatch(pgid, log_path, stall_timeout_s)
         _over_budget = [False]
         poll = 5.0
+        _therm = _thermal_watch_new()
         while True:
             try:
                 rc = proc.wait(timeout=poll)
@@ -1210,6 +1225,7 @@ def _execute(
                 return rc
             except subprocess.TimeoutExpired:
                 pass
+            _thermal_watch_sample(_therm, _therm_label)
             now = time.monotonic()
             try:
                 size = log_path.stat().st_size
