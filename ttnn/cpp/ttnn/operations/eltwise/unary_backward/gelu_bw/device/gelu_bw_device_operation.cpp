@@ -116,15 +116,45 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
         grad_output.logical_shape(),
         input_tensor.logical_shape());
 
+    TT_FATAL(
+        grad_output.device() == input_tensor.device(),
+        "GELU_BW operation requires grad_output and input to be on the same device.");
+
     if (preallocated_input_grad.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = preallocated_input_grad.value().logical_shape();
+        const auto& preallocated = preallocated_input_grad.value();
+
         TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "When preallocted output tensor is used, GELU_BW operation requires its shape to match the computed "
-            "shape. Computed shape: {}, Shape in preallocated output tensor: {}",
-            computed_output_shape,
-            preallocated_output_shape);
+            preallocated.storage_type() == StorageType::DEVICE,
+            "GELU_BW operation requires preallocated input grad to be on Device. Storage type: {}",
+            static_cast<int>(preallocated.storage_type()));
+
+        TT_FATAL(
+            preallocated.buffer() != nullptr,
+            "GELU_BW operation requires preallocated input grad to be allocated in a buffer on the device. Buffer is "
+            "null.");
+
+        TT_FATAL(!preallocated.is_sharded(), "GELU_BW operation does not support sharded preallocated input grad.");
+
+        TT_FATAL(
+            preallocated.layout() == Layout::TILE,
+            "GELU_BW operation requires preallocated input grad to be in Tile layout. Layout: {}",
+            static_cast<int>(preallocated.layout()));
+
+        TT_FATAL(
+            preallocated.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "GELU_BW operation requires preallocated input grad to use Interleaved memory layout. Memory layout: {}",
+            static_cast<int>(preallocated.memory_config().memory_layout()));
+
+        TT_FATAL(
+            preallocated.logical_shape() == input_tensor.logical_shape(),
+            "When a preallocated output tensor is used, GELU_BW operation requires its shape to match the input shape. "
+            "Input shape: {}, Preallocated output shape: {}",
+            input_tensor.logical_shape(),
+            preallocated.logical_shape());
+
+        TT_FATAL(
+            preallocated.device() == input_tensor.device(),
+            "GELU_BW operation requires the preallocated input grad tensor to be on the same device as input.");
     }
 }
 
