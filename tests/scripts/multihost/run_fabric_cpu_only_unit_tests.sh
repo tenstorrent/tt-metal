@@ -107,6 +107,14 @@ SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 # tt-cluster-descriptors yet (120-C set has 20 of 36 hosts; 110-C/D lack the u14/u20 rows; 110-A
 # has no set), so only the 120-D SC28 mapping exists for now.
 SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tests/tt_metal/tt_fabric/mock_cluster_mappings/SC28_32x4_revC_subtorus_aisleD_mapping.yaml"
+# Same SC28/SC24 ring subsets on the revAB capture of the same aisle-D hosts, plus the SC24 (6-quad)
+# ring subset of the revC capture. The revAB aisleD descriptor set is pending in tt-cluster-descriptors
+# (branch riddy21/sc36-revab-aisled-sweep-mappings); its two entries fail in CI until it merges + bump.
+# The other SC28 ring host lists (120-C, 110-A/C/D) still have no complete 36-host capture (largest
+# existing sets are 20 hosts or missing entirely), so no mappings exist for them yet.
+SC28_REVAB_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tests/tt_metal/tt_fabric/mock_cluster_mappings/SC28_32x4_revAB_subtorus_aisleD_mapping.yaml"
+SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING="tests/tt_metal/tt_fabric/mock_cluster_mappings/SC24_32x4_revC_subtorus_aisleD_ring_mapping.yaml"
+SC24_REVAB_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING="tests/tt_metal/tt_fabric/mock_cluster_mappings/SC24_32x4_revAB_subtorus_aisleD_ring_mapping.yaml"
 # 24-host SC24 revC subtorus (system-110, aisle C columns c01-c07, units u02-u20); used by the SC24
 # 96-stage / six-BigMesh ring-stress entries.
 # TODO(rsong): pending tt-cluster-descriptors SC24 aisle-C set; path will be finalized when it lands.
@@ -797,7 +805,10 @@ MGD_BIGMESH_6="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descr
 MGD_BIGMESH_7="${MGD_SUBTORUS}/subtorus_sc28_4x32_7bigmesh_ring_mesh_graph_descriptor.textproto"
 for entry in \
     "SC24_revC_subtorus_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:6" \
+    "SC24_revC_subtorus_aisleD_ring:${SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
+    "SC24_revAB_subtorus_aisleD_ring:${SC24_REVAB_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
     "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
+    "SC28_revAB_subtorus_aisleD:${SC28_REVAB_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
     "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"
   for bigmesh in ${bigmeshes}; do
