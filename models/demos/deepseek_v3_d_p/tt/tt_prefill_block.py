@@ -649,9 +649,10 @@ class TtPrefillBlock(LightweightModule):
                 # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
                 # host before the zero has executed, so the ack implies zero-complete with no host sync —
                 # unlike the host-callback path below, which needs an explicit flush.
-                # NOT used under trace: record_dev is the per-chunk socket metadata tensor, so its address
-                # changes every chunk and a capture would bake in a stale one. TtPrefillRuntime.prefill_chunk
-                # asserts d2h_service is None when use_trace.
+                # NOT used under trace: TtPrefillRuntime._forward_traced does not thread d2h_service/
+                # record_dev into the model, so a capture would hold no ack sends. (record_dev itself is
+                # now a persistent buffer, so its address WOULD survive a capture.)
+                # TtPrefillRuntime.prefill_chunk asserts d2h_service is None when use_trace.
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
             else:
                 # Trace path: route the ack through the controller. At capture it splits the trace here (a host

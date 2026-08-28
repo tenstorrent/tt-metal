@@ -574,14 +574,16 @@ class TtPrefillRuntime:
                 "use_trace: capture_trace() must run before the first prefill_chunk(); capturing here "
                 "would stall the first request by a warm pass + capture"
             )
-            # The D2H layer-ack is not on the traced path: record_dev is the per-chunk socket metadata
-            # tensor, whose address changes every chunk, so the capture would bake in a stale address.
-            # Fail loudly rather than silently replaying a trace that emits no acks. (Wiring it up needs
-            # record_dev to become a persistent, in-place-updated buffer like _trace_metadata.)
+            # The D2H layer-ack is not on the traced path. record_dev is no longer the blocker: the
+            # runner now allocates it once and hands it to the inbound sync op as metadata_out, so its
+            # address survives a capture. What is still missing is below -- _forward_traced does not
+            # thread d2h_service/record_dev into model.forward, so a captured forward contains no ack
+            # sends. Fail loudly rather than silently replaying a trace that emits no acks.
             assert d2h_service is None, (
-                "use_trace does not support the D2H layer-ack path yet (record_dev is a per-chunk socket "
-                "tensor, so its address cannot be captured); run with PREFILL_USE_TRACE=0 or use the "
-                "host-callback ack (set_layer_ack_channel / set_layer_completion_sink)"
+                "use_trace does not support the D2H layer-ack path yet (_forward_traced does not thread "
+                "d2h_service/record_dev into the model, so the capture holds no ack sends); run with "
+                "PREFILL_USE_TRACE=0 or use the host-callback ack (set_layer_ack_channel / "
+                "set_layer_completion_sink)"
             )
             # Per-layer completion callbacks live on the CONTROLLER, registered once at capture time (a
             # host-side callback cannot execute inside a trace, so the capture splits at each ack point).

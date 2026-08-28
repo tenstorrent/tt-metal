@@ -258,14 +258,41 @@ def _is_shutdown_sentinel(meta: dict) -> bool:
     )
 
 
-def _socket_next(h2d_service) -> tuple:
+def _make_socket_metadata_buffer(mesh_device) -> ttnn.Tensor:
+    """Allocate the persistent device buffer each chunk's PrefillMetadata record lands in, ONCE.
+
+    The inbound sync op writes the record here (metadata_out=) instead of into a freshly-allocated
+    tensor, and the model forwards that same tensor as the per-layer D2H ack payload
+    (outbound_socket_service_sync inside each block) -- a call site that sits INSIDE the captured
+    forward. A trace bakes the record's address in at capture and re-patches nothing on replay, so a
+    per-chunk record would leave every replay acking out of a buffer the allocator has since reused.
+
+    Allocate before capture_trace(): buffers allocated during capture can overlap the captured trace
+    buffers. Spec must equal the op's metadata output spec -- [1, 1, 1, N/4] uint32 ROW_MAJOR DRAM,
+    replicated -- which the op validates on every call.
+    """
+    import torch
+
+    return ttnn.from_torch(
+        torch.zeros(1, 1, 1, METADATA_SIZE_BYTES // 4, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _socket_next(h2d_service, metadata_buf) -> tuple:
     """Block on the next producer push: returns (tt_tokens, {slot_id, actual_start, actual_end},
     tt_metadata). The device metadata tensor is returned (not discarded) so it can be propagated into
-    the model's per-layer ack send. Used only by the unbounded request loop (rank 0 input)."""
+    the model's per-layer ack send. `metadata_buf` is the caller-owned persistent record buffer the op
+    writes into, so tt_metadata IS that buffer -- do not free it here. Used only by the unbounded
+    request loop (rank 0 input)."""
     import torch
 
     tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES
+        h2d_service, metadata_size_bytes=METADATA_SIZE_BYTES, metadata_out=metadata_buf
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
     return tt_tokens, {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}, tt_metadata
@@ -318,7 +345,7 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     return inbound, outbound
 
 
-def _d2d_recv(inbound) -> tuple:
+def _d2d_recv(inbound, metadata_buf) -> tuple:
     """Drain the next chunk that landed in the inbound receiver backing into a fresh device tensor and
     decode the inline metadata. The returned tensor already has the embedding-output sharding, so it
     feeds runtime.prefill with no reshard. Pairs with the upstream rank's _d2d_send."""
@@ -326,7 +353,7 @@ def _d2d_recv(inbound) -> tuple:
 
     t0 = time.perf_counter()
     act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
-        inbound, metadata_size_bytes=METADATA_SIZE_BYTES
+        inbound, metadata_size_bytes=METADATA_SIZE_BYTES, metadata_out=metadata_buf
     )
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
@@ -472,6 +499,7 @@ def run_request_loop(
     d2d_in=None,
     d2d_out=None,
     d2h_service=None,
+    metadata_buf=None,
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
@@ -481,6 +509,8 @@ def run_request_loop(
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
         raise ValueError("request mode requires the H2D service on the first rank for input")
+    if metadata_buf is None:
+        raise ValueError("request mode requires the persistent metadata record buffer (_make_socket_metadata_buffer)")
     logger.info(
         f"[pp rank {rank}/{num_ranks}] request (unbounded) loop start "
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
@@ -491,15 +521,15 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta, metadata_device = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, metadata_device = _socket_next(h2d_service, metadata_buf)  # slot/start/end from producer
         else:
-            inp, meta, metadata_device = _d2d_recv(d2d_in)
+            inp, meta, metadata_device = _d2d_recv(d2d_in, metadata_buf)
         if _is_shutdown_sentinel(meta):
-            # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
-            # next rank so it too unblocks and exits, then fall through to the graceful drain below.
+            # End of stream: drop the throwaway payload, hand the sentinel to the next rank so it too
+            # unblocks and exits, then fall through to the graceful drain below. The metadata record is
+            # the loop-owned persistent buffer (_make_socket_metadata_buffer), so it is NOT freed here.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
-            ttnn.deallocate(metadata_device)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
@@ -992,15 +1022,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # LayerCompletionRouter the multi-rank host-callback path uses, so it is multi-host compatible: it
     # works on any rank count (single-rank => world_size=1 router, local ring + counter channel, no MPI).
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
-    # D2H is NOT trace-capturable: its ack record is the per-chunk socket metadata tensor, whose address
-    # changes every chunk, so a capture would bake in a stale one (TtPrefillRuntime.prefill_chunk asserts
-    # the same thing). Reject the combination up front rather than replay a trace that silently emits no
+    # D2H is not trace-capturable YET. The ack record itself is no longer the blocker: it is now a
+    # persistent buffer (_make_socket_metadata_buffer, handed to the sync op as metadata_out), so its
+    # address does survive a capture. What is still missing is that TtPrefillRuntime._forward_traced
+    # does not thread d2h_service/record_dev into model.forward, so a captured forward contains no ack
+    # sends at all. Reject the combination up front rather than replay a trace that silently emits no
     # acks -- and reject rather than quietly downgrade, since PREFILL_LAYER_ACK_D2H=1 is an explicit ask.
     # The host-callback backends DO work traced (the controller splits the capture at each ack point).
     if use_d2h and runtime.config.use_trace:
         raise ValueError(
-            "PREFILL_LAYER_ACK_D2H=1 is incompatible with PREFILL_USE_TRACE=1: the D2H ack record is a "
-            "per-chunk socket tensor whose address cannot be captured, so the replay would emit no acks. "
+            "PREFILL_LAYER_ACK_D2H=1 is incompatible with PREFILL_USE_TRACE=1: the traced forward does "
+            "not thread d2h_service/record_dev into the model, so the replay would emit no acks. "
             "Run untraced for the D2H backend, or leave PREFILL_LAYER_ACK_D2H unset to ack under trace."
         )
     # The router path covers: (a) any multi-rank run (each rank owns only a layer slice, so it can't
@@ -1094,6 +1126,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     elif single_rank:
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
 
+    # Persistent record buffer for the per-chunk metadata. Allocated HERE -- before capture_trace()
+    # below -- because the model forwards it as the per-layer D2H ack payload from inside the captured
+    # forward, so its address is baked into the trace; and because a buffer allocated during capture can
+    # overlap the captured trace buffers.
+    metadata_buf = _make_socket_metadata_buffer(mesh_device)
+
     # Capture the trace (use_trace) after the D2D endpoints AND the per-layer completion wiring
     # (LayerAck channel / layer-completion sink) are set up, but before the request loop: the capture
     # must split at each completion point, and doing it here keeps the one-time cost out of the loop.
@@ -1114,6 +1152,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2d_in=d2d_in,
             d2d_out=d2d_out,
             d2h_service=d2h_service,
+            metadata_buf=metadata_buf,
         )
     finally:
         # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
