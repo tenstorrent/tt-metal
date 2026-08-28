@@ -103,7 +103,7 @@ SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-
 # SC28 and SC24 (6-quad) ring subsets of the SC36 revC subtorus aisleD capture (the hosts whose
 # quads close each ring; see the mappings' headers). Exact fits for the 112-stage 4x2 ring /
 # SC28-K3 7-BigMesh and for the SC24-GLM 6-BigMesh respectively.
-# TODO(rsong): pending in tt-cluster-descriptors on branch rsong/sc28-revc-subtorus-aisled-mapping;
+# TODO(rsong): pending tt-cluster-descriptors PR 19 (rsong/sc28-revc-subtorus-aisled-mapping);
 # these entries fail in CI until it merges and the submodule pin is bumped.
 # The other SC28/SC24 ring host lists (120-C, 110-A/C/D) have no complete mock capture in
 # tt-cluster-descriptors yet (aisle-C sets have 20 of 36 hosts and none include c07/Quad6;
