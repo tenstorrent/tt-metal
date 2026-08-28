@@ -265,7 +265,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 // Any number of local kernels/threads works.
                 content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
                 content << "namespace sem_internal {\n";
-                content << "inline void init_dm_cached() {\n";
+                content << "inline void init_dm_local_cached() {\n";
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 for (const auto& entry : sem_entries) {
                     if (entry.scope != SemScope::DM_LOCAL_CACHED) {
@@ -288,7 +288,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 }
                 content << "#endif\n";
                 content << "}\n";
-                content << "inline void finish_dm_cached() {\n";
+                content << "inline void finish_dm_local_cached() {\n";
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 for (const auto& entry : sem_entries) {
                     if (entry.scope != SemScope::DM_LOCAL_CACHED) {

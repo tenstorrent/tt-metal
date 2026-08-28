@@ -419,6 +419,12 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
         my_xy, atomic_ret_val);  // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
 }
 
+// Point atomic return values back at the slot init_at_cmd_buf() programmed at startup.
+inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(uint32_t atomic_ret_val) {
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
+}
+
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     // TODO: Add ATT configuration here
 }

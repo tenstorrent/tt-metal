@@ -36,8 +36,7 @@
  *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
  *  - relay_multicast(dst_sem, ...): Multicast this semaphore's local value into a different destination semaphore.
  */
-template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX,
-          SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
+template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
 class Semaphore {
     // Lets relay_unicast / relay_multicast read dst_sem's private members without a public accessor.
     template <ProgrammableCoreType OT, SemScope OS>
@@ -85,8 +84,7 @@ public:
     }
 
     // Non-Metal-2.0: a bare id carries no host-resolved mechanism.
-    explicit __attribute__((always_inline)) Semaphore(uint32_t semaphore_id) :
-        l1_offset_(sem_l1_offset(semaphore_id)) {
+    explicit __attribute__((always_inline)) Semaphore(uint32_t semaphore_id) : l1_offset_(sem_l1_offset(semaphore_id)) {
         static_assert(
             SCOPE == SemScope::LOCAL_NONATOMIC,
             "a raw semaphore id has no host-resolved mechanism; only LOCAL_NONATOMIC can be built "
@@ -190,15 +188,10 @@ public:
             const uint32_t ret_slot = cas_ret_slot();
             auto* ret_word =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(MEM_L1_UNCACHED_BASE) + ret_slot);
-            constexpr uint32_t kCasSentinel = 0xFFFFFFFFu;
-            auto consumed_cas4 = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
-                *ret_word = kCasSentinel;
+            auto lock_cas = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
                 noc_fast_atomic_cas4<DM_DEDICATED_NOC>(
                     noc_index, lock_noc, NOC_UNICAST_WRITE_VC, cmp4, swap4, ret_slot);
                 noc_async_atomic_barrier();
-                WAYPOINT("NSDD");
-                while (*ret_word == kCasSentinel) {
-                }
                 return *ret_word;
             };
             for (;;) {
@@ -207,7 +200,7 @@ public:
                 do {
                     invalidate_l1_cache();
                 } while ((*sem_addr) < value);
-                if (consumed_cas4(/*cmp4=*/0, /*swap4=*/1) != 0) {
+                if (lock_cas(/*cmp4=*/0, /*swap4=*/1) != 0) {
                     continue;  // another consumer holds the lock, wait for it to release
                 }
                 // Re-check under the lock, no other consumer can decrement now.
@@ -218,13 +211,10 @@ public:
                     // Atomic subtract: the NoC only has atomic ADD (INCR_GET), so add the two's complement.
                     noc_semaphore_inc(sem_noc, (uint32_t)(0u - value));
                     noc_async_atomic_barrier();
-                    WAYPOINT("NSDD");
-                    // confirm the subtract's reply was received
-                    for (uint32_t spin = 0; spin < 1024u && *ret_word == kCasSentinel; spin++) {
-                    }
                 }
-                consumed_cas4(/*cmp4=*/1, /*swap4=*/0);  // release
+                lock_cas(/*cmp4=*/1, /*swap4=*/0);  // release
                 if (ok) {
+                    noc_restore_default_atomic_ret_addr(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                     return;
                 }
             }
@@ -255,14 +245,32 @@ public:
      *
      * @param value The value to wait for.
      */
-    __attribute__((always_inline)) void wait(uint32_t value) { noc_semaphore_wait(local_ptr(), value); }
+    __attribute__((always_inline)) void wait(uint32_t value) {
+        if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {
+            WAYPOINT("NSW");
+            while (load() != value) {
+            }
+            WAYPOINT("NSD");
+        } else {
+            noc_semaphore_wait(local_ptr(), value);
+        }
+    }
 
     /**
      * @brief Block until the semaphore is at least the specified value.
      *
      * @param value The minimum value to wait for.
      */
-    __attribute__((always_inline)) void wait_min(uint32_t value) { noc_semaphore_wait_min(local_ptr(), value); }
+    __attribute__((always_inline)) void wait_min(uint32_t value) {
+        if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {
+            WAYPOINT("NSMW");
+            while (load() < value) {
+            }
+            WAYPOINT("NSMD");
+        } else {
+            noc_semaphore_wait_min(local_ptr(), value);
+        }
+    }
 
     /**
      * @brief Set the semaphore to the specified value.
@@ -276,10 +284,7 @@ public:
     /**
      * @brief Read the current semaphore value through this scope's coherent view.
      */
-    __attribute__((always_inline)) uint32_t value() const {
-        invalidate_l1_cache();
-        return *local_ptr();
-    }
+    __attribute__((always_inline)) uint32_t value() const { return load(); }
 
     /**
      * @brief Relay this semaphore's local value into a different remote semaphore on a single core.
@@ -298,8 +303,7 @@ public:
     void relay_unicast(
         const Noc& noc, const Semaphore<dst_core_type, dst_scope>& dst_sem, uint32_t noc_x, uint32_t noc_y) {
         static_assert(SCOPE != SemScope::DM_LOCAL_CACHED, "relay_unicast is not available on a cached semaphore");
-        static_assert(
-            dst_scope != SemScope::DM_LOCAL_CACHED, "relay_unicast cannot target a cached semaphore");
+        static_assert(dst_scope != SemScope::DM_LOCAL_CACHED, "relay_unicast cannot target a cached semaphore");
         ASSERT(l1_offset_ != dst_sem.l1_offset_);
         const uint64_t dst_noc_addr = ::get_noc_addr(noc_x, noc_y, dst_sem.get_l1_addr(), noc.get_noc_id());
         noc_semaphore_set_remote(get_l1_addr(), dst_noc_addr, noc.get_noc_id());
@@ -375,8 +379,7 @@ public:
         static_assert(
             SCOPE != SemScope::DM_LOCAL_CACHED,
             "multicast is not available on a cached semaphore: the cached pool is node-private");
-        static_assert(
-            dst_scope != SemScope::DM_LOCAL_CACHED, "relay_multicast cannot target a cached semaphore");
+        static_assert(dst_scope != SemScope::DM_LOCAL_CACHED, "relay_multicast cannot target a cached semaphore");
         ASSERT(l1_offset_ != dst_sem.l1_offset_);
         const uint64_t multicast_addr = ::get_noc_multicast_addr(
             noc_x_start, noc_y_start, noc_x_end, noc_y_end, dst_sem.get_l1_addr(), noc.get_noc_id());
@@ -420,6 +423,16 @@ private:
     uintptr_t l1_offset_;  // physical L1 offset of the semaphore word (cached-alias address)
 
     // Local access pointer for reads / non-atomic writes.
+    __attribute__((always_inline)) uint32_t load() const {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+        if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {
+            return __atomic_load_n(reinterpret_cast<uint32_t*>(l1_offset_), __ATOMIC_RELAXED);
+        }
+#endif
+        invalidate_l1_cache();
+        return *local_ptr();
+    }
+
     __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* local_ptr() const {
         uintptr_t addr = l1_offset_;
 #ifdef ARCH_QUASAR
