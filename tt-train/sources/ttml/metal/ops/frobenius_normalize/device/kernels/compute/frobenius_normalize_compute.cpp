@@ -150,10 +150,13 @@ void kernel_main() {
         cb_pop_front(cb_norm, 1);
 
         // Mid-kernel phase switch (hw startup already done at kernel top): reconfig Pack for the new
-        // output; the SrcA reconfig + copy_init below complete the datapath re-init (was init_sfpu).
+        // output, then re-point SrcA + copy_init for the final scaled copy of the input.
         pack_reconfig_data_format(cb_output);
 
-        reconfig_data_format_srca(cb_output, cb_input);
+        // SrcA currently holds the FP32 reduce operand, so set it to the input format unconditionally: a
+        // format-conditional reconfig keyed on the output CB would skip when input and output share a format
+        // and leave SrcA reading the input as FP32.
+        reconfig_data_format_srca(cb_input);
         copy_init(cb_input);
         binop_with_scalar_tile_init();
 
