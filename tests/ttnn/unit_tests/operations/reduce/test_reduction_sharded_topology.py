@@ -107,24 +107,43 @@ def test_reduce_dram_sharded(device, op_name, shard_layout, dim):
     )
 
 
+# Output configs a full-HW reduce accepts.  The 1x1 result can stay sharded in either buffer type;
+# std/var reshard the input to the output config on the way in, so the sharded variants reuse the
+# input's own shard spec.
+_HW_OUTPUT_KINDS = ["interleaved", "dram_sharded", "l1_sharded"]
+
+
+def _hw_output_config(output_kind, shard_layout):
+    if output_kind == "interleaved":
+        return ttnn.DRAM_MEMORY_CONFIG
+    geometry = _DRAM_SHARD_GEOMETRY[shard_layout]
+    buffer_type = ttnn.BufferType.DRAM if output_kind == "dram_sharded" else ttnn.BufferType.L1
+    shard_spec = ttnn.ShardSpec(geometry["shard_grid"], geometry["shard_shape"], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(shard_layout, buffer_type, shard_spec)
+
+
 @pytest.mark.parametrize("op_name", list(REDUCE_OPS.keys()))
 @pytest.mark.parametrize("shard_layout", list(_DRAM_SHARD_GEOMETRY.keys()))
-def test_reduce_dram_sharded_full_hw_reduce(device, op_name, shard_layout):
-    """Full-HW reduce from a DRAM-sharded input; the output is interleaved since a collapsed 1x1
-    result cannot stay sharded across cores. sum/mean/max/min decompose host-side into a W-reduce
-    then an H-reduce, each reading the sharded or intermediate tensor; std/var use one Welford
-    call."""
+@pytest.mark.parametrize("output_kind", _HW_OUTPUT_KINDS)
+def test_reduce_dram_sharded_full_hw_reduce(device, op_name, shard_layout, output_kind):
+    """Full-HW reduce from a DRAM-sharded input, across every output config the op accepts.
+    sum/mean/max/min decompose host-side into a W-reduce then an H-reduce, each reading the sharded
+    or intermediate tensor; std/var use one Welford call."""
     torch.manual_seed(0)
     ttnn_op, torch_op = REDUCE_OPS[op_name]
 
     torch_input_tensor, dram_sharded_input = _dram_sharded_input(device, shard_layout)
     torch_output_tensor = torch_op(torch_input_tensor, (-2, -1), True)
 
-    output_tensor = ttnn_op(dram_sharded_input, dim=(-2, -1), keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_config = _hw_output_config(output_kind, shard_layout)
+    output_tensor = ttnn_op(dram_sharded_input, dim=(-2, -1), keepdim=True, memory_config=output_config)
 
     output_mem_config = output_tensor.memory_config()
-    assert output_mem_config.buffer_type == ttnn.BufferType.DRAM
-    assert not output_mem_config.is_sharded()
+    assert output_mem_config.buffer_type == output_config.buffer_type
+    assert output_mem_config.is_sharded() == output_config.is_sharded()
+    if output_config.is_sharded():
+        # A 1x1 result is a single shard, so either sharded layout normalizes to the same spec.
+        assert output_mem_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_numeric_metrics(
