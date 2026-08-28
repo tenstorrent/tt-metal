@@ -1,6 +1,6 @@
 {
- "last_run": "2026-08-28T03:28:00Z",
- "run_id": "33138712703",
+ "last_run": "2026-08-28T09:28:00Z",
+ "run_id": "33159188419",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -35,16 +35,14 @@
   "54666": {
    "title": "fix(ttnn): guard matmul per_core_M/N against zero to avoid SIGFPE",
    "closes": 54639,
-   "status": "ci_queued",
-   "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero",
-   "note": " | corrected PR number from stale 54664 to actual 54666 during 2026-08-28 run"
+   "status": "CI green",
+   "branch": "repo-assist/fix-issue-54639-matmul-per-core-divzero-af452bb681e00eeb"
   },
-  "54655": {
+  "54690": {
    "issue": 54655,
    "title": "fix(ttnn): remove static from unused function templates to fix Clang 23 build",
-   "branch": "repo-assist/fix-issue-54655-clang23-unused-template",
-   "status": "opened",
-   "ci": "unverified locally, triggered via pr-gate.yaml"
+   "branch": "repo-assist/fix-issue-54655-clang23-unused-template-b588121d18d65476",
+   "status": "mergeable_state=behind; unverified locally; CI checks previously green (RTL Sim, Cycode); CORRECTED PR NUMBER from previously-mistracked 54655 (issue) - actual PR is #54690"
   }
  },
  "issues_labeled": [
@@ -86,7 +84,9 @@
   "54017:bug",
   "53999:bug",
   "54016:feature-request",
-  "54495:bug"
+  "54495:bug",
+  "54695:bug",
+  "54654:bug"
  ],
  "covered_no_duplicate": {
   "52131": "PR #52136 already closes it",
@@ -148,7 +148,9 @@
    "author": "kinginu",
    "note": "pow_bw +inf bug, confirmed correct fix, no duplicate needed"
   },
-  "54639": "verified no existing PR before opening #54664"
+  "54639": "verified no existing PR before opening #54664",
+  "54695": "labeled+commented this run, no fix PR opened (root cause confirmed, fix approach suggested, no HW needed but left for follow-up PR)",
+  "54654": "labeled bug, needs HW/device access to root-cause slow-dispatch hang, no fix PR"
  },
  "dropped_fix_targets": {
   "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -382,6 +384,10 @@
   "36251": {
    "date": "2026-08-27",
    "note": "author nudge (quiet since Feb reviews, mergeable_state unknown)"
+  },
+  "49627": {
+   "date": "2026-08-28",
+   "note": "codeowners ping (reviewer-blocked, 2 groups pending since 2026-07-15, author already very active with own pings)"
   }
  },
  "backlog_cursor": {
@@ -503,6 +509,11 @@
   "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43"
  },
  "run_history": [
+  {
+   "run_id": "33159188419",
+   "date": "2026-08-28T09:28:00Z",
+   "summary": "Labeled+commented #54695 (atanh_bw inf-flip bug); labeled #54654 (rms_norm slow-dispatch hang); codeowners-pinged stale PR #49627; corrected PR mapping for #54655 (actual PR #54690); re-verified 6 tracked repo-assist PRs unchanged; updated monthly summary #51865."
+  },
   {
    "run_id": "33138712703",
    "date": "2026-08-28T03:28:00Z",
