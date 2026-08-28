@@ -978,7 +978,7 @@ std::vector<nlohmann::json> function_starts_with_factory(const nlohmann::json& t
 std::vector<nlohmann::json> function_starts_named(const std::vector<nlohmann::json>& nodes, std::string_view needle) {
     std::vector<nlohmann::json> filtered;
     std::copy_if(nodes.begin(), nodes.end(), std::back_inserter(filtered), [needle](const auto& node) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
+        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).template get<std::string>();
         return name.find(needle) != std::string::npos;
     });
     return filtered;
