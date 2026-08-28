@@ -45,9 +45,8 @@ inline constexpr std::size_t MAX_MCAST_INJECTIONS = 5;
 // directly to make the dedup intent explicit. The first-hop neighbor through this link is
 // stored on the Connection (Connection::next_hop_dst), not on the key. Multiple traffic
 // configs whose final destinations all route through the same eth chan + VC dedup to one
-// ConnectionKey here (e.g. Z-link sub-torus all-to-all). Multi-Z disambiguation between
-// neighbor meshes is preserved naturally because separate Z eth chans have distinct
-// (link_idx, eth_chan) values.
+// ConnectionKey here. Parallel lanes to the same logical neighbor remain distinct because
+// they have different (link_idx, eth_chan) values.
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
