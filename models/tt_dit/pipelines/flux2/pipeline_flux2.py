@@ -121,17 +121,17 @@ class Flux2Pipeline:
 
         self.checkpoint_name = checkpoint_name
 
-        self._torch_transformer = diffusers.Flux2Transformer2DModel.from_pretrained(
-            checkpoint_name,
-            subfolder="transformer",
-            torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
-        )
-        self._torch_transformer.eval()
-
-        self._torch_vae = AutoencoderKLFlux2.from_pretrained(checkpoint_name, subfolder="vae")
-        assert isinstance(self._torch_vae, AutoencoderKLFlux2)
+        # The torch reference modules are built ONLY on a converted-weight cache miss:
+        # `cache.load_model` takes `get_torch_state_dict` as a callable and never invokes
+        # it on a hit. Materialising them here anyway would force every warm boot to read
+        # the source safetensors, which is why they are properties below.
+        self._torch_transformer_cached = None
+        self._torch_vae_cached = None
 
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
+        self._transformer_config = diffusers.Flux2Transformer2DModel.load_config(
+            checkpoint_name, subfolder="transformer"
+        )
 
         logger.info("creating TT-NN transformer...")
 
@@ -166,7 +166,12 @@ class Flux2Pipeline:
             shard_prompt=self._shard_prompt,
         )
 
-        self._pos_embed = self._torch_transformer.pos_embed
+        # RoPE tables, built from two config scalars. Reading them off the loaded torch
+        # model would drag the whole checkpoint in for something that carries no weights.
+        self._pos_embed = diffusers.models.transformers.transformer_flux2.Flux2PosEmbed(
+            theta=self._transformer_config["rope_theta"],
+            axes_dim=self._transformer_config["axes_dims_rope"],
+        )
 
         self._image_processor = VaeImageProcessor()
 
@@ -259,6 +264,31 @@ class Flux2Pipeline:
             traced=traced,
         )
 
+    @property
+    def _torch_transformer(self):
+        """The torch reference transformer, loaded on first use.
+
+        Only a converted-weight cache miss reaches this. Loading it eagerly made the
+        source safetensors a hard requirement of every boot, warm or cold.
+        """
+        if self._torch_transformer_cached is None:
+            logger.info("loading the torch transformer (converted-weight cache miss)")
+            self._torch_transformer_cached = diffusers.Flux2Transformer2DModel.from_pretrained(
+                self.checkpoint_name,
+                subfolder="transformer",
+                torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
+            )
+            self._torch_transformer_cached.eval()
+        return self._torch_transformer_cached
+
+    @property
+    def _torch_vae(self):
+        """The torch reference VAE, loaded on first use. See :attr:`_torch_transformer`."""
+        if self._torch_vae_cached is None:
+            logger.info("loading the torch VAE (converted-weight cache miss)")
+            self._torch_vae_cached = AutoencoderKLFlux2.from_pretrained(self.checkpoint_name, subfolder="vae")
+        return self._torch_vae_cached
+
     def _release_denoise_trace(self) -> None:
         """Release the captured denoise trace, if any."""
         tracer = type(self)._step._tracers.get(self)
@@ -286,7 +316,7 @@ class Flux2Pipeline:
             _release_module_trace(getattr(self._prompt_encoder, "_encoder", None))
         cache.load_model(
             tt_model=self.transformer,
-            get_torch_state_dict=self._torch_transformer.state_dict,
+            get_torch_state_dict=lambda: self._torch_transformer.state_dict(),
             model_name=os.path.basename(self.checkpoint_name),
             subfolder="transformer",
             parallel_config=self._parallel_config,
@@ -310,7 +340,7 @@ class Flux2Pipeline:
             self._release_denoise_trace()
         cache.load_model(
             tt_model=self._vae_decoder,
-            get_torch_state_dict=self._torch_vae.state_dict,
+            get_torch_state_dict=lambda: self._torch_vae.state_dict(),
             model_name=os.path.basename(self.checkpoint_name),
             subfolder="vae",
             parallel_config=self._vae_parallel,
