@@ -1,60 +1,59 @@
-# BGE-M3 encoder-only SDPA scaffold
+# BGE-M3 encoder-only SDPA
 
-Status: **unverified parity scaffold; not integrated into the model**.
+Status: **in use by the data-parallel serving path**.
 
-This directory establishes a no-`_ttnn.so`-rebuild path for the exact retained
-N300 DP=2 encoder attention shape:
+`BgeM3AttentionJit._attend` calls `bge_encoder_sdpa_experimental` for every
+layer, and `ModelArgs` selects that class for the B12/S8192 data-parallel
+shape. Treat this directory as production code.
 
-- Q `[6, 32, 4096, 64]` BF8
+This directory holds a model-local SDPA. It builds the program from Python
+with `ttnn.generic_op`, so a change to the descriptor or to the kernels needs
+no `_ttnn.so` rebuild.
+
+## Shapes
+
+The serving path folds 2 query chunks into the head dimension before the call,
+so SDPA reads 4096 queries per head. The GQA head-broadcast keeps every query
+head over the full sequence, so the result stays exact.
+
+- Q `[6, 32, 4096, 64]` BF4
 - K `[6, 16, 8192, 64]` BF4
-- V `[6, 16, 8192, 64]` BF8
-- non-causal, no mask, scale 1
-- Q128/K2048, LoFi, FP32 destination
+- V `[6, 16, 8192, 64]` BF4
+- non-causal, scale 1 (the build folds the scale into the Q weight)
 - fixed 8x8 worker grid
 
-`op.py` mirrors the relevant constants, CB allocation, compile-time arguments,
-and per-core global-Q scheduling from the production `SDPAProgramFactory`.
-The three model-local kernel entrypoints currently include the production JIT
-kernels unchanged. This separates host-descriptor parity from later kernel
-specialization.
+`attention.py` picks the chunk plan:
 
-## Why forwarding semaphores are omitted
+| Request | q_chunk | k_chunk | fp32_dest_acc_en |
+| --- | --- | --- | --- |
+| serving (BF4) | 256 | 2048 | False |
+| `quality_mode` masked | 128 | 512 | True |
+
+The serving plan also sets `direct_concat_heads`, so the writer emits the
+concat-head order and the separate concat-heads program is not needed.
+
+## Compact valid lengths
+
+`use_runtime_lengths` takes a compact `[B, 1]` uint32 tensor of per-request
+valid lengths. The kernels build only the boundary mask tiles, and they skip a
+key chunk that holds only padding. A dense `[B, 1, S, S]` mask costs about
+1.5 GiB at B12/S8192, so the serving path never builds one.
+
+## Why the forwarding semaphores are omitted
 
 There are 6144 Q work units: `B6 * HQ32 * 32 Q chunks`. Dividing across 64
-cores gives exactly 96 units/core, or three complete heads/core. No head crosses
-a core boundary, so the production KV forwarding chains have no participants.
-The Python descriptor therefore sends fourteen zero chain fields per core and
-does not allocate the three forwarding semaphores.
+cores gives exactly 96 units per core, or three complete heads per core. No
+head crosses a core boundary, so the KV forwarding chains have no participants.
+The descriptor sends fourteen zero chain fields per core and allocates no
+forwarding semaphore.
 
-This assumption must be validated on silicon before any model integration.
+## Kernel provenance
 
-## First takeover steps
+`compute.cpp`, `compute_common.hpp`, `reader.cpp`, and `writer.cpp` started as
+copies of `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/`.
+They now carry the BF4 paths, the compact masking, the padded-chunk skip, and
+the direct concat-head writer.
 
-1. Import `build_encoder_sdpa_descriptor` only; check Python binding names and
-   descriptor construction without wiring `attention.py`.
-2. Run the gated parity probe in
-   `models/demos/wormhole/bge_m3/tests/perf/encoder_sdpa_parity_probe.py`.
-3. Resolve any binding differences, especially:
-   - `KernelDescriptor(defines=...)` map conversion;
-   - `TensorAccessorArgs` placeholder layout for absent optional tensors;
-   - whether inactive CB id `0xFFFFFFFF` survives Python integer conversion;
-   - whether explicit forwarding semaphore descriptors are required even when
-     every runtime participant flag is zero.
-4. Require stock-equivalent PCC and output shape.
-5. Compare one warm repeat launch, program-cache reuse, and trace capture/replay.
-6. Profile device duration. Parity is acceptable only within measurement noise.
-7. Only then add an explicit optimization option in `attention.py`.
-
-## Specialization order after parity
-
-1. Copy production kernel bodies into this directory; stop including them.
-2. Add internal zones around QK, row max, sub/exp/sum, PV, correction, and final
-   normalization.
-3. Remove inactive encoder modes and optional-accessor slots only after confirming
-   they affect generated code or L1.
-4. Explore CB lifetime aliasing to recover enough L1 for Q160/K2048 while
-   retaining double-buffered K/V.
-5. Optimize the measured dominant reduction/SFPU region one change at a time.
-
-Do not infer a speedup from specialization alone: most production mode branches
-are already compile-time eliminated.
+The copies drift when upstream changes the shared headers. A drift shows up as
+a compile error on a changed SFPU signature. Re-sync the affected call sites
+against the upstream kernels.

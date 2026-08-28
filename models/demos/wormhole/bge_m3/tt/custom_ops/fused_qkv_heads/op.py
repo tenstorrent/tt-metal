@@ -1,22 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""BGE-M3 fused QKV → Q/K/V heads — Python wrappers.
+"""BGE-M3 fused QKV to Q/K/V heads.
 
-Two variants:
+``bge_qkv_heads_headsplit`` splits a fused QKV tensor into Q, K, and V heads.
+Each core owns a head group.
 
-  - ``bge_qkv_heads_stock``: thin shim around ``ttnn.experimental.nlp_create_qkv_heads``
-    that gives the sweep harness a single function name to call. Equivalent
-    to today's production path through ``BgeM3Attention``.
-
-  - ``bge_qkv_heads_scatter``: (stub) custom path that should eventually fuse
-    the matmul output writer with head split, deleting the
-    ``NlpCreateHeadsDeviceOperation`` dispatch. Today raises NotImplementedError
-    so the sweep records a `skipped` row instead of crashing.
-
-The split is intentional: today's PR scaffolds the harness; the sweep
-baseline test (`test_baseline_qkv_heads_timing`) must pass on silicon and
-match the latest profile before we implement the scatter kernel.
+The data-parallel serving path does not call this op. It calls
+``bge_qkv_scatter_matmul``, which fuses the projection and the head split into
+one program.
 """
 
 from __future__ import annotations
@@ -24,15 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import ttnn
-
-# Path (relative to TT_METAL_HOME) where the future scatter-writer .cpp will live.
-# Kept here as the single source of truth so the sweep file can reference it
-# without re-hardcoding the path.
-SCATTER_WRITER_KERNEL_REL_PATH = (
-    "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "writer_qkv_scatter.cpp"
-)
-
-# Track A optimized kernels (batched-barrier reader+writer).
 
 # Head-split kernels (work units split by (batch, seq_tile, head_group)
 # instead of just (batch, seq_tile)). Ported from Qwen3-Embedding-0.6B PR.
@@ -324,44 +307,3 @@ def bge_qkv_heads_headsplit(
         v_tensor = converted
 
     return q_tensor, k_tensor, v_tensor
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Future Track B: fused matmul-with-scatter-writer (stub)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-def bge_qkv_heads_scatter(
-    hidden_states: ttnn.Tensor,  # noqa: ARG001 (stub)
-    wqkv: ttnn.Tensor,  # noqa: ARG001
-    bqkv: ttnn.Tensor | None,  # noqa: ARG001
-    *,
-    num_heads: int,  # noqa: ARG001
-    head_dim: int,  # noqa: ARG001
-    qkv_compute_kernel_cfg,  # noqa: ARG001
-    qkv_program_config,  # noqa: ARG001
-    out_dtype: ttnn.DataType,  # noqa: ARG001
-    out_memcfg: ttnn.MemoryConfig | None = None,  # noqa: ARG001
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Stub: fused QKV-matmul-with-scatter-writer.
-
-    Not implemented in the scaffold pass. The sweep file calls this and
-    catches NotImplementedError to record a `skipped` row.
-
-    The implementation plan, once baseline timing is locked:
-      1. Fork the matmul `in1_receiver_writer_padding_block_sharded.cpp`
-         (the writer used by `MatmulMultiCoreReuseMultiCast2dProgramConfig`).
-      2. Replace the single output `TensorAccessor` with three
-         (Q, K, V), routing tiles by their N-column index.
-      3. Wrap as a `ttnn.generic_op` with `ttnn.ProgramDescriptor` mirroring
-         the production matmul's CB layout, reader CTs, and runtime args.
-      4. Verify Q/K/V are bit-equivalent to
-         `qkv_matmul → nlp_create_qkv_heads` on the same inputs.
-
-    See `SCATTER_WRITER_KERNEL_REL_PATH` for the eventual kernel location.
-    """
-    raise NotImplementedError(
-        "bge_qkv_heads_scatter: scatter writer not yet implemented. "
-        "Implement after baseline sweep confirms timing baseline. "
-        f"Future kernel path: {SCATTER_WRITER_KERNEL_REL_PATH}"
-    )
