@@ -127,8 +127,22 @@
 # arch-agnostic and are included deliberately: the ttsim list uses them as a baseline that the
 # simulator can run the ordinary host/L1 paths, not just the Quasar-specific kernels.
 #
-# The filter is accumulated one test per line so each is greppable; folding it into a single
-# --gtest_filter= argument directly would make one ~800-character line.
+# 9 of the 14 tests in ttsim's list are here. The other 5 are deferred because turning off
+# NOC_API_V2 stops their kernels compiling at all — tt-2xx/noc_zero_l1.inl unconditionally calls
+# init_wr_cmd_buf(noc_local_xy()), and both symbols are defined only in noc_nonblocking_api_v2.h,
+# so the V1 path fails to build for any kernel that reaches it via core_local_mem.h /
+# circular_buffer.h / dataflow_buffer.h:
+#   noc_zero_l1.inl:96: error: 'noc_local_xy' was not declared in this scope
+# Deferred (all data-movement / semaphore tests, all blocked on the above, not on a test bug):
+#   QuasarMeshDeviceSingleCardFixture.DmLoopback
+#   QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts
+#   QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline
+#   QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline
+#   QuasarMeshDeviceSingleCardFixture.SingleDmL1Write
+# Restore them once #54794 is resolved — either ttsim models the V2 custom instructions (in which
+# case the grep/sed above goes away too), or noc_zero_l1.inl grows a V1 fallback.
+#
+# The filter is accumulated one test per line so each is greppable.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
     hdr=$TT_METAL_HOME/tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h;
@@ -137,15 +151,10 @@
     f=HostOnlyTest.Bfp8Conversion;
     f=$f:UnitMeshFixture.InterleavedL1Buffer;
     f=$f:UnitMeshFixture.UnalignedReadWriteCore;
-    f=$f:QuasarMeshDeviceSingleCardFixture.DmLoopback;
-    f=$f:QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster;
-    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline;
-    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline;
-    f=$f:QuasarMeshDeviceSingleCardFixture.SingleDmL1Write;
     f=$f:RISCVAtomicsFixture.TestAtomicAddFetchRISCV;
     f=$f:RISCVAtomicsFixture.TestAtomicLoadStoreRISCV;
     ./build/test/tt_metal/unit_tests_legacy --gtest_filter=$f
