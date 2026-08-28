@@ -156,6 +156,7 @@ cmbf2d::ControlTables read_control_tables(const Dram& dram) {
     return ctl;
 }
 
+#if TILE
 // Our end of the untilizer handshake. The group produces a fixed sequence of batches (see the group walk),
 // this stream reads the rows it wants out of them, and the two exchange only counts.
 //
@@ -229,6 +230,7 @@ struct Untilized {
         }
     }
 };
+#endif
 
 // Everything the phases share: the ring's flow control, where the next downstream chunk goes, and how far
 // into our own region we have consumed.
@@ -244,10 +246,22 @@ struct Untilized {
 struct Reader {
     const Dram& dram;
     cmbf2d::ControlTables ctl;
+#if TILE
     Untilized untilized;
     // The group's production for the expert in progress. Rebuilt every iteration, identically on every core
     // of the group, which is what makes a batch index mean the same thing to all of them.
     cmbf2d::GroupWalk walk{ct.walks_down != 0};
+#endif
+
+    // Where page `p` of our region is read from: an untilizer's staging ring, or the buffer itself when the
+    // tokens are already rows.
+    uint64_t token_source(uint32_t p) {
+#if TILE
+        return untilized.take(walk, p);
+#else
+        return dram.in.get_noc_addr(p);
+#endif
+    }
     uint32_t published = 0;
     uint32_t claimed = 0;
     // Publishing is batched so the atomic is amortised, matching the sender's batch.
@@ -331,7 +345,7 @@ struct Reader {
         volatile tt_l1_ptr uint32_t* meta =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * cmbf2d::META_PAD_STRIDE);
 
-        noc_async_read(untilized.take(walk, in_page), slot_addr_of(slot), ct.token_size_bytes);
+        noc_async_read(token_source(in_page), slot_addr_of(slot), ct.token_size_bytes);
         // Everything below runs while that read is in flight, which is the point of prefetching the metadata.
         // Record layout: [0] linearized_coord, [1] token_idx, [2] topk_idx; the destination chip is already
         // known from the run this token came out of.
@@ -522,7 +536,7 @@ struct Reader {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_pads_addr + pad * cmbf2d::META_PAD_STRIDE);
                 const uint32_t out_page = meta[1] * ct.num_experts_per_tok + meta[2];
                 const uint64_t out_addr = dram.out.get_noc_addr(out_page);
-                noc_async_read(untilized.take(walk, base + pad), slot_addr, ct.token_size_bytes);
+                noc_async_read(token_source(base + pad), slot_addr, ct.token_size_bytes);
                 noc_async_read_barrier();
                 noc_async_write(slot_addr, out_addr, ct.token_size_bytes);
                 // Serialised on purpose: the slot IS the buffer, so it cannot be refilled until the write
@@ -550,6 +564,7 @@ void kernel_main() {
     // One pass per local expert, fabric then local, so every token of expert e is placed before expert
     // e + 1 is touched.
     for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+#if TILE
         reader.walk = cmbf2d::group_walk(
             reader.ctl,
             ct.walks_down != 0,
@@ -557,12 +572,17 @@ void kernel_main() {
             ct.my_dg_index,
             ct.num_assignments,
             [](uint32_t k) { return kernel_compile_time_args[ct.assignment_base + k * cmbf2d::ASSIGNMENT_WORDS + 1]; });
+#endif
         reader.run_schedule(local_expert);
         reader.run_local_phase(local_expert);
+#if TILE
         reader.untilized.finish_expert(reader.walk);
+#endif
     }
     reader.end_stream();
+#if TILE
     reader.untilized.reset_counters();
+#endif
 
     // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
     // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last

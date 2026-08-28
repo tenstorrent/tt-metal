@@ -42,7 +42,11 @@ UntilizerGroups decide_untilizers(
     std::set<CoreCoord>& taken,
     tt::tt_metal::IDevice* dev,
     const CoreCoord& grid,
-    const tt::tt_fabric::FabricNodeId& who) {
+    const tt::tt_fabric::FabricNodeId& who,
+    uint32_t per_group) {
+    if (per_group == 0) {
+        return {};
+    }
     std::array<std::size_t, UNTILIZER_GROUPS> leftmost_sender;
     leftmost_sender.fill(std::numeric_limits<std::size_t>::max());
     const std::size_t sender_row = streams.begin()->second.worker_logical.y;
@@ -77,7 +81,7 @@ UntilizerGroups decide_untilizers(
             "combine_fabric2d {}: untilizer group {} has no senders to serve",
             who,
             g);
-        while (groups[g].size() < untilizers_per_group()) {
+        while (groups[g].size() < per_group) {
             TT_FATAL(
                 column < grid.x,
                 "combine_fabric2d {}: group {} got {} of {} untilizers before running out of the {} columns two "
@@ -85,10 +89,10 @@ UntilizerGroups decide_untilizers(
                 who,
                 g,
                 groups[g].size(),
-                untilizers_per_group(),
+                per_group,
                 grid.x);
             for (std::size_t row : {sender_row + 1, sender_row}) {
-                if (groups[g].size() == untilizers_per_group()) {
+                if (groups[g].size() == per_group) {
                     break;
                 }
                 const CoreCoord core{column, row};
@@ -112,7 +116,11 @@ UntilizerGroups decide_untilizers(
 }
 
 DevicePlacement decide_device_placement(
-    ttnn::MeshDevice* mesh, const ttnn::MeshCoordinate& coord, uint32_t axis, uint32_t num_links) {
+    ttnn::MeshDevice* mesh,
+    const ttnn::MeshCoordinate& coord,
+    uint32_t axis,
+    uint32_t num_links,
+    uint32_t untilizers_per_group) {
     auto* dev = mesh->get_device(coord);
     const auto self_node = mesh->get_fabric_node_id(coord);
 
@@ -184,7 +192,9 @@ DevicePlacement decide_device_placement(
         assign(stream, candidate, worker);
     }
     return DevicePlacement{
-        placements, decide_untilizers(placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node)};
+        placements,
+        decide_untilizers(
+            placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node, untilizers_per_group)};
 }
 
 }  // namespace
@@ -203,12 +213,13 @@ uint32_t untilizers_per_group() {
     return n;
 }
 
-MeshPlacement decide_placement(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links) {
+MeshPlacement decide_placement(
+    ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, uint32_t untilizers_per_group) {
     TT_FATAL(mesh != nullptr, "combine_fabric2d: mesh device is null");
 
     MeshPlacement placement;
     for (const auto& coord : ttnn::MeshCoordinateRange(mesh->shape())) {
-        placement.emplace(coord, decide_device_placement(mesh, coord, axis, num_links));
+        placement.emplace(coord, decide_device_placement(mesh, coord, axis, num_links, untilizers_per_group));
     }
     return placement;
 }

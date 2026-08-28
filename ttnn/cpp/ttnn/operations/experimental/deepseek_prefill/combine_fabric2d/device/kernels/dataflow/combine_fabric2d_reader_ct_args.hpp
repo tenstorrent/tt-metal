@@ -61,6 +61,7 @@ struct ReaderCtArgs {
     // Which way this stream walks the pages inside one run. Its destinations are taken furthest-first, and
     // for a clockwise stream that is descending dispatch-group index, hence descending page: matching the
     // pages to it turns the whole own-assignment phase into one continuous sweep of the expert's region.
+    // Only untilized tokens are read in that order -- reading DRAM directly has no sequence to match.
     uint32_t walks_down;
     // The batch ring an untilizer stages tokens into. Same address on every untilizer core, so a row is
     // named by core and offset with nothing per-core to pass.
@@ -115,7 +116,7 @@ struct ReaderCtArgs {
         my_dg_index(op::my_dg_index(args, coord)),
         control_addr(l1.control),
         meta_prefetch_cap(META_PREFETCH),
-        walks_down(op::stream_is_cw(plan.stream)),
+        walks_down(op::dispatched_is_tiled(tensor_args) && op::stream_is_cw(plan.stream)),
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
