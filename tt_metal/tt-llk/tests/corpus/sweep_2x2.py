@@ -999,6 +999,37 @@ KNOBS = {
     # Residual = chain execution (word parity flipped 76 vs 77 yet
     # +2.73 remains; HW's FULL-FLIP-NOT-MODELED caveat, FI envelope).
     "loop-prgm-reclaim": "-mtt-tensix-optimize-loop-prgm-reclaim",
+    # IF (dst-autoincr-load-carrier, lane IF 2026-08-27): lane IE's
+    # named compiler successor for the sdpareducerow residual (HW rows
+    # A9/A10; the hand's ADDR_MOD-carried load walk).
+    # -mtt-tensix-optimize-dst-autoincr-load-carrier Init(0) makes the
+    # dst-autoincr pass's replay-slot/issue-word counting EXACT for raw
+    # `.ttinsn` constant words (the audited rvtt_raw_ttinsn_word
+    # extraction: one 32-bit Tensix word = one replay slot = one
+    # frontend word; classification untouched — raw words stay
+    # refused as payload members / gap items / config-window items).
+    # The adjudicated pin-38 blocker: the LLK envelope datacopy
+    # record's 16-raw-word shadow counted ZERO slots, overran its
+    # block, and refused the WHOLE function ("replay capture crosses
+    # block") before any row was seen — which is why the useq twin
+    # (BLAZE_IMPL 8: unit-stride load dst_reg[0]; dst_reg += 1)
+    # compiled to 32 raw TTINCRWC with zero capture while the same
+    # LOAD-terminated rows fire in a record-free TU at pin 38 (the row
+    # machinery has no load/store distinction; lane IF counter-probe).
+    # Under the knob the useq tile loop folds: 32 TTINCRWC -> 0, 32
+    # encoding-identical scratch-mode SFPLOADs (mode 6) + one 3-word
+    # slot program per tile (dominating placement refused by the
+    # loop's own semaphore/MOP words — per-group in-loop program);
+    # sum 126 -> 97, max 128 -> 99 tensix words/tile.  Replay
+    # soundness: RWC/ADDR_MOD effects are per-execution cumulative
+    # with no per-launch reset (WH REPLAY.md/INCRWC.md/RWCs.md; sim
+    # replay_expander re-pushes stored words through the same FIFO;
+    # hand precedent ADDR_MOD_5 dest.incr=16 on the last recorded
+    # SFPLOAD of ckernel_sfpu_sdpa_reduce_row.h) — the only skew
+    # mechanism (executions != removed increments) is the pass's
+    # existing fail-closed payload-coverage refusal, exercised by the
+    # walk-skew twin.
+    "dst-autoincr-load-carrier": "-mtt-tensix-optimize-dst-autoincr-load-carrier",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
     # noexec-rerecord-dststore-composition-unaudited (Dst-store re-record
@@ -1340,6 +1371,12 @@ KNOB_MODES = {
     "crossrow-pairing-seed": "on-plus",
     "crossrow-2datum": "on-plus",
     "loop-prgm-reclaim": "on-plus",
+    # IF dst-autoincr-load-carrier: default-off Init(0) booking knob;
+    # an exact-counting unlock for the dst-autoincr shadow/issue-word
+    # walks (admission-widening only where whole functions previously
+    # bailed on raw-word recording shadows).  on-plus while a booking
+    # knob; promotion requires the ON-delta adjudication ceremony.
+    "dst-autoincr-load-carrier": "on-plus",
     # HH launch-flatten: default-off Init(0) booking knob; a pure
     # GIMPLE unroll-request (delivery-shape change only, dynamic word
     # stream unchanged by construction).  on-plus while a booking knob;
