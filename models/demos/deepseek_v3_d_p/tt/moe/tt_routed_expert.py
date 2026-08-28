@@ -23,7 +23,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
-from models.demos.deepseek_v3_d_p.utils.expert_dtypes import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 
 # Model configs are torch-only and so name their activation as a string; this is the one place
 # that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
@@ -46,6 +45,18 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+
+
+# The default routed-expert weight dtype, in one place. It used to be spelled as a literal at each
+# site that builds or checks the cache, so A/B-ing expert precision meant editing every one and
+# hoping none was missed -- and missing one is not a crash, it is a cache BUILT at one dtype and
+# CHECKED at another, which loads the empty placeholder as the weights and yields a meaningless PCC.
+# Callers wanting a different precision pass `routed_expert_weights_dtype` explicitly.
+#
+# Not yet used by `load_and_compute_layer_by_layer` (utils/transformer_helpers.py), which still
+# carries a literal and whose four call sites do not override it; changing this constant leaves that
+# loader on the old dtype. That file belongs to another PR in this split, so it is a follow-up.
+DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
 
 
 class TtRoutedExpert(LightweightModule):
