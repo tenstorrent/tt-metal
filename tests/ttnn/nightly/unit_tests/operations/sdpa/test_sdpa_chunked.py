@@ -378,6 +378,82 @@ def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
         device.enable_program_cache()
 
 
+@pytest.mark.parametrize("flexible", [False, True], ids=["scalar_offset", "runtime_offset"])
+def test_chunked_sdpa_attention_sink_pcc(device, flexible):
+    """The public chunked API must forward attention_sink for both offset overloads."""
+    torch.manual_seed(0)
+    b, nh, nkv, s, d = 1, 4, 1, 1024, 128
+    chunk_size = page_block_size = 128
+
+    q = torch.randn(b, nh, s, d)
+    k = torch.randn(b, nkv, s, d)
+    v = torch.randn(b, nkv, s, d)
+    sink = torch.tensor([2.0, -1.0, 0.5, 3.0]).reshape(1, nh, 1, 1)
+
+    # Exercise non-identity paging as well as sink forwarding.
+    permutation = torch.randperm(s // page_block_size)
+    page_table = torch.argsort(permutation).reshape(b, -1)
+
+    def page_cache(cache):
+        return (
+            cache.reshape(b, nkv, s // page_block_size, page_block_size, d)
+            .transpose(1, 2)
+            .reshape(-1, nkv, page_block_size, d)[permutation]
+        )
+
+    tt_k = ttnn.from_torch(page_cache(k), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_v = ttnn.from_torch(page_cache(v), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_page_table = ttnn.from_torch(page_table, dtype=ttnn.int32, device=device)
+    tt_sink = ttnn.from_torch(sink, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=chunk_size,
+        k_chunk_size=chunk_size,
+        exp_approx_mode=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    k_heads = k.repeat(1, nh // nkv, 1, 1)
+    v_heads = v.repeat(1, nh // nkv, 1, 1)
+    scale = d**-0.5
+    for chunk_start in range(0, s, chunk_size):
+        q_chunk = q[:, :, chunk_start : chunk_start + chunk_size]
+        tt_q = ttnn.from_torch(q_chunk, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        kwargs = {
+            "program_config": program_config,
+            "compute_kernel_config": compute_kernel_config,
+            "attention_sink": tt_sink,
+        }
+        if flexible:
+            kwargs["chunk_start_idx_tensor"] = ttnn.from_torch(
+                torch.tensor([chunk_start], dtype=torch.int32), dtype=ttnn.int32, device=device
+            )
+            tt_output = ttnn.transformer.chunked_scaled_dot_product_attention(tt_q, tt_k, tt_v, tt_page_table, **kwargs)
+        else:
+            tt_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                tt_q, tt_k, tt_v, tt_page_table, chunk_start, **kwargs
+            )
+
+        prefix_length = chunk_start + chunk_size
+        scores = torch.matmul(q_chunk, k_heads[:, :, :prefix_length].transpose(-2, -1)) * scale
+        query_positions = torch.arange(chunk_start, prefix_length).reshape(-1, 1)
+        key_positions = torch.arange(prefix_length).reshape(1, -1)
+        scores = scores.masked_fill(key_positions > query_positions, float("-inf"))
+        sink_scores = (sink * scale).expand(b, nh, chunk_size, 1)
+        weights = torch.softmax(torch.cat([scores, sink_scores], dim=-1), dim=-1)[..., :-1]
+        reference = torch.matmul(weights, v_heads[:, :, :prefix_length])
+
+        output = ttnn.to_torch(tt_output)
+        passed, pcc = comp_pcc(reference, output, 0.995)
+        assert passed, f"chunk_start={chunk_start}, flexible={flexible}: {pcc}"
+
+
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])

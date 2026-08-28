@@ -244,7 +244,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -255,7 +256,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             scale,
             memory_config,
             program_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            attention_sink);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -271,7 +273,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        attention_sink);
 }
 
 }  // namespace
@@ -459,6 +462,9 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Defaults to `None`. Shape [1 x nqh x 1 x 1],
+                containing one attention-sink logit per query head. The sink participates in softmax
+                normalization but does not contribute a value vector.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -479,7 +485,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        nb::arg("attention_sink") = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
