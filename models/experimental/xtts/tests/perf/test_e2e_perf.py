@@ -34,16 +34,24 @@ MAX_NEW_TOKENS = 240
 TEMPERATURE, TOP_K, TOP_P, REP_PENALTY = 0.65, 50, 0.85, 5.0
 
 MARGIN = 0.40
-# Raising GPT matmul and vocoder conv fidelity off LoFi/HiFi2 (MM_FIDELITY in tt/xtts_gpt_block.py,
-# _CONV_FIDELITY in tt/xtts_hifigan.py) took e2e spectrogram PCC 0.988 -> 0.997 and cost some speed.
-# These are the previous baselines scaled by the regression measured back-to-back on one host
-# (decode +5.6%, vocoder +26%, setup +6.0%, RTF +6.1%) rather than by absolute numbers off a loaded
-# dev box, so they stay calibrated to whatever machine the originals came from. Nearly all of the
-# RTF cost is decode -- the vocoder is under 2% of replay, so its +26% barely registers.
-EXPECTED_SETUP_S = 0.047
-EXPECTED_DECODE_MS_PER_CODE = 8.58
-EXPECTED_VOCODER_MS_PER_CODE = 0.146
-EXPECTED_RTF = 0.191
+# Measured on Blackhole P150b, warm and uncontended: 188 codes -> 8.725 s audio, setup 43.77 ms,
+# decode 6.267 ms/code, vocoder 0.1094 ms/code, replay 1.243 s, RTF 0.142. A second run of the same
+# seeded input gave decode 6.445 / RTF 0.146, and the 8-point ISL sweep spans decode 6.146-6.268 and
+# RTF 0.142-0.145 -- so ~3% run-to-run spread is normal and MARGIN absorbs it comfortably.
+#
+# These supersede baselines that had been carried forward by scaling rather than re-measured: the
+# earlier numbers predated the paged_fused_update_cache decode KV write and never picked up that
+# win, which left decode gated at 8.58 ms/code against an actual 6.267 -- with MARGIN on top, decode
+# could have regressed ~1.9x before this test failed. Always re-baseline off a fresh measurement.
+#
+# The scaling factors those numbers used (decode +5.6%, vocoder +26%, RTF +6.1% for raising
+# MM_FIDELITY/_CONV_FIDELITY) also do not reproduce here. A/B on one P150b, same binary and seeded
+# input, only the two fidelity constants changed, 2 runs each: decode +3.1%, vocoder +9.3%, setup
+# +1.9%, RTF +2.9% (0.140 -> 0.144) -- decode and RTF within this test's own run-to-run spread.
+EXPECTED_SETUP_S = 0.044
+EXPECTED_DECODE_MS_PER_CODE = 6.27
+EXPECTED_VOCODER_MS_PER_CODE = 0.110
+EXPECTED_RTF = 0.142
 EXPECTED_COMPILE_S = 44.0
 
 
