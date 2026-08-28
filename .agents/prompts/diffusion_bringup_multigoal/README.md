@@ -8,7 +8,10 @@ has no KV-cache, paged decode, or token loop).
 Launch with the existing runner pointed at this directory:
 
 ```bash
-.agents/scripts/multigoal --prompts-dir .agents/prompts/diffusion_bringup_multigoal
+.agents/scripts/multigoal \
+   --replace DIFFUSION_MODEL=org/Your-Model-Here \
+   --replace MODEL_DIR=models/tt_dit/models/transformers/org_your_model_here \
+   .agents/prompts/diffusion_bringup_multigoal/*.txt
 ```
 
 Each `NN-<stage>.txt` is a `/goal` that invokes the relevant diffusion skill(s) and states checkable
