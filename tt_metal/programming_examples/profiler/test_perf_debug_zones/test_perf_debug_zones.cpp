@@ -19,6 +19,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -267,6 +268,10 @@ int main(int argc, char** argv) {
     uint32_t emit_markers = 0;  // --markers 1: emit the point-marker trio (Flag/Data/Iter) per iteration.
                                 // OFF by default: it exercises every wire shape (PP_EVENT has no other
                                 // emitter) but costs ~21% of wire volume, which skews knee/onset numbers.
+    uint32_t all_devices = 0;   // --all-devices 1: open the FULL system mesh instead of a unit mesh on
+                                // device 0. The workload is already a MeshWorkload over the mesh own
+                                // shape, so this alone fans it out to every device -- which is what makes
+                                // the capture exercise the cross-device wall-clock sync.
     uint32_t empty_mode = 0;    // --empty 1: unrolled EMPTY zones + stats consumer -> profiler self-overhead
                                 // --empty 2: same, plus ONE extra wall-clock read pair per zone BODY -- the
                                 //            duration delta vs --empty 1 prices read_wall_clock itself
@@ -288,6 +293,8 @@ int main(int argc, char** argv) {
             empty_mode = v;
         } else if (a == "--markers") {
             emit_markers = v;
+        } else if (a == "--all-devices") {
+            all_devices = v;
         }
     }
 
@@ -314,8 +321,16 @@ int main(int argc, char** argv) {
     const size_t num_cqs = (nq != nullptr && *nq != '\0') ? (size_t)std::strtoul(nq, nullptr, 10) : 1;
 
     int device_id = 0;
-    std::shared_ptr<distributed::MeshDevice> mesh_device =
-        distributed::MeshDevice::create_unit_mesh(device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    if (all_devices != 0) {
+        const auto shape = distributed::SystemMesh::instance().shape();
+        printf("[perf-debug zones]   --all-devices: opening system mesh %ux%u\n", (unsigned)shape[0], (unsigned)shape[1]);
+        mesh_device = distributed::MeshDevice::create(
+            distributed::MeshDeviceConfig(shape), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    } else {
+        mesh_device = distributed::MeshDevice::create_unit_mesh(
+            device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, num_cqs);
+    }
     if (clkprobe) {
         clock_probe(mesh_device);
         mesh_device->close();

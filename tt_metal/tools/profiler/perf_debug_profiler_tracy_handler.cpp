@@ -125,6 +125,10 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     if (auto it = tracy_contexts_.find(key); it != tracy_contexts_.end()) {
         return it->second;
     }
+    // Rename ETH rows so they are findable: without this they are formatted exactly like a Tensix core
+    // and the sync lanes disappear into a list of otherwise-identical "Physical (x,y)" rows.
+    const bool is_eth = eth_cores_.count(key) != 0;
+    const std::string ctx_name = is_eth ? fmt::format("Device: {} ETH ({},{})", chip_id, core_x, core_y) : name;
     ChipAnchor a{};
     if (!LookupAnchorLocked(chip_id, core_x, core_y, a)) {
         return nullptr;  // device was never AddDevice'd
@@ -136,12 +140,67 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     // Tracy GUI does NOT show a per-context "Drift (ns/s)/Auto" control under every core. Timestamps are
     // host-rebased, so the anchor mapping is exact and no drift correction is wanted.
     TracyTTContextPopulateCalibrated(ctx, a.host_start, a.first_timestamp, a.frequency);
-    TracyTTContextName(ctx, name.c_str(), name.size());
+    TracyTTContextName(ctx, ctx_name.c_str(), ctx_name.size());
     tracy_contexts_[key] = ctx;
+    EmitSyncMarkerLocked(chip_id, ctx, core_x, core_y);
     return ctx;
 #else
     return nullptr;
 #endif
+}
+
+void PerfDebugTracyHandler::SetSyncMarker(
+    uint32_t chip_id, uint64_t device_ticks, int64_t closure_cycles, double ppm_vs_root) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sync_markers_[chip_id] = SyncMarker{device_ticks, closure_cycles, ppm_vs_root};
+}
+
+void PerfDebugTracyHandler::EmitSyncMarkerLocked(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] TracyTTCtx ctx,
+    [[maybe_unused]] uint32_t core_x,
+    [[maybe_unused]] uint32_t core_y) {
+#if defined(TRACY_ENABLE)
+    if (eth_cores_.count(ContextKey(chip_id, core_x, core_y)) != 0) {
+        return;  // an eth lane: its own raw samples say more than a derived anchor would
+    }
+    const auto it = sync_markers_.find(chip_id);
+    if (it == sync_markers_.end() || ctx == nullptr) {
+        return;  // no sync for this chip: better a lane with no marker than a marker with no meaning
+    }
+    // BRISC ONLY. Stamping all five lanes put five identical markers on every core, which reads as
+    // clutter across every RISC row and adds nothing: the anchor is a property of the CORE, not the lane.
+    {
+        const tracy::RiscType r = tracy::RiscType::BRISC;
+        tracy::TTDeviceMarker marker;
+        marker.chip_id = chip_id;
+        marker.core_x = core_x;
+        marker.core_y = core_y;
+        marker.risc = r;
+        marker.timestamp = it->second.device_ticks;
+        marker.runtime_host_id = 0;
+        marker.marker_type = tracy::TTDeviceMarkerType::DATA;
+        // ONE name for every device on purpose: identical names are what let the eye (and a filter) pick the
+        // whole cross-device column out at once. Which device it belongs to is already the row it sits on.
+        marker.marker_name = "SYNC_ANCHOR";
+        marker.file = "eth_wallclock_sync";
+        marker.line = 0;
+        // Tooltip reads these as Data / Data high: the alignment ACCURACY bound, and this device's rate.
+        marker.data = static_cast<uint64_t>(it->second.closure_cycles);
+        marker.data_high = static_cast<uint64_t>(static_cast<int64_t>(it->second.ppm_vs_root * 1000.0));
+        TracyTTPushMarker(ctx, marker);
+    }
+#endif
+}
+
+bool PerfDebugTracyHandler::IsEthCore(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return eth_cores_.count(ContextKey(chip_id, noc0_x, noc0_y)) != 0;
+}
+
+void PerfDebugTracyHandler::RegisterEthCore(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    eth_cores_.insert(ContextKey(chip_id, noc0_x, noc0_y));
 }
 
 void PerfDebugTracyHandler::SetDriscRole(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y, const char* role) {
@@ -186,7 +245,10 @@ void PerfDebugTracyHandler::HandleWorkerZone([[maybe_unused]] const perf_debug::
     tm.chip_id = zone.chip_id;
     tm.core_x = zone.core_noc0_x;
     tm.core_y = zone.core_noc0_y;
-    tm.risc = kRisc[zone.risc % 5];
+    // An ETH core has no Tensix RISCs: kRisc would label its row BRISC, naming hardware the tile does
+    // not have. ERISC is the lane these samples actually ran on.
+    tm.risc = IsEthCore(zone.chip_id, zone.core_noc0_x, zone.core_noc0_y) ? tracy::RiscType::ERISC
+                                                                         : kRisc[zone.risc % 5];
     const uint32_t thread = tm.get_thread_id();
 
     // Colour resolution, matching the legacy wire's getMarkerColor exactly (TracyTTDevice.hpp): an
@@ -252,7 +314,8 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
     marker.chip_id = event.chip_id;
     marker.core_x = event.core_noc0_x;
     marker.core_y = event.core_noc0_y;
-    marker.risc = kRisc[event.risc % 5];
+    marker.risc = IsEthCore(event.chip_id, event.core_noc0_x, event.core_noc0_y) ? tracy::RiscType::ERISC
+                                                                                : kRisc[event.risc % 5];
     marker.timestamp = event.timestamp;
     marker.runtime_host_id = event.runtime_host_id;
     // Two kinds, by payload -- every id on this wire is a compile-time structural id, so there is no

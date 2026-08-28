@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cmath>
 #include <queue>
 #include "tools/profiler/perf_debug_profiler.hpp"
 
@@ -776,6 +777,17 @@ uint32_t eth_sync_samples() {
     }();
     return v;
 }
+// How many REDUNDANT (non-tree) links to measure for the closure self-check. The spanning tree needs only
+// N-1 edges; any extra link between two already-synced devices is a free accuracy check, because its offset
+// is predictable from the tree and the two numbers must agree. Costs one link measurement each (~65 ms), so
+// it is capped rather than exhaustive. 0 disables.
+uint32_t eth_sync_closure_links() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_CLOSURE");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 4u;
+    }();
+    return v;
+}
 uint32_t eth_sync_gap_us() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_GAP_US");
@@ -789,6 +801,135 @@ uint32_t eth_sync_gap_us() {
 // n devices, not one per link. Every extra edge would cost another ~n_samples * gap of bring-up time and
 // tell us something we can already derive, so the tree is what gets measured and any remaining edges stay
 // available as a consistency check when we want one.
+// Draw the eth sync's RAW round trips onto the two eth cores' own Tracy lanes: the sender's [t0,t2] as a
+// zone, the peer's t1 as a marker. This is the one alignment indicator in the trace that is NOT derived
+// from the anchors -- SYNC_ANCHOR markers are computed FROM the fit, so they line up by construction and
+// cannot contradict a wrong offset. These can: each is a measurement on its own device's clock, rendered
+// through that device's own anchor, so if the anchors are right the peer's t1 lands INSIDE the sender's
+// zone. A t1 outside its zone is a causality violation, and therefore proof the alignment is wrong.
+//
+// Scale warning for whoever reads this in the GUI: the round trip is ~858 cycles (~0.64 us) against a
+// multi-millisecond capture, so it is sub-pixel until you zoom to microseconds. It is a check you run, not
+// one you notice.
+void PerfDebugProfiler::emit_eth_sync_lanes() {
+    if (tracy_ == nullptr || eth_sync_traces_.empty()) {
+        return;
+    }
+    // Both eth cores carry real samples that PREDATE the anchor instant, and Tracy wants per-lane arrival
+    // in non-decreasing time -- so the anchor marker must not be minted first on these cores.
+    for (const auto& t : eth_sync_traces_) {
+        tracy_->RegisterEthCore(t.sender_chip, t.snd_x, t.snd_y);
+        tracy_->RegisterEthCore(t.receiver_chip, t.rcv_x, t.rcv_y);
+    }
+
+    // ---- PER-ETH-CORE ANCHOR (the ORIGIN) ----
+    // An eth tile runs at the SAME RATE as a Tensix worker but does NOT share its origin: the two domains
+    // bank different counter totals (the same duty-cycle effect that forced the per-DRAM-core anchor).
+    // Measured on bh-31: an eth tile had banked ~53 MINUTES more than its chip's worker, so on the chip
+    // anchor these rows rendered ~25 minutes right of the workload with their durations still exactly
+    // right -- the identical signature to the DRAM case. The anchors below were captured AT SYNC TIME
+    // (see EthSyncTrace); re-measuring them here instead cost 36 us of extrapolation error.
+    std::set<uint64_t> anchored;
+    auto anchor_eth = [&](uint32_t chip, uint32_t nx, uint32_t ny, bool valid, int64_t host_anchor,
+                          uint64_t dev_at_anchor) {
+        const uint64_t key = (static_cast<uint64_t>(chip) << 40) | (static_cast<uint64_t>(nx) << 20) | ny;
+        if (!anchored.insert(key).second) {
+            return;
+        }
+        double freq = 0.0;
+        for (const auto& d : devices_) {
+            if (d.chip_id == chip) {
+                freq = d.freq_ghz;
+                break;
+            }
+        }
+        if (!valid || freq <= 0.0) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync lanes: no per-core anchor for chip {} eth NOC0 ({},{}); its "
+                "rows will inherit the WORKER anchor and sit far from the workload",
+                chip,
+                nx,
+                ny);
+            return;
+        }
+        tracy_->AddCore(chip, nx, ny, host_anchor, static_cast<double>(dev_at_anchor), freq);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth core anchor: chip {} NOC0 ({},{}) device_time_at_anchor={} cycles on "
+            "the chip's shared {:.6f} GHz, offset vs the chip's WORKER anchor {:+.3f} ms [eth and Tensix "
+            "share a rate, not an origin]",
+            chip,
+            nx,
+            ny,
+            dev_at_anchor,
+            freq,
+            (static_cast<double>(dev_at_anchor) - static_cast<double>(root_dev_at_anchor_)) / freq / 1e6);
+    };
+    for (const auto& t : eth_sync_traces_) {
+        anchor_eth(t.sender_chip, t.snd_x, t.snd_y, t.snd_anchor_valid, t.snd_host_anchor, t.snd_dev_at_anchor);
+        anchor_eth(t.receiver_chip, t.rcv_x, t.rcv_y, t.rcv_anchor_valid, t.rcv_host_anchor, t.rcv_dev_at_anchor);
+    }
+
+    static constexpr std::string_view kRttName = "ETH_SYNC_RTT";
+    static constexpr std::string_view kEchoName = "ETH_SYNC_ECHO";
+    size_t n_zones = 0, n_marks = 0;
+    // Traces are stored in measurement order and each trace's trips are chronological, so pushing in this
+    // order is already non-decreasing per lane.
+    for (const auto& t : eth_sync_traces_) {
+        for (const auto& tr : t.trips) {
+            perf_debug::WorkerZonePacket z;
+            z.chip_id = t.sender_chip;
+            z.core_virtual_x = t.snd_x;
+            z.core_virtual_y = t.snd_y;
+            z.core_noc0_x = t.snd_x;
+            z.core_noc0_y = t.snd_y;
+            z.risc = 0;
+            z.timer_id = 0;
+            z.name = kRttName;
+            z.start = tr[0];
+            z.end = tr[2];
+            z.color = 0x27AE60;
+            tracy_->HandleWorkerZone(z);
+            ++n_zones;
+        }
+        for (const auto& tr : t.trips) {
+            perf_debug::WorkerEventPacket e;
+            e.chip_id = t.receiver_chip;
+            e.core_virtual_x = t.rcv_x;
+            e.core_virtual_y = t.rcv_y;
+            e.core_noc0_x = t.rcv_x;
+            e.core_noc0_y = t.rcv_y;
+            e.risc = 0;
+            e.id = 0;
+            e.name = kEchoName;
+            e.timestamp = tr[1];
+            e.num_values = 0;
+            tracy_->HandleWorkerEvent(e);
+            ++n_marks;
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync lanes: {} -> {} drawn on eth NOC0 ({},{}) and ({},{}), {} round "
+            "trip(s); the peer's ETH_SYNC_ECHO must fall INSIDE the sender's ETH_SYNC_RTT zone",
+            t.sender_chip,
+            t.receiver_chip,
+            t.snd_x,
+            t.snd_y,
+            t.rcv_x,
+            t.rcv_y,
+            t.trips.size());
+    }
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] eth sync lanes: {} zone(s) + {} marker(s) across {} link(s) -- RAW samples, "
+        "not fitted values, so they can contradict the anchors (SYNC_ANCHOR cannot)",
+        n_zones,
+        n_marks,
+        eth_sync_traces_.size());
+    eth_sync_traces_.clear();
+}
+
 void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     if (!eth_sync_enabled()) {
         return;
@@ -803,6 +944,53 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
         return;  // nothing to sync against
     }
 
+    // For translating eth logical coords -> NOC0, the coordinate space every Tracy row is keyed by.
+    const auto eth_context_id = mesh_device->impl().get_context_id();
+    auto& eth_cluster = MetalContext::instance(eth_context_id).get_cluster();
+    // Bounded on purpose: 256 samples x 2 rows per link is plenty to see the pattern, and the point of
+    // these rows is the causality invariant, not volume.
+    constexpr size_t kMaxEthTrips = 256;
+    auto stash_trace = [&](IDevice* sd, const CoreCoord& s_eth, IDevice* rd, const CoreCoord& r_eth,
+                           const eth_sync::LinkSyncResult& res) {
+        if (res.trips.empty()) {
+            return;
+        }
+        const CoreCoord sn = eth_cluster.get_physical_coordinate_from_logical_coordinates(
+            sd->id(), s_eth, CoreType::ETH, /*no_warn=*/true);
+        const CoreCoord rn = eth_cluster.get_physical_coordinate_from_logical_coordinates(
+            rd->id(), r_eth, CoreType::ETH, /*no_warn=*/true);
+        EthSyncTrace t;
+        t.sender_chip = static_cast<uint32_t>(sd->id());
+        t.receiver_chip = static_cast<uint32_t>(rd->id());
+        t.snd_x = static_cast<uint32_t>(sn.x);
+        t.snd_y = static_cast<uint32_t>(sn.y);
+        t.rcv_x = static_cast<uint32_t>(rn.x);
+        t.rcv_y = static_cast<uint32_t>(rn.y);
+        const CoreCoord sv = eth_cluster.get_virtual_coordinate_from_logical_coordinates(
+            sd->id(), s_eth, CoreType::ETH);
+        const CoreCoord rv = eth_cluster.get_virtual_coordinate_from_logical_coordinates(
+            rd->id(), r_eth, CoreType::ETH);
+        t.snd_vx = static_cast<uint32_t>(sv.x);
+        t.snd_vy = static_cast<uint32_t>(sv.y);
+        t.rcv_vx = static_cast<uint32_t>(rv.x);
+        t.rcv_vy = static_cast<uint32_t>(rv.y);
+        // Anchor both eth tiles NOW, microseconds-to-milliseconds from their own samples, not seconds.
+        const PerfDebugSync sa = sync_device_clock(eth_cluster, static_cast<uint32_t>(sd->id()), sv);
+        const PerfDebugSync ra = sync_device_clock(eth_cluster, static_cast<uint32_t>(rd->id()), rv);
+        t.snd_anchor_valid = sa.valid;
+        t.rcv_anchor_valid = ra.valid;
+        t.snd_host_anchor = sa.host_anchor;
+        t.rcv_host_anchor = ra.host_anchor;
+        t.snd_dev_at_anchor = sa.device_at_anchor;
+        t.rcv_dev_at_anchor = ra.device_at_anchor;
+        const size_t n = std::min(res.trips.size(), kMaxEthTrips);
+        t.trips.reserve(n);
+        for (size_t i = 0; i < n; i++) {
+            t.trips.push_back({res.trips[i].t0, res.trips[i].t1, res.trips[i].t2});
+        }
+        eth_sync_traces_.push_back(std::move(t));
+    };
+
     eth_sync::LinkSyncConfig cfg;
     cfg.n_samples = eth_sync_samples();
     cfg.gap_us = eth_sync_gap_us();
@@ -810,6 +998,13 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
     // BFS from the root so every device is reached exactly once, over whichever link the cluster reports
     // first for that pair. Which physical link is picked matters at the nanosecond level (they are not
     // identical lengths), so it is logged.
+    // Unordered (min,max) chip pairs already measured, so the closure pass below only measures links
+    // that close a CYCLE rather than re-measuring a tree edge from the other side.
+    auto pair_key = [](uint32_t x, uint32_t y) {
+        return (static_cast<uint64_t>(std::min(x, y)) << 32) | static_cast<uint64_t>(std::max(x, y));
+    };
+    std::set<uint64_t> measured_pairs;
+
     std::set<int> visited;
     std::queue<IDevice*> q;
     eth_sync_root_chip_ = static_cast<uint32_t>(devices.front()->id());
@@ -883,16 +1078,155 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
             }
             if (ls.valid) {
                 eth_sync_parent_edge_[ls.receiver_chip] = link_syncs_.size();
+                stash_trace(snd, ec, rcv, std::get<1>(peer), r);
             }
+            measured_pairs.insert(pair_key(ls.sender_chip, ls.receiver_chip));
             link_syncs_.push_back(ls);
         }
     }
+    // ---- CLOSURE SELF-CHECK ----
+    // Every link measured above is a TREE edge, so nothing so far cross-checks anything: a wrong edge just
+    // silently moves its whole subtree. A link between two devices the tree already relates is different --
+    // its offset is PREDICTED by composing the tree, so measuring it tests the composition end to end over
+    // a path that shares no link with the prediction. The disagreement ("closure") is the one number here
+    // that is an accuracy bound rather than a fit statistic: residual_rms says the line fits its own
+    // samples, closure says two independent routes to the same clock agree.
+    //
+    // Both directions are composed in DIFFERENCES from each edge's reference instant, for the same reason
+    // eth_sync_anchor_for is: the clocks sit near 1e13 cycles, where a double holds only ~0.001 cycle.
+    auto edge_to_parent = [](const LinkSync& e, uint64_t t_child) {
+        // Inverse of the parent->child map. Forward is t_c = ref + u*rate + offset with u = t_p - ref.
+        const double u = (static_cast<double>(static_cast<int64_t>(t_child - e.ref_mid)) -
+                          static_cast<double>(e.offset)) / e.rate;
+        return static_cast<uint64_t>(static_cast<int64_t>(e.ref_mid) + std::llround(u));
+    };
+    auto to_root = [&](uint32_t chip, uint64_t t_chip, uint64_t& t_root) {
+        uint32_t cur = chip;
+        uint64_t t = t_chip;
+        for (size_t guard = 0; cur != eth_sync_root_chip_; ++guard) {
+            const auto it = eth_sync_parent_edge_.find(cur);
+            if (it == eth_sync_parent_edge_.end() || guard > link_syncs_.size()) {
+                return false;
+            }
+            const auto& e = link_syncs_[it->second];
+            t = edge_to_parent(e, t);
+            cur = e.sender_chip;
+        }
+        t_root = t;
+        return true;
+    };
+
+    uint32_t closure_done = 0;
+    int64_t worst_closure = 0;
+    uint32_t worst_a = 0, worst_b = 0;
+    for (IDevice* snd : devices) {
+        if (closure_done >= eth_sync_closure_links()) {
+            break;
+        }
+        for (const CoreCoord& ec : snd->get_active_ethernet_cores(true)) {
+            if (closure_done >= eth_sync_closure_links()) {
+                break;
+            }
+            std::tuple<ChipId, CoreCoord> peer;
+            try {
+                peer = snd->get_connected_ethernet_core(ec);
+            } catch (const std::exception&) {
+                continue;
+            }
+            const auto peer_id = static_cast<uint32_t>(std::get<0>(peer));
+            const auto snd_id = static_cast<uint32_t>(snd->id());
+            if (measured_pairs.count(pair_key(snd_id, peer_id)) != 0) {
+                continue;  // a tree edge, or a pair already closed
+            }
+            IDevice* rcv = nullptr;
+            for (IDevice* d : devices) {
+                if (static_cast<uint32_t>(d->id()) == peer_id) {
+                    rcv = d;
+                    break;
+                }
+            }
+            // Both ends must already hang off the tree, or there is nothing to predict against.
+            if (rcv == nullptr || eth_sync_parent_edge_.count(peer_id) == 0) {
+                continue;
+            }
+            measured_pairs.insert(pair_key(snd_id, peer_id));
+
+            const auto r = eth_sync::measure_link(snd, ec, rcv, std::get<1>(peer), cfg);
+            if (!r.solution.valid) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] eth sync CLOSURE {} -> {} could not be measured ({}, {}); "
+                    "skipping this check",
+                    snd_id,
+                    peer_id,
+                    eth_sync::status_name(r.sender_status),
+                    eth_sync::status_name(r.receiver_status));
+                continue;
+            }
+
+            uint64_t t_root = 0;
+            uint64_t pred_b = 0, pred_a = 0;
+            double rate_b = 1.0, rate_a = 1.0;
+            if (!to_root(snd_id, r.solution.mid_ref, t_root) ||
+                !eth_sync_anchor_for(peer_id, t_root, pred_b, rate_b) ||
+                !eth_sync_anchor_for(snd_id, t_root, pred_a, rate_a)) {
+                continue;
+            }
+            // Measured: where the redundant link says the peer's clock stood at this same instant.
+            const int64_t meas_b = static_cast<int64_t>(r.solution.mid_ref) + r.solution.offset;
+            stash_trace(snd, ec, rcv, std::get<1>(peer), r);
+            const int64_t closure = meas_b - static_cast<int64_t>(pred_b);
+            const double rate_pred = rate_b / rate_a;
+            ++closure_done;
+            // `closure_done == 1` seeds it: a FIRST result of exactly 0 would fail the > test and leave
+            // the reported pair as 0/0, which reads like a real pair rather than "unset".
+            if (closure_done == 1 || std::llabs(closure) > std::llabs(worst_closure)) {
+                worst_closure = closure;
+                worst_a = snd_id;
+                worst_b = peer_id;
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync CLOSURE {} -> {} via eth ({},{}): {:+} cycles vs the "
+                "tree-composed prediction, rate {:+.2f} ppm vs {:+.2f} ppm predicted (residual {:.1f} "
+                "cycles) [independent route; small = the composition is right]",
+                snd_id,
+                peer_id,
+                ec.x,
+                ec.y,
+                closure,
+                (r.solution.rate - 1.0) * 1e6,
+                (rate_pred - 1.0) * 1e6,
+                r.solution.residual_rms);
+        }
+    }
+    if (closure_done != 0) {
+        eth_sync_worst_closure_ = worst_closure;
+        eth_sync_closure_valid_ = true;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync ACCURACY: worst closure {:+} cycles over {} independent "
+            "route(s) ({} vs {}) -- this bounds cross-device alignment error; residual_rms only bounds "
+            "each link's own fit",
+            worst_closure,
+            closure_done,
+            worst_a,
+            worst_b);
+    } else if (eth_sync_closure_links() != 0) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync: no redundant link available, so cross-device alignment is "
+            "UNCHECKED (a tree alone cannot detect a bad edge); topology has no cycle among synced devices");
+    }
+
     const auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_start).count();
     log_info(
         tt::LogMetal,
-        "[perf-debug profiler] eth sync: {} link(s) measured across {} devices in {} ms ({} samples {} us apart)",
+        "[perf-debug profiler] eth sync: {} tree link(s) + {} closure link(s) measured across {} devices "
+        "in {} ms ({} samples {} us apart)",
         link_syncs_.size(),
+        closure_done,
         devices.size(),
         ms,
         cfg.n_samples,
@@ -990,6 +1324,13 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             ctx.freq_ghz = root_freq_ghz_ * derived_rate;
             tracy_->AddDevice(
                 ctx.chip_id, root_host_anchor_, static_cast<double>(derived_clock), ctx.freq_ghz);
+            // Same PHYSICAL instant as every other device's marker (it is the root's host anchor mapped
+            // onto this chip's clock), so the markers line up vertically iff the anchors are right.
+            tracy_->SetSyncMarker(
+                ctx.chip_id,
+                derived_clock,
+                eth_sync_closure_valid_ ? eth_sync_worst_closure_ : 0,
+                (derived_rate - 1.0) * 1e6);
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} anchored via eth to root {}: device clock {} at the root's "
@@ -1023,6 +1364,13 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             }
             tracy_->AddDevice(
                 ctx.chip_id, sync.host_anchor, static_cast<double>(sync.device_at_anchor), sync.frequency);
+            // The root's own anchor IS the common instant every derived device was mapped onto, so it gets
+            // the same marker with rate 0 ppm -- it is the reference the others are quoted against.
+            tracy_->SetSyncMarker(
+                ctx.chip_id,
+                sync.device_at_anchor,
+                eth_sync_closure_valid_ ? eth_sync_worst_closure_ : 0,
+                0.0);
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} clock sync: frequency={:.6f} GHz (aiclk reports {:.6f}), "
@@ -1242,6 +1590,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         perf_debug::attach_registered_consumers(*receiver_);
         receiver_->start();
     }
+    // After every device has its anchor: the eth samples are rendered through those anchors, so drawing
+    // them any earlier would map them with an anchor that does not exist yet.
+    emit_eth_sync_lanes();
     if (!devices_.empty()) {
         log_info(
             tt::LogMetal,

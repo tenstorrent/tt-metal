@@ -12,6 +12,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -67,6 +68,27 @@ public:
     // dangling one is read after free. Called once per drainer at boot, before any sample arrives.
     void SetDriscRole(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y, const char* role);
 
+    // Record the per-chip SYNC ANCHOR, published as a point marker on EVERY lane of every context of that
+    // chip (see EmitSyncMarkerLocked). `device_ticks` is the chip's own clock at the instant the sync says
+    // is COMMON to all devices, so on an aligned capture the markers form one vertical line across every
+    // device; a device whose anchor is wrong pulls its whole column sideways by exactly its error. That is
+    // the indicator the trace itself carries -- the closure number lives in the log, but the trace shows it.
+    // Must be called before that chip's contexts are created (they are created lazily, on first zone).
+    void SetSyncMarker(uint32_t chip_id, uint64_t device_ticks, int64_t closure_cycles, double ppm_vs_root);
+
+    // Declare a core an ETHERNET core, which does two things a plain suppression could not:
+    //  - its Tracy row is NAMED "ETH", so the sync lanes are findable among ~dozens of Tensix rows
+    //    (they are otherwise formatted identically and simply vanish into the list);
+    //  - the SYNC_ANCHOR marker is skipped on it, because its raw samples are stamped EARLIER than the
+    //    anchor instant and Tracy requires per-lane arrival in non-decreasing time.
+    // Must be called before the core's first zone/marker: a context's name is set once, at creation.
+    void RegisterEthCore(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y);
+
+    // True once RegisterEthCore has been called for this core. Used to pick the ERISC lane: an eth core has
+    // no BRISC/NCRISC/TRISC, so rendering its rows with Tensix lane names labels them as hardware that does
+    // not exist on that tile.
+    bool IsEthCore(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y);
+
     // Push one point-in-time event onto its core's Tracy lane. Unlike a zone this has no START/END pair,
     // so it bypasses the lane_depth_ bookkeeping entirely -- it cannot orphan or unbalance a stack.
     void HandleWorkerEvent(const perf_debug::WorkerEventPacket& event);
@@ -83,6 +105,19 @@ private:
     // here: the client drains the lock-free queues BEFORE the serial one each pass, so mixing queues
     // makes creation/use ordering racy -- measured as an intermittent tracy-capture segfault.
     TracyTTCtx GetOrCreateContext(uint32_t chip_id, uint32_t core_x, uint32_t core_y, const std::string& name);
+
+    // chip -> the anchor marker to stamp on each new context's lanes. Empty until SetSyncMarker.
+    struct SyncMarker {
+        uint64_t device_ticks = 0;
+        int64_t closure_cycles = 0;
+        double ppm_vs_root = 0.0;
+    };
+    std::unordered_map<uint32_t, SyncMarker> sync_markers_;
+    std::unordered_set<uint64_t> eth_cores_;
+    // Stamp the chip's sync anchor on all 5 RISC lanes of a freshly created context. Caller holds mutex_,
+    // and calls it BEFORE any zone reaches the context, which is what keeps the marker's earlier timestamp
+    // consistent with Tracy's per-lane non-decreasing arrival contract.
+    void EmitSyncMarkerLocked(uint32_t chip_id, TracyTTCtx ctx, uint32_t core_x, uint32_t core_y);
 
     // ContextKey -> immortal role string ("FILLER"/"MOVER"). Empty for any core never registered, which is
     // why the label falls back to bare coordinates rather than asserting.

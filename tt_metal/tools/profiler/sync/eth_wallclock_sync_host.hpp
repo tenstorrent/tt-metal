@@ -53,6 +53,10 @@ struct LinkSyncConfig {
 
 struct LinkSyncResult {
     EthSyncSolution solution;
+    // The RAW round trips behind the solution, kept so a caller can render them. They are MEASUREMENTS,
+    // not products of the fit, which is the whole reason they are worth showing: a fitted anchor cannot
+    // contradict itself, but a raw t1 landing outside its own [t0,t2] contradicts the alignment outright.
+    std::vector<Trip> trips;
     uint32_t sender_status = ETH_SYNC_IDLE;
     uint32_t receiver_status = ETH_SYNC_IDLE;
     size_t sender_samples = 0;
@@ -184,7 +188,8 @@ inline LinkSyncResult measure_link(
 
     const size_t n = snd_s.size() < rcv_s.size() ? snd_s.size() : rcv_s.size();
     if (n >= 4) {
-        out.solution = solve(build_trips(snd_s, rcv_s, n));
+        out.trips = build_trips(snd_s, rcv_s, n);
+        out.solution = solve(out.trips);
     }
     return out;
 }

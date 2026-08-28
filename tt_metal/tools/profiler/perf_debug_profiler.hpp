@@ -23,6 +23,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <array>
 #include <vector>
 
 #include "hostdevcommon/profiler_common.h"
@@ -204,6 +205,37 @@ private:
     // it from its parent. The root has no entry.
     std::unordered_map<uint32_t, size_t> eth_sync_parent_edge_;
     uint32_t eth_sync_root_chip_ = 0;
+
+    // Worst redundant-link closure from sync_devices_over_eth(), kept so the Tracy SYNC_ANCHOR marker can
+    // publish the accuracy bound into the trace itself instead of leaving it only in the run log. `_valid`
+    // is false when the topology had no cycle, which is NOT the same as a closure of zero.
+    // Raw round trips per measured link, kept until the anchors exist so they can be drawn on the two
+    // ETH cores' own Tracy lanes: the sender's [t0,t2] as a zone, the receiver's t1 as a marker inside it.
+    // Unlike SYNC_ANCHOR (which is derived from the anchors and so aligns by construction), these are
+    // measurements -- a t1 that renders OUTSIDE its zone is proof the alignment is wrong.
+    struct EthSyncTrace {
+        uint32_t sender_chip = 0;
+        uint32_t receiver_chip = 0;
+        uint32_t snd_x = 0, snd_y = 0;  // NOC0 coords of the sender's eth core
+        uint32_t rcv_x = 0, rcv_y = 0;  // NOC0 coords of the receiver's eth core
+        uint32_t snd_vx = 0, snd_vy = 0;  // VIRTUAL coords, for reading that tile's own wall clock
+        uint32_t rcv_vx = 0, rcv_vy = 0;
+        // Each eth core's own host<->device anchor, captured AT SYNC TIME rather than later. Anchoring far
+        // from the samples is not free: the anchor is a point plus a slope, and the slope carries a few ppm
+        // of error, so extrapolating back N seconds costs N * ppm. Measured the hard way -- anchoring 7.55 s
+        // after the samples put the peer's echo 36 us OUTSIDE its own round trip (4.8 ppm x 7.55 s), which
+        // discards the sync's 1.9 ns precision by four orders of magnitude.
+        int64_t snd_host_anchor = 0, rcv_host_anchor = 0;
+        uint64_t snd_dev_at_anchor = 0, rcv_dev_at_anchor = 0;
+        bool snd_anchor_valid = false, rcv_anchor_valid = false;
+        std::vector<std::array<uint64_t, 3>> trips;  // t0 (snd clock), t1 (rcv clock), t2 (snd clock)
+    };
+    std::vector<EthSyncTrace> eth_sync_traces_;
+    // Draw the stored traces onto eth lanes. Called once, after every device has its anchor.
+    void emit_eth_sync_lanes();
+
+    int64_t eth_sync_worst_closure_ = 0;
+    bool eth_sync_closure_valid_ = false;
 
     // The ROOT's host<->device fit, kept so every other device can hang off it instead of measuring its
     // own. Plain fields rather than the PerfDebugSync struct, which is .cpp-local.
