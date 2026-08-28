@@ -8,7 +8,11 @@ import stat
 import time
 
 from scripts.tt_hw_planner import cc_harness
-from scripts.tt_hw_planner.cc_harness import _resolve_agent_timeout_s, run_cc_loop
+from scripts.tt_hw_planner.cc_harness import (
+    _DEFAULT_AGENT_TIMEOUT_S,
+    _resolve_agent_timeout_s,
+    run_cc_loop,
+)
 
 
 def _script(tmp_path, name, body):
@@ -20,7 +24,12 @@ def _script(tmp_path, name, body):
 
 def test_resolve_timeout_env_and_defaults(monkeypatch):
     monkeypatch.delenv("TT_HW_PLANNER_CC_AGENT_TIMEOUT_S", raising=False)
-    assert _resolve_agent_timeout_s(None) == 3600
+    # Asserted against the constant, not a repeated literal, so raising the default is a one-line
+    # change. It was 3600s; an hour is shorter than a legitimate round on a large model (a FLUX.2
+    # e2e suite is ~13 min per attempt and the agent runs it repeatedly), so the watchdog was
+    # killing rounds that had already passed instead of catching wedged ones.
+    assert _resolve_agent_timeout_s(None) == _DEFAULT_AGENT_TIMEOUT_S
+    assert _DEFAULT_AGENT_TIMEOUT_S > 3600, "must exceed one legitimate long round"
     assert _resolve_agent_timeout_s(5) == 5
     assert _resolve_agent_timeout_s(0) is None
     assert _resolve_agent_timeout_s(-1) is None

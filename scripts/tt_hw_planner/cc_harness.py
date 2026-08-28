@@ -152,15 +152,32 @@ def gate_status(
     }
 
 
+# Per-round wall-clock budget for one `claude -p` invocation, when the caller names none.
+#
+# This is a WEDGE detector, not a work budget: it exists to kill an agent that has stopped making
+# progress, and every second under a legitimate round's length turns it into a work budget instead.
+# The old hour assumed a round wraps roughly one ~1800s device pytest. A round on a large model does
+# not: FLUX.2-klein-9B's e2e suite alone runs ~13 min per attempt and the agent runs it repeatedly, so
+# a round that had already reached "54 passed, 0 failed" was killed mid-write-up for exceeding the
+# hour, and the restarted round then re-ran the tests it had already passed. Two such strikes abandon
+# the loop, so the cap was ending healthy runs rather than catching wedged ones.
+#
+# Sized so that only a genuinely stuck agent reaches it. The cost of it being generous is that a truly
+# wedged agent burns this long before the kill; the cost of it being tight is losing completed work,
+# which is worse and was actually observed. Callers that know their own bound still pass one, and
+# TT_HW_PLANNER_CC_AGENT_TIMEOUT_S overrides it per run.
+_DEFAULT_AGENT_TIMEOUT_S = 72000  # 20h
+
+
 def _resolve_agent_timeout_s(agent_timeout_s: int | None) -> int | None:
     """Per-round wall-clock budget for one `claude -p` invocation. None/<=0 disables the watchdog.
-    Defaults generously (longer than any legitimate round, which can wrap a ~1800s device pytest) so it
-    only fires on a truly wedged agent, and is env-tunable via TT_HW_PLANNER_CC_AGENT_TIMEOUT_S."""
+    Defaults to `_DEFAULT_AGENT_TIMEOUT_S` — long enough that only a wedged agent reaches it — and is
+    env-tunable via TT_HW_PLANNER_CC_AGENT_TIMEOUT_S."""
     if agent_timeout_s is None:
         try:
-            agent_timeout_s = int(os.environ.get("TT_HW_PLANNER_CC_AGENT_TIMEOUT_S", "3600"))
+            agent_timeout_s = int(os.environ.get("TT_HW_PLANNER_CC_AGENT_TIMEOUT_S", str(_DEFAULT_AGENT_TIMEOUT_S)))
         except ValueError:
-            agent_timeout_s = 3600
+            agent_timeout_s = _DEFAULT_AGENT_TIMEOUT_S
     return agent_timeout_s if agent_timeout_s and agent_timeout_s > 0 else None
 
 
