@@ -46,8 +46,7 @@ struct UntilizerCtArgs {
     uint32_t ring_batches;
     uint32_t control_addr;
     uint32_t produced_addr;
-    // Tile geometry. Zero tiles per row means the dispatched buffer is already row-major and there is
-    // nothing to untilize: the batch is then a copy of the pages the walk asked for.
+    // Tile geometry. These cores exist only where there is something to untilize.
     uint32_t tiles_per_row;
     uint32_t tile_bytes;
     uint32_t block_tiles;
@@ -78,7 +77,7 @@ struct UntilizerCtArgs {
         ring_batches(UNT_RING_BATCHES),
         control_addr(plan.control_addr),
         produced_addr(plan.produced_addr),
-        tiles_per_row(op::dispatched_is_tiled(tensor_args) ? op::tiles_per_token_row(tensor_args) : 0),
+        tiles_per_row(op::tiles_per_token_row(tensor_args)),
         tile_bytes(op::tile_size_bytes(tensor_args)),
         block_tiles(op::untilize_block_tiles(tensor_args)) {
         // The own destinations in emission order, which is the order the group walks their runs. Taken from
@@ -145,8 +144,6 @@ struct UntilizerCtArgs {
         tiles_per_row(get_compile_time_arg_val(18)),
         tile_bytes(get_compile_time_arg_val(19)),
         block_tiles(get_compile_time_arg_val(20)) {}
-
-    constexpr bool is_tiled() const { return tiles_per_row != 0; }
 
     static constexpr uint32_t destination_base = UNTILIZER_SCALAR_CT_ARGS;
     static constexpr uint32_t consumer_base = destination_base + get_compile_time_arg_val(10);  // num_destinations
