@@ -9,9 +9,19 @@
 #   - cast back to input dtype; eps = config.layer_norm_eps = 1e-5
 #
 # This is a MEAN-CENTERING LayerNorm — NOT the RMSNorm used across tt_transformers.
-# Weight loading mirrors models/common/rmsnorm.py (SHARD_HEIGHT reshape, replicated
-# row-major weight, cache_file_name) so the on-device weight format matches what the
-# ttnn normalization ops expect on this stack.
+#
+# TP-mesh path (P5b, 2026-08-28): mirrors the proven tt_distributed_rmsnorm wiring
+# (models/tt_transformers/tt/ccl.py) using the layernorm analog ops — verified present
+# in the on-box ttnn build (0.19.0-era, Blackhole firmware 19.11.0):
+#   ttnn.layer_norm_pre_all_gather  -> tt_all_gather(dim=3, cluster_axis=1)
+#   ttnn.layer_norm_post_all_gather (per-device gamma shard)
+# Gamma is sharded per-device via ShardTensor2dMesh(dims=(None, 2)) exactly like
+# models/common/rmsnorm.py weight_distributed. On a multi-device mesh (cluster axis 1
+# width > 1) forward() ALWAYS takes the distributed path — the same choice
+# DistributedNorm makes for the stock blocks on this stack. Plain ttnn.layer_norm
+# remains as the single-device fallback only; NOTE: the plain interleaved op
+# over-allocates L1 circular buffers at dim 8192 on this build (observed on-box
+# 2026-08-28: CBs grow to 3,363,712 B > 1,572,864 B) — do not use it on the mesh.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -29,13 +39,9 @@ class TtCohereLayerNorm(LightweightModule):
     Weight-only (no bias) for c4ai-command-r-v01: checkpoint tensors are *.weight
     only (attention_bias=false; HF CohereLayerNorm defaults bias=None).
 
-    TODO(PCC): validate ttnn.layer_norm vs HF CohereLayerNorm fp32 compute at
-    PCC >= 0.99 on captured CPU-reference activations (tt-rd scripts/command-r/)
-    before Stage-1 bring-up. compute_kernel_config mirrors RMSNorm's HiFi2 +
-    fp32_dest_acc_en settings; re-tune if PCC < 0.99.
-    TODO(Stage-2): sharded program/memory configs + a DistributedNorm equivalent
-    for TP meshes (the RMSNorm path uses DistributedNorm(RMSNorm(...)); LayerNorm
-    needs its own all-gather wiring — models/tt_transformers/tt/distributed_norm.py).
+    Weights: `weight` is the replicated full-width gamma (single-device fallback);
+    `weight_distributed` is the per-device width shard used by the distributed
+    path (mirrors rmsnorm.py).
     """
 
     def __init__(
@@ -70,6 +76,10 @@ class TtCohereLayerNorm(LightweightModule):
         # Compatibility with models that don't use mesh devices (mirrors RMSNorm).
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
+        # Distributed iff the mesh has >1 device on cluster axis 1 (the TP width
+        # axis) — mirrors DistributedNorm always distributing on this stack.
+        self.distributed = is_mesh_device and list(device.shape)[1] > 1
+
         self.weight = ttnn.as_tensor(
             torch_weight,
             device=device,
@@ -80,12 +90,66 @@ class TtCohereLayerNorm(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
+        if self.distributed:
+            # Per-device gamma shard: [1, 1, dim/SHARD_HEIGHT, SHARD_HEIGHT] sharded
+            # on dim 2 across cluster axis 1 (mirrors rmsnorm.py weight_distributed).
+            self.weight_distributed = ttnn.as_tensor(
+                torch_weight,
+                device=device,
+                dtype=weight_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=weight_memory_config,
+                cache_file_name=(
+                    None if weight_cache_path is None else weight_cache_path / (weight_name + "_distributed")
+                ),
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape)),
+            )
+
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+    def _distributed_layernorm(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """tt_distributed_layernorm — layernorm analog of ccl.tt_distributed_rmsnorm.
+
+        pre_all_gather computes per-row partial stats on each device's width shard;
+        the stats are all-gathered along cluster axis 1; post_all_gather combines
+        them into the true row mean/variance and applies the per-device gamma shard.
+        """
+        # Lazy import: ccl lives beside us in tt_transformers.tt; importing at module
+        # load would risk an import cycle for the family dispatch in model.py.
+        from models.tt_transformers.tt.ccl import tt_all_gather
+
+        num_links = self.tt_ccl.get_num_links(cluster_axis=1) if self.tt_ccl is not None else 1
+
+        tt_stats = ttnn.layer_norm_pre_all_gather(
+            x, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
+        )
+        padded_shape = (1, 1, x.shape[-2], 32)
+        tt_stats = ttnn.reshape(tt_stats, ttnn.Shape(padded_shape))  # same workaround as rmsnorm path
+        tt_stats_gathered = tt_all_gather(
+            tt_stats,
+            mesh_device=self.device,
+            tt_ccl=self.tt_ccl,
+            dim=3,
+            cluster_axis=1,
+            num_links=num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_stats.deallocate(True)
+
+        x = ttnn.layer_norm_post_all_gather(
+            x,
+            tt_stats_gathered,
+            epsilon=self.eps,
+            weight=self.weight_distributed,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )
+        tt_stats_gathered.deallocate(True)
+        return x
 
     def forward(
         self, x: ttnn.Tensor, mode="decode", norm_config=None, in_sharded=False, out_sharded=False
@@ -94,17 +158,22 @@ class TtCohereLayerNorm(LightweightModule):
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
         output_mem_config = norm_config.get("output_mem_config") if norm_config else None
 
-        program_config = sharded_program_config if in_sharded else None
-        memory_config = sharded_output_config if out_sharded else None
-
-        x = ttnn.layer_norm(
-            x,
-            epsilon=self.eps,
-            weight=self.weight,
-            program_config=program_config,
-            memory_config=memory_config,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
+        if self.distributed and not in_sharded:
+            x = self._distributed_layernorm(x)
+        else:
+            # Single-device / sharded-input fallback only (see module docstring:
+            # plain interleaved layernorm over-allocates L1 at dim 8192 on this
+            # build — the mesh path above is the production path).
+            program_config = sharded_program_config if in_sharded else None
+            memory_config = sharded_output_config if out_sharded else None
+            x = ttnn.layer_norm(
+                x,
+                epsilon=self.eps,
+                weight=self.weight,
+                program_config=program_config,
+                memory_config=memory_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
 
         if in_sharded and not out_sharded:
             return ttnn.sharded_to_interleaved(x)
@@ -116,9 +185,9 @@ class TtCohereLayerNorm(LightweightModule):
 def build_cohere_final_norm(args, mesh_device, state_dict, weight_cache_path, dtype, tt_ccl):
     """Final model norm for Command-R (model.py final_norm_builder hook).
 
-    Plain (non-distributed) TtCohereLayerNorm over the converted "norm.weight" key.
+    Same distributed TtCohereLayerNorm over the converted "norm.weight" key (the
+    final norm input is TP width-sharded like every residual stream tensor).
     Norm weights stay bfloat16 regardless of the model dtype (mirrors RMSNorm).
-    TODO(Stage-2): DistributedNorm strategy for TP meshes (see class TODO above).
     """
     return TtCohereLayerNorm(
         device=mesh_device,

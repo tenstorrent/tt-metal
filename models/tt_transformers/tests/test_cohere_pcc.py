@@ -22,11 +22,15 @@
 # docs/command-r-bounty-prep.md for the on-box env — do NOT restart tt-qwen38):
 #   python_env/bin/python -m pytest models/tt_transformers/tests/test_cohere_pcc.py -v
 #
-# Stage-1 scope note: TtCohereLayerNorm runs plain ttnn.layer_norm (replicated weight);
-# the TP-mesh DistributedNorm wiring is Stage-2 (class TODO). test_cohere_layernorm_pcc
-# therefore feeds a REPLICATED input (full rows per device — valid for the plain op).
-# test_cohere_decoder_layer_prefill_pcc runs the real sharded residual path and will
-# surface any TP-norm gap at the 0.99 gate before full-stack bring-up.
+# Distributed-norm path (P5b, 2026-08-28): TtCohereLayerNorm mirrors the proven
+# tt_distributed_rmsnorm pattern (models/tt_transformers/tt/ccl.py) —
+# ttnn.layer_norm_pre_all_gather -> tt_all_gather (cluster_axis=1) ->
+# ttnn.layer_norm_post_all_gather with a TP-sharded gamma (ShardTensor2dMesh
+# dims=(None, 2)). Both tests feed WIDTH-SHARDED inputs — the exact layout the
+# decoder layer feeds its input_layernorm on a (1, N) mesh — so both gates
+# exercise the same production path. The plain interleaved ttnn.layer_norm
+# over-allocates L1 at dim 8192 on this build (observed on-box 2026-08-28:
+# CBs 3,363,712 B > 1,572,864 B) and is kept only as the single-device fallback.
 
 import os
 
@@ -123,13 +127,13 @@ def test_cohere_layernorm_pcc(mesh_device, reset_seeds, ensure_gc):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),  # full rows per device (Stage-1 scope)
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 3), mesh_shape=list(mesh_device.shape)),
     )
     tt_out = tt_norm(tt_input, mode="prefill")
     tt_output_torch = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape),
-    )[:1, :1].reshape(1, -1, model_args.dim)  # first replica — [1, S_pad, 8192]
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    ).reshape(1, -1, model_args.dim)  # reassembled width shards — [1, S_pad, 8192]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
     logger.info(comp_allclose(reference_output, tt_output_torch))
