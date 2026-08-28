@@ -346,11 +346,11 @@ def kimi_k3_tensor_cache_path(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> Path:
-    """Select the parent-owned cache root for one mesh placement."""
+    """Select TTNN model-cache storage for one immutable checkpoint snapshot and mesh placement."""
     mesh_shape = tuple(mesh_device.shape)
-    sequence_parallel_axis = 1 - tensor_parallel_axis
-    layout = f"sp{mesh_shape[sequence_parallel_axis]}_tp{mesh_shape[tensor_parallel_axis]}"
-    return checkpoint_dir / "ttnn_cache" / layout
+    snapshot = checkpoint_dir.resolve().name
+    layout = f"mesh{mesh_shape[0]}x{mesh_shape[1]}_tpaxis{tensor_parallel_axis}"
+    return Path(ttnn.CONFIG.model_cache_path) / "kimi_k3" / snapshot / layout
 
 
 def run_profiled_forward(
