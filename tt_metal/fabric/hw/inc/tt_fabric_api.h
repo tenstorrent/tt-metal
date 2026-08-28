@@ -36,6 +36,7 @@ namespace tt::tt_fabric {
 #endif
 
 #if defined(FABRIC_2D) && (FABRIC_2D_MESH_Y_SIZE > 0)
+static_assert(ROUTING_TABLE_BASE % alignof(std::uint32_t) == 0, "2D routing-table base must be word aligned");
 // The Y and X maps occupy Y + X bytes, two more than the (Y-1) + (X-1) hop count the buffer tiers
 // were sized from. Checked here because the equivalent runtime ASSERT compiles out of release
 // kernels, where an oversized shape would instead write past the end of the header.
@@ -164,8 +165,9 @@ bool fabric_set_unicast_route(
 // The packet carries widened action-byte maps instead of a hop program plus branch offsets:
 // route_buffer[0..Y) holds the Y map, route_buffer[Y..Y+X) the X map.
 
-// Unicast widen. mesh_{y,x}_size are the local mesh shape, supplied by the caller; always returns
-// true, since violations fail ASSERTs instead.
+// Unicast setup retains the final destination in packet metadata, then expands one destination-major
+// table entry into the packet's [Y | X] map. A remote destination temporarily expands the local exit
+// chip instead; the destination-mesh landing later rebuilds the final map.
 inline bool fabric_set_2d_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
@@ -235,12 +237,13 @@ inline std::uint8_t fabric_set_2d_mcast_route(
         return action_y != 0 ? action_y : packet_header->route_buffer[mesh_y_size + root_x];
     }
 
-    // Encoded into a local buffer and copied so the shared host/device encoder needs no
-    // volatile-qualified variant.
+    // Tree pruning repeatedly clears and ORs map bytes, so keep those read-modify-writes in local
+    // staging. Once complete, commit the contiguous [Y | X] map to volatile packet L1 in chunks.
     constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
-    std::uint8_t maps[route_buffer_bytes];
-    encode_2d_mcast_maps(
-        maps,
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
+    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
+        maps.bytes(),
         routing_table->route_table_2d.data,
         mesh_y_size,
         mesh_x_size,
@@ -251,14 +254,11 @@ inline std::uint8_t fabric_set_2d_mcast_route(
         e_num_hops,
         w_num_hops);
 
-    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
-    for (uint32_t i = 0; i < map_bytes; ++i) {
-        packet_header->route_buffer[i] = maps[i];
-    }
+    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
 
     // Returned rather than acted on: how many outputs a caller can launch depends on the connections
     // it holds. Zero outputs is legal and means deliver locally only.
-    return maps[root_y];
+    return maps.bytes()[root_y];
 }
 
 // Intermesh landing encode. Runs on the boundary-facing router before ordinary decode, replacing the
@@ -304,10 +304,13 @@ inline void fabric_set_2d_intermesh_landing_route(
     const uint16_t anchor_dev_id = packet_header->dst_start_chip_id;
     ASSERT(anchor_dev_id < (uint32_t)mesh_y_size * mesh_x_size);
 
+    // Reuse the worker encoder, but root its X tree at this landing column. Local staging avoids
+    // volatile updates while pruning; only the completed map is copied over the source-mesh map.
     constexpr uint32_t route_buffer_bytes = sizeof(HybridMeshPacketHeader::route_buffer);
-    std::uint8_t maps[route_buffer_bytes];
-    encode_2d_mcast_maps(
-        maps,
+    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
+    route_2d_detail::Route2DMapStaging<route_buffer_bytes> maps(map_bytes);
+    encode_2d_mcast_maps<route_2d_detail::AlignedMcastTreeEdgeReader>(
+        maps.bytes(),
         routing_table.route_table_2d.data,
         mesh_y_size,
         mesh_x_size,
@@ -319,10 +322,7 @@ inline void fabric_set_2d_intermesh_landing_route(
         packet_header->mcast_params[eth_chan_directions::EAST],
         packet_header->mcast_params[eth_chan_directions::WEST]);
 
-    const uint32_t map_bytes = (uint32_t)mesh_y_size + mesh_x_size;
-    for (uint32_t i = 0; i < map_bytes; ++i) {
-        packet_header->route_buffer[i] = maps[i];
-    }
+    route_2d_detail::copy_2d_map_to_l1(packet_header->route_buffer, maps.word_data(), map_bytes);
 }
 
 // Single-hop poke: the destination is exactly one fabric hop away, so this writes LOCAL_DELIVER at

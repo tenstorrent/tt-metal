@@ -568,9 +568,18 @@ inline bool mcast_test_row_bit(const std::uint32_t* bits, std::uint32_t row) {
     return ((bits[row >> 5] >> (row & 31)) & 1u) != 0;
 }
 
-// One axis of the reverse pass. `needed` enters holding the requested targets and leaves holding
-// those plus every transit parent; an edge is taken when its child subtree still holds something
-// needed. LOCAL_DELIVER is not set here, since a row can be needed purely as a transit parent.
+// Default reader for host buffers and other callers that cannot promise halfword alignment.
+struct McastTreeEdgeByteReader {
+    static inline std::uint16_t get(const std::uint8_t* region, std::uint32_t index) {
+        return Routing2DCodec::get_mcast_tree_edge(region, index);
+    }
+};
+
+// One axis of the reverse pass. Edges are stored descendants before ancestors, so selecting a needed
+// child marks its parent in time for the parent's edge later in this same pass. `needed` therefore
+// grows from requested targets to include every transit parent. LOCAL_DELIVER is added separately
+// because a row can be needed purely for transit.
+template <typename EdgeReader>
 inline void mcast_prune_axis(
     std::uint8_t* out_actions,
     const std::uint8_t* tree_region,
@@ -579,7 +588,7 @@ inline void mcast_prune_axis(
     bool is_y_axis) {
     const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
     for (std::uint32_t i = 0; i < edge_count; ++i) {
-        const std::uint16_t edge = Routing2DCodec::get_mcast_tree_edge(tree_region, i);
+        const std::uint16_t edge = EdgeReader::get(tree_region, i);
         const std::uint32_t child = static_cast<std::uint32_t>(Routing2DCodec::mcast_edge_child(edge));
         if (!mcast_test_row_bit(needed, child)) {
             continue;
@@ -602,6 +611,12 @@ inline void mcast_prune_axis(
 //
 // N walks toward decreasing y and S toward increasing y, both modular, so an extent that wraps the ring
 // is legal rather than clamped.
+//
+// Encoding proceeds in four stages: convert extents to X/Y target bitmaps; prune the X tree and mark
+// X delivery columns; prune the Y tree; then copy the encode-root X teeth/delivery onto each target Y
+// row. The last step lets an N/S/Z-facing router deliver and branch into X from one nonzero Y action;
+// subsequent E/W-facing routers consume the X map directly.
+template <typename EdgeReader = McastTreeEdgeByteReader>
 inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
     const std::uint8_t* vectors,
@@ -649,7 +664,7 @@ inline void encode_2d_mcast_maps(
     const std::uint8_t* tree_x = vectors + Routing2DCodec::mcast_tree_x_offset(y_size, x_size);
 
     std::uint32_t needed_x[MCAST_ROW_BITS_WORDS] = {x_targets[0], x_targets[1]};
-    mcast_prune_axis(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
+    mcast_prune_axis<EdgeReader>(out_x, tree_x, x_size, needed_x, /*is_y_axis=*/false);
     for (std::uint32_t x = 0; x < x_size; ++x) {
         if (mcast_test_row_bit(x_targets, x)) {
             out_x[x] |= Routing2DCodec::ACTION_LOCAL_DELIVER;
@@ -657,7 +672,7 @@ inline void encode_2d_mcast_maps(
     }
 
     std::uint32_t needed_y[MCAST_ROW_BITS_WORDS] = {y_targets[0], y_targets[1]};
-    mcast_prune_axis(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
+    mcast_prune_axis<EdgeReader>(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
 
     // Every target row carries the encode root column's E/W teeth, and delivers only if that column is
     // itself a target. Indexed by encode_root_x rather than the anchor, since the teeth are what this
@@ -673,6 +688,7 @@ inline void encode_2d_mcast_maps(
 }
 
 // Same-mesh source, where the anchor and the encode root are the same chip.
+template <typename EdgeReader = McastTreeEdgeByteReader>
 inline void encode_2d_mcast_maps(
     std::uint8_t* route_buffer,
     const std::uint8_t* vectors,
@@ -684,7 +700,8 @@ inline void encode_2d_mcast_maps(
     std::uint32_t s_hops,
     std::uint32_t e_hops,
     std::uint32_t w_hops) {
-    encode_2d_mcast_maps(route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
+    encode_2d_mcast_maps<EdgeReader>(
+        route_buffer, vectors, y_size, x_size, root_y, root_x, root_x, n_hops, s_hops, e_hops, w_hops);
 }
 
 // FWD_DIRS slot order: base {E, W, N, S, Z} with the self direction removed.
@@ -1078,6 +1095,9 @@ struct routing_l1_info_t {
     uint8_t padding[6] = {};  // pad to 16-byte alignment
 };
 static_assert(offsetof(routing_l1_info_t, routing_path_table_1d) == 516);
+static_assert(
+    offsetof(routing_l1_info_t, route_table_2d) % alignof(std::uint32_t) == 0,
+    "2D route-table storage must be word aligned for device reverse-tree loads");
 static_assert(
     offsetof(routing_l1_info_t, exit_node_table) == 516 + Routing2DCodec::ROUTE_TABLE_BYTES,
     "exit_node_table must follow the 1028-byte 2D union slot");
