@@ -89,14 +89,6 @@ public:
         return walks_down_ ? tile_row(s.hi - 1) - (batch - s.first_batch) : tile_row(s.lo) + (batch - s.first_batch);
     }
 
-    // The pages of `batch` its group actually wants: its tile-row, narrowed to the interval it came from.
-    void batch_pages(uint32_t batch, uint32_t& lo, uint32_t& hi) const {
-        const Segment& s = segments_[segment_of_batch(batch)];
-        const uint32_t row = tile_row_of(batch);
-        lo = row * UNT_BATCH_ROWS > s.lo ? row * UNT_BATCH_ROWS : s.lo;
-        hi = (row + 1) * UNT_BATCH_ROWS < s.hi ? (row + 1) * UNT_BATCH_ROWS : s.hi;
-    }
-
 private:
     // Two, because the walk breaks only where the dispatch-group index wraps, and it wraps at most once.
     static constexpr uint32_t MAX_SEGMENTS = 2;

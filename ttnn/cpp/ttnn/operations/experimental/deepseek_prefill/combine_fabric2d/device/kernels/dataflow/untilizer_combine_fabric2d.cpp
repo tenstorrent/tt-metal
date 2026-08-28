@@ -130,52 +130,32 @@ void kernel_main() {
     const Dram dram = open_dram();
     const cmbf2d::ControlTables ctl = read_control_tables(dram);
 
-    if (ct.is_tiled()) {
-        // The compute kernel cannot read the control tensors, so it is told how many batches to expect
-        // before the first one arrives. Pushed once and never popped.
-        uint32_t mine = 0;
-        walk_my_batches(ctl, [&](uint32_t, const cmbf2d::GroupWalk&) { mine++; });
-        CircularBuffer cb_batches(cmbf2d::UNT_CB_BATCHES);
-        cb_batches.reserve_back(1);
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
-        cb_batches.push_back(1);
-    }
+    // The compute kernel cannot read the control tensors, so it is told how many batches to expect before
+    // the first one arrives. Pushed once and never popped.
+    uint32_t mine = 0;
+    walk_my_batches(ctl, [&](uint32_t, const cmbf2d::GroupWalk&) { mine++; });
+    CircularBuffer cb_batches(cmbf2d::UNT_CB_BATCHES);
+    cb_batches.reserve_back(1);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
+    cb_batches.push_back(1);
 
     Ring ring;
     walk_my_batches(ctl, [&](uint32_t b, const cmbf2d::GroupWalk& walk) {
         while (ring.full()) {
             ring.reclaim_one();
         }
-        if (ct.is_tiled()) {
-            // The whole tile-row, a block of tiles at a time so the input window stays small. Whole because
-            // that is the least an untilize can do, even when the walk wants only part of it.
-            CircularBuffer cb_in(cmbf2d::UNT_CB_IN);
-            const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
-            for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
-                cb_in.reserve_back(ct.block_tiles);
-                const uint32_t dst = cb_in.get_write_ptr();
-                for (uint32_t j = 0; j < ct.block_tiles; j++) {
-                    noc_async_read(dram.in.get_noc_addr(first_tile + t + j), dst + j * ct.tile_bytes, ct.tile_bytes);
-                }
-                noc_async_read_barrier();
-                cb_in.push_back(ct.block_tiles);
-            }
-        } else {
-            // Already row-major: the rows go straight into the batch, and only the ones the walk asked for.
-            // Each lands at the offset its page index implies, which is where a reader will look for it.
-            ring.cb_out.reserve_back(cmbf2d::UNT_BATCH_ROWS);
-            const uint32_t dst = ring.cb_out.get_write_ptr();
-            uint32_t lo = 0;
-            uint32_t hi = 0;
-            walk.batch_pages(b, lo, hi);
-            for (uint32_t p = lo; p < hi; p++) {
-                noc_async_read(
-                    dram.in.get_noc_addr(p),
-                    dst + (p % cmbf2d::UNT_BATCH_ROWS) * ct.token_size_bytes,
-                    ct.token_size_bytes);
+        // The whole tile-row, a block of tiles at a time so the input window stays small. Whole because that
+        // is the least an untilize can do, even when the walk wants only part of it.
+        CircularBuffer cb_in(cmbf2d::UNT_CB_IN);
+        const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
+        for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
+            cb_in.reserve_back(ct.block_tiles);
+            const uint32_t dst = cb_in.get_write_ptr();
+            for (uint32_t j = 0; j < ct.block_tiles; j++) {
+                noc_async_read(dram.in.get_noc_addr(first_tile + t + j), dst + j * ct.tile_bytes, ct.tile_bytes);
             }
             noc_async_read_barrier();
-            ring.cb_out.push_back(cmbf2d::UNT_BATCH_ROWS);
+            cb_in.push_back(ct.block_tiles);
         }
         ring.publish();
     });
