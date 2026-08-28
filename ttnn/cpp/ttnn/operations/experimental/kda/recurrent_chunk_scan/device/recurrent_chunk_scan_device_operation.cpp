@@ -53,7 +53,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_protocol_tensor(in.final_decay, "final_decay", true, operation_name);
     check_protocol_tensor(in.t_inv, "t_inv", false, operation_name);
 
-    for (const auto [tensor, name] : std::array{
+    for (const auto& [tensor, name] : std::array{
              std::pair{&in.kd, "kd"},
              std::pair{&in.q_decay, "q_decay"},
              std::pair{&in.intra, "intra"},
