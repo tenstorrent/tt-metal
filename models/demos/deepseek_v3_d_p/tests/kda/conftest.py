@@ -10,7 +10,6 @@ import pytest
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "perf: mark explicit KDA performance tests")
-    config.addinivalue_line("markers", "long_running: mark opt-in KDA tests excluded from routine runs")
 
 
 @pytest.fixture(scope="session")

@@ -14,8 +14,7 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 - `assert_bit_identical` compares implementation repetitions without computing a CPU oracle.
 - Dedicated determinism tests run the implementation three times from identical inputs and state.
   They do not compute a CPU reference; every output and final-state tensor must be bit-identical.
-- CPU-reference determinism uses T=128 and three repetitions. It is marked `long_running` and skips
-  unless `KDA_RUN_LONG_TESTS=1`.
+- CPU-reference determinism uses T=32 and compares two repetitions with the initial result.
 - Required performance acceptance is real Kimi-K3, B=1, T=5120 on SP1xTP8, SP2xTP4, and SP4xTP2.
 - LoudBox references and regression limits live in `perf/perf_targets/bh_loudbox.json`.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
@@ -29,10 +28,9 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 
 ```text
 tests/
-├── conftest.py                         — Pinned checkpoint fixture plus perf and optional
-│                                         long-running marker registration.
+├── conftest.py                         — Pinned checkpoint fixture plus perf marker registration.
 ├── checkpoint_utils.py                 — Indexed Kimi-K3 layer loading for tests.
-├── test_cache_fingerprints.py           — Persistent tensor and CPU-oracle cache identities.
+├── test_cache_fingerprints.py           — Persistent tensor-cache config and placement identities.
 ├── test_numeric_validation.py          — Accuracy, equality, bit-identity, and finiteness contracts.
 ├── utils.py                            — Three numeric contracts; case builders,
 │                                         reconstruction, and profiling support.
@@ -72,7 +70,7 @@ CPU-reference tests live beside the implementation:
 ```text
 models/demos/deepseek_v3_d_p/reference/kda/tests/
 ├── test_config.py                       — Config mapping and validation contracts.
-├── test_layer.py                        — Transition accuracy and optional bounded determinism.
+├── test_layer.py                        — Transition accuracy and bit-identical determinism.
 └── test_ops.py                          — Torch operation identities and accuracy checks.
 ```
 
@@ -102,14 +100,6 @@ Required performance matrix:
 KIMI_K3_CKPT=/path/to/pinned/kimi-k3 PERF_REPS=10 \
 scripts/run_safe_pytest.sh --run-all \
   models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py -q -s
-```
-
-Optional bounded CPU-reference determinism:
-
-```bash
-KDA_RUN_LONG_TESTS=1 scripts/run_safe_pytest.sh \
-  models/demos/deepseek_v3_d_p/reference/kda/tests/test_layer.py \
-  -k reference_layer_determinism
 ```
 
 Add `--profile` only for a specific Tracy investigation and use an exact node ID; `run_safe_pytest.sh --profile` does not preserve a spaced `-k` expression as one argument.

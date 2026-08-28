@@ -55,7 +55,9 @@ pytestmark = [
 _SEQUENCE = 5120
 _REPETITIONS = 10
 _TIMING_SAMPLES = int(os.getenv("KDA_TIMING_SAMPLES", "5"))
-_PCC_THRESHOLD = 0.98
+if _TIMING_SAMPLES < 1:
+    raise ValueError(f"KDA_TIMING_SAMPLES must be positive, got {_TIMING_SAMPLES}")
+_PCC_THRESHOLD = 0.9995
 _PERF_TARGETS_PATH = Path(__file__).parent / "perf_targets" / "bh_loudbox.json"
 _CPU_REFERENCE_CACHE_VERSION = 2
 
@@ -89,8 +91,9 @@ def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     for source_path in (reference_dir / "layer.py", reference_dir / "ops.py"):
         fingerprint.update(source_path.read_bytes())
     return (
-        case.checkpoint_dir
-        / "ttnn_cache"
+        Path(ttnn.CONFIG.model_cache_path)
+        / "kimi_k3"
+        / case.checkpoint_dir.resolve().name
         / "cpu_reference"
         / f"layer_{KimiK3Config.FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
     )
@@ -170,8 +173,10 @@ def kimi_k3_production_reference(
 def _load_perf_target(layout: str, *, sequence: int, repetitions: int) -> tuple[float, float]:
     targets = json.loads(_PERF_TARGETS_PATH.read_text(encoding="utf-8"))
     workload = targets["workload"]
-    assert sequence == int(workload["sequence"]), "LoudBox targets only apply to the required sequence length"
-    assert repetitions == int(workload["repetitions"]), "LoudBox targets require the calibrated replay count"
+    if sequence != int(workload["sequence"]):
+        raise ValueError("LoudBox targets only apply to the required sequence length")
+    if repetitions != int(workload["repetitions"]):
+        raise ValueError("LoudBox targets require the calibrated replay count; rebaseline to change it")
     target = targets["targets"][layout]
     return float(target["reference_ms"]), float(target["max_regression_pct"])
 
@@ -227,8 +232,7 @@ def test_kimi_k3_layer_1_perf(
     kimi_k3_production_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float],
 ) -> None:
     """Compare production geometry with an independent CPU oracle before timing it."""
-    sequence = int(os.getenv("KIMI_K3_PERF_SEQ", str(_SEQUENCE)))
-    assert sequence == _SEQUENCE, "the cached CPU oracle covers only the production sequence"
+    sequence = _SEQUENCE
     case, golden_output, golden_state, cpu_reference_seconds = kimi_k3_production_reference
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layer, hidden_tt = make_kimi_k3_device_case(
@@ -287,7 +291,7 @@ def test_kimi_k3_layer_1_perf(
         "device_forward_ms": device_forward_ms,
     }
     print("KDA_LAYER_PERF=" + json.dumps(result, sort_keys=True))
-    assert wall_ms <= max_wall_ms, (
-        f"{layout} trace wall {wall_ms:.3f} ms exceeds LoudBox limit {max_wall_ms:.3f} ms "
+    assert median_wall_ms <= max_wall_ms, (
+        f"{layout} median trace wall {median_wall_ms:.3f} ms exceeds LoudBox limit {max_wall_ms:.3f} ms "
         f"(reference {reference_ms:.3f} ms + {max_regression_pct:.1f}%)"
     )
