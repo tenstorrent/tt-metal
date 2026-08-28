@@ -40,6 +40,7 @@ reported for that reason.
 | 4 | [flat, tile-clean sampling chain](perf_reports/04-flat-sampling-chain.md) | Release | 310.1 ms | 37.6 ms | **347.7 ms** | **−136.1 ms** |
 | 5 | [hoisted head permute, untilize before the head split](perf_reports/05-hoisted-layout-ops.md) | Release | 263.6 ms | 41.8 ms | **305.4 ms** | **−42.3 ms** |
 | 6 | [sampling geometry on the SFPU](perf_reports/06-sfpu-geometry.md) | Release | 125.3 ms | 44.1 ms | **169.4 ms** | **−136.0 ms** |
+| 7 | [the grid's point axis folded into its page](perf_reports/07-folded-grid-page.md) | Release | 112.4 ms | 40.3 ms | **152.7 ms** | **−16.7 ms** |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. the time the
 device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
@@ -52,23 +53,29 @@ re-measurement, and stage 2 onwards is measured against it.
 
 **Stage 1: −70.7% of wall clock**, trading kernel for −2198.2 ms of host gap.
 
-**Stages 2–6: 681.5 → 125.3 ms of kernel, −81.6%**, at a PCC gate held at 0.9996 throughout. All of
+**Stages 2–7: 681.5 → 112.4 ms of kernel, −83.5%**, at a PCC gate held at 0.9996 throughout. All of
 it is device time. Kernel is **74%** of wall clock, so what remains of the host-round-trip work is
-bounded by 44.1 ms.
+bounded by 40.3 ms.
 
 `200×200` spatial cross attention runs as of stage 4; it had been failing on an allocation of 2.97
 GB for a 23.2 MB tensor. The full `tests/pcc/` suite is 33 passed with nothing deselected.
 
-**MSDAOperation is 29.5 ms, 23.5% of kernel.** Stage 05 read it as 167.8 ms and 78× above its DRAM
+**MSDAOperation is 27.7 ms, 24.6% of kernel.** Stage 05 read it as 167.8 ms and 78× above its DRAM
 roof, and concluded the fused kernel was slow. It was not: the compute kernel was idle for the whole
 call, waiting on a reader doing per-point float maths at ~140 cycles an operation on a core with no
 FPU. Moving that onto the SFPU collapsed the op to 29.5 ms without touching the sampling kernel —
 see [06](perf_reports/06-sfpu-geometry.md).
 
-**Layout plumbing is now the largest item** — `Reshape` + `Permute` + `Slice` + `Untilize` is 71.7
-ms, **57% of kernel**. Unlike the residue stage 05 described, it has an identifiable shape: ~24 ms
-turning `value` into per-level heads and ~31 ms preparing grid and attn. That is the same plumbing
-the 19 `nlp_*` head-reshape ops exist to fuse, minus a deformable-attention member.
+**Effective bandwidth on a layout op tracks its page size, not its size.** A ROW_MAJOR page is the
+last dimension, rounded up to the 32-byte DRAM alignment, so a 2-wide tensor spends 32 bytes per 4
+bytes of data. Sorted by GB/s the layout ops sort by page width: 512 B → 38 GB/s, 64 B → 14 GB/s,
+4 B → 2 GB/s, against a 288 GB/s roof. Folding the grid's point axis into its page deleted both
+4-byte-page ops — see [07](perf_reports/07-folded-grid-page.md).
+
+**Layout plumbing is the largest item** — `Reshape` + `Permute` + `Slice` + `Untilize` is 60.5 ms,
+**54% of kernel**. Unlike the residue stage 05 described, it has an identifiable shape: turning
+`value` into per-level heads, and preparing grid and attn. That is the same plumbing the 19 `nlp_*`
+head-reshape ops exist to fuse, minus a deformable-attention member.
 
 ## Where the baseline time is
 

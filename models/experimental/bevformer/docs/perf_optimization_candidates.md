@@ -23,6 +23,7 @@ Numbers quoted below as *cost* come from the baseline profile
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
 | [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **−138.3 ms**, and it was never the op | L | med | **landed — [06](perf_reports/06-sfpu-geometry.md)** |
 | [7](#candidate-7--an-msda-head-reshape-op) | an MSDA head-reshape op | kernel | **~55 ms**, 44% of kernel | L | med | **next** |
+| [8](#candidate-8--the-grids-point-axis-in-its-page) | fold the grid's point axis into its page | kernel | **−12.9 ms**, and the page was the story | S | low | **landed — [07](perf_reports/07-folded-grid-page.md)** |
 
 Ordering rationale is at the [bottom](#ordering).
 
@@ -364,3 +365,24 @@ second has no existing analogue — it is deformable-specific — but it is the 
 
 Stage 05 measured both as a wash and reverted them. It measured them against a kernel twice as slow,
 and against a critical path that has since moved.
+
+---
+
+## Candidate 8 — the grid's point axis in its page
+
+**Landed** — [stage 07](perf_reports/07-folded-grid-page.md), kernel −12.9 ms, wall −16.7 ms, PCC
+unchanged.
+
+A ROW_MAJOR page is the last dimension, and the buffer rounds it up to the 32-byte DRAM alignment.
+The fused op took its grid as `(N, Q*P, 1, 2)` — a 4-byte page in a 32-byte slot, so the SCA grid
+held 3.83 M points in **122 MB** for 7.67 MB of data, and the reader issued P four-byte NoC reads
+per query. The op now also accepts `(N, Q, 1, P*2)`: one read, a quarter of the pages, 30.6 MB.
+
+This is what the layout profile had been saying all along. Effective bandwidth sorted the ops by
+page width, not by size — 512 B at 38 GB/s, 64 B at 14 GB/s, 4 B at 2 GB/s — and the two slowest
+reshapes in the layer were the two moving the least data.
+
+Stage 05 tried the Python half alone and correctly measured nothing: without the op change the grid
+still reaches the op at width 2, so the 4-byte page is still written and only the op writing it
+moves. Any divisor of P per page is accepted, so `(N, Q*P, 1, 2)` still works and VADv2 is
+untouched.
