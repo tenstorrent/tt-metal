@@ -377,6 +377,14 @@ def before_loop(
     tt_root = Path(tt_metal_root or os.environ.get("TT_METAL_HOME", PKG_ROOT.parents[2]))
 
     run = Run.create(runs_root, config=None, label=model_root.name)
+    # THE CONSOLE OUTPUT IS AN ARTIFACT TOO. Everything else this run produces is filed in run.dir,
+    # which is named for the model and the run; the log that says WHY a run stopped was the one thing
+    # left to a shell redirect, and voxtral run 41's reason was lost with it. Installed here because
+    # this is the first line that knows where the run directory is, and the banner below is the first
+    # thing worth keeping.
+    from .console_log import install as _install_console_log
+
+    _install_console_log(run.dir)
     stages = _Stages(run.dir / "events.jsonl")
     print(f"run: {run.run_id}  ->  {run.dir}", file=sys.stderr, flush=True)
     _sep = "=" * 78
