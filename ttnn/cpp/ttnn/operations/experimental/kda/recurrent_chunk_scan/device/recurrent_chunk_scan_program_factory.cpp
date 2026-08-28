@@ -4,10 +4,10 @@
 #include "ttnn/operations/experimental/kda/recurrent_chunk_scan/device/recurrent_chunk_scan_program_factory.hpp"
 
 #include <algorithm>
-#include <set>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -43,15 +43,13 @@ ScanWorkDistribution distribute_scan(
     }
     ScanWorkDistribution result;
     result.value_tiles_per_core = value_tiles / value_blocks;
-    std::set<tt::tt_metal::CoreRange> ranges;
     for (uint32_t index = 0; index < batch_heads * value_blocks; ++index) {
         const tt::tt_metal::CoreCoord core{index % grid.x, index / grid.x};
         result.cores.push_back(core);
         result.head.push_back(index / value_blocks);
         result.value_block.push_back(index % value_blocks);
-        ranges.insert(tt::tt_metal::CoreRange{core, core});
     }
-    result.core_set = tt::tt_metal::CoreRangeSet{ranges};
+    result.core_set = tt::tt_metal::num_cores_to_corerangeset(batch_heads * value_blocks, grid, /*row_wise=*/true);
     return result;
 }
 
