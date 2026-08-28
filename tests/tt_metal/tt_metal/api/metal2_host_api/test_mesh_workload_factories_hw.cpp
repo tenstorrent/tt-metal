@@ -52,8 +52,7 @@ protected:
             return;
         }
         auto mesh_device = devices_.at(0);
-        IDevice* device = mesh_device->get_devices()[0];
-        if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
     }
@@ -67,8 +66,7 @@ protected:
             return;
         }
         auto mesh_device = devices_.at(0);
-        IDevice* device = mesh_device->get_devices()[0];
-        if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
     }
@@ -81,8 +79,7 @@ protected:
         if (this->IsSkipped()) {
             return;
         }
-        IDevice* device = mesh_device_->get_devices().at(0);
-        if (device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE) {
+        if (mesh_device_->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device_->arch() != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Skipping: test requires Wormhole B0 or Blackhole hardware";
         }
     }

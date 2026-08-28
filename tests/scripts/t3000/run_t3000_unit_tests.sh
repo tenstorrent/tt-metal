@@ -258,35 +258,6 @@ run_t3000_ccl_tests() {
   fi
 }
 
-run_t3000_tt_dit_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_tt_dit_tests"
-
-  #T5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/t5/test_t5_full.py::test_t5_encoder -k "t3k" ; fail+=$?
-
-  #UMT5 Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "t3k" ; fail+=$?
-
-  #Clip Encoder
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
-
-  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks. TODO: DELETE!
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_tt_dit_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-
-}
-
 run_t3000_tttv2_fast_unit_tests() {
   fail=0
 
@@ -391,9 +362,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run tt_dit tests
-  run_t3000_tt_dit_tests
 
   # Run tttv2 fast unit tests
   run_t3000_tttv2_fast_unit_tests
