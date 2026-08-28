@@ -60,12 +60,6 @@ constexpr uint32_t SITES_PER_BRICK_AXIS_MAX = 32;
 
 inline BrickCoverage classify_brick(
     const Site& query_brick_origin, const Site& key_brick_origin, const kernel_args::NeighborhoodExtents& extents) {
-    // Copy the shapes this loop reads into locals. NOT a style choice: `extents` arrives by
-    // reference here and is ~21 words by value in fill_mask_tile, so it lives in memory and every
-    // `extents.stride[axis]` is a fresh load. A 3-word Shape local is small enough to register
-    // allocate, which is what the old uint32_t[3] hoists were buying. Removing them cost 9%
-    // (645 -> 703 ms at the stage-5 width-sharded band), so they are back -- just spelled as the
-    // shape itself rather than as three loose fields.
     const auto brick_sites = extents.brick_sites;
     const auto stride = extents.stride;
     const auto volume = extents.volume;
@@ -135,12 +129,9 @@ FORCE_INLINE void fill_mask_tile(
 
     volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(write_address);
 
-    // Shapes copied into 3-word locals -- see the note in classify_brick: `extents` is too big to
-    // register allocate, so reading through it per axis measured 9% slower.
-    //
-    // `window` and `snap` are different again: they are COMPUTED per axis (clamp to the volume, and
-    // the brick-snapping rule), not a respelling of a member, and the element loops read them once
-    // per tile rather than recomputing them 1024 times.
+    // `window` and `snap` are not respellings of a member: they are COMPUTED per axis (clamp to
+    // the volume, and the brick-snapping rule), and the element loops read them once per tile
+    // rather than recomputing them 1024 times.
     const auto brick_sites = extents.brick_sites;
     const auto stride = extents.stride;
     const auto volume = extents.volume;

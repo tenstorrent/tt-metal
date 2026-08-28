@@ -76,8 +76,6 @@ FORCE_INLINE int32_t relative_span_high(uint32_t window_extent, uint32_t brick_e
 // the pair falls outside it. Mirrors the linearisation in _build_relative_masks.
 FORCE_INLINE uint32_t relative_table_index(
     const Site& query_origin_site, const Site& key_origin_site, const kernel_args::NeighborhoodExtents& extents) {
-    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
-    // through `extents` per axis measured 9% slower at the stage-5 band.
     const auto brick_sites = extents.brick_sites;
     const auto context_window = extents.context_window;
     const BrickPoint key_brick = containing_brick(key_origin_site, extents.brick_sites);
@@ -113,8 +111,6 @@ FORCE_INLINE bool gather_is_canonical(
     const Site& query_origin_site,
     ShapeInBricks gather_bricks,
     const kernel_args::NeighborhoodExtents& extents) {
-    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
-    // through `extents` per axis measured 9% slower at the stage-5 band.
     const auto brick_sites = extents.brick_sites;
     const auto context_window = extents.context_window;
     const BrickPoint query_brick = containing_brick(query_origin_site, extents.brick_sites);
@@ -138,8 +134,6 @@ FORCE_INLINE bool gather_is_canonical(
 // brick per edge per axis.
 FORCE_INLINE bool brick_window_is_unclamped(
     const Site& query_origin_site, const kernel_args::NeighborhoodExtents& extents) {
-    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
-    // through `extents` per axis measured 9% slower at the stage-5 band.
     const auto brick_sites = extents.brick_sites;
     const auto volume = extents.volume;
     const auto context_window = extents.context_window;
@@ -182,8 +176,6 @@ FORCE_INLINE bool brick_window_is_unclamped(
 // is the unit whose clamping behaviour decides the pattern. Scanning a brick would give the
 // right answer only when the chunk is one brick.
 FORCE_INLINE uint32_t chunk_regime(const Site& chunk_origin_site, const kernel_args::NeighborhoodExtents& extents) {
-    // Shapes into 3-word locals -- see classify_brick in neighborhood_mask_gen.hpp: reading them
-    // through `extents` per axis measured 9% slower at the stage-5 band.
     const auto brick_sites = extents.brick_sites;
     const auto stride = extents.stride;
     const auto volume = extents.volume;
