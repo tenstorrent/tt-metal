@@ -34,8 +34,9 @@ struct WorkerCandidate {
     tt::tt_fabric::FabricNodeId downstream_node{tt::tt_fabric::MeshId{0}, 0};
 };
 
-// Both groups go in the one row adjacent to the senders' row, each in a contiguous block of columns,
-// blocks ordered by their group's leftmost sender so a group sits over the senders it feeds.
+// Untilizer cells are the row adjacent to the senders plus the sender row's columns no sender occupies,
+// enumerated column by column, adjacent row first. Columns are allocated whole, so a group's cores stay in
+// its own column block and a sender-row core sits in the same column as its group's cores in the row above.
 UntilizerGroups decide_untilizers(
     const StreamPlacements& streams,
     std::set<CoreCoord>& taken,
@@ -44,7 +45,7 @@ UntilizerGroups decide_untilizers(
     const tt::tt_fabric::FabricNodeId& who) {
     std::array<std::size_t, UNTILIZER_GROUPS> leftmost_sender;
     leftmost_sender.fill(std::numeric_limits<std::size_t>::max());
-    std::size_t sender_row = streams.begin()->second.worker_logical.y;
+    const std::size_t sender_row = streams.begin()->second.worker_logical.y;
     for (const auto& [stream, placement] : streams) {
         leftmost_sender[untilizer_group_of(stream)] =
             std::min(leftmost_sender[untilizer_group_of(stream)], placement.worker_logical.x);
@@ -62,13 +63,6 @@ UntilizerGroups decide_untilizers(
         who,
         sender_row,
         grid.y);
-    TT_FATAL(
-        UNTILIZER_GROUPS * untilizers_per_group() <= grid.x,
-        "combine_fabric2d {}: {} groups of {} untilizers do not fit a {}-column row",
-        who,
-        UNTILIZER_GROUPS,
-        untilizers_per_group(),
-        grid.x);
 
     std::array<uint32_t, UNTILIZER_GROUPS> order;
     std::iota(order.begin(), order.end(), 0u);
@@ -83,17 +77,35 @@ UntilizerGroups decide_untilizers(
             "combine_fabric2d {}: untilizer group {} has no senders to serve",
             who,
             g);
-        for (uint32_t i = 0; i < untilizers_per_group(); i++) {
-            const CoreCoord core{column++, sender_row + 1};
+        while (groups[g].size() < untilizers_per_group()) {
             TT_FATAL(
-                taken.insert(core).second,
-                "combine_fabric2d {}: untilizer {} of group {} lands on {}, which is already owned",
+                column < grid.x,
+                "combine_fabric2d {}: group {} got {} of {} untilizers before running out of the {} columns two "
+                "rows can offer",
                 who,
-                i,
                 g,
-                core);
-            groups[g].push_back(
-                UntilizerPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)});
+                groups[g].size(),
+                untilizers_per_group(),
+                grid.x);
+            for (std::size_t row : {sender_row + 1, sender_row}) {
+                if (groups[g].size() == untilizers_per_group()) {
+                    break;
+                }
+                const CoreCoord core{column, row};
+                if (row == sender_row && taken.contains(core)) {
+                    continue;
+                }
+                TT_FATAL(
+                    taken.insert(core).second,
+                    "combine_fabric2d {}: untilizer {} of group {} lands on {}, which is already owned",
+                    who,
+                    groups[g].size(),
+                    g,
+                    core);
+                groups[g].push_back(
+                    UntilizerPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)});
+            }
+            column++;
         }
     }
     return groups;
