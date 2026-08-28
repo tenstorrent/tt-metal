@@ -60,38 +60,55 @@ inline void axis_split(
     CircularBuffer frac_out(frac_cb);
 
     grid.wait_front(1);
+
+    // Two windows, one pack each: the packer is configured per output CB, so a
+    // second pack_tile to a different CB in the same window would use the first
+    // one's configuration.
     floor_out.reserve_back(1);
-    frac_out.reserve_back(1);
-
     tile_regs_acquire();
-
     copy_tile_to_dst_init_short_with_dt(last_srca, grid_cb);
     last_srca = grid_cb;
     copy_tile(grid_cb, 0, DST_A);
-
     binop_with_scalar_tile_init();
     add_unary_tile(DST_A, ONE_BITS);
     mul_unary_tile(DST_A, scale_bits);
     sub_unary_tile(DST_A, shift_bits);  // DST_A = px
-
     copy_dest_values_init();
     copy_dest_values(DST_A, DST_B);
     rounding_op_tile_init();
     floor_tile(DST_B);  // DST_B = floor(px)
-
-    sub_binary_tile_init();
-    sub_binary_tile(DST_A, DST_B, DST_C);  // DST_C = frac
-
     tile_regs_commit();
-
     tile_regs_wait();
     pack_tile(DST_B, floor_cb);
+    tile_regs_release();
+    floor_out.push_back(1);
+
+    // px is rebuilt rather than staged: three scalar ops cost less than a CB
+    // round trip, and the floor has to be read back as an operand regardless.
+    frac_out.reserve_back(1);
+    tile_regs_acquire();
+    copy_tile_to_dst_init_short_with_dt(last_srca, grid_cb);
+    last_srca = grid_cb;
+    copy_tile(grid_cb, 0, DST_A);
+    binop_with_scalar_tile_init();
+    add_unary_tile(DST_A, ONE_BITS);
+    mul_unary_tile(DST_A, scale_bits);
+    sub_unary_tile(DST_A, shift_bits);
+    // floor is recomputed rather than read back from floor_cb: that CB belongs to
+    // the reader, which pops it concurrently.
+    copy_dest_values_init();
+    copy_dest_values(DST_A, DST_B);
+    rounding_op_tile_init();
+    floor_tile(DST_B);
+    sub_binary_tile_init();
+    sub_binary_tile(DST_A, DST_B, DST_C);  // DST_C = frac
+    tile_regs_commit();
+    tile_regs_wait();
     pack_tile(DST_C, frac_cb);
     tile_regs_release();
+    frac_out.push_back(1);
 
     grid.pop_front(1);
-    floor_out.push_back(1);
-    frac_out.push_back(1);
 }
 
 // One corner weight, folded with attn so the reduction's scalar tile arrives
@@ -113,37 +130,38 @@ inline void corner_weight(
 
     tile_regs_acquire();
 
+    // Every copy_tile first, then the maths. Interleaving an SFPU op between two
+    // copies reconfigures the unpacker mid-window.
     copy_tile_to_dst_init_short_with_dt(last_srca, frac_x_cb);
     last_srca = frac_x_cb;
     copy_tile(frac_x_cb, 0, DST_A);
-    if (invert_x) {
-        binop_with_scalar_tile_init();
-        rsub_unary_tile(DST_A, ONE_BITS);
-    }
 
     copy_tile_to_dst_init_short_with_dt(last_srca, frac_y_cb);
     last_srca = frac_y_cb;
     copy_tile(frac_y_cb, 0, DST_B);
-    if (invert_y) {
+
+    copy_tile_to_dst_init_short_with_dt(last_srca, attn_cb);
+    last_srca = attn_cb;
+    copy_tile(attn_cb, 0, DST_C);
+
+    if (invert_x || invert_y) {
         binop_with_scalar_tile_init();
-        rsub_unary_tile(DST_B, ONE_BITS);
+        if (invert_x) {
+            rsub_unary_tile(DST_A, ONE_BITS);
+        }
+        if (invert_y) {
+            rsub_unary_tile(DST_B, ONE_BITS);
+        }
     }
 
     mul_binary_tile_init();
-    mul_binary_tile(DST_A, DST_B, DST_C);
-
-    // DST_A is free once the corner product is in DST_C.
-    copy_tile_to_dst_init_short_with_dt(last_srca, attn_cb);
-    last_srca = attn_cb;
-    copy_tile(attn_cb, 0, DST_A);
-
-    mul_binary_tile_init();
-    mul_binary_tile(DST_C, DST_A, DST_C);
+    mul_binary_tile(DST_A, DST_B, DST_A);
+    mul_binary_tile(DST_A, DST_C, DST_A);
 
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_tile(DST_C, scalar_cb);
+    pack_tile(DST_A, scalar_cb);
     tile_regs_release();
 
     scalar_out.push_back(1);

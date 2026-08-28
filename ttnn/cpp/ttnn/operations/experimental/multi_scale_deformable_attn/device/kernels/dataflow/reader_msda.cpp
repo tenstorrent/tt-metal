@@ -179,6 +179,31 @@ void kernel_main() {
             const uint32_t gy_l1 = grid_y_cb.get_write_ptr();
             const uint32_t at_l1 = attn_tile_cb.get_write_ptr();
 
+            // The geometry runs over the whole tile, not just column 0, so the
+            // other 31 columns must be finite. A CB slot is uninitialised L1 on
+            // its first use and the bit pattern there can decode to inf or NaN,
+            // which the SFPU then propagates. Later blocks reuse the slot and
+            // find this pass's finite values, so once is enough.
+            if (t < P) {
+                for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+                    const auto row = msda_tile_layout::tile_row_offsets(r);
+                    CoreLocalMem<volatile uint32_t> gx_lo(gx_l1 + row.lo);
+                    CoreLocalMem<volatile uint32_t> gx_hi(gx_l1 + row.hi);
+                    CoreLocalMem<volatile uint32_t> gy_lo(gy_l1 + row.lo);
+                    CoreLocalMem<volatile uint32_t> gy_hi(gy_l1 + row.hi);
+                    CoreLocalMem<volatile uint32_t> at_lo(at_l1 + row.lo);
+                    CoreLocalMem<volatile uint32_t> at_hi(at_l1 + row.hi);
+                    for (uint32_t i = 0; i < HALF_WORDS; ++i) {
+                        gx_lo[i] = 0;
+                        gx_hi[i] = 0;
+                        gy_lo[i] = 0;
+                        gy_hi[i] = 0;
+                        at_lo[i] = 0;
+                        at_hi[i] = 0;
+                    }
+                }
+            }
+
             for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
                 // Tail rows are written as zero: their weight ends up zero, which
                 // is the same contract the reduction already relies on.
@@ -251,8 +276,22 @@ void kernel_main() {
                 //
                 // Only the logical D*2 bytes are requested, never value_stick_nbytes: the padded
                 // tail would spill past the row into the next one.
-                for (uint32_t r = 0; r < v_rows; ++r) {
-                    if (!(yv_arr[r] && xv_arr[r])) {
+                for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
+                    if (r >= v_rows || !(yv_arr[r] && xv_arr[r])) {
+                        // No corner to gather: zero the row. The reduction weights
+                        // come from the compute kernel, which does not know which
+                        // corners fell outside the feature map, so a stale row here
+                        // would be multiplied by a live weight.
+                        const auto off = msda_tile_layout::tile_row_offsets(r);
+                        for (uint32_t k = 0; k < N_D_TILES; ++k) {
+                            const uint32_t ktile_l1 = tile_l1 + k * TILE_NBYTES;
+                            CoreLocalMem<volatile uint32_t> zlo(ktile_l1 + off.lo);
+                            CoreLocalMem<volatile uint32_t> zhi(ktile_l1 + off.hi);
+                            for (uint32_t i = 0; i < HALF_WORDS; ++i) {
+                                zlo[i] = 0;
+                                zhi[i] = 0;
+                            }
+                        }
                         continue;
                     }
                     const uint32_t cy = static_cast<uint32_t>(y0_arr[r] + dy_off);

@@ -227,7 +227,14 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         x_shift_bits,
         y_scale_bits,
         y_shift_bits};
-    compute_desc.config = ComputeConfigDescriptor{};
+    // fp32 destination: the geometry builds px = (g + 1) * scale - shift, which
+    // reaches the feature map's extent. In a 16-bit destination the ulp at 200 is
+    // 1.0, so floor and the fraction it feeds are lost outright on large maps.
+    // The geometry holds three tiles at once, inside the four a 32-bit
+    // destination allows.
+    ComputeConfigDescriptor compute_cfg{};
+    compute_cfg.fp32_dest_acc_en = true;
+    compute_desc.config = compute_cfg;
 
     // Writer kernel descriptor.
     KernelDescriptor::CompileTimeArgs writer_ct{
