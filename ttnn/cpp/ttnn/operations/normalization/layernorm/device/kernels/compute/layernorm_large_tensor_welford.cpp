@@ -989,11 +989,15 @@ void kernel_main() {
                 dfb_inb_obj.pop_front(block.full_block_size());
 
             for (auto block : generic::blocks(Wt, blk)) {
-                dfb_in_obj.wait_front(block.full_block_size());
-                dfb_in_fp32_obj_eltwise.wait_front(block.full_block_size());
-                if constexpr (fuse_pre_add) {
-                    dfb_inb_obj.wait_front(block.full_block_size());
-                    dfb_inb_fp32_obj_eltwise.wait_front(block.full_block_size());
+                if constexpr (fused_pre_add_replay) {
+                    dfb_x_replay_obj.wait_front(block.full_block_size());
+                } else {
+                    dfb_in_obj.wait_front(block.full_block_size());
+                    dfb_in_fp32_obj_eltwise.wait_front(block.full_block_size());
+                    if constexpr (fuse_pre_add) {
+                        dfb_inb_obj.wait_front(block.full_block_size());
+                        dfb_inb_fp32_obj_eltwise.wait_front(block.full_block_size());
+                    }
                 }
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
                     dfb_x_welford_obj_eltwise.wait_front(block.full_block_size());
