@@ -998,6 +998,31 @@ KNOBS = {
     # legs base-vs-fix at ON-36+crossrow-2datum 3300/3300 identical
     # with lane IC's booked 12-TU delta reproduced EXACT.
     "crossrow-shared-reload": "-mtt-tensix-optimize-crossrow-shared-reload",
+    # IK (crosscall-addrmod, lane IK 2026-08-28): lane IA's named
+    # successor — the binopscalar +1.93 residual.  After IA's pricing
+    # fix the straight-line 8-row callee correctly REFUSES the per-call
+    # ADDR_MOD slot-program re-emission (removed 8 <= 3*2 + 2), yet the
+    # hand kernel programs its ADDR_MOD slots ONCE PER KERNEL.
+    # -mtt-tensix-optimize-crosscall-addrmod Init(0) is exactly that
+    # discipline: a callee whose groups ALL refuse by the per-execution
+    # pricing (single stride, explicit rows, whole-callee slot-clobber
+    # census clean, entry-distance guard met, rows above the
+    # call-boundary crossing charge) gets its three-SETC16 owned-slot
+    # program hoisted ONCE into the proven caller's loop entry — the
+    # lane CA init-hoist scan (every statement or delivered word that
+    # could write a contract row refuses by name; SETC16 decode against
+    # the owned rows; MOP template audit; Wormhole ADDR_MOD_SET_Base
+    # watch row) at every lane HC residency-walk level — and the
+    # callee's groups fire at ZERO per-call configuration cost: the
+    # hoisted program is preheader-class by construction (lane IA
+    # placement split).  Soundness prior is the ISA adjudication that
+    # ThreadConfig ADDR_MOD rows are per-thread and writable only by
+    # same-thread SETC16 (tt-isa-documentation: WRCFG/CFGSHIFTMASK/
+    # RMWCIB functional models each exclude ThreadConfig).  binopscalar
+    # sem callee drops 27 -> 24 words/call with the program lifted 3
+    # loop levels to run_kernel entry; measured note follows the
+    # silicon legs.
+    "crosscall-addrmod": "-mtt-tensix-optimize-crosscall-addrmod",
     # ID (loop-prgm-reclaim, lane ID 2026-08-27): the trigonometry
     # loadi-gap attack (HW row A7; GV's named PRGM/LREG capacity
     # ceiling).  -mtt-tensix-optimize-loop-prgm-reclaim Init(0) offers
@@ -1463,6 +1488,7 @@ KNOB_MODES = {
     # on-plus while a booking knob; promotion requires an R9 witness
     # and ON-vs-ON attribution ceremony.
     "crossrow-shared-reload": "on-plus",
+    "crosscall-addrmod": "on-plus",
     "loop-prgm-reclaim": "on-plus",
     # IF dst-autoincr-load-carrier: default-off Init(0) booking knob;
     # an exact-counting unlock for the dst-autoincr shadow/issue-word
