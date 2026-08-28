@@ -1,20 +1,28 @@
 # Stage: 04-fused-msda
 
-- source commit: working tree on `ctr-mmicic/optimizer/bevformer-msda-fused-2026-08-27` (parent
-  [`8a48cf6bde2`](https://github.com/tenstorrent/tt-metal/commit/8a48cf6bde2))
+- source commit: [`2bc69b90e3c`](https://github.com/tenstorrent/tt-metal/commit/2bc69b90e3c1472e29428f40542bac47847cbf36)
 - config: `nuscenes_base`, 100×100, N150
-- layer profile: **489.5 ms kernel / 14.0 ms gap / 503.5 ms wall**, 129 device ops (+8), CSV
-  `generated/profiler/reports/2026_08_27_23_24_32/`
-- **−191.6 ms kernel (−28.1%), −190.6 ms layer wall (−27.5%)** against
-  [stage 03](03-constant-uploads-cached.md) re-measured in the same session
-  (`2026_08_27_23_03_17`: 681.1 ms kernel / 13.0 ms gap / 694.1 ms wall, 121 ops)
+- layer profile: **489.5 ms kernel**, 129 device ops (+8), CSV
+  `generated/profiler/reports/2026_08_27_23_24_32/` (**since deleted** — see below)
+- **−191.6 ms kernel (−28.1%)** against [stage 03](03-constant-uploads-cached.md) re-measured in
+  the same session (`2026_08_27_23_03_17`: 681.1 ms kernel, 121 ops)
 - PCC: **0.999611** (baseline 0.999608, gate 0.997) — unchanged
 
-**No encoder-wall number.** Stages 02 and 03 quote a median over 11 timed iterations, but the
-encoder harness in the tree runs `DEVICE_PERF_ITERS = 1` and has no wall-clock timing loop, so that
-methodology is not reproducible from the repo. Only the layer harness was run. `PERF.md`'s own rule
-— encoder ≈ 6 × layer — puts this at roughly −1.14 s of encoder wall, but that is arithmetic, not a
-measurement.
+**No wall-clock number, corrected after publication.** This report originally led with
+"−190.6 ms layer wall (−27.5%)", measured as 14.0 ms of gap against the stage-03 re-measure's
+13.0 ms. [Stage 05](05-offset-normalizer-folded.md) then profiled identical code twice and got
+93.4 ms and 151.2 ms of gap while kernel held to 0.1 ms, which retires the gap column as a
+measurement — see [PERF.md](../PERF.md#the-gap-column-is-not-reliable). The kernel figures here are
+unaffected and reproduce; the wall figures have been removed rather than restated.
+
+**No encoder number either.** Stages 02 and 03 quote a median over 11 timed iterations, but the
+encoder harness in the tree runs `DEVICE_PERF_ITERS = 1` with no wall-clock timing loop, so that
+methodology is not reproducible from the repo. Only the layer harness was run.
+
+**The CSV this report cites no longer exists.** `2026_08_27_23_24_32/` and the stage-03 re-measure
+`2026_08_27_23_03_17/` were both removed from `generated/` between sessions, so neither figure can
+be re-audited — the same problem [PERF.md](../PERF.md) already records for stage 01. The per-op
+tables below are what survives. Copy cited CSVs out of `generated/` at run time.
 
 ## What this change was
 

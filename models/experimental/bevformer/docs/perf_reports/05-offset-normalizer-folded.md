@@ -1,7 +1,6 @@
 # Stage: 05-offset-normalizer-folded
 
-- source commit: working tree on `ctr-mmicic/bev-former` (parent
-  [`a90ab665de7`](https://github.com/tenstorrent/tt-metal/commit/a90ab665de7))
+- source commit: [`d86d2f722fb`](https://github.com/tenstorrent/tt-metal/commit/d86d2f722fbecdd210e96c2927a9b9648211ebf5)
 - config: `nuscenes_base`, 100×100, N150
 - layer profile: **456.8 ms kernel**, 127 device ops (−2), CSVs
   `generated/profiler/reports/2026_08_28_10_23_13/` and `…_10_30_24/`
