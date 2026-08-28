@@ -344,9 +344,7 @@ def get_unique_base_names(input_dir: Path):
 
 
 def _reject_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
-    """Fail the session if any rows share the same (sweep-params, marker) key.
-    
-    """
+    """Fail the session if any rows share the same (sweep-params, marker) key."""
     if frame.empty or MARKER not in frame.columns:
         return frame
 

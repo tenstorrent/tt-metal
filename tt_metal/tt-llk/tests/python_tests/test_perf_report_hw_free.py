@@ -703,7 +703,9 @@ def test_duplicate_sweep_key_is_rejected_not_averaged():
             stat_column("L1_TO_L1", MEAN): [100.0, 140.0],
         }
     )
-    with pytest.raises(PerfSchemaError) as excinfo:
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        PerfSchemaError
+    ) as excinfo:
         _reject_duplicate_keys(frame, "perf_example.csv")
     message = str(excinfo.value)
     assert "perf_example.csv" in message
