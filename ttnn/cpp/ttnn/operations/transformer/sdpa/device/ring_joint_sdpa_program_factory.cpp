@@ -2905,8 +2905,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
         // Per-q_chunk work bitmap (num_q_chunks uint32s) used by sparse computation.
-        for (uint32_t q = 0; q < num_q_chunks; ++q) {
-            compute_args.push_back(q_work_bitmap[q]);
+        if (sparse_frames_enabled) {
+            for (uint32_t q = 0; q < num_q_chunks; ++q) {
+                compute_args.push_back(q_work_bitmap[q]);
+            }
         }
         compute_kernel.emplace_runtime_args(core, compute_args.args);
     }
