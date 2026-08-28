@@ -1,6 +1,31 @@
-# `mb-coverage` — environment
+# `mb-coverage` — environment (attempt 2)
 
-Recorded 2026-08-27, unattended, by the Milestone B step-7 coverage job.
+Recorded 2026-08-27/28, unattended, by the Milestone B step-7 coverage job,
+**attempt 2**. Attempt 1's version of this file is preserved verbatim beside it
+as `ENVIRONMENT_attempt1.md`; where the two disagree, this one is later and was
+measured on a live mesh.
+
+## The correction that matters
+
+Attempt 1 recorded, as its headline, *"the mesh never came back … eleven boards
+off the PCIe bus … `ttnn` cannot open a cluster at all"*. **That is not true of
+this machine at 2026-08-27 23:21 UTC.** Established before any planning, by the
+cheapest real check there is:
+
+```sh
+$ ls /sys/class/tenstorrent | wc -l
+32
+$ python -u -m pytest -v -rA --color=no -p no:cacheprovider --timeout=240 \
+    models/common/tests/models/galaxy/test_partition_wh_galaxy.py
+5 passed in 12.32s          # opens a real 8x4 cluster; "multidevice with 32 devices is created"
+```
+
+Log: `logs2/a2_00_mesh_health.log`. Every device number in this attempt's
+`REPORT.md` was measured after that check.
+
+The mesh was repaired between attempt 1 (03:31 UTC) and `mb-qwen` attempt 2
+(which ran 17:53–22:51 UTC and qualified both models on silicon). Attempt 1 was
+not wrong about what it saw; it was superseded.
 
 ## Tree
 
@@ -8,92 +33,72 @@ Recorded 2026-08-27, unattended, by the Milestone B step-7 coverage job.
 | --- | --- |
 | Repository | `/proj_sw/user_dev/ctr-apbernal/tt-metal` |
 | Branch | `apbernal/tttv2_wh_glx_2d_modules_milestone_b` |
-| Commit at start | `0c1ccd8557c7cb25cd1ca300d522eab1ed5db733` |
-| Milestone A base for the boundary greps | `bc6ad03bfc2` (`Re-run the Milestone A device matrix and host gate at the committed tree`) |
+| Commit at start | `b1e824537a4699003413dfa863db9fa3bb6253ad` (`Re-qualify the step-5 gate and the Q/K norm at this attempt's final commit`) |
+| Milestone A base for the boundary greps | `bc6ad03bfc2` |
 | Milestone A reference branch | `gongyu/tttv2_wh_glx_2d_modules` — read only, never written |
 
-## Host
+Attempt 1's two commits are both ancestors of this commit
+(`git merge-base --is-ancestor 1cd451cd965 HEAD` → true), so every step-7 test
+file it wrote is present in the tree this attempt measured.
+
+## Host and mesh
 
 | | |
 | --- | --- |
-| Hostname | `wh-glx6u-05-special-ctr-apbernal-for-reservation-117587` |
 | Kernel | `6.8.0-83-generic` |
-| CPUs | 64 |
-| RAM | 566 GiB total, ~309 GiB available at start |
-| Python | 3.10.21, `python_env/` in the repo (pre-built, **not** recreated) |
-| torch | 2.11.0+cpu |
-| transformers | 5.12.1 |
-| `TT_METAL_HOME` | `/proj_sw/user_dev/ctr-apbernal/tt-metal` |
-| `PYTHONPATH` | `/proj_sw/user_dev/ctr-apbernal/tt-metal` |
-| tt-smi | 5.2.0 |
-| `tenstorrent` kernel module | 2.4.1 |
+| RAM | 566 GiB total, ~273 GiB available at start |
+| `ls /sys/class/tenstorrent \| wc -l` | **32** (the health check; `/dev/tenstorrent` is not one) |
+| Mesh | WH Galaxy, `(8, 4)`, exclusive to this job |
+| Python env | pre-built `python_env/`, **not** recreated; no rebuild of tt-metal |
 
-### `HF_HOME`
-
-**Unset in this job's inherited environment**, exactly as `mb-qwen` warned. Every
-pytest invocation in this job exported it explicitly:
+## The one environment variable that silently ruins a night
 
 ```sh
-export HF_HOME=/proj_sw/user_dev/hf_data
+export HF_HOME=/localdev/ctr-apbernal/hf_data      # reaches BOTH checkpoints
 ```
 
-With it unset, Llama's real-checkpoint host tests do not fail — they **skip**,
-because `snapshot_download` falls through to the network and gets a 401 on a
-gated repo. A green run that quietly skipped its only real-checkpoint coverage
-is not evidence.
+Inherited value in this job's shell: **empty**. Under an empty or wrong value
+`hf_config_or_skip` turns every real-checkpoint test into a `SKIPPED` and the run
+looks green having measured nothing. Every script in this directory exports it.
+Confirmed present under it: `models--meta-llama--Llama-3.3-70B-Instruct` and
+`models--Qwen--Qwen3-32B`.
 
-### Checkpoints present
+## Reference token files
 
-| Checkpoint | State |
+`models/tt_transformers/tests/reference_outputs/{Llama-3.3-70B-Instruct,Qwen3-32B}.refpt`
+
+Both hold **1024** tokens (`reference_tokens` shaped `(1, 1024)`, `top5_tokens`
+`(1024, 5)` and `(1023, 5)`). This is a hard limit on two things measured here:
+the 512/511 accuracy gate fits exactly, and `_distinct_rows(length, 32)` — which
+needs `length + 32` tokens — cannot produce 32 distinct rows at length 1024 or
+2048 from this file. See `REPORT.md` §A2 area 2.
+
+## Run harness
+
+`cov_run3.sh` → `cov_device_run.sh` → `cov_after_device_run.sh`, driven by
+`cov_seq2.sh` over a pipe-delimited manifest. Copied from
+`../qwen/`, with one deliberate change, recorded because it silently destroys
+multi-test runs:
+
+> the qwen `device_run.sh` arms its teardown-grace timer on the **first per-test
+> verdict** in the log. In a one-node-id run that is the last thing before
+> teardown; in a whole-file run it fires 90 s after test 1 passes and reaps a
+> healthy process mid-test-2. `cov_device_run.sh` arms on the pytest **session
+> summary** instead, and adds an idle-mtime trigger (no log write for
+> `MB_IDLE`=900 s with a verdict already in hand) for the hang case attempt 3 of
+> `mb-llama` described.
+
+Never pipes pytest. Signals only a PID whose `comm` is python/python3/pytest.
+Resets the mesh (`tt-smi -glx_reset`, 900 s cap) after any non-clean run.
+
+## Costs measured here, for whoever schedules the next night
+
+| Thing | Wall clock |
 | --- | --- |
-| `meta-llama/Llama-3.3-70B-Instruct` | present under `/proj_sw/user_dev/hf_data/hub` |
-| `Qwen/Qwen3-32B` | **absent** — `~/.cache/huggingface/hub/models--Qwen--Qwen3-32B` holds `config.json` only. ~65 GB still has to be fetched. |
+| mesh open, 32 devices | ~25 s |
+| Llama 80-layer model build from the warm device weight cache | **~5.5 min** |
+| Qwen 64-layer model build from the warm device weight cache | ~4 min |
 
-## Mesh — BLOCKED (infra), unchanged from `mb-qwen`
-
-```text
-ls /dev/tenstorrent | wc -l        32   <- the house-rules check. It LIES: stale nodes.
-ls /sys/class/tenstorrent | wc -l  21   <- the real count.
-missing: 0 1 2 3 4 5 6 7 10 11 14       (11 of 32)
-present: 8 9 12 13 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
-```
-
-Identical to the set `mb-qwen` recorded. `tt-smi -ls` aborts inside `tt_umd`
-topology discovery:
-
-```text
-Read 0xffffffff over PCIe ID 17: the board should be reset.
-tt_umd/device/tt_device/tt_device.cpp:242 — TopologyDiscovery::get_connected_devices()
-```
-
-and every `ttnn` cluster open fails the same way at
-`tt_device.cpp:398 — TTDevice::is_pcie_hung`.
-
-**No recovery attempt was spent.** Two prior jobs used both of their permitted
-attempts on this exact fault and both failed: `tt-smi -glx_reset` cannot run
-because it must open `/dev/tenstorrent/7` first, and `tt-smi -r` re-initialises
-only the visible boards before failing on PCIe ID 17. Neither can bring a board
-back that is not on the bus. This needs an IPMI power cycle of the tray or a
-host reboot, which is outside what an unattended job may do. Spending a third
-job's attempts on a fault two jobs have already characterised would have been
-waste, so this job recorded the state and moved to what could be measured.
-
-Evidence: `logs/00_mesh_state_20260827T020110Z.log`,
-`logs/01_device_open_attempt_partition_20260827T020120Z.log`, and the three
-`logs/12_device_attempt_*.log`.
-
-## Device-run procedure actually used
-
-No pytest process in this job ever held the mesh, because no pytest process in
-this job could open it. Every device invocation was a single foreground
-`timeout … python -m pytest … > LOG 2>&1` with no pipe, `pgrep` checked before
-each one, and it errored in ~2 s at cluster open. Nothing was killed; no PID was
-signalled at any point.
-
-## Test-count sanity
-
-| Suite | Count |
-| --- | --- |
-| New host coverage (`models/common/tests/models/galaxy/test_step7_*.py`) | 162, all passing, three fresh processes |
-| New Llama device coverage | 17 collected, **0 executed** |
-| New Qwen device coverage | 16 collected, **0 executed** |
+Every test in these files builds its own model, and several build two. That
+single number is what makes a 17-node-id file a three-hour run and is the reason
+this attempt ran subsets rather than whole files where it had to choose.

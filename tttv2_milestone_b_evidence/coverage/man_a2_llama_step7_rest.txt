@@ -1,0 +1,9 @@
+1800|1500|a2_17_llama_greedy_vs_argmax|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k greedy_sampling_equals_host_argmax
+2700|2400|a2_18_llama_padded_vocab|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k no_padded_vocabulary
+2400|2100|a2_19_llama_seeded_slot|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k seeded_slot_repeats
+1800|1500|a2_20_llama_heterogeneous|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k heterogeneous_sampling
+2100|1800|a2_21_llama_chunked_vs_uncached|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k chunked_prefill_matches
+1800|1500|a2_22_llama_prefix_then_plain|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k prefix_cached_request_then_a_normal
+2100|1800|a2_23_llama_mixed_slots|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k mixed_across_slots
+4200|1500|a2_24_llama_concat_lengths|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k concat32_matches_sequential
+4200|1500|a2_25_llama_concat_active|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k padded_rows_change_no_active

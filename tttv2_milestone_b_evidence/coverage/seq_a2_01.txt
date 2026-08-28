@@ -1,0 +1,2 @@
+# wrapper-deadline  pytest-deadline  logname  target
+8400 3000 a2_01_llama_full_model_file models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py

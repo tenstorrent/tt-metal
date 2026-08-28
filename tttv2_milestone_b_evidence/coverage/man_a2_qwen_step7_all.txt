@@ -1,0 +1,10 @@
+1500|1200|a2_26_qwen_late_capacity|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k paged_capacity_resolved
+2100|1800|a2_27_qwen_paged_vs_contig|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k paged_and_contiguous
+1800|1500|a2_28_qwen_cross_slot|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k never_appears_in_another
+1800|1500|a2_29_qwen_greedy_vs_argmax|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k greedy_sampling_equals_host_argmax
+2700|2400|a2_30_qwen_padded_vocab|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k no_padded_vocabulary
+2400|2100|a2_31_qwen_seeded_slot|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k seeded_slot_repeats
+2100|1800|a2_32_qwen_chunked_vs_uncached|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k chunked_prefill_matches
+1800|1500|a2_33_qwen_prefix_then_plain|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k prefix_cached_request_then_a_normal
+4200|1500|a2_34_qwen_concat_lengths|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k concat32_matches_sequential
+4200|1500|a2_35_qwen_concat_active|models/common/tests/models/qwen3_32b_galaxy/test_step7_coverage_wh_galaxy.py|-k padded_rows_change_no_active

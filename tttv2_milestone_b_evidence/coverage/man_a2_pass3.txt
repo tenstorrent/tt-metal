@@ -1,0 +1,4 @@
+6000|4200|a2_p3_llama_full_model_file|models/common/tests/models/llama33_70b_galaxy/test_full_model_wh_galaxy.py|
+4800|4200|a2_p3_qwen_full_model_file|models/common/tests/models/qwen3_32b_galaxy/test_full_model_wh_galaxy.py|
+3000|2400|a2_p3_llama_demo|models/common/models/llama33_70b_galaxy/demo.py|
+2400|1800|a2_p3_qwen_demo|models/common/models/qwen3_32b_galaxy/demo.py|

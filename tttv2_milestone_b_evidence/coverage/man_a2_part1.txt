@@ -1,0 +1,4 @@
+600|420|a2_01b_page_table_placement|models/common/tests/models/galaxy/test_step7_page_table_placement_wh_galaxy.py|
+1500|1200|a2_02_llama_late_capacity|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k paged_capacity_resolved
+2100|1800|a2_03_llama_paged_vs_contig|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k paged_and_contiguous
+1800|1500|a2_04_llama_cross_slot|models/common/tests/models/llama33_70b_galaxy/test_step7_coverage_wh_galaxy.py|-k never_appears_in_another
