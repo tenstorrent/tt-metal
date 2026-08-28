@@ -30,8 +30,6 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/time_budget.yaml @roseli-TT @tdowdallTT
 .github/time_budgets/ @roseli-TT @tdowdallTT
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-deepseek-tests.yaml @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
