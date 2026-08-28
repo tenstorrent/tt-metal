@@ -1248,9 +1248,16 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG0, 1);
     TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_3, 0);
 
-    // Dummy loads to increment dest counters
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
-    TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_5, 0);
+    // Dummy loads to increment dest counters.
+    //
+    // Wormhole gives SFPLOAD's addr-mode field two bits where Blackhole gives
+    // three, so ADDR_MOD_5 and ADDR_MOD_6 do not fit and their high bit lands
+    // in instr_mod0 instead: TT_OP_SFPLOAD adds rather than ors, so
+    // (m, 6, 0) == (m + 1, 2, 0) and (m, 5, 0) == (m + 1, 1, 0) for every m.
+    // Written out below as the words the encoder has always produced, which is
+    // what this has been executing all along.
+    TTI_SFPLOAD(8, static_cast<uint32_t>(INSTRUCTION_MODE) + 1, ADDR_MOD_2, 0);
+    TTI_SFPLOAD(8, static_cast<uint32_t>(INSTRUCTION_MODE) + 1, ADDR_MOD_1, 0);
 }
 
 /**

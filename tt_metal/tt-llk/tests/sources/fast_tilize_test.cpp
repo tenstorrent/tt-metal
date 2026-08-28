@@ -308,12 +308,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                         else
                         {
-                            num_units = (remaining_tiles - 3) / unit_dim;
+                            // remaining_tiles is odd and not 3 here, so this arm splits off a
+                            // trailing 3-tile unit.  It is only meaningful from 5 up: at 1 the
+                            // subtraction wraps and the tile index becomes 0xfffffffe, which the
+                            // packer turns into a Z counter of -4.  Saturating keeps every
+                            // reachable path identical and stops the compiler specialising an
+                            // unreachable one into an out-of-range instruction field.
+                            const std::uint32_t tail_tiles = remaining_tiles > 3 ? remaining_tiles - 3 : 0;
+                            num_units                      = tail_tiles / unit_dim;
                             _llk_pack_fast_tilize_block_(0, L1_ADDRESS(buffer_Res[tile_index]), unit_dim, num_units, num_faces);
                             LLK_ASSERT(
-                                (remaining_tiles - 3 < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                (tail_tiles < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                 "remaining_tiles - 3 exceeds max dest tiles");
-                            _llk_pack_fast_tilize_block_(remaining_tiles - 3, L1_ADDRESS(buffer_Res[tile_index + remaining_tiles - 3]), 3, 1, num_faces);
+                            _llk_pack_fast_tilize_block_(tail_tiles, L1_ADDRESS(buffer_Res[tile_index + tail_tiles]), 3, 1, num_faces);
                         }
                         packed_tiles += remaining_tiles;
                         remaining_tiles = 0;
