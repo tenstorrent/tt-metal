@@ -81,7 +81,9 @@ DB_SCHEMA = [
     Column("loop_factor", "int64", True, "key"),
     Column("tile_cnt", "int64", True, "key"),
     # configuration
+    Column("alpha_bits", "int64", True, "configuration"),
     Column("approx_mode", "string", True, "configuration"),
+    Column("beta_bits", "int64", True, "configuration"),
     Column("binop_mathop", "string", True, "configuration"),
     Column("block_ct_dim", "int64", True, "configuration"),
     Column("block_rt_dim", "int64", True, "configuration"),

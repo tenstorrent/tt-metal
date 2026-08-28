@@ -460,14 +460,12 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     )
 
 
-# The BH-routed ttnn.topk path (topk_large_indices, engages for bf16 largest at k>64 or wide
-# non-pow2 widths) crashes the CI simulator's ttsim build (silent worker death ~9s in; see the
-# sanity break on 1dc0e9673b6). The same tests pass on BH silicon and on a current ttsim
-# (SFPLOADMACRO-capable). Skip the routed cells on simulator runners until the runner image
-# ships an updated ttsim.
 skip_routed_topk_on_sim = pytest.mark.skipif(
     is_blackhole() and bool(os.environ.get("TT_METAL_SIMULATOR")),
-    reason="BH-routed topk crashes the CI ttsim build; passes on silicon and current ttsim",
+    reason=(
+        "Large indices topk on BH needs SFPCONFIG instr_mod1=8, unmodeled by ttsim "
+        "(https://github.com/tenstorrent/ttsim-private/issues/798)"
+    ),
 )
 
 
