@@ -144,6 +144,20 @@ class TTSampling(LightweightModule):
     def force_argmax_sampling(self) -> bool:
         return self._force_argmax_sampling
 
+    def _normalize_device_params(self, k, temp):
+        """Clamp k to the candidate row the kernel actually holds and replace the greedy temp=0.
+
+        ttnn.sampling walks k entries of each user's two-face candidate row, so a k above max_top_k
+        (callers pass vocab_size to mean "no top-k filter") runs the top-p scan and the draw off the
+        end of that row into unrelated L1. temp multiplies the logits before the softmax, so a caller
+        encoding greedy as temp=0 flattens every candidate to an equal probability and turns the draw
+        uniform -- the opposite of the argmax it asked for.
+        """
+        k = torch.clamp(torch.as_tensor(k), max=self.max_top_k)
+        temp = torch.as_tensor(temp, dtype=torch.float32)
+        temp = torch.where(temp == 0.0, torch.ones_like(temp), temp)
+        return k, temp
+
     def __init__(
         self,
         mesh_device,
@@ -275,6 +289,7 @@ class TTSampling(LightweightModule):
         if temp is None:
             temp = torch.ones(total_param_size)
 
+        k, temp = self._normalize_device_params(k, temp)
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
 
         # Create sampling parameter tensors on device
@@ -600,6 +615,7 @@ class TTSampling(LightweightModule):
         empty_slots: list[int] | None = None,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
+        k, temp = self._normalize_device_params(k, temp)
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -610,7 +626,7 @@ class TTSampling(LightweightModule):
                 mapper = None
 
             self.k_tensor_new = ttnn.from_torch(
-                torch.tensor(k),
+                k,
                 device=None,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -624,7 +640,7 @@ class TTSampling(LightweightModule):
                 mesh_mapper=mapper,
             )
             self.temp_tensor_new = ttnn.from_torch(
-                torch.tensor(temp),
+                temp,
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -637,7 +653,7 @@ class TTSampling(LightweightModule):
 
             # Keep the greedy tie-break mask (1.0 where k==1) in sync with k, distributed like k_tensor.
             self._greedy_col_new = ttnn.from_torch(
-                (torch.tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.bfloat16),
+                (k.reshape(1, 1, -1, 1) == 1).to(torch.bfloat16),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
