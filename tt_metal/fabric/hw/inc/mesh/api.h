@@ -1198,20 +1198,21 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 #if defined(FABRIC_2D)
 // clang-format off
 /**
- * Splits ONE multicast operation across several connections: builds a single route map and sends an
- * identical copy of it out every root output. Unlike the route variant above, which builds a
- * different header per slot.
+ * Splits one multicast operation across the root's output connections. The complete route is encoded
+ * once into one shared header, then that immutable header is submitted through every selected output.
  *
- * Requires one direction-tagged slot and one header per root output, and fail-stops if a slot is
- * missing rather than delivering to part of the range.
+ * Requires one direction-tagged connection per root output and exactly one header in the route.
+ * Missing connections fail-stop rather than delivering to only part of the range.
  *
- * Delivers locally when the root action carries LOCAL_DELIVER, i.e. when the range covers the source
- * chip. Returns the root action byte; the caller must not repeat that local delivery.
+ * Source-local delivery is not part of this API: injection bypasses the source RX, and only the
+ * Ethernet outputs in the root action are used.
+ *
+ * Return value: None
  *
  * | Argument                   | Description                             | Type                                       | Required |
  * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
  * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
- * | route_id                   | Route holding one header per root output| uint8_t                                    | True     |
+ * | route_id                   | Route holding the shared packet header  | uint8_t                                    | True     |
  * | dst_dev_id                 | Range anchor device id                  | uint16_t                                   | True     |
  * | dst_mesh_id                | Range anchor mesh id                    | uint16_t                                   | True     |
  * | ranges                     | Multicast extents (E/W/N/S)             | const MeshMcastRange&                      | True     |
@@ -1220,7 +1221,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
  * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
  */
 // clang-format on
-FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
+FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint16_t dst_dev_id,
@@ -1229,12 +1230,11 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
-    auto [headers, num_headers] = PacketHeaderPool::header_table[route_id];
+    auto [packet_header, num_headers] = PacketHeaderPool::header_table[route_id];
+    ASSERT(num_headers == 1);
 
-    // Re-encoded per header rather than copied between them, to avoid copying through volatile L1
-    // pointers.
     const uint8_t root_action = fabric_set_2d_mcast_route(
-        headers,
+        packet_header,
         dst_dev_id,
         dst_mesh_id,
         ranges.e,
@@ -1244,52 +1244,25 @@ FORCE_INLINE uint8_t fabric_multicast_source_inject_noc_unicast_write(
         FABRIC_2D_MESH_Y_SIZE,
         FABRIC_2D_MESH_X_SIZE);
     const uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
+    ASSERT(root_outputs != 0);
 
-    uint8_t copy_index = 0;
-    for (uint8_t dir = 0; dir < static_cast<uint8_t>(eth_chan_directions::COUNT); ++dir) {
-        if ((root_outputs & Routing2DCodec::action_bit(static_cast<eth_chan_directions>(dir))) == 0) {
-            continue;
+    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    uint8_t pending_outputs = root_outputs;
+    connection_manager.for_each([&](auto& sender, uint32_t, uint32_t tag) {
+        if (tag >= static_cast<uint32_t>(eth_chan_directions::COUNT)) {
+            return;
         }
-        ASSERT(copy_index < num_headers);
-        volatile PACKET_HEADER_TYPE* header = headers + copy_index;
-        if (copy_index != 0) {
-            fabric_set_2d_mcast_route(
-                header,
-                dst_dev_id,
-                dst_mesh_id,
-                ranges.e,
-                ranges.w,
-                ranges.n,
-                ranges.s,
-                FABRIC_2D_MESH_Y_SIZE,
-                FABRIC_2D_MESH_X_SIZE);
+        const uint8_t output_bit = Routing2DCodec::action_bit(static_cast<eth_chan_directions>(tag));
+        if ((pending_outputs & output_bit) == 0) {
+            return;
         }
-        header->to_noc_unicast_write(noc_unicast_command_header, size);
-
-        bool injected = false;
-        connection_manager.for_each_with_tag(dir, [&](auto& sender, uint32_t, uint32_t) {
-            // One send per output even where several slots share a direction; a second send would
-            // deliver the subtree twice.
-            if (injected) {
-                return;
-            }
-            injected = true;
-            sender.wait_for_empty_write_slot();
-            sender.send_payload_without_header_non_blocking_from_address(src_addr, size);
-            sender.send_payload_flush_non_blocking_from_address(
-                reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
-        });
-        ASSERT(injected);
-        copy_index++;
-    }
-
-    // Injection bypasses the source RX, so no router decodes this chip's own action byte and this
-    // write is the only thing that delivers here. Exactly once, not once per copy.
-    if (root_action & Routing2DCodec::ACTION_LOCAL_DELIVER) {
-        noc_async_write(src_addr, noc_unicast_command_header.noc_address, size);
-    }
-
-    return root_action;
+        pending_outputs &= static_cast<uint8_t>(~output_bit);
+        sender.wait_for_empty_write_slot();
+        sender.send_payload_without_header_non_blocking_from_address(src_addr, size);
+        sender.send_payload_flush_non_blocking_from_address(
+            reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+    });
+    ASSERT(pending_outputs == 0);
 }
 #endif
 
