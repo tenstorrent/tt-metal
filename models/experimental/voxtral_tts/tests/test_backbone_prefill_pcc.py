@@ -1,22 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Block 1 on device against the fp32 reference: wiring, prefill, decode, and the KV cache.
+"""Block 1 prefill on device against the fp32 reference.
 
   * wiring    -- one layer, which is where a rotation-convention error shows.
   * prefill   -- all 15 fixture prompts, pooled and last-position, each paired with a
     worst-sample bound because a correlation alone can hide one far-off element.
-  * decode    -- teacher-forced on real frames, so each step is an independent measurement.
-  * KV cache  -- every cached K and V entry, all 26 layers, at four prompt lengths, plus a check
-    that decode leaves the prompt's positions untouched.
+  * KV cache  -- every cached K and V entry, all 26 layers, at four prompt lengths.
 
-PCC floors are assertable here; worst-sample aggregate LEVELS are not, since they vary more between
-prompts than between builds. Those belong in the paired comparison `scripts/quality_report.py`
-performs.
+Decode is test_backbone_decode_pcc.py. Prefill across every padded shape is test_prefill_shapes.py.
 
 Run:
-    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_pcc.py
-    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_pcc.py -k "case0 or case2"
+    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_prefill_pcc.py
+    pytest -svv models/experimental/voxtral_tts/tests/test_backbone_prefill_pcc.py -k case0
 """
 
 import pytest
@@ -131,62 +127,6 @@ def test_prefill_pcc(gen, w, ci):
         f"diverged, and only the last_only=False one is covered by the gates above")
 
 
-@pytest.mark.parametrize("ci", case_ids(), ids=lambda c: f"case{c}")
-def test_decode_pcc_teacher_forced(gen, w, ci):
-    """Device KV cache and decode steps against the reference, teacher-forced on real frames."""
-    frames = real_frames()
-    embeds, case = fixture_embeds(ci, w)
-    P = embeds.shape[1]
-    inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
-    h_ref = inc.prefill(embeds)
-    gen.reset()
-    h_dev = gen.prefill(embeds, last_only=True)
-    assert gen.pos == inc.pos == P, f"position mismatch after prefill: {gen.pos} vs {inc.pos}"
-
-    pcs, wss = [], []
-    for t in range(min(DECODE_STEPS, frames.shape[0])):
-        emb = bref.embed_frame(w, frames[t])
-        h_ref = inc.step(emb)
-        h_dev = gen.step(emb)
-        _m = compare_hidden(h_dev, h_ref)
-        pcs.append(_m["pcc"])
-        wss.append(_m["worst_pct"])
-    print(
-        f"\n  case {ci} ({case['voice']}, P={P}), {len(pcs)} frames: min PCC {min(pcs):.6f}  "
-        f"mean worst-sample {sum(wss)/len(wss):.2f}%  max {max(wss):.2f}%"
-    )
-    assert min(pcs) > PCC_DECODE, f"case {ci} decode min PCC {min(pcs):.6f}"
-
-
-def test_decode_is_bit_deterministic(gen, w):
-    """The same config re-run must reproduce bit-identically."""
-    frames = real_frames()
-    embeds, _ = fixture_embeds(0, w)
-
-    def run():
-        gen.reset()
-        gen.prefill(embeds, last_only=True)
-        out = []
-        for t in range(min(4, frames.shape[0])):
-            out.append(gen.step(bref.embed_frame(w, frames[t])).clone())
-        return out
-
-    a, b = run(), run()
-    for t, (x, y) in enumerate(zip(a, b)):
-        assert torch.equal(x, y), f"decode step {t} not reproducible: max delta {(x - y).abs().max():.3e}"
-    print(f"\n  {len(a)} decode steps reproduced bit-identically across two runs")
-
-
-# ── The KV cache prefill writes ──
-CACHE_CASES = (0, 2, 3, 12)         # P = 100..357
-CACHE_CASE = CACHE_CASES[0]
-# Cache worst-sample is not gated: it is dominated by one position per prompt, so a threshold
-# loose enough to pass would assert nothing. The hidden-state worst-sample is gated above.
-CACHE_PCC = 0.998
-CACHE_STEPS = 4
-
-# THE K CACHE IS STORED IN A DIFFERENT HEAD-DIM ORDER ON THE TWO SIDES, and comparing raw K without
-# accounting for it reads PCC ~0.02 in all 26 layers while the model is perfectly healthy. Measured
 def _reference_cache(w, embeds):
     """-> {layer_index: (k, v)} after a reference prefill, each [1, N_KV_HEADS, P, HEAD_DIM]."""
     inc = bref.IncrementalBackbone(w, n_layers=N_LAYERS)
@@ -237,32 +177,3 @@ def test_prefill_kv_cache_matches_reference(gen, w, ci):
     assert not bad, "cache entries below the gate: " + ", ".join(
         f"layer {i} {s} PCC {pc:.6f}" for i, s, pc in bad)
 
-
-def test_decode_does_not_disturb_the_prompt_cache(gen, w):
-    """Decode must leave the prompt's positions exactly as prefill wrote them.
-
-    Device against itself, so it isolates the write index from any numerical question."""
-    embeds, _ = fixture_embeds(CACHE_CASE, w)
-    P = embeds.shape[1]
-    frames = real_frames()
-    gen.reset()
-    gen.prefill(embeds, last_only=True)
-    before = _device_cache(gen, P)
-    for t in range(CACHE_STEPS):
-        gen.step(bref.embed_frame(w, frames[t]))
-    after = _device_cache(gen, P)
-
-    moved = []
-    for i in range(N_LAYERS):
-        for side, j in (("K", 0), ("V", 1)):
-            if not torch.equal(before[i][j], after[i][j]):
-                d = (before[i][j] - after[i][j]).abs()
-                moved.append((i, side, float(d.max()), int(d.amax(dim=(0, 1, 3)).argmax())))
-    if moved:
-        for i, side, mx, pos in moved[:5]:
-            print(f"\n    layer {i} {side} changed by {mx:.3e} at prompt position {pos}")
-    assert not moved, (
-        f"{len(moved)} of {N_LAYERS * 2} (layer, side) cache regions changed over {CACHE_STEPS} "
-        f"decode steps -- decode is writing inside the prompt's positions [0, {P})")
-    print(f"\n  {N_LAYERS} layers x (K,V) unchanged across {CACHE_STEPS} decode steps "
-          f"(prompt positions [0, {P}))")
