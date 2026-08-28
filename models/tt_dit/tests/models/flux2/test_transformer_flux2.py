@@ -44,14 +44,18 @@ class ModelLocationGenerator(Protocol):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, topology, num_links, device_params",
+    "mesh_device, sp_axis, tp_axis, topology, num_links, fsdp, device_params",
     [
         # 2x2 is the only geometry a 4-chip box can run: the attention path requires both
-        # sequence and tensor parallel factors > 1.
-        [(2, 2), 0, 1, ttnn.Topology.Linear, 2, line_params_flux2_transformer],
-        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
-        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
+        # sequence and tensor parallel factors > 1. FSDP is on because tensor parallelism
+        # alone shards the weights across only the TP axis and REPLICATES them across SP,
+        # so 64 GB of weights occupy 129 GB of the 137 GB the four chips have — 94% full
+        # before any activation, and the full model then misses by ~100 MB. Sharding on
+        # both axes puts the same weights in 64 GB, which is what the pipeline does.
+        [(2, 2), 0, 1, ttnn.Topology.Linear, 2, True, line_params_flux2_transformer],
+        [(1, 8), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
+        [(2, 4), 0, 1, ttnn.Topology.Linear, 1, False, line_params_flux2_transformer],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
     ],
     ids=[
         "bh_2x2_linear",
@@ -80,6 +84,7 @@ def test_transformer(
     tp_axis: int,
     topology: ttnn.Topology,
     num_links: int,
+    fsdp: bool,
     batch_size: int,
     height: int,
     width: int,
@@ -140,6 +145,7 @@ def test_transformer(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
+        is_fsdp=fsdp,
     )
 
     cache.load_model(
@@ -150,6 +156,9 @@ def test_transformer(
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
         mesh_device=mesh_device,
+        # Also part of the cache key: an FSDP-sharded tree and a TP-only one are
+        # different tensors, and reading one as the other fails on a missing weight.
+        is_fsdp=fsdp,
     )
 
     spatial_seq_len = height * width // 16**2
