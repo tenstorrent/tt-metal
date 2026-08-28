@@ -72,22 +72,16 @@ _L1_RESERVE = 32 * 1024
 
 # Per-device override, same keying as `_VISION_MM_TUNING_BY_DEVICE` (`ModelArgs.device_name`).
 #
-# N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this
-# table was swept on (mlp_fc2's L1 output wants 387 KiB/core vs ~1200 available)
-# and fatal at 3x the rows: at 33024 the plan still took L1 for 1161
-# buffer at 244608, and mlp_fc2's own CB region ends at 301248 --
-#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
-#    [0-0 - 5-6]. L1 buffer allocated at 244608, CB region ends at 301248"
-# which is the 300dpi (206x160 patches) cases of test_model.py::test_vision_model_inference. 128 KB
-# restores the invariant with margin and keeps every 11008-row L1 placement the sweep chose --
-# verified on Qwen3.5-9B / N300: mlp_fc2 still takes L1 at 11008 rows, DRAM at
-# 33024/34816, with no other family's placement changed, and all 6 vision cases pass.
+# N300: 128 KB. The 32 KB default is invisible at the 11008-row demo grid this table was swept on,
+# but fatal at 3x the rows -- at 33024 the plan still takes L1 and mlp_fc2's CBs then clash with it
+# ("circular buffers ... clash with L1 buffers"), which is the 300dpi cases of
+# test_model.py::test_vision_model_inference. 128 KB restores the invariant with margin and keeps
+# every 11008-row placement the sweep chose (verified on 9B/N300: mlp_fc2 still takes L1 at 11008,
+# DRAM at 33024/34816, no other family moved, all 6 vision cases pass).
 #
-# NOT applied to the other Wormhole meshes though the bug is general: the widest
-# image measured on any of them is this same 11008-row grid, where it cannot
-# T3K's overrides below put FOUR families' outputs in L1 -- derived (not measured) numbers put
-# merger_fc2 only ~4 MiB inside budget there, too little margin to move blind
-# was not verified against. Extend per mesh, with a large-image run to back it up.
+# NOT applied to the other Wormhole meshes, though the bug is general: the widest image measured on
+# them is this same 11008-row grid, and T3K's overrides put FOUR families' outputs in L1 on derived
+# rather than measured numbers. Extend per mesh, backed by a large-image run.
 _L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
 
 # Per-family matmul tuning, from tests/perf/test_sweep_vision_matmuls.py.
@@ -107,7 +101,7 @@ _L1_RESERVE_BY_DEVICE = {"N300": 128 * 1024}
 #
 # The measured per-op deltas, the rejected alternatives (sharded activations; in0-in-L1 on the 9B; a
 # forced config for the merger) and the headroom deliberately left (LoFi, worth ~-46 ms/tower but an
-# accuracy call) are all recorded in ../../VISION_TOWER_PERF.md.
+# accuracy call) are all recorded under "Tower kernel tuning" in ../../README-N300-9B.md.
 _VISION_MM_TUNING = {
     # patch_embed's DRAM output is deliberate: L1 was worth only -58 us once per image, and its
     # consumers are elementwise ops plus a pad that would inherit L1 unvalidated.
@@ -147,36 +141,24 @@ _FIDELITY_NAMES = ("lofi", "hifi2", "hifi2_na", "hifi2_fp16", "hifi2_nol1acc", "
 
 # SDPA tuning, from tests/perf/test_sweep_vision_sdpa.py. Wormhole-only, same gate as the matmuls.
 #
-# The tower's SDPA is its largest single op (18.1 ms/block on the 9B at 8 heads/device, 6.1 ms on the
-# 27B at 2). Two things were wrong:
+# The tower's SDPA is its largest single op. Two things were wrong: HiFi4 on BFP8 inputs (HiFi2 is
+# -16% at equal PCC; LoFi is only 3% faster again and collapses to PCC 0.9656, since the flash
+# softmax accumulates over chunks and LoFi cannot carry it), and K arriving in BF16 from
+# `kv_cache_dtype` while Q and V were BFP8 -- there is no KV *cache* in a single-pass non-causal
+# tower, so that dtype never applied.
 #
-#  - HiFi4 on BFP8 inputs. Isolated at the 9B shape: HiFi4 20.49 ms -> HiFi2 17.07 ms (-16%) at
-#    PCC 0.999899 vs 0.999911. LoFi is only 3% faster than HiFi2 and lands at PCC 0.9656 -- rejected;
-#    the flash softmax accumulates over seq/k_chunk chunks and LoFi cannot carry it.
-#  - K arrived in BF16 (from `kv_cache_dtype`) while Q and V were BFP8. There is no KV *cache* in a
-#    single-pass non-causal tower, so that dtype never applied. Worth ~1% inside SDPA (it is not
-#    K-bandwidth-bound) plus the no-op typecast it deletes.
+# `fp32_dest_acc_en` stays True via compute_kernel_config_hifi2: the softmax sum needs it (a ~0.94
+# PCC cliff at False), and unlike a matmul it costs SDPA nothing here.
 #
-# `fp32_dest_acc_en` stays True via compute_kernel_config_hifi2: the softmax sum needs it (a known
-# ~0.94 PCC cliff at False), and unlike a matmul that costs SDPA nothing here.
+# Chunks are q=128 / k=512 on BOTH meshes. The kernel parallelises over heads x q_chunks across 64
+# cores, and at 11008 rows q=256 gives 344 units (6 rounds, 40 idle slots) against q=128's 688 (11
+# rounds, 16 idle) -- the balance q=256 lost once the row count stopped being a multiple of
+# 256x64/heads. Measured at the demo shape against the HiFi4/bf16-K baseline: 9B/N300 18.27 -> 13.43
+# ms (1.36x), 27B/T3K 6.06 -> 3.80 ms (1.59x), pcc 0.999909 both.
 #
-# Chunks: q=128 / k=512 on BOTH meshes, so there is no per-device override any more. This was
-# 256/512 (9B) and 128/256 (T3K) while the tower padded rows to a 2048 multiple; re-sweeping at the
-# real 11008 rows moved both to the same answer. The kernel parallelises over heads x q_chunks
-# across 64 cores, and at 11008 rows:
-#
-#   q=256 -> 43 q_chunks -> 8x43 = 344 units, which still needs 6 rounds of 64 (40 idle slots).
-#   q=128 -> 86 q_chunks -> 8x86 = 688 units in 11 rounds (16 idle) -- the balance q=256 lost when
-#            the row count stopped being a multiple of 256x64/heads.
-#
-# Measured, isolated, at the demo shape (seq 11008, head_dim 96), against the HiFi4/bf16-K baseline:
-#
-#   9B  / N300 / 8 heads:  18.27 -> 13.43 ms (1.36x) at 128/512, pcc 0.999909
-#   27B / T3K  / 2 heads:   6.06 ->  3.80 ms (1.59x) at 128/512, pcc 0.999909
-#
-# `exp_approx=True` measured 13.35 vs 13.43 on the 9B -- 0.6%, inside noise, and approximate exp
-# accumulates over SEQ/k_chunk flash chunks across 27 blocks. Not taken.
-# 512/512 is rejected on both: the flash CBs reach 1,949,888 B against L1's 1,499,136 B.
+# `exp_approx=True` measured 0.6% (inside noise) and accumulates approximate exp over flash chunks
+# across 27 blocks -- not taken. 512/512 is rejected: the flash CBs reach 1,949,888 B against L1's
+# 1,499,136 B.
 _VISION_SDPA_TUNING = dict(fidelity="hifi2", k_bf8b=True, q_chunk=128, k_chunk=512, exp_approx=False)
 _VISION_SDPA_TUNING_BY_DEVICE = {}
 

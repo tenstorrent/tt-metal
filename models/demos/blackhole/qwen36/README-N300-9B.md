@@ -80,8 +80,7 @@ models/demos/blackhole/qwen36/
 │   └── sample_prompts/
 ├── utils/                     # substate helper (weight key slicing)
 ├── README.md
-├── README-N300-9B.md
-└── VISION_TOWER_PERF.md
+└── README-N300-9B.md
 ```
 
 ## Dependencies
@@ -317,28 +316,184 @@ Decode holds ~flat to 128k (~21% drop by 256k as paged-KV attention grows). TTFT
 
 ### Vision
 
-**Demo throughput** (`demo/vision_demo.py`, all 5 cases):
+**Demo throughput** (`demo/vision_demo.py`, all 5 cases). Traced TTFTs are a **second pytest
+process** with warm disk JIT (`1645/1645` hits). Capture is outside the timer; a cold first
+process compiles leftover tail/bucket programs inside TTFT and reads ~2× higher (4.52 s / 6.64 s
+/ 0.76 s / 0.31 s for the four traced cases).
 
 | Case | Prompt tokens | TTFT | Decode | Gen |
 | --- | --- | --- | --- | --- |
-| `traced_single_image` | 2770 (2752 image) | 4.52 s | 24.8 tok/s | 419 |
+| `traced_single_image` | 2770 (2752 image) | 2.18 s | 24.7 tok/s | 419 |
 | `paged_single_image` | 2770 (2752 image) | 2.14 s | 24.7 tok/s | 300 |
-| `traced_multi_image` | 5529 (5504 image) | 6.64 s | 24.6 tok/s | 124 |
-| `traced_video` | 820 (728 video) | 0.76 s | 24.9 tok/s | 300 |
-| `traced_text_only` | 21 | 0.31 s | 24.9 tok/s | 100 |
+| `traced_multi_image` | 5529 (5504 image) | 4.43 s | 24.6 tok/s | 124 |
+| `traced_video` | 820 (728 video) | 0.68 s | 24.8 tok/s | 300 |
+| `traced_text_only` | 21 | 0.30 s | 24.9 tok/s | 100 |
 
-Traced TTFT exceeds untraced for the 2770-token single-image case: prompt spans `PREFILL_CHUNK=2048`,
-so traced prefill runs two passes vs one untraced pass. Trace capture is outside the TTFT timer.
+ prompt spans `PREFILL_CHUNK=2048`, so traced prefill runs two passes vs one untraced pass. Trace capture is outside the TTFT timer.
 
-**Tower kernel tuning** (full writeup: `VISION_TOWER_PERF.md`):
+#### Tower kernel tuning
 
-| Stage | Before | After (N300) |
+Four optimisation passes over `tt/vision/` (patch/positional embed → 27 × `VisionBlock` →
+`PatchMerger`), measured on **N300** (TP=2, activations fractured along the hidden dim). Numbers are
+`tt-perf-report` device time for the demo grid `1×86×128` (11008 patches).
+
+The tuning is **gated to Wormhole** in code: `VisionModelArgs.vision_mm_tuned` is `is_wormhole_b0()`,
+and off-arch `vision_mm_plan` returns ttnn's auto config, DRAM in/out and the pre-sweep fidelity.
+CCL workers are additionally gated on `device_name` (see `vision_ccl_tuning`). Blackhole P150 /
+P150x4 are **not swept** and keep the untuned path. `QWEN36_VISION_MM_TUNING=0` and
+`QWEN36_VISION_CCL=0` force those fallbacks on any arch.
+
+**Mind the depth.** A window is `head + depth × block + tail`, so window totals are comparable only
+at equal depth — profile at **`-k oneblock`** (depth 1; every block op appears exactly once) and gate
+accuracy at **`-k fulldepth`**. Profiling `fulldepth` reports a ~27× larger window and reads as a
+massive regression. `27-blk` below is `head + 27 × block + tail`, the honest projection of the
+shipping tower.
+
+| 9B / N300 | head | block | tail | depth-1 window | 27-blk |
+| --- | --- | --- | --- | --- | --- |
+| tuning gated off | 4.55 | 37.50 | 6.57 | 48.61 ms | 1023.5 ms |
+| + matmul program configs | 4.37 | 34.19 | 6.62 | 45.18 ms | 934.0 ms |
+| + SDPA + redundant-op removal | 3.03 | 30.42 | 6.51 | 39.96 ms | 831.0 ms |
+| + tightened row padding, q/k 128/512 | 2.83 | 26.74 | 6.65 | 36.22 ms | 731.4 ms |
+| + CCL `num_workers_per_link=4` (**current**) | 2.66 | 26.46 | 6.25 | **35.37 ms** | **723.3 ms** |
+
+`patch_embed` and the two merger matmuls live in head/tail — they run once per image at any depth.
+The block *opens* with the `AllGather` that precedes the first `LayerNorm`: put that leading ~2.1 ms
+in the head by mistake and the head/block split is wrong by that much while the window total still
+looks right.
+
+**Accuracy gates at full depth**, because error compounds block over block:
+
+| depth 1 | **depth 27 (real)** | depth 27, before the padding fix |
 | --- | --- | --- |
-| Depth-1 window (one block, device time) | 11,876 µs | **6,887 µs** (1.72x) |
-| Full tower device time | 52,477 µs | 45,343 µs (−13.6%) |
-| SDPA (8 heads/device, 256/512) | 20.62 ms | **15.29 ms** (1.35x) |
-| Redundant data-movement pass | 18,119 µs device | 79.46 ms → 71.81 ms wall (−9.6%) |
-| CCL workers (`wpl=4` vs `wpl=2`) | 5.77 ms | **4.69 ms** (−19%) |
+| 0.99977 | **0.99929** | 0.98540 |
+
+The ~0.985 was **not** `bfloat8_b` weight error (an earlier writeup said so; it was wrong). It was
+the sequence padding: SDPA runs `is_causal=False` with no `attn_mask`, so pad rows acted as unmasked
+*keys* — zeros, so every real query summed `exp(0) = 1` into its softmax denominator. Note the
+control that produced the wrong conclusion looked sound: the untuned tower measured 0.98495, no
+better than the tuned one, but `QWEN36_VISION_MM_TUNING=0` does not touch `seq_len`, so both arms
+carried the same bug. *A gate that holds both arms equally wrong proves they match, not that either
+is right.*
+
+**Per-op device time, 9B / N300** (one instance each; `before` folds in the op each change absorbed):
+
+| op | before | after | |
+| --- | --- | --- | --- |
+| `patch_embed` 11008→5504 × 1536 × 576 | 865 | **730** | 1.18x |
+| `qkv` 2048→1536 × 1152 × 2304 | 3281 + 937 (bias add) | **1411** | 2.99x |
+| `wo` 1024→4096 × 768 × 1152 | 2725 | **294** | 9.27x |
+| `mlp_fc1` 1024→3072 × 1152 × 2176 | 1863 + 1234 (GELU) | **1991** | 1.56x |
+| `mlp_fc2` 1024→1536 × 2176 × 1152 | 1670 | **995** | 1.68x |
+| `merger_fc1/2` | 707 / 764 | 708 / 757 | left on auto |
+
+What was wrong: `wo`'s program config sized `per_core_M` for 2048 rows while the matmul ran 1024, so
+it used **24 of 64 cores**; `qkv` used `in0_block_w=1` (36 single-tile K blocks); four families ran
+on ttnn's auto config; `qkv`/`wo` ran **HiFi4 on bfloat8_b weights**; `ttnn.linear(activation=...)`
+with no core grid dispatches a **separate `unary_chain` op** (1234 µs/block); and the `qkv` bias was
+a separate elementwise add (937 µs/block).
+
+All of it now derives from one entry point, **`VisionModelArgs.vision_mm_plan`**, which sizes grid,
+`in0_block_w`, subblock, row chunk, fidelity and both memory configs from the matmul's actual
+per-device shape, checks them against the L1 budget, and falls back to auto when nothing legal fits.
+Per-family tuning is `_VISION_MM_TUNING`, with per-device overrides in `_VISION_MM_TUNING_BY_DEVICE`;
+`chunk` and `in0_block_w` are **caps**, snapped down to what is legal for the shape being run.
+
+| family (9B / N300) | chunk | grid | ibw | subblock | fidelity | in0 | out |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `patch_embed` | 5504 | 6×8 | 6 | 1×3 | HiFi2 | DRAM | DRAM |
+| `qkv` | 1536 | 8×8 | 18 | 1×3 | HiFi2 | DRAM | DRAM |
+| `wo` | 4096 | 6×8 | 24 | 1×6 | LoFi | DRAM | DRAM |
+| `mlp_fc1` | 3072 | 8×8 | 6 | 2×3 | HiFi2_fp16 | DRAM | DRAM |
+| `mlp_fc2` | 1536 | 6×8 | 4 | 1×6 | HiFi2_fp16 | DRAM | **L1** |
+| `merger_fc1/2` | — | auto | — | — | HiFi2_fp16 | DRAM | DRAM |
+
+GELU is folded into the program config (`fused_activation`) rather than passed as `activation=`,
+and the `qkv` bias into `ttnn.linear(bias=...)` — safe only because `qkv` is column-parallel and its
+output is final. The **row-parallel** biases (`wo`, `mlp_fc2`, `merger_fc2`)
+must stay after the collective, which would otherwise sum them TP times.
+
+**SDPA** was the largest single op after the matmul pass, with the same class of defect: HiFi4 →
+**HiFi2** (LoFi is 3% faster and lands at PCC 0.9656 per op — no 27-block tower survives it), and K
+arriving **BF16** from `kv_cache_dtype` against BFP8 Q/V, in a tower that has no KV cache at all.
+Chunks are **q=128 / k=512**: the kernel parallelises over `heads × q_chunks` across
+64 cores, and at 11008 rows q=256 leaves 40 of 384 slots idle where q=128 leaves 16 of 688. `512/512`
+is rejected — the flash CBs reach 1,949,888 B against L1's 1,499,136 B. `exp_approx=True` is inside
+noise (0.6%) and accumulates approximate exp across flash chunks over 27 blocks; not taken.
+
+**Row padding** was a multiple of 2048, citing `tt_transformers/tt/attention.py` — a file this tower
+never calls. The real constraint is `seq_len % 128 == 0`, so the demo grid needs **zero** pad
+(11008 = 86 × 128). The `(n // m) + 1` form also over-padded exact multiples, sending a 4096-patch
+image to 6144: 1.5x the rows and 2.25x the SDPA for nothing.
+
+**CCL workers**: shipped default is `(chunks_per_sync=10, num_workers_per_link=4)` from
+`vision_ccl_tuning()`; every other SKU keeps `(10, 2)`. Worth −19% on the AllGather (5.77 → 4.69 ms);
+the ReduceScatter is a wash. `wpl=8` matches `4` and spends more cores. `num_links` stays 1
+(`get_num_links` is hard-fatal above that). `chunks_per_sync` stays 10 — text prefill already
+measured it as a no-op.
+
+**The L1 budget.** Wormhole has 1464 KB usable L1 per Tensix core, and three things compete for it:
+the matmul's circular buffers, an L1-interleaved `in0` (paged across 64 cores), and an L1-interleaved
+output. For `qkv` the output alone is 864 KB/core against 992 KB of CBs, so `in0` and the output
+genuinely cannot coexist here. Two rules cost a tower crash each to learn, and neither is visible on
+paper:
+
+- a consumer's `in0` is placed by its **producer** and spends the *consumer's* budget — hence
+  `LayerNorm.forward` taking a `memory_config`, and `vision_mm_plan` taking `in0_already_l1`;
+- an L1 tensor's **lifetime** spans ops an isolated sweep never runs together — `ff_in` was held by
+  `VisionBlock` until `MLP.forward` returned, so `fc2` ran with three L1 tenants (1769 KB against
+  1432) and died, while the isolated sweep measured that exact config at 298 µs quite happily.
+
+Also load-bearing: the **intermediate CB aliases the output CB** when formats match (bf16 out, no
+fp32 accumulate), and counting it twice is ~144 KB/core too pessimistic — enough to cost a family its
+L1 output, measured once as a 298 → 493 µs regression. `_L1_RESERVE` is
+32 KB (the `l1_small_size` the demo opens with, plus slack), which makes the estimate aggressive for
+**unmeasured** shapes — re-run the sweep's `in0`/output arms if image sizes change.
+
+**Negative results — do not re-try:**
+
+| tried | outcome |
+| --- | --- |
+| `BLOCK_SHARDED` L1 activation | Pins `in0_block_w` and `per_core_M`, forcing a single-shot form whose CBs are 2.0–8.2 MB/core. 7 of 8 arms never built; the one that did measured **408 µs against 105 µs**. |
+| `in0` in L1 | Noise on every family (1.02x on `qkv`, ~0.7% on `mlp_fc1`, nothing on `mlp_fc2`/`wo`), and it forces `in0_block_w` 18 → 6 — that deep K-block is worth more than the L1 read. |
+| A 2D config for `merger_fc1` | Isolated sweep liked it (654 → 555 µs) but **in-model it measured 559 vs auto's 531**. |
+| Folding the **row-parallel** biases into the matmul | Numerically wrong — the collective sums the bias TP times. |
+| Converting `in0` to L1 rather than having the producer write it there | +139–277 µs, wiping out the win. |
+| LoFi on SDPA | PCC 0.9656 per op. The sweep enforces a `PCC_FLOOR` because fastest-wins picks it every time. |
+
+
+
+**Reproducing it:**
+
+```bash
+export TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) ARCH_NAME=wormhole_b0
+export HF_MODEL=Qwen/Qwen3.5-9B MESH_DEVICE=N300
+
+# depth-1 device-perf report (~40 s). Use -k, not a node id: ids change when a param is added,
+# and `-k pcc` would match the module+function name and select BOTH cases.
+python -m tracy -p -v -r -m \
+  pytest models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k oneblock
+tt-perf-report --start-signpost start --end-signpost stop \
+  "$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)"
+
+# the numerical gate: all 27 blocks (~50 s)
+pytest models/demos/blackhole/qwen36/tests/test_vision_tower_pcc.py -v -s -k fulldepth
+
+# the shape gate, then the tuning sweeps (matmul ~5 min; SDPA ~1 min)
+pytest models/demos/blackhole/qwen36/tests/perf/test_sweep_vision_matmuls.py::test_vision_matmul_specs_match_model -v
+pytest models/demos/blackhole/qwen36/tests/perf/test_sweep_vision_matmuls.py -v -s -k sweep
+pytest models/demos/blackhole/qwen36/tests/perf/test_sweep_vision_sdpa.py -v -s
+
+# A/B: one env var, no working-tree surgery, flips matmul AND SDPA tuning together
+QWEN36_VISION_MM_TUNING=0 pytest ... -k oneblock
+```
+
+The shape gate (`tests/perf/vision_matmul_specs.py`) is what keeps the sweep honest: it derives the
+matmul inventory analytically from `VisionModelArgs` **and** captures it from a real forward with
+`ttnn.linear` monkey-patched, then diffs them — so changing a reshape granularity, weight dtype or
+fidelity fails the gate instead of letting the sweep optimise a shape nothing runs.
+
+
 
 ## Known limitations (N300, 9B)
 
