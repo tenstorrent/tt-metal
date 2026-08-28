@@ -411,6 +411,7 @@ void kernel_main() {
                 local_n_has_padding,
                 joint_has_padding,
                 has_straddle && is_causal && is_balanced,
+                false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
