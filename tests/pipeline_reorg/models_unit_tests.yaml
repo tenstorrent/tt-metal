@@ -194,6 +194,10 @@
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
+    # Seed the shared HF_HOME cache if this revision isn't already on the mount. The tests
+    # below run with CI=true -> local_files_only=True (avoids slow NFS scans), so a cold
+    # cache would otherwise fail outright with LocalEntryNotFoundError instead of downloading.
+    python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
@@ -223,6 +227,10 @@
   cmd: |
     unset TT_METAL_WATCHER  # same watcher issue as 27B (#50886)
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B MESH_DEVICE=N300
+    # Seed the shared HF_HOME cache if this revision isn't already on the mount. The tests
+    # below run with CI=true -> local_files_only=True (avoids slow NFS scans), so a cold
+    # cache would otherwise fail outright with LocalEntryNotFoundError instead of downloading.
+    python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
     pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
     pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
