@@ -639,7 +639,21 @@ void kernel_main() {
 
     const uint32_t num_cores = get_arg_val<uint32_t>(0);
     const uint32_t cv_src = get_arg_val<uint32_t>(1);  // start of profiler_msg_t on the worker
-    volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(2));
+    // ETH COVERAGE. An eth core's profiler_msg_t sits at a DIFFERENT L1 address than a Tensix one, so a
+    // single base cannot serve a mixed poll list. Eth cores are appended AFTER the workers, so one split
+    // index plus one alternate base covers the list with a single predictable compare per core -- no
+    // per-core address table, and zero cost on a filler that has no eth cores (eth_start == num_cores).
+    //
+    // The SPAN SIZE is deliberately left uniform. profiler_msg_t is control_vector[64] followed by
+    // buffer[PROCESSOR_COUNT], and PROCESSOR_COUNT is 2 on a Blackhole eth core against 5 on Tensix -- but
+    // the control vector prefix, which is where every SPSC head/tail lives, is IDENTICAL. Reading the full
+    // 5-RISC span from an eth core therefore over-reads ~6 KB of neighbouring eth L1, and the decoder
+    // yields nothing for RISC slots 2-4 because their heads and tails are zeroed at init and no producer
+    // ever moves them. That keeps lane numbering uniform (lane = core * kNRisc + risc) across both core
+    // types, which is the assumption the host decode and every lane-indexed structure are built on.
+    const uint32_t cv_src_eth = get_arg_val<uint32_t>(2);
+    const uint32_t eth_start = get_arg_val<uint32_t>(3);
+    volatile tt_l1_ptr uint32_t* coords = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_addr(4));
 
     // Reads on one NoC, writes on the other, so a batch of span reads can be IN FLIGHT while the previous
     // batch is pushed to the host. On a single NoC the two are serialized by the barriers however the loop
@@ -2007,7 +2021,9 @@ void kernel_main() {
                         noc_async_write_one_packet<true, true>(
                             sc,
                             get_noc_addr(
-                                coords[c] & 0xFFFFu, coords[c] >> 16, cv_src + kernel_profiler::SPSC_RING_HEAD_0 * 4u),
+                                coords[c] & 0xFFFFu,
+                                coords[c] >> 16,
+                                (c < eth_start ? cv_src : cv_src_eth) + kernel_profiler::SPSC_RING_HEAD_0 * 4u),
                             kNumRisc * 4u);
                         hb_slot = (hb_slot + 1u) & (kMaxCores - 1u);
                         c_ph_head += get_timestamp() - t_h0;
@@ -2075,6 +2091,8 @@ void kernel_main() {
                             z_issue(self_now_phase, self_zone_close);
                         for (uint32_t i = 0; i < n; i++) {
                             const uint32_t xy = coords[base_c + i];
+                            // Eth cores are appended after the workers, so one compare picks the base.
+                            const uint32_t cv = (base_c + i) < eth_start ? cv_src : cv_src_eth;
                             CoreLocalMem<uint32_t> dst(kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u);
                             if constexpr (kReadSplit == 2) {
                                 // SPLIT WITHIN THE CORE: both NoCs carry half of the SAME span. Alternating whole
@@ -2083,14 +2101,14 @@ void kernel_main() {
                                 // halves) without needing more L1, which is the only free variable left.
                                 constexpr uint32_t kHalf = (kSpanBytes / 2u) & ~0x1Fu;  // 32 B aligned
                                 noc.async_read<NocOptions::DEFAULT, kHalf>(
-                                    src, dst, kHalf, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src}, {});
+                                    src, dst, kHalf, {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv}, {});
                                 CoreLocalMem<uint32_t> dst2(
                                     kStageBase + (gen * kGenSlots + i) * kSlotBytes + kPrefix * 4u + kHalf);
                                 noc_b.async_read<NocOptions::DEFAULT, kSpanBytes - kHalf>(
                                     src,
                                     dst2,
                                     kSpanBytes - kHalf,
-                                    {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src + kHalf},
+                                    {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv + kHalf},
                                     {});
                             } else if constexpr (kReadSplit == 1) {
                                 // Alternate cores between the two NoCs so both have transactions outstanding.
@@ -2099,14 +2117,14 @@ void kernel_main() {
                                         src,
                                         dst,
                                         kSpanBytes,
-                                        {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src},
+                                        {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv},
                                         {});
                                 } else {
                                     noc_b.async_read<NocOptions::DEFAULT, kSpanBytes>(
                                         src,
                                         dst,
                                         kSpanBytes,
-                                        {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src},
+                                        {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv},
                                         {});
                                 }
                             } else {
@@ -2114,7 +2132,7 @@ void kernel_main() {
                                     src,
                                     dst,
                                     kSpanBytes,
-                                    {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv_src},
+                                    {.noc_x = xy & 0xFFFFu, .noc_y = xy >> 16, .addr = cv},
                                     {});
                             }
                         }

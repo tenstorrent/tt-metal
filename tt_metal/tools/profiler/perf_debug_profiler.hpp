@@ -115,6 +115,12 @@ private:
         // Worker cores only, i.e. where the DRISC self-profiling lane block starts inside core_virt. 0 when
         // self-profiling is off, in which case core_virt holds nothing but workers.
         uint32_t n_worker_cores = 0;
+        // ETH COVERAGE: eth cores are appended after the workers in the poll list. eth_start is the index
+        // where they begin (== worker count), eth_prof_l1 the L1 base their profiler_msg_t sits at, which
+        // differs from the Tensix one. Both are 0 when eth coverage is off.
+        uint32_t n_eth_cores = 0;
+        uint32_t eth_start = 0;
+        uint32_t eth_prof_l1 = 0;
         // ---- DRISC drainer ----
         // The program stays alive for the life of the profiler: its kernel is still running. It was
         // launched OUTSIDE the command queue (detail::LaunchProgram with force_slow_dispatch), which is

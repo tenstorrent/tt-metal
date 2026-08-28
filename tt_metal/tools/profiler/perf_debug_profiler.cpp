@@ -292,6 +292,17 @@ uint32_t role_ring_mb() {
 // the sustained-optimized roster: the second mover is worth ~2.3x on the sustained knee, so switch to 4 for
 // long max-rate captures. The 6-shape is the default because it keeps producers unstalled at the highest
 // offered rates, which is what perturbs a workload's own timing.
+// TT_METAL_PERF_DEBUG_ETH_COVERAGE: sweep the ACTIVE eth cores alongside the workers. On by default --
+// an eth core's markers are otherwise written into its L1 ring and never drained, so anything a fabric
+// router or the device<->device clock sync records is simply lost. Set 0 to restore worker-only coverage,
+// which is also the fallback when the part exposes no eth profiler region.
+bool eth_coverage() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_COVERAGE");
+        return (s == nullptr || *s == '\0') ? true : (*s != '0');
+    }();
+    return v;
+}
 uint32_t n_fillers() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FILLERS");
@@ -3205,6 +3216,69 @@ bool PerfDebugProfiler::boot_device(
         }
     }
 
+    // ---- ETH COVERAGE ------------------------------------------------------------------------------
+    //
+    // Eth cores run kernels too (fabric routers, and the device<->device clock sync), and their markers go
+    // into the same per-RISC SPSC rings a worker uses -- but nothing drained them, so anything an eth core
+    // recorded was stranded in its L1. Append them to the poll list so the fillers sweep them like any
+    // other core.
+    //
+    // Their profiler_msg_t sits at a DIFFERENT L1 address (an eth core is its own programmable core type),
+    // which is why the drain kernel takes a second base and a split index rather than one address for the
+    // whole list. Eth cores go at the END so that split is a single compare.
+    //
+    // Lane numbering stays uniform (5 slots per core) even though a Blackhole eth core has 2 processors,
+    // not 5: profiler_msg_t is control_vector[64] then buffer[PROCESSOR_COUNT], so the control vector --
+    // where every SPSC head and tail lives -- is laid out identically, and slots 2-4 simply stay at
+    // head == tail == 0 forever because nothing produces into them. Keeping kNRisc uniform is what lets
+    // core_of_xy, ctx.nl and the decoder's lane math stay untouched.
+    const uint32_t n_worker_only = static_cast<uint32_t>(num_cores);
+    uint64_t eth_prof_l1 = 0;
+    std::vector<CoreCoord> eth_virt;
+    if (eth_coverage()) {
+        try {
+            eth_prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "[perf-debug profiler] no eth profiler region ({}); eth coverage off", e.what());
+        }
+    }
+    if (eth_prof_l1 != 0) {
+        IDevice* dev0 = mesh_device->get_device(coord);
+        // Active cores only: an inactive eth core has no firmware answering, and the sync work this exists
+        // for runs on links that are up.
+        for (const CoreCoord& lg : dev0->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true)) {
+            const CoreCoord v =
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, lg, CoreType::ETH);
+            eth_virt.push_back(v);
+        }
+    }
+    if (!eth_virt.empty()) {
+        const uint32_t base = static_cast<uint32_t>(coords.size());
+        coords.resize(base + eth_virt.size());
+        ctx.core_virt.resize(base + eth_virt.size());
+        for (size_t k = 0; k < eth_virt.size(); k++) {
+            const uint32_t idx = base + static_cast<uint32_t>(k);
+            const uint32_t vx = static_cast<uint32_t>(eth_virt[k].x), vy = static_cast<uint32_t>(eth_virt[k].y);
+            coords[idx] = (vx & 0xFFFFu) | ((vy & 0xFFFFu) << 16);
+            ctx.core_of_xy[coords[idx]] = idx;
+            cluster.write_core(
+                zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, eth_virt[k]), eth_prof_l1);
+            ctx.core_virt[idx] = {vx, vy};
+        }
+        ctx.nl = static_cast<uint32_t>(coords.size()) * kNRisc;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] Device {}: eth coverage ON -- {} active eth cores appended after {} workers "
+            "(eth profiler L1 0x{:x})",
+            device_id,
+            eth_virt.size(),
+            n_worker_only,
+            eth_prof_l1);
+    }
+    ctx.n_eth_cores = static_cast<uint32_t>(eth_virt.size());
+    ctx.eth_start = n_worker_only;
+    ctx.eth_prof_l1 = static_cast<uint32_t>(eth_prof_l1);
+
     const distributed::MeshCoordinate scoord = coord;
     ctx.device = mesh_device->get_device(coord);
 
@@ -3486,8 +3560,11 @@ bool PerfDebugProfiler::boot_device(
         // getting this denominator wrong would look like a working build that simply did not improve.
         const uint32_t n_slices = rsplit ? n_fillers() : n_sockets_split();
         const uint32_t slice = is_mover ? 0u : d;
-        const uint32_t lo = is_mover ? 0u : static_cast<uint32_t>((num_cores * slice) / n_slices);
-        const uint32_t hi = is_mover ? 0u : static_cast<uint32_t>((num_cores * (slice + 1)) / n_slices);
+        // Slice the WHOLE poll list -- workers PLUS the appended eth cores. num_cores counts workers only,
+        // so slicing on it would enumerate the eth cores and then sweep none of them.
+        const uint64_t n_poll = static_cast<uint64_t>(coords.size());
+        const uint32_t lo = is_mover ? 0u : static_cast<uint32_t>((n_poll * slice) / n_slices);
+        const uint32_t hi = is_mover ? 0u : static_cast<uint32_t>((n_poll * (slice + 1)) / n_slices);
         const uint32_t my_cores = hi - lo;
         if (my_cores == 0 && !is_mover) {
             continue;
@@ -4069,7 +4146,12 @@ bool PerfDebugProfiler::boot_device(
                           kdrain,
                           ctx.drisc_logical[d],
                           DramConfig{.noc = drain_noc() == 1 ? NOC::NOC_1 : NOC::NOC_0, .compile_args = cargs});
-            std::vector<uint32_t> rt = {my_cores, static_cast<uint32_t>(prof_l1)};
+            // Eth cores sit at the END of the global poll list, so a filler's slice [lo,hi) contains them
+            // only if it reaches past eth_start; translate the global split into this slice's local one.
+            const uint32_t local_eth_start =
+                (ctx.eth_start > lo) ? std::min<uint32_t>(ctx.eth_start - lo, my_cores) : 0u;
+            std::vector<uint32_t> rt = {
+                my_cores, static_cast<uint32_t>(prof_l1), ctx.eth_prof_l1, local_eth_start};
             rt.insert(rt.end(), coords.begin() + lo, coords.begin() + hi);
             SetRuntimeArgs(*ctx.drain_program[d], drain_id, ctx.drisc_logical[d], rt);
 
