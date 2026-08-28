@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 import torch
@@ -16,6 +18,17 @@ from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import (
     required_kda_weight_names,
     validate_kda_weights,
 )
+
+
+def kda_state_dict_sha256(state_dict: Mapping[str, torch.Tensor]) -> str:
+    """Return a canonical content identity for the normalized KDA layer weights."""
+    fingerprint = hashlib.sha256()
+    for name in sorted(state_dict):
+        tensor = state_dict[name].detach().cpu().contiguous()
+        metadata = json.dumps([name, str(tensor.dtype), list(tensor.shape)], separators=(",", ":"))
+        fingerprint.update(metadata.encode())
+        fingerprint.update(memoryview(tensor.view(torch.uint8).numpy()))
+    return fingerprint.hexdigest()
 
 
 def kda_layer_prefix(layer_idx: int) -> str:

@@ -16,12 +16,13 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
   They do not compute a CPU reference; every output and final-state tensor must be bit-identical.
 - CPU-reference determinism uses T=32 and compares two repetitions with the initial result.
 - Required performance acceptance is real Kimi-K3, B=1, T=5120 on SP1xTP8, SP2xTP4, and SP4xTP2.
-- LoudBox references and regression limits live in `perf/perf_targets/bh_loudbox.json`.
+- LoudBox references, five-session dispersion, and regression limits live in `perf/perf_targets/bh_loudbox.json`.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
 - `model/test_real_weights.py` checks output and both states against the independent Torch reference
   and requires usable realtime program records.
-- `perf/test_layer_perf.py` checks those endpoints on a synchronized eager forward, then measures
-  warm trace-replay wall time. Timing repetitions are not accuracy or determinism samples.
+- `perf/test_layer_perf.py` checks those endpoints on a synchronized eager forward, then gates the
+  median of five warm trace-replay samples. Its 900-second item timeout covers a cold CPU-oracle cache.
+  Timing repetitions are not accuracy or determinism samples.
 - Use synchronized trace wall time for routine latency and Tracy only for targeted attribution.
 
 ## Catalogue
@@ -30,7 +31,7 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 tests/
 ├── conftest.py                         — Pinned checkpoint fixture plus perf marker registration.
 ├── checkpoint_utils.py                 — Indexed Kimi-K3 layer loading for tests.
-├── test_cache_fingerprints.py           — Persistent tensor-cache config and placement identities.
+├── test_cache_fingerprints.py           — Persistent checkpoint-content, config, and placement identities.
 ├── test_numeric_validation.py          — Accuracy, equality, bit-identity, and finiteness contracts.
 ├── utils.py                            — Three numeric contracts; case builders,
 │                                         reconstruction, and profiling support.
@@ -55,8 +56,8 @@ tests/
 │                                         bit-identical projection determinism.
 └── perf/
     ├── perf_targets/
-    │   ├── bh_loudbox.json             — T=5120 trace-wall references and provenance;
-    │   │                                 and one-sided regression limits.
+    │   ├── bh_loudbox.json             — T=5120 median trace-wall references, session dispersion,
+    │   │                                 provenance, and one-sided regression limits.
     └── test_layer_perf.py              — T=5120 accuracy and trace-wall acceptance on
                                           SP1xTP8, SP2xTP4, and SP4xTP2.
 ```

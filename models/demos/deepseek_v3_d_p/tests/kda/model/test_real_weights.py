@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 
 pytestmark = [
     run_for_blackhole(),
+    pytest.mark.requires_host_iommu,
     pytest.mark.parametrize(
         "device_params",
         [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -42,7 +43,7 @@ def test_kimi_k3_layer_1_real_weights_pcc(
 ) -> None:
     case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=128)
     golden_output, golden_state = kda_forward_reference(case.hidden, case.state_dict, case.config)
-    cache_path = kimi_k3_tensor_cache_path(case.checkpoint_dir, mesh_device, tensor_parallel_axis)
+    cache_path = kimi_k3_tensor_cache_path(case.checkpoint_identity, mesh_device, tensor_parallel_axis)
     cache_prefix = f"layer_{KimiK3Config.FIRST_KDA_LAYER}.kda"
     if not KDAWeights.check_cache_complete(
         cache_path,
