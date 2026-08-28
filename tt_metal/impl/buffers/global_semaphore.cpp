@@ -97,7 +97,7 @@ void GlobalSemaphoreImpl::setup_buffer(
         .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
         .shard_parameters = std::move(shard_parameters),
     };
-    // LOCAL: bottom-up so 64 B semaphores do not fragment the top region (DSpark wave OOM).
+    // Bottom-up: tiny and address-agnostic, so it must not fragment the top region (see PR).
     buffer_ = distributed::AnyBuffer::create(sem_shard_config, address, /*bottom_up=*/true);
 
     if (initial_value.has_value()) {

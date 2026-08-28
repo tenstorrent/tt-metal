@@ -158,7 +158,7 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         .page_size = config_buffer_size,
         .buffer_type = BufferType::L1,
         .sharding_args = BufferShardingArgs(shard_params, TensorMemoryLayout::HEIGHT_SHARDED),
-        .bottom_up = true,  // LOCAL: keep 64 B configs out of the top region (see DSpark wave OOM)
+        .bottom_up = true,  // tiny + address-agnostic: keep it out of the top region (see PR)
         .sub_device_id = std::nullopt,
     };
 
