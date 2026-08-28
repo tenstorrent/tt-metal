@@ -16,8 +16,9 @@
 
 set -e
 
-# Navigate to tt-metal repo root (script lives in models/experimental/ops/quasar/gpt_oss/tests/)
-cd "$(dirname "$0")/../../../.."
+# Navigate to tt-metal repo root (script lives in models/experimental/ops/quasar/gpt_oss/tests/,
+# six levels down: tests -> gpt_oss -> quasar -> ops -> experimental -> models -> root)
+cd "$(dirname "$0")/../../../../../.."
 
 export HF_MODEL=${HF_MODEL:-/localdev/gpt-oss-120b}
 export TT_CACHE_PATH=${TT_CACHE_PATH:-/localdev/gpt-oss-120b}

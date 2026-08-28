@@ -47,8 +47,12 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # Override num_layers if provided (useful for quick testing with fewer layers)
+    # Override num_layers if provided (useful for quick testing with fewer layers). Reachable from
+    # the demo via QSR_N_LAYERS, so a typo is a realistic input: bound it here rather than let 0
+    # build an empty decoder or an oversized value index past hf_config.layer_types much later.
     if num_layers is not None:
+        if not 1 <= num_layers <= gpt_oss_model_args.n_layers:
+            raise ValueError(f"num_layers must be between 1 and {gpt_oss_model_args.n_layers}, got {num_layers}")
         gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
         gpt_oss_model_args.n_layers = num_layers
 
