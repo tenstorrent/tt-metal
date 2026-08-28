@@ -5,6 +5,7 @@
 #include <boost/move/utility_core.hpp>
 #include <nlohmann/json.hpp>
 #include <nlohmann/json_fwd.hpp>
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -12,11 +13,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -965,25 +968,24 @@ namespace {
 
 std::vector<nlohmann::json> function_starts_with_factory(const nlohmann::json& trace) {
     std::vector<nlohmann::json> nodes;
-    for (const auto& node : trace) {
-        if (node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart &&
-            node.at(ttnn::graph::kParams).contains(ttnn::graph::kProgramFactoryType)) {
-            nodes.push_back(node);
-        }
-    }
+    std::copy_if(trace.begin(), trace.end(), std::back_inserter(nodes), [](const auto& node) {
+        return node.at(ttnn::graph::kNodeType) == ttnn::graph::kNodeFunctionStart &&
+               node.at(ttnn::graph::kParams).contains(ttnn::graph::kProgramFactoryType);
+    });
     return nodes;
 }
 
+std::vector<nlohmann::json> function_starts_named(const std::vector<nlohmann::json>& nodes, std::string_view needle) {
+    std::vector<nlohmann::json> filtered;
+    std::copy_if(nodes.begin(), nodes.end(), std::back_inserter(filtered), [needle](const auto& node) {
+        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
+        return name.find(needle) != std::string::npos;
+    });
+    return filtered;
+}
+
 bool looks_like_hex(const std::string& value) {
-    if (value.empty()) {
-        return false;
-    }
-    for (unsigned char c : value) {
-        if (!std::isxdigit(c)) {
-            return false;
-        }
-    }
-    return true;
+    return !value.empty() && std::all_of(value.begin(), value.end(), [](unsigned char c) { return std::isxdigit(c); });
 }
 
 class CustomCaptureProcessor : public tt::tt_metal::IGraphProcessor {};
@@ -1018,7 +1020,7 @@ TEST_F(TestScopedGraphCapture, ProgramFactoryTypeOnDeviceOp) {
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        const auto output_tensor = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto output_tensor = ttnn::softmax(input_tensor, -1);
         trace = capture.end_graph_capture();
     }
 
@@ -1063,13 +1065,7 @@ TEST_F(TestScopedGraphCapture, ProgramFactoryIndexDiffersAcrossPadVariants) {
     }
 
     auto factory_nodes = function_starts_with_factory(trace);
-    std::vector<nlohmann::json> pad_nodes;
-    for (const auto& node : factory_nodes) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
-        if (name.find("Pad") != std::string::npos) {
-            pad_nodes.push_back(node);
-        }
-    }
+    auto pad_nodes = function_starts_named(factory_nodes, "Pad");
     ASSERT_GE(pad_nodes.size(), 2u);
     std::string type_a = pad_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryType).get<std::string>();
     std::string type_b = pad_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramFactoryType).get<std::string>();
@@ -1096,19 +1092,13 @@ TEST_F(TestScopedGraphCapture, ProgramCacheHitFalseThenTrueInNormalMode) {
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NORMAL);
-        const auto first = ttnn::softmax(input_tensor, -1);
-        const auto second = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto first = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto second = ttnn::softmax(input_tensor, -1);
         trace = capture.end_graph_capture();
     }
 
     auto factory_nodes = function_starts_with_factory(trace);
-    std::vector<nlohmann::json> softmax_nodes;
-    for (const auto& node : factory_nodes) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
-        if (name.find("Softmax") != std::string::npos) {
-            softmax_nodes.push_back(node);
-        }
-    }
+    auto softmax_nodes = function_starts_named(factory_nodes, "Softmax");
     ASSERT_GE(softmax_nodes.size(), 2u);
     EXPECT_FALSE(softmax_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
     EXPECT_TRUE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
@@ -1129,19 +1119,13 @@ TEST_F(TestScopedGraphCapture, ProgramCacheHitStaysFalseInNoDispatch) {
     nlohmann::json trace;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
-        const auto first = ttnn::softmax(input_tensor, -1);
-        const auto second = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto first = ttnn::softmax(input_tensor, -1);
+        [[maybe_unused]] const auto second = ttnn::softmax(input_tensor, -1);
         trace = capture.end_graph_capture();
     }
 
     auto factory_nodes = function_starts_with_factory(trace);
-    std::vector<nlohmann::json> softmax_nodes;
-    for (const auto& node : factory_nodes) {
-        const auto name = node.at(ttnn::graph::kParams).at(ttnn::graph::kName).get<std::string>();
-        if (name.find("Softmax") != std::string::npos) {
-            softmax_nodes.push_back(node);
-        }
-    }
+    auto softmax_nodes = function_starts_named(factory_nodes, "Softmax");
     ASSERT_GE(softmax_nodes.size(), 2u);
     EXPECT_FALSE(softmax_nodes[0].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());
     EXPECT_FALSE(softmax_nodes[1].at(ttnn::graph::kParams).at(ttnn::graph::kProgramCacheHit).get<bool>());

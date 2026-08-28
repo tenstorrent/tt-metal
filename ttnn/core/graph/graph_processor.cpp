@@ -14,6 +14,7 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
 
+#include <algorithm>
 #include <fstream>
 #include <optional>
 #include <sstream>
@@ -36,6 +37,10 @@ inline bool from_bool_param(const std::string& value) {
     return (
         (value.length() == 4) && ('t' == value[0] || 'T' == value[0]) && ('r' == value[1] || 'R' == value[1]) &&
         ('u' == value[2] || 'U' == value[2]) && ('e' == value[3] || 'E' == value[3]));
+}
+
+bool is_graph_processor(const std::shared_ptr<IGraphProcessor>& processor) {
+    return dynamic_cast<ttnn::graph::GraphProcessor*>(processor.get()) != nullptr;
 }
 
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
@@ -175,12 +180,7 @@ bool GraphProcessor::is_detailed_buffer_tracing_enabled() { return capture_detai
 
 bool GraphProcessor::has_active_instance() {
     const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-    for (const auto& processor : processors) {
-        if (dynamic_cast<GraphProcessor*>(processor.get()) != nullptr) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(processors.begin(), processors.end(), is_graph_processor);
 }
 
 void GraphProcessor::set_pending_program_factory(std::string type, std::size_t index, bool cache_hit) {
@@ -587,16 +587,8 @@ node_id GraphProcessor::track_function_end_impl() {
         params[kProgramCacheHit] = pending_program_factory_->cache_hit ? "true" : "false";
         const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
         // Reset after the last GraphProcessor copies.
-        bool last_graph_processor = true;
-        auto it = processors.rbegin();
-        while (it != processors.rend()) {
-            if (dynamic_cast<GraphProcessor*>(it->get()) != nullptr) {
-                last_graph_processor = (it->get() == this);
-                break;
-            }
-            ++it;
-        }
-        if (last_graph_processor) {
+        const auto it = std::find_if(processors.rbegin(), processors.rend(), is_graph_processor);
+        if (it == processors.rend() || it->get() == this) {
             pending_program_factory_.reset();
         }
     }
