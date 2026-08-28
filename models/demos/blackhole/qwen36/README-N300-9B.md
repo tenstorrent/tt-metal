@@ -497,6 +497,10 @@ fidelity fails the gate instead of letting the sweep optimise a shape nothing ru
 
 ## Known limitations (N300, 9B)
 
+- **Greedy decode is on device; temperature sampling is not.** Default `QWEN35_TEMP=0` (unset)
+  picks the next token with per-shard `ttnn.argmax` on N300. `QWEN35_TEMP>0` (and top-k / top-p /
+  repetition penalty / no-repeat) still run on the host via `torch.multinomial`, because vocab/2
+  exceeds the on-device sampler's 64K shard limit (`tt/model.py`).
 - **Batched GDN prefill is capped at batch size 2–4**, not the model's full serving batch — the
   `gated_delta_attn_seq` kernel maps one row to `B * Nv_tp`, which bounds how large a batch can be
   processed in one prefill call (`tests/test_gdn_tp.py:351`).
