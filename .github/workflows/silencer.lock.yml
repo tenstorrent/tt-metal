@@ -707,6 +707,11 @@ jobs:
                         "description": "Run fabric sanity tests (WH N300 + BH card smoke)",
                         "type": "boolean"
                       },
+                      "run-models-sanity-tests": {
+                        "default": false,
+                        "description": "Run model sanity tests (WH Galaxy; off by default because this workflow also fires on every push to main)",
+                        "type": "boolean"
+                      },
                       "run-ops-sanity-tests": {
                         "default": true,
                         "description": "Run ops sanity tests",
