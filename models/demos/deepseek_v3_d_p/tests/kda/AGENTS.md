@@ -19,8 +19,8 @@ Run every device test through `scripts/run_safe_pytest.sh`. A passing hardware r
 - LoudBox references, five-session dispersion, and regression limits live in `perf/perf_targets/bh_loudbox.json`.
 - Rebaseline only when the workload, hardware/runtime contract, or accepted baseline changes.
 - `model/test_real_weights.py` checks output and both states against the independent Torch reference.
-- `perf/test_layer_perf.py` checks those endpoints on a synchronized eager forward, then gates the
-  median of five warm trace-replay samples. Its 900-second item timeout covers a cold CPU-oracle cache.
+- `perf/test_layer_perf.py` checks those endpoints on synchronized eager and trace-replay forwards,
+  then gates the median of five warm trace-replay samples. Its 900-second item timeout covers a cold CPU-oracle cache.
   Timing repetitions are not accuracy or determinism samples.
 - Use synchronized trace wall time for routine latency and Tracy only for targeted attribution.
 
@@ -79,7 +79,7 @@ models/demos/deepseek_v3_d_p/reference/kda/tests/
 Hermetic and real-weight correctness, excluding perf:
 
 ```bash
-KIMI_K3_CKPT=/path/to/pinned/kimi-k3 \
+KIMI_K3_CKPT=/path/to/pinned/kimi-k3 KDA_PERF_SKU=bh_loudbox \
 scripts/run_safe_pytest.sh --run-all \
   models/demos/deepseek_v3_d_p/tests/kda \
   models/demos/deepseek_v3_d_p/reference/kda/tests \

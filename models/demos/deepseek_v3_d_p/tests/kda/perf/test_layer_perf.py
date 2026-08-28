@@ -20,7 +20,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER, KIMI_K3_HF_REVISION
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     check_kimi_k3_accuracy,
@@ -57,7 +57,7 @@ _REPETITIONS = 10
 _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_TARGETS_PATH = Path(__file__).parent / "perf_targets" / "bh_loudbox.json"
-_CPU_REFERENCE_CACHE_VERSION = 3
+_CPU_REFERENCE_CACHE_VERSION = 4
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
@@ -69,19 +69,20 @@ def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
     reference_dir = Path(inspect.getfile(kda_forward_reference)).parent
     fingerprint = hashlib.sha256()
     fingerprint.update(f"v{_CPU_REFERENCE_CACHE_VERSION}".encode())
-    fingerprint.update(str(KimiK3Config.FIRST_KDA_LAYER).encode())
+    fingerprint.update(str(KIMI_K3_FIRST_KDA_LAYER).encode())
     fingerprint.update(str(case.hidden.shape[1]).encode())
     fingerprint.update(case.checkpoint_identity.encode())
     fingerprint.update((case.checkpoint_dir / "config.json").read_bytes())
     fingerprint.update(_tensor_sha256(case.hidden).encode())
-    for source_path in (reference_dir / "config.py", reference_dir / "layer.py", reference_dir / "ops.py"):
+    for source_path in sorted(reference_dir.glob("*.py")):
+        fingerprint.update(source_path.name.encode())
         fingerprint.update(source_path.read_bytes())
     return (
         Path(ttnn.CONFIG.model_cache_path)
         / "kimi_k3"
         / case.checkpoint_identity
         / "cpu_reference"
-        / f"layer_{KimiK3Config.FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
+        / f"layer_{KIMI_K3_FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
     )
 
 
@@ -156,13 +157,20 @@ def kimi_k3_production_reference(
     return case, golden_output, golden_state, elapsed
 
 
-def _load_perf_target(layout: str, *, sequence: int, repetitions: int) -> tuple[float, float]:
+def _load_perf_target(layout: str, *, sequence: int, repetitions: int, timing_samples: int) -> tuple[float, float]:
     targets = json.loads(_PERF_TARGETS_PATH.read_text(encoding="utf-8"))
+    calibrated_sku = targets["sku"]
+    if os.environ.get("KDA_PERF_SKU") != calibrated_sku:
+        raise ValueError(f"set KDA_PERF_SKU={calibrated_sku} to opt in to this hardware-specific performance gate")
     workload = targets["workload"]
+    if workload["weights_revision"] != KIMI_K3_HF_REVISION:
+        raise ValueError("LoudBox target weights do not match the pinned Kimi-K3 revision")
     if sequence != int(workload["sequence"]):
         raise ValueError("LoudBox targets only apply to the required sequence length")
     if repetitions != int(workload["repetitions"]):
         raise ValueError("LoudBox targets require the calibrated replay count; rebaseline to change it")
+    if timing_samples != int(workload["timing_samples"]):
+        raise ValueError("LoudBox targets require the calibrated timing sample count; rebaseline to change it")
     target = targets["targets"][layout]
     return float(target["reference_ms"]), float(target["max_regression_pct"])
 
@@ -181,7 +189,12 @@ def _trace_wall_samples_ms(
     layer: ttKDA,
     hidden: ttnn.Tensor,
     repetitions: int,
-) -> list[float]:
+    case: KimiK3TestCase,
+    golden_output: torch.Tensor,
+    golden_state: KDAReferenceState,
+    tensor_parallel_axis: int,
+    layout: str,
+) -> tuple[list[float], dict[str, float]]:
     state = _allocate_state(layer)
     warm_output, warm_state = layer.forward(hidden, state)
     ttnn.synchronize_device(mesh_device)
@@ -192,6 +205,17 @@ def _trace_wall_samples_ms(
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
+    trace_pcc = check_kimi_k3_accuracy(
+        f"Kimi-K3 layer 1 T={case.hidden.shape[1]} {layout} trace replay",
+        case,
+        golden_output,
+        golden_state,
+        next_state,
+        output,
+        mesh_device,
+        tensor_parallel_axis,
+        pcc_threshold=_PCC_THRESHOLD,
+    )
     samples_ms = []
     for _ in range(_TIMING_SAMPLES):
         start = time.perf_counter()
@@ -203,7 +227,7 @@ def _trace_wall_samples_ms(
     ttnn.deallocate(output)
     _deallocate_state(state)
     _deallocate_state(next_state)
-    return samples_ms
+    return samples_ms, trace_pcc
 
 
 @pytest.mark.parametrize(
@@ -227,10 +251,10 @@ def test_kimi_k3_layer_1_perf(
         tensor_parallel_axis=tensor_parallel_axis,
     )
 
-    state = _allocate_state(layer)
+    initial_state = _allocate_state(layer)
     start = time.perf_counter()
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, state)
+        output, state = layer.forward(hidden_tt, initial_state)
     ttnn.synchronize_device(mesh_device)
     device_forward_ms = (time.perf_counter() - start) * 1e3
     mesh_shape = tuple(mesh_device.shape)
@@ -249,14 +273,30 @@ def test_kimi_k3_layer_1_perf(
         )
     finally:
         ttnn.deallocate(output)
+    _deallocate_state(initial_state)
     _deallocate_state(state)
 
     repetitions = _REPETITIONS
-    samples_ms = _trace_wall_samples_ms(mesh_device, layer, hidden_tt, repetitions)
+    samples_ms, trace_pcc = _trace_wall_samples_ms(
+        mesh_device,
+        layer,
+        hidden_tt,
+        repetitions,
+        case,
+        golden_output,
+        golden_state,
+        tensor_parallel_axis,
+        layout,
+    )
     first_wall_ms = samples_ms[0]
     median_wall_ms = statistics.median(samples_ms)
     tail_wall_ms = max(samples_ms)
-    reference_ms, max_regression_pct = _load_perf_target(layout, sequence=sequence, repetitions=repetitions)
+    reference_ms, max_regression_pct = _load_perf_target(
+        layout,
+        sequence=sequence,
+        repetitions=repetitions,
+        timing_samples=_TIMING_SAMPLES,
+    )
     max_wall_ms = reference_ms * (1.0 + max_regression_pct / 100.0)
     result = {
         "fabric_config": ttnn.get_fabric_config().name,
@@ -264,6 +304,7 @@ def test_kimi_k3_layer_1_perf(
         "sequence": sequence,
         "repetitions": repetitions,
         "pcc": pcc,
+        "trace_pcc": trace_pcc,
         "pcc_reference": "independent pure-Torch FP32 CPU reference",
         "trace_wall_ms": median_wall_ms,
         "first_trace_wall_ms": first_wall_ms,

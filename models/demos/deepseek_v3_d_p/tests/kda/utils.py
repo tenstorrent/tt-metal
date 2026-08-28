@@ -14,8 +14,14 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
+    KIMI_K3_FIRST_KDA_LAYER,
+    KIMI_K3_HF_REVISION,
+    KIMI_K3_LAYER_1_SHA256,
+    kda_state_dict_sha256,
+    load_kda_layer_state_dict,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
@@ -278,7 +284,12 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
     config = kimi_k3_kda_config()
     downloaded_config = json.loads((checkpoint_dir / "config.json").read_text(encoding="utf-8"))
     assert KDAConfig.from_model_config(downloaded_config) == config
-    state_dict = load_kda_layer_state_dict(checkpoint_dir, KimiK3Config.FIRST_KDA_LAYER, config)
+    state_dict = load_kda_layer_state_dict(checkpoint_dir, KIMI_K3_FIRST_KDA_LAYER, config)
+    checkpoint_identity = kda_state_dict_sha256(state_dict)
+    assert checkpoint_identity == KIMI_K3_LAYER_1_SHA256, (
+        f"Kimi-K3 layer {KIMI_K3_FIRST_KDA_LAYER} weights do not match pinned revision "
+        f"{KIMI_K3_HF_REVISION}: {checkpoint_identity}"
+    )
     hidden = torch.randn(
         1,
         sequence,
@@ -291,7 +302,7 @@ def make_kimi_k3_test_case(checkpoint_dir: Path, *, sequence: int) -> KimiK3Test
         state_dict=state_dict,
         hidden=hidden,
         checkpoint_dir=checkpoint_dir,
-        checkpoint_identity=kda_state_dict_sha256(state_dict),
+        checkpoint_identity=checkpoint_identity,
     )
 
 
@@ -341,7 +352,7 @@ def make_kimi_k3_device_case(
         case.config,
         case.state_dict if weights is None else None,
         weight_cache_path=tensor_cache_path,
-        layer_idx=KimiK3Config.FIRST_KDA_LAYER,
+        layer_idx=KIMI_K3_FIRST_KDA_LAYER,
         weights=weights,
         tt_ccl=TT_CCL(mesh_device),
         sp_axis=sequence_parallel_axis,
