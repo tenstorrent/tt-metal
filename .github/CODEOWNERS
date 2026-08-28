@@ -68,7 +68,6 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/ @roseli-TT @tdowdallTT
 tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @roseli-TT
 tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @uaydonat @roseli-TT
 tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @uaydonat @roseli-TT

@@ -1240,7 +1240,10 @@ template <
     uint32_t sliding_window_size = 0,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool use_provided_mask = false>
+    bool use_provided_mask = false,
+    // Compile-time gate for q_base_tiles: only the head-serial ring passes read Q at an offset,
+    // and every other caller keeps the original constant-zero index math (and codegen).
+    bool has_q_base_tiles = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1264,7 +1267,10 @@ static void sdpa_inner_loop_step(
     const bool apply_sliding_window = false,
     const uint32_t mask_straddle_col = 0,
     const uint32_t mask_straddle_jump = 0,
-    const KVPadRotationContext& kv_pad_rotation = {}) {
+    const KVPadRotationContext& kv_pad_rotation = {},
+    // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
+    // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
+    const uint32_t q_base_tiles = 0) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1275,8 +1281,10 @@ static void sdpa_inner_loop_step(
     static_assert(!(use_padded_mask && ring_mode), "use_padded_mask and ring_mode are mutually exclusive");
 
     uint32_t pushed_rows = 0;
-    uint32_t q_wait_tiles = q_subblock_num_tiles;
-    uint32_t q_index_offset = 0;
+    // Q lives at [q_base_tiles, q_base_tiles + Sq_chunk_t*DHt) from the CB front. wait_front counts
+    // from the front, so the wait target includes the chunks of earlier passes that stay resident.
+    uint32_t q_wait_tiles = (has_q_base_tiles ? q_base_tiles : 0) + q_subblock_num_tiles;
+    uint32_t q_index_offset = has_q_base_tiles ? q_base_tiles : 0;
     uint32_t kt_index_offset = 0;
 
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
@@ -1919,7 +1927,9 @@ template <
     bool is_causal_sdpa = false,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool use_provided_mask = false>
+    bool use_provided_mask = false,
+    bool use_windowed_narrowing = false,
+    uint32_t cb_windowed_k_range = INVALID_CB>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2014,6 +2024,16 @@ void sdpa_standard_v2(
                     k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
                 }
             }
+        }
+        // Windowed K-range narrowing: this Q chunk's [k_lo, k_hi) comes from the reader's ctrl CB —
+        // read via the UNPACK mailbox so all three TRISCs agree. The reader streams exactly this many
+        // K/V chunks and the writer produces exactly this many mask chunks; disagreement deadlocks.
+        if constexpr (use_windowed_narrowing) {
+            CircularBuffer cb_k_range_obj(cb_windowed_k_range);
+            cb_k_range_obj.wait_front(1);
+            k_loop_start = ckernel::read_tile_value(cb_windowed_k_range, 0, 0);
+            k_loop_end = ckernel::read_tile_value(cb_windowed_k_range, 0, 1);
+            cb_k_range_obj.pop_front(1);
         }
 
         auto call_step = [&](auto profiling_tag,
@@ -2257,6 +2277,12 @@ template <
     bool local_n_mask_enabled = false,
     bool joint_n_mask_enabled = false,
     bool straddle_mask_enabled = false,
+    // Head-serial passes: keep each pass's flash-attention state in an L1 FIFO
+    // ({cb_sum_in, cb_max_in, cb_prev_out}, num_passes+1 entries deep) instead of the caller's
+    // ping-pong halves. Compile-time so non-FIFO callers (normal ring joint) pay zero MATH-thread
+    // instructions for the FIFO branches — the utilization-band perf gates resolve even
+    // fraction-of-a-percent overhead on this path.
+    bool use_l1_state_fifo = false,
     bool kv_pad_rotation_enabled = false,
     uint32_t v_cb_physical_width_t = vDHt,
     bool v_shares_k_buffer = false,
@@ -2294,7 +2320,9 @@ void sdpa_ring_v2(
     const ChunkedContext& chunked = {},
     const bool is_first_active_iter = true,
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
-    const uint32_t logical_lt = 0) {
+    const uint32_t logical_lt = 0,
+    // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
+    const uint32_t q_base_tiles = 0) {
     init_sdpa_streaming_semaphores();
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -2493,8 +2521,8 @@ void sdpa_ring_v2(
             }
             per_q_valid_kv++;
         }
-        // Use persistent accumulator state from caller (single Q-chunk)
-        // or restore from DRAM (multi Q-chunk).
+        // Use persistent accumulator state from caller (single Q-chunk),
+        // restore from DRAM staging (multi Q-chunk), or pop from the L1 FIFO (head-serial passes).
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
 
         const bool is_first_kv_for_this_q = is_first_active_iter;
@@ -2505,7 +2533,11 @@ void sdpa_ring_v2(
         const AccumulatorHalf original_prev = q_prev;
         const bool restore_from_staging = (q_per_core > 1 && !is_first_active_iter);
         ASSERT(!has_sliding_window || !restore_from_staging);
-        if (restore_from_staging) {
+        // FIFO entry: this pass's own state sits at the front (the fixed cyclic pass order
+        // guarantees it), so the first K chunk merges straight out of the FIFO and pops it.
+        // The staging path builds the identical triple, so both share one redirect.
+        const bool fifo_entry = use_l1_state_fifo && !is_first_active_iter;
+        if (restore_from_staging || fifo_entry) {
             q_prev = {cb_sum_in, cb_max_in, cb_prev_out};
         }
 
@@ -2656,10 +2688,15 @@ void sdpa_ring_v2(
             // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
             const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
             ASSERT(!has_sliding_window || !save_to_staging);
-            const uint32_t step_save_out_cb = save_to_staging ? cb_out : INVALID_CB;
-            const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : INVALID_CB;
+            // FIFO exit: sum/out redirect into the FIFO (pack-only, write-pointer relative). max
+            // cannot — the step reads cur.max front-relative — so mirror it via step_save_max_cb.
+            const bool fifo_exit = use_l1_state_fifo && is_last_k && !is_last_ring_iter;
+            const uint32_t step_save_out_cb = save_to_staging ? cb_out : (fifo_exit ? cb_prev_out : INVALID_CB);
+            const uint32_t step_save_max_cb = save_to_staging ? cb_max_out : (fifo_exit ? cb_max_in : INVALID_CB);
             if (save_to_staging) {
                 q_cur.sum = cb_sum_out;
+            } else if (fifo_exit) {
+                q_cur.sum = cb_sum_in;
             }
 
             // K start tile fed to diag stamp must share Q's coord frame (local for is_causal, global for chunked).
@@ -2748,7 +2785,8 @@ void sdpa_ring_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                false>(  // use_provided_mask
+                false,               // use_provided_mask
+                use_l1_state_fifo>(  // has_q_base_tiles: head-serial passes read Q at q_base_tiles
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2771,7 +2809,8 @@ void sdpa_ring_v2(
                 has_sliding_window,
                 step_straddle_col,
                 step_straddle_jump,
-                step_kv_pad_rotation);
+                step_kv_pad_rotation,
+                q_base_tiles);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
@@ -2785,8 +2824,9 @@ void sdpa_ring_v2(
                 sdpa_cb_pop_front_out_of_line(q_cur.max, Sq_chunk_t);
             } else {
                 std::swap(q_prev, q_cur);
-                // After K0's swap, q_cur holds staging buffers. Reset to original accumulator CBs.
-                if (restore_from_staging && KV_chunks_processed == 1) {
+                // After K0's swap, q_cur holds the staging/FIFO buffers. Reset to the scratch
+                // accumulator CBs so the rest of the pass ping-pongs between scratch halves.
+                if ((restore_from_staging || fifo_entry) && KV_chunks_processed == 1) {
                     q_cur = {original_prev.sum, original_prev.max, original_prev.out};
                 }
             }
@@ -2796,12 +2836,23 @@ void sdpa_ring_v2(
         // Pop Q — not popped inside step since ring_mode gates the early Q pop.
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
-        if (q_per_core > 1 || is_last_ring_iter) {
-            sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+        // Head-serial passes own the pop themselves: all resident chunks are popped together after
+        // the last pass of the last ring iteration, so nothing is popped here.
+        if constexpr (!use_l1_state_fifo) {
+            if (q_per_core > 1 || is_last_ring_iter) {
+                sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+            }
         }
 
-        // Persist or save accumulators for next ring iteration
-        if (q_per_core == 1) {
+        // Persist or save accumulators for next ring iteration.
+        //
+        // FIFO passes persist nothing. Only the scratch max (mirrored, not redirected) is left;
+        // after the last swap it is q_prev.max — pop it.
+        if constexpr (use_l1_state_fifo) {
+            if (!is_last_ring_iter) {
+                sdpa_cb_pop_front_out_of_line(q_prev.max, Sq_chunk_t);
+            }
+        } else if (q_per_core == 1) {
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;

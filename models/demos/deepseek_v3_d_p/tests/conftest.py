@@ -108,6 +108,19 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
 ]
 
 
+def pytest_addoption(parser):
+    try:
+        parser.addoption(
+            "--wrapper-invocation",
+            action="store_true",
+            default=False,
+            help="Set by wrapper tests on the child pytest they spawn: every uncollect_if trim "
+            "is bypassed, so the wrapper's -k filter fully owns the selection.",
+        )
+    except ValueError:
+        pass
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(
@@ -157,9 +170,13 @@ def pytest_collection_modifyitems(config, items):
     """
     is_ci_env = os.getenv("CI") == "true"
     is_ci_v2_env = "TT_GH_CI_INFRA" in os.environ
-    items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
-
     on_ci = is_ci_env or is_ci_v2_env
+
+    # A wrapper's child pytest owns its own selection through -k; trimming it here would
+    # hide exactly the cases the wrapper exists to measure.
+    if not config.getoption("--wrapper-invocation"):
+        items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
+
     torus_xy_certified = os.getenv("PREFILL_TORUS_XY_CERTIFIED") == "1"
     torus_xy_fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     ring_or_torus_fabrics = {
@@ -292,7 +309,9 @@ def pytest_collection_modifyitems(config, items):
             if mesh_shape in allowed_fabric_dct.keys():
                 allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
 
-        if requested_fabric_cfg not in allowed_fabric_cfgs:
+        # A case with no device_params fabric never opens a fabric, so it cannot request an
+        # unfeasible mesh/fabric combination — only device-count matching below applies to it.
+        if requested_fabric_cfg is not None and requested_fabric_cfg not in allowed_fabric_cfgs:
             item.add_marker(
                 pytest.mark.skip(
                     reason="requested combination of fabric config and mesh, unfeasible on the given hardware"

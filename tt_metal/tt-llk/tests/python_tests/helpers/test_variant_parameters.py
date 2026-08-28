@@ -354,6 +354,8 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                                the run-0 init (W-stride -> 32 rows) and the uninit
                                (W-stride -> 64 rows). The two must agree: a block packed
                                dense and torn down non-dense is not a supported call.
+    ``UNINIT_RESTORE_MOP``     the ``restore_tile_pack_mop`` template argument, i.e.
+                               whether the uninit reinstalls the Default tile-pack MOP.
     ``UNINIT_SKIP``            negative control -- drop the uninit entirely. Not a
                                supported configuration; it exists to prove the restores
                                are load-bearing rather than incidentally redundant.
@@ -367,6 +369,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
     """
 
     dense_packing: bool = False
+    restore_mop: bool = False
     skip: bool = False
     block_mop_num_faces: int = 2
 
@@ -374,6 +377,7 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
         return "\n".join(
             [
                 f"constexpr bool UNINIT_DENSE_PACKING = {str(self.dense_packing).lower()};",
+                f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
             ]
@@ -1789,6 +1793,142 @@ class TYPECAST_FORMATS(TemplateParameter):
             f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class CUSTOM_MM_REUSE_CFG(TemplateParameter):
+    """Compile-time chain geometry for the custom_mm_reuse_dest_srcb test.
+
+    The reuse LLK is the second matmul of a fused chain: its in0 operand is moved
+    out of DEST (where a preceding custom_mm<dense_packing> left its output) into
+    SrcB via MOVD2B; only the weights are unpacked into SrcA. The C++ driver runs
+    the whole chain, so these four constants size both the producer custom_mm and
+    the reuse consumer:
+
+    ``in0_tile_r_dim``  height of the in0 tile (1/2/4/8); selects the MOVD2B pattern.
+    ``producer_kt``     producer inner dim in tiles (its kt_dim).
+    ``reuse_kt``        consumer inner dim in tiles == producer ct_dim == number of
+                        DEST-resident in0 tiles the reuse op reduces over.
+    ``reuse_nt``        consumer output width in tiles (1 to 16).
+    """
+
+    in0_tile_r_dim: int = 8
+    producer_kt: int = 2
+    reuse_kt: int = 2
+    reuse_nt: int = 1
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t IN0_TILE_R_DIM = {self.in0_tile_r_dim}u;",
+            f"constexpr std::uint32_t PRODUCER_KT = {self.producer_kt}u;",
+            f"constexpr std::uint32_t REUSE_KT = {self.reuse_kt}u;",
+            f"constexpr std::uint32_t REUSE_NT = {self.reuse_nt}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class SDPA_CUSTOM_MM_FLAGS(TemplateParameter):
+    """Compile-time knobs for the experimental sdpa_custom_mm block matmul test.
+
+    Emitted as #defines (not constexpr) because the C++ driver both consumes
+    SIGNAL_GRANULARITY as a non-type template argument and guards each name with an
+    #ifndef default, so a standalone compile of the source still works.
+
+    signal_granularity : FPU->SFPU post cadence (llk_math_sdpa_custom_mm template arg).
+                         Must divide ct_dim. Purely a signalling cadence; does not change
+                         the numeric result.
+    read_transposed    : selects the transposed SrcA (in1) L1 walk in the unpack LLK.
+    mm_transpose       : the `transpose` init flag threaded through the unpack/math inits
+                         (addr_mod SrcA increment + Haloize_mode).
+    """
+
+    signal_granularity: int = 1
+    read_transposed: bool = False
+    mm_transpose: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"#define SIGNAL_GRANULARITY {self.signal_granularity}",
+            f"#define READ_TRANSPOSED {str(self.read_transposed).lower()}",
+            f"#define MM_TRANSPOSE {str(self.mm_transpose).lower()}",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
+    """Compile-time dims for the experimental sdpa_custom_mm_reuse_dest_srcb OV matmul.
+
+    kt_dim: number of K tiles (softmax-score / V K tiles). The unpack MOP requires an
+            even kt_dim >= 2 (see the "kt_dim: even number from 2 to 256" note in
+            llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h); kt_dim < 2 underflows the
+            MOP iteration count and hangs the unpacker.
+    nt_dim: number of V head-dim output tiles per K iteration (1..16).
+    """
+
+    kt_dim: int = 2
+    nt_dim: int = 1
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t KT_DIM = {self.kt_dim};",
+            f"constexpr std::uint32_t NT_DIM = {self.nt_dim};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class SDPA_REDUCE_ROW_POOL(TemplateParameter):
+    """Select MAX vs SUM for the experimental sdpa_reduce_row op.
+
+    Emits ``constexpr int SDPA_REDUCE_POOL = 0|1;`` consumed by
+    sources/sdpa_reduce_row_test.cpp (0 == MAX -> calculate_sdpa_reduce_max_row,
+    1 == SUM -> calculate_sdpa_reduce_sum_row). The op only supports MAX and SUM.
+    """
+
+    reduce_pool: ReducePool = ReducePool.Max
+
+    def convert_to_cpp(self) -> str:
+        pool_to_int = {ReducePool.Max: 0, ReducePool.Sum: 1}
+        try:
+            value = pool_to_int[self.reduce_pool]
+        except KeyError:
+            raise ValueError(
+                f"sdpa_reduce_row supports only MAX and SUM pools, got {self.reduce_pool}"
+            )
+        return f"constexpr int SDPA_REDUCE_POOL = {value};"
+
+
+@dataclass
+class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
+    chunk_size: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t CHUNK_SIZE = {self.chunk_size};"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t CHUNK_SIZE;", "I"
+
+
+@dataclass
+class MULSCALARHIFI_HIFI_INIT(TemplateParameter):
+    """Select the REVERTED HiFi general-init path in eltwise_mul_scalar_hifi_test.cpp.
+
+    Emits ``#define HIFI_GENERAL_INIT`` when ``enabled`` so the C++ reproduces
+    ``deepseek_binary_dest_reuse_tiles_init``'s HiFi branch verbatim: the general
+    ``_llk_math_eltwise_binary_init_<ELWMUL, NONE, MATH_FIDELITY, DEST_TO_SRCA>``
+    called with a hard-coded ``ckernel::DEFAULT_TENSOR_SHAPE`` instead of the
+    kernel's real tile shape (api/compute/experimental/eltwise_mul_scalar.h:74-88).
+    That mis-specialization hangs the device on silicon (tt-blaze #1760); the
+    Python test is marked xfail. When disabled, the C++ falls through to the
+    non-reverted control path (general init with the correct tensor_shape).
+    """
+
+    enabled: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return "#define HIFI_GENERAL_INIT" if self.enabled else ""
 
 
 @dataclass

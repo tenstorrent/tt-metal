@@ -4,6 +4,7 @@
 
 import pytest
 from conftest import skip_for_blackhole
+from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -70,10 +71,14 @@ _OPS_WITH_STABLE_SORT = {
 }
 
 
-def _get_dest_acc_modes(mathop):
+def _get_dest_acc_modes(mathop, formats):
     if mathop in _OPS_WITHOUT_DEST_ACC:
         return [DestAccumulation.No]
-    return [DestAccumulation.Yes, DestAccumulation.No]
+    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
+    # for both would record two rows with an identical key (the same kernel twice).
+    return distinct_dest_accumulation_modes(
+        formats, [DestAccumulation.Yes, DestAccumulation.No]
+    )
 
 
 def _get_fast_modes(mathop):
@@ -161,7 +166,7 @@ def _get_formats(mathop):
         ApproximationMode.No,
     ],
     mathop=PERF_SWEEP_OPS,
-    dest_acc=lambda mathop: _get_dest_acc_modes(mathop),
+    dest_acc=lambda mathop, formats: _get_dest_acc_modes(mathop, formats),
     loop_factor=[
         16,
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement

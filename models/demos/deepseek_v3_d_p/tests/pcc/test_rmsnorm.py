@@ -12,6 +12,7 @@ Tests that hidden dimension sharding across chips produces correct results when
 using the distributed RMSNorm approach with all-gather for global statistics.
 """
 
+
 import pytest
 import torch
 from loguru import logger
@@ -24,6 +25,18 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    isl_per_chip = params["isl_per_chip"]
+
+    if not on_ci:
+        return False
+    if isl_per_chip == 4096:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "isl_per_chip, emb_dim, epsilon, num_links", [(3200, 7168, 1e-6, 1), (4096, 7168, 1e-6, 1)], ids=["3.2K", "4K"]
 )
@@ -139,6 +152,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug("PCC test passed!")
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize("isl_per_chip, emb_dim, epsilon", [(3200, 7168, 1e-6), (4096, 7168, 1e-6)], ids=["3.2K", "4K"])
 def test_rmsnorm_single_chip(device, isl_per_chip, emb_dim, epsilon):
     """

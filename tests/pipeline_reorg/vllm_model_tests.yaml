@@ -81,6 +81,10 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+# Product path on QB2: 256k + chunked prefill + B=32. LoudBox legs are omitted
+# — models.vllm bh_loudbox budget (75) is fully consumed by Llama-3.1-8B.
+# SKU timeouts kept at main's allocation so verify_time_budget stays green
+# without touching .github/time_budget.yaml.
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
@@ -88,8 +92,8 @@
   benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 400000000}'
-  additional-server-args: "--max_model_len 131072 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
@@ -115,18 +119,52 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
+# Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
+#
 # KNOWN ERROR — [WH-T3K] Gemma4-31B: device hang (fast-dispatch timeout) during
-# decode on WH-T3K only; the same serving config passes on [BH-QB-2] Gemma4-31B.
-# Not a serving/KV-config issue — a tt-metal dispatch-layer hang. Kept enabled to
+# decode on WH-T3K only; the same serving config passes on BH. Kept enabled to
 # track. https://github.com/tenstorrent/tt-metal/issues/49494
+# Still reproducing as of run 32375657713: EngineCore died with
+# "TIMEOUT: device timeout, potential hang detected, the device is unrecoverable"
+# (system_memory_manager.cpp:779) after 6/16 requests, with decode already
+# degraded to ~412 ms/token against ~112 ms locally. Removing --async-scheduling
+# alone did NOT fix it — that run still logged "Asynchronous scheduling is
+# enabled" because the capability defaults on; the kill-switch now lives in
+# vllm-model-tests-impl.yaml. Whether that closes #49494 is unproven.
+#
+# --async-scheduling was REMOVED here (it is still set on the Blackhole legs
+# below). Async decode is measurably broken on Wormhole: on T3K 12B at
+# max_num_seqs 32, async ON returns 32/32 correct on only 4 of 6 repeats
+# (30/32 on the other two, degenerate repetition) while async OFF gives 32/32
+# on four consecutive repeats at the same throughput (363-383 vs 377-389 tok/s
+# aggregate) — no throughput upside, strictly worse correctness. This is also
+# the most likely driver of the WH-T3K-only decode hang tracked in
+# https://github.com/tenstorrent/tt-metal/issues/49494, which never reproduced
+# on BH with the same serving config. Restore it with the tt-inference-server
+# WH specs once the async path is fixed on Wormhole.
+#
+# Benchmark scope reduced to 16 prompts (the shared default is 32) instead of
+# raising any timeout. 31B/T3K sustains ~8.9 tok/s and the benchmark is
+# serialized at max_num_seqs 1, so 32 x 100 output tokens needs ~360 s and was
+# overrunning the 5 min benchmark budget (measured 359.9 s). 16 prompts is
+# ~180 s, comfortably inside it. additional-benchmark-args is appended after the
+# shared args so --num-prompts wins, and the "all requests completed" gate reads
+# num_prompts back out of the result JSON, so it stays consistent at 16.
+#
+# coherence-test added: this was the only gemma4 leg without it, and the
+# benchmark gate gates on request *completion* only — the WH corruption class
+# returns well-formed garbage with completed == num_prompts and sails straight
+# through. Verified passing on T3K.
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
+  coherence-test: true
   server-timeout: 45
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
-  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
+  additional-benchmark-args: "--num-prompts 16"
   multimodal: false
   skus:
     wh_llmbox:
@@ -137,12 +175,13 @@
 
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
+  coherence-test: true
   server-timeout: 20
   benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D"}'
-  additional-server-args: "--max_model_len 32768 --max_num_seqs 1 --async-scheduling"
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
   multimodal: false
   skus:
     bh_quietbox_2:
