@@ -1,15 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Focused DI vs dest-addressed-DI perf comparison.
+"""Perf for the grouped (multi-replay) dest-addressed DI path.
 
-Deliberately tiny: the dest-addressed DI stream only fits the 64-entry math replay buffer
-for ct_dim * rt_dim * fidelity_phases * 16 <= 64, so LoFi 4-tile blocks are where it can
-remove the most (per-tile MOP restart + per-block dest bookkeeping). HiFi4 is the control:
-its stream never fits, the path falls back to the plain DI MOP, and the two rows must match.
+Instruction accounting says the grouped path's best case is `rt > ct >= 2`, where the baseline pays
+two dest re-base instructions per output column: 14 overhead instructions per block against 6. The
+shared perf sweep uses `exact_dest_fill`, which does not generate those shapes, so its grouped
+numbers have never been taken.
 
-Read mean(MATH_ISOLATE) in the .post.csv -- that is cycles per tile-pass with the unpack
-bottleneck removed, which is where a math-thread instruction saving is visible at all.
+Shapes and fidelities mirror test_matmul_dest_di_grouped_quasar.py so a perf row always has a
+correctness row behind it. HiFi4 is the control: group_tiles=1 on a multi-tile block, so the op
+falls back to the counter path and its rows must not move.
+
+Read mean(MATH_ISOLATE) for the instruction saving and mean(L1_TO_L1) for whether it reaches the
+kernel. Two loop factors separate a fixed per-kernel cost (decays as 1/N) from a per-tile one
+(constant).
 """
 
 import pytest
@@ -23,6 +28,7 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import parametrize
+from quasar.test_matmul_dest_di_grouped_quasar import GROUPED_DIMENSIONS
 from quasar.test_matmul_quasar import test_matmul as run_matmul
 
 
@@ -30,37 +36,20 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
 @pytest.mark.quasar
 @parametrize(
     format=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
-    # Every fidelity: LoFi/HiFi2 are unpack-bound (math 16.8/32.8 vs unpack 33.2), HiFi3/HiFi4 are
-    # math-bound (48.8/64.8). A 1-tile block is the only shape whose stream fits the replay buffer
-    # at HiFi3/HiFi4 (1 x 4 x 16 = 64), so it is the only case where a math-thread saving can reach
-    # the kernel's critical path.
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
     dest_sync_mode=[DestSync.Half],
     dest_acc=[DestAccumulation.No],
-    # rt=ct=1 with kt=1 and kt=4. exact_dest_fill only generates dest-filling shapes, which is why
-    # the earlier sweep never covered a 1-tile block.
-    dimensions=[
-        ([32, 32], [32, 32]),
-        ([32, 128], [128, 32]),
-    ],
+    dimensions=GROUPED_DIMENSIONS,
     implied_math_format=[ImpliedMathFormat.Yes],
     register_format_hint=[None],
     enable_direct_indexing=[True],
     enable_dest_direct_addressing=[False, True],
     transpose=[Transpose.No],
     run_types=PERF_RUN_TYPES_QUASAR,
-    # Dest-addressed DI trades a bigger one-time replay load (64 instruction writes vs 15)
-    # for a cheaper loop, so the verdict depends on how many tile-passes amortize the init.
-    # Sweeping loop_factor separates the fixed per-kernel cost from the per-tile saving.
-    loop_factor=[32, 128, 512],
+    loop_factor=[32, 512],
     is_perf=[True],
 )
-def test_perf_matmul_dest_di_quasar(
+def test_perf_matmul_dest_di_grouped_quasar(
     perf_report,
     math_fidelity,
     dest_sync_mode,

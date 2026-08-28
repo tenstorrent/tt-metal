@@ -487,6 +487,25 @@ inline dest_di_plan_t _llk_math_matmul_dest_di_plan_(const std::uint8_t ct_dim, 
 }
 
 /**
+ * @brief Reports whether the dest-addressed stream is worth using over the counter-driven MOP.
+ *
+ * Only when one replay covers the whole block. Measurement (docs/llk/l3/matmul_direct_indexing_quasar.md
+ * sections 7.4-7.5) shows cost tracks the number of replay invocations rather than the number of
+ * instructions: a single replay replacing several MOP replays wins 1.00 cyc/tile at HiFi2-HiFi4,
+ * while the multi-group form loses 0.13-0.51 cyc/tile because each group's replay costs more than
+ * the MOP trigger it removes, despite issuing fewer instructions.
+ *
+ * The grouped path stays implemented and covered by test_matmul_dest_di_grouped_quasar so the
+ * decision can be revisited on silicon; it is disabled here by measurement, not by defect.
+ *
+ * @param plan: Stream plan from @ref _llk_math_matmul_dest_di_plan_
+ */
+inline bool _llk_math_matmul_dest_di_beneficial_(const dest_di_plan_t& plan)
+{
+    return plan.single_replay;
+}
+
+/**
  * @brief Initializes addrmod for the dest-addressed direct-indexing matrix multiply.
  *
  * Every dest index is encoded in its own MVMULDI, so no addr_mod moves a counter; the only
@@ -627,7 +646,7 @@ inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
         static_assert(ENABLE_DIRECT_INDEXING, "Dest direct addressing is a direct-indexing (MVMULDI) path");
         static_assert(!ENABLE_2X_FORMAT, "Dest direct addressing is implemented for the non-2x DI stream only");
 
-        if (_llk_math_matmul_dest_di_plan_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim).group_tiles >= 2)
+        if (_llk_math_matmul_dest_di_beneficial_(_llk_math_matmul_dest_di_plan_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim)))
         {
             _llk_math_matmul_dest_di_addrmod_<MATH_FIDELITY_TYPE>();
             _llk_math_matmul_dest_di_mop_config_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
@@ -746,9 +765,7 @@ inline void _llk_math_matmul_block_dest_di_(std::uint8_t ct_dim, std::uint8_t rt
 {
     const dest_di_plan_t plan = _llk_math_matmul_dest_di_plan_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
 
-    // One tile per replay would cost a dest-base move plus a replay per tile, more than the
-    // counter-driven MOP it would replace.
-    if (plan.group_tiles < 2)
+    if (!_llk_math_matmul_dest_di_beneficial_(plan))
     {
         _llk_math_matmul_block_(ct_dim, rt_dim);
         return;
