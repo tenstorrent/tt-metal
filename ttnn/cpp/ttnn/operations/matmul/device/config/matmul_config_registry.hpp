@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
+#include "ttnn/operations/matmul/device/config/registry/matmul_registry_compatibility.hpp"
 #include "ttnn/operations/matmul/device/config/registry/matmul_registry_exact.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
@@ -51,6 +52,22 @@ enum class ResolutionReason : std::uint8_t {
     UnsupportedSemantics,
     IncompleteRequest,
     InconsistentRequest,
+    CompatibilityUnavailable,
+    DeviceAttestationUnavailable,
+    DeviceQueryFailed,
+    DeviceUninitialized,
+    RemoteDevice,
+    NotOneChipDevice,
+    ActiveSubDeviceManager,
+    UnsupportedArchitecture,
+    UnsupportedBoard,
+    UnsupportedCluster,
+    BoardClusterMismatch,
+    FirmwareUnavailable,
+    InvalidDeviceCapability,
+    SemanticSourceMismatch,
+    BuildIdentityMismatch,
+    RuntimeCapabilityMismatch,
     UnsupportedArtifact,
     MaterializationRejected,
     CircuitBroken,
@@ -102,6 +119,7 @@ bool has_nondefault_v1_tile_transpose(const tt::tt_metal::Tile& tile) noexcept;
 struct Eligibility {
     CallSemantics call;
     IoContractStatus io_contract_status = IoContractStatus::Resolved;
+    CompatibilityStatus compatibility_status = CompatibilityStatus::Compatible;
     bool trace_capture_active = false;
     bool has_program_config = false;
     bool has_compute_kernel_config = false;
@@ -157,9 +175,10 @@ struct WorkloadRequest {
     bool operator==(const WorkloadRequest&) const = default;
 };
 
-// Physical board, topology, firmware, session, and build identities are not
-// bankable. The live grid selects the harvested exact cohort and bounds native
-// candidate legality.
+// The request key carries only portable, per-call selection facts. Independent
+// build and live-device compatibility is attested before lookup; placement and
+// session identities are deliberately absent. The live grid selects the
+// harvested exact cohort and bounds native candidate legality.
 struct DeviceRequest {
     std::uint32_t architecture = 0;
     std::uint32_t device_count = 0;
@@ -207,7 +226,8 @@ RegistryRequestInspection inspect_registry_request(
     CallSemantics call_semantics,
     const ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    bool trace_capture_active);
+    bool trace_capture_active,
+    RegistryCompatibilityProvider compatibility_provider = production_registry_compatibility);
 
 std::optional<compact::KeyDescriptor> compact_registry_key(const MatmulRegistryRequest& request) noexcept;
 
@@ -288,6 +308,12 @@ struct StatsSnapshot {
     bool mode_is_frozen = false;
     Mode frozen_mode = Mode::Off;
     std::size_t exact_entry_count = 0;
+    std::uint16_t compatibility_schema_version = 0;
+    compact::Sha256 expected_semantic_source_sha256{};
+    compact::Sha256 expected_build_identity_sha256{};
+    compact::Sha256 expected_runtime_capability_sha256{};
+    compact::Sha256 actual_semantic_source_sha256{};
+    compact::Sha256 actual_build_identity_sha256{};
     std::array<DomainStatsSnapshot, kOperationDomainCount> domains{};
 };
 

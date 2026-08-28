@@ -21,7 +21,8 @@ RegistryRequestInspection inspect_registry_request(
     const CallSemantics call_semantics,
     const ttnn::prim::MatmulParams& parameters,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
-    const bool trace_capture_active) {
+    const bool trace_capture_active,
+    const RegistryCompatibilityProvider compatibility_provider) {
     const auto io_contract = resolve_matmul_io_contract(IoContractRequest{
         .input_a_dtype = input_tensor_a.dtype(),
         .input_a_tile = input_tensor_a.tensor_spec().tile(),
@@ -76,6 +77,9 @@ RegistryRequestInspection inspect_registry_request(
         return inspection;
     }
     const auto device_arch = devices.front()->arch();
+    inspection.eligibility.compatibility_status = compatibility_provider != nullptr
+                                                      ? compatibility_provider(*device_a)
+                                                      : CompatibilityStatus::DeviceAttestationUnavailable;
 
     const auto a_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_a, parameters.transpose_a);
     const auto b_logical = utilities::get_matmul_tensor_logical_shape(input_tensor_b, parameters.transpose_b);

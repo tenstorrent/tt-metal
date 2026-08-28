@@ -538,5 +538,129 @@ TEST(MatmulConfigRegistry, AddmmRequiresExactSafeScalarSemantics) {
     EXPECT_EQ(preflight_v1_eligibility(bad), ResolutionReason::UnsupportedSemantics);
 }
 
+DeviceCompatibilityFacts compatible_device_facts() {
+    return DeviceCompatibilityFacts{
+        .architecture = static_cast<std::uint32_t>(tt::ARCH::BLACKHOLE),
+        .board_class = AttestationBoardClass::BlackholeGalaxy,
+        .cluster_class = AttestationClusterClass::BlackholeGalaxy,
+        .device_initialized = true,
+        .remote_only = false,
+        .active_sub_device_manager_is_default = true,
+        .device_count = 1,
+        .mesh_rows = 1,
+        .mesh_cols = 1,
+        .compute_grid_x = 12,
+        .compute_grid_y = 10,
+        .physical_grid_x = 17,
+        .physical_grid_y = 12,
+        .logical_grid_x = 17,
+        .logical_grid_y = 12,
+        .dram_grid_x = 8,
+        .dram_grid_y = 2,
+        .tensix_harvesting_mask = 1,
+        .num_hw_cqs = 2,
+        .num_dram_channels = 8,
+        .l1_size_per_core = 1'495'040,
+        .dram_size_per_channel = 2'147'483'648,
+        .firmware_bundle_present = true,
+        .firmware_bundle_major = 1,
+        .firmware_bundle_minor = 2,
+        .firmware_bundle_patch = 3,
+        .ethernet_firmware_present = true,
+        .ethernet_firmware_major = 4,
+        .ethernet_firmware_minor = 5,
+        .ethernet_firmware_patch = 6};
+}
+
+TEST(MatmulConfigRegistry, DeviceCompatibilityDigestIsDeterministicAndFailsClosed) {
+    constexpr std::array<std::uint8_t, 3> abc{'a', 'b', 'c'};
+    EXPECT_EQ(registry_sha256(abc), (compact::Sha256{0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40,
+                                                     0xde, 0x5d, 0xae, 0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17,
+                                                     0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad}));
+    const auto facts = compatible_device_facts();
+    const auto first = derive_device_compatibility(facts);
+    const auto second = derive_device_compatibility(facts);
+    EXPECT_EQ(first.status, DeviceCompatibilityStatus::Success);
+    EXPECT_EQ(first.runtime_capability_sha256, second.runtime_capability_sha256);
+    EXPECT_NE(first.runtime_capability_sha256, compact::Sha256{});
+
+    auto same_capability = facts;
+    same_capability.tensix_harvesting_mask = 2;
+    EXPECT_EQ(derive_device_compatibility(same_capability).runtime_capability_sha256, first.runtime_capability_sha256);
+    same_capability = facts;
+    same_capability.tensix_harvesting_mask = 0;
+    same_capability.compute_grid_x = 13;
+    EXPECT_EQ(derive_device_compatibility(same_capability).runtime_capability_sha256, first.runtime_capability_sha256);
+    same_capability = facts;
+    same_capability.tensix_harvesting_mask = 3;
+    same_capability.compute_grid_x = 11;
+    EXPECT_EQ(derive_device_compatibility(same_capability).runtime_capability_sha256, first.runtime_capability_sha256);
+
+    auto invalid = facts;
+    invalid.firmware_bundle_present = false;
+    EXPECT_EQ(derive_device_compatibility(invalid).status, DeviceCompatibilityStatus::FirmwareUnavailable);
+    invalid = facts;
+    invalid.compute_grid_x = 13;
+    EXPECT_EQ(derive_device_compatibility(invalid).status, DeviceCompatibilityStatus::InvalidCapability);
+    invalid = facts;
+    invalid.remote_only = true;
+    EXPECT_EQ(derive_device_compatibility(invalid).status, DeviceCompatibilityStatus::RemoteDevice);
+}
+
+TEST(MatmulConfigRegistry, CompatibilityRequiresIndependentExpectedAndActualDigests) {
+    const auto device = derive_device_compatibility(compatible_device_facts());
+    auto expected = metadata();
+    expected.compatibility_schema_version = kRegistryCompatibilitySchemaVersion;
+    expected.build_identity_sha256 = digest(3);
+    expected.runtime_capability_sha256 = device.runtime_capability_sha256;
+    BuildCompatibilityDigests actual{
+        .semantic_source_sha256 = expected.semantic_source_sha256,
+        .build_identity_sha256 = expected.build_identity_sha256};
+    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::Compatible);
+
+    actual.semantic_source_sha256 = digest(4);
+    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::SemanticSourceMismatch);
+    actual.semantic_source_sha256 = expected.semantic_source_sha256;
+    actual.build_identity_sha256 = digest(4);
+    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::BuildIdentityMismatch);
+    actual.build_identity_sha256 = expected.build_identity_sha256;
+    auto changed_device = device;
+    changed_device.runtime_capability_sha256 = digest(5);
+    EXPECT_EQ(
+        validate_registry_compatibility(expected, actual, changed_device),
+        CompatibilityStatus::RuntimeCapabilityMismatch);
+    expected.compatibility_schema_version = 0;
+    EXPECT_EQ(validate_registry_compatibility(expected, actual, device), CompatibilityStatus::CompatibilityUnavailable);
+    expected.compatibility_schema_version = kRegistryCompatibilitySchemaVersion;
+    auto unavailable_device = device;
+    unavailable_device.status = DeviceCompatibilityStatus::FirmwareUnavailable;
+    EXPECT_EQ(
+        validate_registry_compatibility(expected, actual, unavailable_device),
+        CompatibilityStatus::FirmwareUnavailable);
+}
+
+TEST(MatmulConfigRegistry, CompatibilityFailureIsTypedAndCountedWithoutMutation) {
+    RuntimeStateReset reset;
+    auto eligible = eligibility();
+    eligible.compatibility_status = CompatibilityStatus::BuildIdentityMismatch;
+    const auto dispatched =
+        resolve_for_dispatch(Mode::Shadow, checked_in_request(), eligible, ttnn::prim::MatmulParams{});
+    EXPECT_EQ(dispatched.resolution.reason, ResolutionReason::BuildIdentityMismatch);
+    EXPECT_EQ(dispatched.action, ExecutionAction::Fallback);
+    EXPECT_FALSE(dispatched.materialized_parameters.has_value());
+    const auto snapshot = stats_snapshot().domains[0];
+    EXPECT_EQ(snapshot.fallbacks, 1U);
+    EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(ResolutionReason::BuildIdentityMismatch)], 1U);
+}
+
+TEST(MatmulConfigRegistry, UnpromotedCheckedTableExposesFailClosedAttestationMetadata) {
+    const auto snapshot = stats_snapshot();
+    EXPECT_EQ(snapshot.compatibility_schema_version, 0);
+    EXPECT_EQ(snapshot.expected_build_identity_sha256, compact::Sha256{});
+    EXPECT_EQ(snapshot.expected_runtime_capability_sha256, compact::Sha256{});
+    EXPECT_NE(snapshot.actual_semantic_source_sha256, compact::Sha256{});
+    EXPECT_NE(snapshot.actual_build_identity_sha256, compact::Sha256{});
+}
+
 }  // namespace
 }  // namespace ttnn::operations::matmul::registry

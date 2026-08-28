@@ -46,6 +46,29 @@ ExecutionAction execution_action(const Mode mode, const Resolution& resolution) 
     return mode == Mode::Shadow ? ExecutionAction::ObserveOnly : ExecutionAction::Fallback;
 }
 
+ResolutionReason compatibility_reason(const CompatibilityStatus status) noexcept {
+    switch (status) {
+        case CompatibilityStatus::Compatible: return ResolutionReason::CertifiedMatch;
+        case CompatibilityStatus::CompatibilityUnavailable: return ResolutionReason::CompatibilityUnavailable;
+        case CompatibilityStatus::DeviceAttestationUnavailable: return ResolutionReason::DeviceAttestationUnavailable;
+        case CompatibilityStatus::DeviceQueryFailed: return ResolutionReason::DeviceQueryFailed;
+        case CompatibilityStatus::DeviceUninitialized: return ResolutionReason::DeviceUninitialized;
+        case CompatibilityStatus::RemoteDevice: return ResolutionReason::RemoteDevice;
+        case CompatibilityStatus::NotOneChipDevice: return ResolutionReason::NotOneChipDevice;
+        case CompatibilityStatus::ActiveSubDeviceManager: return ResolutionReason::ActiveSubDeviceManager;
+        case CompatibilityStatus::UnsupportedArchitecture: return ResolutionReason::UnsupportedArchitecture;
+        case CompatibilityStatus::UnsupportedBoard: return ResolutionReason::UnsupportedBoard;
+        case CompatibilityStatus::UnsupportedCluster: return ResolutionReason::UnsupportedCluster;
+        case CompatibilityStatus::BoardClusterMismatch: return ResolutionReason::BoardClusterMismatch;
+        case CompatibilityStatus::FirmwareUnavailable: return ResolutionReason::FirmwareUnavailable;
+        case CompatibilityStatus::InvalidDeviceCapability: return ResolutionReason::InvalidDeviceCapability;
+        case CompatibilityStatus::SemanticSourceMismatch: return ResolutionReason::SemanticSourceMismatch;
+        case CompatibilityStatus::BuildIdentityMismatch: return ResolutionReason::BuildIdentityMismatch;
+        case CompatibilityStatus::RuntimeCapabilityMismatch: return ResolutionReason::RuntimeCapabilityMismatch;
+    }
+    return ResolutionReason::CompatibilityUnavailable;
+}
+
 void record_resolution(
     const Mode mode,
     const OperationDomain domain,
@@ -378,6 +401,10 @@ ResolutionReason preflight_v1_eligibility(const Eligibility& eligibility) noexce
         (is_addmm && *eligibility.call.beta_f32_bits != 0 && *eligibility.call.beta_f32_bits != 0x80000000U)) {
         return ResolutionReason::UnsupportedSemantics;
     }
+    if (const auto reason = compatibility_reason(eligibility.compatibility_status);
+        reason != ResolutionReason::CertifiedMatch) {
+        return reason;
+    }
     return ResolutionReason::CertifiedMatch;
 }
 
@@ -642,6 +669,14 @@ StatsSnapshot stats_snapshot() noexcept {
     snapshot.mode_is_frozen = mode != kModeUninitialized;
     snapshot.frozen_mode = snapshot.mode_is_frozen ? static_cast<Mode>(mode) : Mode::Off;
     snapshot.exact_entry_count = generated::program_config_exact_entries().size();
+    const auto& metadata = generated::metadata();
+    const auto actual_build = compiled_build_compatibility();
+    snapshot.compatibility_schema_version = metadata.compatibility_schema_version;
+    snapshot.expected_semantic_source_sha256 = metadata.semantic_source_sha256;
+    snapshot.expected_build_identity_sha256 = metadata.build_identity_sha256;
+    snapshot.expected_runtime_capability_sha256 = metadata.runtime_capability_sha256;
+    snapshot.actual_semantic_source_sha256 = actual_build.semantic_source_sha256;
+    snapshot.actual_build_identity_sha256 = actual_build.build_identity_sha256;
     for (std::size_t domain = 0; domain < stats.size(); ++domain) {
         const auto& source = stats[domain];
         auto& destination = snapshot.domains[domain];

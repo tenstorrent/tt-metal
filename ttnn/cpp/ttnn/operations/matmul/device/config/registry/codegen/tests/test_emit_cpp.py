@@ -257,6 +257,29 @@ def test_checked_in_registry_snapshot_is_fresh() -> None:
     assert (CHECKED_IN_GENERATED_DIR / "matmul_registry_data.cpp").read_bytes() == expected_source
 
 
+def test_optional_compatibility_manifest_is_strict_and_emitted(expect_error) -> None:
+    lock = direct_lock()
+    lock["compatibility"] = {
+        "build_identity_sha256": "2" * 64,
+        "runtime_capability_sha256": "3" * 64,
+        "schema_version": 1,
+    }
+    checked = emitter.validate_lock(_seal(lock))
+    _, source = emitter.emit(checked)
+    assert b".compatibility_schema_version = 1" in source
+    assert b"0x22, 0x22" in source
+    assert b"0x33, 0x33" in source
+
+    lock = direct_lock()
+    lock["compatibility"] = {
+        "build_identity_sha256": ZERO,
+        "runtime_capability_sha256": "3" * 64,
+        "schema_version": 1,
+    }
+    with expect_error(emitter.LockValidationError, "must be nonzero"):
+        emitter.validate_lock(_seal(lock))
+
+
 @pytest.mark.parametrize("family", ["multi_core_reuse", "multi_cast_1d", "multi_cast_2d"])
 def test_exact_table_supports_every_native_family_as_a_paired_recipe(family: str) -> None:
     lock = emitter.validate_lock(direct_lock(family))
