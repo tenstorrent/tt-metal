@@ -237,9 +237,6 @@ def _build_producer_cmd(
             "--mca",
             "btl_tcp_if_include",
             tcp_interface,
-            "--prtemca",
-            "oob_tcp_if_include",
-            tcp_interface,
         ] + list(mpi_args or [])
 
     cmd = build_generate_rank_bindings_mpi_cmd(
