@@ -610,6 +610,12 @@ handshake-pair sharing and deliberate skew -- so a build that changes kernel siz
 behaviour is not surprising, and that cuts both ways: it could be a real assert, or a race the
 watcher's timing avoids.
 
+**IT IS NOT A PORT REGRESSION.** The pre-port tree -- `tt/unified/`, `mcast_share.cpp`,
+`unified_harness.py` and the launcher all checked out at `8bb48ab0f1d`, on the descriptor path
+-- hangs identically with asserts on: four configurations pass, then it stops, same place,
+same timeout. So this predates the Metal 2.0 work entirely and belongs to the assert-mode
+hazard the project already knows about rather than to anything here.
+
 **Two earlier explanations were wrong, and both were mine.** The first was per-launch program
 churn; caching the workload changed nothing. The second was a preceding multicast, from
 bisecting that appeared to show `matmul_mcast + mcast_share` and `matmul_blocked +
