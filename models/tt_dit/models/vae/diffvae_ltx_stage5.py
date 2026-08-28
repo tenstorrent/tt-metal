@@ -209,16 +209,65 @@ class DiffVAEStage5Config:
 # ---------------------------------------------------------------------------
 
 
-# Backends that keep this chip's W-shard of the sequence through the whole stage. Everything the
-# W-SP path sets up -- the resharded context, the W-sharded RoPE tables, the local W extent, the
-# per-chip row count -- is identical whichever of these runs; only the attention call differs. So
-# this is a membership test rather than a string compare, and putting a backend on the sharded
-# path is a one-line change here instead of four scattered ones.
-W_SHARDED_BACKENDS = ("op_sp_w_sharded", "bricked_sp_w_sharded")
+@dataclass(frozen=True)
+class NAKernel:
+    """Which NA3D executor stage 5 runs, and the layout decisions that follow from it.
+
+    Everything the W-SP path sets up -- the resharded context, the W-sharded RoPE tables, the local
+    W extent, the per-chip row count -- is identical whichever W-sharded backend runs; only the
+    attention call differs. Carrying that as a field rather than re-deriving it from the name means
+    the dispatch and the shapes cannot disagree, and putting a backend on the sharded path is a
+    one-line change in the table below instead of four scattered ones.
+
+    The other three fields used to be independent environment variables, which let combinations
+    exist that no executor honours: DIFFVAE_BRICKED_FLAT only ever countermanded
+    DIFFVAE_S5_FLAT_SEQ for one backend, and DIFFVAE_S5_KEEP_BRICKED did nothing off the bricked
+    path. As fields they are stated once, per kernel, where the reason for each is visible.
+    """
+
+    #: The backend string callers select with (DIFFVAE_STAGE5_BACKEND, or the ctor kwarg).
+    name: str
+    #: Keep this chip's W-shard of the sequence through the whole stage.
+    w_sharded: bool = False
+    #: Our op: sites in bricked order, one tile row per 3D brick.
+    bricked: bool = False
+    #: Hoist the brick conversion to stage entry/exit instead of paying it per block.
+    keep_bricked: bool = False
+    #: Wants the flat (B, NH, S, HD) sequence the projections already produce, rather than the 6-D
+    #: volume its to_seq would tear straight back down. Only honoured where the preconditions hold
+    #: (see ``_NeighborhoodAttention3D.forward``); the executor asserts them too.
+    prefers_flat_seq: bool = False
 
 
-def _is_w_sharded(backend: str) -> bool:
-    return backend in W_SHARDED_BACKENDS
+_NA_KERNELS: dict[str, NAKernel] = {
+    kernel.name: kernel
+    for kernel in (
+        NAKernel("gather"),
+        NAKernel("op"),
+        NAKernel("fused"),
+        NAKernel("op_sp"),
+        NAKernel("bricked", bricked=True),
+        NAKernel("op_sp_w_sharded", w_sharded=True, prefers_flat_seq=True),
+        # No flat sequence: the bricked op re-bricks the sites itself, so the flat form buys it
+        # nothing and its 4-D branch has to reconstruct the volume shape anyway.
+        NAKernel("bricked_sp_w_sharded", w_sharded=True, bricked=True, keep_bricked=True),
+    )
+}
+
+
+def resolve_na_kernel(backend: str | NAKernel) -> NAKernel:
+    """The kernel record for a backend name. Rejects an unknown one HERE, at construction.
+
+    Left to itself an unknown name survives the whole build -- weights included -- and surfaces as
+    a ValueError from inside na3d's own dispatcher on the first forward.
+    """
+    if isinstance(backend, NAKernel):
+        return backend
+    try:
+        return _NA_KERNELS[backend]
+    except KeyError:
+        msg = f"unknown NA3D backend {backend!r}; expected one of {sorted(_NA_KERNELS)}"
+        raise ValueError(msg) from None
 
 
 def neighborhood_attention_3d(
@@ -814,7 +863,7 @@ class _NeighborhoodAttention3D(Module):
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType,
         ccl_manager=None,
-        na3d_backend: str | None = None,
+        na3d_backend: str | NAKernel,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
     ) -> None:
@@ -822,14 +871,15 @@ class _NeighborhoodAttention3D(Module):
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        # Backend for the NA3D call: "gather"/"op" run the attention replicated (whole volume on
-        # every chip); "op_sp_w_sharded" keeps this chip's W-shard of the sequence through the whole
-        # attention (K/V gathered internally), for full-stage spatial-W SP. Defaults to the env
-        # override so the whole decoder can be flipped to the op backend for the OOM diagnosis.
-        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        # Which NA3D executor runs: "gather"/"op" run the attention replicated (whole volume on
+        # every chip); "op_sp_w_sharded" and "bricked_sp_w_sharded" keep this chip's W-shard of the
+        # sequence through the whole attention (K/V reached internally), for full-stage spatial-W SP.
+        # Resolved by the stage and handed down, so the three levels cannot pick different backends.
+        self.kernel = resolve_na_kernel(na3d_backend)
         self.sp_axis = sp_axis
-        # TP-over-heads on a second mesh axis (only meaningful under op_sp_w_sharded): the attention
-        # runs on heads/tp of the heads per chip, gathered back before the output projection.
+        # TP-over-heads on a second mesh axis (only meaningful under a w_sharded kernel): the
+        # attention runs on heads/tp of the heads per chip, gathered back before the output
+        # projection.
         self.tp_axis = tp_axis
         self.scale = config.head_dim**-0.5
 
@@ -840,11 +890,6 @@ class _NeighborhoodAttention3D(Module):
         # before the replicated out-proj). qkv is 3 of the 4 projections, so this reclaims the bulk
         # of the ~0.9s redundant projection compute without adding an all-reduce.
         self.tp_proj = tp_axis is not None and os.environ.get("DIFFVAE_TP_PROJ", "1") == "1"
-        # DIFFVAE_S5_FLAT_SEQ=1: hand the attention the (B, NH, S, HD) the projections already
-        # produce instead of building the 6-D volume for its to_seq to tear straight back down.
-        # Needs one head per chip: above that a frame's rows are site-major with heads inner, so
-        # the flat form would want a real permute rather than a frame-axis merge.
-        self.flat_seq = os.environ.get("DIFFVAE_S5_FLAT_SEQ", "0") == "1"
         tp = int(list(mesh_device.shape)[tp_axis]) if self.tp_proj else 1
         assert not self.tp_proj or config.num_heads % tp == 0, f"num_heads={config.num_heads} not divisible by tp={tp}"
         self.heads_local = config.num_heads // tp
@@ -962,7 +1007,7 @@ class _NeighborhoodAttention3D(Module):
         """
         cfg = self.config
         assert grid.batch == 1, f"batched stage 5 is not implemented; got batch={grid.batch}"
-        sharded = _is_w_sharded(self.na3d_backend)
+        sharded = self.kernel.w_sharded
         if sharded:
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
@@ -1002,14 +1047,13 @@ class _NeighborhoodAttention3D(Module):
             """
             return ttnn.reshape(x, (grid.batch, heads, sites_local, cfg.head_dim))
 
-        flat_seq = self.flat_seq and sharded and self.tp_proj and heads == 1
-        # The bricked op re-bricks the sites itself, so the flat (B, NH, S, HD) sequence buys it
-        # nothing and its 4-D branch has to reconstruct the volume shape anyway. Keeping it on
-        # to_volume is one less layout to be wrong about while the TP path is being brought up;
-        # DIFFVAE_BRICKED_FLAT=1 hands it the flat form instead, so the two can be raced without
-        # a source edit. Only reachable under tp_proj with one head left, i.e. TP_HEADS=1.
-        if flat_seq and self.na3d_backend == "bricked_sp_w_sharded":
-            flat_seq = os.environ.get("DIFFVAE_BRICKED_FLAT") == "1"
+        # The flat (B, NH, S, HD) sequence, where the kernel wants it AND the shape allows it. One
+        # head per chip is the hard part: above that a frame's rows are site-major with heads inner,
+        # so the flat form would want a real permute rather than a frame-axis merge -- which is only
+        # reachable under column-parallel qkv with heads == tp, i.e. TP_HEADS=1. Both preconditions
+        # are runtime facts about this call rather than properties of the kernel, so they stay here;
+        # the executor asserts heads_presharded for the flat path too.
+        flat_seq = self.kernel.prefers_flat_seq and self.tp_proj and heads == 1
         if brick is not None:
             # Already bricked: RoPE output is (1, 1, sites*heads, hd); fold back to (B, heads, sites, hd).
             # Under TP (one head) those shapes already match, and ttnn.reshape of a matching TILE
@@ -1068,51 +1112,57 @@ class _NeighborhoodAttention3D(Module):
             k = lane_unfused(self.to_k, self.k_norm)
             v = lane_unfused(self.to_v, None)
 
-        if sharded and self.na3d_backend == "bricked_sp_w_sharded":
-            # Our op: this chip's W-shard plus the halo its windows reach into, and a per-device
-            # gather table carrying where that shard sits in the global volume. Window placement
-            # stays global, so a query near a shard seam still sees a full window.
-            from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
+        # The one place the executor is chosen. Everything that used to guard these arms -- the
+        # W-shard membership test, the flat-sequence opt-in, its per-backend override -- is now a
+        # field of the record being matched, so no two of them can disagree.
+        match self.kernel.name:
+            case "bricked_sp_w_sharded":
+                # Our op: this chip's W-shard plus the halo its windows reach into, and a per-device
+                # gather table carrying where that shard sits in the global volume. Window placement
+                # stays global, so a query near a shard seam still sees a full window.
+                from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
 
-            out = neighborhood_attention_3d_bricked_w_sharded(
-                q,
-                k,
-                v,
-                dims=(grid.t, grid.h, grid.w),
-                kernel_size=cfg.kernel_size,
-                sp_axis=self.sp_axis,
-                ccl_manager=self.ccl_manager,
-                scale=1.0,
-                tp_axis=self.tp_axis,
-                heads_presharded=self.tp_proj,
-                already_bricked=brick is not None,
-                brick=brick,
-            )
-        elif sharded:
-            out = neighborhood_attention_3d_op_sp_w_sharded(
-                q,
-                k,
-                v,
-                dims=(grid.t, grid.h, grid.w),
-                kernel_size=cfg.kernel_size,
-                sp_axis=self.sp_axis,
-                ccl_manager=self.ccl_manager,
-                scale=1.0,
-                tp_axis=self.tp_axis,
-                heads_presharded=self.tp_proj,
-                flat_seq=flat_seq,
-                gna_stride=None if cfg.gna_stride == (1, 1, 1) else cfg.gna_stride,
-            )
-        else:
-            out = neighborhood_attention_3d(
-                q,
-                k,
-                v,
-                kernel_size=cfg.kernel_size,
-                scale=1.0,
-                ccl_manager=self.ccl_manager,
-                backend=self.na3d_backend,
-            )
+                out = neighborhood_attention_3d_bricked_w_sharded(
+                    q,
+                    k,
+                    v,
+                    dims=(grid.t, grid.h, grid.w),
+                    kernel_size=cfg.kernel_size,
+                    sp_axis=self.sp_axis,
+                    ccl_manager=self.ccl_manager,
+                    scale=1.0,
+                    tp_axis=self.tp_axis,
+                    heads_presharded=self.tp_proj,
+                    already_bricked=brick is not None,
+                    brick=brick,
+                )
+            case "op_sp_w_sharded":
+                out = neighborhood_attention_3d_op_sp_w_sharded(
+                    q,
+                    k,
+                    v,
+                    dims=(grid.t, grid.h, grid.w),
+                    kernel_size=cfg.kernel_size,
+                    sp_axis=self.sp_axis,
+                    ccl_manager=self.ccl_manager,
+                    scale=1.0,
+                    tp_axis=self.tp_axis,
+                    heads_presharded=self.tp_proj,
+                    flat_seq=flat_seq,
+                    gna_stride=None if cfg.gna_stride == (1, 1, 1) else cfg.gna_stride,
+                )
+            case _:
+                # Replicated: the whole volume on every chip. na3d's own dispatcher picks the
+                # executor from the same name.
+                out = neighborhood_attention_3d(
+                    q,
+                    k,
+                    v,
+                    kernel_size=cfg.kernel_size,
+                    scale=1.0,
+                    ccl_manager=self.ccl_manager,
+                    backend=self.kernel.name,
+                )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
 
@@ -1135,7 +1185,7 @@ class DiffusionNABlock(Module):
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType,
         ccl_manager=None,
-        na3d_backend: str | None = None,
+        na3d_backend: str | NAKernel,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
     ) -> None:
@@ -1143,9 +1193,9 @@ class DiffusionNABlock(Module):
         self.config = config
         self.mesh_device = mesh_device
         # Resolve the backend once so the block and its attention agree on whether the sequence is
-        # W-sharded: under "op_sp_w_sharded" the per-chip tensor holds only H*(W/sp) rows per frame,
+        # W-sharded: under a w_sharded kernel the per-chip tensor holds only H*(W/sp) rows per frame,
         # so the block's own frame slicing must use the local rows-per-frame, not the full W.
-        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        self.kernel = resolve_na_kernel(na3d_backend)
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
         self.context_proj = Linear(config.context_channels, config.dim, bias=True, mesh_device=mesh_device, dtype=dtype)
@@ -1165,7 +1215,7 @@ class DiffusionNABlock(Module):
             mesh_device=mesh_device,
             dtype=dtype,
             ccl_manager=ccl_manager,
-            na3d_backend=self.na3d_backend,
+            na3d_backend=self.kernel,
             sp_axis=sp_axis,
             tp_axis=tp_axis,
         )
@@ -1227,7 +1277,7 @@ class DiffusionNABlock(Module):
         # Rows per frame on THIS chip. Under spatial-W SP the sequence is W-sharded, so a frame holds
         # only H*(W/sp) rows here; the frame-granular band slicing below must use that local count.
         # Bricked order groups sites by T_br, so the slice unit is one T-brick of sites instead.
-        if _is_w_sharded(self.na3d_backend):
+        if self.kernel.w_sharded:
             sp = int(list(self.mesh_device.shape)[self.sp_axis])
             w_local = grid.w // sp
             rows = sites_per_t_brick((grid.t, grid.h, w_local), brick) if brick is not None else grid.h * w_local
@@ -1380,7 +1430,7 @@ class DiffVAEStage5(Module):
         dtype: ttnn.DataType = ttnn.bfloat16,
         modulation_dtype: ttnn.DataType = ttnn.float32,
         ccl_manager=None,
-        na3d_backend: str | None = None,
+        na3d_backend: str | NAKernel | None = None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
     ) -> None:
@@ -1391,23 +1441,20 @@ class DiffVAEStage5(Module):
         self.ccl_manager = ccl_manager
         self.dtype = dtype
         self.modulation_dtype = modulation_dtype
-        # Spatial-W SP: when the backend is "op_sp_w_sharded" the whole stage keeps its sequence
-        # W-sharded -- context and x_t are uploaded/resharded over W, the blocks run 1/sp, and the
-        # tail output is gathered back over W in forward. Defaults to the env override (so the OOM
-        # diagnostic can flip the whole decoder to the replicated op backend).
-        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        # Spatial-W SP: under a w_sharded kernel the whole stage keeps its sequence W-sharded --
+        # context and x_t are uploaded/resharded over W, the blocks run 1/sp, and the tail output is
+        # gathered back over W in forward. This is the ONE place the backend is resolved; the blocks
+        # and their attention are handed the record, so no level can pick a different one.
+        self.kernel = resolve_na_kernel(na3d_backend or "gather")
         self.sp_axis = sp_axis
         # TP-over-heads on a second mesh axis: only the per-head attention shards over it; every
         # other op (context, RoPE, MLP, tail) stays replicated across tp_axis. Composes with the
         # W-shard above -- the two use orthogonal mesh axes.
         self.tp_axis = tp_axis
-        self._w_sharded = _is_w_sharded(self.na3d_backend)
-        # Hoist brick conversion to stage entry/exit. Off with DIFFVAE_S5_KEEP_BRICKED=0 to race
-        # the per-call permute. Default on for the bricked W-sharded backend: that is the path
-        # whose 7-D permute was 735 ms of the decode.
-        self._keep_bricked = (
-            self.na3d_backend == "bricked_sp_w_sharded" and os.environ.get("DIFFVAE_S5_KEEP_BRICKED", "1") != "0"
-        )
+        self._w_sharded = self.kernel.w_sharded
+        # Hoist brick conversion to stage entry/exit rather than paying it per block: that 7-D
+        # permute was 735 ms of the decode on the one path that needs it.
+        self._keep_bricked = self.kernel.keep_bricked
         self._brick: tuple[int, int, int] | None = None
         # Under column-parallel qkv (DIFFVAE_TP_PROJ) the q/k carry only heads/tp per chip, so the
         # shared RoPE tables (which repeat each row per head) must be built for the local head count.
@@ -1415,8 +1462,8 @@ class DiffVAEStage5(Module):
         _tp = int(list(mesh_device.shape)[tp_axis]) if _tp_proj else 1
         self._rope_num_heads = self.config.num_heads // _tp
         if self._w_sharded:
-            assert sp_axis is not None, f"{self.na3d_backend} needs sp_axis"
-            assert ccl_manager is not None, f"{self.na3d_backend} needs a ccl_manager"
+            assert sp_axis is not None, f"{self.kernel.name} needs sp_axis"
+            assert ccl_manager is not None, f"{self.kernel.name} needs a ccl_manager"
         # The tile-aligned width the 48 patch channels are zero-padded to. The pad has to
         # be explicit on conv_in_x_t's K axis: a garbage-filled activation tail would
         # otherwise multiply against whatever the weight's own tile pad happens to hold.
@@ -1434,7 +1481,7 @@ class DiffVAEStage5(Module):
                 mesh_device=mesh_device,
                 dtype=dtype,
                 ccl_manager=ccl_manager,
-                na3d_backend=self.na3d_backend,
+                na3d_backend=self.kernel,
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
             )

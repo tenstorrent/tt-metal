@@ -44,7 +44,6 @@ export DIFFVAE_DET_COLPAR_QKV=1
 export DIFFVAE_DET_FUSED_ROPE=1
 export DIFFVAE_DET_FUSED_SWIGLU=1
 export DIFFVAE_DET_FLAT_SEQ=1
-export DIFFVAE_S5_FLAT_SEQ=1
 export DIFFVAE_STAGE_TIMING=1
 
 # Fail loudly if the paste-corruption bugs ever come back rather than running a half-configured job.

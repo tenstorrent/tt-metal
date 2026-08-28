@@ -410,7 +410,7 @@ Helpers worth knowing:
 | `halo_sites(window, brick)`             | `ceil(window/2 / brick) * brick` — the halo, in whole bricks                                                                                                                                |
 | `_tiles_per_kv_chunk(gather)`           | largest chunk that fits DST and divides the gather                                                                                                                                          |
 | `_build_regime_masks(...)`              | the 27 uploaded mask sets, enumerated per **chunk**                                                                                                                                         |
-| `_cached_plan` / `_cached_sharded_plan` | plan + uploaded tables, cached per geometry                                                                                                                                                 |
+| `_cached_plan(...)`                     | plan + uploaded tables, cached per geometry; unsharded is the one-shard case                                                                                                                |
 
 
 The sharded path builds **one plan per shard** and stacks the tables, uploading with
@@ -507,10 +507,10 @@ Stage 5: 8 diffusion NA blocks on the largest grid, where almost all decode comp
 | `DiffVAEStage5Config`                               | includes `kernel_size` and `gna_stride`                           |
 | `_Band`, `_bands(t, frames, kernel)`                | frame banding for peak memory; halo from `window_bounds`          |
 | `_RopeTables`, `_build_rope_tables`, `_apply_rope`  | RoPE, stored **factored**                                         |
-| `_NeighborhoodAttention3D.forward(y, grid, tables)` | the per-block attention; dispatches by backend                    |
+| `_NeighborhoodAttention3D.forward(y, grid, tables)` | the per-block attention; one `match` on `self.kernel.name`        |
 | `DiffusionNABlock`                                  | context inject → AdaLN residual attention → AdaLN residual SwiGLU |
 | `DiffVAEStage5.forward_diff_step(...)`              | the 8-block loop, per band                                        |
-| `W_SHARDED_BACKENDS`, `_is_w_sharded(backend)`      | which backends keep their W-shard                                 |
+| `NAKernel`, `_NA_KERNELS`, `resolve_na_kernel()`    | the backend record: W-shard, bricking, flat sequence              |
 
 
 **The RoPE factorisation is a real constraint on any future work.** A row of the fused table is

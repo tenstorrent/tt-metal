@@ -34,6 +34,7 @@ Required on this host (weights are NOT at /mnt/MLPerf):
 Selecting the executor / attention:
 
     DIFFVAE_STAGE5_BACKEND=bricked_sp_w_sharded   # ours; unset = op_sp_w_sharded (reference)
+    DIFFVAE_DET_NA3D_BACKEND=gather               # stages 1-4 ONLY, separate from the above
     DIFFVAE_S5_GNA_STRIDE=1,1,1                   # exact NA (stage 5 only). 6,8,4 = GNA
     DIFFVAE_GNA=0                                 # puts the REFERENCE at stride 1 (its own knob)
     DIFFVAE_BLOCK_PROF=1                          # deep spans in the decode tree; needed for any breakdown
@@ -49,7 +50,6 @@ Diagnostics added this session (all default off):
     DIFFVAE_NA_PER_BRICK_MASK=0|1  force per-brick masks; defaults on when chunk != stride
     DIFFVAE_NA_HALO_TOPOLOGY=ring  retest the halo on ring once neighbor_pad is fixed
     DIFFVAE_EXCLUSIVE=1            restore the DiffVAE's old evict-the-DiT behaviour
-    DIFFVAE_BRICKED_FLAT=1         hand the bricked op the flat sequence instead of the 6-D volume
 
 ## Commands
 

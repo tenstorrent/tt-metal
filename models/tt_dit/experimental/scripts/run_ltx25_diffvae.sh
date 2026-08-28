@@ -110,7 +110,6 @@ export DIFFVAE_DET_FUSED_QKV=${DIFFVAE_DET_FUSED_QKV:-1}
 export DIFFVAE_DET_FUSED_ROPE=${DIFFVAE_DET_FUSED_ROPE:-1}
 export DIFFVAE_DET_FUSED_SWIGLU=${DIFFVAE_DET_FUSED_SWIGLU:-1}
 export DIFFVAE_DET_FLAT_SEQ=${DIFFVAE_DET_FLAT_SEQ:-1}
-export DIFFVAE_S5_FLAT_SEQ=${DIFFVAE_S5_FLAT_SEQ:-1}
 export DIFFVAE_STAGE_TIMING=${DIFFVAE_STAGE_TIMING:-1}
 # Tree + per-stage/category breakdown, rendered at test teardown; DIFFVAE_TREE_ALL=1 also renders
 # the warm-up pass. Prefix DIFFVAE_BLOCK_PROF=1 to break the deterministic stages down into

@@ -282,34 +282,95 @@ def _query_chunk_bricks(stride: tuple[int, int, int], brick: tuple[int, int, int
     )
 
 
-def _cached_plan(volume, context_window, stride, brick, device):
+def _cached_plan(volume, context_window, stride, brick, device, *, resident=None, shard_count=1, sp_axis=None):
+    """Plan plus uploaded tables, cached per geometry. UNSHARDED IS THE ONE-SHARD CASE.
+
+    ``resident`` is what one device HOLDS: its owned columns plus the halo its windows reach
+    into. Omit it for an unsharded run -- resident becomes the volume, there is no halo, the
+    query region is the whole volume, and the origin table replicates instead of sharding. The
+    plan builder already models it that way: a ``shard_extent`` equal to the volume is not
+    sharded, and a query region equal to the resident one is not a sub-region (see
+    ``NeighborhoodConfig`` in neighborhood_plan.hpp), so nothing below needs a second path.
+
+    One plan per shard, with the per-device gather tables stacked for a sharded upload. Every
+    device runs the SAME program, so the plan's shapes -- chunk count, gathered bricks -- must
+    agree across shards, and they do: the resident extent is uniform and every origin is
+    brick-aligned, so only the origins themselves differ. Those ride the table, which is sharded
+    over the mesh so each device reads its own. That is why only shard 0's plan is kept: it is
+    the representative, and the assert below is what licenses treating it as one.
+    """
+    sharded = resident is not None
+    resident = resident if sharded else volume
     query_chunk_bricks = _query_chunk_bricks(stride, brick)
-    key = (volume, context_window, stride, brick, query_chunk_bricks, id(device))
+    key = (volume, context_window, stride, brick, query_chunk_bricks, resident, shard_count, sp_axis, id(device))
     entry = _PLAN_CACHE.get(key)
     if entry is not None:
         return entry
 
     import torch
 
-    plan = ttnn.transformer.neighborhood_plan(
-        volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
+    from ..utils.tensor import from_torch
+
+    # Queries are the columns this shard OWNS; keys are those plus the halo. Telling the op the
+    # difference is what stops it computing -- and Q from having to carry -- the halo's queries,
+    # which belong to the neighbour and were discarded after every call. Unsharded there is no
+    # halo, so the query region is the whole volume and this reduces to the identity.
+    halo = halo_sites(min(context_window[2], volume[2]), brick[2]) if sharded else 0
+    owned_width = resident[2] - 2 * halo
+    query_extent = (resident[0], resident[1], owned_width)
+    query_origin = (0, 0, halo)
+    plans = []
+    for shard_index in range(shard_count):
+        # The device at the low edge sits BELOW the volume by one halo. Those columns are real
+        # storage holding nothing the volume contains; no query owns them, no window reaches them.
+        plans.append(
+            ttnn.transformer.neighborhood_plan(
+                volume,
+                context_window,
+                stride,
+                brick,
+                query_chunk_bricks=query_chunk_bricks,
+                shard_extent=resident,
+                shard_origin=(0, 0, shard_index * owned_width - halo),
+                query_extent=query_extent,
+                query_origin=query_origin,
+            )
+        )
+
+    first = plans[0]
+    for shard_index, plan in enumerate(plans[1:], start=1):
+        for field in ("chunk_count", "gather_brick_count", "gather_bricks", "volume_chunks", "query_brick_count"):
+            assert plan[field] == first[field], (
+                f"shard {shard_index} plans a different {field} than shard 0 "
+                f"({plan[field]} vs {first[field]}); one program cannot serve both"
+            )
+
+    stacked = torch.tensor([plan["gather_origin_table"] for plan in plans], dtype=torch.uint32).reshape(
+        shard_count, 1, first["chunk_count"], first["gather_origin_columns"]
     )
-    plan["query_chunk_bricks"] = query_chunk_bricks
-    origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
-        1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+    # sp_axis is None unsharded, which makes every placement a replicate -- the same distribution
+    # a plain single-device upload produces, and the same (1, 1, chunks, columns) shape.
+    first["gather_origin_tensor"] = from_torch(
+        stacked,
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_axes=[sp_axis, None, None, None],
     )
-    plan["gather_origin_tensor"] = ttnn.from_torch(
-        origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
+    first["query_chunk_bricks"] = query_chunk_bricks
+    first["query_extent"] = query_extent
+    first["query_origin"] = query_origin
+
     from loguru import logger
 
     logger.info(
-        f"[neighborhood] volume={volume} window={context_window} stride={stride} brick={brick} "
-        f"chunk={query_chunk_bricks} bricks ({plan['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
-        f"bricks={plan['brick_count']} gather={plan['gather_brick_count']} tiles "
-        f"({plan['gather_brick_count'] * SITES_PER_BRICK / (plan['bricks_per_query_chunk'] * SITES_PER_BRICK):.2f} "
-        f"keys/query, waste "
-        f"{plan['gather_brick_count'] * 32 / (context_window[0] * context_window[1] * context_window[2]):.2f}x)"
+        f"[neighborhood] {f'W-SHARDED x{shard_count}: ' if sharded else ''}volume={volume} "
+        f"{f'resident={resident} ' if sharded else ''}"
+        f"window={context_window} stride={stride} brick={brick} "
+        f"chunk={query_chunk_bricks} bricks ({first['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
+        f"bricks={first['brick_count']} gather={first['gather_brick_count']} tiles "
+        f"({first['gather_brick_count'] / first['bricks_per_query_chunk']:.2f} keys/query, waste "
+        f"{first['gather_brick_count'] * SITES_PER_BRICK / (context_window[0] * context_window[1] * context_window[2]):.2f}x)"
     )
     # Uploading these is the single largest win in the op. Generating masks on device instead
     # costs 43.5 ms of a 53.8 ms block at stage-5 size -- 81% of the whole attention -- because
@@ -319,17 +380,23 @@ def _cached_plan(volume, context_window, stride, brick, device):
     # At stride 1 the regime table above does not apply: its 27 patterns describe chunks that
     # share ONE window, which is a GNA property. Every query centres its own window here, so the
     # pattern is a function of the relative brick offset instead -- see _build_relative_masks.
-    plan["relative_mask"] = stride == (1, 1, 1)
-    plan["interior_mask_tensor"] = ttnn.from_torch(
-        _build_relative_masks(context_window, brick)
-        if plan["relative_mask"]
-        else _build_regime_masks(volume, context_window, stride, brick, query_chunk_bricks, plan),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
+    first["relative_mask"] = stride == (1, 1, 1)
+    if first["relative_mask"]:
+        # The RELATIVE table depends on nothing but the window and the brick, so it uploads once
+        # and serves every shard.
+        masks = _build_relative_masks(context_window, brick)
+    elif sharded:
+        # The REGIME sets cannot be uploaded once sharded: they are enumerated against a single
+        # shard origin and every shard has its own, so the sharded path generates every tile on
+        # device.
+        masks = None
+    else:
+        masks = _build_regime_masks(volume, context_window, stride, brick, query_chunk_bricks, first)
+    first["interior_mask_tensor"] = (
+        None if masks is None else ttnn.from_torch(masks, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     )
-    _PLAN_CACHE[key] = plan
-    return plan
+    _PLAN_CACHE[key] = first
+    return first
 
 
 def _tiles_per_kv_chunk(gather_brick_count: int) -> int:
@@ -543,104 +610,6 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
     return best
 
 
-_SHARDED_PLAN_CACHE: dict = {}
-
-
-def _cached_sharded_plan(volume, context_window, stride, brick, resident, shard_count, sp_axis, device, halo=0):
-    """One plan per shard, with the per-device gather tables stacked for a sharded upload.
-
-    Every device runs the SAME program, so the plan's shapes -- chunk count, gathered bricks --
-    must agree across shards, and they do: the resident extent is uniform and every origin is
-    brick-aligned, so only the origins themselves differ. Those ride the table, which is sharded
-    over the mesh so each device reads its own.
-    """
-    query_chunk_bricks = _query_chunk_bricks(stride, brick)
-    key = (volume, context_window, stride, brick, resident, shard_count, sp_axis, id(device), halo)
-    entry = _SHARDED_PLAN_CACHE.get(key)
-    if entry is not None:
-        return entry
-
-    import torch
-
-    from ..utils.tensor import from_torch
-
-    owned_width = resident[2] - 2 * halo_sites(min(context_window[2], volume[2]), brick[2])
-    # Queries are the columns this shard OWNS; keys are those plus the halo. Telling the op the
-    # difference is what stops it computing -- and Q from having to carry -- the halo's queries,
-    # which belong to the neighbour and were discarded after every call.
-    halo = (resident[2] - owned_width) // 2
-    query_extent = (resident[0], resident[1], owned_width)
-    query_origin = (0, 0, halo)
-    plans = []
-    for shard_index in range(shard_count):
-        # The device at the low edge sits BELOW the volume by one halo. Those columns are real
-        # storage holding nothing the volume contains; no query owns them, no window reaches them.
-        origin_width = shard_index * owned_width - (resident[2] - owned_width) // 2
-        plans.append(
-            ttnn.transformer.neighborhood_plan(
-                volume,
-                context_window,
-                stride,
-                brick,
-                query_chunk_bricks=query_chunk_bricks,
-                shard_extent=resident,
-                shard_origin=(0, 0, origin_width),
-                query_extent=query_extent,
-                query_origin=query_origin,
-            )
-        )
-
-    first = plans[0]
-    for shard_index, plan in enumerate(plans[1:], start=1):
-        for field in ("chunk_count", "gather_brick_count", "gather_bricks", "volume_chunks", "query_brick_count"):
-            assert plan[field] == first[field], (
-                f"shard {shard_index} plans a different {field} than shard 0 "
-                f"({plan[field]} vs {first[field]}); one program cannot serve both"
-            )
-
-    columns = first["gather_origin_columns"]
-    stacked = torch.tensor([plan["gather_origin_table"] for plan in plans], dtype=torch.uint32).reshape(
-        shard_count, 1, first["chunk_count"], columns
-    )
-    first["gather_origin_tensor"] = from_torch(
-        stacked,
-        device=device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_axes=[sp_axis, None, None, None],
-    )
-    first["query_chunk_bricks"] = query_chunk_bricks
-    first["query_extent"] = query_extent
-    first["query_origin"] = query_origin
-
-    from loguru import logger
-
-    logger.info(
-        f"[neighborhood] W-SHARDED x{shard_count}: volume={volume} resident={resident} "
-        f"window={context_window} stride={stride} brick={brick} chunk={query_chunk_bricks} bricks "
-        f"({first['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
-        f"gather={first['gather_brick_count']} tiles "
-        f"({first['gather_brick_count'] / first['bricks_per_query_chunk']:.2f} keys/query)"
-    )
-    # The REGIME sets cannot be uploaded here: they are enumerated against a single shard origin
-    # and every shard has its own, so the sharded path has always generated every tile on device.
-    # The RELATIVE table has no such dependence -- it is a function of the window and the brick
-    # alone (see _build_relative_masks) -- so at stride 1 it uploads once and serves every shard.
-    first["relative_mask"] = stride == (1, 1, 1)
-    first["interior_mask_tensor"] = (
-        ttnn.from_torch(
-            _build_relative_masks(context_window, brick),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
-        if first["relative_mask"]
-        else None
-    )
-    _SHARDED_PLAN_CACHE[key] = first
-    return first
-
-
 def _tp_trace(device, message: str) -> None:
     """Synchronise and log, so a hang inside the TP block names the op it hung ON.
 
@@ -774,8 +743,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
     resident = (time_extent, height_extent, width_local + 2 * halo)
 
     device = query.device()
-    plan = _cached_sharded_plan(
-        volume, context_window, stride, brick, resident, shard_count, sp_axis, device, halo=halo
+    plan = _cached_plan(
+        volume, context_window, stride, brick, device, resident=resident, shard_count=shard_count, sp_axis=sp_axis
     )
     channels = head_count * head_dim
     # K and V span the resident region (owned + halo); Q and the output span only what this shard

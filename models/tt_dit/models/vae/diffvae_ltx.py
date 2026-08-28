@@ -814,7 +814,11 @@ class DeterministicStages(Module):
         # activation is W-sharded from stage 1 on (stage 0's W is not divisible by the mesh axis, so
         # it stays replicated), then gathered back to a replicated context at the end -- so the
         # handoff to stage 5 is unchanged. Defaults to the env override for the OOM diagnostic.
-        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_NA3D_BACKEND", "gather")
+        #
+        # DET_ in the name because this reaches stages 1-4 ONLY, alongside the other DIFFVAE_DET_*
+        # knobs. Stage 5 is selected separately by DIFFVAE_STAGE5_BACKEND; the two used to share the
+        # name DIFFVAE_NA3D_BACKEND, so setting it moved both halves of the decode at once.
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "gather")
         self.sp_axis = sp_axis
         # TP-over-heads on the orthogonal axis for the W-sharded stages (2-D SP x TP): the det stages
         # otherwise run replicated over this axis. Only applied to the op_sp_w_sharded stages (1+).
