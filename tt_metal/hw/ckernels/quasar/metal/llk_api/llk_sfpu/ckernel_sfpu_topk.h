@@ -104,7 +104,7 @@ inline void topk_init() {
 }
 
 // Fused-key sweeps: BH/WH-only. Declared for call-shape parity; any instantiation is a
-// compile-time error (dependent condition keeps the uninstantiated templates legal).
+// compile-time error.
 template <bool APPROXIMATION_MODE, bool largest>
 inline void calculate_topk_fuse() {
     static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Fused-key TopK is not supported on Quasar");
@@ -113,6 +113,17 @@ inline void calculate_topk_fuse() {
 template <bool APPROXIMATION_MODE, bool largest, std::uint32_t index_store_mode = 0>
 inline void calculate_topk_defuse(std::uint32_t /*num_tiles*/) {
     static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Fused-key TopK is not supported on Quasar");
+}
+
+// Same motivation as Fused-key sweeps above
+template <bool APPROXIMATION_MODE, bool largest>
+inline void calculate_topk_stamp_local_positions() {
+    static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, bool largest>
+inline void calculate_topk_stamp_tile_rank_range(std::uint32_t /*dst_tile_index*/, std::uint32_t /*rank_base*/) {
+    static_assert(!APPROXIMATION_MODE && APPROXIMATION_MODE, "Rank-stamped stable TopK is not supported on Quasar");
 }
 
 // Load 8 lanes (one value LREG pair + one index LREG pair) from Dest at runtime offsets.

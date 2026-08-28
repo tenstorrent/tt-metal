@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -221,9 +221,8 @@ std::vector<Tensor> post_sort_transform_tensor(
     return result;
 }
 
-// Mirrors the device op's preallocated-output rules (sort_device_operation.cpp) so the
-// composite early exits enforce the same contract as the dispatched path. Layout is
-// deliberately not checked: the main path converts a mismatched layout instead.
+// Follows the preallocated-output rules in sort_device_operation.cpp, so the
+// composite early exits enforce the same contract as the dispatched path.
 void validate_preallocated_output_tensors(
     const std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors,
     const Shape& original_lshape,
@@ -266,13 +265,11 @@ void validate_preallocated_output_tensors(
     }
 }
 
-// Fills a validated preallocated output pair for the early-exit paths: the input copied
-// into the caller's values buffer, zeros into the caller's indices buffer.
 std::vector<Tensor> fill_preallocated_early_exit_outputs(
     const Tensor& input_tensor, std::optional<std::tuple<Tensor&, Tensor&>>& optional_output_tensors) {
     auto& values = std::get<0>(*optional_output_tensors);
     auto& indices = std::get<1>(*optional_output_tensors);
-    // ttnn::copy requires matching layouts; the main path likewise converts rather than rejecting.
+    // ttnn::copy requires matching layouts.
     const Tensor source =
         input_tensor.layout() == values.layout() ? input_tensor : ttnn::to_layout(input_tensor, values.layout());
     ttnn::copy(source, values);
@@ -306,7 +303,6 @@ std::vector<Tensor> sort(
     operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_preallocated_output_tensors(
         optional_output_tensors, original_lshape, input_tensor.dtype());
 
-    // Rank 0 admits only dim 0/-1; the generic range check degenerates to always-false there.
     TT_FATAL(
         (dim >= -static_cast<int8_t>(rank) && dim < static_cast<int8_t>(rank)) ||
             (rank == 0 && (dim == 0 || dim == -1)),
