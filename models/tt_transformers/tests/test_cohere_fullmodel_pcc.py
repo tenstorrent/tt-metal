@@ -344,8 +344,11 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
     )
     logger.info(f"[cohere-head] raw logits shape from device: {tuple(logits_torch.shape)}")
     logits_torch = logits_torch.reshape(1, -1, logits_torch.shape[-1])[:, :seq_len, : model_args.vocab_size]
-    # rows are the 32-row lm-head window; rows :seq_len are the real prompt tokens
-    passing_l, pcc_msg_l, pcc_l = _pcc(ref_logits, logits_torch.float())
+    # rows are the 32-row lm-head window; at seq_len > 32 the window cannot cover all
+    # real tokens — compare the overlapping rows only (seq-36 root-cause run hit
+    # "size of tensor a (9216000) must match the size of tensor b (8192000)").
+    rows = logits_torch.shape[1]
+    passing_l, pcc_msg_l, pcc_l = _pcc(ref_logits[:, :rows], logits_torch.float())
     logger.info(f"[cohere-head] logits pcc={pcc_l:.6f} gate={'PASS' if passing_l else 'FAIL'} ({pcc_msg_l})")
 
     assert passing_n, f"final_norm PCC < 0.99 (bounty gate): {pcc_msg_n}"
