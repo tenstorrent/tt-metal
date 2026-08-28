@@ -70,9 +70,9 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, uint32_t value_block) {
             const uint32_t global_col = value_block * Vt + local_col;
             if (global_col < Kt) {
                 auto tile = state_ptr + (global_col * Vt + local_col) * tile_elements;
-                for (uint32_t row = 0; row < 16; ++row) {
-                    tile[row * 16 + row] = one_fp32;
-                    tile[3 * face_elements + row * 16 + row] = one_fp32;
+                for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+                    tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
+                    tile[3 * face_elements + row * tt::constants::FACE_WIDTH + row] = one_fp32;
                 }
             }
         }
