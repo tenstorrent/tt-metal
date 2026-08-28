@@ -33,12 +33,12 @@ source:
     # The only models/common module on the path: tt_dit's linear and attention import
     # is_blackhole from it. modules/tt_ccl is NOT needed — only utils/test.py imports
     # that, and the server inlines the helpers rather than depending on the test tree.
-    - models/common/__init__.py
+    # models/, models/common/ and models/tt_dit/ are PEP 420 namespace packages with no
+    # __init__.py, so staging a child is what creates them in the image.
     - models/common/utility_functions.py
     # The pipeline, the model code, and server/flux2 itself. Sibling DiT models under
     # models/ and pipelines/ come along with their packages; splitting those out per
     # file would risk under-shipping for a few MB.
-    - models/tt_dit/__init__.py
     - models/tt_dit/blocks
     - models/tt_dit/encoders
     - models/tt_dit/layers
@@ -46,7 +46,6 @@ source:
     - models/tt_dit/parallel
     - models/tt_dit/pipelines
     - models/tt_dit/utils
-    - models/tt_dit/server/__init__.py
     - models/tt_dit/server/flux2
   ubuntu: "24.04"
   python: "3.12"
