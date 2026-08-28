@@ -49,12 +49,12 @@ from models.experimental.voxtral_tts.tt.ttnn_voxtral_gpt import TtVoxtralGPT  # 
 from models.experimental.voxtral_tts.tt.ttnn_voxtral_pipeline import open_device  # noqa: E402
 
 PCC_PREFILL = 0.999
-PCC_DECODE = 0.999
+CACHE_CASES = (0, 2, 3, 12)         # P = 100..357
+CACHE_PCC = 0.998
 # The per-position minimum is printed, not asserted: a single position's PCC is far noisier than
 # the pooled or last-position figure. What is gated is the worst-sample bound on the last position.
 MAX_WORST_SAMPLE_PCT = 5.0
 MAX_POOLED_WORST_SAMPLE_PCT = 8.0   # largest single-element error over all positions
-DECODE_STEPS = 8
 
 
 @pytest.fixture(scope="module")
