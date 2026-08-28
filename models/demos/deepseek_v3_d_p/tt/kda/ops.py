@@ -16,10 +16,11 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
+    KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     KDA_GATE_DTYPE,
+    KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
-    KDA_PREFIX_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_MEMORY_CONFIG,
     KDA_QKV_DTYPE,
@@ -308,6 +309,8 @@ def _summarize_chunk_groups(
     affine_a, affine_b = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         memory_config=summary_memory_config,
+        # Summary generation is part of chunk preparation; the affine-prefix
+        # fidelity knob applies only to composition of the emitted summaries.
         compute_kernel_config=compute_config.preparation,
     )
     assert affine_a.dtype == ttnn.float32
@@ -458,7 +461,7 @@ class _LocalGroupedScan(_GroupedScan):
             summary_b,
             initial_state,
             groups_per_head,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=KDA_LOCAL_PREFIX_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config.affine_prefix,
         )
         return group_initial_states, None
@@ -524,7 +527,7 @@ class _DistributedGroupedScan(_GroupedScan):
             summary_b,
             partition_entry_state,
             groups_per_head,
-            memory_config=KDA_PREFIX_MEMORY_CONFIG,
+            memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
             compute_kernel_config=self._compute_config.affine_prefix,
         )
         return group_initial_states, distributed_final_state
@@ -542,6 +545,18 @@ class _DistributedGroupedScan(_GroupedScan):
         return strategy_final_state
 
 
+def _uses_grouped_scan(
+    *,
+    num_chunks: int,
+    program_config: KDARecurrenceProgramConfig,
+    sequence_parallel_axis: int | None,
+) -> bool:
+    """Return the single canonical grouped-versus-direct scan decision."""
+    return sequence_parallel_axis is not None or (
+        num_chunks >= program_config.grouped_scan_min_chunks and num_chunks % program_config.summary_group_chunks == 0
+    )
+
+
 def _select_scan(
     *,
     num_chunks: int,
@@ -549,11 +564,15 @@ def _select_scan(
     compute_config: _RecurrenceComputeConfig,
     sequence_parallel_axis: int | None,
 ) -> _RecurrenceScan:
-    if sequence_parallel_axis is not None:
-        return _DistributedGroupedScan(sequence_parallel_axis, program_config, compute_config)
-    if num_chunks >= program_config.grouped_scan_min_chunks and num_chunks % program_config.summary_group_chunks == 0:
+    if not _uses_grouped_scan(
+        num_chunks=num_chunks,
+        program_config=program_config,
+        sequence_parallel_axis=sequence_parallel_axis,
+    ):
+        return _DirectScan(program_config, compute_config)
+    if sequence_parallel_axis is None:
         return _LocalGroupedScan(program_config, compute_config)
-    return _DirectScan(program_config, compute_config)
+    return _DistributedGroupedScan(sequence_parallel_axis, program_config, compute_config)
 
 
 def _restore_recurrence_output(scan: _ScanResult, geometry: _RecurrenceGeometry) -> _ScanResult:
