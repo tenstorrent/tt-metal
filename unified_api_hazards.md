@@ -317,6 +317,29 @@ without a marker are mechanisms the headers document as the caller's responsibil
     metal cannot issue a duplicate id. A collision is a build error naming the arithmetic.
     Verified non-vacuous twice, by moving the base and by splitting the run.
 
+30. ~~**A kernel returning with a nonposted write still in flight.**~~ **FIXED.** The DFB
+    release condition is that the write has DEPARTED local L1, which is what
+    `noc_async_writes_flushed()` waits for and what `~NocAsyncWriteTx` did. Kernel EXIT is a
+    stricter contract, and how much stricter depends on the NOC mode: dedicated-mode firmware
+    asserts `nonposted_writes_sent` (`brisck.cc:91-95`), which a flush satisfies, but under
+    `DM_DYNAMIC_NOC` `brisc.cc:550-561` also asserts `nonposted_writes_flushed` -- landed, not
+    merely sent -- so the NOC interface is idle for the next kernel. `noc_store(...)` without
+    `.wait()` never barriered, so under dynamic NOC a store still in flight at return halted
+    BRISC. `detail::release_writes` now pays the round trip in the mode that is owed it, which
+    leaves dedicated-mode codegen unchanged.
+
+    It is the rule `~NocAsyncWriteCoreTx` already stated for its atomic -- "leaving one
+    outstanding is an inter-kernel data race... the ack lands after this kernel has finished,
+    against whatever runs next" -- applied to the write it sits next to. The comment was right
+    and the writes were the half that had not been finished.
+
+    **What made it expensive to find is worth more than the fix.** It presents as a hang with
+    a bit-exact result, because the payload does land; only the check that it had landed by
+    then fails. It is invisible in dedicated mode, which is every other suite. And it is
+    invisible under the WATCHER, which is the tool you reach for -- the watcher's own overhead
+    gives the writes time to arrive, so the assert it exists to report does not trip. That
+    combination is what kept `mcast_share` red for as long as it was.
+
 ## E. Silently wrong, never hangs
 
 22. **`reduce_mean` with a scaler of 1.** That is a sum, with nothing to say so.

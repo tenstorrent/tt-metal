@@ -590,6 +590,27 @@ Block<S> NocAsyncMcastTx<thread, S>::wait() const {
 
 // --- NocAsyncWriteTx ---
 
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+namespace detail {
+// Releasing the source buffer only needs the write to have DEPARTED local L1, and that is
+// all async_writes_flushed() waits for. Kernel EXIT is a stricter contract, and it differs
+// by NOC mode: dedicated-mode firmware asserts nonposted_writes_SENT (brisck.cc), which a
+// flush already satisfies, but under DM_DYNAMIC_NOC brisc.cc additionally asserts
+// nonposted_writes_FLUSHED -- landed, not merely sent -- so the NOC interface is idle for
+// whatever kernel runs next. Both RISCs share the counters in that mode, so a write still
+// in flight when the kernel returns halts BRISC on an ebreak with the payload correct and
+// nothing to see: it is the same inter-kernel race the atomic barrier below exists to
+// prevent, and the same rule. Pay the round trip only in the mode that is owed it.
+FORCE_INLINE void release_writes(uint8_t noc_id) {
+    if constexpr (NOC_MODE == DM_DYNAMIC_NOC) {
+        Noc(noc_id).async_write_barrier();
+    } else {
+        Noc(noc_id).async_writes_flushed();
+    }
+}
+}  // namespace detail
+#endif
+
 template <int thread, typename S>
 NocAsyncWriteTx<thread, S>::NocAsyncWriteTx(const Storage<S>& storage) : cb_id(storage.cb_id) {}
 
@@ -600,9 +621,9 @@ template <int thread, typename S>
 NocAsyncWriteTx<thread, S>::~NocAsyncWriteTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        // Writes have DEPARTED local L1 -- the release condition for the source
-        // buffer. Not the same as having landed; see wait().
-        Noc(noc_id).async_writes_flushed();
+        // Departed local L1 releases the source buffer; see detail::release_writes for
+        // why kernel exit can need more than that. Landing is wait()'s job.
+        detail::release_writes(noc_id);
         buffer(cb_id).pop_front(num_pages);
     }
 #endif
@@ -666,7 +687,7 @@ template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S>::~NocAsyncWriteCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        Noc(noc_id).async_writes_flushed();
+        detail::release_writes(noc_id);
         // The arrival flag is an ATOMIC, and a write flush does not cover atomics.
         // Leaving one outstanding is an inter-kernel data race: the ack lands after
         // this kernel has finished, against whatever runs next. The watcher calls
