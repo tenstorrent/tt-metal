@@ -981,7 +981,22 @@ KNOBS = {
     # value-oracle belt re-walks the committed order
     # (crossrow-pairing-shared-reload-final-order).  Composed with
     # crossrow-2datum (+ stochrnd-store-fold) the tanh paired record
-    # drops 30 -> 26 words; measured note follows the silicon legs.
+    # drops 30 -> 26 words = 26+2 priced acceptance stalls = 28
+    # slots/pair, BELOW hand's modeled 30.  MEASURED (BH, 3 reps
+    # cycle-identical, corr-first 4/4 x15 sessions, anchors
+    # 83640/67378 EXACT, booked composition control 71736 EXACT):
+    # tanh-fresh sem 63544 vs booked hand 67378 = -5.69 -> LOSS +6.47
+    # FLIPPED TO WIN (causal vs plain ON sem -24.03; the same-leg
+    # stoch-moved hand 65326 is also beaten, -2.73).  Matrix: SR alone
+    # byte+cycle inert on tanh (pairing refuses at the swap without
+    # stall-words); 2datum+SR 67642 (+0.39); the full triple = the
+    # WIN.  Corpus: OFF/TD/ON-36 base-vs-fix 3300/3300 .text-identical
+    # each; knob (ON-36+SR) delta = ZERO corpus TUs (the fires live in
+    # the fresh-harness class outside the mapped corpus — HM/laneID
+    # precedent — adjudicated by paired CRAQ 4/4 x3 arms on the pinned
+    # sim 1d162f0adf67 and the device corr legs); icknob preservation
+    # legs base-vs-fix at ON-36+crossrow-2datum 3300/3300 identical
+    # with lane IC's booked 12-TU delta reproduced EXACT.
     "crossrow-shared-reload": "-mtt-tensix-optimize-crossrow-shared-reload",
     # ID (loop-prgm-reclaim, lane ID 2026-08-27): the trigonometry
     # loadi-gap attack (HW row A7; GV's named PRGM/LREG capacity
