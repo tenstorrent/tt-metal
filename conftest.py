@@ -790,16 +790,22 @@ def bh_2d_mesh_device_context(device_params):
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
 
-    # TODO #50463: Revisit MGD path handling
-    if os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
+    # The fixture's 8-device logical view is always 4x2. Loudbox fabric is
+    # physically described as 2x4 (LINE,RING), including simulator MGDs, but
+    # open_mesh_device remaps that physical topology into the logical 4x2 view.
+    # Taking SystemMeshDescriptor().shape() here transposes the fixture contract
+    # whenever TT_MESH_GRAPH_DESC_PATH is set and makes GLM's size-4 ring look
+    # like a size-4 line.
+    if ttnn.get_num_devices() == 8:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 2),
+            **updated_device_params,
+        )
+    # TODO #50463: Revisit MGD path handling for other mesh sizes.
+    elif os.environ.get("TT_MESH_GRAPH_DESC_PATH"):
         mesh_shape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
         mesh_device = ttnn.open_mesh_device(
             mesh_shape=mesh_shape,
-            **updated_device_params,
-        )
-    elif ttnn.get_num_devices() == 8:
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(4, 2),
             **updated_device_params,
         )
     elif ttnn.get_num_devices() == 32:
