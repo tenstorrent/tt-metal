@@ -105,8 +105,6 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // covers exactly per_core_N_gu cols per step; activated cols past
     // actual_hidden are 0 (gate/up weight OOB zero-fill propagates through
     // silu and multiply).
-    constexpr uint32_t kMaxGridX = 11;
-    constexpr uint32_t MAX_GRID_Y = 8;
     // Full 2D grid, always. The short-sequence special case was removed: real
     // dispatch buffers are always in the long-sequence range, and the runtime
     // kernel picker (adaptive_chunk.hpp) already shrinks per_core_M for small
@@ -117,8 +115,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // per_core_M / num_chunks at runtime from the device token count, never
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
-    uint32_t GRID_X = kMaxGridX;
-    uint32_t GRID_Y = MAX_GRID_Y;
+    uint32_t GRID_X = kCoreGridX;
+    uint32_t GRID_Y = kCoreGridY;
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 8). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -127,15 +125,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // pick just uses fewer of the reserved tiles. Sizing per EXPERT at runtime
     // also beats any single host-side seed here, since each local expert carries a
     // different token count. (Owned by the op, not the caller.)
-    constexpr uint32_t kMaxChunkMTiles = 8 * MAX_GRID_Y;  // per_core_M <= 8 (L1 cap)
+    constexpr uint32_t kMaxChunkMTiles = 8 * kCoreGridY;  // per_core_M <= 8 (L1 cap)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= kMaxGridX && grid_size.y >= MAX_GRID_Y,
+        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
-        kMaxGridX,
-        MAX_GRID_Y,
+        kCoreGridX,
+        kCoreGridY,
         grid_size.x,
         grid_size.y);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
