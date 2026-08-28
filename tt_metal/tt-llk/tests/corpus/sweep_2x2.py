@@ -1029,6 +1029,22 @@ KNOBS = {
     # mechanism (executions != removed increments) is the pass's
     # existing fail-closed payload-coverage refusal, exercised by the
     # walk-skew twin.
+    # MEASURED (laneIF-evidence-20260827, BH, 26 device sessions all
+    # rc=0, corr-first every session, 3 reps ALL cycle-identical;
+    # paired CRAQ 8/8 both arms at pinned sim 1d162f0adf67): booked
+    # anchors reproduce EXACT (sum lift/orig 1495/1472, max 1775/1758);
+    # useq twin sum 1854 (knob off) -> 1596 (knob), causal -13.9%;
+    # max 1833 -> 1823, -0.5% (SFPSWAP execution-bound — freeing 29
+    # frontend words/tile buys ~nothing; FI envelope).  The carried
+    # walk is REAL but the useq delivery shape still loses to the
+    # booked straight-push lift (sum +6.8%, max +2.7% vs lift):
+    # A9/A10 rows stay lift-booked; the carried-walk class is
+    # refused-by-measurement on this vehicle, cert strengthened.
+    # Corpus: OFF/TD/ON-36 base-vs-fix 3300/3300 byte-identical and
+    # the knob delta is ZERO corpus TUs (fires live in the
+    # fresh-harness/blaze class outside the corpus, laneID-class
+    # adjudication); orig/lift/uni8/unih blaze arms knob-vs-fix
+    # byte-identical 8/8.
     "dst-autoincr-load-carrier": "-mtt-tensix-optimize-dst-autoincr-load-carrier",
     # GQ (record-hoist-peel): exec-while-record first-trip peel — rescues
     # exactly the doomed-hoist mirror refusal
