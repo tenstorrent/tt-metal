@@ -34,20 +34,9 @@ kernel-contract ruling before any of it can be written.
 to see where each moves the needle: W1 is cat G, which stands at 0 covered of the 14 ops that
 have a zero pole to deliver one to, and W9 is cat A.
 
-**Already landed.** These items are closed and their sections are gone; the numbering of what
-remains is unchanged so that references from commit messages and reviews still resolve.
-
-| # | What landed |
-|---|---|
-| W2 | `StimuliSpec.cycle`, honoured by `CustomStrategy` and on by default in `edge_spec()`, so an edge probe fills the face instead of leaving a ~98% zero tail |
-| W3 | zero operands, the uint32 upper half, and signed division — including the negatives this plan expected to be blocked, which `twos_complement=True` turns out to deliver |
-| W4 | a `mixed` where-condition that is mixed by construction on every format; its cat-B half had already been closed by the ternary specials work |
-| W5 | IEEE specials for the whole ternary family, including the `TernarySFPUGolden` and `WhereGolden` Dest/pack modelling that blocked it |
-| W6 | the addc multiplier as a compile-time axis, with the `value = 0` identity asserted bit for bit |
-| W7 | all of it: `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis and `EXTREMES_READY_OPS` for the ops that cannot overflow, then a table-driven saturation sweep for the nine that can — seven unary and two binary |
-| W8 | logsigmoid's `x > 4` branch, the golden that models it, and the paired operand B it needs — which also retired the "effectively unary" justification keeping the op out of cat B |
-| W10 | a block spread that actually spans the shared exponent, on the broad-profile ops at Bfp8_b and on all three block formats. One expectation did not hold and is recorded in the section comment: on a Bfp8_b output the tolerance accepts every element, so `_bfp_block_aware_compare`'s lattice path is still never reached — it is reached for Bfp4_b and Bfp2_b outputs, where it is the only verdict |
-| W11 | the coverage ledger, `python -m helpers.sfpu_domains --report`, and the ratchet that stops a class losing coverage silently |
+The numbering is not contiguous: W2–W8, W10 and W11 are closed and their sections have been
+removed. What remains keeps its original number so that references from commit messages and
+reviews still resolve.
 
 ---
 
@@ -116,8 +105,12 @@ right gate already exists — `negative_zero_delivered(input_format, dest_acc)` 
 ```python
 >>> edge_values(MathOperation.SfpuElwdiv, DataFormat.Float32, DataFormat.Float32,
 ...             operand=Operand.B, dest_acc=DestAccumulation.Yes)
-[-0.015625, 0.0, 0.015625]      # no -0.0
+[-2.384185791015625e-07, 0.0, 2.384185791015625e-07]      # no -0.0
 ```
+
+The two straddling probes are one fp32 ULP either side of the pole; they were an order of
+magnitude wider when this was first written, before the step became `dest_acc`-aware. Neither
+of them is the missing value — the gap is that the zero in the middle only ever has one sign.
 
 ### Steps
 
@@ -291,11 +284,6 @@ limitation, not a test:
   `0x80000000` as "negative zero", so the value cannot round-trip. Covered by a dedicated
   `xfail` (`test_sfpu_binary_int_shift_int32_min_unsupported`) and by `integer_specials()`'s
   docstring. `INT32_MIN + 1` and `2**31 + 1` stand in for it on the signed and unsigned sides.
-- **Negative integer operands generally** — *retracted*. This entry expected the
-  sign-magnitude Dst to block them, and `twos_complement=True` turns out to deliver them
-  intact: `test_eltwise_binary_sfpu_int_signed_division` drives both signs on both operands and
-  passes, which is what separates truncating from flooring division. Only the single
-  `0x80000000` pattern above is genuinely blocked.
 - **`Lgamma` / `Digamma` / `Polygamma` at their poles.** The kernels are polynomial and LUT
   fits that claim accuracy only well inside a positive domain; a probe at the boundary
   tests a value the kernel never promised. Already recorded above `_OP_SINGULARITIES`.
