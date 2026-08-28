@@ -15,6 +15,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import normalize_kda_state_dict
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
 _CACHE_SCHEMA_VERSION = 2
 
@@ -81,11 +82,12 @@ class KDAWeights:
         if cache_path is None:
             return False
         cache_path = Path(cache_path)
+        checker = FastCacheChecker(cache_path)
         mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
         for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
             pattern = f"{stem}_dtype_{ttnn.bfloat16.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
-            if not any(cache_path.glob(pattern)):
+            if not checker.pattern_exists(pattern, "KDA"):
                 return False
         return True
 
@@ -115,10 +117,10 @@ class KDAWeights:
     @classmethod
     def from_cache(
         cls,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
-        config: KDAConfig,
         cache_path: Path,
         cache_name_prefix: str,
+        config: KDAConfig,
+        mesh_device: ttnn.Device | ttnn.MeshDevice,
         *,
         tensor_parallel_axis: int = 1,
     ) -> "KDAWeights":

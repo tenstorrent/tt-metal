@@ -19,6 +19,10 @@ from models.demos.deepseek_v3_d_p.tt.kda.weight_schema import (
     validate_kda_weights,
 )
 
+KIMI_K3_FIRST_KDA_LAYER = 1
+KIMI_K3_HF_REVISION = "9f62e4e9fffbd0a83ddd60e1c209d828994b3569"
+KIMI_K3_LAYER_1_SHA256 = "10b99878599e02d002f2566b04c9cc7433da6d267351991978f6e348478f3097"
+
 
 def kda_state_dict_sha256(state_dict: Mapping[str, torch.Tensor]) -> str:
     """Return a canonical content identity for the normalized KDA layer weights."""

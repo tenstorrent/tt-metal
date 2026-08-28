@@ -86,15 +86,18 @@ def test_offline_cache_and_cache_only_layer_pcc(device: ttnn.Device, tmp_path: P
 
     assert not KDAWeights.check_cache_complete(tmp_path, cache_prefix, config, device)
     with expect_error(FileNotFoundError, "incomplete KDA TTNN cache"):
-        KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
+        KDAWeights.from_cache(tmp_path, cache_prefix, config, device)
 
     KDAWeights.build_ttnn_cache(state_dict, tmp_path, cache_prefix, config, device)
     assert KDAWeights.check_cache_complete(tmp_path, cache_prefix, config, device)
-    cached_weights = KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
-    assert cached_weights is not None
-    layer = ttKDA(device, config, {}, weight_cache_path=tmp_path, layer_idx=0)
-    actual_output, _ = _forward(layer, hidden, layer.allocate_state())
-    assert_accurate(golden_output, actual_output, name="cache-only output", pcc_threshold=0.999)
+    cached_weights = KDAWeights.from_cache(tmp_path, cache_prefix, config, device)
+    cached_layer = ttKDA(device, config, weights=cached_weights)
+    cached_output, _ = _forward(cached_layer, hidden, cached_layer.allocate_state())
+    assert_accurate(golden_output, cached_output, name="loaded-cache output", pcc_threshold=0.999)
+
+    cache_only_layer = ttKDA(device, config, {}, weight_cache_path=tmp_path, layer_idx=0)
+    cache_only_output, _ = _forward(cache_only_layer, hidden, cache_only_layer.allocate_state())
+    assert_accurate(golden_output, cache_only_output, name="cache-only output", pcc_threshold=0.999)
 
 
 def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path: Path, expect_error) -> None:
@@ -104,7 +107,7 @@ def test_cache_only_load_rejects_corrupt_tensorbin(device: ttnn.Device, tmp_path
     next(tmp_path.glob("*.tensorbin")).write_bytes(b"corrupt")
 
     with expect_error(RuntimeError, "too small"):
-        KDAWeights.from_cache(device, config, tmp_path, cache_prefix)
+        KDAWeights.from_cache(tmp_path, cache_prefix, config, device)
 
 
 def test_program_config_controls_tp_topology(device: ttnn.Device) -> None:
