@@ -291,19 +291,24 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
     passing_n, pcc_msg_n, pcc_n = _pcc(ref_norm, normed_torch.float())
     logger.info(f"[cohere-head] final_norm pcc={pcc_n:.6f} gate={'PASS' if passing_n else 'FAIL'} ({pcc_msg_n})")
 
-    # logits PCC — mirror model.py prefill (model.py: lm_head_input_mem_cfg reshard
-    # before self.lm_head(x); the DRAM-sharded LM-head matmul rejects interleaved input
-    # with "bad optional access" — observed on-box 2026-08-28 run1)
+    # logits PCC — mirror model.py prefill EXACTLY: slice to a 32-row window first
+    # (model.py: ttnn.slice(x, (0,0,get_last_token,0), (1,1,get_last_token+32, ...)) —
+    # get_lm_head_input_mem_config(PREFILL) shards (tile_padded_batch_rows=32, 128)
+    # per core, so a 128-row input fails shard-grid fit — observed on-box run2
+    # 2026-08-28: tensor_spec.cpp:161 !shard_grid_fit_error.has_value()). Rows 0:32
+    # cover all real tokens for these prompts (seq_len <= 32 by construction).
     lm_head_input_mem_cfg = model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
+    tt_head_in = ttnn.slice(tt_normed, (0, 0, 0, 0), (1, 1, 32, tt_normed.shape[-1]))
     if lm_head_input_mem_cfg.is_sharded():
-        tt_normed = ttnn.interleaved_to_sharded(tt_normed, lm_head_input_mem_cfg)
-    tt_logits = tt_head(tt_normed)
+        tt_head_in = ttnn.interleaved_to_sharded(tt_head_in, lm_head_input_mem_cfg)
+    tt_logits = tt_head(tt_head_in)
     logits_torch = ttnn.to_torch(
         tt_logits,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=model_args.cluster_shape),
     )
     logger.info(f"[cohere-head] raw logits shape from device: {tuple(logits_torch.shape)}")
     logits_torch = logits_torch.reshape(1, -1, logits_torch.shape[-1])[:, :seq_len, : model_args.vocab_size]
+    # rows are the 32-row lm-head window; rows :seq_len are the real prompt tokens
     passing_l, pcc_msg_l, pcc_l = _pcc(ref_logits, logits_torch.float())
     logger.info(f"[cohere-head] logits pcc={pcc_l:.6f} gate={'PASS' if passing_l else 'FAIL'} ({pcc_msg_l})")
 
