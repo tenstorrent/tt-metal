@@ -708,8 +708,8 @@ jobs:
                         "type": "boolean"
                       },
                       "run-models-sanity-tests": {
-                        "default": false,
-                        "description": "Run model sanity tests (WH Galaxy; off by default because this workflow also fires on every push to main)",
+                        "default": true,
+                        "description": "Run model sanity tests (WH Galaxy)",
                         "type": "boolean"
                       },
                       "run-ops-sanity-tests": {

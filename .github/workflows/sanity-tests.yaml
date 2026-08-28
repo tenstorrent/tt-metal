@@ -80,9 +80,9 @@ on:
         description: "Run Blackhole multi-card sanity tests"
       run-models-sanity-tests:
         required: false
-        default: false
+        default: true
         type: boolean
-        description: "Run model sanity tests (WH Galaxy; off by default because this workflow also fires on every push to main)"
+        description: "Run model sanity tests (WH Galaxy)"
       enable-watcher:
         required: false
         type: boolean
@@ -194,9 +194,9 @@ on:
         description: "Run Blackhole multi-card sanity tests"
       run-models-sanity-tests:
         required: false
-        default: false
+        default: true
         type: boolean
-        description: "Run model sanity tests (WH Galaxy; off by default because this workflow also fires on every push to main)"
+        description: "Run model sanity tests (WH Galaxy)"
       enable-watcher:
         required: false
         default: false
@@ -527,8 +527,8 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  # Model sanity tests (WH Galaxy). Opt-in: this workflow also runs on every push to
-  # main, and this leg needs a 6U Galaxy.
+  # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
+  # main and the scheduled runs leave this leg out: `inputs` is null on those events.
   models-sanity-tests:
     if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) == 'true' }}
     needs: [build-artifact, generate-sku-matrix]
