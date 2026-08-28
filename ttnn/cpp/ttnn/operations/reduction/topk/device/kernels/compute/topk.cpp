@@ -400,7 +400,8 @@ void kernel_main() {
                         }
                     }
                 }
-                ckernel::topk_local_sort<network_stable, false, rank_stamped>(0, (int)!largest, end_phase);
+                ckernel::topk_local_sort<network_stable, DST_ACCUM_MODE, false, rank_stamped>(
+                    0, (int)!largest, end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();

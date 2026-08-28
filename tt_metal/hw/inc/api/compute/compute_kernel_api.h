@@ -737,9 +737,9 @@ ALWI void silu_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init,
 // clang-format on
 template <
     bool stable_sort = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
-    bool rank_stamped = false,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool rank_stamped = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
     MATH(SFPU_UNARY_CALL(
@@ -794,10 +794,10 @@ ALWI void topk_local_sort(
 template <
     bool idir = false,
     bool stable_sort = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
     bool rank_stamped = false,
-    bool pre_tagged = false,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool pre_tagged = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -847,9 +847,9 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
 // clang-format on
 template <
     bool stable_sort = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
     bool fused = false,
-    bool rank_stamped = false,
-    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+    bool rank_stamped = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
