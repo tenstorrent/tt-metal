@@ -23,7 +23,7 @@ Numbers quoted below as *cost* come from the baseline profile
 | [5](#candidate-5--trace-capture) | trace capture the encoder | gap | all remaining gap | M | low | blocked on 1b |
 | [6](#candidate-6--the-fused-msda-op-itself) | the fused MSDA op itself | kernel | **−138.3 ms**, and it was never the op | L | med | **landed — [06](perf_reports/06-sfpu-geometry.md)** |
 | [7](#candidate-7--an-msda-head-reshape-op) | an MSDA head-reshape op | kernel | — | L | med | closed — wrong shape, see 9 |
-| [9](#candidate-9--axes-as-addresses-not-data) | axes as addresses, not data | kernel | **~22 ms left** of ~45 | M | low | **in progress — [08](perf_reports/08-packed-value-heads.md)** |
+| [9](#candidate-9--axes-as-addresses-not-data) | axes as addresses, not data | kernel | **~6 ms left** of ~45 | M | low | **in progress — [08](perf_reports/08-packed-value-heads.md), [09](perf_reports/09-packed-attn-runs.md)** |
 | [8](#candidate-8--the-grids-point-axis-in-its-page) | fold the grid's point axis into its page | kernel | **−12.9 ms**, and the page was the story | S | low | **landed — [07](perf_reports/07-folded-grid-page.md)** |
 
 Ordering rationale is at the [bottom](#ordering).
@@ -410,16 +410,21 @@ The head is not data. It is a byte offset inside a stick, and the level is a byt
 | input | copied form | addressed form | offset |
 |---|---|---|---|
 | value | `(B*nh, H, W, D)` | `(B, H, W, nh*D)` | `h*D*2` — **landed, −20.5 ms** |
-| attn | `(B*nh, Q, P)` | `(B, Q, nh*L*P)` | `(h*L*P + l*P)*2` — **~15 ms** |
-| grid | `(B*nh, Q, 1, P*2)` | `(B, Q, nh*L*P*2)` | `(h*L*P + l*P)*2*2` — **~5 ms** |
-| output | `(B*nh, Q, D)` | `(B, Q, nh*D)` | `h*D*2` in the writer — **~2 ms** |
+| attn | `(B*nh, Q, P)` | `(B, Q, nh*L*P)` | `(h*L*P + l*P)*2` — **landed, −17.9 ms** |
+| grid | `(B*nh, Q, 1, P*2)` | `(B, Q, nh*L*P*2)` | `(h*L*P + l*P)*2*2` — **~4.5 ms** |
+| output | `(B*nh, Q, D)` | `(B, Q, nh*D)` | `h*D*2` in the writer — **~1.9 ms** |
 
-Each input is independent: `N_work` is `B*num_heads` either way, so one can be widened while the
-others stay in the form the caller already produces. Every step is one stage, one measurement.
+`attn` and `grid` are selected by their own shapes, so either can be widened on its own. `value`
+cannot: `num_heads > 1` *is* the switch that packs it. (Stage 08 claimed all four were independent;
+that was wrong and stage 09 found it by writing a test that passed head-major value with
+`num_heads = 4`.)
 
-`attn` is the largest remaining piece because its copied form carries a trailing `(L, P) = (4, 4)`
-that pads to a full `(32, 32)` tile — 64× — which is what the 3.6 ms untilize pays for.
+**A NoC source offset must be 32-byte aligned.** value's `h*D*2` always is, because `D % 16 == 0`,
+so stage 08 never met the constraint. attn's is not — `P = 4, L = 4` gives 8, 16, 24 for levels 1–3
+— and stage 09 pays for it by rounding the read down to the boundary and indexing the points from
+there. The grid's offset has the same shape and will need the same handling.
 
 Not yet verified: the writer passes `{.offset_bytes = 0}` in its destination args
 (`writer_msda.cpp:87`). Whether the destination struct accepts an offset the way the source struct
-does needs checking before the output step.
+does needs checking before the output step — and after the alignment surprise, on the device rather
+than by reading the header.

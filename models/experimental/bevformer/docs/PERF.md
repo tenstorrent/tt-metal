@@ -42,6 +42,7 @@ reported for that reason.
 | 6 | [sampling geometry on the SFPU](perf_reports/06-sfpu-geometry.md) | Release | 125.3 ms | 44.1 ms | **169.4 ms** | **−136.0 ms** |
 | 7 | [the grid's point axis folded into its page](perf_reports/07-folded-grid-page.md) | Release | 112.4 ms | 40.3 ms | **152.7 ms** | **−16.7 ms** |
 | 8 | [value heads addressed by byte offset](perf_reports/08-packed-value-heads.md) | Release | 91.9 ms | 41.6 ms | **133.4 ms** | **−19.3 ms** |
+| 9 | [attn level runs addressed by byte offset](perf_reports/09-packed-attn-runs.md) | Release | 74.0 ms | 56.1 ms | **130.0 ms** | **−3.4 ms** |
 
 `kernel` = summed `DEVICE KERNEL DURATION`. `gap` = summed `OP TO OP LATENCY`, i.e. the time the
 device spent idle between ops waiting on host dispatch. `wall` = kernel + gap, per layer.
@@ -51,7 +52,7 @@ measured gaps of 63.3, 41.6 and 34.1 ms while kernel held at 91.9 / 91.9 / 92.3.
 one op — the `bev_mask` readback that [candidate 1b](perf_optimization_candidates.md#1b-bound-max_len-statically)
 is about — so wall clock here resolves to roughly ±15 ms. Every row from stage 2 to stage 7 is a
 single run and is not being re-measured; treat their kernel deltas as sound and their wall deltas as
-indicative. Stage 8 quotes the median of three.
+indicative. Stages 8 and 9 quote the median of three.
 
 **Stages 0–1 and stages 2–4 are not on the same build, so the deltas do not sum across that line.**
 Op-to-op latency is host dispatch cost and a Debug build inflates it ~5×. Device time is unaffected:
@@ -61,8 +62,8 @@ re-measurement, and stage 2 onwards is measured against it.
 
 **Stage 1: −70.7% of wall clock**, trading kernel for −2198.2 ms of host gap.
 
-**Stages 2–8: 681.5 → 91.9 ms of kernel, −86.5%**, at a PCC gate held at 0.9996 throughout. All of
-it is device time. Kernel is **69%** of the median wall clock; the rest is one host sync.
+**Stages 2–9: 681.5 → 74.0 ms of kernel, −89.1%**, at a PCC gate held at 0.9996 throughout. All of
+it is device time. Kernel is **57%** of the median wall clock; most of the rest is one host sync.
 
 `200×200` spatial cross attention runs as of stage 4; it had been failing on an allocation of 2.97
 GB for a 23.2 MB tensor. The full `tests/pcc/` suite is 33 passed with nothing deselected.
@@ -79,13 +80,16 @@ bytes of data. Sorted by GB/s the layout ops sort by page width: 512 B → 38 GB
 4 B → 2 GB/s, against a 288 GB/s roof. Folding the grid's point axis into its page deleted both
 4-byte-page ops — see [07](perf_reports/07-folded-grid-page.md).
 
-**Layout plumbing is the largest item** — `Reshape` + `Permute` + `Slice` + `Untilize` is 38.4 ms,
-**42% of kernel**, down from 60.5. The fix is not the deformable member of the 19 `nlp_*`
-head-reshape ops: such an op would still have to *produce* the head-major tensor, 92.6 MB written
-and read, when the cost is the page it produces rather than the number of calls. Making the head an
-address instead of an axis deletes the tensor entirely — see
-[08](perf_reports/08-packed-value-heads.md). The same treatment is still owed to `attn` (~15 ms),
-the grid's head axis (~5 ms) and the output (~2 ms).
+**`MSDAOperation` is the largest item again** at 28.6 ms, **39% of kernel** — for the first time
+since stage 06. Layout plumbing is 20.6 ms, down from 60.5, and no single item in it is above
+1.9 ms.
+
+The fix was never the deformable member of the 19 `nlp_*` head-reshape ops: such an op would still
+have to *produce* the head-major tensor, 92.6 MB written and read, when the cost is the page it
+produces rather than the number of calls. Making the head and the level into addresses instead of
+axes deletes the tensor entirely — see [08](perf_reports/08-packed-value-heads.md) and
+[09](perf_reports/09-packed-attn-runs.md). The grid's head axis (~4.5 ms) and the output (~1.9 ms)
+are still owed the same treatment.
 
 ## Where the baseline time is
 
