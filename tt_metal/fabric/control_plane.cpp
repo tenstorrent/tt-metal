@@ -750,6 +750,14 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::consolidate_fabric_config_with_mesh_graph_shapes(const std::vector<MeshShape>& mesh_shapes) {
+    // Multi-mesh only: the deadlock-avoidance mismatch this guards against (#54650) needs an
+    // inter-mesh link whose two endpoints label the axis differently, which cannot happen with a
+    // single mesh — both ends of every link agree by construction. Single-mesh systems also include
+    // 2x2 boxes whose chip pairs are double-cabled and genuinely ring; consolidating their torus away
+    // would turn deadlock avoidance off on links that ring.
+    if (mesh_shapes.size() <= 1) {
+        return;
+    }
     this->fabric_config_ = coerce_fabric_config_to_realized_ring_extents(this->fabric_config_, mesh_shapes);
 }
 

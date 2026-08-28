@@ -289,6 +289,38 @@ protected:
     }
 };
 
+// Single-mesh systems must keep the requested torus/ring config verbatim. The #54650
+// deadlock-avoidance mismatch needs an inter-mesh link whose two endpoints label the axis
+// differently — impossible with one mesh, where both ends of every link agree by construction.
+// And a 2x2 box whose chip pairs are double-cabled genuinely rings (BH QuietBox class), so
+// consolidating the torus away would also turn deadlock avoidance off on links that ring — a
+// correctness risk, not a simplification. Pins the pre-consolidation behavior on the 2x2 N300 mock.
+TEST_F(MockClusterTopologyFixture, SingleMeshKeepsRequestedTorusConfig) {
+    auto& ctx = tt::tt_metal::MetalContext::instance();
+    if (ctx.get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::N300_2x2) {
+        GTEST_SKIP() << "Requires the 2x2 N300 mock cluster (single 2x2 mesh)";
+    }
+
+    ctx.set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    EXPECT_EQ(ctx.get_fabric_config(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY)
+        << "single-mesh 2x2: requested torus must stay latched (no inter-mesh link can mismatch)";
+    ctx.set_fabric_config(
+        tt::tt_fabric::FabricConfig::DISABLED,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+    // The 1D ring on a 2x2 is a genuine 4-cycle (wrap-around-mesh) and must also stay latched.
+    ctx.set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    EXPECT_EQ(ctx.get_fabric_config(), tt::tt_fabric::FabricConfig::FABRIC_1D_RING)
+        << "single-mesh 2x2: FABRIC_1D_RING is a 4-device ring and must stay latched";
+    ctx.set_fabric_config(
+        tt::tt_fabric::FabricConfig::DISABLED,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+}
+
 TEST_F(MockClusterTopologyFixture, HopCalculations_WithRealTopology) {
     auto shapes = get_mesh_shapes_from_control_plane();
 
