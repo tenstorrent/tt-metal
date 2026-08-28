@@ -95,7 +95,43 @@ public:
     get_env();
 
     dispatch_core_manager& get_dispatch_core_manager();
+
+    // Snapshot of the dispatch-core partition used to build the currently live
+    // dispatch managers. Written only by initialize(); default-constructed
+    // (WORKER, unset axis) until then. Teardown does not clear it.
     const DispatchCoreConfig& get_dispatch_core_config() const { return dispatch_core_config_; }
+
+    // Propose a complete dispatch-core config from the environment attached to
+    // this context, plus optional caller preferences.
+    //
+    // This is not a getter for get_dispatch_core_config(). That member is the
+    // snapshot stored by initialize(), describing how already-built dispatch
+    // state was partitioned. This method never reads that snapshot. It
+    // recomputes from live architecture, live fabric tensix config, optional
+    // type/axis arguments, and the TT_METAL_GTEST_ETH_DISPATCH override
+    // (explicit argument > env-var override > platform default).
+    //
+    // Call this when choosing the config to pass into a forthcoming
+    // initialize() / device open: no usable snapshot exists yet, or the caller
+    // is proposing a new partition. Call get_dispatch_core_config() when asking
+    // how live dispatch managers were built.
+    //
+    // The two agree only after initialize() has run and the last initialize
+    // used exactly what this method would produce from the same inputs now.
+    // They differ when initialize has not run, when initialize was given an
+    // explicit non-default that the no-argument call would not pick, or when
+    // fabric tensix config changed after the snapshot was stored.
+    //
+    // initialize() itself is not this method: it keeps the incoming type and
+    // only fills an unset axis. Calling resolve after initialize does not
+    // refresh the snapshot; it re-runs default policy against the live env.
+    //
+    // Temporary. Dispatch config is still a parameter to initialize() because
+    // MetalContext has no construct-with-settings step. The intended end state
+    // is to resolve (or accept an already-complete config) when the
+    // environment is set up, after fabric config is known, and to store that
+    // result for the context lifetime. This helper should then go away;
+    // remaining callers query the snapshot.
     DispatchCoreConfig resolve_dispatch_core_config(
         std::optional<DispatchCoreType> type = std::nullopt, std::optional<DispatchCoreAxis> axis = std::nullopt) const;
     internal::ServiceCoreManager& get_service_core_manager();
