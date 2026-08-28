@@ -19,8 +19,10 @@ FORCE_INLINE void read_contiguous_tiles(
     const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t base, uint32_t count) {
     buffer.reserve_back(count);
     const uint32_t entry_size = buffer.get_entry_size();
-    for (uint32_t tile = 0; tile < count; ++tile) {
-        noc.async_read(accessor, buffer, entry_size, {.page_id = base + tile}, {.offset_bytes = tile * entry_size});
+    uint32_t tile = 0;
+    for (const auto& page : accessor.pages(base, base + count)) {
+        noc.async_read(accessor, buffer, entry_size, {.page_id = page.page_id()}, {.offset_bytes = tile * entry_size});
+        ++tile;
     }
     noc.async_read_barrier();
     buffer.push_back(count);

@@ -72,10 +72,14 @@ _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 
 
 @pytest.mark.parametrize(
-    ("batch_heads", "num_chunks", "key_dim", "value_dim", "bf16_names", "output_memory"),
+    ("batch_heads", "num_chunks", "key_dim", "value_dim", "bf16_names", "input_memory", "output_memory"),
     [
-        pytest.param(2, 1, 32, 32, frozenset(), ttnn.DRAM_MEMORY_CONFIG, id="single-chunk-fp32"),
-        pytest.param(2, 3, 32, 64, BF16_ALLOWED, ttnn.L1_MEMORY_CONFIG, id="three-chunk-all-allowed-bf16"),
+        pytest.param(
+            2, 1, 32, 32, frozenset(), ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="single-chunk-fp32"
+        ),
+        pytest.param(
+            2, 3, 32, 64, BF16_ALLOWED, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="three-chunk-all-allowed-bf16"
+        ),
         pytest.param(
             2,
             4,
@@ -83,9 +87,10 @@ _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
             64,
             frozenset({"kd", "q_decay", "final_decay"}),
             ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.DRAM_MEMORY_CONFIG,
             id="production-four-chunk",
         ),
-        pytest.param(6, 2, 64, 32, frozenset(), ttnn.L1_MEMORY_CONFIG, id="grouped-batch-heads"),
+        pytest.param(6, 2, 64, 32, frozenset(), ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="grouped-batch-heads"),
     ],
 )
 def test_recurrent_chunk_scan_contract_and_trace(
@@ -96,12 +101,13 @@ def test_recurrent_chunk_scan_contract_and_trace(
     value_dim: int,
     bf16_names: frozenset[str],
     output_memory: ttnn.MemoryConfig,
+    input_memory: ttnn.MemoryConfig,
 ) -> None:
     host_inputs = host_protocol(batch_heads, num_chunks, key_dim, value_dim, bf16_names=bf16_names)
     host_state = initial_state(batch_heads, key_dim, value_dim)
     expected = recurrent_oracle(host_inputs, host_state)
-    inputs = device_protocol(host_inputs, device)
-    state = to_device(host_state, device)
+    inputs = tuple(to_device(tensor, device, memory_config=input_memory) for tensor in host_inputs)
+    state = to_device(host_state, device, memory_config=input_memory)
 
     assert_runtime_contract(
         device,
