@@ -547,7 +547,7 @@
 
 - name: Gemma-4-12B unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
