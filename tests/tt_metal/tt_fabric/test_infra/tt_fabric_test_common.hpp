@@ -413,11 +413,10 @@ public:
     }
 
     uint32_t get_max_connections_per_device() const override {
-        static constexpr uint32_t MAX_Z_NEIGHBORS = 2;
         auto arch = tt::tt_metal::hal::get_arch();
         switch (arch) {
-            case tt::ARCH::BLACKHOLE: return 4 + MAX_Z_NEIGHBORS;  // N, S, E, W + up to 2 Z destinations
-            default: return 4;                                     // N, S, E, W
+            case tt::ARCH::BLACKHOLE: return 5;  // N, S, E, W, Z
+            default: return 4;                   // N, S, E, W
         }
     }
 

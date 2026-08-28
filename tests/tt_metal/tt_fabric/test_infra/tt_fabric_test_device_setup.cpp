@@ -77,30 +77,6 @@ std::vector<RoutingDirection> mcast_outgoing_directions(
     return directions;
 }
 
-// Rejects a direction that reaches more than one peer. register_fabric_connection selects the eth
-// chan for a direction by narrowing on the caller's final destination, falling back to indexing the
-// direction's channel list by link_idx when that destination is not a direct neighbor. A multicast
-// has no single destination chip, so it always takes the fallback and picks a peer by position.
-// Every cardinal direction reaches one peer, where picking by position is unambiguous. A chip can
-// own two chords and report both under Z, where it can select the wrong chord and deliver only part
-// of the range.
-void assert_direction_reaches_one_peer(const FabricNodeId& src_node_id, RoutingDirection direction) {
-    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto chans = cp.get_active_fabric_eth_channels_in_direction(src_node_id, direction);
-    std::set<FabricNodeId> peers;
-    for (const auto chan : chans) {
-        peers.insert(cp.get_connected_mesh_chip_chan_ids(src_node_id, chan).first);
-    }
-    TT_FATAL(
-        peers.size() <= 1,
-        "express multicast from {} leaves on direction {}, which reaches {} distinct peers. Choosing "
-        "between them needs the tree edge the encoder actually picked, which mcast_root_output_directions "
-        "does not return.",
-        src_node_id,
-        static_cast<int>(direction),
-        peers.size());
-}
-
 }  // namespace
 
 // ====================================
@@ -563,9 +539,6 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
     for (const auto direction : outgoing_directions) {
-        if (is_tree_mcast) {
-            assert_direction_reaches_one_peer(this->test_device_ptr_->get_node_id(), direction);
-        }
         fabric_connection_keys.push_back(this->test_device_ptr_->register_fabric_connection(
             this->logical_core_,
             TestWorkerType::SENDER,
@@ -699,9 +672,6 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
     std::vector<ConnectionKey> fabric_connection_keys;
     fabric_connection_keys.reserve(outgoing_directions.size());
     for (const auto direction : outgoing_directions) {
-        if (is_tree_mcast) {
-            assert_direction_reaches_one_peer(this->test_device_ptr_->get_node_id(), direction);
-        }
         fabric_connection_keys.push_back(this->test_device_ptr_->register_fabric_connection(
             this->logical_core_,
             TestWorkerType::SYNC,

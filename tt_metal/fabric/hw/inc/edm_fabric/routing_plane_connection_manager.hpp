@@ -14,14 +14,11 @@ namespace tt::tt_fabric {
 
 // Determine maximum number of routing-plane connections if not provided by the build.
 #ifndef TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS
-// Anything beyond the four port directions is a Z peer, and both conditions for having one are
-// required: only Blackhole has Z ports at all (num_z_ports is 0 on every other arch), and intramesh
-// Z edges are written solely by the express_links expansion, which FABRIC_EXPRESS_ENABLED echoes.
-// A 2D build without express links therefore still tops out at NESW.
+// The manager holds at most one logical connection per output direction. Blackhole express meshes
+// add one Z direction to the four cardinal directions; parallel lanes to that same neighbor are
+// routing-plane realizations, not additional logical connections.
 #if defined(FABRIC_EXPRESS_ENABLED) && defined(ARCH_BLACKHOLE)
-// NESW + up to 2 Z-link peers. Both Z connections carry tag == eth_chan_directions::Z, so a tag
-// lookup alone cannot tell them apart; callers needing a specific peer must go by slot.
-#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 6
+#define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 5
 #else
 #define TT_FABRIC_MAX_ROUTING_PLANE_CONNECTIONS 4
 // TODO: 3D, dragonfly and custom etc.
@@ -129,15 +126,6 @@ public:
     inline void for_each(Fn&& fn) {
         for (uint32_t i = 0; i < num_active_; ++i) {
             fn(slots_[i].sender, i, slots_[i].tag);
-        }
-    }
-
-    template <typename Fn>
-    inline void for_each_with_tag(uint32_t tag, Fn&& fn) {
-        for (uint32_t i = 0; i < num_active_; ++i) {
-            if (slots_[i].tag == tag) {
-                fn(slots_[i].sender, i, slots_[i].tag);
-            }
         }
     }
 
