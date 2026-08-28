@@ -43,7 +43,7 @@ void kernel_main() {
         }
         report_value(report_addr, cached.value());                       // expect num_threads * increment_times
         report_value(report_addr + sizeof(uint32_t), external.value());  // expect num_threads * increment_times
-        report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::cached)));
-        report_value(report_addr + 3 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::external)));
+        report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem::cached.scope));
+        report_value(report_addr + 3 * sizeof(uint32_t), static_cast<uint32_t>(sem::external.scope));
     }
 }

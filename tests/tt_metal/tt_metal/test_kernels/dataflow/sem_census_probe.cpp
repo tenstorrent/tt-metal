@@ -20,7 +20,7 @@ void kernel_main() {
     const uint32_t barrier_idx = get_arg(args::barrier_idx);
     const uint32_t wait_min_total = get_arg(args::wait_min_total);
 
-    // The mechanism comes from the host's scope table
+    // The mechanism comes from the binding token the host emitted.
     Semaphore counter(sem::counter);
 
     for (uint32_t i = 0; i < increment_times; i++) {
@@ -38,11 +38,11 @@ void kernel_main() {
             }
         }
         volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-        report[0] = static_cast<uint32_t>(sem_scope_of(sem::counter));
+        report[0] = static_cast<uint32_t>(sem::counter.scope);
         report[1] = counter.value();
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         report[2] =
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(::get_semaphore(sem::counter) + MEM_L1_UNCACHED_BASE);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(::get_semaphore(sem::counter.id) + MEM_L1_UNCACHED_BASE);
         flush_l2_cache_line(report_addr);
         flush_l2_cache_line(report_addr + sizeof(uint32_t));
         flush_l2_cache_line(report_addr + 2 * sizeof(uint32_t));

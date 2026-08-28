@@ -17,7 +17,7 @@
 #include <tt_stl/assert.hpp>
 
 // Host-side mirror of the device SemScope enum.
-// Codegen emits these values into each kernel's scope table.
+// Codegen spells the scope by name.
 enum class SemScope : uint8_t {
     LOCAL_NONATOMIC = 0,
     DM_LOCAL_CACHED = 1,
@@ -34,52 +34,27 @@ struct SemBindingEntry {
     uint32_t total_binder_harts = 0;
 };
 
-// The generated semaphore section.
-// Emits the TT_METAL2_SEM_SCOPE_TABLE define. Must be the FIRST line of the generated header,
-// before any include, so no include chain can compile noc_semaphore.h without it.
-inline void emit_sem_scope_table(std::ostream& os, const std::vector<SemBindingEntry>& entries, size_t table_size) {
-    std::vector<SemScope> table(table_size, SemScope::LOCAL_NONATOMIC);
-    for (const auto& entry : entries) {
-        TT_FATAL(
-            entry.id < table.size(),
-            "semaphore id {} does not fit the {}-slot scope table (NUM_SEMAPHORES)",
-            entry.id,
-            table.size());
-        table[entry.id] = entry.scope;
+// The enumerator name, as the kernel spells it.
+inline std::string_view sem_scope_enumerator(SemScope scope) {
+    switch (scope) {
+        case SemScope::LOCAL_NONATOMIC: return "LOCAL_NONATOMIC";
+        case SemScope::DM_LOCAL_CACHED: return "DM_LOCAL_CACHED";
+        case SemScope::EXTERNAL: return "EXTERNAL";
     }
-    os << "#define TT_METAL2_SEM_SCOPE_TABLE {";
-    for (size_t i = 0; i < table.size(); i++) {
-        os << "static_cast<::SemScope>(" << static_cast<int>(table[i]) << ")" << (i + 1 < table.size() ? ", " : "");
-    }
-    os << "}\n\n";
+    TT_THROW("unhandled SemScope value {}", static_cast<int>(scope));
 }
 
-// Emits the sem:: ids plus two static_asserts: one fails the kernel build if the host
-// and device SemScope enums are renumbered out of sync; the other if anything compiled
-// noc_semaphore.h before the scope table was defined (which would silently degrade every id
-// to LOCAL_NONATOMIC). Leaves `namespace sem {` open so the caller can append symbols (the
-// cached-pool seeder) before closing it.
-inline void emit_sem_ids_and_tripwires(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
-    os << "#include <cstdint>\n";
-    os << "#ifndef COMPILE_FOR_TRISC\n";
-    os << "#include \"api/dataflow/noc_semaphore.h\"\n";
-    os << "#endif\n";
+// The generated semaphore section: one binding token per bound semaphore, in `namespace sem`.
+// The token carries the id and the mechanism the host picked, so the kernel gets its scope at
+// compile time.
+inline void emit_semaphore_binding_tokens(std::ostream& os, const std::vector<SemBindingEntry>& entries) {
     os << "namespace sem {\n";
     for (const auto& entry : entries) {
-        os << "constexpr std::uint32_t " << entry.name << " = " << entry.id << "u;\n";
+        os << "using " << entry.name << "_t = ::SemaphoreBindingToken<" << entry.id
+           << "u, ::SemScope::" << sem_scope_enumerator(entry.scope) << ">;\n";
+        os << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
     }
-    os << "#ifndef COMPILE_FOR_TRISC\n";
-    os << "static_assert(static_cast<int>(::SemScope::LOCAL_NONATOMIC) == "
-       << static_cast<int>(SemScope::LOCAL_NONATOMIC)
-       << " && static_cast<int>(::SemScope::DM_LOCAL_CACHED) == " << static_cast<int>(SemScope::DM_LOCAL_CACHED)
-       << " && static_cast<int>(::SemScope::EXTERNAL) == " << static_cast<int>(SemScope::EXTERNAL)
-       << ", \"device SemScope numbering diverged from the host mirror (jit_build_settings.hpp)\");\n";
-    for (const auto& entry : entries) {
-        os << "static_assert(::sem_scope_of(" << entry.id << "u) == static_cast<::SemScope>("
-           << static_cast<int>(entry.scope)
-           << "), \"scope table not visible at noc_semaphore.h inclusion -- include-order regression\");\n";
-    }
-    os << "#endif\n";
+    os << "}  // namespace sem\n";
 }
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.

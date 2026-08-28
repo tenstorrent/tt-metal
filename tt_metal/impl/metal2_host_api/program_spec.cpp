@@ -30,6 +30,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <core_descriptor.hpp>
@@ -96,19 +97,6 @@ struct CollectedSpecData {
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 
-    // Data structure used to keep track of the kernel instances that bind to a given
-    // semaphore, and their placement (derived from kernel bindings).
-    struct SemaphoreBinderInfo {
-        struct BinderRecord {
-            const KernelSpec* kernel = nullptr;
-            const SemaphoreBinding* binding = nullptr;
-        };
-        std::vector<BinderRecord> binders;
-        NodeRangeSet binder_node_set;
-        uint32_t binder_instance_count = 0;
-    };
-    std::unordered_map<SemaphoreSpecName, SemaphoreBinderInfo> semaphore_endpoints;
-
     // WorkUnit membership: a kernel may belong to multiple WorkUnitSpecs.
     std::unordered_map<KernelSpecName, std::vector<const WorkUnitSpec*>> kernel_work_units;
 
@@ -169,7 +157,6 @@ using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 // what indexes the per-core config table, so it is what device-facing lowering must use.
 using DFBNameToSlotMap = std::unordered_map<DFBSpecName, uint32_t>;
 using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
-using SemaphoreNameToScopeMap = std::unordered_map<SemaphoreSpecName, SemScope>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -204,61 +191,6 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     NodeRangeSet a_set = to_node_range_set(a);
     NodeRangeSet b_set = to_node_range_set(b);
     return a_set.intersects(b_set);
-}
-
-// Look up a semaphore's binder info; an unbound semaphore returns an empty record.
-const CollectedSpecData::SemaphoreBinderInfo& SemaphoreBinders(
-    const CollectedSpecData& collected, const SemaphoreSpecName& name) {
-    static const CollectedSpecData::SemaphoreBinderInfo kEmpty{};
-    const auto it = collected.semaphore_endpoints.find(name);
-    return it != collected.semaphore_endpoints.end() ? it->second : kEmpty;
-}
-
-// Returns true if every binder is a data-movement kernel, false otherwise.
-bool all_binders_are_dm(const CollectedSpecData::SemaphoreBinderInfo& binders) {
-    for (const auto& rec : binders.binders) {
-        if (!rec.kernel->is_data_movement_kernel()) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// A semaphore can use the local cached pool only if it lives on one node and every binder is a
-// DM kernel on that same node, return true if this is the case, false otherwise.
-bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
-    const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-    return sem_nodes.num_cores() == 1 &&
-           sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() && all_binders_are_dm(binders);
-}
-
-// Check if the cached tier is available on this target device.
-bool cached_tier_available() {
-    return MetalContext::instance().rtoptions().get_target_device() != tt::TargetDevice::Emule;
-}
-
-// Picks the fastest access path that keeps this semaphore's operations atomic. Every
-// binder is treated as a possible reader and writer.
-SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
-    // Gen1 (Wormhole/Blackhole)
-    if (!is_gen2_arch()) {
-        return SemScope::LOCAL_NONATOMIC;
-    }
-
-    // Gen2, <=1 binder instance on 1 node
-    const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-    const bool single_node = sem_nodes.num_cores() == 1;
-    if (binders.binder_instance_count <= 1 && single_node) {
-        return SemScope::LOCAL_NONATOMIC;
-    }
-
-    // Gen2, all binders are DMs on the same 1 node as the semaphore
-    if (cached_tier_available() && cached_geometry_ok(sem, binders)) {
-        return SemScope::DM_LOCAL_CACHED;
-    }
-
-    // Gen2, anything else (binders on multiple nodes)
-    return SemScope::EXTERNAL;
 }
 
 // Helper: return a DFB's alias-with list.
@@ -500,29 +432,10 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 kernel.unique_id,
                 binding.accessor_name);
             TT_FATAL(
-                binding.accessor_name != "init_dm_cached" && binding.accessor_name != "finish_dm_cached",
-                "Kernel '{}' semaphore accessor_name '{}' is reserved.",
-                kernel.unique_id,
-                binding.accessor_name);
-            TT_FATAL(
                 collected.semaphore_by_name.contains(binding.semaphore_spec_name),
                 "Kernel '{}' references unknown semaphore '{}'",
                 kernel.unique_id,
                 binding.semaphore_spec_name);
-            // A kernel may bind a given semaphore only once.
-            auto& sem_info = collected.semaphore_endpoints[binding.semaphore_spec_name];
-            for (const auto& rec : sem_info.binders) {
-                TT_FATAL(
-                    rec.kernel != &kernel,
-                    "Kernel '{}' binds semaphore '{}' more than once (accessor names '{}' and '{}'). A "
-                    "kernel may bind a given semaphore at most once; to refer to it by another name in "
-                    "kernel code, alias the handle (constexpr auto x = sem::y) instead.",
-                    kernel.unique_id,
-                    binding.semaphore_spec_name,
-                    rec.binding->accessor_name,
-                    binding.accessor_name);
-            }
-            sem_info.binders.push_back({&kernel, &binding});
         }
     }
 
@@ -724,16 +637,6 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
             node_set = node_set.merge(to_node_range_set(work_unit->target_nodes));
         }
         collected.kernel_node_set[kernel_name] = node_set;
-    }
-
-    // Derive each semaphore's binder instance count and binder node set: union of binding-kernels' node sets.
-    for (auto& [sem_name, sem_info] : collected.semaphore_endpoints) {
-        for (const auto& rec : sem_info.binders) {
-            sem_info.binder_instance_count +=
-                collected.kernel_node_set.at(rec.kernel->unique_id).num_cores() * rec.kernel->num_threads;
-            sem_info.binder_node_set =
-                sem_info.binder_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
-        }
     }
 
     // Derive each local DFB's allocation node set: union of binding-kernels' node sets.
@@ -2653,9 +2556,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
 // and the binder hart count for local cached semaphores.
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec,
-    const CollectedSpecData& collected,
+    const sem_solver::SemaphoreBinderCensus& semaphore_binders,
     const SemaphoreNameToIdMap& semaphore_name_to_id,
-    const SemaphoreNameToScopeMap& semaphore_name_to_scope) {
+    const sem_solver::SemaphoreNameToScopeMap& semaphore_name_to_scope) {
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
@@ -2669,7 +2572,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
         const uint32_t total_binder_harts =
             scope == SemScope::DM_LOCAL_CACHED
-                ? SemaphoreBinders(collected, semaphore_binding.semaphore_spec_name).binder_instance_count
+                ? sem_solver::BinderHartCount(semaphore_binders, semaphore_binding.semaphore_spec_name)
                 : 0u;
         TT_FATAL(
             total_binder_harts <= 0x7FFFu,
@@ -3011,7 +2914,12 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // Step 1a: Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Step 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Step 1b: Census the semaphore binders, using the kernel node sets from Step 1a. Runs
+    // unconditionally because it also rejects a kernel that binds the same semaphore twice.
+    const sem_solver::SemaphoreBinderCensus semaphore_binders =
+        sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
+
+    // Step 1c: Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
@@ -3170,10 +3078,9 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         }
     }
 
-    // Create Semaphores and build name -> ID map and name -> Scope map.
+    // Create Semaphores and build the name -> ID map.
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
-    SemaphoreNameToScopeMap semaphore_name_to_scope;
     for (const auto& semaphore_spec : spec.semaphores) {
         const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
@@ -3181,42 +3088,11 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
         program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
-        semaphore_name_to_scope[semaphore_name] =
-            ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
     }
 
-    // Semaphore ids are unique per core, not per program, so two semaphores on disjoint nodes
-    // can share an id, and a kernel binding both has only one scope-table slot for it. If
-    // their scopes differ, promote every member to EXTERNAL (correct for any topology) and
-    // repeat until stable. A promotion can surface a new collision in another kernel.
-    {
-        bool promoted = true;
-        while (promoted) {
-            promoted = false;
-            for (const KernelSpec& kernel_spec : spec.kernels) {
-                std::unordered_map<uint32_t, std::vector<const SemaphoreSpecName*>> members_by_id;
-                for (const auto& binding : kernel_spec.semaphore_bindings) {
-                    members_by_id[semaphore_name_to_id.at(binding.semaphore_spec_name)].push_back(
-                        &binding.semaphore_spec_name);
-                }
-                for (const auto& [id, members] : members_by_id) {
-                    const bool divergent = std::any_of(members.begin(), members.end(), [&](const auto* m) {
-                        return semaphore_name_to_scope.at(*m) != semaphore_name_to_scope.at(*members.front());
-                    });
-                    if (!divergent) {
-                        continue;
-                    }
-                    for (const auto* m : members) {
-                        SemScope& scope = semaphore_name_to_scope.at(*m);
-                        if (scope != SemScope::EXTERNAL) {
-                            scope = SemScope::EXTERNAL;
-                            promoted = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Pick each semaphore's access mechanism.
+    const sem_solver::SemaphoreNameToScopeMap semaphore_name_to_scope =
+        sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders);
 
     // Create Kernels (arch-specific)
     for (const KernelSpec& kernel_spec : spec.kernels) {
@@ -3227,7 +3103,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
             MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
-            MakeSemaphoreBindingHandles(kernel_spec, collected, semaphore_name_to_id, semaphore_name_to_scope);
+            MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer

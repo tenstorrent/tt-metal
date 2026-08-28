@@ -1074,7 +1074,7 @@ TEST_F(SemScopeFixture, TestCensusMultiConsumerCachedShape) {
 // this one kernel's scope table has one slot for both. Alone, sem_near would be cached and
 // sem_far EXTERNAL, a divergent slot, so the host must promote both to EXTERNAL, which is
 // correct for every topology.
-TEST_F(SemScopeFixture, TestIdCollisionPromotesToExternal) {
+TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
     if (!has_second_node()) {
         GTEST_SKIP() << "needs a second node for the disjoint-node id collision";
     }
@@ -1118,9 +1118,9 @@ TEST_F(SemScopeFixture, TestIdCollisionPromotesToExternal) {
     tt::tt_metal::detail::ReadFromDeviceL1(device_, core, report_addr, 2 * sizeof(uint32_t), result);
     ASSERT_EQ(result.size(), 2u);
     ASSERT_NE(result[0], kNoReport) << "slot probe never reported";
-    log_info(LogTest, "id-collision slot: near={} far={}", result[0], result[1]);
-    EXPECT_EQ(result[0], scope_val(SemScope::EXTERNAL)) << "sem_near was not promoted off the divergent slot";
-    EXPECT_EQ(result[1], scope_val(SemScope::EXTERNAL)) << "sem_far must stay EXTERNAL";
+    log_info(LogTest, "same-id scopes: near={} far={}", result[0], result[1]);
+    EXPECT_EQ(result[0], scope_val(SemScope::DM_LOCAL_CACHED)) << "on-node sem_near should be cached";
+    EXPECT_EQ(result[1], scope_val(SemScope::EXTERNAL)) << "off-node sem_far must be EXTERNAL";
 }
 
 // A kernel may bind a given semaphore only once: a second binding would double-count that

@@ -846,10 +846,6 @@ static void emit_metal2_namespaces(
     for (const auto& [name, h] : s.sem_accessors) {
         sem_entries.push_back({name, h.id, h.scope});
     }
-    if (!sem_entries.empty()) {
-        // Scope table first, so the sem:: namespace can reference it.
-        tt::tt_metal::emit_sem_scope_table(f, sem_entries, tt::tt_metal::NUM_SEMAPHORES);
-    }
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";
     }
@@ -904,8 +900,7 @@ static void emit_metal2_namespaces(
         f << "}  // namespace dfb\n";
     }
     if (!sem_entries.empty()) {
-        tt::tt_metal::emit_sem_ids_and_tripwires(f, sem_entries);
-        f << "}  // namespace sem\n";
+        tt::tt_metal::emit_semaphore_binding_tokens(f, sem_entries);
     }
     if (!s.ta_accessors.empty()) {
         f << "namespace tensor {\n";

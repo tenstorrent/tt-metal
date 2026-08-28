@@ -14,7 +14,7 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     const uint32_t increment_times = get_arg(args::increment_times);
 
-    // The mechanism comes from the host's scope table
+    // The mechanism comes from the binding token the host emitted.
     Semaphore s(sem::counter);
 #if defined(SEM_SCOPE_SENTINEL_DOWN)
     // Sentinel collision: with the word at 0xFFFFFFFF, EXTERNAL down()'s pre-op return

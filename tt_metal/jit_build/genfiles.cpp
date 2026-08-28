@@ -41,7 +41,6 @@
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel_source.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
@@ -192,12 +191,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
-    //  - Semaphore binding ids are emitted into the sem namespace as constexpr uint32_t;
-    //    the host-resolved mechanism travels separately in the TT_METAL2_SEM_SCOPE_TABLE define.
+    //  - Semaphore binding tokens are emitted into the sem namespace
     //  - TensorBindings are emitted into the tensor namespace
     //  - Scratchpad binding tokens are emitted into the scratch namespace
     //
-    // NOTE: DFB tokens and semaphore ids are emitted as constexpr variables, i.e. as implicit CTAs.
+    // NOTE: DFB and semaphore tokens are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
     //       (Or, we could give the user the choice via the Metal 2.0 host API, on a per-kernel or per-binding basis.)
     //       Implicit CTA is simpler and cheaper, but could theoretically cause unnecessary kernel cache hit misses.
@@ -211,17 +209,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (!sem_entries.empty()) {
-        // Must be the first line of the header, before any include, so no include chain can
-        // compile noc_semaphore.h without the scope table.
-        tt::tt_metal::emit_sem_scope_table(content, sem_entries, tt::tt_metal::NUM_SEMAPHORES);
-    }
     if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
         tensor_binding_sequence_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
             content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+        }
+        if (!sem_entries.empty()) {
+            // Defines SemaphoreBindingToken and SemScope. Header-only and dependency-free,
+            // so it is safe on compute builds too.
+            content << "#include \"api/dataflow/semaphore_binding_token.h\"\n";
         }
         if (has_cached_sem) {
             // Include for the entry/exit stubs' bodies (get_semaphore + the MEM_ defines),
@@ -254,9 +252,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         }
 
         if (!sem_entries.empty()) {
-            // This helper prints the sem:: ids and asserts but does not close the
-            // namespace, the cached-pool seeder below is appended inside it first.
-            tt::tt_metal::emit_sem_ids_and_tripwires(content, sem_entries);
+            tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);
             if (has_cached_sem) {
                 // Cached-pool entry/exit stubs. A cached semaphore's pool row must be seeded
                 // with its init value once per program, by exactly one hart, before anyone
@@ -268,6 +264,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 // the last one zeroes the bookkeeping word so the next program starts fresh.
                 // Any number of local kernels/threads works.
                 content << "#define TT_DM_CACHED_SEM_STUBS 1\n";
+                content << "namespace sem_internal {\n";
                 content << "inline void init_dm_cached() {\n";
                 content << "#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)\n";
                 for (const auto& entry : sem_entries) {
@@ -310,8 +307,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 }
                 content << "#endif\n";
                 content << "}\n";
+                content << "}  // namespace sem_internal\n";
             }
-            content << "}  // namespace sem\n";
         }
 
         if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {

@@ -34,7 +34,7 @@ void kernel_main() {
     }
 
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-    report[0] = static_cast<uint32_t>(sem_scope_of(sem::counter));
+    report[0] = static_cast<uint32_t>(sem::counter.scope);
     report[1] = counter.value();
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
     flush_l2_cache_line(report_addr);

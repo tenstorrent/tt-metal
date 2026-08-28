@@ -23,8 +23,8 @@ static inline void report_value(uint32_t report_addr, uint32_t v) {
 // Reports the final count plus the mechanism the host actually baked for each semaphore.
 static inline void report(uint32_t report_addr, uint32_t count) {
     report_value(report_addr, count);
-    report_value(report_addr + sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::counter)));
-    report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem_scope_of(sem::done)));
+    report_value(report_addr + sizeof(uint32_t), static_cast<uint32_t>(sem::counter.scope));
+    report_value(report_addr + 2 * sizeof(uint32_t), static_cast<uint32_t>(sem::done.scope));
 }
 
 void kernel_main() {
@@ -41,7 +41,7 @@ void kernel_main() {
     // iteration count that is ~100x any healthy wait.
     constexpr uint32_t kSpinCap = 1u << 20;
 
-    // The mechanism comes from the host's scope table
+    // The mechanism comes from the binding token the host emitted.
     Semaphore work(sem::counter);
 
 #if defined(MODE_PRODUCER_CONSUMER)

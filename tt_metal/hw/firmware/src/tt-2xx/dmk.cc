@@ -108,11 +108,11 @@ uint32_t _start() {
 #ifdef TT_DM_CACHED_SEM_STUBS
         // When the kernel binds DM_LOCAL_CACHED semaphores: seed their
         // pool rows once per program, and restore them on the way out.
-        sem::init_dm_cached();
+        sem_internal::init_dm_cached();
 #endif
         kernel_main();
 #ifdef TT_DM_CACHED_SEM_STUBS
-        sem::finish_dm_cached();
+        sem_internal::finish_dm_cached();
 #endif
         WAYPOINT("KD");
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
