@@ -96,21 +96,30 @@ FORCE_INLINE void multiply_by_decay(
     DataflowBuffer& output,
     uint32_t key_tiles,
     uint32_t value_tiles) {
-    output.reserve_back(key_tiles * value_tiles);
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t count = key_tiles * value_tiles;
+
+    output.reserve_back(count);
     reconfig_data_format(state_id, decay_id);
     mul_bcast_cols_init(state_id, decay_id);
-    for (uint32_t key = 0; key < key_tiles; key++) {
-        for (uint32_t value = 0; value < value_tiles; value++) {
-            const uint32_t index = key * value_tiles + value;
-            tile_regs_acquire();
-            mul_tiles_bcast_cols(state_id, decay_id, index, key, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, output_id, index);
-            tile_regs_release();
+    for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
+        const uint32_t remaining = count - block_start;
+        const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            const uint32_t index = block_start + tile;
+            const uint32_t key = index / value_tiles;
+            mul_tiles_bcast_cols(state_id, decay_id, index, key, tile);
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, output_id, block_start + tile);
+        }
+        tile_regs_release();
     }
-    output.push_back(key_tiles * value_tiles);
+    output.push_back(count);
 }
 
 template <ChunkInputPolicy InputPolicy, uint32_t Ct, uint32_t Kt, uint32_t Vt>
