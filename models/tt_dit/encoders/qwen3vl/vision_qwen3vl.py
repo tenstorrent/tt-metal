@@ -494,6 +494,7 @@ class Qwen3VlVisionMLP(Module):
         hidden_act: str,
         mesh_device,
         parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
@@ -503,12 +504,18 @@ class Qwen3VlVisionMLP(Module):
             if intermediate_size % self._p.tp_factor != 0:
                 msg = f"intermediate_size {intermediate_size} is not divisible by TP factor {self._p.tp_factor}"
                 raise ValueError(msg)
-            kw = dict(mesh_device=mesh_device, mesh_axis=self._p.tp_axis, ccl_manager=self._p.ccl_manager)
+            kw = dict(
+                mesh_device=mesh_device,
+                mesh_axis=self._p.tp_axis,
+                ccl_manager=self._p.ccl_manager,
+                compute_kernel_config=linear_compute_kernel_config,
+            )
             self.linear_fc1 = ColParallelLinear(hidden_size, intermediate_size, bias=True, **kw)
             self.linear_fc2 = RowParallelLinear(intermediate_size, hidden_size, bias=True, **kw)
         else:
-            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, mesh_device=mesh_device)
-            self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, mesh_device=mesh_device)
+            kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
+            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, **kw)
+            self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, **kw)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_fc1.forward(x)
@@ -535,7 +542,13 @@ class Qwen3VlVisionAttention(Module):
     """
 
     def __init__(
-        self, *, hidden_size: int, num_heads: int, mesh_device, parallel: VisionParallel | None = None
+        self,
+        *,
+        hidden_size: int,
+        num_heads: int,
+        mesh_device,
+        parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
@@ -560,12 +573,18 @@ class Qwen3VlVisionAttention(Module):
         self._sdpa_worker_grid = (full_grid.x - 1, full_grid.y)
 
         if self._p.tp:
-            kw = dict(mesh_device=mesh_device, mesh_axis=self._p.tp_axis, ccl_manager=self._p.ccl_manager)
+            kw = dict(
+                mesh_device=mesh_device,
+                mesh_axis=self._p.tp_axis,
+                ccl_manager=self._p.ccl_manager,
+                compute_kernel_config=linear_compute_kernel_config,
+            )
             self.qkv = ColParallelLinear(hidden_size, 3 * self.inner, bias=True, **kw)
             self.proj = RowParallelLinear(self.inner, hidden_size, bias=True, **kw)
         else:
-            self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, mesh_device=mesh_device)
-            self.proj = Linear(self.inner, hidden_size, bias=True, mesh_device=mesh_device)
+            kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
+            self.qkv = Linear(hidden_size, 3 * self.inner, bias=True, **kw)
+            self.proj = Linear(self.inner, hidden_size, bias=True, **kw)
 
         # Tile transformation matrix for the fused interleaved RoPE (`rotary_embedding_llama`). A shared
         # constant, replicated across the mesh; the q/k weights were permuted SPLIT->INTERLEAVED at load
@@ -600,17 +619,33 @@ class Qwen3VlVisionAttention(Module):
     def _windowed_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
         """Flash tiling for windowed (block-diagonal) attention.
 
-        Same clamp as the ring's config. Windows shorter than the chunk are fine, and so are windows
-        that are not tile-aligned: the mask generator searches `cu_window_seqlens` per Q chunk, so one
-        chunk may straddle several windows (`tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py`
-        covers 33-row windows at chunk 64). Uses the full compute grid -- unlike the ring, nothing here
-        reserves cores for CCL workers.
+        Windows shorter than the chunk are fine, and so are windows that are not tile-aligned: the
+        mask generator searches `cu_window_seqlens` per Q chunk, so one chunk may straddle several
+        windows (`tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py` covers 33-row windows
+        at chunk 64). Uses the full compute grid -- unlike the ring, nothing here reserves cores for
+        CCL workers.
+
+        K chunk 512 (vs the q chunk's 128) is a FIDELITY choice, not just a perf one: the flash
+        streaming softmax pays one running-max/output rescale per K chunk, and the per-block one-step
+        error scales with the rescale count -- measured 3.10 / 2.34 / 1.15 / 0.67 % at k_chunk
+        64/128/256/512 on the tower's worst block (real weights, 21K-key windows), the dominant term
+        of the tower's end-to-end error. Purely k-sided: q256/k256 measured identical to q128/k256,
+        and q256/k512 exceeds L1, so q stays at 128.
+
+        (64, 1024) is the accuracy-optimal point on the L1 frontier: the scores CB scales with
+        q*k (~65K elements fits, ~98K does not) and the K/V chunk CBs with k alone (k1536 fails
+        even at q64), so k1024 requires q64. Chosen deliberately over (128, 512)'s 6.5 % / 270 ms:
+        ~0.6 RMSE points for ~10 % tower time (q64 doubles Q-loop iterations). q chunk size has no
+        accuracy effect (measured); only the K-chunk count does. The fitted sweep puts the
+        non-chunking error floor at ~0.27 %/step -- the bf16 CPU reference's own level -- so a
+        kernel carrying the rescale path in higher precision would reach reference parity at any
+        chunk size and reclaim both the L1 and the q64 latency.
         """
-        chunk = min(-(-seq_len // _TILE) * _TILE, 128)
+        tiles = -(-seq_len // _TILE) * _TILE
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=chunk,
-            k_chunk_size=chunk,
+            q_chunk_size=min(tiles, 64),
+            k_chunk_size=min(tiles, 1024),
             exp_approx_mode=False,  # False is the more accurate softmax
         )
 
@@ -716,6 +751,11 @@ class Qwen3VlVisionAttention(Module):
                 v,
                 is_causal=False,
                 scale=self.scale,
+                # Same flash tiling as the windowed path (nothing about it is windowed-specific).
+                # Without it the op defaults to chunk 32, and the streaming softmax's per-chunk
+                # rescale error scales with the chunk count -- at fl2va sizes (16K-65K keys, one
+                # block) that is the worst configuration of all; see _windowed_program_config.
+                program_config=self._windowed_program_config(seq_len),
                 compute_kernel_config=self._sdpa_compute_kernel_config,
             )
         else:
@@ -854,6 +894,7 @@ class Qwen3VlVisionBlock(Module):
         norm_eps: float,
         mesh_device,
         parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         parallel = parallel or VisionParallel()
@@ -862,7 +903,11 @@ class Qwen3VlVisionBlock(Module):
         # LayerNorm needs no cross-device statistics. Under SP they are row-wise and so unaffected.
         self.norm1 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
         self.attn = Qwen3VlVisionAttention(
-            hidden_size=hidden_size, num_heads=num_heads, mesh_device=mesh_device, parallel=parallel
+            hidden_size=hidden_size,
+            num_heads=num_heads,
+            mesh_device=mesh_device,
+            parallel=parallel,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
         self.norm2 = LayerNorm(hidden_size, norm_eps=norm_eps, mesh_device=mesh_device)
         self.mlp = Qwen3VlVisionMLP(
@@ -871,6 +916,7 @@ class Qwen3VlVisionBlock(Module):
             hidden_act=hidden_act,
             mesh_device=mesh_device,
             parallel=parallel,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
 
     def forward(
@@ -911,6 +957,7 @@ class Qwen3VlVisionPatchMerger(Module):
         use_postshuffle_norm: bool,
         mesh_device,
         parallel: VisionParallel | None = None,
+        linear_compute_kernel_config=None,
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
@@ -924,12 +971,18 @@ class Qwen3VlVisionPatchMerger(Module):
             if self.merged_size % self._p.tp_factor != 0:
                 msg = f"merged_size {self.merged_size} is not divisible by TP factor {self._p.tp_factor}"
                 raise ValueError(msg)
-            kw = dict(mesh_device=mesh_device, mesh_axis=self._p.tp_axis, ccl_manager=self._p.ccl_manager)
+            kw = dict(
+                mesh_device=mesh_device,
+                mesh_axis=self._p.tp_axis,
+                ccl_manager=self._p.ccl_manager,
+                compute_kernel_config=linear_compute_kernel_config,
+            )
             self.linear_fc1 = ColParallelLinear(self.merged_size, self.merged_size, bias=True, **kw)
             self.linear_fc2 = RowParallelLinear(self.merged_size, out_hidden_size, bias=True, **kw)
         else:
-            self.linear_fc1 = Linear(self.merged_size, self.merged_size, bias=True, mesh_device=mesh_device)
-            self.linear_fc2 = Linear(self.merged_size, out_hidden_size, bias=True, mesh_device=mesh_device)
+            kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
+            self.linear_fc1 = Linear(self.merged_size, self.merged_size, bias=True, **kw)
+            self.linear_fc2 = Linear(self.merged_size, out_hidden_size, bias=True, **kw)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`(total_patches, hidden_size)` -> `(total_patches // merge ** 2, out_hidden_size)`."""
@@ -982,9 +1035,22 @@ class Qwen3VlVisionModel(Module):
         mesh_device: ttnn.MeshDevice,
         parallel_config: EncoderParallelConfig | None = None,
         ccl_manager: CCLManager | None = None,
+        high_fidelity_linears: bool = False,
     ) -> None:
         super().__init__()
         self._p = resolve_vision_parallel(mesh_device, parallel_config, ccl_manager)
+        # HiFi4 for every tower linear, mirroring the decoder's `high_fidelity_linears`: the tt_dit-wide
+        # default is HiFi2, and the tower's ~10% RMS output error at real weights (vs the fp32
+        # reference) is what the fused conditioner amplifies. Off by default; MiniMax-H3 opts in.
+        linear_compute_kernel_config = None
+        if high_fidelity_linears:
+            linear_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         self.hidden_size = hidden_size
         self.head_dim = hidden_size // num_heads
         self.spatial_merge_size = spatial_merge_size
@@ -1008,6 +1074,7 @@ class Qwen3VlVisionModel(Module):
                 norm_eps=norm_eps,
                 mesh_device=mesh_device,
                 parallel=self._p,
+                linear_compute_kernel_config=linear_compute_kernel_config,
             )
             for _ in range(depth)
         )
@@ -1018,6 +1085,7 @@ class Qwen3VlVisionModel(Module):
             norm_eps=norm_eps,
             mesh_device=mesh_device,
             parallel=self._p,
+            linear_compute_kernel_config=linear_compute_kernel_config,
         )
         self.merger = Qwen3VlVisionPatchMerger(use_postshuffle_norm=False, **merger_kwargs)
         self.deepstack_merger_list = ModuleList(

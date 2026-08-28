@@ -226,6 +226,11 @@ def build_minimax_h3_vision_tower(
     parallel_config=None,
     ccl_manager=None,
     load_weights: bool = True,
+    # HiFi4 tower linears by default, mirroring the decoder: HiFi2 measurably drops bf16 operand
+    # precision (~0.3-0.5 % RMS per linear; MLP one-step 0.77 -> 0.29 % at HiFi4, reaching the bf16
+    # CPU reference's level), while costing ~1 % tower time (the linears are not the bottleneck).
+    # Tower end-to-end RMSE vs the reference: 7.4 -> 6.5 % on two_refs at real weights.
+    high_fidelity_linears: bool = True,
 ) -> tuple[Qwen3VlVisionModel, dict]:
     """Build the released vision tower and load its weights. Returns `(tower, vision_config)`.
 
@@ -260,6 +265,7 @@ def build_minimax_h3_vision_tower(
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
+        high_fidelity_linears=high_fidelity_linears,
     )
     if load_weights:
         # Strict: `pos_embed.weight` is popped to the host by `_prepare_torch_state` and every other
