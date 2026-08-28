@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import itertools
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -348,6 +349,7 @@ class SamplingGenerator:
         logits: ttnn.Tensor,
         *,
         tt_out_tok: Optional[ttnn.Tensor] = None,
+        all_configs: bool = False,
     ) -> None:
         """Run the sampling pipeline once without capturing, to compile it and size its scratch.
 
@@ -357,13 +359,48 @@ class SamplingGenerator:
         left inline, this pass allocates device buffers that a live trace can corrupt on replay.
 
         ``logits`` only has to match the spec of the tensor that will later be captured, not be it.
+
+        ``all_configs`` compiles every ``_TraceKey`` flag combination rather than just the one active
+        now. Traces are keyed on (penalties, log_probs, force_argmax), but warmup only ever runs one of
+        those, so a request asking for logprobs or penalties later finds an uncaptured slot and, because
+        callers pass ``skip_precompile=True``, executes its program for the first time inside a live
+        trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
         """
-        self._run_sampling(
-            logits,
-            penalties_on=self._penalties_active,
-            tt_out_tok=tt_out_tok,
-            count_tokens=False,
-        )
+        if not all_configs:
+            self._run_sampling(
+                logits,
+                penalties_on=self._penalties_active,
+                tt_out_tok=tt_out_tok,
+                count_tokens=False,
+            )
+            return
+
+        log_probs = self.tt_sampling.log_probs_calculator
+        saved_penalties = self._penalties_active
+        saved_force_argmax = self.tt_sampling._force_argmax_sampling
+        saved_enabled = list(log_probs.logprobs_enabled)
+        saved_num_logprobs = list(log_probs.num_logprobs)
+        try:
+            for penalties_on, log_probs_on, force_argmax in itertools.product((False, True), repeat=3):
+                self._penalties_active = penalties_on
+                # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
+                # the live request params, and only the flag selects the program being compiled.
+                self.tt_sampling._force_argmax_sampling = force_argmax
+                log_probs.set_log_probs_mode(log_probs_on, num_logprobs=0)
+                self._run_sampling(
+                    logits,
+                    penalties_on=penalties_on,
+                    tt_out_tok=tt_out_tok,
+                    count_tokens=False,
+                )
+        finally:
+            self._penalties_active = saved_penalties
+            self.tt_sampling._force_argmax_sampling = saved_force_argmax
+            log_probs.logprobs_enabled = saved_enabled
+            log_probs.num_logprobs = saved_num_logprobs
+            log_probs.enable_log_probs = any(saved_enabled)
+            log_probs.topk_logprobs_needed = log_probs.enable_log_probs
+            self._log_probs_active = log_probs.enable_log_probs
 
     def capture_trace(
         self,
