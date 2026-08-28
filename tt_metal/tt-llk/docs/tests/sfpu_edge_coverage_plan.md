@@ -28,25 +28,28 @@ the concrete steps to reach them.
 | [W7](#w7--the-overflow-producing-ops-are-not-driven-at-their-ceiling) | Nothing asserts that a result too large for the output format saturates rather than wraps | unary, binary | M | High | — |
 | [W9](#w9--tan-has-no-registered-pole-sincos-never-exceed-π) | `Tan` has no pole entry; `sin`/`cos` capped at ±π | unary | M | Medium | needs a kernel-contract ruling |
 | [W10](#w10--block-float-inputs-never-see-a-mixed-magnitude-block) | Bfp8_b/Bfp4_b blocks always uniform-magnitude | all | M | Medium | — |
-| [W11](#w11--a-coverage-ledger-so-the-next-gap-is-visible) | No machine-checked record of which value classes each op has seen | infra | M | High | the items above |
 
-Suggested order: **W1** (small, unblocked, independently mergeable), then **W11**, then
-**W7 → W9 → W10** (each needs a measurement pass, and W9 a kernel-contract ruling).
+Suggested order: **W1** (small, unblocked, independently mergeable), then **W7 → W9 → W10**
+(each needs a measurement pass, and W9 a kernel-contract ruling).
 
-**Already landed**, in the commit this document arrives with: the whole of the original W5
-(IEEE specials for the ternary family, including the `TernarySFPUGolden` and `WhereGolden`
-Dest/pack modelling that blocked it), and all of the original W7 except its overflow half —
-`format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis on
-`edge_values()`/`edge_spec()`, `EXTREMES_READY_OPS` with its first tranche enrolled, and one
-saturation test. Also the whole of W2 — `StimuliSpec.cycle`, honoured by `CustomStrategy`,
-on by default in `edge_spec()` — the whole of W4, whose cat-B half the ternary specials work
-had already closed, the whole of W6, and the whole of W8 — which also retired the "effectively
-unary" justification that kept `SfpuLogsigmoid` out of cat B, replacing it with the structural
-one, and the whole of W3 — including the negatives it expected to be blocked, which
-`twos_complement=True` turns out to deliver. W7 below is what is left of it. The numbering is
-unchanged so
-that references from commit messages and reviews still resolve; the closed items are simply
-gone.
+`python -m helpers.sfpu_domains --report` prints the coverage ledger, which is now the fastest
+way to see where each remaining item moves the needle: W1 is cat G (0 of 14 ops that have a
+zero pole), W7 is cat F (14 of 129), W9 is cat A, and W10 is a delivery question that cuts
+across all of them.
+
+**Already landed.** These items are closed and their sections are gone; the numbering of what
+remains is unchanged so that references from commit messages and reviews still resolve.
+
+| # | What landed |
+|---|---|
+| W2 | `StimuliSpec.cycle`, honoured by `CustomStrategy` and on by default in `edge_spec()`, so an edge probe fills the face instead of leaving a ~98% zero tail |
+| W3 | zero operands, the uint32 upper half, and signed division — including the negatives this plan expected to be blocked, which `twos_complement=True` turns out to deliver |
+| W4 | a `mixed` where-condition that is mixed by construction on every format; its cat-B half had already been closed by the ternary specials work |
+| W5 | IEEE specials for the whole ternary family, including the `TernarySFPUGolden` and `WhereGolden` Dest/pack modelling that blocked it |
+| W6 | the addc multiplier as a compile-time axis, with the `value = 0` identity asserted bit for bit |
+| W7 | everything except its overflow half: `format_extremes()`, `extremes_safe()`, `subnormal_delivered()`, the `extremes=` axis, `EXTREMES_READY_OPS` with its first tranche, and one saturation test. W7 below is what is left of it |
+| W8 | logsigmoid's `x > 4` branch, the golden that models it, and the paired operand B it needs — which also retired the "effectively unary" justification keeping the op out of cat B |
+| W11 | the coverage ledger, `python -m helpers.sfpu_domains --report`, and the ratchet that stops a class losing coverage silently |
 
 ---
 
@@ -405,56 +408,6 @@ and block-float inputs are excluded from cat B on the (correct) grounds that
    its keep.
 
 **Cost:** one distribution + one nightly variant per family.
-
----
-
-## W11 — A coverage ledger, so the next gap is visible
-
-### Problem
-
-Every gap in this document was found by reading code and running the registries by hand.
-Nothing in the suite states, per op, *which classes of input value it has actually seen* —
-so an op can sit for a release with a positive-only uniform and look fully covered.
-
-The suite already has the ingredients: `SPECIALS_READY_OPS` and
-`_BINARY_SPECIALS_NOT_READY` are exactly this kind of ledger for one class, and the
-`_assert_domain_sets_consistent()` / `_classify_stimuli_source()` pair is exactly this
-kind of totality check for another. The missing piece is generalising them across classes.
-
-### Steps
-
-1. **Name the classes.** The four the framework already has, plus the ones this plan adds:
-
-   | Class | Meaning | Source |
-   |---|---|---|
-   | A | domain singularities, straddled | `_OP_SINGULARITIES` |
-   | B | IEEE specials (±inf, NaN, ±0) | `format_specials()` + `specials_safe()` |
-   | C | integer extremes | `integer_specials()` |
-   | D | knees, thresholds, rounding ties | `_OP_EDGE_POINTS` |
-   | E | operand-as-parameter (shift amounts, scalars) | `SHIFT_EDGE_AMOUNTS`, W6 |
-   | F | finite magnitude extremes and subnormals | `format_extremes()` + `extremes_safe()` |
-   | G | signed zero at a pole | W1 |
-
-2. **Add `_OP_COVERAGE_LEDGER: Dict[MathOperation, Dict[EdgeClass, str]]`** to
-   `sfpu_domains.py`, where the value is either `COVERED` (derived, not asserted — see
-   step 3) or a reason string explaining why the class does not apply or is not yet
-   reachable.
-
-3. **Derive the `COVERED` half rather than declaring it.** For each op and class, ask the
-   existing machinery: does `edge_values(op, fmt, ..., operand=o)` actually emit a value of
-   that class? That way the ledger cannot claim coverage the sweep does not deliver — which
-   is the failure mode a hand-maintained matrix has.
-
-4. **Add one `test_sfpu_domains.py` test asserting totality:** every op in
-   `sfpu_unary_ops() | _SFPU_BINARY_OPS | _SFPU_TERNARY_OPS` has an entry for every class,
-   either derived-covered or explained. A new op with no entry fails at collection, in
-   every lane, with no hardware.
-
-5. **Emit it as a report.** A `--sfpu-coverage-report` flag (or a plain
-   `python -m helpers.sfpu_domains --report`) printing the matrix makes the remaining gaps
-   a one-line query instead of a code-reading exercise.
-
-**Cost:** medium, and it is the item that stops this document needing to be written again.
 
 ---
 

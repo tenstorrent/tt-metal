@@ -646,6 +646,148 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
             )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# The coverage ledger
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _ledger():
+    from helpers.sfpu_domains import coverage_ledger, suite_coverage_from_tests
+
+    return coverage_ledger(suite_coverage_from_tests())
+
+
+def test_coverage_ledger_is_total():
+    """Every op has an entry for every class, and every entry says something.
+
+    The gate the ledger exists to be: an op with no entry -- a newly registered one, say --
+    fails here, at collection, in every lane, with no hardware. And an entry that is neither
+    COVERED nor UNRECORDED has to be a *reason*, not a placeholder, since a short string in
+    that position is how "nobody got to it" comes to read as "considered and excluded".
+    """
+    from helpers.sfpu_domains import COVERED, UNRECORDED, EdgeClass
+
+    ledger = _ledger()
+    assert ledger, "the ledger is empty, so every assertion below is vacuous"
+    for op, cells in ledger.items():
+        missing = [c.name for c in EdgeClass if c not in cells]
+        assert not missing, f"{op.name} has no entry for {missing}"
+        for edge_class, value in cells.items():
+            if value in (COVERED, UNRECORDED):
+                continue
+            assert len(value) > 20, (
+                f"{op.name} / {edge_class.name}: {value!r} is too short to be a reason "
+                "for not driving the class"
+            )
+
+
+def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
+    """A COVERED cell must correspond to something the stimulus machinery actually emits.
+
+    This is the whole difference between a derived ledger and a hand-maintained matrix, so it
+    is checked rather than commented: for the classes this module owns, re-derive the answer
+    independently of coverage_ledger() and require the two to agree.
+    """
+    from helpers.sfpu_domains import (
+        BINARY_SPECIALS_READY_OPS,
+        COVERED,
+        EXTREMES_READY_OPS,
+        SPECIALS_READY_OPS,
+        TERNARY_SPECIALS_READY_OPS,
+        EdgeClass,
+        op_edge_points,
+    )
+
+    ready = (
+        set(SPECIALS_READY_OPS)
+        | set(BINARY_SPECIALS_READY_OPS)
+        | set(TERNARY_SPECIALS_READY_OPS)
+    )
+    for op, cells in _ledger().items():
+        if cells[EdgeClass.A] == COVERED:
+            assert (
+                op in ops_with_singularity()
+            ), f"{op.name} has no registered singularity"
+        if cells[EdgeClass.B] == COVERED:
+            assert op in ready, f"{op.name} is not in any *_SPECIALS_READY_OPS"
+        if cells[EdgeClass.D] == COVERED:
+            assert op_edge_points(op) or any(
+                op_edge_points(op, operand) for operand in Operand
+            ), f"{op.name} has no registered knee"
+        if cells[EdgeClass.F] == COVERED:
+            assert op in EXTREMES_READY_OPS, f"{op.name} is not enrolled for cat F"
+
+
+# The ratchet. Floors rather than exact counts: a class getting *more* coverage must not need a
+# test edit, and losing some must not pass silently. Every number here was produced by
+# `python -m helpers.sfpu_domains --report` at the time the class was last worked on, so raising
+# one is the natural last step of enrolling an op.
+#
+# Cat G is 0 on purpose and is the honest state: nothing delivers a -0.0 to a pole yet. It is
+# in the table so that the day something does, the floor is the thing that gets raised.
+_COVERAGE_FLOORS = {
+    "A": 20,
+    "B": 76,
+    "C": 5,
+    "D": 45,
+    "E": 5,
+    "F": 14,
+    "G": 0,
+}
+
+
+def test_coverage_does_not_regress():
+    """Per class, at least as many ops are covered as the last time it was measured."""
+    from helpers.sfpu_domains import EdgeClass, coverage_counts
+
+    counts = coverage_counts(_ledger())
+    shortfalls = {
+        edge_class.name: (
+            counts[edge_class]["covered"],
+            _COVERAGE_FLOORS[edge_class.name],
+        )
+        for edge_class in EdgeClass
+        if counts[edge_class]["covered"] < _COVERAGE_FLOORS[edge_class.name]
+    }
+    assert not shortfalls, (
+        "coverage went backwards (class: got, floor): "
+        f"{shortfalls}. Either an op lost its enrolment or a table entry was dropped."
+    )
+
+
+def test_suite_coverage_is_resolved_from_the_suites():
+    """SuiteCoverage's fields must be non-empty, or the ledger under-reports in silence.
+
+    The three facts the ledger cannot derive come from the test modules by import. A rename on
+    the test side would make one of those lookups yield an empty set, and every op would quietly
+    become "not applicable" for that class -- coverage vanishing without a single failure.
+    """
+    from helpers.sfpu_domains import suite_coverage_from_tests
+
+    suite = suite_coverage_from_tests()
+    for field in (
+        "integer_extremes",
+        "integer_driven",
+        "operand_parameters",
+        "extra_ops",
+    ):
+        assert getattr(suite, field), (
+            f"SuiteCoverage.{field} resolved empty -- the suite it is read from has probably "
+            "been renamed, and the ledger is now under-reporting that class"
+        )
+
+
+def test_coverage_report_renders():
+    """The report is the point of the ledger, so it has to actually render."""
+    from helpers.sfpu_domains import EdgeClass, format_coverage_report
+
+    report = format_coverage_report(_ledger())
+    for edge_class in EdgeClass:
+        assert edge_class.name in report
+        assert edge_class.value in report
+    assert "unrecorded" in report
+
+
 def test_every_int_binary_op_drives_zero_or_records_why_not():
     """Zero reaches every int binary op, on both operands, or the exclusion is written down.
 

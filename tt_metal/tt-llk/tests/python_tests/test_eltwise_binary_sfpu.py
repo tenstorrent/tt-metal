@@ -38,6 +38,7 @@ from helpers.sfpu_domains import (
     for_op,
     generated_nan_sign_is_asserted,
     integer_specials,
+    op_edge_points,
     ops_with_singularity,
     specials_safe,
 )
@@ -1281,20 +1282,29 @@ assert set(_INT_ZERO_UNDEFINED_DIVISOR) <= set(_INT_BINARY_STIMULI), (
     f"{sorted(op.name for op in set(_INT_ZERO_UNDEFINED_DIVISOR) - set(_INT_BINARY_STIMULI))}"
 )
 
-# Small values around zero. 0 is the probe; 1 is the multiplicative identity gcd and lcm are
-# most likely to disagree on; 2 and 7 give a composite and a prime so gcd/lcm results are not
-# all trivially 1 or equal.
-_INT_ZERO_PROBE = (0, 1, 2, 7)
+# A composite and a prime to pair the knees against, so gcd and lcm results are not all
+# trivially 1 or equal. The knees themselves -- 0 and 1 -- come from _OP_EDGE_POINTS via
+# op_edge_points(), not from a list here: an op joins this probe by gaining a table entry, and
+# the coverage ledger then derives cat D from the same place rather than from a list it cannot
+# see. Ops with no registered knee (the divisor family) still get 0 as a *dividend*, which is
+# an ordinary value rather than a knee.
+_INT_ZERO_SPREAD = (2, 7)
+_INT_ZERO_DIVIDEND = 0
+
+
+def _int_zero_probe(mathop):
+    """The values *mathop* is driven at: its registered knees plus the spread."""
+    knees = tuple(int(v) for v in op_edge_points(mathop))
+    return tuple(sorted(set(knees) | set(_INT_ZERO_SPREAD) | {_INT_ZERO_DIVIDEND}))
 
 
 def _int_zero_pairs(mathop):
     """The (a, b) product for *mathop*, with 0 dropped from b where a zero divisor is UB."""
+    values = _int_zero_probe(mathop)
     b_values = [
-        v
-        for v in _INT_ZERO_PROBE
-        if v != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR
+        v for v in values if v != 0 or mathop not in _INT_ZERO_UNDEFINED_DIVISOR
     ]
-    return [(a, b) for a in _INT_ZERO_PROBE for b in b_values]
+    return [(a, b) for a in values for b in b_values]
 
 
 @pytest.mark.nightly

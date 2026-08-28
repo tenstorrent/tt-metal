@@ -1953,8 +1953,32 @@ _COMPARISON_EDGE_OPS = (
     MathOperation.UnaryNe,
 )
 
+# The integer binary ops whose answer at zero is a knee rather than an ordinary value:
+# gcd(0, x) = |x| and lcm(0, x) = 0 are identities, and 0 is the annihilator for the multiply
+# and the neutral element for max/min. 1 comes with it because it is the multiplicative
+# identity gcd and lcm are next most likely to disagree on.
+#
+# Registered here rather than listed in the test that drives them, which is convention 1: an op
+# joins a sweep by gaining a table entry. It also makes the coverage ledger tell the truth --
+# with the values in a test-file list, cat D read "no knee registered" for ops that were being
+# driven at one, which is the ledger claiming *less* than the suite delivers.
+#
+# The divisor ops are absent: a zero divisor is undefined for them (see
+# _INT_ZERO_UNDEFINED_DIVISOR in the binary suite), and a zero *dividend* is an ordinary value
+# rather than a knee, so there is nothing to register.
+_INT_ZERO_KNEE_OPS = (
+    MathOperation.SfpuGcd,
+    MathOperation.SfpuLcm,
+    MathOperation.SfpuMulInt32,
+    MathOperation.SfpuMaxInt32,
+    MathOperation.SfpuMinInt32,
+    MathOperation.SfpuMaxUint32,
+    MathOperation.SfpuMinUint32,
+)
+
 _OP_EDGE_POINTS: Dict[MathOperation, Tuple[float, ...]] = {
     **{op: (0.0, -0.0) for op in _ZERO_EDGE_OPS},
+    **{op: (0.0, 1.0) for op in _INT_ZERO_KNEE_OPS},
     # UnaryGt/Lt/Ge/Le reach the edge sweep through edge_spec(). UnaryEq and UnaryNe do not
     # -- they are outside _OP_DOMAIN_REGISTRY, so their consumer is
     # test_eltwise_unary_sfpu._threshold_op_stimuli_spec, which reads op_edge_points() directly to
@@ -3184,3 +3208,267 @@ def edge_pair_values(
     if not a or not b:
         return []
     return [(x, y) for x in a for y in b]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The coverage ledger
+#
+# Every gap this suite has closed was found by reading code and running the registries by
+# hand. Nothing stated, per op, *which classes of input value it has actually seen* -- so an
+# op could sit for a release with a positive-only uniform and look fully covered.
+#
+# The ingredients were already here: SPECIALS_READY_OPS and _BINARY_SPECIALS_NOT_READY are
+# exactly this kind of ledger for one class, and the *_READY / *_NOT_READY partition tests are
+# exactly this kind of totality check for another. What follows generalises them across
+# classes.
+#
+# TWO RULES IT IS BUILT ON.
+#
+# **Derived, never declared.** A cell reads COVERED only if the machinery that builds stimuli
+# actually emits a value of that class for that op -- the question is put to
+# ops_with_singularity(), op_edge_points(), the *_READY_OPS dicts and EXTREMES_READY_OPS, not
+# to a hand-maintained matrix. A matrix can claim coverage the sweep does not deliver; this
+# cannot.
+#
+# **Unrecorded is its own state.** The honest answer for most (op, class) pairs today is
+# neither "covered" nor "does not apply" but "nobody has decided" -- 28 unary ops sit outside
+# cat B with no per-op reason, for instance. Collapsing that into "not covered" would make the
+# ledger agree with a future where someone *had* decided and the answer was no. The three
+# states stay distinct, and the ratchet below is what turns UNRECORDED into a reason over time.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class EdgeClass(str, Enum):
+    """The classes of input value a sweep can drive at, and where each one comes from."""
+
+    A = "singularities"  # _OP_SINGULARITIES, straddled by boundary_probes()
+    B = "ieee_specials"  # format_specials() behind the *_READY_OPS gates
+    C = "integer_extremes"  # integer_specials(), through a raw override
+    D = "knees"  # _OP_EDGE_POINTS / _OP_OPERAND_EDGE_POINTS
+    E = "operand_parameters"  # shift amounts, compile-time scalars
+    F = "magnitude_extremes"  # format_extremes() behind EXTREMES_READY_OPS
+    G = "signed_zero_at_a_pole"  # a -0.0 delivered *to* a registered pole
+
+
+#: A cell's value when the machinery does emit a value of that class for that op.
+COVERED = "covered"
+
+#: A cell's value when nothing records whether the class applies. Distinct from a reason:
+#: this is the state the ratchet exists to shrink.
+UNRECORDED = "unrecorded"
+
+
+@dataclass(frozen=True)
+class SuiteCoverage:
+    """What the suites drive that this module cannot derive from its own tables.
+
+    Two of the seven classes are delivered by machinery that lives in the test modules --
+    integer extremes as raw override tensors, operand-as-parameter as compile-time template
+    arguments -- and a third fact, which ops are driven on an integer format at all, decides
+    whether cat C even applies. None of them has a table here to ask.
+
+    Passed in rather than restated. A second copy of a list inside this module is exactly how a
+    ledger comes to claim coverage no sweep delivers, which is the failure mode the whole thing
+    exists to prevent; test_sfpu_domains builds this from the suites themselves and pins it
+    against them. Every field defaults to empty, so a caller without the facts gets UNRECORDED
+    rather than a confident wrong answer.
+    """
+
+    #: Ops driven at the integer extremes (cat C).
+    integer_extremes: FrozenSet[MathOperation] = frozenset()
+    #: Ops driven on an integer format at all. Outside this, cat C does not apply.
+    integer_driven: FrozenSet[MathOperation] = frozenset()
+    #: Ops taking an operand as a parameter -- a shift amount, a compile-time scalar (cat E).
+    operand_parameters: FrozenSet[MathOperation] = frozenset()
+    #: Ops a suite drives that have no _OP_DOMAIN_REGISTRY entry, so _ledger_ops() cannot
+    #: find them. The ~30 integer and bitwise binary ops are the population this exists for.
+    extra_ops: FrozenSet[MathOperation] = frozenset()
+
+
+def _ledger_ops(suite: SuiteCoverage) -> FrozenSet[MathOperation]:
+    """Every op the ledger has an opinion about.
+
+    The three families this module knows how to classify, minus the ops deliberately kept out
+    of the correctness sweep, plus whatever the suites declare they drive without a registry
+    entry. An op that gains a registry entry lands here automatically, which is what makes the
+    totality check a real gate rather than a list to remember to edit.
+    """
+    return (
+        (sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT))
+        | _SFPU_BINARY_OPS
+        | _SFPU_TERNARY_OPS
+        | suite.extra_ops
+    )
+
+
+_CAT_B_READY: Dict[MathOperation, str] = {
+    **SPECIALS_READY_OPS,
+    **BINARY_SPECIALS_READY_OPS,
+    **TERNARY_SPECIALS_READY_OPS,
+}
+
+_CAT_B_NOT_READY: Dict[MathOperation, str] = {
+    **_BINARY_SPECIALS_NOT_READY,
+    **_TERNARY_SPECIALS_NOT_READY,
+}
+
+
+def _has_knee(op: MathOperation) -> bool:
+    return bool(op_edge_points(op)) or any(
+        op_edge_points(op, operand) for operand in Operand
+    )
+
+
+def _has_zero_pole(op: MathOperation) -> bool:
+    """Does *op* have a singularity registered at exactly zero, on any operand?
+
+    Cat G is "a -0.0 delivered to a pole", so an op with no zero pole has nowhere to deliver
+    one and the class does not apply to it. reciprocal, div, fmod, remainder, xlogy, atan2,
+    addcdiv and snake_beta are the ones that do.
+    """
+    return any(
+        point == 0.0
+        for entries in _OP_SINGULARITIES.get(op, {}).values()
+        for point, _side in entries
+    )
+
+
+def coverage_ledger(
+    suite: Optional[SuiteCoverage] = None,
+) -> Dict[MathOperation, Dict[EdgeClass, str]]:
+    """Per op, per class: COVERED, UNRECORDED, or the reason the class is not driven.
+
+    See SuiteCoverage for the three facts this module cannot derive and why they are arguments
+    rather than a second table.
+    """
+    suite = suite or SuiteCoverage()
+    ledger: Dict[MathOperation, Dict[EdgeClass, str]] = {}
+    for op in _ledger_ops(suite):
+        cells: Dict[EdgeClass, str] = {}
+
+        cells[EdgeClass.A] = (
+            COVERED
+            if op in ops_with_singularity()
+            else "smooth everywhere: no entry in _OP_SINGULARITIES"
+        )
+
+        if op in _CAT_B_READY:
+            cells[EdgeClass.B] = COVERED
+        elif op in _CAT_B_NOT_READY:
+            cells[EdgeClass.B] = _CAT_B_NOT_READY[op]
+        else:
+            cells[EdgeClass.B] = UNRECORDED
+
+        if op in suite.integer_extremes:
+            cells[EdgeClass.C] = COVERED
+        elif op in suite.integer_driven:
+            cells[EdgeClass.C] = UNRECORDED
+        else:
+            cells[EdgeClass.C] = "no integer form driven by any suite"
+
+        cells[EdgeClass.D] = (
+            COVERED
+            if _has_knee(op)
+            else "no knee, threshold or rounding tie registered"
+        )
+
+        cells[EdgeClass.E] = (
+            COVERED
+            if op in suite.operand_parameters
+            else "takes no operand as a parameter (no shift amount, no compile-time scalar)"
+        )
+
+        cells[EdgeClass.F] = COVERED if op in EXTREMES_READY_OPS else UNRECORDED
+
+        cells[EdgeClass.G] = (
+            UNRECORDED
+            if _has_zero_pole(op)
+            else "no singularity at zero, so there is no pole to deliver a -0.0 to"
+        )
+
+        ledger[op] = cells
+    return ledger
+
+
+def coverage_counts(
+    ledger: Dict[MathOperation, Dict[EdgeClass, str]],
+) -> Dict[EdgeClass, Dict[str, int]]:
+    """How many ops are covered / unrecorded / explained, per class."""
+    counts: Dict[EdgeClass, Dict[str, int]] = {}
+    for edge_class in EdgeClass:
+        states = [cells[edge_class] for cells in ledger.values()]
+        counts[edge_class] = {
+            COVERED: sum(1 for s in states if s == COVERED),
+            UNRECORDED: sum(1 for s in states if s == UNRECORDED),
+            "explained": sum(1 for s in states if s not in (COVERED, UNRECORDED)),
+        }
+    return counts
+
+
+def format_coverage_report(ledger: Dict[MathOperation, Dict[EdgeClass, str]]) -> str:
+    """The ledger as a text matrix, so the remaining gaps are a one-line query.
+
+    `.` is covered, `-` is explained-as-not-applicable, `?` is unrecorded. Ops are listed
+    alphabetically and the per-class totals come last.
+    """
+    glyph = {COVERED: ".", UNRECORDED: "?"}
+    header = "  ".join(c.name for c in EdgeClass)
+    width = max(len(op.name) for op in ledger) if ledger else 0
+    lines = [f"{'op'.ljust(width)}  {header}", f"{'-' * width}  {'-' * len(header)}"]
+    for op in sorted(ledger, key=lambda o: o.name):
+        row = "  ".join(
+            glyph.get(ledger[op][c], "-").center(len(c.name)) for c in EdgeClass
+        )
+        lines.append(f"{op.name.ljust(width)}  {row}")
+
+    counts = coverage_counts(ledger)
+    lines.append("")
+    lines.append(f"{len(ledger)} ops.  . covered   - not applicable   ? unrecorded")
+    for edge_class in EdgeClass:
+        c = counts[edge_class]
+        lines.append(
+            f"  {edge_class.name} {edge_class.value:<22} "
+            f"covered {c[COVERED]:>3}   n/a {c['explained']:>3}   "
+            f"unrecorded {c[UNRECORDED]:>3}"
+        )
+    return "\n".join(lines)
+
+
+def suite_coverage_from_tests() -> SuiteCoverage:
+    """Build a SuiteCoverage by asking the suites what they drive.
+
+    The import is a layering inversion -- this module sits below the tests -- and it is
+    confined to this function, which only the CLI and test_sfpu_domains call, so it never
+    happens at import time. The alternative was a second copy of four lists inside this module,
+    which is the drift the ledger exists to prevent.
+    """
+    import test_eltwise_binary_sfpu as binary
+    import test_eltwise_unary_sfpu as unary
+    import test_sfpu_ternary as ternary
+
+    return SuiteCoverage(
+        integer_extremes=frozenset(binary._INT_EXTREME_OPS)
+        | frozenset(unary._INT_UNARY_OPS),
+        integer_driven=frozenset(binary._INT_DRIVEN_BINARY_OPS)
+        | frozenset(binary._INT_BINARY_STIMULI)
+        | frozenset(unary._INT_UNARY_OPS),
+        operand_parameters=frozenset(unary._UNARY_SHIFT_OPS)
+        | frozenset(binary._SHIFT_EDGE_OPS)
+        | frozenset(ternary._SCALAR_OPS),
+        extra_ops=frozenset(binary._INT_DRIVEN_BINARY_OPS)
+        | frozenset(binary._INT_BINARY_STIMULI),
+    )
+
+
+def _report_main() -> None:
+    """`python -m helpers.sfpu_domains --report`."""
+    print(format_coverage_report(coverage_ledger(suite_coverage_from_tests())))
+
+
+if __name__ == "__main__":  # pragma: no cover - developer entry point
+    import sys
+
+    if "--report" in sys.argv:
+        _report_main()
+    else:
+        print("usage: python -m helpers.sfpu_domains --report")
