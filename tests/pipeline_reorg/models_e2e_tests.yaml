@@ -469,10 +469,12 @@
 - name: Qwen3.6-27B e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B MESH_DEVICE=P150x4
-    # Seed the shared HF_HOME cache if this revision isn't already on the mount. The tests
-    # below run with CI=true -> local_files_only=True (avoids slow NFS scans), so a cold
-    # cache would otherwise fail outright with LocalEntryNotFoundError instead of downloading.
-    python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
+    # One-time seed of the shared HF_HOME cache when this revision isn't on the mount yet.
+    # This job's env sets HF_HUB_OFFLINE=1 (and CI=true forces local_files_only=True
+    # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
+    # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
+    # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
@@ -493,10 +495,12 @@
   # 4k-256k ISL ladder or vision demo matrix (out of CI budget on both device targets).
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.5-9B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.5-9B MESH_DEVICE=N300
-    # Seed the shared HF_HOME cache if this revision isn't already on the mount. The tests
-    # below run with CI=true -> local_files_only=True (avoids slow NFS scans), so a cold
-    # cache would otherwise fail outright with LocalEntryNotFoundError instead of downloading.
-    python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
+    # One-time seed of the shared HF_HOME cache when this revision isn't on the mount yet.
+    # This job's env sets HF_HUB_OFFLINE=1 (and CI=true forces local_files_only=True
+    # downstream too), so a cold cache fails outright with LocalEntryNotFoundError instead of
+    # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
+    # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
+    HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
     pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
     pytest --timeout 1800 models/demos/blackhole/qwen36/demo/vision_demo.py -k "traced_single_image"
