@@ -132,22 +132,46 @@ jobs:
           summary=$(printf '%s\n' "${failed[@]}" \
             | python3 .github/actions/scripts/failure_title.py "$BRANCH")
 
+          # Section layout mirrors RELEASE-7, the hand-written reference for
+          # these tickets. "### " and "- " render as headings and bullets.
           {
             echo "summary=$summary"
             echo "description<<EOF"
-            echo "The Package and release workflow failed."
-            echo "Branch: $BRANCH"
-            if [ -n "${HEAD_SHA:-}" ]; then
-              echo "Commit: [${HEAD_SHA:0:12}](https://github.com/$REPO/commit/$HEAD_SHA)"
-            else
-              echo "Commit: unknown"
-            fi
-            echo "Run: [$RUN_ID](${RUN_URL:-https://github.com/$REPO/actions/runs/$RUN_ID})"
-            [ "$dropped" -gt 0 ] && echo "($dropped job(s) omitted: the runner never started, so no test ran.)"
-            echo "Failed jobs:"
+            echo "### Impact"
+            echo "The Package and release workflow failed on $BRANCH: ${#failed[@]} job(s) failed."
+            [ "$dropped" -gt 0 ] && echo "($dropped more job(s) omitted: the runner never started, so no test ran.)"
+            echo "### Failed jobs"
             # The leaf name, not the whole "a / b / c / leaf" path -- the prefix
             # is the same for every row and the link carries the full context.
             for i in "${!failed[@]}"; do echo "- [${failed[$i]##*/ }](${urls[$i]})"; done
+            echo "### Environment"
+            echo "- Branch: $BRANCH"
+            if [ -n "${HEAD_SHA:-}" ]; then
+              echo "- Commit: [${HEAD_SHA:0:12}](https://github.com/$REPO/commit/$HEAD_SHA)"
+            else
+              echo "- Commit: unknown"
+            fi
+            echo "- Run link: [$RUN_ID](${RUN_URL:-https://github.com/$REPO/actions/runs/$RUN_ID})"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # The failed run's own AI Summary (the ai_run_summary artifact uploaded
+      # by release-build-test-publish) supplies per-job root causes. Analysis
+      # is decoration: the ticket files without it if the artifact is missing
+      # or the fetch breaks.
+      - name: Attach AI Summary root causes
+        if: ${{ steps.collect.outputs.file == 'true' }}
+        id: ai
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "section<<EOF"
+            python3 .github/actions/scripts/ai_failure_section.py "$REPO" "$RUN_ID"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -160,7 +184,9 @@ jobs:
           JIRA_PROJECT_KEY: "RELEASE"
           JIRA_ISSUE_TYPE: ${{ env.JIRA_ISSUE_TYPE }}
           JIRA_SUMMARY: ${{ steps.collect.outputs.summary }}
-          JIRA_DESCRIPTION: ${{ steps.collect.outputs.description }}
+          # The AI section is already newline-terminated headings/bullets; an
+          # empty section (no artifact, fetch failed) concatenates to nothing.
+          JIRA_DESCRIPTION: "${{ steps.collect.outputs.description }}\n${{ steps.ai.outputs.section }}"
           JIRA_LABELS: "ci-failure,package-and-release"
           # Everything lands on one owner for triage, who reassigns. Override
           # with the repo variable rather than editing this file.

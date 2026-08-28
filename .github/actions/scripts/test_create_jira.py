@@ -207,3 +207,25 @@ def test_two_labelled_links_on_one_line_do_not_merge():
         (" and ", None),
         ("b", "https://x.test/2"),
     ]
+
+
+
+def test_adf_renders_headings_and_bullets():
+    """"### " and "- " give the RELEASE-7 shape without an ADF-aware producer."""
+    from jira_client import _adf
+
+    doc = _adf("### Impact\nBad.\n- one\n- two\nplain\n- solo")
+    assert [b["type"] for b in doc["content"]] == ["heading", "paragraph", "bulletList", "paragraph", "bulletList"]
+    heading, _, first_list = doc["content"][:3]
+    assert heading["attrs"]["level"] == 3 and heading["content"][0]["text"] == "Impact"
+    assert len(first_list["content"]) == 2
+
+
+def test_adf_links_render_inside_bullets_and_headings():
+    from jira_client import _adf
+
+    doc = _adf("### See https://x.test/h\n- [job](https://x.test/j)")
+    heading_marks = doc["content"][0]["content"][-1]["marks"][0]
+    assert heading_marks == {"type": "link", "attrs": {"href": "https://x.test/h"}}
+    item_para = doc["content"][1]["content"][0]["content"][0]
+    assert item_para["content"][0]["text"] == "job"

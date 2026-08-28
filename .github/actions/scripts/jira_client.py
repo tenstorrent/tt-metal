@@ -105,13 +105,32 @@ def _commit_link(sha, repo=None):
 
 
 def _adf(text):
-    """Wrap plain text (newline-separated) in a minimal Atlassian Document Format doc."""
-    paragraphs = [
-        {"type": "paragraph", "content": _line_nodes(line)}
-        for line in (text or "").splitlines()
-        if line.strip()
-    ] or [{"type": "paragraph", "content": []}]
-    return {"type": "doc", "version": 1, "content": paragraphs}
+    """Wrap plain text (newline-separated) in a minimal Atlassian Document Format doc.
+
+    Two markdown-ish forms are recognised so producers can stay plain-text:
+    a "### " prefix renders as a level-3 heading, and runs of "- " lines as a
+    bullet list. Anything else is a paragraph. Links render everywhere.
+    """
+    blocks = []
+    bullets = None  # the open bulletList, while consecutive "- " lines continue it
+    for line in (text or "").splitlines():
+        if not line.strip():
+            bullets = None
+            continue
+        if line.startswith("- "):
+            if bullets is None:
+                bullets = {"type": "bulletList", "content": []}
+                blocks.append(bullets)
+            bullets["content"].append(
+                {"type": "listItem", "content": [{"type": "paragraph", "content": _line_nodes(line[2:])}]}
+            )
+            continue
+        bullets = None
+        if line.startswith("### "):
+            blocks.append({"type": "heading", "attrs": {"level": 3}, "content": _line_nodes(line[4:])})
+        else:
+            blocks.append({"type": "paragraph", "content": _line_nodes(line)})
+    return {"type": "doc", "version": 1, "content": blocks or [{"type": "paragraph", "content": []}]}
 
 
 def _find_open_dupe(base, email, token, project, dedup_label):
