@@ -7,6 +7,10 @@
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
+// This kernel reconfigs ~30x; inlining the LLK Src zero-flag DEFAULT configurator at each site pushes
+// the program over the kernel-config buffer. Force it out-of-line here.
+#define LLK_ZEROFLAG_OUTLINE 1
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
@@ -445,6 +449,7 @@ void kernel_main() {
                 local_n_has_padding,
                 joint_has_padding,
                 has_straddle && is_causal && is_balanced,
+                false,  // use_l1_state_fifo — compile-time off: no FIFO branch overhead here
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
                 v_shares_k_buffer,
@@ -481,6 +486,7 @@ void kernel_main() {
                 chunked_context,
                 is_first_active_iter,
                 logical_lt,
+                /*q_base_tiles=*/0u,
                 sparse_frame_mask_words,
                 q_shard_start_tile,
                 q_work_bitmap);

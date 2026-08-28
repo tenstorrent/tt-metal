@@ -14,6 +14,7 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     run_model_device_perf_test_with_merge,
     run_moe_perf_with_approximation,
 )
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe"
 
@@ -23,6 +24,14 @@ _CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and p
 _CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
 _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
 _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
+
+
+_IGNORE_POWER = os.environ.get("DS_PERF_IGNORE_POWER") == "1"
+_REQUIRE_HIGH_POWER = pytest.mark.skipif(
+    not (is_high_power() or _IGNORE_POWER),
+    reason="galaxy perf baselines are cut on a >=130W TDP host; an 8kW galaxy measures differently. "
+    "DS_PERF_IGNORE_POWER=1 runs it anyway, for bring-up only",
+)
 
 
 def _require_certified_torus_xy():
@@ -40,20 +49,25 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Recalibrated 2026-08-21 on this LoudBox, Fabric2D TorusY, with the routed experts folded
-        # into one program. Single run each, where the previous 8x1 was a mean of two.
-        expected_ns_8x1=14_385_886,
+        # Re-measured 2026-08-22 at 640 tokens/chip, BH LoudBox bh-lb-15, DDR 16000, 150W.
+        # Mean of 14 runs, 5.876-5.921 ms, 0.76% peak to peak.
+        expected_ns_8x1=5_895_298,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=15_945_512,
+        # Re-cut 2026-08-28 on the CI LoudBox (bh_loudbox): runs 33089588265 and 33179961983
+        # measured 9.381 / 9.298 ms, mean below. The dev box bh-lb-15 read 9_601_530 (14-run
+        # mean), 2.7% slower, and the 9.298 sample fell 0.16% under that band's floor -- this
+        # gate has to be cut on the CI runner.
+        expected_ns_2x4=9_339_547,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
-        comments_8x1="seq3200_lb_8x1_torus_y_dispatch_combine_proxy",
-        comments_2x4="seq3200_lb_2x4_fabric2d_gate_proxy",
+        comments_8x1="isl5k_lb_8x1_torus_y_dispatch_combine_proxy",
+        comments_2x4="isl5k_lb_2x4_fabric2d_gate_proxy",
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy():
     """Measure the production 8x4 TorusXY Galaxy path without padding."""
@@ -65,17 +79,19 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        # Historical baseline: measured with FABRIC_1D, not TorusXY.
-        expected_device_perf_ns_per_iteration=21_028_751,
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 6.155 / 6.070 ms, spread 1.38%.
+        expected_device_perf_ns_per_iteration=6_112_530,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        comments="seq3200_glx_8x4_ground_truth",
+        comments="isl5k_glx_8x4_ground_truth",
     )
 
 
+@_REQUIRE_HIGH_POWER
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy_pad50():
     """8x4 galaxy ground truth with 50% right-padding + padding-aware routing (zigzag placement)."""
@@ -87,12 +103,13 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        # Historical baseline: measured with FABRIC_1D, not TorusXY.
-        expected_device_perf_ns_per_iteration=14_107_228,
+        # Measured 2026-08-22, 14kW BH galaxy bh-glx-110-c04u02, 8x4 TorusXY certified, DDR 16000.
+        # Two runs 5.223 / 5.188 ms, spread 0.67%.
+        expected_device_perf_ns_per_iteration=5_205_872,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,
         batch_size=1,
         margin=margin,
-        comments="seq3200_glx_8x4_ground_truth_padded_50_percent_w_awareness",
+        comments="isl5k_glx_8x4_ground_truth_padded_50_percent_w_awareness",
     )
