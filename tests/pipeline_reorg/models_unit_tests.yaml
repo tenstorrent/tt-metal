@@ -1339,7 +1339,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B unit tests
   cmd: |
-    export TT_METAL_WATCHER=30
+    export TT_METAL_WATCHER=45
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
     pytest --timeout 10000 models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py -k "is_fsdp1"
