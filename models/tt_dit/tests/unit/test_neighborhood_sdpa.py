@@ -4,8 +4,8 @@
 """PCC tests for the neighborhood attention device op against the torch reference.
 
 The op consumes tensors in BRICKED site order. Bricking is done here in torch, using the
-index formula already pinned to the C++ `site_to_bricked_index` by
-test_neighborhood_permute.py, so a failure here is the OP rather than the ordering.
+index formula already pinned to `neighborhood_permute` by test_neighborhood_permute.py, so a
+failure here is the OP rather than the ordering.
 """
 
 import pytest

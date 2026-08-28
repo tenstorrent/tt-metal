@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <set>
 #include <type_traits>
 #include <vector>
 
@@ -316,53 +315,6 @@ TEST(NeighborhoodContextWindow, ContainsItsOwnQueryGroup) {
                         EXPECT_LT(site, origin + extent) << "query fell above its own window on axis " << axis_index;
                     }
                 }
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Natural <-> Bricked
-// ---------------------------------------------------------------------------
-
-TEST(NeighborhoodBrickedOrder, RoundTripsAndIsInjective) {
-    for (const NeighborhoodConfig& config : awkward_configs()) {
-        std::set<uint32_t> seen_bricked_indices;
-
-        for (uint32_t site_time = 0; site_time < config.volume.time(); ++site_time) {
-            for (uint32_t site_height = 0; site_height < config.volume.height(); ++site_height) {
-                for (uint32_t site_width = 0; site_width < config.volume.width(); ++site_width) {
-                    const Site original_site = Site::at(site_time, site_height, site_width);
-                    const uint32_t bricked_index = site_to_bricked_index(original_site, config);
-
-                    EXPECT_TRUE(seen_bricked_indices.insert(bricked_index).second)
-                        << "two sites collided on bricked index " << bricked_index;
-                    EXPECT_EQ(bricked_index_to_site(bricked_index, config), original_site);
-                }
-            }
-        }
-        EXPECT_EQ(seen_bricked_indices.size(), config.volume.count());
-    }
-}
-
-TEST(NeighborhoodBrickedOrder, PacksOneBrickContiguously) {
-    // The whole point of bricking: 32 consecutive bricked indices are one compact 3D box.
-    const NeighborhoodConfig config = make_config(
-        ShapeInSites::of(8, 12, 12),
-        ShapeInSites::of(5, 5, 5),
-        ShapeInSites::of(1, 1, 1),
-        BrickShapeInSites::of(2, 4, 4));
-
-    for (uint32_t brick_index = 0; brick_index < 6; ++brick_index) {
-        const Site brick_origin = brick_index_to_origin(brick_index, config);
-
-        for (uint32_t site_index_in_brick = 0; site_index_in_brick < SITES_PER_BRICK; ++site_index_in_brick) {
-            const Site site = bricked_index_to_site(brick_index * SITES_PER_BRICK + site_index_in_brick, config);
-
-            for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
-                EXPECT_GE(site.by_axis[axis_index], brick_origin.by_axis[axis_index]);
-                EXPECT_LT(
-                    site.by_axis[axis_index], brick_origin.by_axis[axis_index] + config.brick.by_axis[axis_index]);
             }
         }
     }

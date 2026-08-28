@@ -21,8 +21,9 @@ DiffVAE block (norms, modulation, SwiGLU, residuals) is per-token and therefore
 permutation-equivariant, so all eight blocks run in bricked order. RoPE tables must be
 permuted the same way, once, at init.
 
-The ordering here is exactly ``site_to_bricked_index`` in
-``ttnn/cpp/ttnn/operations/transformer/sdpa/device/neighborhood_plan.cpp``::
+This module is the sole definition of the ordering. The SDPA kernels do not convert -- they
+assume it, addressing one page per brick in ``neighborhood_chunk_layout.hpp``. So the formula
+below and that addressing must agree, with nothing in the type system tying them together::
 
     brick_index         = (time // brick_time) * (bricks_height * bricks_width)
                         + (height // brick_height) * bricks_width

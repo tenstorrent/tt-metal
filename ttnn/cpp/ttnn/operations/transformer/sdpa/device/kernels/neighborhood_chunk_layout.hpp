@@ -22,7 +22,7 @@ namespace ttnn::transformer::neighborhood::chunk_layout {
 
 // A linear index into a (time, height, width) grid -> the point it names. The exact inverse of
 // point3_to_linear below, and both are ROW-MAJOR over (time, height, width) -- the order tokens
-// arrive in, the order bricks tile a chunk, and the order site_to_bricked_index uses on the host.
+// arrive in, the order bricks tile a chunk, and the order neighborhood_permute.py bricks with.
 // All four have to agree: a work item is decoded to a point here and re-linearised there to
 // address the tensor, so a disagreement reads the wrong tile row for every brick and still
 // returns plausible video.

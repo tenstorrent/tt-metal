@@ -161,60 +161,6 @@ ContextWindow context_window_for(Site query_group_origin, const NeighborhoodConf
     return window;
 }
 
-uint32_t site_to_brick_index(Site site, const NeighborhoodConfig& config) {
-    const ShapeInBricks volume_bricks = volume_in_bricks(config);
-    const BrickPoint brick = containing_brick(site, config.brick);
-
-    return brick.time() * (volume_bricks.height() * volume_bricks.width()) + brick.height() * volume_bricks.width() +
-           brick.width();
-}
-
-Site brick_index_to_origin(uint32_t brick_index, const NeighborhoodConfig& config) {
-    const ShapeInBricks volume_bricks = volume_in_bricks(config);
-    const uint32_t bricks_per_time_slice = volume_bricks.height() * volume_bricks.width();
-
-    const uint32_t brick_index_time = brick_index / bricks_per_time_slice;
-    const uint32_t remainder_after_time = brick_index % bricks_per_time_slice;
-
-    return first_site_of(
-        BrickPoint::at(
-            brick_index_time,
-            remainder_after_time / volume_bricks.width(),
-            remainder_after_time % volume_bricks.width()),
-        config.brick);
-}
-
-uint32_t site_to_bricked_index(Site site, const NeighborhoodConfig& config) {
-    const uint32_t brick_index = site_to_brick_index(site, config);
-
-    const uint32_t site_in_brick_time = site.time() % config.brick.time();
-    const uint32_t site_in_brick_height = site.height() % config.brick.height();
-    const uint32_t site_in_brick_width = site.width() % config.brick.width();
-
-    const uint32_t site_index_in_brick = site_in_brick_time * (config.brick.height() * config.brick.width()) +
-                                         site_in_brick_height * config.brick.width() + site_in_brick_width;
-
-    return brick_index * SITES_PER_BRICK + site_index_in_brick;
-}
-
-Site bricked_index_to_site(uint32_t bricked_index, const NeighborhoodConfig& config) {
-    const uint32_t brick_index = bricked_index / SITES_PER_BRICK;
-    const uint32_t site_index_in_brick = bricked_index % SITES_PER_BRICK;
-
-    const Site brick_origin = brick_index_to_origin(brick_index, config);
-
-    const uint32_t sites_per_brick_time_slice = config.brick.height() * config.brick.width();
-    const uint32_t site_in_brick_time = site_index_in_brick / sites_per_brick_time_slice;
-    const uint32_t remainder_after_time = site_index_in_brick % sites_per_brick_time_slice;
-    const uint32_t site_in_brick_height = remainder_after_time / config.brick.width();
-    const uint32_t site_in_brick_width = remainder_after_time % config.brick.width();
-
-    return Site::at(
-        brick_origin.time() + site_in_brick_time,
-        brick_origin.height() + site_in_brick_height,
-        brick_origin.width() + site_in_brick_width);
-}
-
 void validate_config(const NeighborhoodConfig& config) {
     require(config.brick.count() == SITES_PER_BRICK, "brick must hold exactly 32 sites");
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {

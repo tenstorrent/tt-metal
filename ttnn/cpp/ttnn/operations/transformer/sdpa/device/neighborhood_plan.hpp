@@ -27,15 +27,17 @@
 // Naming: every count carries its unit -- _sites, _bricks, _tiles, _index, _count. You
 // cannot add a brick count to a site count when the names do not match. POSITIONS enforce the
 // same rule through the type system instead: see Unit in kernels/neighborhood_point3.hpp.
+//
+// Two orderings of the same sites appear throughout. NATURAL is row-major over
+// (time, height, width) -- the order tokens arrive in. BRICKED groups each 32 consecutive tokens
+// into one compact 3D box, so a brick is exactly one hardware tile row; that is what makes the
+// gather tile-aligned. The permutation itself is done by to_bricked / to_natural in
+// models/tt_dit/layers/neighborhood_permute.py, once at stage entry and once at exit.
 
 namespace ttnn::transformer::neighborhood {
 
 // One brick is one hardware tile row: 32 sites, in some 3D arrangement.
 constexpr uint32_t SITES_PER_BRICK = 32;
-
-// Natural: row-major over (time, height, width), the order tokens arrive in.
-// Bricked: 32 consecutive tokens form one compact 3D box -- see site_to_bricked_index.
-enum class Order : uint8_t { Natural, Bricked };
 
 // Where a context window sits against a volume boundary on one axis. Three states per axis
 // means at most 27 distinct window geometries in a volume of any size. These change the
@@ -169,14 +171,6 @@ Regime regime_for_axis(uint32_t site_index, uint32_t volume_extent_sites, uint32
 // The context window for the query group starting at `query_group_origin`. Always fully in
 // bounds; always contains its own query group.
 ContextWindow context_window_for(Site query_group_origin, const NeighborhoodConfig& config);
-
-// Natural <-> Bricked. Round-trips for every site in the volume.
-uint32_t site_to_bricked_index(Site site, const NeighborhoodConfig& config);
-Site bricked_index_to_site(uint32_t bricked_index, const NeighborhoodConfig& config);
-
-// The brick a site belongs to, and the first site of a brick.
-uint32_t site_to_brick_index(Site site, const NeighborhoodConfig& config);
-Site brick_index_to_origin(uint32_t brick_index, const NeighborhoodConfig& config);
 
 // Throws std::invalid_argument on a config that cannot be built.
 void validate_config(const NeighborhoodConfig& config);

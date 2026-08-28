@@ -43,7 +43,7 @@ constexpr uint16_t MASK_SCORE = 0xFF80;  // -infinity
 
 // Positions here are `Site`s from neighborhood_point3.hpp: RESIDENT-local sites, in the same
 // units the gather origin table carries. Bricks are laid out time-major then height then width --
-// the same order as site_to_bricked_index on the host.
+// the same order neighborhood_permute.py bricks with.
 
 // How much of a key brick a query brick can see. When the whole brick is one query group
 // (stride == brick) every row of the mask tile is the same, so a brick that lies wholly inside

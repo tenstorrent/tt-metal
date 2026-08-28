@@ -4,9 +4,9 @@
 """Tests for Natural <-> Bricked token order.
 
 The load-bearing test is :func:`test_bricked_order_matches_index_formula`. The kernel side
-computes addresses from ``site_to_bricked_index`` in ``neighborhood_plan.cpp``; this module
-realises the same ordering by moving axes. Nothing in the type system ties those two
-together, so if they ever disagree the kernel reads the wrong keys and still produces
+assumes bricked order and addresses one page per brick; ``neighborhood_permute`` realises that
+ordering by moving axes. Nothing in the type system ties those two together, so if they ever
+disagree the kernel reads the wrong keys and still produces
 plausible-looking video. That test is the pin.
 """
 
@@ -33,7 +33,7 @@ FLAT_TIME_BRICK = (1, 4, 8)
 
 
 def reference_bricked_index_table(volume, brick):
-    """The permutation, transcribed from ``site_to_bricked_index`` in neighborhood_plan.cpp.
+    """The permutation, written as an index formula rather than as axis moves.
 
     Deliberately written as index arithmetic rather than as axis moves, so it cannot share a
     bug with the reshape/permute implementation it checks.
@@ -180,7 +180,7 @@ def test_bands_align_to_brick_t():
     ids=["cubic_brick", "flat_time_brick"],
 )
 def test_bricked_order_matches_index_formula(mesh_device, volume, brick):
-    """Every site must land where site_to_bricked_index says it does.
+    """Every site must land where the index formula says it does.
 
     Each site carries its own natural index as its value. The volumes here hold at most 256
     sites so every index is exact in bfloat16 and the comparison can be equality, not a
@@ -201,7 +201,7 @@ def test_bricked_order_matches_index_formula(mesh_device, volume, brick):
     actual = ttnn.to_torch(to_bricked(on_device, volume=volume, brick=brick)).float()[0, :, 0]
     expected = natural.reshape(1, site_count, channel_count)[0, reference_bricked_index_table(volume, brick), 0]
 
-    assert torch.equal(actual, expected), "bricked order disagrees with site_to_bricked_index"
+    assert torch.equal(actual, expected), "bricked order disagrees with the index formula"
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
