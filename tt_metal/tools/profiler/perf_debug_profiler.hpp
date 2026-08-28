@@ -177,6 +177,28 @@ private:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         DeviceCtx& ctx,
         const distributed::MeshCoordinate& coord);
+
+    // ---- DEVICE-TO-DEVICE CLOCK SYNC ------------------------------------------------------------------
+    //
+    // Measured over the ethernet links at start(), BEFORE any device is booted. That ordering is the whole
+    // reason it is cheap: fabric has not claimed the eth cores yet and no drainer is resident, so nothing
+    // has to be evicted and LaunchProgram's dram_barrier cannot meet a DRAM core in stream mode.
+    //
+    // One entry per measured link. Composing these into a per-device transform against the root, and
+    // feeding that to Tracy, is the next step; for now they are measured and reported so the numbers can
+    // be trusted before anything depends on them.
+    struct LinkSync {
+        uint32_t sender_chip = 0;
+        uint32_t receiver_chip = 0;
+        int64_t offset = 0;    // receiver MINUS sender, in cycles, at ref_mid on the sender clock
+        uint64_t ref_mid = 0;  // the sender-clock instant the offset is quoted at
+        double rate = 1.0;     // receiver cycles per sender cycle
+        double residual_rms = 0.0;
+        uint64_t rtt_min = 0;
+        bool valid = false;
+    };
+    std::vector<LinkSync> link_syncs_;
+    void sync_devices_over_eth(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     // Read the drainer's LIVE state (done word, heartbeat, phase) mid-run and log it. Distinguishes
     // "kernel exited" from "kernel blocked in the credit wait" from "kernel sweeping with nothing to do" --
     // states the end-of-run results block cannot tell apart because it is only published on exit.

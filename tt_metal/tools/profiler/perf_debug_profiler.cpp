@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <queue>
 #include "tools/profiler/perf_debug_profiler.hpp"
 
 #include <algorithm>
@@ -52,6 +53,7 @@
 #include "tools/profiler/perf_debug_env.hpp"
 #include "tools/profiler/perf_debug_profiler_tracy_handler.hpp"
 #include "tools/profiler/perf_debug_receiver.hpp"
+#include "tools/profiler/sync/eth_wallclock_sync_host.hpp"
 #include "tools/profiler/perf_debug_tracy_consumer.hpp"
 #include "llrt/zone_meta.hpp"  // per-ELF (zone id -> source location), the streaming name source
 #include "tools/profiler/spsc_packet.h"
@@ -757,6 +759,142 @@ PerfDebugProfiler::PerfDebugProfiler(const std::shared_ptr<distributed::MeshDevi
 
 PerfDebugProfiler::~PerfDebugProfiler() { stop(); }
 
+// TT_METAL_PERF_DEBUG_ETH_SYNC: measure the device-to-device clock offsets over ethernet at bring-up.
+// On by default when there is more than one device; a single-device run has nothing to sync and skips it.
+namespace {
+bool eth_sync_enabled() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC");
+        return (s == nullptr || *s == '\0') ? true : (*s != '0');
+    }();
+    return v;
+}
+uint32_t eth_sync_samples() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_SAMPLES");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 256u;
+    }();
+    return v;
+}
+uint32_t eth_sync_gap_us() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_GAP_US");
+        return (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 200u;
+    }();
+    return v;
+}
+}  // namespace
+
+// Measure one link per device pair, over a SPANNING TREE rooted at the first device: n-1 measurements for
+// n devices, not one per link. Every extra edge would cost another ~n_samples * gap of bring-up time and
+// tell us something we can already derive, so the tree is what gets measured and any remaining edges stay
+// available as a consistency check when we want one.
+void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (!eth_sync_enabled()) {
+        return;
+    }
+    std::vector<IDevice*> devices;
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+        if (mesh_device->is_local(coord)) {
+            devices.push_back(mesh_device->get_device(coord));
+        }
+    }
+    if (devices.size() < 2) {
+        return;  // nothing to sync against
+    }
+
+    eth_sync::LinkSyncConfig cfg;
+    cfg.n_samples = eth_sync_samples();
+    cfg.gap_us = eth_sync_gap_us();
+
+    // BFS from the root so every device is reached exactly once, over whichever link the cluster reports
+    // first for that pair. Which physical link is picked matters at the nanosecond level (they are not
+    // identical lengths), so it is logged.
+    std::set<int> visited;
+    std::queue<IDevice*> q;
+    visited.insert(devices.front()->id());
+    q.push(devices.front());
+    const auto t_start = std::chrono::steady_clock::now();
+    while (!q.empty()) {
+        IDevice* snd = q.front();
+        q.pop();
+        for (const CoreCoord& ec : snd->get_active_ethernet_cores(true)) {
+            std::tuple<ChipId, CoreCoord> peer;
+            try {
+                peer = snd->get_connected_ethernet_core(ec);
+            } catch (const std::exception&) {
+                continue;
+            }
+            const int peer_id = static_cast<int>(std::get<0>(peer));
+            if (visited.count(peer_id) != 0) {
+                continue;
+            }
+            IDevice* rcv = nullptr;
+            for (IDevice* d : devices) {
+                if (d->id() == peer_id) {
+                    rcv = d;
+                    break;
+                }
+            }
+            if (rcv == nullptr) {
+                continue;  // link leaves this mesh
+            }
+            visited.insert(peer_id);
+            q.push(rcv);
+
+            const auto r = eth_sync::measure_link(snd, ec, rcv, std::get<1>(peer), cfg);
+            LinkSync ls;
+            ls.sender_chip = static_cast<uint32_t>(snd->id());
+            ls.receiver_chip = static_cast<uint32_t>(rcv->id());
+            if (r.solution.valid) {
+                ls.offset = r.solution.offset;
+                ls.ref_mid = r.solution.mid_ref;
+                ls.rate = r.solution.rate;
+                ls.residual_rms = r.solution.residual_rms;
+                ls.rtt_min = r.solution.rtt_min;
+                ls.valid = true;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] eth sync {} -> {} via eth ({},{}): offset {} cycles, rate {:.9f} "
+                    "({:+.2f} ppm), rtt_min {} cycles, residual {:.1f} cycles",
+                    ls.sender_chip,
+                    ls.receiver_chip,
+                    ec.x,
+                    ec.y,
+                    ls.offset,
+                    ls.rate,
+                    (ls.rate - 1.0) * 1e6,
+                    ls.rtt_min,
+                    ls.residual_rms);
+            } else {
+                // Loud, and non-fatal: without this edge the receiver keeps its own host anchor, which is
+                // what every device used before this existed. A worse alignment is not a reason to lose
+                // the capture.
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] eth sync {} -> {} FAILED (sender {}, receiver {}); device {} "
+                    "falls back to its own host anchor",
+                    ls.sender_chip,
+                    ls.receiver_chip,
+                    eth_sync::status_name(r.sender_status),
+                    eth_sync::status_name(r.receiver_status),
+                    ls.receiver_chip);
+            }
+            link_syncs_.push_back(ls);
+        }
+    }
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t_start).count();
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] eth sync: {} link(s) measured across {} devices in {} ms ({} samples {} us apart)",
+        link_syncs_.size(),
+        devices.size(),
+        ms,
+        cfg.n_samples,
+        cfg.gap_us);
+}
+
 void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     const auto context_id = mesh_device->impl().get_context_id();
     auto& cluster = MetalContext::instance(context_id).get_cluster();
@@ -772,6 +910,11 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     // a model: at start() (MeshDevice bring-up) no workload kernel has been compiled yet, and by the first
     // drain the LATER kernels still have not been.
 
+    // Device-to-device clock sync FIRST, while the eth cores are still free and no drainer is resident.
+    // Both conditions stop holding the moment the loop below starts booting devices.
+    sync_devices_over_eth(mesh_device);
+
+    // ---- PASS 2: bring up each device's drainers -------------------------------------------------------
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
         if (!mesh_device->is_local(coord)) {
             continue;
