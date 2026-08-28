@@ -266,6 +266,21 @@ allowed to block the rest.** Concretely: a 2.0 port targeting WH/BH can keep the
 core-to-core implementation verbatim; a Quasar port cannot, and needs cross-node DFB or an
 explicitly sanctioned raw-L1 path. Scope the first port to Gen1 and log this as the known gap.
 
+**Checked since, and the door is deliberately shut rather than merely unbuilt.** The obvious
+fix -- stop taking the buffer's pointer, pass the BUFFER to `noc.async_read` and let metal map
+it back to its cached view -- works for a local source or destination and NOT for this. A
+core-to-core copy addresses a PEER's copy of the buffer, computed from our own buffer's
+pointer, and on Gen2 that needs the buffer's cached address:
+
+    // dataflow_buffer.h:381, private
+    // NOC APIs do not accept uncached addresses, but this is private so not exposed to kernels.
+    uint32_t get_noc_write_addr() const { return get_write_ptr_impl(); }
+
+Private, friended only to `noc_traits_t<DataflowBuffer>`. So a kernel cannot construct a peer
+address from a DFB by any public route, which is not an oversight -- it is the same statement
+as "cross-node DFB is the mechanism for this", made in code. Nothing we can write closes this
+gap; it closes when that feature lands.
+
 ### 5.4 Quasar is a different machine, and `api.h` assumes it is not
 
 Not strictly a 2.0 issue — 2.0 runs on WH/BH today — but the reason 2.0 exists, so it belongs here.
@@ -630,6 +645,34 @@ them on, which is exactly why mcast_share looked fine standalone and broke under
 and why two wrong theories survived as long as they did. The suite-level results stand,
 because `run_unified_tests.sh` exports the right name; the individual spot-checks were weaker
 than they looked.
+
+### 7.6 Why the custom Fn contract is not worth changing yet
+
+`unified_explicit_noc_spec.md` step 3 changes `fn(L1Pages)` to hand the routine its NOC, so a
+routine issues on the NOC the handle will barrier on. Priced properly it is worse value than it
+looked, and the reasons are worth recording so it is not re-proposed on the same reasoning.
+
+**What it costs.** Twelve kernel routines plus the library's three built-ins; compute-side
+stubs for whatever endpoint type the routines name, because an Fn body is compiled on all five
+projections; and real ceremony in what are also the model's worked examples --
+
+    noc_async_read(in0.get_noc_addr(i), pages.addr(p), pages.page_bytes);
+    noc.async_read(in0, l1, pages.page_bytes, {.page_id = i}, {.addr = pages.addr(p)});
+
+**What it buys today: nothing.** Nothing can request a NOC other than the thread's own -- that
+is step 2, which does not exist -- so every routine would receive the NOC it already uses. The
+step exists to prepare for a capability whose own spec records the motivation as unproven
+(§2 there: the configuration it was written to reach never completed, and `DM_DYNAMIC_NOC`
+costs 2.7% before buying anything).
+
+**One thing the pricing did settle.** If it is done, the parameter should be a `Noc` and not
+the `uint8_t` that spec proposes. `noc_traits_t<TensorAccessor>` feeds `noc.get_noc_id()` into
+`get_noc_addr` itself, so the object form gets the ADDRESS computed for the right NOC as well
+as the issue -- where a bare index leaves two places to get right and one of them silent. That
+is a strict improvement on the spec's own design, arrived at by trying to write the call.
+
+So: not now. Revisit if and when a caller genuinely needs a foreign NOC, and take the `Noc`
+parameter when it happens.
 
 ## 8. What this buys, against the hazard ledger
 
