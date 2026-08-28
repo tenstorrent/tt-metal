@@ -2304,7 +2304,11 @@ void sdpa_ring_v2(
     // frames. 0 when unsharded.
     const uint32_t q_shard_start_tile = 0,
     // Per-q_chunk work bitmap: bit `iter` set iff q_chunk has work in that (mask-active) iter.
-    const uint32_t* q_work_bitmap = nullptr) {
+    const uint32_t* q_work_bitmap = nullptr,
+    // Reference iteration: when true, the frame gate uses forced_k_frame instead of the ring_id-derived
+    // frame, so spatial q_chunks attend the pre-delivered reference frame via mask[q_frame][forced_k_frame].
+    const bool force_ref_k_frame = false,
+    const uint32_t forced_k_frame = 0) {
     init_sdpa_streaming_semaphores();
 
     // Sparse computation: mirror the reader's fully-padded-shard detection. A shard whose Q frames are
@@ -2477,7 +2481,7 @@ void sdpa_ring_v2(
             }
             // K chunk's global tile position along the padded sequence (all sp shards concatenated).
             const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-            const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
+            const uint32_t k_frame = force_ref_k_frame ? forced_k_frame : (k_global_start_tile / tiles_per_frame);
             const uint32_t bit_idx = q_frame_for_chunk * num_frames_padded_compile + k_frame;
             const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
             const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
@@ -2583,7 +2587,7 @@ void sdpa_ring_v2(
                 // Pre-scan: skip k_chunks this q_frame doesn't attend when counting valid KV.
                 if (!is_joint) {
                     const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
-                    const uint32_t k_frame = k_global / tiles_per_frame;
+                    const uint32_t k_frame = force_ref_k_frame ? forced_k_frame : (k_global / tiles_per_frame);
                     const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
                     const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
                     if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
@@ -2612,7 +2616,8 @@ void sdpa_ring_v2(
                     if (!is_joint_) {
                         // Reader pushed only if some q_frame in shard attends.
                         const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k * Sk_chunk_t;
-                        const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
+                        const uint32_t k_frame =
+                            force_ref_k_frame ? forced_k_frame : (k_global_start_tile / tiles_per_frame);
                         bool aggregate_allowed = false;
                         for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
                             const uint32_t bit_idx = qf * num_frames_padded_compile + k_frame;

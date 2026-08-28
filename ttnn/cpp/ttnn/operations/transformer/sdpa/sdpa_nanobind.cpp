@@ -60,7 +60,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     std::optional<uint32_t> tokens_per_frame,
     std::optional<uint32_t> num_frames_padded,
-    std::vector<uint32_t> sparse_frame_mask) {
+    std::vector<uint32_t> sparse_frame_mask,
+    const std::optional<ttnn::Tensor>& reference_kv,
+    std::optional<uint32_t> reference_frame_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -99,7 +101,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         persistent_output_buffer_joint_v,
         tokens_per_frame,
         num_frames_padded,
-        std::move(sparse_frame_mask));
+        std::move(sparse_frame_mask),
+        reference_kv,
+        reference_frame_idx);
     return outputs;
 }
 
@@ -711,7 +715,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
         nb::arg("tokens_per_frame") = nb::none(),
         nb::arg("num_frames_padded") = nb::none(),
-        nb::arg("sparse_frame_mask") = std::vector<uint32_t>{});
+        nb::arg("sparse_frame_mask") = std::vector<uint32_t>{},
+        nb::arg("reference_kv") = nb::none(),
+        nb::arg("reference_frame_idx") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

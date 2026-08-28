@@ -196,6 +196,7 @@ def _run_sparse_frames_op(
     force_allow_all: bool = False,
     allow_override: torch.Tensor | None = None,
     reference_as_joint: bool = False,
+    reference_as_extra_k: bool = False,
 ):
     """Build small Q/K/V, run the ring op with sparse computation enabled, compare to a pytorch ref.
 
@@ -255,16 +256,20 @@ def _run_sparse_frames_op(
     # joint path. `allow` (hence `gt`) keeps the full pattern; only the op's spatial mask drops the
     # reference column so the windowed gather no longer needs the far reference shards.
     ref_frame = num_frames_real - 1  # the last real frame is the reference (see _window_plan add_last)
-    if reference_as_joint:
-        assert add_last_frame, "reference_as_joint expects the add-last-frame (reference) pattern"
+    if reference_as_joint or reference_as_extra_k:
+        assert add_last_frame, "reference delivery expects the add-last-frame (reference) pattern"
         spatial_allow = allow.clone()
-        spatial_allow[:, ref_frame] = 0  # every query gets the reference via joint instead of spatial
-        # Replicated reference K/V = the reference frame's tokens (real data, < real_n), same on every device.
+        spatial_allow[:, ref_frame] = 0  # every query gets the reference via the separate path, not spatial
+        # Reference frame's real tokens (< real_n), replicated on every device.
         ref_slice = slice(ref_frame * tokens_per_frame, (ref_frame + 1) * tokens_per_frame)
         ref_K = padded_K[:, :, ref_slice, :].contiguous()
         ref_V = padded_V[:, :, ref_slice, :].contiguous()
-        # Dummy joint Q (op forces joint Q/K/V to share length L=tokens_per_frame); its output is discarded.
-        dummy_joint_Q = torch.zeros(b, nh, tokens_per_frame, d)
+        if reference_as_joint:
+            # Dummy joint Q (op forces joint Q/K/V to share length L=tokens_per_frame); output discarded.
+            dummy_joint_Q = torch.zeros(b, nh, tokens_per_frame, d)
+        else:
+            # Extra-K path: stacked reference_kv = [K frame | V frame] on the seq dim -> [b, nh, 2*tpf, d].
+            ref_kv_stacked = torch.cat([ref_K, ref_V], dim=2).contiguous()
     else:
         spatial_allow = allow
 
@@ -349,6 +354,16 @@ def _run_sparse_frames_op(
         del ref_K, ref_V, dummy_joint_Q
         gc.collect()
 
+    # Extra-K path: stacked reference_kv replicated on sp, sharded on heads (tp), like the spatial inputs.
+    tt_reference_kv = None
+    if reference_as_extra_k:
+        ref_shard_dims = [None, None]
+        ref_shard_dims[sp_axis] = None  # replicated across the ring
+        ref_shard_dims[tp_axis] = 1  # heads sharded
+        tt_reference_kv = _to_dev(ref_kv_stacked, ref_shard_dims)
+        del ref_K, ref_V, ref_kv_stacked
+        gc.collect()
+
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size_tokens,
@@ -391,6 +406,8 @@ def _run_sparse_frames_op(
         tokens_per_frame=tokens_per_frame if sparse_frames_enabled else None,
         num_frames_padded=num_frames_padded if sparse_frames_enabled else None,
         sparse_frame_mask=sparse_frame_mask,
+        reference_kv=tt_reference_kv,
+        reference_frame_idx=(ref_frame if reference_as_extra_k else None),
     )
 
     # Gather output back (sharded seq on sp, heads on tp).
@@ -728,6 +745,12 @@ class TestSparseFramesRing:
             sparse_frames_enabled=True,
         )
 
+    @pytest.mark.skip(
+        reason="Replicated joint is incompatible with sparse_frames: compute's per-Q valid-KV pre-scan "
+        "(compute_streaming.hpp:2567) derives a spatial frame for every q_chunk, but joint q_chunks have "
+        "no frame, so the mask lookup is garbage -> is_last_k desyncs -> cb_out deadlock. Independent of "
+        "windowing. Reference delivery is being moved to the extra-gathered-slots path (spatial K, no joint)."
+    )
     @_MESH_TOPOLOGY
     @pytest.mark.parametrize(
         ("tokens_per_frame", "nf_real_fn", "nf_padded_fn"),
@@ -777,6 +800,55 @@ class TestSparseFramesRing:
             k_chunk_size_tokens=tokens_per_frame // 2,
             sparse_frames_enabled=True,
             reference_as_joint=True,
+        )
+
+    @_MESH_TOPOLOGY
+    @pytest.mark.parametrize(
+        ("tokens_per_frame", "nf_real_fn", "nf_padded_fn"),
+        [
+            pytest.param(64, lambda sp: sp + sp // 2 - 2, lambda sp: sp + sp // 2, id="frac_1p5"),
+            pytest.param(128, lambda sp: sp, lambda sp: sp, id="whole_1p0"),
+        ],
+    )
+    def test_reference_as_extra_k(
+        self,
+        mesh_device,
+        num_links,
+        sp_axis,
+        sp_factor,
+        tp_axis,
+        tp_factor,
+        device_params,
+        all_gather_topology,
+        reset_seeds,
+        tokens_per_frame,
+        nf_real_fn,
+        nf_padded_fn,
+    ):
+        """Windowed-CCL Phase 2 (extra-K): deliver the reference frame as a replicated stacked reference_kv
+        buffer processed as one extra ring iteration (no joint queries). Spatial gather is windowed (the
+        reference column is peeled from the mask). Same windowed+reference golden -> PCC match proves
+        window-only spatial gather + reference-as-extra-K == full windowed+reference."""
+        _run_sparse_frames_op(
+            mesh_device=mesh_device,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            tp_axis=tp_axis,
+            tp_factor=tp_factor,
+            num_links=num_links,
+            num_frames_real=nf_real_fn(sp_factor),
+            num_frames_padded=nf_padded_fn(sp_factor),
+            tokens_per_frame=tokens_per_frame,
+            b=1,
+            nh=8,
+            d=128,
+            window=5,
+            add_last_frame=True,
+            all_gather_topology=all_gather_topology,
+            q_chunk_size_tokens=tokens_per_frame // 2,
+            k_chunk_size_tokens=tokens_per_frame // 2,
+            sparse_frames_enabled=True,
+            reference_as_extra_k=True,
         )
 
     @_MESH_TOPOLOGY

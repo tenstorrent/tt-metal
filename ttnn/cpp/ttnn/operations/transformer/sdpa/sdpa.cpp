@@ -233,7 +233,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     std::optional<uint32_t> tokens_per_frame,
     std::optional<uint32_t> num_frames_padded,
-    std::vector<uint32_t> sparse_frame_mask) {
+    std::vector<uint32_t> sparse_frame_mask,
+    const std::optional<ttnn::Tensor>& reference_kv,
+    std::optional<uint32_t> reference_frame_idx) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -280,7 +282,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sliding_window_size,
         tokens_per_frame,
         num_frames_padded,
-        std::move(sparse_frame_mask));
+        std::move(sparse_frame_mask),
+        reference_kv,
+        reference_frame_idx);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

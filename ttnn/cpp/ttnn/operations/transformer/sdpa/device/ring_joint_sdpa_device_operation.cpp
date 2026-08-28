@@ -346,6 +346,40 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
+    if (tensor_args.reference_kv.has_value()) {
+        // Reference-frame delivery: a replicated per-device frame (frame `reference_frame_idx`) attended
+        // by every query. Only meaningful with the windowed sparse-frames path.
+        const auto& reference_kv = tensor_args.reference_kv.value();
+        const auto& q_shape = input_tensor_q.logical_shape();
+        TT_FATAL(
+            args.has_sparse_frames() && args.reference_frame_idx.has_value(),
+            "RingJointSDPA reference_kv requires the sparse-frames path and reference_frame_idx");
+        TT_FATAL(!has_joint_tensors, "RingJointSDPA reference_kv does not support joint attention tensors");
+        TT_FATAL(reference_kv.storage_type() == StorageType::DEVICE, "reference_kv must be on device");
+        TT_FATAL(reference_kv.buffer() != nullptr, "reference_kv must be allocated on device");
+        TT_FATAL(reference_kv.layout() == Layout::TILE, "reference_kv must be tilized");
+        TT_FATAL(
+            reference_kv.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "reference_kv must be in DRAM");
+        const auto& ref_shape = reference_kv.logical_shape();
+        TT_FATAL(ref_shape.rank() == 4, "reference_kv must have rank 4, got rank {}", ref_shape.rank());
+        TT_FATAL(
+            ref_shape[1] == q_shape[1],
+            "reference_kv local num_heads must match Q. Got reference_kv: {}, Q: {}",
+            ref_shape[1],
+            q_shape[1]);
+        // Stacked K|V on the seq dim: rows [0, tpf) are K, rows [tpf, 2*tpf) are V.
+        TT_FATAL(
+            ref_shape[2] == 2u * args.tokens_per_frame.value(),
+            "reference_kv seq dim must equal 2*tokens_per_frame ({}) for stacked K|V, got {}",
+            2u * args.tokens_per_frame.value(),
+            ref_shape[2]);
+        TT_FATAL(
+            args.reference_frame_idx.value() < args.num_frames_padded.value(),
+            "reference_frame_idx ({}) must be < num_frames_padded ({})",
+            args.reference_frame_idx.value(),
+            args.num_frames_padded.value());
+    }
+
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
     if (has_gathered_v) {
         sdpa_input_tensors.push_back(tensor_args.gathered_v.value());
@@ -1223,7 +1257,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const std::optional<uint32_t> tokens_per_frame,
     const std::optional<uint32_t> num_frames_padded,
-    std::vector<uint32_t> sparse_frame_mask) {
+    std::vector<uint32_t> sparse_frame_mask,
+    const std::optional<ttnn::Tensor>& reference_kv,
+    std::optional<uint32_t> reference_frame_idx) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     const bool sparse_frames =
@@ -1377,7 +1413,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         tokens_per_frame,
         num_frames_padded,
-        std::move(sparse_frame_mask));
+        std::move(sparse_frame_mask),
+        reference_frame_idx);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -1389,6 +1426,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .gathered_k = persistent_output_buffer_k,
         .gathered_v = persistent_output_buffer_v,
         .attention_sink = attention_sink,
+        .reference_kv = reference_kv,
         // Declaration order in RingJointSDPAInputs: gathered_joint_k/v precede slot_id/kv_actual_isl,
         // and C++20 requires designated initializers in declaration order.
         .gathered_joint_k = resolved_gathered_joint_k,

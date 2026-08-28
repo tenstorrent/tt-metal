@@ -315,7 +315,10 @@ void kernel_main() {
     constexpr uint32_t post_joint_tensor_args_offset =
         get_post_tensor_args_offset<has_joint_inputs, has_gathered_joint_k, joint_tensor_args_offset>();
     constexpr auto attention_sink_args = TensorAccessorArgs<post_joint_tensor_args_offset>();
-    constexpr uint32_t post_tensor_args_offset = attention_sink_args.next_compile_time_args_offset();
+    // Reference-frame accessor follows the sink accessor (factory appends it in the same order). Always
+    // present in the arg stream (nullptr buffer when disabled), so the offset math stays consistent.
+    constexpr auto reference_kv_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    constexpr uint32_t post_tensor_args_offset = reference_kv_args.next_compile_time_args_offset();
     // The metadata accessor (metadata path only) follows the tensor accessors and precedes the chain
     // semaphore compile args. Gate its offset on slot_from_metadata: when absent, fall back to a VALID
     // (unused) accessor offset (q_args' slot 40) so TensorAccessorArgs<> -- instantiated unconditionally
@@ -350,6 +353,8 @@ void kernel_main() {
         joint_v_addr = get_arg_val<uint32_t>(argidx++);
     }
     const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
+    // reference_kv address: factory pushes it right after the sink address (has_reference-gated buffer).
+    const uint32_t reference_kv_addr = get_arg_val<uint32_t>(argidx++);
     // Gathered joint K/V buffer addresses (sharded path only) — pushed by the factory right after the
     // attention-sink address, so they must be read here before global_q_start to keep argidx aligned.
     uint32_t gathered_joint_k_addr = 0;
@@ -511,6 +516,10 @@ void kernel_main() {
     constexpr uint32_t sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(cb_arg_offset + 6);
     constexpr uint32_t sparse_num_frames_padded = get_compile_time_arg_val(cb_arg_offset + 7);
+    // Reference-frame delivery CT scalars (factory pushes them right after the sparse ones).
+    constexpr uint32_t has_reference = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t reference_frame_idx = get_compile_time_arg_val(cb_arg_offset + 9);
+    constexpr uint32_t num_reference_k_chunks = get_compile_time_arg_val(cb_arg_offset + 10);
 
     // Packed sparse_frame_mask bitmap (32 uint32 words) present only when sparse_frames_enabled.
     [[maybe_unused]] uint32_t sparse_frame_mask_words[32];
@@ -659,6 +668,13 @@ void kernel_main() {
     const auto attention_sink_tile_shape = TensorTileShape(1, NH, 1, 1);
     CircularBuffer cb_attn_sink(cb_attention_sink);
 
+    // Reference-frame delivery: replicated buffer with K stacked over V on the seq dim
+    // (rows [0, tiles_per_frame) = K, rows [tiles_per_frame, 2*tiles_per_frame) = V). Read on the extra
+    // reference iteration; k_frame is forced to reference_frame_idx by the compute-side gate.
+    const auto reference_kv_reader = TensorAccessor(reference_kv_args, reference_kv_addr);
+    const auto reference_kv_tile_logical = TensorTileShape(B, NH, 2u * tiles_per_frame, DHt);
+    const auto reference_kv_generator = PaddedAddrGenerator(reference_kv_reader, reference_kv_tile_logical);
+
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
@@ -715,11 +731,20 @@ void kernel_main() {
     // active_ring_iter_mask are the window shards, so the active check below stays valid unchanged.
     const uint32_t sdpa_ring_iterations =
         has_sliding_window ? 1u : (1u + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1]);
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+    // Reference-frame delivery: one extra iteration at index sdpa_ring_iterations (== host num_ring_iters).
+    // It reads the pre-delivered replicated reference_kv buffer, so it must NOT call the AG sequencer sync
+    // (there is no AG shard for it). Its active/work bits are already set in active_ring_iter_mask /
+    // q_work_bitmap by the host at this same index.
+    const uint32_t reference_iter = sdpa_ring_iterations;
+    const uint32_t total_iterations = sdpa_ring_iterations + (has_reference ? 1u : 0u);
+    for (uint32_t ring_iter = 0; ring_iter < total_iterations; ++ring_iter) {
+        const bool is_reference_iter = has_reference && (ring_iter == reference_iter);
         const bool ring_iter_is_active = has_sliding_window || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         // Sliding already advanced/synchronized the sequencer above and uses a synthetic local
-        // iteration whose K loop decodes the real source ring ID for each chunk.
-        uint32_t ring_id = has_sliding_window ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
+        // iteration whose K loop decodes the real source ring ID for each chunk. The reference iteration
+        // is pre-delivered (no AG shard), so it also skips the sync and uses a placeholder ring_id.
+        uint32_t ring_id =
+            (is_reference_iter || has_sliding_window) ? ring_index : fused_op_receiver.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so reader stays aligned with compute, writer, and all-gather.
         if (!ring_iter_is_active) {
@@ -737,10 +762,15 @@ void kernel_main() {
         // Replicated joint: process joint once per device. Full ring visits ring_size-1; a windowed
         // gather may not, so fire on the last active windowed iteration instead (all kernels agree via
         // active_ring_iter_mask). Data is local (replicated), so the choice of iteration is free.
+        // The reference iteration carries neither joint nor local-shard chunks: it delivers exactly the
+        // reference frame's K chunks from the replicated reference_kv buffer.
         const bool do_joint_kv =
-            has_gathered_joint_k ? true
-                                 : (sdpa_ring_iterations < ring_size ? is_last_ring_iter : (ring_id == ring_size - 1));
-        uint32_t num_kv_chunks = num_local_k_chunks;
+            is_reference_iter
+                ? false
+                : (has_gathered_joint_k
+                       ? true
+                       : (sdpa_ring_iterations < ring_size ? is_last_ring_iter : (ring_id == ring_size - 1)));
+        uint32_t num_kv_chunks = is_reference_iter ? num_reference_k_chunks : num_local_k_chunks;
         if constexpr (has_joint_k) {
             if (do_joint_kv) {
                 num_kv_chunks += num_joint_k_chunks;
@@ -928,8 +958,10 @@ void kernel_main() {
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
                 const bool kv_chunk_is_joint = !has_sliding_window && has_joint_k && k_chunk >= num_local_k_chunks;
+                // The reference iteration's chunks are all real frame-nf-1 tokens and always attended, so
+                // they bypass the spatial beyond-logical-n / aggregate-frame skips below.
                 const bool kv_chunk_is_beyond_logical_n =
-                    !kv_chunk_is_joint &&
+                    !is_reference_iter && !kv_chunk_is_joint &&
                     !kv_chunk_starts_before_logical_end<
                         kv_pad_rotation_enabled,
                         chunked_enabled,
@@ -963,7 +995,7 @@ void kernel_main() {
                     // Different cores in the same head/batch/gqa chain handle different q_chunks with potentially
                     // different sparse_frame_mask rows — if reader skipped per-q_chunk, chain participants would
                     // disagree per k_chunk and chain sync would break.
-                    if (!kv_chunk_is_joint && !shard_attends_nothing) {
+                    if (!kv_chunk_is_joint && !shard_attends_nothing && !is_reference_iter) {
                         const uint32_t k_global_start_tile = kv_local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                         const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
                         const uint32_t q_shard_start_tile = ring_index * q_local_padded_Nt;
@@ -997,7 +1029,12 @@ void kernel_main() {
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
                 const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
                 const bool source_is_local = source_ring_id == ring_index;
-                if (source_is_local) {
+                if (is_reference_iter) {
+                    // Reference K rows [0, tiles_per_frame) of the stacked reference_kv buffer.
+                    const uint32_t ref_k_start_tile = source_k_chunk * Sk_chunk_t;
+                    k_slice = Slice(nb, nk, ref_k_start_tile, ref_k_start_tile + Sk_chunk_t, 0, DHt);
+                    end_seq_tile = tiles_per_frame;
+                } else if (source_is_local) {
                     const uint32_t local_k_start_tile = source_k_chunk * Sk_chunk_t;
                     k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
                     end_seq_tile = source_valid_kv_tiles;
@@ -1078,19 +1115,23 @@ void kernel_main() {
                             k_tile_bytes,
                             true /*transpose*/);
                     };
-                    fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
-                        kv_chunk_is_joint,
-                        joint_chunk_is_local,
-                        // Local vs gathered spatial source is keyed off the source ring id, not the
-                        // loop index, so the sliding-window plan's out-of-order K chunks resolve too.
-                        source_is_local ? 0 : 1,
-                        joint_k_addr,
-                        gathered_joint_k_addr,
-                        local_k_generator,
-                        gathered_k_generator,
-                        joint_q_input_tile_logical,
-                        joint_input_tile_logical,
-                        fetch_k);
+                    if (is_reference_iter) {
+                        fetch_k(reference_kv_generator);
+                    } else {
+                        fetch_k_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+                            kv_chunk_is_joint,
+                            joint_chunk_is_local,
+                            // Local vs gathered spatial source is keyed off the source ring id, not the
+                            // loop index, so the sliding-window plan's out-of-order K chunks resolve too.
+                            source_is_local ? 0 : 1,
+                            joint_k_addr,
+                            gathered_joint_k_addr,
+                            local_k_generator,
+                            gathered_k_generator,
+                            joint_q_input_tile_logical,
+                            joint_input_tile_logical,
+                            fetch_k);
+                    }
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
@@ -1170,7 +1211,12 @@ void kernel_main() {
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
-                    const Slice v_slice(k_slice.d0, nv, k_slice.d2_start, k_slice.d2_end, 0, vDHt);
+                    // Reference V is stacked after K in reference_kv: rows [tiles_per_frame, 2*tiles_per_frame).
+                    const uint32_t v_d2_start =
+                        is_reference_iter ? (tiles_per_frame + k_slice.d2_start) : k_slice.d2_start;
+                    const uint32_t v_d2_end = is_reference_iter ? (tiles_per_frame + k_slice.d2_end) : k_slice.d2_end;
+                    const uint32_t v_end_seq_tile = is_reference_iter ? (2u * tiles_per_frame) : end_seq_tile;
+                    const Slice v_slice(k_slice.d0, nv, v_d2_start, v_d2_end, 0, vDHt);
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
                     uint32_t cb_v_start_address = cb_v.get_write_ptr();
@@ -1186,23 +1232,27 @@ void kernel_main() {
                             fetch_block(
                                 v_gen,
                                 v_slice,
-                                end_seq_tile,
+                                v_end_seq_tile,
                                 cb_v_in,
                                 cb_v_start_address,
                                 v_tile_bytes,
                                 false /*transpose*/);
                         };
-                        fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
-                            kv_chunk_is_joint,
-                            joint_chunk_is_local,
-                            source_is_local ? 0 : 1,
-                            joint_v_addr,
-                            gathered_joint_v_addr,
-                            v_generators.local,
-                            v_generators.gathered,
-                            joint_q_input_tile_logical,
-                            joint_input_tile_logical,
-                            fetch_v);
+                        if (is_reference_iter) {
+                            fetch_v(reference_kv_generator);
+                        } else {
+                            fetch_v_from_source<has_joint_k, has_gathered_joint_k, joint_tensor_args_offset>(
+                                kv_chunk_is_joint,
+                                joint_chunk_is_local,
+                                source_is_local ? 0 : 1,
+                                joint_v_addr,
+                                gathered_joint_v_addr,
+                                v_generators.local,
+                                v_generators.gathered,
+                                joint_q_input_tile_logical,
+                                joint_input_tile_logical,
+                                fetch_v);
+                        }
                     }
 
                     // Forward V to next core(s) before push_back — prevents compute from
