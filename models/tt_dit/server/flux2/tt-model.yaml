@@ -1,0 +1,88 @@
+# A container (v5.1) package for FLUX.2 on a Blackhole QuietBox 2 (p300x2, 4 chips).
+#
+#   tt-model package --container models/tt_dit/server/flux2/tt-model.yaml
+#   tt-model serve   build/flux2-dev-qb2/tt_kernel_manifest.json --follow
+#   tt-model push    build/flux2-dev-qb2 --private
+schema: "5.1"
+
+repo: stisiTT/flux2-dev-qb2
+name: flux2-dev-qb2
+
+# A POINTER: FLUX.2-dev is downloaded to the consumer's own HF cache at pull time and
+# is never baked into the image. Note the weights are GATED — a consumer needs their own
+# accepted licence and HF token before `serve` can fetch them.
+weights: black-forest-labs/FLUX.2-dev
+
+# FLUX.2 is a rectified-flow diffusion transformer: no tokens, no KV cache, nothing for a
+# continuous-batching engine to do. It serves through its own HTTP app instead.
+kind: tt-dit-server
+arch: blackhole
+
+image:
+  registry: hf
+
+source:
+  tt_metal: /home/stisi/tt-metal
+  # EXACTLY what ships. An allowlist, never a denylist — under-shipping is an error, so a
+  # missing entry fails the build rather than surfacing on a consumer's first boot.
+  code:
+    - models/common # utility_functions + modules/tt_ccl, imported throughout tt_dit
+    - models/tt_dit # the pipeline, the model code, and server/flux2 itself
+  ubuntu: "24.04"
+  python: "3.12"
+
+runtime:
+  # The ASGI target uvicorn serves. It lives in the tree above, which is why
+  # verify.sh imports it inside the finished image.
+  app: "models.tt_dit.server.flux2.app:app"
+  packages:
+    - fastapi
+    - uvicorn
+    - "pydantic>=2"
+    - pillow
+    # The pipeline builds its torch reference modules from diffusers and tokenizes the
+    # prompt with transformers, so both are runtime dependencies, not dev extras.
+    - diffusers
+    - transformers
+    - sentencepiece
+    - protobuf
+
+serve:
+  hardware: p300x2
+  # Four chips as a 2x2 square, NOT the P300x2 line. FLUX.2 needs its sequence and
+  # tensor parallel factors both above 1; on a line one of them is 1 and attention
+  # fails deep inside with an error that says nothing about the real cause.
+  mesh_device: QB2
+  port: 8000
+  env:
+    # The 32B transformer, the 24B text encoder and the VAE cannot be co-resident on
+    # four chips, so weights are swapped per phase and the transformer is FSDP-sharded.
+    FLUX2_DYNAMIC_LOAD: "1"
+    FLUX2_FSDP: "1"
+    FLUX2_TRACED: "1"
+    FLUX2_HEIGHT: "1024"
+    FLUX2_WIDTH: "1024"
+    FLUX2_STEPS: "50"
+
+# Assertions run INSIDE the finished image, after the user switch. These are what make
+# the code allowlist trustworthy.
+verify:
+  # The pipeline and its three big submodules must import from the shipped tree.
+  - "from models.tt_dit.pipelines.flux2.pipeline_flux2 import Flux2Pipeline"
+  - "from models.tt_dit.models.transformers.transformer_flux2 import Flux2Transformer"
+  - "from models.tt_dit.models.vae.vae_flux2 import Flux2VaeDecoder"
+  - "from models.tt_dit.encoders.mistral3.model_mistral3 import Mistral3Encoder"
+  # The server must reject a mesh that would give either parallel factor 1. This is the
+  # guard standing between a consumer and a run that silently produces noise.
+  - |
+    import os
+    from models.tt_dit.server.flux2.config import ServerConfig
+    os.environ['FLUX2_MESH_SHAPE'] = '1x4'
+    try:
+        ServerConfig.from_env()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('a 1x4 line mesh must be rejected: FLUX.2 needs sp>1 and tp>1')
+    os.environ['FLUX2_MESH_SHAPE'] = '2x2'
+    assert ServerConfig.from_env().mesh_shape == (2, 2)

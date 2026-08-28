@@ -92,6 +92,32 @@ def _fabric_params(topology: str) -> dict:
     return {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
 
+def _get_updated_device_params(device_params: dict) -> dict:
+    """Resolve the dispatch-core config, inlined from ``tests/scripts/common.py``.
+
+    Inlined rather than imported for the same reason the fabric helpers above are: a
+    server must not depend on the test tree, which does not ship in a release image.
+    """
+    import ttnn
+
+    new_device_params = dict(device_params)
+    dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
+    dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
+    fabric_tensix_config = new_device_params.get("fabric_tensix_config", None)
+
+    if ttnn.device.is_blackhole():
+        # ROW dispatch needs both fabric and tensix config; otherwise force COL.
+        fabric_config = new_device_params.get("fabric_config", None)
+        if not (fabric_config and fabric_tensix_config) and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
+            logger.warning("ROW dispatch requires both fabric and tensix config, using DispatchCoreAxis.COL instead.")
+            dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+
+    new_device_params["dispatch_core_config"] = ttnn.DispatchCoreConfig(
+        dispatch_core_type, dispatch_core_axis, fabric_tensix_config
+    )
+    return new_device_params
+
+
 def warn_if_watcher_set() -> None:
     """``TT_METAL_WATCHER`` overflows the fabric-router kernel-config
     buffer on multi-chip fabric. The launcher unsets it; warn loudly if it leaks
@@ -111,7 +137,6 @@ def open_mesh(cfg: ServerConfig):
     back to :func:`close_mesh` so the fabric can be reset on teardown.
     """
     import ttnn
-    from tests.scripts.common import get_updated_device_params
 
     warn_if_watcher_set()
 
@@ -125,7 +150,7 @@ def open_mesh(cfg: ServerConfig):
     # The VAE decoder uses conv2d, which needs L1 small buffers (matches the flux2 tests).
     device_params["l1_small_size"] = 65536
 
-    updated = get_updated_device_params(device_params)
+    updated = _get_updated_device_params(device_params)
     fabric_config = updated.pop("fabric_config", None)
     fabric_tensix_config = updated.pop("fabric_tensix_config", None)
     reliability_mode = updated.pop("reliability_mode", None)
