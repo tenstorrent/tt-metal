@@ -59,6 +59,7 @@ def _run_recurrence(
     state: ttnn.Tensor,
     *,
     summary_group_chunks: int = 8,
+    grouped_scan_min_chunks: int = 160,
 ) -> ops._ScanResult:
     prefix_compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -68,7 +69,10 @@ def _run_recurrence(
     return ops._chunk_recurrence(
         ops._FlatRecurrenceInputs(q=q, k=k, v=v, gate=gate, beta=beta),
         state,
-        program_config=KDARecurrenceProgramConfig(summary_group_chunks=summary_group_chunks),
+        program_config=KDARecurrenceProgramConfig(
+            summary_group_chunks=summary_group_chunks,
+            grouped_scan_min_chunks=grouped_scan_min_chunks,
+        ),
         compute_config=ops._RecurrenceComputeConfig(
             preparation=None,
             affine_prefix=prefix_compute_config,
@@ -282,7 +286,17 @@ def test_chunk_recurrence_determinism(device: ttnn.Device) -> None:
     results = []
     for _ in range(3):
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            result = _run_recurrence(device, q_tt, k_tt, v_tt, gate_tt, beta_tt, state_tt, summary_group_chunks=2)
+            result = _run_recurrence(
+                device,
+                q_tt,
+                k_tt,
+                v_tt,
+                gate_tt,
+                beta_tt,
+                state_tt,
+                summary_group_chunks=2,
+                grouped_scan_min_chunks=1,
+            )
         ttnn.synchronize_device(device)
         results.append((ttnn.to_torch(result.output), ttnn.to_torch(result.final_state)))
 
