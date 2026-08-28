@@ -57,7 +57,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
+    std::optional<uint32_t> tokens_per_frame,
+    std::optional<uint32_t> num_frames_padded,
+    std::vector<uint32_t> sparse_frame_mask) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -93,7 +96,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         attention_sink,
         sliding_window_size,
         persistent_output_buffer_joint_k,
-        persistent_output_buffer_joint_v);
+        persistent_output_buffer_joint_v,
+        tokens_per_frame,
+        num_frames_padded,
+        std::move(sparse_frame_mask));
     return outputs;
 }
 
@@ -642,6 +648,15 @@ void bind_sdpa(nb::module_& mod) {
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            tokens_per_frame (int, optional): Enables frame-block-sparse attention. Tokens
+                per frame, tile-aligned. Set together with num_frames_padded and sparse_frame_mask.
+                Defaults to None (dense).
+            num_frames_padded (int, optional): Frame count padded to a multiple of the ring size; the
+                trailing padded frames carry no real tokens. Defaults to None.
+            sparse_frame_mask (List[int], optional): Bit-packed [num_frames_padded x num_frames_padded]
+                allow table, row-major into uint32 words (bit q*num_frames_padded+k set iff query frame
+                q attends key frame k). Disallowed frame pairs are skipped by the reader and compute.
+                Empty (default) means dense.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -697,7 +712,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
-        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none(),
+        nb::arg("tokens_per_frame") = nb::none(),
+        nb::arg("num_frames_padded") = nb::none(),
+        nb::arg("sparse_frame_mask") = std::vector<uint32_t>{});
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

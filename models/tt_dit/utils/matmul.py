@@ -188,37 +188,28 @@ grid_11_10_configs = {
     # FE aggregate after column-parallel sharding on TP=4: video 4096/4=1024, audio 2048/4=512.
     (1024, 188160, 1024): (4, 8, 8, (1, 4)),
     (1024, 188160, 512): (4, 8, 4, (1, 4)),
-    (32, 6144, 12288): (1, 8, 24, (1, 4)),
-    (128, 32, 32): (4, 1, 1, (4, 1)),
-    (128, 64, 512): (1, 2, 2, (1, 2)),
-    (512, 64, 256): (2, 2, 1, (2, 1)),
-    (512, 3072, 6144): (2, 6, 12, (1, 4)),
-    (1024, 32, 128): (3, 1, 1, (3, 1)),
-    (1024, 6144, 128): (8, 8, 1, (4, 1)),
-    (16384, 512, 64): (6, 8, 2, (2, 2)),
-    # flux2 dual-grid sweep rank-1 — 11×10 grid (2026-05-27, flux2_dual_grid_mm_sweep.md)
-    (1024, 128, 768): (12, 2, 5, (1, 1)),  # dual-grid sweep 11x10, 9.5 μs, 7.0% FLOP util
-    (512, 15360, 768): (4, 15, 6, (2, 1)),  # dual-grid sweep 11x10, 146.2 μs, 27.2% FLOP util
-    (1024, 6144, 768): (6, 8, 8, (3, 1)),  # dual-grid sweep 11x10, 80.2 μs, 39.6% FLOP util
-    (512, 6144, 768): (2, 8, 3, (1, 3)),  # dual-grid sweep 11x10, 67.4 μs, 23.6% FLOP util
-    (1024, 6144, 4608): (4, 6, 8, (4, 1)),  # dual-grid sweep 11x10, 311.5 μs, 61.2% FLOP util
-    (512, 6144, 4608): (4, 8, 8, (1, 4)),  # dual-grid sweep 11x10, 244.1 μs, 39.0% FLOP util
-    (1024, 6144, 2304): (4, 4, 8, (4, 1)),  # dual-grid sweep 11x10, 162.9 μs, 58.5% FLOP util
-    (512, 6144, 2304): (2, 6, 8, (1, 4)),  # dual-grid sweep 11x10, 128.9 μs, 37.0% FLOP util
-    # flux2 2048-res sweep rank-1 — 11×10 grid (2026-05-30, 2048.md)
-    (4096, 128, 768): (14, 2, 3, (1, 3)),  # 32.3 μs,   2.8% util  x_embedder
-    (128, 15360, 768): (2, 16, 3, (1, 3)),  # 132.0 μs,  2.6% util  context_embedder
-    (4096, 6144, 2304): (6, 4, 4, (2, 2)),  # 540.5 μs, 24.4% util  single-block to_qkv spatial
-    (128, 6144, 2304): (2, 6, 10, (2, 2)),  # 127.4 μs,  3.2% util  single-block to_qkv prompt
-    (4096, 6144, 4608): (8, 4, 14, (2, 2)),  # 1054.6 μs,25.0% util  single-block proj_mlp spatial
-    (128, 6144, 4608): (6, 12, 8, (2, 2)),  # 238.0 μs,  3.5% util  single-block proj_mlp prompt
-    (4096, 6144, 128): (3, 16, 2, (3, 1)),  # 206.8 μs,  6.9% util  proj_out
-    # flux2 SP1 (1024-res) sweep rank-1 — 11×10 grid (2026-06-01, 2048_sp1.md)
-    (2048, 128, 1536): (6, 2, 5, (3, 1)),  # 23.9 μs   x_embedder / img_in
-    (2048, 6144, 128): (16, 8, 2, (2, 2)),  # 94.0 μs   proj_out
-    (2048, 6144, 4608): (4, 4, 15, (4, 1)),  # 462.3 μs  proj_mlp spatial
-    (2048, 6144, 9216): (8, 8, 10, (2, 2)),  # 972.7 μs  ff1 / qkv spatial
-    (64, 6144, 4608): (2, 8, 8, (2, 2)),  # 196.3 μs  proj_mlp prompt
+    (32, 4096, 1024): (2, 8, 4, (2, 2)),
+    (32, 4096, 2560): (2, 4, 12, (2, 2)),
+    (32, 2560, 4096): (2, 4, 12, (2, 2)),
+    (320, 512, 1024): (2, 4, 4, (2, 2)),
+    (320, 1024, 256): (2, 4, 2, (2, 2)),
+    (320, 1024, 1024): (2, 4, 4, (2, 2)),
+    (3840, 384, 1152): (11, 4, 4, (1, 4)),
+    (3840, 384, 384): (11, 4, 2, (1, 2)),
+    (15360, 384, 1152): (22, 4, 4, (2, 2)),
+    (15360, 384, 384): (11, 3, 4, (1, 4)),
+    (32, 96, 192): (2, 3, 2, (2, 2)),
+    (64, 96, 192): (2, 3, 2, (2, 2)),
+    (32, 32, 32): (2, 1, 2, (2, 2)),
+    (96, 8192, 5120): (6, 16, 8, (2, 2)),
+    (96, 5120, 5120): (4, 8, 8, (2, 2)),
+    (96, 5120, 2560): (6, 5, 8, (2, 2)),
+    (96, 2048, 5120): (2, 4, 8, (2, 2)),
+    (2656, 5120, 64): (4, 8, 2, (2, 2)),
+    (32, 256, 512): (2, 4, 2, (2, 2)),
+    (32, 512, 128): (2, 8, 2, (2, 2)),
+    (32, 128, 30720): (2, 2, 8, (2, 2)),
+    (11520, 5120, 64): (3, 40, 2, (3, 1)),
 }
 
 grid_12_9_configs = {
@@ -370,18 +361,6 @@ def get_matmul_core_grid(mesh_device):
             min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
         )
     return core_grid
-
-
-def agmm_worker_grid(full_grid, transpose):
-    """all_gather_minimal_matmul_async matmul worker grid, sized to leave the mux axis free.
-
-    The op places its input muxes on the device's last ROW when the core grid is transposed and its
-    last COLUMN when it is not (see the program factory's `in0_mux_in_column` logic). The matmul
-    workers must therefore avoid that row/column: reserve a row when transposed -> (x, y-1); reserve a
-    column when not -> (x-1, y). `transpose` should be the op's own decision, i.e.
-    `force_transpose or (M > N)`.
-    """
-    return ttnn.CoreCoord(full_grid.x, full_grid.y - 1) if transpose else ttnn.CoreCoord(full_grid.x - 1, full_grid.y)
 
 
 def _compute_heuristic_blocking(M: int, K: int, N: int, grid_x: int, grid_y: int, tp_factor: int = -1):
@@ -620,99 +599,6 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     )
 
 
-_logged_agmm_v3_signatures = set()
-
-
-def get_agmm_config(
-    M,
-    K,
-    N,
-    full_grid,
-    cluster_size,
-    num_links,
-    core_grid=None,
-    default_block_size=None,
-    use_heuristic=False,
-    fuse_swiglu=False,
-    use_addcmul=False,
-    force_transpose=True,
-):
-    """Resolve (core_grid, MinimalMatmulConfig, num_workers_per_link) for
-    `all_gather_minimal_matmul_async`.
-
-    Precedence -- anything measured or explicit wins, bit-for-bit identical to the legacy path:
-      1. An explicit `core_grid` or `default_block_size` from the caller.
-      2. A swept `(M, K, N)` table entry for the legacy grid (`_grid_config_lookup`, i.e.
-         `grid_12_9_configs` and entries added via `register_matmul_configs`).
-      3. The v3 rule engine (`utils/agmm_rules.py`) -- picks the worker grid (orientation-aware)
-         and blocking; blind-validated within 5% of swept optimum on ~96% of shapes. Blackhole
-         only; the rules were fitted against Blackhole L1 and fabric parameters. Skipped when
-         `force_transpose` overrides the op's own `M > N` orientation, since the rules derive
-         layout and blocking from that same test and have no fit for the forced orientation.
-      4. The legacy warned generic fallback.
-
-    `force_transpose` mirrors the op parameter (whose default is likewise `True`) and must be the
-    value the caller actually passes to the op, since the worker grid has to reserve the mux axis
-    the op will use.
-
-    On a v3 hit, an info log prints the config as a paste-able table line: sweep the shape with
-    `sweep_mm_block_sizes.py` and paste the winner into `grid_12_9_configs` (or a model table)
-    to override the rules permanently.
-    """
-    # The op transposes when the caller forces it or the output is wide, and places its in0 muxes
-    # on the axis the worker grid leaves free -- reserve a row when transposed, a column when not.
-    transpose_core_grid = force_transpose or M > N
-    legacy_grid = core_grid or agmm_worker_grid(full_grid, transpose_core_grid)
-    # in0 senders group along the M-parallel axis (grid.x transposed, grid.y not); split it into
-    # exactly num_links groups, matching the op's `ceil(in0_axis / workers) == num_links` assert.
-    # For the default transposed grid this is the same 6 the old `full_grid.x // num_links` gave.
-    legacy_workers = math.ceil((legacy_grid.x if transpose_core_grid else legacy_grid.y) / num_links)
-    table_hit = _grid_config_lookup.get((legacy_grid.x, legacy_grid.y), {}).get((M, K, N)) is not None
-    if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
-        config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
-        return legacy_grid, config, legacy_workers
-
-    v3 = None
-    if is_blackhole() and transpose_core_grid == (M > N):
-        from .agmm_rules import pick_v3
-
-        v3 = pick_v3(
-            M,
-            K,
-            N,
-            cluster_size=cluster_size,
-            full_grid=(full_grid.x, full_grid.y),
-            fuse_swiglu=fuse_swiglu,
-            use_addcmul=use_addcmul,
-        )
-    if v3 is None:
-        config = get_matmul_config(M, K, N, legacy_grid)  # legacy warned generic fallback
-        return legacy_grid, config, legacy_workers
-
-    grid_x, grid_y = v3["core_grid"]
-    m_blk, k_blk, n_blk = v3["blocks"]
-    sub_h, sub_w = v3["subblock"]
-    signature = (M, K, N, grid_x, grid_y)
-    if signature not in _logged_agmm_v3_signatures:
-        logger.info(
-            f"AGMM v3 rule config for (M, K, N) = ({M}, {K}, {N}) on {grid_x}x{grid_y}"
-            f"{' transposed' if v3['transposed'] else ''}: "
-            f"({M}, {K}, {N}): ({m_blk}, {k_blk}, {n_blk}, ({sub_h}, {sub_w}))  "
-            f"# paste into grid config table after sweeping to override"
-        )
-        _logged_agmm_v3_signatures.add(signature)
-    config = ttnn.MinimalMatmulConfig(
-        M_block_size=m_blk,
-        K_block_size=k_blk,
-        N_block_size=n_blk,
-        subblock_h=sub_h,
-        subblock_w=sub_w,
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
-    )
-    in0_axis = grid_x if v3["transposed"] else grid_y
-    return ttnn.CoreCoord(grid_x, grid_y), config, math.ceil(in0_axis / num_links)
-
-
 def get_1d_matmul_config(
     M: int,
     K: int,
@@ -790,34 +676,12 @@ class FusedMMRSConfig(NamedTuple):
     chunk_width_in_mm_blocks: int
     # Optional explicit reduce-scatter worker count
     num_workers_per_link: int | None = None
-    # Rolling L1 window over the MM output, in M blocks. The op requires it whenever the MM output
-    # lands in L1: unwindowed, the resident shard is Mt_per_core * Nt_per_core tiles per matmul
-    # core, which for a large M crowds out later programs' circular buffers (issue #52863). 2 is
-    # the shallowest depth that still lets the matmul run a block ahead of the RS readers, and
-    # measured perf is flat in this knob, so the default leaves the most L1 to circular buffers.
-    # get_params clamps it to the blocks a core actually has.
-    mm_window_blocks: int | None = 2
 
-    def get_params(self, core_grid, num_links, M=None):
+    def get_params(self, core_grid, num_links):
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
         num_workers_override = config_dict.pop("num_workers_per_link")
-        mm_window_blocks = config_dict.pop("mm_window_blocks")
-        if mm_window_blocks is not None and M is not None:
-            # Clamp to the M blocks a core actually walks (fused MMRS never transposes: M on grid.y).
-            mt_per_core = math.ceil(math.ceil(M / 32) / self.compute_with_storage_grid_size.y)
-            blocks_per_core = math.ceil(mt_per_core / self.M_block_size)
-            if blocks_per_core <= 1:
-                # A single block per core makes the window degenerate twice over: there is no slot
-                # rotation, so the pipelining the window exists for cannot happen; and the windowed
-                # tensor's height is quantized to WHOLE M blocks, so when M_block > Mt_per_core the
-                # "window" is TALLER than the real output (e.g. flux2 1024px: M_block=12 over 5 real
-                # rows -> a 384 KB/core resident shard, 2.4x full residency, which clashed with the
-                # blocking's own CBs). Fall back to the DRAM handoff instead.
-                mm_window_blocks = None
-            else:
-                mm_window_blocks = min(mm_window_blocks, blocks_per_core)
 
         if num_workers_override is not None:
             num_workers_per_link = num_workers_override
@@ -833,7 +697,6 @@ class FusedMMRSConfig(NamedTuple):
             "num_buffers_per_channel": num_buffers_per_channel,
             "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
             "num_workers_per_link": num_workers_per_link,
-            "mm_window_blocks": mm_window_blocks,
         }
 
 
@@ -848,43 +711,15 @@ fused_mmrs_configs = {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
     },
     ttnn.CoreCoord(12, 10): {
-        # Wan2.2 720p ff2, single galaxy, swept 2026-08-24 (windowed): Mt_per_core=37, M_block=8
-        # leaves 5 blocks.
-        (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 3, 8, 2, 2, None, 1, 5),  # 1744.0 us
-        # Entries marked "swept 2026-08-24 (windowed)" were swept under the windowed L1 handoff
-        # with the runner that windows combos leaving >= 2 M blocks per core (DRAM otherwise), on
-        # a binary verified to place the RS intermediate in DRAM (an earlier stale build parked it
-        # in L1, flattering times ~3-4%; those numbers were restated from clean re-sweeps).
-        # M_block must stay <= ceil(Mt_per_core / 2) for the window to rotate.
-        #
-        # Wan2.2 720p ff2 on the quad-galaxy config (M = 9472 / 4), swept 2026-08-24 (windowed):
-        # 557.4 us windowed vs 722.2 us best-DRAM. Mt_per_core=10, M_block=6 leaves 2 blocks.
-        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # 557.4 us
-        # LTX ff2 @stage_1 (M = 9728/sp8), swept 2026-08-24 (windowed): 362.9 us vs 376.1 us
-        # best-DRAM. Previously absent, so it fell to the default config whose M_block=8 exceeds
-        # the 5 rows per core -> DRAM fallback; this entry puts stage_1 on the windowed handoff.
-        (1216, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 8, 6, 2, 2, None, 1, 5),  # 362.9 us
-        # LTX ff2 @stage_2 (M = 38912/sp8), swept 2026-08-24 (windowed): 973.0 us vs ~1088 us for
-        # the previous DRAM-era M7/K5/N6 blocking.
-        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 6, 2, 2, None, 1, 5),  # 973.0 us
-        # Aang ff2 (same K/N family as Wan). Windowed beats the best DRAM blocking on both:
-        # a2v 601.9 us vs 746.99 us DRAM-swept @ M6/K4/N8 (-19%); SR 2084.2 us vs 2191.75 us
-        # DRAM-swept @ M6/K4/N7 (-5%).
-        (2656, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 3, 8, 2, 2, None, 1, 5),  # a2v, 601.9 us
-        (11520, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR, 2084.2 us
-        # Aang @1080p variants, swept 2026-08-24 (windowed). a2v-1080p has only 7 M tile-rows per
-        # core, so M_block drops to 4 to keep the window rotating.
-        (1664, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 2, 2, None, 1, 5),  # a2v 1080p, 428.3 us
-        (7200, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 6, 4, 8, 2, 2, None, 1, 5),  # SR 1080p, 1378.2 us
-        # Flux2 @1024px, swept 2026-08-24 (windowed). Windowed won both shapes outright:
-        # 407.5 us vs 443.8 us best-DRAM for (1152,...), 339.9 us vs 345.4 us for (1024,...).
-        # The pre-window (1152,...) M_block=12 entry was degenerate under the window (12-tile
-        # block over 5 rows/core -> 384 KB resident shard, CB clash).
-        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 3, 6, 8, 1, 4, None, 1, 5),  # 407.5 us
+        (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
+        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
+        # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
+        (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
+        (1152, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 12, 4, 8, 1, 1, None, 1, 5),
         (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 2, None, 1),
         (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
         (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
-        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 2, 4, 8, 2, 2, None, 1, 5),  # 339.9 us, see above
+        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 1, 2, None, 1),
         # 2048-resolution shapes — BH 4×8 ring sweep (2026-05-30, 2048.md)
         (4096, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),  # 1546.0 μs
         (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs
@@ -897,56 +732,24 @@ fused_mmrs_configs = {
 }
 
 
-_logged_mmrs_rule_signatures = set()
-
-
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
-    """Resolve the fused MM+RS parameter dict for a shape.
-
-    Precedence -- anything measured or explicit wins:
-      1. A swept ``(M, K, N)`` table entry (``fused_mmrs_configs``, including entries added via
-         ``register_fused_mmrs_configs``).
-      2. The v2.3 rule engine (`utils/mmrs_rules.py`) -- always the 12x8 matmul grid with the
-         reduce-scatter above it; blind-validated within 5% of the swept optimum on ~90% of
-         shapes across five ff2 families. Blackhole 12x10 only; the rules were fitted against
-         Blackhole L1, and unaligned M stays off them (the RS output height must be tile-aligned).
-      3. The warned generic default, which puts the matmul on an 8x7 grid at subblock 1x1 -- on a
-         larger device drastically slower than the unfused matmul + reduce-scatter it replaces,
-         so the fusion reads as a regression: sweep the shape instead.
-
-    On a rule hit, an info log prints the config as a paste-able table entry: sweep the shape
-    with `sweep_mm_block_sizes.py` (use case ``mmrs``) and paste the winner into
-    ``fused_mmrs_configs`` (or register it from a model table) to override the rules permanently.
-    """
-    table = fused_mmrs_configs.get(device_core_grid, {})
-    config = table.get((M, K, N))
-
-    if config is None and is_blackhole() and M % 32 == 0:
-        from .mmrs_rules import pick_v23
-
-        v23 = pick_v23(M, K, N, full_grid=(device_core_grid.x, device_core_grid.y))
-        if v23 is not None:
-            m_blk, k_blk, n_blk = v23["blocks"]
-            sub_h, sub_w = v23["subblock"]
-            signature = (M, K, N, device_core_grid.x, device_core_grid.y)
-            if signature not in _logged_mmrs_rule_signatures:
-                logger.info(
-                    f"MMRS v2.3 rule config for (M, K, N) = ({M}, {K}, {N}): "
-                    f"FusedMMRSConfig(ttnn.CoreCoord{v23['mm_grid']}, "
-                    f"{m_blk}, {k_blk}, {n_blk}, {sub_h}, {sub_w}, None, 1)  "
-                    f"# paste into fused_mmrs_configs after sweeping to override"
-                )
-                _logged_mmrs_rule_signatures.add(signature)
-            config = FusedMMRSConfig(ttnn.CoreCoord(*v23["mm_grid"]), m_blk, k_blk, n_blk, sub_h, sub_w, None, 1)
-
-    if config is None:
+    config = fused_mmrs_configs.get(device_core_grid, {})
+    if len(config) == 0:
+        logger.warning(f"No known fused MM/RS config for {device_core_grid} core grid, using default")
+    elif (M, K, N) not in config:
         logger.warning(
-            f"No fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid "
-            "and the rule engine does not cover it; using default, which is likely slower than not "
-            "fusing at all"
+            f"No known fused MM/RS config for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid, using default"
         )
-        config = default_fused_mmrs_config
-    return config.get_params(device_core_grid, num_links, M=M)
+    elif (M, K, N) not in config:
+        # Worth a warning even though the grid is known: the default puts the matmul on an 8x7 grid at
+        # subblock 1x1, so on a larger device it is drastically slower than the unfused
+        # matmul + reduce-scatter it is meant to replace, and the fusion reads as a regression.
+        logger.warning(
+            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; "
+            "using default, which is likely slower than not fusing at all"
+        )
+    config = config.get((M, K, N), default_fused_mmrs_config)
+    return config.get_params(device_core_grid, num_links)
 
 
 def register_matmul_configs(configs: dict) -> None:

@@ -2296,6 +2296,9 @@ template <
     // reader's kv_chunk_is_beyond_logical_l skip so the K/V CB producer/consumer counts stay aligned.
     bool joint_n_skip_enabled = false,
     uint32_t joint_local_padded_Nt = 0,  // Lt_local: per-device joint tile count (sharded path)
+    bool sparse_frames_enabled = false,
+    uint32_t tiles_per_frame = 0,
+    uint32_t num_frames_padded_compile = 0,
     typename MaskCtx = LightweightMaskContext>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
@@ -2323,8 +2326,39 @@ void sdpa_ring_v2(
     // True (unpadded) joint length in tiles; joint K chunks starting at/after it are pure padding.
     const uint32_t logical_lt = 0,
     // Tile offset of this call's Q chunk within cb_q_in (head-serial passes; 0 otherwise).
-    const uint32_t q_base_tiles = 0) {
+    const uint32_t q_base_tiles = 0,
+    const uint32_t* sparse_frame_mask_words = nullptr,
+    // Tile-space start of this device's q shard (ring_index * q_local_padded_Nt). A chunk's frame is
+    // (q_shard_start_tile + q_chunk*Sq_chunk_t) / tiles_per_frame, so shards may hold fractional
+    // frames. 0 when unsharded.
+    const uint32_t q_shard_start_tile = 0,
+    // Per-q_chunk work bitmap: bit `iter` set iff q_chunk has work in that (mask-active) iter.
+    const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
+
+    // Sparse computation: mirror the reader's fully-padded-shard detection. A shard whose Q frames are
+    // all padding attends no k_frame, so the reader disables its aggregate skip and forwards/pushes
+    // every k_chunk (full data-movement participation, like dense). Compute must then DRAIN every
+    // pushed chunk rather than consult the (all-zero) aggregate — otherwise it would leave reader's
+    // pushes stranded in the CBs. This flag forces the drain paths below to drain unconditionally.
+    bool shard_attends_nothing = false;
+    if constexpr (sparse_frames_enabled) {
+        if constexpr (tiles_per_frame > 0 && q_local_padded_Nt > 0) {
+            // Frame range this shard's q tiles touch (inclusive; a partial end frame is included).
+            const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+            const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
+            shard_attends_nothing = true;
+            for (uint32_t qf = q_frame_lo; qf <= q_frame_hi && shard_attends_nothing; ++qf) {
+                for (uint32_t kf = 0; kf < num_frames_padded_compile; ++kf) {
+                    const uint32_t bit_idx = qf * num_frames_padded_compile + kf;
+                    if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
+                        shard_attends_nothing = false;
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
     constexpr bool has_sliding_window = sliding_window_size > 0;
@@ -2458,6 +2492,53 @@ void sdpa_ring_v2(
         return false;
     };
 
+    // Sparse computation: this (q_frame, k_frame) pair is disallowed for this Q chunk. Reader
+    // skips only when no q_frame in the shard attends the k_frame
+    // — required for head/batch/gqa chain sync across cores handling different q_chunks
+    // with different allow rows). So the reader may have pushed K/V for a chunk this specific
+    // Q chunk doesn't attend — we drain those here.
+    // The aggregate check: if no q_frame in the shard attends this k_frame either, the reader
+    // also skipped and we return true without draining. Otherwise reader pushed so drain.
+    auto try_skip_sparse_frames = [&](uint32_t k_chunk, uint32_t q_frame_for_chunk, bool kv_chunk_is_joint) -> bool {
+        if constexpr (sparse_frames_enabled) {
+            if (kv_chunk_is_joint) {
+                return false;  // joint K is always attended
+            }
+            // K chunk's global tile position along the padded sequence (all sp shards concatenated).
+            const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+            const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
+            const uint32_t bit_idx = q_frame_for_chunk * num_frames_padded_compile + k_frame;
+            const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
+            const uint32_t bit = (word >> (bit_idx & 31u)) & 1u;
+            if (bit == 0u) {
+                // This q chunk doesn't attend this k_frame, but the reader pushed it if any frame in
+                // the shard's range does; drain in that case.
+                const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+                const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
+                bool aggregate_allowed = false;
+                for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
+                    const uint32_t agg_bit_idx = qf * num_frames_padded_compile + k_frame;
+                    if (((sparse_frame_mask_words[agg_bit_idx >> 5] >> (agg_bit_idx & 31u)) & 1u) != 0u) {
+                        aggregate_allowed = true;
+                        break;
+                    }
+                }
+                if (aggregate_allowed || shard_attends_nothing) {
+                    // Reader pushed but this Q chunk doesn't attend so drain it.
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
+                return true;  // skip either way (whether we drained or not)
+            }
+        }
+        return false;
+    };
+
     // -----------------------------------------------------------------------
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
@@ -2507,6 +2588,13 @@ void sdpa_ring_v2(
         }
         // Per-Q pre-scan: count K chunks that will actually be processed.
         // Placed after balanced-skip guards so skipped Q chunks don't pay for the scan.
+        // Note: this scan does not drain CBs (reader hasn't pushed yet); it only mirrors the
+        // skip predicates so `is_last_k` fires on the right chunk in the main loop below.
+        uint32_t q_frame_for_this_chunk = 0;
+        if constexpr (sparse_frames_enabled) {
+            // Global frame of this q chunk; each chunk sits in one frame, so one division is exact.
+            q_frame_for_this_chunk = (q_shard_start_tile + q_chunk * Sq_chunk_t) / tiles_per_frame;
+        }
         uint32_t per_q_valid_kv = has_sliding_window ? sliding_q_plan.total_k_chunk_count : 0;
         for (uint32_t k = 0; !has_sliding_window && k < num_kv_chunks; ++k) {
             const uint32_t source_ring_id = ring_id;
@@ -2520,19 +2608,106 @@ void sdpa_ring_v2(
                     continue;
                 }
             }
+            if constexpr (sparse_frames_enabled) {
+                // Pre-scan: skip k_chunks this q_frame doesn't attend when counting valid KV.
+                if (!is_joint) {
+                    const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                    const uint32_t k_frame = k_global / tiles_per_frame;
+                    const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
+                    const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
+                    if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
+                        continue;
+                    }
+                }
+            }
             per_q_valid_kv++;
         }
+
+        // Sparse computation zero-work-iter fast path: this Q chunk has no processed K chunks in
+        // this ring iter (either a padded / all-drained Q frame across all iters, or a real Q
+        // frame whose allowed K frames don't land in this iter). We must still drain the K/V
+        // that the reader pushed for this Q chunk but we cannot enter the accumulator machinery.
+        if constexpr (sparse_frames_enabled) {
+            if (per_q_valid_kv == 0) {
+                // Drain any k_chunks reader pushed. Reader pushed if any q_frame in shard attends this k_frame.
+                // Since this q_chunk has per_q_valid_kv==0, we drain (not process) every pushed chunk.
+                const uint32_t q_frame_lo = q_shard_start_tile / tiles_per_frame;
+                const uint32_t q_frame_hi = (q_shard_start_tile + q_local_padded_Nt - 1) / tiles_per_frame;
+                for (uint32_t k = 0; k < num_kv_chunks; ++k) {
+                    const bool is_joint_ = (k >= num_local_k_chunks);
+                    if (try_skip_oob_kv(ring_id, k, is_joint_)) {
+                        continue;
+                    }
+                    if (!is_joint_) {
+                        // Reader pushed only if some q_frame in shard attends.
+                        const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                        const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
+                        bool aggregate_allowed = false;
+                        for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
+                            const uint32_t bit_idx = qf * num_frames_padded_compile + k_frame;
+                            if (((sparse_frame_mask_words[bit_idx >> 5] >> (bit_idx & 31u)) & 1u) != 0u) {
+                                aggregate_allowed = true;
+                                break;
+                            }
+                        }
+                        if (!aggregate_allowed && !shard_attends_nothing) {
+                            continue;  // reader also skipped — nothing to drain
+                        }
+                    }
+                    // Drain K/V that reader pushed.
+                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                    if constexpr (!kt_inplace_v) {
+                        CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    KV_chunks_processed_in_iter++;
+                }
+                // Per-iter handshake with writer.
+                if (q_per_core > 1) {
+                    CircularBuffer(cb_signal).reserve_back(1);
+                    sdpa_cb_push_back_out_of_line(cb_signal, 1);
+                }
+                // Pop Q if reader pushed it this iter. For q_per_core > 1, reader pushes Q every
+                // iter (need_q_read=true) — match with a pop every iter. For q_per_core == 1, Q
+                // is fronted across iters and popped only on the last (matches the standard path
+                // below at "Pop Q"). A zero-total-work Q chunk on a single-Q core means the whole
+                // core is zero-work; the last-iter pop suffices.
+                if (q_per_core > 1 || is_last_ring_iter) {
+                    sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
+                }
+                continue;
+            }
+        }
+
         // Use persistent accumulator state from caller (single Q-chunk),
         // restore from DRAM staging (multi Q-chunk), or pop from the L1 FIFO (head-serial passes).
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
 
         const bool is_first_kv_for_this_q = is_first_active_iter;
 
+        const bool is_this_first_work_iter_for_q = [&] {
+            if constexpr (sparse_frames_enabled) {
+                const uint32_t q_bits = q_work_bitmap[q_chunk];
+                return q_bits != 0u ? (ring_iter == __builtin_ctz(q_bits)) : is_first_kv_for_this_q;
+            } else {
+                return is_first_kv_for_this_q;
+            }
+        }();
+        const bool is_this_last_work_iter_for_q = [&] {
+            if constexpr (sparse_frames_enabled) {
+                const uint32_t q_bits = q_work_bitmap[q_chunk];
+                return q_bits != 0u ? (ring_iter == (31u - __builtin_clz(q_bits))) : is_last_ring_iter;
+            } else {
+                return is_last_ring_iter;
+            }
+        }();
+
         // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
         // (cb_prev_out, cb_max_in, cb_sum_in) — no copy_block needed.
         // After K0's swap, reset q_cur to original accumulator CBs for normal ping-pong.
         const AccumulatorHalf original_prev = q_prev;
-        const bool restore_from_staging = (q_per_core > 1 && !is_first_active_iter);
+        const bool restore_from_staging = (q_per_core > 1 && !is_this_first_work_iter_for_q);
         ASSERT(!has_sliding_window || !restore_from_staging);
         // FIFO entry: this pass's own state sits at the front (the fixed cyclic pass order
         // guarantees it), so the first K chunk merges straight out of the FIFO and pops it.
@@ -2559,14 +2734,17 @@ void sdpa_ring_v2(
             if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
                 continue;
             }
+            if (try_skip_sparse_frames(k_chunk, q_frame_for_this_chunk, kv_chunk_is_joint)) {
+                continue;
+            }
+
             KV_chunks_processed++;
             KV_chunks_processed_in_iter++;
 
-            const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
             const bool is_last_k = (KV_chunks_processed == per_q_valid_kv);
 
-            // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last_k_of_last_ring_iter = is_last_ring_iter && is_last_k;
+            bool is_first = is_this_first_work_iter_for_q && (KV_chunks_processed == 1);
+            bool is_last_k_of_last_ring_iter = is_this_last_work_iter_for_q && is_last_k;
 
             // Signal writer that last K-chunk is starting (for row-by-row DMA save/restore).
             if (is_last_k && q_per_core > 1) {
@@ -2687,7 +2865,7 @@ void sdpa_ring_v2(
             // On last K-chunk of non-last ring iters (multi-Q), redirect output, sum, and max
             // to writer-staging CBs, eliminating post-loop copy_block calls.
             // Writer drains cb_out row-by-row during SALAD; cb_sum_out and cb_max_out bulk after.
-            const bool save_to_staging = is_last_k && !is_last_ring_iter && q_per_core > 1;
+            const bool save_to_staging = is_last_k && !is_this_last_work_iter_for_q && q_per_core > 1;
             ASSERT(!has_sliding_window || !save_to_staging);
             // FIFO exit: sum/out redirect into the FIFO (pack-only, write-pointer relative). max
             // cannot — the step reads cur.max front-relative — so mirror it via step_save_max_cb.
@@ -2857,7 +3035,7 @@ void sdpa_ring_v2(
             // Single Q-chunk: persist in L1 (no DRAM round-trip)
             acc_state.prev = q_prev;
             acc_state.cur = q_cur;
-        } else if (!is_last_ring_iter) {
+        } else if (!is_this_last_work_iter_for_q) {
             // Multi Q-chunk: save raw accumulators to DRAM via writer CBs.
             // Out tiles already saved row-by-row via cb_out during last K-chunk SALAD.
             // Sum already in cb_sum_out (redirected via q_cur.sum on last K-chunk).

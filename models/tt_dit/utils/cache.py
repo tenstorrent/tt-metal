@@ -19,6 +19,15 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 CACHE_DICT_FILE = "cache_dict.json"
+logger.info(
+    "WEIGHT-CACHE ENV pid={} {}".format(
+        os.getpid(),
+        " ".join(
+            f"{k}={os.environ.get(k)!r}"
+            for k in ("TT_DIT_CACHE_DIR", "TT_METAL_CACHE", "TT_WALLTIME", "TT_MESH_HOST_RANK")
+        ),
+    )
+)
 
 
 class MissingCacheError(Exception):
@@ -39,6 +48,24 @@ def config_id(parallel_config):
 
 def cache_dir_is_set() -> bool:
     return _cache_root() is not None
+
+
+def log_cache_decision(
+    site: str,
+    cache_dir: str | Path | None,
+    *,
+    hit: bool,
+    reason: str = "",
+) -> None:
+    root = os.environ.get("TT_DIT_CACHE_DIR")
+    path = Path(cache_dir) if cache_dir is not None else None
+    state = "HIT " if hit else "MISS"
+    detail = (
+        f"dir='{path}' exists={path.is_dir()} complete={_cache_is_complete(path)}" if path is not None else "dir=<none>"
+    )
+    logger.info(
+        f"WEIGHT-CACHE {state} {site}: TT_DIT_CACHE_DIR={root!r} {detail}" + (f" reason={reason}" if reason else "")
+    )
 
 
 def load_model(
@@ -79,7 +106,10 @@ def load_model(
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
         `RuntimeError`: `TT_DIT_CACHE_DIR` is not set and `get_torch_state_dict` is `None`.
     """
+    site = f"{model_name}/{subfolder}"
+
     if tt_model.is_loaded():
+        logger.info(f"WEIGHT-CACHE SKIP {site}: already resident on device")
         return
 
     cache_dir = model_cache_dir(
@@ -96,6 +126,7 @@ def load_model(
     if cache_dir is None:
         assert get_torch_state_dict is not None
 
+        log_cache_decision(site, None, hit=False, reason="TT_DIT_CACHE_DIR unset")
         logger.info(
             "Loading transformer weights from PyTorch state dict. "
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
@@ -106,11 +137,14 @@ def load_model(
         return
 
     if _cache_is_complete(cache_dir):
+        log_cache_decision(site, cache_dir, hit=True)
         logger.info(f"loading cache at '{cache_dir}'.")
         with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
             tt_model.load(cache_dir)
         ttnn.distributed_context_barrier()
         return
+
+    log_cache_decision(site, cache_dir, hit=False, reason=f"no {CACHE_DICT_FILE} marker at this key")
 
     if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
@@ -145,6 +179,7 @@ def model_cache_dir(
         if required:
             msg = "Cache is required. Set the TT_DIT_CACHE_DIR environment variable."
             raise RuntimeError(msg)
+        logger.info(f"WEIGHT-CACHE KEY {model_name}/{subfolder}: TT_DIT_CACHE_DIR unset, no cache dir")
         return None
 
     parallel_key = config_id(parallel_config)
@@ -159,6 +194,12 @@ def model_cache_dir(
     ownership_suffix = _cache_ownership_suffix(mesh_device)
     if ownership_suffix:
         path = path / ownership_suffix
+
+    logger.info(
+        f"WEIGHT-CACHE KEY {model_name}/{subfolder}: root='{cache_dir}' key='{key}' "
+        f"ownership='{ownership_suffix or '-'}' -> '{path}' "
+        f"exists={path.is_dir()} complete={_cache_is_complete(path)}"
+    )
 
     return path
 

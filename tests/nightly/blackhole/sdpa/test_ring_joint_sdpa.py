@@ -3523,6 +3523,122 @@ def test_ring_joint_attention_kv_pad_aware_rotation_accuracy(case_name):
     )
 
 
+def _pack_sparse_frame_mask(allow: torch.Tensor) -> List[int]:
+    """Bit-pack an [nf, nf] uint8 allow table into uint32 words (bit q*nf+k set iff q attends k)."""
+    nf = allow.shape[0]
+    words = [0] * (((nf * nf) + 31) // 32)
+    for q in range(nf):
+        for k in range(nf):
+            if allow[q, k]:
+                bit = q * nf + k
+                words[bit // 32] |= 1 << (bit % 32)
+    return words
+
+
+def _sparse_frames_masked_ref(Q, K, V, allow: torch.Tensor, tokens_per_frame: int) -> torch.Tensor:
+    """Dense masked SDPA reference (small shapes only): expand the [nf, nf] frame allow table to a
+    per-token boolean mask and let softmax over disallowed (-inf) positions drop them."""
+    n = Q.shape[2]
+    keep = allow.bool().repeat_interleave(tokens_per_frame, 0).repeat_interleave(tokens_per_frame, 1)[:n, :n]
+    return torch.nn.functional.scaled_dot_product_attention(Q, K, V, attn_mask=keep.reshape(1, 1, n, n))
+
+
+@pytest.mark.parametrize("add_last_frame", [False, True], ids=["window", "window_plus_last"])
+def test_ring_joint_attention_sparse_frames_accuracy(add_last_frame):
+    """Frame-block-sparse ring joint SDPA on a small shape: one frame per SP shard, each query frame
+    attends a centered window of key frames (optionally plus the last frame). Exercises the
+    sparse_frame_mask skip path end-to-end against a masked torch reference. Standalone — does not
+    use the ModelConfig/MeshConfig sweep scaffolding."""
+    if MESH_CONFIG.num_devices < 2:
+        pytest.skip("sparse-frames ring joint attention requires >= 2 devices")
+    mesh_config = replace(MESH_CONFIG, tp_size=1, sp_size=MESH_CONFIG.num_devices)
+
+    nf = mesh_config.sp_size  # one frame per shard; nf_padded == nf_real == sp (already ring-aligned)
+    tokens_per_frame = 64  # 2 tiles, tile-aligned
+    window = 3
+    b, nh, d = 1, 8, 128
+    sq = nf * tokens_per_frame
+
+    torch.manual_seed(1234)
+    Q, K, V = fa_rand(b, nh, sq, d), fa_rand(b, nh, sq, d), fa_rand(b, nh, sq, d)
+
+    # Centered window: frame q attends [q-window//2, q+window//2] (clamped), optionally the last frame.
+    allow = torch.zeros(nf, nf, dtype=torch.uint8)
+    half = window // 2
+    for q in range(nf):
+        allow[q, max(0, q - half) : min(nf, q + half + 1)] = 1
+        if add_last_frame:
+            allow[q, nf - 1] = 1
+    sparse_frame_mask = _pack_sparse_frame_mask(allow)
+    gt = _sparse_frames_masked_ref(Q, K, V, allow, tokens_per_frame)
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh_device = runtime.mesh_device
+        input_shard_dims = [None, None]
+        input_shard_dims[runtime.sp_axis] = 2  # shard seq across the SP mesh axis
+
+        def _shard(t, dims):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        tt_Q, tt_K, tt_V = _shard(Q, input_shard_dims), _shard(K, input_shard_dims), _shard(V, input_shard_dims)
+        # Persistent gather buffers hold the full (all-gathered) K/V — replicated across SP.
+        p_buf_k, p_buf_v = _shard(torch.zeros(b, nh, sq, d), [None, None]), _shard(
+            torch.zeros(b, nh, sq, d), [None, None]
+        )
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=tokens_per_frame,
+            k_chunk_size=tokens_per_frame,
+            exp_approx_mode=False,
+        )
+        tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_Q,
+            tt_K,
+            tt_V,
+            None,
+            None,
+            None,
+            persistent_output_buffer_k=p_buf_k,
+            persistent_output_buffer_v=p_buf_v,
+            joint_strategy="rear",
+            logical_n=sq,
+            program_config=program_config,
+            compute_kernel_config=runtime.compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+            num_links=runtime.num_links,
+            cluster_axis=runtime.sp_axis,
+            mesh_device=mesh_device,
+            topology=runtime.topology,
+            subdevice_id=runtime.worker_sub_device_id,
+            ccl_core_grid_offset=(runtime.ccl_column, 0),
+            use_column_major_ccl=True,
+            is_causal=False,
+            tokens_per_frame=tokens_per_frame,
+            num_frames_padded=nf,
+            sparse_frame_mask=sparse_frame_mask,
+        )
+        out = ttnn.to_torch(
+            tt_out, mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(-1, 2))
+        )[:, :, :sq, :]
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+    passing, pcc = comp_pcc(gt, out, DEFAULT_PCC_THRESHOLD)
+    logger.info(
+        f"[sparse-frames ring joint] nf={nf} fsl={tokens_per_frame} window={window} add_last={add_last_frame} pcc={pcc}"
+    )
+    assert passing, f"sparse-frames ring joint SDPA PCC {pcc} below {DEFAULT_PCC_THRESHOLD}"
+
+
 def test_ring_joint_attention_gpt_oss_first_complete_group_sliding_kv_pad_reuse_accuracy_and_determinism(
     expect_error,
 ):

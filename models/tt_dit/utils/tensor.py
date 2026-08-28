@@ -546,12 +546,16 @@ def _reassemble_2d(
             out[tuple(slices)] = shard
         return out
 
+    def _cat_unique(axis, dim):
+        first = {}
+        for coord, shard in zip(mesh_coords, shards):
+            first.setdefault(int(coord[axis]), shard)
+        return torch.cat([first[p] for p in sorted(first)], dim=dim)
+
     if d0 is not None:
-        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
-        return torch.cat([s for _, s in by_pos], dim=d0)
+        return _cat_unique(0, d0)
     if d1 is not None:
-        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
-        return torch.cat([s for _, s in by_pos], dim=d1)
+        return _cat_unique(1, d1)
     return shards[0]
 
 
@@ -639,19 +643,7 @@ def fast_device_to_host(
 
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
-                # A TILE-layout all_gather/repeat/mesh_partition is only safe when
-                # BOTH of the last two dims are tile-aligned. If the second-to-last
-                # dim (H) is not a multiple of TILE_SIZE, its tile padding makes the
-                # TILE repeat/mesh_partition interleave H rows across the shards ->
-                # horizontal-band noise corruption on multi-host (single-host skips
-                # this block, hence 4x8 was clean but 4x32 corrupted). Predict the
-                # per-chip shape after repeat (× n_hosts) and mesh_partition
-                # (÷ inter_axis_size) on inter_dim, and drop to ROW_MAJOR unless
-                # BOTH last dims are tile-aligned (matches the known-good behavior).
-                post_shape = list(gathered_tensor.shape)
-                post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
-                if post_shape[-1] % ttnn.TILE_SIZE != 0 or post_shape[-2] % ttnn.TILE_SIZE != 0:
-                    gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
+                gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
                 repeat_dims = [1] * len(gathered_tensor.shape)
                 repeat_dims[inter_dim] = n_hosts

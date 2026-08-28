@@ -90,6 +90,10 @@ void kernel_main() {
     // per-ring-iteration joint tail mask and the joint out-of-bounds K-chunk skip.
     constexpr uint32_t logical_lt = get_compile_time_arg_val(53);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
+    // Sparse computation. All three set together at the host or all zero (feature disabled).
+    constexpr bool sparse_frames_enabled = get_compile_time_arg_val(79) == 1;
+    constexpr uint32_t tiles_per_frame = get_compile_time_arg_val(80);
+    constexpr uint32_t num_frames_padded_compile = get_compile_time_arg_val(81);
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -146,6 +150,24 @@ void kernel_main() {
     uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
+    // Packed sparse_frame_mask bitmap (32 uint32 words: nf_padded <= 32 -> at most 32 * 32 = 1024
+    // bits). Present in the runtime-arg stream only when sparse_frames_enabled — the host omits them
+    // otherwise, so gate the read on the same compile-time flag to keep q_work_bitmap aligned.
+    [[maybe_unused]] uint32_t sparse_frame_mask_words[32];
+    if constexpr (sparse_frames_enabled) {
+#pragma GCC unroll 32
+        for (uint32_t w = 0; w < 32; ++w) {
+            sparse_frame_mask_words[w] = get_arg_val<uint32_t>(argidx++);
+        }
+    }
+    // Per-q_chunk work bitmap: bit `ring_iter` set iff q_chunk has attended work in that (mask-
+    // active) iter. Host-precomputed; compute and writer read the same. When sparse is disabled the
+    // host fills every entry with active_ring_iter_mask, so dense derives identical decisions.
+    uint32_t q_work_bitmap[num_q_chunks] = {};
+    for (uint32_t q = 0; q < num_q_chunks; ++q) {
+        q_work_bitmap[q] = get_arg_val<uint32_t>(argidx++);
+    }
+
     RingSDPAOpIndexer fused_op_indexer(
         ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
 
@@ -188,6 +210,11 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
     constexpr uint32_t cb_kv_pad_derived = get_compile_time_arg_val(cb_arg_offset + 23);
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(cb_arg_offset + 24);
+
+    // Attention-sink and frame-block-sparse are mutually exclusive.
+    static_assert(
+        !(sparse_frames_enabled && use_attention_sink),
+        "Sparse computation and attention-sink cannot both be enabled on the ring-joint SDPA path");
 
     if constexpr (kv_pad_from_metadata) {
         CircularBuffer cb_derived(cb_kv_pad_derived);
@@ -244,6 +271,13 @@ void kernel_main() {
             kv_pad_q_valid_tile_count}};
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
+
+    uint32_t q_shard_start_tile = 0;
+    if constexpr (sparse_frames_enabled) {
+        // Tile-space start of this device's q shard; each chunk's frame is derived from it by division.
+        q_shard_start_tile = ring_index * q_local_padded_Nt;
+    }
+
     constexpr uint32_t sdpa_ring_iterations = has_sliding_window ? 1 : ring_size;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
@@ -425,7 +459,10 @@ void kernel_main() {
                 use_attention_sink,
                 cb_attention_sink,
                 has_gathered_joint_k,
-                Lt_local>(
+                Lt_local,
+                sparse_frames_enabled,
+                tiles_per_frame,
+                num_frames_padded_compile>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -448,7 +485,11 @@ void kernel_main() {
                 use_zigzag_balancing,
                 chunked_context,
                 is_first_active_iter,
-                logical_lt);
+                logical_lt,
+                /*q_base_tiles=*/0u,
+                sparse_frame_mask_words,
+                q_shard_start_tile,
+                q_work_bitmap);
         } else {
             assert_kv_pad_rotation_streaming_only<kv_pad_rotation_enabled>();
             sdpa_ring<

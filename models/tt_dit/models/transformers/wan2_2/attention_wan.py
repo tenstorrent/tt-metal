@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -17,6 +19,20 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+
+_RING_SDPA_LOGGED = set()
+
+
+def _sdpa_tensor_desc(name, t):
+    if t is None:
+        return f"{name}=None"
+    try:
+        return (
+            f"{name}: shape={list(t.shape)} padded={list(t.padded_shape)} "
+            f"dtype={t.dtype} layout={t.layout} mem={t.memory_config()}"
+        )
+    except Exception as e:  # a debug dump must never take down a multi-host run
+        return f"{name}: <undescribable: {type(e).__name__}: {e}>"
 
 
 class WanAttention(Module):
@@ -143,16 +159,15 @@ class WanAttention(Module):
         )
 
         self.use_exp_ring_sdpa = (
-            self.parallel_config.tensor_parallel.factor == 4 and self.parallel_config.sequence_parallel.factor == 32
+            self.parallel_config.tensor_parallel.factor == 4
+            and self.parallel_config.sequence_parallel.factor == 32
+            and self.ccl_manager is not None
+            and self.ccl_manager.num_links == 2  # op requires exactly 2 links
+            and self.ccl_manager.topology == ttnn.Topology.Ring
         )
-
-        if self.use_exp_ring_sdpa:
-            self.exp_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=full_grid,
-                q_chunk_size=ring_sdpa_chunk_size[0],
-                k_chunk_size=ring_sdpa_chunk_size[1],
-                exp_approx_mode=False,
-            )
+        self.exp_ring_k_chunk_size = ring_sdpa_chunk_size[1]  # shape-independent
+        self.exp_ring_full_grid = full_grid  # the exp op reserves the CCL column itself
+        self._exp_ring_pc_by_shape = {}  # (B*NH, N_local) -> SDPAProgramConfig | None
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -308,6 +323,72 @@ class WanAttention(Module):
             )
         return output
 
+    @staticmethod
+    def _exp_ring_q_chunk(n_local, sdpa_cols):
+        if sdpa_cols < 1 or n_local < 1 or n_local % ttnn.TILE_SIZE != 0:
+            return None
+        per_column = -(-n_local // sdpa_cols)
+        q_chunk = -(-per_column // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        return q_chunk if -(-n_local // q_chunk) == sdpa_cols else None
+
+    def _build_exp_ring_program_config(self, b_nh, n_local):
+        sdpa_cols = self.exp_ring_full_grid.x - 1
+        q_chunk = self._exp_ring_q_chunk(n_local, sdpa_cols)
+        if b_nh > self.exp_ring_full_grid.y or q_chunk is None:
+            print(
+                f"[ring-sdpa] exp ring SDPA unavailable for B*NH={b_nh} N_local={n_local} "
+                f"grid={self.exp_ring_full_grid.x}x{self.exp_ring_full_grid.y} (sdpa_cols={sdpa_cols}); "
+                f"using ring_joint_scaled_dot_product_attention",
+                flush=True,
+            )
+            return None
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.exp_ring_full_grid,
+            q_chunk_size=q_chunk,
+            k_chunk_size=self.exp_ring_k_chunk_size,
+            exp_approx_mode=False,
+        )
+
+    def _exp_ring_program_config(self, q_BHNE):
+        if not self.use_exp_ring_sdpa:
+            return None
+        key = (q_BHNE.shape[0] * q_BHNE.shape[1], q_BHNE.shape[2])
+        if key not in self._exp_ring_pc_by_shape:
+            self._exp_ring_pc_by_shape[key] = self._build_exp_ring_program_config(*key)
+        return self._exp_ring_pc_by_shape[key]
+
+    def _log_ring_sdpa_inputs(self, op_name, *, q, k, v, joint, pbuf_k, pbuf_v, logical_n, program_config, extra):
+        mode = os.environ.get("TT_DIT_SDPA_LOG", "1")
+        if mode == "0":
+            return
+        key = (op_name, tuple(q.shape), tuple(k.shape), tuple(v.shape), logical_n, str(program_config))
+        if mode != "all":
+            if key in _RING_SDPA_LOGGED:
+                return
+            _RING_SDPA_LOGGED.add(key)
+
+        sp = self.parallel_config.sequence_parallel
+        tp = self.parallel_config.tensor_parallel
+        lines = [
+            f"[ring-sdpa] ttnn.transformer.{op_name}",
+            "  " + _sdpa_tensor_desc("q", q),
+            "  " + _sdpa_tensor_desc("k", k),
+            "  " + _sdpa_tensor_desc("v", v),
+            "  " + _sdpa_tensor_desc("joint_q / joint_k / joint_v", joint),
+            "  " + _sdpa_tensor_desc("persistent_output_buffer_k", pbuf_k),
+            "  " + _sdpa_tensor_desc("persistent_output_buffer_v", pbuf_v),
+            f"  logical_n={logical_n} joint_strategy='rear' dim=2",
+            f"  program_config={program_config}",
+            f"  compute_kernel_config={self.sdpa_compute_kernel_config}",
+            f"  mesh_shape={list(self.mesh_device.shape)} full_grid={self.mesh_device.compute_with_storage_grid_size()}",
+            f"  sp: axis={sp.mesh_axis} factor={sp.factor}  |  tp: axis={tp.mesh_axis} factor={tp.factor}",
+            f"  n_local_heads={self.n_local_heads} head_dim={self.head_dim}",
+            f"  cluster_axis={sp.mesh_axis} num_links={self.ccl_manager.num_links} "
+            f"topology={self.ccl_manager.topology} subdevice_id={self.ccl_manager.ccl_sub_device_id}",
+        ]
+        lines += [f"  {name}={value}" for name, value in extra.items()]
+        print("\n".join(lines), flush=True)
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -420,7 +501,26 @@ class WanAttention(Module):
                         dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
 
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
-                if self.use_exp_ring_sdpa:
+                pbuf_k = self.ccl_manager.get_ag_ping_pong_buffer(
+                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
+                )
+                pbuf_v = self.ccl_manager.get_ag_ping_pong_buffer(
+                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
+                )
+                exp_ring_pc = self._exp_ring_program_config(q_BHNE)
+                if exp_ring_pc is not None:
+                    self._log_ring_sdpa_inputs(
+                        "exp_ring_joint_scaled_dot_product_attention",
+                        q=q_BHNE,
+                        k=k_BHNE,
+                        v=v_BHNE,
+                        joint=dummy_joint,
+                        pbuf_k=pbuf_k,
+                        pbuf_v=pbuf_v,
+                        logical_n=N,
+                        program_config=exp_ring_pc,
+                        extra={"num_workers_per_link": 5, "num_buffers_per_channel": 32},
+                    )
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,
@@ -428,15 +528,11 @@ class WanAttention(Module):
                         dummy_joint,
                         dummy_joint,
                         dummy_joint,
-                        persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
-                        ),
-                        persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
-                        ),
+                        persistent_output_buffer_k=pbuf_k,
+                        persistent_output_buffer_v=pbuf_v,
                         joint_strategy="rear",
                         logical_n=N,
-                        program_config=self.exp_ring_sdpa_program_config,
+                        program_config=exp_ring_pc,
                         compute_kernel_config=self.sdpa_compute_kernel_config,
                         dim=2,
                         multi_device_global_semaphore=self.ccl_manager.get_exp_ring_ping_pong_semaphore(
@@ -451,6 +547,21 @@ class WanAttention(Module):
                         num_buffers_per_channel=32,
                     )
                 else:
+                    self._log_ring_sdpa_inputs(
+                        "ring_joint_scaled_dot_product_attention",
+                        q=q_BHNE,
+                        k=k_BHNE,
+                        v=v_BHNE,
+                        joint=dummy_joint,
+                        pbuf_k=pbuf_k,
+                        pbuf_v=pbuf_v,
+                        logical_n=N,
+                        program_config=self.ring_sdpa_program_config,
+                        extra={
+                            "ccl_core_grid_offset": (self.sdpa_worker_grid[0], 0),
+                            "use_column_major_ccl": True,
+                        },
+                    )
                     spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                         q_BHNE,
                         k_BHNE,
@@ -458,12 +569,8 @@ class WanAttention(Module):
                         dummy_joint,
                         dummy_joint,
                         dummy_joint,
-                        persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                            k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=k_BHNE.dtype
-                        ),
-                        persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                            v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis, dtype=v_BHNE.dtype
-                        ),
+                        persistent_output_buffer_k=pbuf_k,
+                        persistent_output_buffer_v=pbuf_v,
                         joint_strategy="rear",
                         logical_n=N,
                         program_config=self.ring_sdpa_program_config,
