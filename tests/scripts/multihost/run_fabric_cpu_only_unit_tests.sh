@@ -759,10 +759,10 @@ if run_group "bh-ring-stress"; then
 RING_STRESS_TIMEOUT=300
 LONG_RING_STRESS_TIMEOUT=600
 for entry in \
-    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112 128 144" \
-    "SC36_revAB_subtorus_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
-    "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112" \
-    "SC24_revC_subtorus_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64 96" ; do
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112 128 144" \
+    "SC36_revAB_subtorus_120_aisleC_sc20:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 64 96 112" \
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64 96" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
     mgd_var="MGD_BLITZ_${stage}"
@@ -804,12 +804,12 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=${
 MGD_BIGMESH_6="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto"
 MGD_BIGMESH_7="${MGD_SUBTORUS}/subtorus_sc28_4x32_7bigmesh_ring_mesh_graph_descriptor.textproto"
 for entry in \
-    "SC24_revC_subtorus_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:6" \
-    "SC24_revC_subtorus_aisleD_ring:${SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
-    "SC24_revAB_subtorus_aisleD_ring:${SC24_REVAB_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
-    "SC28_revC_subtorus_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
-    "SC28_revAB_subtorus_aisleD:${SC28_REVAB_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
-    "SC36_revC_subtorus_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:7" ; do
+    "SC24_revC_subtorus_110_aisleC:${SC24_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:6" \
+    "SC24_revC_subtorus_120_aisleD_ring:${SC24_REVC_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
+    "SC24_revAB_subtorus_120_aisleD_ring:${SC24_REVAB_SUBTORUS_AISLED_RING_CLUSTER_DESC_MAPPING}:6" \
+    "SC28_revC_subtorus_120_aisleD:${SC28_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
+    "SC28_revAB_subtorus_120_aisleD:${SC28_REVAB_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" \
+    "SC36_revC_subtorus_120_aisleD:${SC36_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:6 7" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"
   for bigmesh in ${bigmeshes}; do
     mgd_var="MGD_BIGMESH_${bigmesh}"
