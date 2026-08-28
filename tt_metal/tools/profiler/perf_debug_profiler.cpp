@@ -781,6 +781,16 @@ uint32_t eth_sync_samples() {
 // N-1 edges; any extra link between two already-synced devices is a free accuracy check, because its offset
 // is predictable from the tree and the two numbers must agree. Costs one link measurement each (~65 ms), so
 // it is capped rather than exhaustive. 0 disables.
+// Re-run the sync at close and price the session's drift. On by default: it costs one link measurement per
+// tree edge (~65 ms) against a device close already measured in seconds, and without it a capture cannot say
+// how stale its own alignment became. 0 disables.
+bool eth_sync_close_check() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_CLOSE");
+        return (s == nullptr || *s == '\0') ? true : (*s != '0');
+    }();
+    return v;
+}
 uint32_t eth_sync_closure_links() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_CLOSURE");
@@ -811,6 +821,97 @@ uint32_t eth_sync_gap_us() {
 // Scale warning for whoever reads this in the GUI: the round trip is ~858 cycles (~0.64 us) against a
 // multi-millisecond capture, so it is sub-pixel until you zoom to microseconds. It is a check you run, not
 // one you notice.
+// Re-measure every tree link at close and compare with what the init fit predicted for that instant.
+//
+// What this prices that nothing else does: the init sync reports how well the two clocks agreed AT THE
+// MOMENT IT RAN. Every zone after that is placed by EXTRAPOLATING that fit, and the extrapolation is only
+// as good as the fitted rate -- 1 ppm of rate error is 1 us per second of session, so a long capture can be
+// far more misaligned at its end than any init-time statistic suggests. Re-running the same links at close
+// turns that into a measurement: the gap between the predicted offset and the measured one IS the session's
+// accumulated error, and it is the honest bound on a zone placed near the end of the capture.
+//
+// Deliberately re-measures the SAME eth cores in the SAME direction. Physical links differ at the
+// nanosecond level, so a different link would show up as drift that never happened.
+void PerfDebugProfiler::check_sync_drift_at_close() {
+    if (!eth_sync_close_check() || link_syncs_.empty()) {
+        return;
+    }
+    eth_sync::LinkSyncConfig cfg;
+    cfg.n_samples = eth_sync_samples();
+    cfg.gap_us = eth_sync_gap_us();
+    const double freq = root_freq_ghz_ > 0.0 ? root_freq_ghz_ : 1.35;  // cycles/ns
+
+    uint32_t checked = 0;
+    double worst_ns = 0.0;
+    uint32_t worst_a = 0, worst_b = 0;
+    double worst_elapsed_s = 0.0;
+    for (const auto& e : link_syncs_) {
+        if (!e.valid || e.snd_dev == nullptr || e.rcv_dev == nullptr) {
+            continue;
+        }
+        const auto r = eth_sync::measure_link(e.snd_dev, e.snd_eth, e.rcv_dev, e.rcv_eth, cfg);
+        if (!r.solution.valid) {
+            // Not fatal and not silent. The most likely cause is that something else now owns these eth
+            // cores (fabric FW, which is NOT up when the init sync runs but may be by close). The kernels
+            // are deadline-bounded precisely so this reports instead of wedging the core.
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {} could not be measured ({}, {}); the "
+                "session's accumulated drift is UNKNOWN for this link",
+                e.sender_chip,
+                e.receiver_chip,
+                eth_sync::status_name(r.sender_status),
+                eth_sync::status_name(r.receiver_status));
+            continue;
+        }
+        // What the init fit says the offset should be at the instant we just re-measured. Composed as a
+        // difference from the init reference, like every other extrapolation here, to keep the precision in
+        // the answer rather than in the epoch.
+        const double dt_cycles = static_cast<double>(static_cast<int64_t>(r.solution.mid_ref - e.ref_mid));
+        const int64_t predicted = e.offset + static_cast<int64_t>(std::llround(dt_cycles * (e.rate - 1.0)));
+        const int64_t err_cycles = r.solution.offset - predicted;
+        const double err_ns = static_cast<double>(err_cycles) / freq;
+        const double elapsed_s = dt_cycles / (freq * 1e9);
+        const double rate_delta_ppm = (r.solution.rate - e.rate) * 1e6;
+        ++checked;
+        if (std::fabs(err_ns) > std::fabs(worst_ns)) {
+            worst_ns = err_ns;
+            worst_a = e.sender_chip;
+            worst_b = e.receiver_chip;
+            worst_elapsed_s = elapsed_s;
+        }
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {}: after {:.1f} s the measured offset is "
+            "{:+} cycles ({:+.3f} us) from what the init fit predicted; rate now {:+.2f} ppm vs {:+.2f} ppm "
+            "at init (delta {:+.2f} ppm), residual {:.1f} cycles",
+            e.sender_chip,
+            e.receiver_chip,
+            elapsed_s,
+            err_cycles,
+            err_ns / 1000.0,
+            (r.solution.rate - 1.0) * 1e6,
+            (e.rate - 1.0) * 1e6,
+            rate_delta_ppm,
+            r.solution.residual_rms);
+    }
+    if (checked != 0) {
+        // The headline number for the capture: how stale its alignment had become by the end. An implied
+        // rate error is more useful than the raw microseconds, because it is what scales to a longer run.
+        const double implied_ppm = worst_elapsed_s > 0.0 ? (worst_ns / 1e9) / worst_elapsed_s * 1e6 : 0.0;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync SESSION DRIFT: worst {:+.3f} us over {:.1f} s ({} -> {}), an "
+            "implied {:+.2f} ppm of unmodelled rate error -- this is how far the capture's cross-device "
+            "alignment had slipped by close, NOT the init sync's accuracy",
+            worst_ns / 1000.0,
+            worst_elapsed_s,
+            worst_a,
+            worst_b,
+            implied_ppm);
+    }
+}
+
 void PerfDebugProfiler::emit_eth_sync_lanes() {
     if (tracy_ == nullptr || eth_sync_traces_.empty()) {
         return;
@@ -1076,6 +1177,10 @@ void PerfDebugProfiler::sync_devices_over_eth(const std::shared_ptr<distributed:
                     eth_sync::status_name(r.receiver_status),
                     ls.receiver_chip);
             }
+            ls.snd_dev = snd;
+            ls.rcv_dev = rcv;
+            ls.snd_eth = ec;
+            ls.rcv_eth = std::get<1>(peer);
             if (ls.valid) {
                 eth_sync_parent_edge_[ls.receiver_chip] = link_syncs_.size();
                 stash_trace(snd, ec, rcv, std::get<1>(peer), r);
@@ -3718,6 +3823,8 @@ void PerfDebugProfiler::stop() {
             llrt::ZoneMetaRegistry::instance().collisions(),
             zm.foreign_sections);
     }
+    // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
+    check_sync_drift_at_close();
     receiver_.reset();
     tracy_consumer_.reset();
     tracy_.reset();

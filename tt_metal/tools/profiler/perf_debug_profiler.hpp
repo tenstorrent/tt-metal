@@ -197,6 +197,13 @@ private:
         double residual_rms = 0.0;
         uint64_t rtt_min = 0;
         bool valid = false;
+        // Enough to RE-MEASURE this exact link at close: same two eth cores, same direction. Which physical
+        // link is used matters at the nanosecond level, so re-measuring a different one would price the
+        // link difference as session drift.
+        IDevice* snd_dev = nullptr;
+        IDevice* rcv_dev = nullptr;
+        CoreCoord snd_eth{};
+        CoreCoord rcv_eth{};
     };
     std::vector<LinkSync> link_syncs_;
     void sync_devices_over_eth(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
@@ -233,6 +240,11 @@ private:
     std::vector<EthSyncTrace> eth_sync_traces_;
     // Draw the stored traces onto eth lanes. Called once, after every device has its anchor.
     void emit_eth_sync_lanes();
+
+    // Re-measure every tree link at CLOSE and compare against what the init fit predicted for that instant.
+    // The init sync says how well the clocks agreed WHEN MEASURED; this says how far the session had drifted
+    // by the time it ended, which is the number that actually bounds a zone's placement late in a capture.
+    void check_sync_drift_at_close();
 
     int64_t eth_sync_worst_closure_ = 0;
     bool eth_sync_closure_valid_ = false;
