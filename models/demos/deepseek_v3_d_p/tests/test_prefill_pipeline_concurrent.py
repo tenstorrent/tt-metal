@@ -56,7 +56,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, 
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
 GALAXY_CHIPS = 32
-TOTAL_LAYERS = 36
+# PP_TOTAL_LAYERS shrinks the model for PROFILING (e.g. 4 -> 1 layer per PP=4 stage), so a Tracy
+# capture is one layer deep instead of nine. Default 36 = the real model; nothing else changes.
+TOTAL_LAYERS = int(os.environ.get("PP_TOTAL_LAYERS", 36))
 W = int(os.environ.get("PP_WINDOW", 5120))
 ITERS = int(os.environ.get("PP_ITERS", 12))
 # "host": hand the activation over through the host (D2H + re-shard + H2D). Correct, but the composed
