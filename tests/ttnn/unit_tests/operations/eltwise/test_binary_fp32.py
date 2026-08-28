@@ -479,6 +479,37 @@ def test_logaddexp_beyond_exp_range_fp32(device, a, b):
 @pytest.mark.parametrize(
     "a, b",
     [
+        (89.0, 0.0),  # ijankowskiTT's repro: inf on main, because bfloat16 never reached the kernel
+        (100.0, 0.0),
+        (128.0, 127.0),
+        (-100.0, -100.0),
+        (5.0, 3.0),  # inside the working band, as a control
+    ],
+)
+def test_logaddexp_beyond_exp_range_bf16(device, a, b):
+    # The kernel is templated on the destination precision and has always had a bfloat16
+    # path, but is_binary_sfpu_op gated logaddexp to fp32 only, so ttnn.logaddexp on
+    # bfloat16 kept going down the composed exp/add/log route and kept overflowing.
+    # The LLK sweep sits below that gate, so it exercised the kernel without exercising
+    # the routing. This test goes through the ttnn op, which is what the gate decides.
+    x_torch = torch.tensor([[a]], dtype=torch.bfloat16)
+    y_torch = torch.tensor([[b]], dtype=torch.bfloat16)
+    golden_fn = ttnn.get_golden_function(ttnn.logaddexp)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp(x_tt, y_tt))
+
+    got = tt_out.flatten()[0].item()
+    want = z_torch.flatten()[0].item()
+    assert torch.isfinite(tt_out).all(), f"logaddexp({a}, {b}) on bfloat16 returned {got}; the exact result is {want}"
+    assert_allclose(tt_out, z_torch, rtol=1e-2, atol=1e-2)
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
         (float("inf"), float("inf")),  # |a - b| is inf - inf = NaN
         (float("-inf"), float("-inf")),
         (float("inf"), float("-inf")),  # different signs: the difference is well defined
