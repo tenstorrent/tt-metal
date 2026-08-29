@@ -18,8 +18,9 @@ namespace tt::tt_metal {
 
 DispatchCoreAxis resolve_dispatch_core_axis(
     const DispatchCoreConfig& config, tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    if (config.has_dispatch_core_axis()) {
-        return config.get_dispatch_core_axis();
+    const auto& axis = std::get<1>(config.attribute_values());
+    if (axis.has_value()) {
+        return axis.value();
     }
     if (arch == tt::ARCH::BLACKHOLE && fabric_tensix_config == tt_fabric::FabricTensixConfig::DISABLED) {
         return DispatchCoreAxis::COL;

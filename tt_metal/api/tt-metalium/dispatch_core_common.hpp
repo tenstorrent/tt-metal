@@ -34,10 +34,6 @@ public:
 
     void set_dispatch_core_type(DispatchCoreType new_type) { type_ = new_type; }
 
-    // Temporary resolver hook. Ordinary consumers should require a complete config and call
-    // get_dispatch_core_axis(); this predicate disappears when axis_ becomes non-optional.
-    bool has_dispatch_core_axis() const { return axis_.has_value(); }
-
     DispatchCoreAxis get_dispatch_core_axis() const {
         TT_FATAL(
             axis_.has_value(),
