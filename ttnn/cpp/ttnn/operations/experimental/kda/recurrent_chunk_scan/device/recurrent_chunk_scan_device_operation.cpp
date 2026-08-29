@@ -6,9 +6,11 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
 
@@ -119,6 +121,69 @@ RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::
         outputs.push_back(create_device_tensor(spec, in.v_beta.device()));
     }
     return outputs;
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<RecurrentChunkScanOperation::tensor_return_value_t>
+RecurrentChunkScanOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    const std::size_t input_count = 7 + static_cast<std::size_t>(in.initial_state.has_value());
+    auto fallback = to_profiler_model<tensor_return_value_t>(zero_estimate(input_count, outputs.size()));
+    if (in.v_beta.storage_type() != StorageType::DEVICE || !in.v_beta.is_allocated() || in.v_beta.device() == nullptr) {
+        log_warning(tt::LogOp, "KDA recurrent_chunk_scan performance model expected an allocated device input");
+        return fallback;
+    }
+    if (attrs.mode != RecurrentChunkScanMode::RECURRENT) {
+        return fallback;
+    }
+
+    auto* device = in.v_beta.device();
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        log_warning(tt::LogOp, "KDA recurrent_chunk_scan performance model supports Blackhole only");
+        return fallback;
+    }
+
+    const auto work = recurrent_chunk_scan_work(attrs.batch_heads, attrs.num_chunks, attrs.key_dim, attrs.value_dim);
+    if (!work) {
+        return fallback;
+    }
+
+    std::vector<const Tensor*> input_tensors = {
+        &in.v_beta, &in.kd, &in.q_decay, &in.intra, &in.k_dec_t, &in.final_decay, &in.t_inv};
+    if (in.initial_state) {
+        input_tensors.push_back(&*in.initial_state);
+    }
+
+    std::vector<KdaTensorTraffic> input_traffic;
+    input_traffic.reserve(input_tensors.size());
+    for (const auto* input : input_tensors) {
+        const auto traffic = tensor_traffic(*input);
+        if (!traffic) {
+            return fallback;
+        }
+        input_traffic.push_back(*traffic);
+    }
+
+    std::vector<KdaTensorTraffic> output_traffic;
+    output_traffic.reserve(outputs.size());
+    for (const auto& output : outputs) {
+        const auto traffic = tensor_traffic(output);
+        if (!traffic) {
+            return fallback;
+        }
+        output_traffic.push_back(*traffic);
+    }
+
+    const auto grid = device->compute_with_storage_grid_size();
+    const auto estimate_result = estimate(
+        *work,
+        input_traffic,
+        output_traffic,
+        static_cast<uint64_t>(grid.x) * grid.y,
+        device->get_clock_rate_mhz(),
+        attrs.compute_kernel_config.math_fidelity);
+    return to_profiler_model<tensor_return_value_t>(estimate_result);
 }
 
 std::vector<Tensor> recurrent_chunk_scan(
