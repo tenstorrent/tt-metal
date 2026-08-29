@@ -1445,6 +1445,27 @@ KNOBS = {
     # -hoist-refused / -reform-composition-unaudited).  Composes on
     # record-hoist (reviewed ON) + record-hoist-lift for the lcm shape.
     "replay-window-sizing": "-mtt-tensix-optimize-replay-window-sizing",
+    # IO (counted-capture-peel, 2026-08-29): extend the GQ
+    # exec-while-record first-trip peel to the COUNTED-LOOP capture
+    # class — a counted single-block SFPU row loop whose plain counted
+    # hoist refuses on modeled benefit (the preheader no-exec record's
+    # full payload re-delivery cannot amortize) re-prices as the PEELED
+    # shape: first trip verbatim in the dedicated preheader with the
+    # capture flipped to exec-while-record (cost = capture word +
+    # record-engine overhead only), remaining trips as playback
+    # launches, counter re-initialized one step later; the launch-loop
+    # unroll then composes (proven trips).  benefit_peel =
+    # (trips-1)*(before-after) - (RISC_PUSH + RECORD_OVERHEAD).
+    # addrsqrt-fresh: rolled 24w x 31-trip row loop -> exec-while-record
+    # 0,24,1,1 capture + 30 straight launches = the hand kernel's
+    # delivery class exactly.  MEASURED WORSE on silicon (envelope law
+    # 5th confirmation; see the addrsqrt-fresh row note) — ships
+    # default-off for cert reproducibility (the IM precedent).
+    # Refusals by name keep the plain refusal's bytes
+    # (counted-capture-peel-trips-unproven / -benefit /
+    # replay-reissue-latency-unproved / record-hoist-peel-* /
+    # post-autoincr-window-carried-peel-launch-arithmetic-unproven).
+    "counted-capture-peel": "-mtt-tensix-optimize-counted-capture-peel",
 }
 
 
@@ -1644,6 +1665,14 @@ KNOB_MODES = {
     # promotion requires an R9 witness and the ON-vs-ON attribution
     # ceremony.
     "replay-window-sizing": "on-plus",
+    # IO counted-capture-peel: default-off Init(0) measurement/cert
+    # knob composing on replay-hoist (reviewed ON) — it re-prices only
+    # counted-loop captures the plain hoist refused — so the A/B is
+    # (ON + flag) vs plain ON.  MEASURED-WORSE on its target row
+    # (addrsqrt-fresh +0.42%); kept registered for cert
+    # reproducibility, NOT booked, NOT a promotion candidate without a
+    # new silicon winner + R9 witness.
+    "counted-capture-peel": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
