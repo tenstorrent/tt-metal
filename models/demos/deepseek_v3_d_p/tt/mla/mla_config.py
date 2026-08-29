@@ -589,7 +589,8 @@ def get_sdpa_config(seq_len_local: int) -> dict | list | None:
 # indexer runs indexer_score with head_group_size=0, so ALL index heads stay on-chip and the key
 # chunk is L1-bound, scaling ~1/heads. Values are measured per-model optima on Blackhole.
 # DeepSeek is flat at 64. GLM's fused ring path uses five-tile block-cyclic runs, so KC=10 avoids
-# splitting a run across work units while remaining fast at both 55K and 512K prefixes.
+# splitting a run across work units while remaining fast at both 55K and 512K prefixes. The 320 value
+# is L1-validated for the fused 32-head Ring Indexer; revalidate L1 before reusing it in a classic path.
 DSA_INDEXER_CONFIG: dict[int, dict[str, int]] = {
     64: {"k_chunk_size": 64},  # DeepSeek V3.2
     32: {"k_chunk_size": 320},  # GLM 5.1 / 5.2
