@@ -533,6 +533,55 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
             collected.tensor_parameter_users[binding.tensor_parameter_name].push_back(&kernel);
         }
+
+        std::unordered_set<std::string> reserved_type_aliases;
+        reserved_type_aliases.reserve(accessor_names.size());
+        for (const auto& binding_name : accessor_names) {
+            reserved_type_aliases.insert(binding_name + "_t");
+        }
+
+        std::unordered_set<std::string> sequence_names;
+        for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
+            TT_FATAL(
+                IsValidCppIdentifier(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !accessor_names.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
+                kernel.unique_id,
+                sequence.sequence_name);
+            TT_FATAL(
+                !reserved_type_aliases.contains(sequence.sequence_name),
+                "Kernel '{}' tensor binding sequence_name '{}' collides with generated type alias '{}'",
+                kernel.unique_id,
+                sequence.sequence_name,
+                sequence.sequence_name);
+            auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name);
+            TT_FATAL(
+                sinserted,
+                "Kernel '{}' has duplicate tensor binding sequence_name '{}'",
+                kernel.unique_id,
+                sequence.sequence_name);
+
+            std::unordered_set<std::string> member_names;
+            for (const auto& member : sequence.members) {
+                TT_FATAL(
+                    accessor_names.contains(member),
+                    "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+                auto [mit, minserted] = member_names.insert(member);
+                TT_FATAL(
+                    minserted,
+                    "Kernel '{}' tensor binding sequence '{}' has duplicate member '{}'",
+                    kernel.unique_id,
+                    sequence.sequence_name,
+                    member);
+            }
+        }
     }
 
     // A borrowed-memory DFB uses its backing TensorParameter via DataflowBufferSpec::borrowed_from
@@ -2788,7 +2837,6 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !gen2.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
-        .enable_2x_src_format = gen2.enable_2x_src_register,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
@@ -3148,6 +3196,14 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
         // will later fill each handle's allocated_address.
         kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
+
+        std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;
+        tensor_binding_sequences.reserve(kernel_spec.advanced_options.tensor_binding_sequences.size());
+        for (const auto& sequence : kernel_spec.advanced_options.tensor_binding_sequences) {
+            tensor_binding_sequences.push_back(
+                TensorBindingSequenceHandle{.sequence_name = sequence.sequence_name, .members = sequence.members});
+        }
+        kernel->set_tensor_binding_sequences(std::move(tensor_binding_sequences));
 
         // Prefix length for device get_compile_time_vararg* bounds (values are in compile_time_args_).
         kernel->set_compile_time_vararg_count(vararg_cta_count);

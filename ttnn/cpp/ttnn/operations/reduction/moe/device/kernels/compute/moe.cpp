@@ -166,7 +166,7 @@ void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
 
     reconfig_data_format_srca(in0_dfb);
     eqz_tile_init();
-    copy_tile_to_dst_init_short(in0_dfb);
+    copy_init(in0_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -191,7 +191,7 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(in_dfb);
 
-    copy_tile_to_dst_init_short(in_dfb);
+    copy_init(in_dfb);
     recip_tile_init();
 
     in_dfb_obj.wait_front(num_tiles);
@@ -350,12 +350,14 @@ void mask_and_topk() {
                 uint32_t right_ind = left_ind + (1 << m_iter);
                 tile_regs_acquire();
 
-                copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
+                reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
+                copy_init(input_transposed_dfb_index);
                 copy_tile(input_transposed_dfb_index, left_ind, input_dest_start);
                 copy_tile(input_transposed_dfb_index, right_ind, input_dest_end);
 
                 // unpack indices into dest
-                copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+                reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+                copy_init(index_transposed_dfb_index);
                 copy_tile(index_transposed_dfb_index, left_ind, index_dest_start);
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
