@@ -362,24 +362,32 @@ def run_test_exp_ring_joint_sdpa(
     ids=["ring"],
 )
 @pytest.mark.parametrize(
-    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size",
+    "mesh_device, num_links, nh, base_seq_len, rp_axis, rp_factor, up_axis, up_factor, q_chunk_size, k_chunk_size, pad_to",
     [
-        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512),
+        ((4, 32), 2, 40, 75600, 1, 32, 0, 4, 224, 512, None),
         # Head-serial passes: nh/up_factor heads land on each device and the op walks
         # ceil(heads_per_device / grid_rows) of them per core row as serial passes. With 10 grid
         # rows, 40 heads -> 10 per device -> 1 pass; 80 heads -> 20 per device -> 2 passes.
-        ((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512),
+        ((4, 32), 2, 80, 75600, 1, 32, 0, 4, 224, 512, None),
         # Minimal spillover: 44 heads -> 11 per device -> row 0 runs 2 passes (heads 0 and 10),
         # rows 1-9 run 1 pass (heads 1-9) on the same P=2 build. Isolates the multi-pass row.
-        ((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512),
+        ((4, 32), 2, 44, 75600, 1, 32, 0, 4, 224, 512, None),
         # H3 15s: 108544 = 106 * 1024 -> 3392 local tiles -> q=320 (11 columns), k=384. Resident Q
         # does not fit L1 at P=2, so this is the one config that exercises the factory's streamed-Q
         # fallback (stream_q). 56 heads -> 14/device: rows 0-3 run 2 passes, rows 4-9 run 1.
-        ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384),
-        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512),
-        ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512),
+        ((4, 32), 2, 56, 108544, 1, 32, 0, 4, 320, 384, None),
+        ((4, 8), 2, 40, 18944, 1, 8, 0, 4, 224, 512, None),
+        # Whole-chunk skip: the pad tail on the LAST ring device covers an entire K chunk, so the
+        # "KV chunk beyond logical_n" skip fires and one ring iteration processes fewer chunks than
+        # the rest (here 1 instead of 2). Mirrors the fl2va 4x32 pipeline hang geometry
+        # (base 31,930 -> padded 32,768: N_local 32 tiles, logical_nt one tile short of the last
+        # chunk) scaled to sp=8: padded 8,192 -> logical_nt 240, last shard chunks at tile 224
+        # (processed) and 240 (skipped). pad_to overrides get_padded_vision_seq_len because its
+        # 32*sp alignment cannot produce a >= one-chunk tail at sp=8.
+        ((4, 8), 2, 56, 7680, 1, 8, 0, 4, 96, 512, 8192),
+        ((1, 4), 2, 10, 8960, 1, 4, 0, 1, 224, 512, None),
     ],
-    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x8", "1x4"],
+    ids=["4x32", "4x32_2pass", "4x32_1spill", "4x32_2pass_streamq", "4x8", "4x8_chunkskip", "1x4"],
     indirect=["mesh_device"],
 )
 @pytest.mark.skipif(
@@ -397,6 +405,7 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     up_factor,
     q_chunk_size,
     k_chunk_size,
+    pad_to,
     all_gather_topology,
     reset_seeds,
 ):
@@ -411,7 +420,9 @@ def test_exp_ring_joint_sdpa_dit_bh_glx_custom(
     if nh % up_factor != 0:
         nh = math.ceil(nh / up_factor) * up_factor
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
-    padded_seq_len = get_padded_vision_seq_len(base_seq_len, list(mesh_device.shape)[rp_axis])
+    padded_seq_len = (
+        pad_to if pad_to is not None else get_padded_vision_seq_len(base_seq_len, list(mesh_device.shape)[rp_axis])
+    )
 
     run_exp_ring_joint_sdpa(
         submesh,
