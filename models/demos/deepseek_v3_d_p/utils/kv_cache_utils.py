@@ -16,6 +16,7 @@ import ttnn
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -23,7 +24,6 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 # at runtime: harvested parts expose fewer banks (e.g. 7), and the cache ND-shard grid + the
 # disaggregation address-table striding must both use the device's actual count to stay consistent.
 BH_NUM_DRAM_BANKS = 8
-PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
 class MlaKvCacheFormat(str, Enum):
@@ -470,6 +470,7 @@ def populate_kv_chunk_address_table_kimi(
     num_users=1,
     config_id=0,
     stage_layout=None,
+    layer_rows=None,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from a device cache tensor.
@@ -485,11 +486,24 @@ def populate_kv_chunk_address_table_kimi(
         lookup_table: an existing KvChunkAddressTable (single- or multi-config).
         config: the KvChunkAddressTableConfig for THIS config_id (read for num_layers).
         config_id: which config of the table to populate (default 0, the single-config case).
+        layer_rows: table row to publish each dense cache layer at; None (default) means row == layer.
+            A compacted cache passes its dense -> global layer map here; DRAM addresses do not move.
         (remaining args as in create_kv_chunk_address_table_kimi)
 
     Returns:
         lookup_table: the same table, with config_id populated.
     """
+
+    # Row a dense cache layer is published at; identity unless the cache is compacted.
+    def _table_row(dense_layer):
+        if layer_rows is None:
+            return dense_layer
+        assert dense_layer < len(layer_rows), (
+            f"layer_rows has {len(layer_rows)} entries but the cache holds dense layer {dense_layer}; "
+            f"the map must cover every layer the cache physically stores"
+        )
+        return layer_rows[dense_layer]
+
     if stage_layout is not None:
         # ---- stage_layout-driven path (PP-capable, #48826). ----
         # Per-stage device groups + host tags are built inside the stage loop below (one group per
@@ -497,15 +511,13 @@ def populate_kv_chunk_address_table_kimi(
         # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
         rows = mesh_shape[0]
 
-        tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
-        num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS  # number of 5k chunks in the seq len
+        tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
+        num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS  # number of 5k chunks in the seq len
 
-        assert (
-            seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
-        ), f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_OUTPUT_TOKENS}"
+        assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
 
         assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-            f"{PREFILL_CHUNK_OUTPUT_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+            f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
             f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
         )
 
@@ -532,7 +544,7 @@ def populate_kv_chunk_address_table_kimi(
                     for local_layer in range(count):
                         global_layer = first + local_layer
                         for seq_chunk in range(num_chunks_per_seq_len):
-                            chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + row * tokens_per_chunk_local
+                            chunk_token_start = seq_chunk * PREFILL_CHUNK_TOKENS + row * tokens_per_chunk_local
                             chunk_token_end = chunk_token_start + tokens_per_chunk_local
                             for position in range(
                                 chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
@@ -541,7 +553,7 @@ def populate_kv_chunk_address_table_kimi(
                                 location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                                 location.size_bytes = chunk_size_bytes
                                 location.device_group_index = group_idx
-                                lookup_table.set(global_layer, position, slot, location, config_id)
+                                lookup_table.set(_table_row(global_layer), position, slot, location, config_id)
 
                                 curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                                 if curr_bank_id == 0:
@@ -562,18 +574,16 @@ def populate_kv_chunk_address_table_kimi(
 
     num_layers = config.num_layers
 
-    assert (
-        seq_len % PREFILL_CHUNK_OUTPUT_TOKENS == 0
-    ), f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_OUTPUT_TOKENS}"
-    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_OUTPUT_TOKENS
+    assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
+    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS
 
     assert (
         tt_kvpe_cache.shape[0] == num_users * num_layers
     ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
 
-    tokens_per_chunk_local = PREFILL_CHUNK_OUTPUT_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
+    tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
     assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-        f"{PREFILL_CHUNK_OUTPUT_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+        f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
     )
 
@@ -605,14 +615,14 @@ def populate_kv_chunk_address_table_kimi(
         for slot in range(num_users):
             for layer in range(num_layers):
                 for seq_chunk in range(num_chunks_per_seq_len):
-                    chunk_token_start = seq_chunk * PREFILL_CHUNK_OUTPUT_TOKENS + global_row * tokens_per_chunk_local
+                    chunk_token_start = seq_chunk * PREFILL_CHUNK_TOKENS + global_row * tokens_per_chunk_local
                     chunk_token_end = chunk_token_start + tokens_per_chunk_local
                     for position in range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
                         location = ttnn.experimental.disaggregation.KvCacheLocation()
                         location.noc_addr = (curr_bank_id << 32) | (dram_bank_base_addr + curr_bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        lookup_table.set(layer, position, slot, location, config_id)
+                        lookup_table.set(_table_row(layer), position, slot, location, config_id)
 
                         curr_bank_id = (curr_bank_id + 1) % num_dram_banks
                         if curr_bank_id == 0:
@@ -634,7 +644,7 @@ def populate_kv_chunk_address_table_dflash(
     head_idx,
     num_users=1,
     config_id=0,
-    chunk_size_global=PREFILL_CHUNK_OUTPUT_TOKENS,
+    chunk_size_global=PREFILL_CHUNK_TOKENS,
 ):
     """
     Populate ONE config (``config_id``) of an existing KvChunkAddressTable from ONE HEAD of the DFlash

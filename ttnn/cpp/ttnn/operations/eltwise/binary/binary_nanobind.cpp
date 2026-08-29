@@ -870,6 +870,9 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the cores every composed step runs on. Defaults to `None`.
+            sub_device_id (ttnn.SubDeviceId, optional): sub-device whose worker cores to run on, as an alternative to
+                spelling them out in :attr:`sub_core_grids`. Mutually exclusive with it. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -886,6 +889,13 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
                  - TILE
 
             Implemented for Blackhole only.
+
+            Restricting the cores forces the intermediates to the output's memory space, because the
+            L1 placement this picks on a full grid is unsafe next to a concurrently running op. For
+            the same reason a core restriction rejects an interleaved-L1 output, whether asked for
+            through :attr:`memory_config` or inherited from an interleaved-L1 :attr:`input_tensor_a`:
+            such a buffer takes L1 on the cores restricted away. Sharded L1 is accepted -- its shard
+            spec confines it.
         )doc",
         std::string(Name),
         "ttnn." + std::string(Name),
@@ -901,7 +911,9 @@ void bind_situ_glu(nb::module_& mod, const std::string& description, const std::
         nb::arg("beta1"),
         nb::arg("beta2"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
 }
 
 template <ttnn::unique_string Name, typename Fn>

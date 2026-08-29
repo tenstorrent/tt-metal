@@ -32,6 +32,7 @@ def _build_failure_body(
     test_output: str,
     attachment_names: list[str] | None = None,
     restart_count: int = 0,
+    reboot_failure: str | None = None,
     grafana_base_url: str = "",
 ) -> str:
     """Build the shared failure detail block used by both a new ticket's
@@ -43,6 +44,14 @@ def _build_failure_body(
     reboot_line = ""
     if restart_count > 0:
         reboot_line = f"*Reboot recovery:* failure persisted after {restart_count} reboot(s)\n"
+
+    # A failed self-heal reboot means the run never got its clean rerun; flag it
+    # with the error so it isn't read as a normal single-run failure.
+    reboot_failure_line = ""
+    if reboot_failure:
+        reboot_failure_line = (
+            f"*Self-heal reboot: FAILED* - node was NOT rebooted or requeued. " f"Reason: {{{{{reboot_failure}}}}}\n"
+        )
 
     telemetry_section = ""
     if telemetry_summary:
@@ -64,6 +73,7 @@ def _build_failure_body(
         f"*Slurm Job ID:* {slurm_job_id}\n"
         f"*Exit Code:* {exit_code}\n"
         f"{reboot_line}"
+        f"{reboot_failure_line}"
         f"*TT-SMI Version:* {versions['tt_smi']}\n"
         f"*TT-KMD Version:* {versions['tt_kmd']}\n"
         f"*Firmware Version:* {versions['fw_bundle']}\n"
@@ -221,6 +231,7 @@ def create_jira_ticket(
     telemetry_summary: str = "",
     attachment_names: list[str] | None = None,
     restart_count: int = 0,
+    reboot_failure: str | None = None,
     grafana_base_url: str = "",
 ) -> str | None:
     """Create a JIRA ticket for a failed health check. Returns ticket key or None."""
@@ -234,6 +245,7 @@ def create_jira_ticket(
         test_output=test_output,
         attachment_names=attachment_names,
         restart_count=restart_count,
+        reboot_failure=reboot_failure,
         grafana_base_url=grafana_base_url,
     )
 

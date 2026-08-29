@@ -974,17 +974,21 @@ int main(int argc, char** argv) {
                 std::set<std::set<std::string>> seen_host_sets;
                 const std::filesystem::path index_path = output_dir / "solutions_index.yaml";
 
-                // emitted counts solutions returned by the enumerator (matches the batch --max-solutions cap
-                // semantics, which bound the enumeration before host-set dedup); cap_reached distinguishes
-                // "stopped at the cap (more may exist)" from "enumeration genuinely exhausted".
-                // Safety cap for the unbounded (max_solutions==0) case: match the batch solver's internal
-                // enumeration cap so the streaming path can't run beyond the documented bound / unbounded disk.
+                // Cap semantics: WITHOUT --distinct-host-sets, the cap bounds raw enumerator outputs
+                // (matches the batch --max-solutions semantics). WITH --distinct-host-sets, the cap bounds
+                // WRITTEN (distinct) solutions instead: the SAT enumeration explores near-neighbor
+                // assignments first, so many consecutive raw solutions share one host set -- counting raw
+                // outputs starves the mode of exactly the host-set variety it exists to produce (e.g. 20
+                // raw solutions collapsing to 7 distinct sets, all anchored on the first host). The raw
+                // safety cap still bounds total solver work in both modes.
+                // cap_reached distinguishes "stopped at the cap (more may exist)" from "genuinely exhausted".
                 constexpr std::size_t kEnumerationSafetyCap = 500000;
                 const std::size_t effective_cap = args.max_solutions != 0 ? args.max_solutions : kEnumerationSafetyCap;
                 std::size_t emitted = 0;
                 bool cap_reached = false;
                 while (true) {
-                    if (emitted >= effective_cap) {
+                    const std::size_t capped_count = args.distinct_host_sets ? index_entries.size() : emitted;
+                    if (capped_count >= effective_cap || emitted >= kEnumerationSafetyCap) {
                         cap_reached = true;
                         break;
                     }
