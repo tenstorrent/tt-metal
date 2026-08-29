@@ -301,17 +301,52 @@ class TtRelPosAttention:
         exactly that, and getting it backwards leaks a megabyte per layer per token.
         """
         if not self.cache_pos_proj:
-            p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), b, pos_emb.shape[1])
-            pt = ttnn.permute(p, (0, 1, 3, 2))
-            ttnn.deallocate(p)
+            pt = self._project_pos(pos_emb, b)
             return pt
-        hit = self._pt_cache.get(id(pos_emb))
+        hit = self._pt_cache.get((id(pos_emb), b))
         if hit is not None:
             return hit[1]
-        p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), b, pos_emb.shape[1])
+        pt = self._project_pos(pos_emb, b)
+        self._pt_cache[(id(pos_emb), b)] = (pos_emb, pt)
+        return pt
+
+    def release_pos_proj_cache(self):
+        """Free the cached `linear_pos` projections.
+
+        Needed because the cache is keyed on `(pos_emb, batch)` and the batched
+        projection is the decode step's largest constant -- a sweep over batch sizes
+        would otherwise hold one widened copy per size per layer until the device
+        closed. Safe only once every trace that referenced them has been released:
+        a trace holds device pointers into these, so freeing one under a live trace
+        is a use-after-free that surfaces as corrupted attention, not as an error.
+        """
+        for _, pt in self._pt_cache.values():
+            ttnn.deallocate(pt)
+        self._pt_cache.clear()
+
+    def _project_pos(self, pos_emb, b):
+        """`linear_pos(pos_emb)`, head-split, transposed, widened to `b` rows.
+
+        **The window does not depend on the batch row.** Relative position is a
+        function of the key axis alone, so every sequence in a batch projects the
+        *same* `[1, h, d_k, N]` block -- the projection runs once and the result is
+        repeated, rather than running `b` identical 536 MFLOP matmuls. `pos_emb`
+        itself arrives batch-1 from `TtARDecoder.positional`, which is why the
+        head-split below is asked for one row regardless of `b`.
+
+        The repeat is materialised rather than left to matmul broadcasting because
+        the result is cached for the life of an utterance and, on the traced path,
+        for the life of a trace: a shape the kernel has to broadcast on every replay
+        is a per-step cost, where this is a one-off. It costs `b * 14 * ~1 MB` of
+        DRAM at `max_len = 256`, which is the batch decode step's largest constant.
+        """
+        p = self._heads(ttnn.linear(pos_emb, self.wp, compute_kernel_config=self.cc), 1, pos_emb.shape[1])
         pt = ttnn.permute(p, (0, 1, 3, 2))
         ttnn.deallocate(p)
-        self._pt_cache[id(pos_emb)] = (pos_emb, pt)
+        if b > 1:
+            wide = ttnn.repeat(pt, ttnn.Shape((b, 1, 1, 1)))
+            ttnn.deallocate(pt)
+            pt = wide
         return pt
 
     def _heads(self, x, b, t):
@@ -581,6 +616,15 @@ class TtRelPosAttention:
             ttnn.deallocate(bd_p)
             q4 = ttnn.permute(qu, (0, 2, 1, 3))
             ttnn.deallocate(qu)
+            if b > 1:
+                # `sdpa_decode` wants Q as `[1, b, nh, dh]` -- batch on dim 1, not dim
+                # 0 (see the op's own docstring). The permute above lands on
+                # `[b, 1, h, d_k]`, which enumerates the same elements in the same
+                # order, so this is a relabelling and not a move. At `b == 1` the two
+                # shapes are identical and the reshape is skipped rather than made a
+                # no-op op, to keep the single-utterance step -- the one every
+                # published figure is measured on -- byte-for-byte what it was.
+                q4 = ttnn.reshape(q4, (1, b, self.h, self.d_k))
             ctx = ttnn.transformer.scaled_dot_product_attention_decode(
                 q4,
                 k,
