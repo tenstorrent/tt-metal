@@ -1847,7 +1847,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
-        supports_async_decode = getattr(self, "model_capabilities", {}).get("supports_async_decode", True)
+        supports_async_decode = self.model_capabilities.get("supports_async_decode", False)
 
         # vLLM under async scheduling supplies a one-step-stale last token at
         # reset steps (its host state lags device sampling). The device token

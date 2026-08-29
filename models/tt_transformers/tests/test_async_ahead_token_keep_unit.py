@@ -8,10 +8,11 @@ position for a slot and adopt whatever the previous decode left in the device
 trace-input buffers, whenever the two positions are continuous
 (``dev_pos == host_pos`` or ``host_pos + 1``). That recovers the authoritative
 token under vLLM async scheduling, where the host trails the device by one step.
-Without that lag there is nothing to recover, so for a model declaring
-``model_capabilities["supports_async_decode"] = False`` the same rule can only
-substitute a stale token from an earlier request that happened to reuse the
-position.
+Without that lag there is nothing to recover, so for a model that does not declare
+``model_capabilities["supports_async_decode"]`` the same rule can only substitute a
+stale token from an earlier request that happened to reuse the position. The
+capability is read fail-closed, matching the vLLM platform, which treats a missing
+key as disabled when it decides whether to schedule the model asynchronously.
 
 The keep runs before any transformer layer and reads only torch tensors and the
 device trace-input buffers, so these tests stub the decode out and observe the
@@ -133,9 +134,9 @@ def _decoded_tokens_and_positions(mesh_device, capabilities, slot_remap=None):
         ),
         pytest.param(
             None,
-            KEPT_TOKENS,
-            KEPT_POSITIONS,
-            id="undeclared_capability_keeps_the_device_token",
+            HOST_TOKENS,
+            HOST_POSITIONS,
+            id="undeclared_capability_decodes_the_tokens_it_was_given",
         ),
     ],
 )
