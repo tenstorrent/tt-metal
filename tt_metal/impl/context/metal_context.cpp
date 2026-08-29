@@ -169,8 +169,10 @@ void MetalContext::initialize(
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
 
-    // Resolve the environment-dependent axis before storing the config. Consumers of the stored config can then
-    // require an explicit axis without consulting process-global state.
+    // Fill an unset axis before the re-init comparison below. A caller with no axis preference passes
+    // DispatchCoreConfig{}, and comparing that against the already-resolved stored config would read as a
+    // parameter change and tear down a context that in fact matches. Resolving first also leaves the stored
+    // snapshot complete, which get_dispatch_core_axis() now requires.
     DispatchCoreConfig resolved_config = dispatch_core_config;
     resolved_config.set_dispatch_core_axis(
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
