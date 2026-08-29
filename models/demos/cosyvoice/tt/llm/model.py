@@ -456,13 +456,20 @@ class TtTransformerLM:
             ttnn.deallocate(ys)
             per_row_caches.append(caches)
 
-        stacked = []
-        for layer in range(len(per_row_caches[0])):
-            k = ttnn.concat([c[layer][0] for c in per_row_caches], dim=0)
-            v = ttnn.concat([c[layer][1] for c in per_row_caches], dim=0)
-            stacked.append((k, v))
-        for caches in per_row_caches:
-            TtARDecoder.free_caches(caches)
+        if b == 1:
+            # `ttnn.concat` of a single tensor returns an **alias** of it, so the
+            # stack-then-free below would free the very buffers it just produced --
+            # the same aliasing trap `logits_for_last` documents for a full-extent
+            # `ttnn.slice`. One row needs no stacking.
+            stacked = per_row_caches[0]
+        else:
+            stacked = []
+            for layer in range(len(per_row_caches[0])):
+                k = ttnn.concat([c[layer][0] for c in per_row_caches], dim=0)
+                v = ttnn.concat([c[layer][1] for c in per_row_caches], dim=0)
+                stacked.append((k, v))
+            for caches in per_row_caches:
+                TtARDecoder.free_caches(caches)
 
         traced = TracedDecodeStep(self.decoder, max_len, batch=b).capture()
         traced.seed(stacked)
