@@ -16,6 +16,7 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+#include "api/debug/dprint.h"
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
@@ -2602,6 +2603,10 @@ void sdpa_ring_v2(
                 }
             }
             per_q_valid_kv++;
+        }
+
+        if (force_ref_k_frame) {
+            DPRINT("Cref q" << q << " pqv" << per_q_valid_kv << " nkv" << num_kv_chunks << ENDL());
         }
 
         // Sparse computation zero-work-iter fast path: this Q chunk has no processed K chunks in

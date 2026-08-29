@@ -14,6 +14,7 @@
 #include "metadata_scalar_read.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
+#include "api/debug/dprint.h"
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
@@ -1161,6 +1162,11 @@ void kernel_main() {
                 }
 
                 // Make K available to compute.
+                if (is_reference_iter) {
+                    DPRINT(
+                        "RKpush ri" << ring_iter << " qi" << q_iter << " kc" << k_chunk << " nkv" << num_kv_chunks
+                                    << ENDL());
+                }
                 cb_k.push_back(k_chunk_tiles);
                 KV_chunks_processed_in_iter++;
 
