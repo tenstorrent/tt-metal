@@ -1,5 +1,95 @@
 # Dependency and input-handling review
 
+> **For the maintainers / security owner:** three `torch` advisories are open and are
+> **not** closed by a version bump. The disposition being requested, the evidence
+> behind it, and what the alternatives cost are in the next section. Everything after
+> that is the full audit record.
+
+## Disposition requested: three open `torch` advisories
+
+Cycode has flagged the same three MEDIUM advisories against `requirements-reference.txt`'s
+`torch==2.6.0+cpu` on every scan since 2026-08-12, unchanged. They are the last three
+of the 39 findings this file opened with; the other 36, including every CRITICAL and
+every HIGH, are closed by removal or by a bump (see *Audit findings* below).
+
+| advisory | affected function | impact | fixed in |
+|---|---|---|---|
+| [CVE-2025-3730](https://nvd.nist.gov/vuln/detail/CVE-2025-3730) | `torch.nn.functional.ctc_loss` | denial of service | `2.8.0` |
+| [CVE-2025-2999](https://nvd.nist.gov/vuln/detail/CVE-2025-2999) | `torch.nn.utils.rnn.unpack_sequence` | memory corruption | `2.9.1` |
+| [CVE-2025-2998](https://nvd.nist.gov/vuln/detail/CVE-2025-2998) | `torch.nn.utils.rnn.pad_packed_sequence` | memory corruption | none recorded; range ends at `<= 2.6.0` |
+
+All three are CVSS 4.0 base **4.8 MEDIUM**, `AV:L/AC:L/PR:L/UI:N` — local access with
+existing privileges, no user interaction. NVD's own text for CVE-2025-3730 adds "the
+real existence of this vulnerability is still doubted at the moment". Two of the three
+are memory corruption rather than DoS, which is worth stating plainly because an
+earlier revision of this document called all three "local DoS" and that was wrong.
+
+**What ships.** Nothing. `requirements-reference.txt` builds a host-only venv for
+golden capture, weight export and WER/speaker scoring. Merging this demo installs
+none of it: `tt/`, `tests/` and `demo/` import only `torch`, `numpy`, `ttnn` and
+`loguru`, all of which tt-metal's `python_env` already carries. See *The port adds no
+runtime dependencies*.
+
+**Reachability, checked rather than asserted.** Each advisory names one function, so
+"does anything on the reference path call it" is a decidable question rather than a
+judgement:
+
+| where | `ctc_loss` | `unpack_sequence` | `pad_packed_sequence` |
+|---|---|---|---|
+| CosyVoice reference repo (all of it) | — | — | — |
+| this port's `scripts/` | — | — | — |
+| `openai-whisper` (WER scoring) | — | — | — |
+| `transformers` | `WavLMForCTC.forward`, under `if labels is not None` | — | — |
+| `torchaudio` | — | — | `models/tacotron2.py` |
+| `modelscope` | `trainers/audio/kws_utils` | — | `models/multi_modal/{mmr,prost}` |
+
+**Not one of those call sites is on the reference path.** The scoring script
+instantiates `WavLMForXVector` — a different class in the same file as `WavLMForCTC` —
+and never passes `labels`, so the `ctc_loss` branch is a training path that does not
+run. From `torchaudio` it calls `load`, `save` and `functional.resample`, not
+Tacotron-2. From `modelscope`, CosyVoice imports exactly `snapshot_download`, which
+reaches neither the video-retrieval models nor the keyword-spotting trainer. Repeat
+the check with:
+
+```bash
+grep -rn "ctc_loss\|unpack_sequence\|pad_packed_sequence" --include="*.py" \
+  $COSYVOICE_REPO models/demos/cosyvoice/scripts
+grep -rl "ctc_loss\|unpack_sequence\|pad_packed_sequence" --include="*.py" \
+  $COSYVOICE_ENV/lib/python3.10/site-packages
+```
+
+**Why the pin does not simply move.** Not compatibility — that was re-measured on
+2026-08-22 and every blocker previously recorded here turned out to be false (details
+below). The blocker is narrower and cannot be tested away:
+`torch.multinomial(probs, num_samples=1)` consumes the RNG stream differently in 2.8
+than in 2.6. The batched form, `topk` and `sort` are byte-identical, and so is the
+generator; model arithmetic survives the bump bit-exact. But the token drawn at decode
+step 2 changes, the utterance ends at 147 semantic tokens instead of 164, and **all 29
+goldens shift**. Every accuracy figure in `PERF.md` is measured against those goldens.
+
+So a bump is a re-baseline, not a numerical risk: regenerate the golden set, re-run
+the PCC suite on both architectures, and re-measure every figure derived from it. That
+is real work, and it buys nothing on the reachability table above.
+
+**The disposition being asked for.** One of:
+
+1. **Accept the risk and keep `torch==2.6.0+cpu`** — the recommendation. The findings
+   are local-privilege, MEDIUM, in functions no reference-path code calls, in a venv
+   the merge does not install.
+2. **Require the bump** — in which case the golden set is regenerated and every
+   accuracy figure re-measured before merge. `docs/security.md`'s *Reproducing*
+   section is the procedure; budget a full re-run of `tests/pcc` and `tests/e2e` on
+   both architectures.
+3. **Require the file's removal from the PR** — publishable, at the cost that the
+   goldens and the WER/similarity scores stop being reproducible from this tree.
+
+If (1) is granted, please record it on the PR; this document will carry the decision
+and its date so a later scan hits a written disposition rather than an open finding.
+
+---
+
+## The full audit record
+
 `pip-audit` run 2026-08-05; re-worked 2026-08-12 against the Cycode scan on the PR, which
 flagged 38 advisories across 10 pinned packages plus one SAST finding. A 39th arrived on
 2026-08-22 against `hydra-core` and is closed the same way, by a bump. The conclusion depends
@@ -45,10 +135,9 @@ help. So the pins moved.
 | fixed by a version bump | 3 CRITICAL, 9 HIGH, 7 MODERATE | `torch`, `lightning`, `diffusers`, `pyarrow`, `protobuf`, `modelscope`, `gdown`, `transformers`, `hydra-core` |
 | **outstanding** | **3 MODERATE** | `torch` ×3 |
 
-**36 of 39 closed, including every CRITICAL and every HIGH.** The three that remain are all
-`torch` MODERATE local-DoS: CVE-2025-3730 (fixed 2.8.0), CVE-2025-2999 (fixed 2.9.1), and
-CVE-2025-2998, whose range ends at `<= 2.6.0` with no fixed version recorded — 2.6.0 is its
-last affected release.
+**36 of 39 closed, including every CRITICAL and every HIGH.** The three that remain are
+the `torch` MEDIUMs dispositioned at the top of this document; see *Disposition
+requested* for their functions, their reachability and what a bump would cost.
 
 Re-measured 2026-08-22, because the reason recorded here was wrong. Neither the `triton` pin
 nor the `torchaudio` decoder blocks a bump any more: `openai-whisper` 20250625 relaxes triton
