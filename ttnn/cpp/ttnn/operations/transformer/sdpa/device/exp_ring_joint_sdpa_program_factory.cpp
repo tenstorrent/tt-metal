@@ -401,7 +401,28 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // reserves the new entry up front), which would deadlock at full depth — so give that case one
     // spare entry. The last active ring iteration is the only one that can be partial, and it
     // normalizes into cb_out instead of pushing to the FIFO, so it never needs the spare.
-    const uint32_t state_fifo_entries = num_passes + (num_local_k_chunks <= 1 ? 1 : 0);
+    // A pass that processes exactly ONE K/V chunk runs the state-FIFO entry (read + POST-step pop
+    // of this pass's previous state) and the FIFO exit (PRE-step reserve + push of its new state)
+    // around the SAME sdpa_inner_loop_step call — so the exit's reserve precedes the pop it needs.
+    // Rows whose pass count fills the FIFO deadlock on that reserve. Give the FIFO one spare entry
+    // whenever any ring iteration can process a single chunk: a one-chunk shard, or the
+    // beyond-logical_n whole-chunk skip shaving the last shard down to one chunk (a pad tail that
+    // covers at least one full K chunk — first hit by the fl2va 1024x768 canvas at 4x32).
+    bool some_iter_processes_one_chunk = (num_local_k_chunks <= 1);
+    for (uint32_t rid = 0; rid < args.ring_size && !some_iter_processes_one_chunk; ++rid) {
+        uint32_t iter_chunks = 0;
+        for (uint32_t kc = 0; kc < num_local_k_chunks; ++kc) {
+            // Mirrors the kernels' kv_chunk_is_beyond_logical_n skip (joint chunks never skip).
+            if (local_padded_Nt * rid + kc * Sk_chunk_t < logical_nt) {
+                iter_chunks++;
+            }
+        }
+        if (rid == args.ring_size - 1) {
+            iter_chunks += num_joint_k_chunks;
+        }
+        some_iter_processes_one_chunk = (iter_chunks == 1);
+    }
+    const uint32_t state_fifo_entries = num_passes + (some_iter_processes_one_chunk ? 1 : 0);
     log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
