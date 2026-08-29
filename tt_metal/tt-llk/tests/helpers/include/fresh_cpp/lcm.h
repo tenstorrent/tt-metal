@@ -116,10 +116,6 @@ __attribute__((noinline)) void calculate_lcm_fresh_cpp()
     {
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            // Keep the all-lane predicate boundary typed and local (the fresh
-            // binary max/min precedent) — the rounds below carry no CC writes.
-            __builtin_rvtt_sfppushc(0);
-            __builtin_rvtt_sfppopc(0);
             const sfpi::vInt a  = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
             const sfpi::vInt b  = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
             const sfpi::vInt ax = sfpi::as<sfpi::vInt>(sfpi::abs(a));

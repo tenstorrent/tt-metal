@@ -42,10 +42,6 @@ __attribute__((noinline)) void calculate_isclose_fresh_cpp(const std::uint32_t r
     {
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            // Keep the all-lane predicate boundary typed and local (the fresh
-            // binary max/min precedent).
-            __builtin_rvtt_sfppushc(0);
-            __builtin_rvtt_sfppopc(0);
             const sfpi::vFloat a = sfpi::dst_reg[0];
             const sfpi::vFloat b = sfpi::dst_reg[tile_rows];
 

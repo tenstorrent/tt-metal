@@ -104,11 +104,6 @@ __attribute__((noinline)) void calculate_typecast_uint16_to_fp16b_semantic()
 __attribute__((always_inline)) inline void calculate_typecast_uint16_to_fp16b_semantic()
 #endif
 {
-    // Establish a local typed all-lanes boundary. The compiler-owned macro
-    // descriptor is materialized in this out-of-line semantic function and
-    // does not depend on the caller's production initialization state.
-    __builtin_rvtt_sfppushc(0);
-    __builtin_rvtt_sfppopc(0);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; ++d)
     {

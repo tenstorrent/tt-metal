@@ -129,11 +129,8 @@ __attribute__((noinline)) void calculate_sigmoid_appx_tree_cpp()
 
 template <int ITERATIONS>
 __attribute__((noinline)) void calculate_signbit_fresh_cpp() {
-    for (int row = 0; row < ITERATIONS; ++row) {
-        // Keep the all-lane predicate boundary typed and local to this
-        // out-of-line semantic body so the compiler can prove its CC state.
-        __builtin_rvtt_sfppushc(0);
-        __builtin_rvtt_sfppopc(0);
+    for (int row = 0; row < ITERATIONS; ++row)
+    {
         const sfpi::vFloat input = sfpi::dst_reg[0];
         const sfpi::vInt sign = sfpi::as<sfpi::vInt>(sfpi::shft(sfpi::as<sfpi::vUInt>(input), -31));
         sfpi::dst_reg[0] = sfpi::int32_to_float(sign, sfpi::RoundMode::Nearest);
@@ -148,13 +145,8 @@ __attribute__((noinline)) void calculate_binary_max_min_fresh_cpp() {
 #pragma GCC unroll 4
     for (int face = 0; face < 4; ++face) {
 #pragma GCC unroll 8
-        for (int row = 0; row < ITERATIONS; ++row) {
-            // Keep the all-lane predicate boundary typed and local.  Compiler
-            // macro formation may hoist the identical enables with its owned
-            // descriptor configuration after proving that this body has no
-            // CC effects.
-            __builtin_rvtt_sfppushc(0);
-            __builtin_rvtt_sfppopc(0);
+        for (int row = 0; row < ITERATIONS; ++row)
+        {
             const sfpi::vFloat lhs = sfpi::dst_reg[0];
             const sfpi::vFloat rhs = sfpi::dst_reg[tile_rows];
             sfpi::dst_reg[0] = IS_MAX ? sfpi::max(lhs, rhs) : sfpi::min(lhs, rhs);
@@ -194,12 +186,6 @@ __attribute__((noinline)) void calculate_unary_max_min_fresh_cpp(const std::uint
 #pragma GCC unroll 8
     for (int row = 0; row < ITERATIONS; ++row)
     {
-        // Keep the all-lane predicate boundary typed and local.  Compiler
-        // macro formation may hoist the identical enables with its owned
-        // descriptor configuration after proving that this body has no
-        // CC effects.
-        __builtin_rvtt_sfppushc(0);
-        __builtin_rvtt_sfppopc(0);
         const sfpi::vFloat input = sfpi::dst_reg[0];
         sfpi::dst_reg[0]         = IS_MAX ? sfpi::max(input, operand) : sfpi::min(input, operand);
         sfpi::dst_reg++;
@@ -212,8 +198,6 @@ __attribute__((noinline)) void calculate_unary_max_min_int_fresh_cpp(const std::
 #pragma GCC unroll 8
     for (int row = 0; row < ITERATIONS; ++row)
     {
-        __builtin_rvtt_sfppushc(0);
-        __builtin_rvtt_sfppopc(0);
         if constexpr (IS_UNSIGNED)
         {
             // Typed unsigned min/max; the SFPI library owns the MSB-safe
@@ -338,12 +322,6 @@ __attribute__((noinline)) void calculate_mul_int_fresh_cpp()
 #pragma GCC unroll 8
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            // Keep the all-lane predicate boundary typed and local (the
-            // fresh max/min precedent): compiler macro formation may hoist
-            // the identical enables with its owned descriptor configuration
-            // after proving this body has no CC effects.
-            __builtin_rvtt_sfppushc(0);
-            __builtin_rvtt_sfppopc(0);
             const sfpi::vInt a   = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
             const sfpi::vInt b   = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
             const sfpi::vUInt ua = sfpi::as<sfpi::vUInt>(a);

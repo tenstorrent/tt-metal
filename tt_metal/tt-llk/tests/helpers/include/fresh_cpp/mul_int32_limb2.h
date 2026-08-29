@@ -54,10 +54,6 @@ __attribute__((noinline)) void calculate_mul_int_limb2_fresh_cpp()
 #pragma GCC unroll 8
         for (int row = 0; row < ITERATIONS; ++row)
         {
-            // Typed all-lane predicate boundary, the fresh max/min precedent
-            // (same idiom as impl 1).
-            __builtin_rvtt_sfppushc(0);
-            __builtin_rvtt_sfppopc(0);
             const sfpi::vInt a                              = sfpi::dst_reg[0].mode<sfpi::DataLayout::SM32>();
             const sfpi::vInt b                              = sfpi::dst_reg[tile_rows].mode<sfpi::DataLayout::SM32>();
             const sfpi::vUInt ua                            = sfpi::as<sfpi::vUInt>(a);
