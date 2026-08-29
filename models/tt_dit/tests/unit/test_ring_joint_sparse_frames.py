@@ -893,8 +893,10 @@ class TestSparseFramesRing:
             window=5,
             add_last_frame=True,
             all_gather_topology=all_gather_topology,
-            q_chunk_size_tokens=640,
-            k_chunk_size_tokens=640,
+            # 160/160 matches the real 4x32 non-exp chunk sizes (ring_chunk_sizes(fsl, 32)); keeps the
+            # QK score buffer (Sq*Sk = 5*5 tiles) small enough for L1, unlike 640/640.
+            q_chunk_size_tokens=160,
+            k_chunk_size_tokens=160,
             sparse_frames_enabled=True,
             reference_as_extra_k=True,
         )
