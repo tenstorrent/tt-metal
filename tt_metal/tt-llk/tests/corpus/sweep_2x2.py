@@ -1406,6 +1406,23 @@ KNOBS = {
     # count/shape/trip gaps all refuse by name and keep the opaque
     # refusal byte-identically.
     "opaque-replay-record": "-mtt-tensix-optimize-opaque-replay-record",
+    # IL (record-hoist-lift, 2026-08-28): walk a downstream-fallback-
+    # refused no-exec record-hoist placement OUTWARD across enclosing
+    # loops to the outermost dedicated preheader the same oracle proves
+    # separated (the oracle's distance walk runs upstream; a path
+    # reaching the function entry is separated) — the hand init-record
+    # discipline.  lcm-fresh: the 14-word Stein round window that
+    # re-recorded exec-while-record ONCE PER ROW becomes one no-exec
+    # entry record + 7 playbacks/row (record delivered once per kernel
+    # call).  Crossed loops must prove replay-preserving under the
+    # record-hoist interval walk; each candidate placement must be a
+    # dedicated, recording-state-clean preheader re-audited by the
+    # oracle; storeless by construction (the Dst-store mirror refuses
+    # first); a failing level stops the walk and no admissible level
+    # keeps today's bytes by name (record-hoist-lift-no-admissible-
+    # level).  Composes on -mtt-tensix-optimize-replay-record-hoist
+    # (reviewed ON).
+    "record-hoist-lift": "-mtt-tensix-optimize-record-hoist-lift",
 }
 
 
@@ -1593,6 +1610,11 @@ KNOB_MODES = {
     # while a booking knob; promotion requires an R9 witness and the
     # ON-vs-ON attribution ceremony.
     "opaque-replay-record": "on-plus",
+    # IL record-hoist-lift: default-off Init(0) booking knob composing
+    # on record-hoist (reviewed ON), so the booking A/B is (ON + flag)
+    # vs plain ON.  on-plus while a booking knob; promotion requires an
+    # R9 witness and the ON-vs-ON attribution ceremony.
+    "record-hoist-lift": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
