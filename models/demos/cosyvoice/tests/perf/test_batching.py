@@ -154,17 +154,49 @@ def test_device_batched_decode_matches_single(device):
         step.release()
         want.append(rows)
 
+    per_step = []
     worst, worst_at = 1.0, None
     for s in range(n_steps):
+        step_worst = 1.0
         for i in range(b):
             a = got[s][i].reshape(-1)
             e = want[i][s].reshape(-1)
             pcc = float(torch.corrcoef(torch.stack([a, e]))[0, 1])
+            step_worst = min(step_worst, pcc)
             if pcc < worst:
                 worst, worst_at = pcc, (s, i)
+        per_step.append(step_worst)
+
+    # The floor is architecture-dependent, and the reason is the same one
+    # `test_device_inplace_matches_untraced` records for the in-place KV cache: a
+    # batched step splits the key-axis reduction across cores differently from a
+    # single-row step, so the partial sums regroup. That is a rounding difference,
+    # not a wrong answer, and Wormhole shows more of it than Blackhole -- which also
+    # warns at runtime that HiFi4 with fp32 accumulation is worse than HiFi3 there,
+    # on a hardware bug. Blackhole measures 0.9999998808 and holds the tight bound;
+    # Wormhole measures ~0.9985, the same order as the in-place cache's documented
+    # 0.9986 on the same part, which is why that test's 0.995 is the bound here too.
+    wormhole = "WORMHOLE" in str(device.arch()).upper()
+    floor = 0.995 if wormhole else 0.999
+
     print(f"\n  batched vs single-row, B={b} ragged prefixes {prefix_lens}, {n_steps} steps")
     print(f"    worst hidden-state PCC {worst:.10f} at step {worst_at[0]} row {worst_at[1]}")
-    assert worst >= 0.999, f"batched row diverges from single-row at {worst_at}: PCC {worst}"
+    print("    per-step worst: " + "  ".join(f"{p:.6f}" for p in per_step))
+    print(f"    floor for this architecture: {floor}")
+
+    assert worst >= floor, f"batched row diverges from single-row at {worst_at}: PCC {worst}"
+
+    # **Non-accumulation is the real gate**, and it is the one a loosened bound would
+    # otherwise hide. Rounding that regroups per step stays put; a wrong mask, a
+    # mis-strided cache or a batch axis read as something else compounds, because each
+    # step's error feeds the next through the KV cache. So the last step must be no
+    # worse than the first, within noise -- the same shape of check
+    # `test_device_inplace_matches_untraced` makes against its control.
+    assert per_step[-1] >= per_step[0] - 0.002, (
+        f"batched decode drifts: step 0 worst {per_step[0]:.6f}, step {n_steps - 1} worst "
+        f"{per_step[-1]:.6f}. A per-step rounding difference does not compound; this does, "
+        "so suspect the mask or the cache stride rather than the reduction split."
+    )
 
 
 @needs_weights
