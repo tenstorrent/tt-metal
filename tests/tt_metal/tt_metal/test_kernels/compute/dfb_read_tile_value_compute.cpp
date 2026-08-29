@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+//
+// DM → Tensix consumer drain (1Sx1S), with read_tile_value / get_tile_address
+// after each wait_front(1). Quasar also builds TRISC_ISOLATE_SFPU (TRISC3); that
+// thread must not enter the mailbox APIs (UNPACK only writes Math+Pack), so the
+// peeks are gated to UNPACK/MATH/PACK only.
 
-#include "api/compute/common.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
 
@@ -17,56 +21,37 @@ void kernel_main() {
     const uint32_t result_l1_addr = get_arg(args::result_l1_addr);
 
     DataflowBuffer dfb(dfb::in);
+
+    // HW requires a copy (unpack) between wait_front and pop_front. No output DFB —
+    // configure unpack+pack against the input and discard the copied tile.
     unary_op_init_common(dfb.get_id(), dfb.get_id());
 
-    // Keep both entries at the front so tile_index 1 exercises fifo_page_size stride.
-    // Each TRISC thread writes the same mailbox-broadcast results to its own L1 slot so
-    // the host can verify UNPACK/MATH/PACK all received the same values.
-    constexpr uint32_t k_num_results = 7;
-    uint32_t results[k_num_results] = {};
+    // Per drain iteration (tile_index 0 = current front):
+    //   [0] read_tile_value<uint32_t>(0, 0)
+    //   [1] read_tile_value<uint32_t>(0, 1)
+    //   [2] *get_tile_address(0) as uint32_t
+    constexpr uint32_t k_results_per_entry = 3;
+    uint32_t results[num_entries_per_consumer * k_results_per_entry] = {};
 
-    dfb.wait_front(num_entries_per_consumer);
+    for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; ++tile_id) {
+        acquire_dst();
+        dfb.wait_front(1);
 
-#ifdef TRISC_UNPACK
-    {
-        const uint32_t read_ptr_bytes = dfb.get_read_ptr() << cb_addr_shift;
-        volatile tt_l1_ptr uint32_t* const w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_ptr_bytes);
-        // Sampled on this core only: cross-core DPRINT interleaving cannot establish ordering, but
-        // the posted count read here tells us whether wait_front had credits when it returned.
-        // posted < num_entries_per_consumer => wait_front returned without waiting.
-        LocalDFBInterface& intf = get_local_dfb_interface(dfb.get_id());
-        const auto& slot = intf.tc_slots[intf.tc_idx];
-        const uint8_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
-        DPRINT(
-            "consumer trisc={} mask={:#x} tc_idx={} tc_id={} posted={} cap={} rd_ptr={:#x} w0={:#x} w1={:#x}\n",
-            (uint32_t)ckernel::csr_read<ckernel::CSR::TRISC_ID>(),
-            (uint32_t)intf.tensix_trisc_mask,
-            (uint32_t)intf.tc_idx,
-            (uint32_t)tc_id,
-            (uint32_t)(ckernel::trisc::tile_counters[tc_id].f.posted & 0xFFFFu),
-            (uint32_t)ckernel::trisc::tile_counters[tc_id].f.buf_capacity,
-            read_ptr_bytes,
-            w[0],
-            w[1]);
-    }
+#if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
+        {
+            const uint32_t base = tile_id * k_results_per_entry;
+            results[base + 0] = dfb.read_tile_value<uint32_t>(0, 0);
+            results[base + 1] = dfb.read_tile_value<uint32_t>(0, 1);
+            const uint32_t tile_addr = dfb.get_tile_address(0);
+            results[base + 2] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
+        }
 #endif
 
-    results[0] = dfb.read_tile_value<uint32_t>(0, 0);
-    results[1] = dfb.read_tile_value<uint32_t>(0, 1);
-    results[2] = dfb.read_tile_value<uint32_t>(1, 0);
-    results[3] = dfb.read_tile_value<uint32_t>(1, 1);
-
-    const uint32_t tile_addr = dfb.get_tile_address(1);
-    results[4] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
-    results[5] = static_cast<uint32_t>(dfb.read_tile_value<uint16_t>(1, 0));
-    results[6] = static_cast<uint32_t>(dfb.read_tile_value<uint16_t>(1, 1));
-
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < num_entries_per_consumer; ++i) {
-        copy_tile(dfb.get_id(), 0, 0);  // dummy copy to avoid UNPACK wait -> pop trap on Quasar
+        copy_tile(dfb.get_id(), 0, 0);
         dfb.pop_front(1);
+        release_dst();
     }
-    tile_regs_release();
+    dfb.finish();
 
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH) || defined(TRISC_PACK)
 #ifdef ARCH_QUASAR
@@ -77,16 +62,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* const out =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(result_l1_ptr_addr);
 #if defined(TRISC_UNPACK)
-    constexpr uint32_t slot_base = 0 * k_num_results;
+    constexpr uint32_t slot_base = 0 * (num_entries_per_consumer * k_results_per_entry);
 #elif defined(TRISC_MATH)
-    constexpr uint32_t slot_base = 1 * k_num_results;
+    constexpr uint32_t slot_base = 1 * (num_entries_per_consumer * k_results_per_entry);
 #elif defined(TRISC_PACK)
-    constexpr uint32_t slot_base = 2 * k_num_results;
+    constexpr uint32_t slot_base = 2 * (num_entries_per_consumer * k_results_per_entry);
 #endif
-    for (uint32_t i = 0; i < k_num_results; ++i) {
+    for (uint32_t i = 0; i < num_entries_per_consumer * k_results_per_entry; ++i) {
         out[slot_base + i] = results[i];
     }
 #endif
-
-    dfb.finish();
 }

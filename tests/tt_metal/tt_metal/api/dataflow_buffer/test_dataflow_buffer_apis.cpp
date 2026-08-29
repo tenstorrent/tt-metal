@@ -49,36 +49,34 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
         GTEST_SKIP() << "Skipping DataflowBufferReadTileValue for tt-sim until GH#50135 is resolved";
     }
 
+    // Same shape as M2 DMTensix 1Sx1S: DM producer + Tensix drain loop, with
+    // read_tile_value / get_tile_address after each wait_front(1) on
+    // UNPACK/MATH/PACK only (not TRISC_ISOLATE_SFPU). Host checks the DFB ring
+    // and the three TRISC result slots.
     constexpr uint32_t num_producers = 1;
     constexpr uint32_t num_consumers = 1;
     constexpr uint32_t entry_size = 1024;
     constexpr uint32_t num_entries = 2;
 
-    constexpr uint32_t num_results_per_thread = 7;
-    constexpr uint32_t num_trisc_threads = 3;
+    constexpr uint32_t results_per_entry = 3;  // u32[0], u32[1], *get_tile_address(0)
+    constexpr uint32_t num_trisc_threads = 3;  // UNPACK / MATH / PACK
 
-    // Tile 0 / tile 1 scalars at element offsets 0 and 1 within each entry.
     constexpr DataT tile0_val0 = 0xA5A5A5A5u;
     constexpr DataT tile0_val1 = 0x11111111u;
-    // Distinct low/high halfwords so uint16 reads can distinguish T-indexing from uint32-indexing + truncate.
     constexpr DataT tile1_val0 = 0xABCD1234u;
     constexpr DataT tile1_val1 = 0x33333333u;
-    constexpr uint16_t tile1_val0_lo = 0x1234u;
-    constexpr uint16_t tile1_val0_hi = 0xABCDu;
-    // Both entries stay at the front; tile_index 0/1 address fifo_rd_ptr + {0, fifo_page_size}.
-    // Per thread: {tile0[0], tile0[1], tile1[0], tile1[1], get_tile_address(1)[0],
-    //             read_tile_value<uint16_t>(1)[0], read_tile_value<uint16_t>(1)[1]}
+
+    // Per TRISC: entry0 {v0,v1,addr0}, entry1 {v0,v1,addr0}
     const std::vector<DataT> expected_per_thread = {
         tile0_val0,
         tile0_val1,
+        tile0_val0,
         tile1_val0,
         tile1_val1,
         tile1_val0,
-        tile1_val0_lo,
-        tile1_val0_hi};
-    // UNPACK, MATH, and PACK each write expected_per_thread to a distinct L1 slot.
+    };
     std::vector<DataT> expected_scalar_reads;
-    expected_scalar_reads.reserve(num_results_per_thread * num_trisc_threads);
+    expected_scalar_reads.reserve(expected_per_thread.size() * num_trisc_threads);
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         expected_scalar_reads.insert(
             expected_scalar_reads.end(), expected_per_thread.begin(), expected_per_thread.end());
@@ -104,7 +102,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
 
     m2::DataMovementHardwareConfig producer_hw;
     m2::ComputeHardwareConfig consumer_hw;
-    if (device->arch() == ARCH::QUASAR) {
+    if (this->device().arch() == ARCH::QUASAR) {
         producer_hw = m2::DataMovementGen2Config{.disable_dfb_implicit_sync_for = {DFB}};
         consumer_hw = m2::ComputeGen2Config{};
     } else {
@@ -149,7 +147,7 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
     m2::ProgramSpec spec{
-        .name = "dfb_read_tile_value_2tiles",
+        .name = "dfb_read_tile_value_drain",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()}},
@@ -157,6 +155,10 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
     };
 
     Program program = m2::MakeProgramFromSpec(this->device(), spec);
+
+    // Single-DFB 1Sx1S: ring starts at the L1 allocator base (same as other M2 DFB tests).
+    const uint32_t dfb_l1_addr =
+        static_cast<uint32_t>(this->device().allocator()->get_base_allocator_addr(HalMemType::L1));
 
     const uint32_t result_size_bytes = static_cast<uint32_t>(expected_scalar_reads.size() * sizeof(DataT));
     const uint32_t l1_alignment = this->device().allocator()->get_alignment(BufferType::L1);
@@ -193,15 +195,23 @@ TEST_F(UnitMeshFixture, DataflowBufferReadTileValue) {
 
     LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
+    // pop_front only advances credits; the producer-filled ring contents remain for host peek.
     tt_driver_atomics::mfence();
+    std::vector<DataT> l1_ring;
+    slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), dfb_l1_addr, num_entries * entry_size, l1_ring);
+    ASSERT_EQ(l1_ring.size(), total_words);
+    EXPECT_EQ(l1_ring[0], tile0_val0) << "entry0 word0 at DFB L1 0x" << std::hex << dfb_l1_addr;
+    EXPECT_EQ(l1_ring[1], tile0_val1) << "entry0 word1";
+    EXPECT_EQ(l1_ring[words_per_entry + 0], tile1_val0) << "entry1 word0";
+    EXPECT_EQ(l1_ring[words_per_entry + 1], tile1_val1) << "entry1 word1";
+
     std::vector<DataT> scalar_results;
     slow_dispatch::ReadFromL1(this->device(), CoreCoord(0, 0), result_l1_addr, result_size_bytes, scalar_results);
     ASSERT_EQ(scalar_results.size(), expected_scalar_reads.size());
+    const uint32_t num_results_per_thread = num_entries * results_per_entry;
     for (uint32_t thread = 0; thread < num_trisc_threads; ++thread) {
         const auto begin = scalar_results.begin() + thread * num_results_per_thread;
-        EXPECT_EQ(
-            std::vector<DataT>(begin, begin + num_results_per_thread),
-            expected_per_thread)
+        EXPECT_EQ(std::vector<DataT>(begin, begin + num_results_per_thread), expected_per_thread)
             << "TRISC thread slot " << thread;
     }
 }

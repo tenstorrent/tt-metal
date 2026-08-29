@@ -45,8 +45,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
             {
                 const uint32_t wr_ptr = dfb.get_write_ptr();
-                volatile tt_l1_ptr uint32_t* const landed =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wr_ptr + MEM_L1_UNCACHED_BASE);
+                volatile tt_l1_ptr uint32_t* const landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wr_ptr);
                 DPRINT(
                     "producer page {} wr_ptr={:#x} landed[0]={:#x} landed[1]={:#x}\n",
                     page_id,
