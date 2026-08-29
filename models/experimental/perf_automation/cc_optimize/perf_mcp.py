@@ -3320,7 +3320,7 @@ def _load_thermal_profile():
     return _adopt_per_model_profiles(doc)
 
 
-def _cooldown_after_clamp(target_c: float = 0.0) -> tuple:
+def _cooldown_after_clamp(target_c: float = 0.0, give_up_on_plateau: bool = True) -> tuple:
     """Hold until the board is genuinely cold, after the hardware has been observed throttling.
 
     THE HEADROOM WAIT GIVES UP; THIS ONE DOES NOT (until its own bound). _wait_for_thermal_headroom
@@ -3377,7 +3377,7 @@ def _cooldown_after_clamp(target_c: float = 0.0) -> tuple:
                     file=sys.stderr,
                     flush=True,
                 )
-            elif time.time() - best_t >= _COOLDOWN_PLATEAU_S:
+            elif give_up_on_plateau and time.time() - best_t >= _COOLDOWN_PLATEAU_S:
                 print(
                     "  [thermal-gate] board has sat at %.1fC for %.0fs and is no longer cooling -- that "
                     "is its floor in this chassis, so the %.1fC target is unreachable"
@@ -3493,6 +3493,53 @@ def _read_die_temp_c():
     if v is not None:
         globals()["_LAST_KNOWN_TEMP_C"] = float(v)
     return v
+
+
+_SAFETY_CEILING_C = 90.0
+_COOL_BACK_TO_C = 65.0
+
+
+def cool_if_over_safety_ceiling(label: str = "") -> bool:
+    """Hold the work back when the board is HOT ENOUGH TO LOSE A CHIP, not merely too warm to measure.
+
+    THESE ARE TWO DIFFERENT JOBS AND THE TOOL ONLY HAD ONE. _START_TEMP_C (65C) protects the READING:
+    a run that starts warm clamps partway through and reports an inflated device_ms. It is checked
+    once, before a device process launches, and by design says nothing afterwards. Nothing in this
+    tool protected the HARDWARE.
+
+    Measured on this liquid-cooled p300c, twice within nine hours: the launch gate passed at 65C, the
+    board then climbed to 99-103C over the following hour, and chip 2 stopped answering at 98.8C the
+    first time and 98.7C the second. Its telemetry went straight to the 0xffffffff sentinel -- no
+    kernel message, no thermal trip, no PCIe error. Chip 3, the hottest at 103.5C, followed. 65C had
+    been satisfied hours earlier and had no opinion about any of it.
+
+    So the ceiling is a SECOND number with a different purpose: 90C, roughly ten degrees below where
+    this board has actually lost chips, and far enough above the 65C measurement gate that ordinary
+    warm running never reaches it. Crossing it cools all the way back to _START_TEMP_C -- one number
+    for "cool enough", rather than inventing a third.
+
+    IT WAITS AS LONG AS IT TAKES. No deadline and no plateau give-up: the measurement gate may
+    proceed on a warm board because a clamped READING is merely discarded, but proceeding at the
+    ceiling risks the board, and 'we waited a while and gave up' is how the chips were lost.
+
+    Offer this only BETWEEN units of work. A process holding the device cannot be paused mid-kernel
+    without risking a wedge, which is worse than the heat. Returns whether it had to cool.
+    """
+    try:
+        cur = _read_die_temp_c()
+        if cur is None or cur < _SAFETY_CEILING_C:
+            return False
+        print(
+            "  [thermal-ceiling] %s: board at %.1fC, at or above the %.1fC SAFETY ceiling -- holding "
+            "work until it returns to %.1fC. This board has lost chips at 98-99C."
+            % (label or "next unit", cur, _SAFETY_CEILING_C, _START_TEMP_C),
+            file=sys.stderr,
+            flush=True,
+        )
+        _cooldown_after_clamp(_COOL_BACK_TO_C, give_up_on_plateau=False)
+        return True
+    except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+        return False
 
 
 def report_board_over_clamp(label: str = "") -> bool:
@@ -3631,7 +3678,13 @@ def _measure_full_pipeline_guarded():
     """
     discarded = 0
     for _ in range(1 + max(0, _THERMAL_RETRIES)):
-        _ok, _start_c = _wait_for_thermal_headroom()
+        # THE SAME ONE TRIGGER. This called the 65C measurement gate; it now holds only at the
+        # safety ceiling, per the operator's rule that work pauses when the board is dangerous and
+        # not merely warm. The clamp machinery below is untouched and is what still protects the
+        # NUMBER: a reading taken on a hot board is detected, discarded and retried, so the cost of
+        # starting warm is a repeat measurement, while the cost of starting hot was a dead chip.
+        cool_if_over_safety_ceiling("full-pipeline measurement")
+        _start_c = _read_die_temp_c()
         globals()["_LAST_RUN_CLAMPED"] = False
         ms, method, err, path = _run_full_pipeline_ms()
         if ms is None:

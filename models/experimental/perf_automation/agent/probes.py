@@ -978,7 +978,7 @@ def thermal_yield(label: str = "") -> None:
         if now - _thermal_yield_last[0] < _THERMAL_YIELD_MIN_GAP_S:
             return
         _thermal_yield_last[0] = now
-        _cc_optimize("run")._wait_for_thermal_headroom_before_device_work(label or "next unit")
+        _cc_optimize("perf_mcp").cool_if_over_safety_ceiling(label or "next unit")
     except Exception as exc:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
         _warn_thermal_inert("thermal_yield", exc)
         return

@@ -3339,25 +3339,33 @@ def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
     min at a quarter of it. Cooler and slower delays the hang; it does not prevent it.
     """
     try:
-        ok, temp = _perf_mcp()._wait_for_thermal_headroom()
-        if not ok and temp is not None:
-            print(
-                "  [thermal-gate] %s starting at %.1fC (still above this board's clamp threshold)"
-                % (label or "device work", temp),
-                flush=True,
-            )
+        # ONE TRIGGER, AND IT IS THE SAFETY CEILING. This also ran the 65C measurement gate here,
+        # before every device process, waiting up to 900s for a board that idles in the sixties.
+        # The operator's call: hold work only when the board is genuinely dangerous, then cool it
+        # properly. A clamped reading is still caught afterwards by detect_overheat, which discards
+        # it and re-measures -- measurement quality keeps a guard, and the board gains a real one.
+        _perf_mcp().cool_if_over_safety_ceiling(label or "device work")
     except Exception as exc:  # noqa: BLE001 -- a gate that cannot run must not stop the work
-        if not _THERMAL_GATE_BROKEN[0]:
-            _THERMAL_GATE_BROKEN[0] = True
-            print(
-                "  [thermal-gate] WARNING: THE THERMAL GATE CANNOT RUN (%s: %s). Device work will "
-                "proceed with NO temperature protection for the rest of this run. On 2026-08-29 this "
-                "same failure was silent, the board held 99-103C for an hour, and two chips stopped "
-                "answering; a gate that cannot run must not stop the work, but it must SAY SO."
-                % (type(exc).__name__, str(exc)[:120]),
-                file=sys.stderr,
-                flush=True,
-            )
+        _warn_gate_broken(exc)
+
+
+def _warn_gate_broken(exc: BaseException) -> None:
+    """Say ONCE that temperature protection is not running, then let the work continue.
+
+    "A gate that cannot run must not stop the work" was implemented as a bare `except: pass`, so a
+    gate that could not run also told nobody. On 2026-08-29 that silence let the board hold 99-103C
+    for an hour with every gate inert, and two chips stopped answering.
+    """
+    if _THERMAL_GATE_BROKEN[0]:
+        return
+    _THERMAL_GATE_BROKEN[0] = True
+    print(
+        "  [thermal-gate] WARNING: THE THERMAL GATE CANNOT RUN (%s: %s). Device work will proceed "
+        "with NO temperature protection for the rest of this run."
+        % (type(exc).__name__, str(exc)[:120]),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 _THERMAL_WATCH_REPORT_S = 300.0
@@ -6062,6 +6070,17 @@ def run_cc_optimize(
     if not _preflight_tool(repo_root):
         print("  [optimize/cc] refusing to start against a tool whose own tests fail.", flush=True)
         raise SystemExit(EXIT_REFUSED)
+    # ONCE, AT THE START, AND NOWHERE ELSE. The 65C gate used to run before EVERY device process,
+    # which meant waiting on a board that idles in the sixties over and over for a threshold that
+    # barely separates clamped runs from clean ones (its own data: medians 72.5C vs 70.8C, ranges
+    # overlapping). Begin the run from a known-cool board, and from then on the only thing that
+    # holds work is the safety ceiling -- which is about the hardware, not the reading.
+    try:
+        _ok, _start_c = _perf_mcp()._wait_for_thermal_headroom()
+        if _start_c is not None:
+            print("  [optimize/cc] starting with the board at %.1fC" % _start_c, flush=True)
+    except Exception as exc:  # noqa: BLE001 -- a gate that cannot run must not stop the work
+        _warn_gate_broken(exc)
     if not os.environ.get("ANTHROPIC_API_KEY"):
         # No exported key is FINE: `claude` may be authenticated via `claude /login` (README §5.2
         # Option A). Every claude subprocess uses those stored creds; claude surfaces its own error

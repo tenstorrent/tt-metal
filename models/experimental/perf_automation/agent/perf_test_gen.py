@@ -503,9 +503,26 @@ def _run_perf_node(node_abs: str, extra_env: dict, timeout_s: int = 2400):
                 break
             ev["TT_PERF_TRACE_REGION"] = str(target)
             rc, out = _once(ev)
-        if disruptions < max_disrupt and _is_device_disruption(rc, out):
-            from . import probes as _pr
+        # THE BUILD PHASE LISTENS TO THE CHIP TOO. detect_overheat had exactly two callers, the
+        # profiling path and the full-pipeline gate -- both of which read a FINISHED measurement's
+        # log. This phase is 30-60 minutes of continuous device work per attempt and is where this
+        # board actually cooks (57C -> 103C, measured), and it scanned for everything except the
+        # device saying it had throttled. Cooling here does not reclassify anything: the disruption
+        # branch below keeps its own narrow rules, deliberately excluding the post-reset AICLK line.
+        from . import probes as _pr
 
+        try:
+            if _pr.detect_overheat(out):
+                print(
+                    "      · the device reported throttling during this attempt — cooling before the "
+                    "next one rather than building on a clamped board",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                _pr._cool_before_remeasure()
+        except Exception:  # noqa: BLE001 -- a cooldown that cannot run must never stop generation
+            pass
+        if disruptions < max_disrupt and _is_device_disruption(rc, out):
             ok = _pr._device_reset(error_text=out)
             try:
                 _pr._await_cool()

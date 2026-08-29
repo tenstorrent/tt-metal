@@ -58,12 +58,15 @@ def test_the_policy_still_lives_in_exactly_one_place():
     probes_src = (_PA / "agent" / "probes.py").read_text()
     # The helper delegates; it does not reimplement the wait.
     i = run_src.index("def _wait_for_thermal_headroom_before_device_work(")
-    helper = run_src[i : i + 2200]
+    helper = run_src[i : run_src.index("\ndef ", i + 1)]
     # Delegation is the property; the IMPORT MECHANISM is not. run.py is loaded BY PATH with no
     # package, so a bare `from .perf_mcp import ...` raises "attempted relative import with no known
     # parent package" -- silently, inside the gate's own except. That is why the board reached
     # 99-103C on 2026-08-29 with no gate running. _perf_mcp() resolves the sibling either way.
-    assert "_perf_mcp()._wait_for_thermal_headroom()" in helper, "the helper does not reuse the gate"
+    # The helper now holds work only at the SAFETY ceiling; the 65C measurement gate fires once, at
+    # run start, not before every device process. Delegation is still the property under test: the
+    # helper must reuse the owner in perf_mcp rather than grow its own thresholds or wait loop.
+    assert "cool_if_over_safety_ceiling" in helper, "the helper does not reuse the ceiling"
     for src, name in ((run_src, "run.py"), (probes_src, "probes.py")):
         assert "_THERMAL_POLL_S" not in src, f"{name} grew its own copy of the wait loop"
         assert "_clamp_threshold_c" not in src, f"{name} grew its own threshold"
@@ -82,4 +85,9 @@ def test_a_gate_that_cannot_run_never_blocks_the_work():
     # 99-103C for an hour and two chips stopped answering. The property is that the failure does not
     # propagate into the launcher, AND that an operator can see protection is off.
     assert "raise" not in tail, "the gate propagates its own failure into the launcher"
-    assert "WARNING" in tail, "an inert gate must announce itself, not fail silently"
+    # The warning text moved into _warn_gate_broken so both callers share one copy; the property is
+    # that the except announces the failure rather than swallowing it in silence.
+    assert "_warn_gate_broken" in tail, "an inert gate must announce itself, not fail silently"
+    warner = src[src.index("def _warn_gate_broken(") :]
+    warner = warner[: warner.index("\ndef ", 1)]
+    assert "WARNING" in warner, "_warn_gate_broken does not actually warn"
