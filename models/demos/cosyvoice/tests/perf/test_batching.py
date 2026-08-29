@@ -55,21 +55,28 @@ def _decoder(device, ttnn):
     return TtARDecoder(device, bag.sub("llm"), meta), meta
 
 
-def _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d):
+def _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d, seeds=None):
     """One right-aligned prefill per row, stacked on the batch axis.
 
     Deliberately ragged: the rows have different prompt lengths, which is the case a
-    real batch presents and the case a left-aligned cache could not serve. Returns the
-    stacked caches and the per-row prefix lengths.
+    real batch presents and the case a left-aligned cache could not serve.
+
+    **`seeds` is explicit, not derived from the loop index.** The correctness test
+    calls this once for the whole batch and then once per row, and a seed taken from
+    the enclosing loop is 0 on every single-row call -- so rows 1..n would be
+    prefilled with different content in the two runs, and the comparison would report
+    a model bug that is really a harness bug. (It did, first time round: PCC 0.80 on
+    exactly rows 1..3 and 1.0 on row 0.)
     """
     from models.demos.cosyvoice.tt.llm.decoder import TtARDecoder, right_aligned_bias
 
     def dev(v):
         return ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
+    seeds = seeds if seeds is not None else list(range(len(prefix_lens)))
     per_row = []
     for i, pl in enumerate(prefix_lens):
-        torch.manual_seed(100 + i)
+        torch.manual_seed(100 + seeds[i])
         ys, caches = dec.forward_chunk_fixed(
             dev(torch.randn(1, pl, d) * 0.1),
             dec.empty_cache(max_len, pl),
@@ -80,6 +87,11 @@ def _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d):
         ttnn.deallocate(ys)
         per_row.append(caches)
 
+    if len(per_row) == 1:
+        # `ttnn.concat` of a single tensor returns an **alias** of it, so stacking
+        # and then freeing the sources would free the result. One row needs no
+        # stacking anyway.
+        return per_row[0]
     stacked = []
     for layer in range(len(per_row[0])):
         stacked.append(
@@ -115,7 +127,7 @@ def test_device_batched_decode_matches_single(device):
     tokens = [torch.randn(1, 1, d) * 0.1 for _ in range(n_steps * b)]
 
     # --- batched
-    stacked = _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d)
+    stacked = _prefill_rows(device, ttnn, dec, prefix_lens, max_len, d, seeds=list(range(b)))
     batched = TracedDecodeStep(dec, max_len, batch=b).capture()
     batched.seed(stacked)
     TtARDecoder.free_caches(stacked)
@@ -130,7 +142,7 @@ def test_device_batched_decode_matches_single(device):
     # --- one row at a time, same inputs, same steps
     want = []
     for i, pl in enumerate(prefix_lens):
-        single = _prefill_rows(device, ttnn, dec, [pl], max_len, d)
+        single = _prefill_rows(device, ttnn, dec, [pl], max_len, d, seeds=[i])
         step = TracedDecodeStep(dec, max_len, batch=1).capture()
         step.seed(single)
         TtARDecoder.free_caches(single)
