@@ -83,11 +83,12 @@ namespace ttnn::experimental::deepseek::moe {
 // with hit_ids the routing-selected experts in ascending order and w the normalized weights above
 // (zero for a token that did not select the expert). Down weights stay 64-way ND-sharded along H.
 // Gate_up is one [gate_32 | up_32] DRAM shard per I-tile, so TP's smaller local I yields fewer
-// shards and each of the 16 cores in a group still owns at least one. With 6 selected experts the
-// compute grid is 12x8 (96 cores), 16 cores per expert (2 columns x 8 rows); each core covers its
-// I-shards of that expert plus 4 of the 64 H-shards, gathers SwiGLU activations within the group,
-// and the 6 groups' matching H-slices are reduced onto group 0. Any other selected count keeps the
-// original 8x8 grid, every core iterating every expert. All three input tensors are TILE layout.
+// shards and each of the 16 cores in a group still owns at least one. With 6 selected experts and
+// a 12x8 (or larger) compute grid the op uses 96 cores, 16 cores per expert (2 columns x 8 rows);
+// each core covers its I-shards of that expert plus 4 of the 64 H-shards, gathers SwiGLU
+// activations within the group, and the 6 groups' matching H-slices are reduced onto group 0.
+// Smaller grids (or any other selected count) keep the original 8x8 grid, every core iterating
+// every expert. All three input tensors are TILE layout.
 Tensor fused_experts(
     const Tensor& input_tensor,
     const Tensor& routing_indices,
