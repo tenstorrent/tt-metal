@@ -154,7 +154,10 @@ class TtTransformerLM:
 
     # ----------------------------------------------------------------------
     def logits_for_last(self, ys):
-        """`llm_decoder(y[:, -1])` -> `[1, 4097]` on the host, ready for sampling.
+        """`llm_decoder(y[:, -1])` -> `[B, 4097]` on the host, ready for sampling.
+
+        Batch 1 -- every published figure -- returns a flat `[4097]`, unchanged; a
+        batched decode returns one row per sequence.
 
         The head is the one place a host round trip is unavoidable: RAS needs the
         full 4097-way distribution *and* the history of emitted tokens, and its
@@ -172,14 +175,15 @@ class TtTransformerLM:
         # is invisible while `ys` is a fresh per-step allocation the caller frees
         # regardless -- and fatal once it is the trace's persistent output buffer,
         # where it surfaces as "Input Tensor is not allocated" on the *next* step.
+        b = ys.shape[0]
         owned = t > 1
-        last = ttnn.slice(ys, [0, t - 1, 0], [1, t, ys.shape[2]]) if owned else ys
+        last = ttnn.slice(ys, [0, t - 1, 0], [b, t, ys.shape[2]]) if owned else ys
         logits = ttnn.linear(last, self.head_w, bias=self.head_b, compute_kernel_config=self.cc)
         if owned:
             ttnn.deallocate(last)
-        out = ttnn.to_torch(logits).float().reshape(-1)
+        out = ttnn.to_torch(logits).float()
         ttnn.deallocate(logits)
-        return out
+        return out.reshape(-1) if b == 1 else out.reshape(b, -1)
 
     @staticmethod
     def cache_width(prefix_len: int, max_tokens: int, bucket: int = 128) -> int:
@@ -361,4 +365,138 @@ class TtTransformerLM:
             traced.release()
         else:
             TtARDecoder.free_caches(caches)
+        return out
+
+    # ----------------------------------------------------------------------
+    def generate_batch(
+        self,
+        requests: list[dict],
+        *,
+        sampler: str = "ras",
+        max_tokens: int | None = None,
+        seed: int | None = None,
+    ) -> list[list[int]]:
+        """Generate semantic tokens for several utterances in one decode loop.
+
+        `requests` is a list of the keyword sets `generate` takes -- `text_tokens`,
+        and optionally `spk_emb`, `prompt_speech_tokens`, `text_len`. One list of
+        token IDs comes back per request, in order.
+
+        **Why this exists.** A decode step at one row is bound by reading the AR
+        decoder's 14 blocks of weights out of DRAM: every matmul is a matrix against
+        a single row, so there is no reuse to amortise the read against. That is what
+        `test_device_decode_bfloat8_weights` measures from the other side -- halving
+        the weight *width* moves the step, because the step is the read. Batching
+        attacks the same bottleneck from the numerator: the same weight read serves
+        `B` rows, so the per-utterance cost falls without any kernel changing.
+
+        **Why the batch can be ragged.** Utterances have different prompt lengths and
+        stop at different tokens. Both are absorbed by the cache being *right*
+        aligned: each row's live history ends at the last slot and differs only in
+        where it begins, which is exactly one number per row in the mask
+        (`right_aligned_bias` takes a list). Nothing gathers, nothing re-packs.
+
+        **What it costs.** Rows that hit EOS early keep stepping until the longest
+        row finishes -- their outputs are discarded. So the wall clock is set by the
+        longest utterance in the batch and the useful fraction is
+        `mean(length) / max(length)`; a batch of similar-length utterances is worth
+        much more than a mixed one. The alternative -- compacting the batch when a
+        row retires -- would rebuild the KV cache at a new batch size, and so pay a
+        fresh trace capture, several times per batch. Reported rather than hidden:
+        the perf test prints the padding waste alongside the throughput.
+
+        Prefill stays per-utterance and untraced. Each prompt is a different length,
+        so batching prefill would mean padding every prompt to the longest and
+        running the encoder over the padding; it runs once per utterance against
+        `n` decode steps, so it is not where the time is.
+
+        Sampling is unchanged and still per row on the host -- RAS needs each row's
+        own emitted history, which is not a batched operation in any useful sense.
+        """
+        from .decoder import TracedDecodeStep
+
+        if seed is not None:
+            torch.manual_seed(seed)
+        if not requests:
+            return []
+        b = len(requests)
+        sample = greedy if sampler == "greedy" else None
+        cfg = self.meta.get("sampling", {})
+        cfg_kw = dict(
+            top_p=cfg.get("top_p", 0.8),
+            top_k=cfg.get("top_k", 25),
+            win_size=cfg.get("win_size", 10),
+            tau_r=cfg.get("tau_r", 0.1),
+        )
+
+        # ---- per-request prefixes, and the one cache width they will share
+        prefixes, prefix_lens, min_lens, caps = [], [], [], []
+        for req in requests:
+            text_tokens = req["text_tokens"]
+            text_enc = self.encode_text(text_tokens)
+            prefix = self.build_prefix(text_enc, req.get("spk_emb"), req.get("prompt_speech_tokens"))
+            ttnn.deallocate(text_enc)
+            n_text = req.get("text_len") or text_tokens.shape[1]
+            prefixes.append(prefix)
+            prefix_lens.append(prefix.shape[1])
+            min_lens.append(int(n_text * self.meta.get("min_token_text_ratio", 2)))
+            caps.append(max_tokens or int(n_text * self.meta.get("max_token_text_ratio", 20)))
+        cap = max(caps)
+        # One width for the batch: the rows share a buffer, so the widest requirement
+        # sets it and shorter rows simply carry more suppressed padding.
+        max_len = max(self.cache_width(pl, cap) for pl in prefix_lens)
+
+        # ---- prefill each row, then stack the caches on the batch axis
+        per_row_caches = []
+        pending = []
+        for prefix in prefixes:
+            ys, caches = self.prefill(prefix, max_len)
+            ttnn.deallocate(prefix)
+            pending.append(self.logits_for_last(ys))
+            ttnn.deallocate(ys)
+            per_row_caches.append(caches)
+
+        stacked = []
+        for layer in range(len(per_row_caches[0])):
+            k = ttnn.concat([c[layer][0] for c in per_row_caches], dim=0)
+            v = ttnn.concat([c[layer][1] for c in per_row_caches], dim=0)
+            stacked.append((k, v))
+        for caches in per_row_caches:
+            TtARDecoder.free_caches(caches)
+
+        traced = TracedDecodeStep(self.decoder, max_len, batch=b).capture()
+        traced.seed(stacked)
+        TtARDecoder.free_caches(stacked)
+
+        # ---- the shared decode loop
+        out: list[list[int]] = [[] for _ in range(b)]
+        done = [False] * b
+        logits = torch.stack(pending)  # [B, vocab]
+        d_in = self.decoder.meta["input_size"]
+        try:
+            for _ in range(cap):
+                rows = torch.zeros(b, 1, d_in)
+                for i in range(b):
+                    if done[i]:
+                        continue
+                    logp = torch.log_softmax(logits[i], dim=-1)
+                    if len(out[i]) < min_lens[i]:
+                        logp[self.eos_token] = -float("inf")
+                    token = sample(logp) if sample is not None else ras_sampling(logp, out[i], **cfg_kw)
+                    if token == self.eos_token or len(out[i]) >= caps[i]:
+                        done[i] = True
+                        continue
+                    out[i].append(token)
+                    rows[i] = self.speech_embedding_host[token].reshape(1, -1)
+                if all(done):
+                    break
+                # A retired row is still stepped -- see the docstring. Its embedding
+                # row stays zero and its output is thrown away; what it must not do is
+                # change the batch size, which would cost a fresh trace capture.
+                valids = [prefix_lens[i] + len(out[i]) for i in range(b)]
+                ys = traced.step(rows, valids)
+                ttnn.synchronize_device(self.device)
+                logits = self.logits_for_last(ys)
+        finally:
+            traced.release()
         return out
