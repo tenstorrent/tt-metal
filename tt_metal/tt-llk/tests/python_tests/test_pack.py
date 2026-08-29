@@ -34,7 +34,6 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -72,44 +71,22 @@ PACK_RELU_TYPES = [
     PackerReluType.MaxThresholdRelu,
 ]
 
-
-def generate_pack_perf_combinations():
-    """Dest-full tall/wide matrices, SyncHalf, dest index 0, all ReLU types."""
-    combinations = []
-    for fmt in PACK_FORMATS:
-        for dest_acc in get_valid_dest_accumulation_modes(fmt):
-            for dimensions in generate_perf_input_dimensions(dest_acc, DestSync.Half):
-                for relu_type in PACK_RELU_TYPES:
-                    combinations.append((fmt, dest_acc, dimensions, relu_type))
-    return combinations
-
-
-PERF_PACK_COMBINATIONS = generate_pack_perf_combinations()
-
-
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-        ]
-    ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+# Shared with perf_pack.py so the two sweeps stay aligned.
+# dest_index stays a lambda: get_valid_dest_indices also takes all_indices, which
+# is not a sweep axis and would fail dependency resolution if passed directly.
+PACK_SWEEP = dict(
+    formats=PACK_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
-    relu_type=[
-        PackerReluType.NoRelu,
-        PackerReluType.ZeroRelu,
-        PackerReluType.MinThresholdRelu,
-        PackerReluType.MaxThresholdRelu,
-    ],
+    relu_type=PACK_RELU_TYPES,
     dest_sync=[DestSync.Half, DestSync.Full],
     dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
         dest_sync, dest_acc, formats, input_dimensions
     ),
 )
+
+
+@parametrize(**PACK_SWEEP)
 def test_pack(
     formats,
     dest_acc,
