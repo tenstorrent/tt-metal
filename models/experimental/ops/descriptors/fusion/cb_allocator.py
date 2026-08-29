@@ -132,12 +132,6 @@ class CBPoolAllocator:
         # reusing non-aliased slots would corrupt phases that use them independently.
         self._slot_alias_groups: Dict[int, frozenset] = {}  # slot_index -> group members
         self._unique_alias_groups: Set[frozenset] = set()  # deduped set of alias groups
-        # (id(OpDescriptor), position in descriptor.cbs) -> {original buffer_index:
-        # assigned index} for GlobalCB-backed CBs.  Keyed by owning op and position
-        # rather than by CBDescriptor identity: indexing ``descriptor.cbs`` hands back
-        # a fresh Python wrapper around the same C++ object every time, so ``id()`` of
-        # a CBDescriptor is not stable across accesses.
-        self._global_cb_index_maps: Dict[Tuple[int, int], Dict[int, int]] = {}
 
     def reserve_index(self, index: int) -> None:
         """Reserve a slot index without creating a pool slot or remap entry.
@@ -146,65 +140,6 @@ class CBPoolAllocator:
         not be pool-allocated, remapped, or included in per-phase CB reset.
         """
         self._allocated_indices.add(index)
-
-    def assign_global_cb_indices(self, key: Tuple[int, int], cb_desc) -> Dict[int, int]:
-        """Reserve the hardware indices a GlobalCB-backed CBDescriptor occupies.
-
-        Such a CB is passed through to the fused program as-is rather than
-        pool-allocated (its L1 is owned by the GlobalCircularBuffer), but its
-        local alias and remote index are still ordinary per-core CB indices.
-        Two ops fused onto the same cores each declare their own GlobalCB at
-        the same indices, so they are assigned here the same way pooled CBs
-        are: keep the original index when it is free, otherwise take the next
-        free one.  The returned map goes into the phase remap, which rewrites
-        both the kernels' ``cb_*`` named args and the descriptor's buffer
-        indices.
-
-        Idempotent per ``key`` (owning OpDescriptor plus position in its cbs
-        list), so a GlobalCB seen from several core groups resolves to one set
-        of indices.
-        """
-        cached = self._global_cb_index_maps.get(key)
-        if cached is not None:
-            return cached
-
-        assigned: Dict[int, int] = {}
-        # Remote indices have to stay above every local index on the core
-        # (Program::update_kernel_groups enforces it), so they grow downwards from
-        # where the op put them while local aliases follow the normal upward search.
-        for fmt_desc in cb_desc.format_descriptors:
-            orig_idx = fmt_desc.buffer_index
-            if orig_idx in assigned:
-                continue
-            new_idx = orig_idx if orig_idx not in self._allocated_indices else self._alloc_index()
-            self._allocated_indices.add(new_idx)
-            assigned[orig_idx] = new_idx
-        for fmt_desc in cb_desc.remote_format_descriptors:
-            orig_idx = fmt_desc.buffer_index
-            if orig_idx in assigned:
-                continue
-            new_idx = self._alloc_remote_index(orig_idx)
-            self._allocated_indices.add(new_idx)
-            assigned[orig_idx] = new_idx
-        self._global_cb_index_maps[key] = assigned
-        return assigned
-
-    def _alloc_remote_index(self, start: int) -> int:
-        """Find the highest free index at or below *start*.
-
-        Remote (GlobalCB) indices must all sit above every local index used on the
-        core, so they are packed downwards from the index the op chose rather than
-        taken from the bottom-up pool search.
-        """
-        idx = start
-        while idx >= 0 and idx in self._allocated_indices:
-            idx -= 1
-        if idx < 0:
-            raise ValueError(
-                f"No free remote CB index at or below {start}: indices "
-                f"{sorted(self._allocated_indices)} are already taken"
-            )
-        return idx
 
     def _alloc_index(self) -> int:
         """Find the next free slot index."""
@@ -219,7 +154,6 @@ class CBPoolAllocator:
         phase_idx: int,
         cb_info: Dict[int, CBInfo],
         phantom_cb_indices: Set[int],
-        global_cb_remap: Optional[Dict[int, int]] = None,
     ) -> None:
         """Allocate slots for a phase's CBs.
 
@@ -239,25 +173,15 @@ class CBPoolAllocator:
             phantom_cb_indices: CB indices referenced in named compile-time args
                 but without a corresponding CBDescriptor.  These get identity-mapped
                 reservations to prevent collisions.
-            global_cb_remap: Index assignments for this phase's GlobalCB-backed CBs
-                from ``assign_global_cb_indices``.  They are not pool slots, but they
-                do belong in the remap so the phase's ``cb_*`` named args follow them.
         """
         remap: Dict[int, int] = {}
         slots_used_this_phase: Set[int] = set()
-
-        if global_cb_remap:
-            remap.update(global_cb_remap)
 
         # Reserve phantom CB indices first (identity mapping).
         # Do NOT add to slots_used_this_phase — phantom CBs (e.g., cb_bias
         # when bias is absent) are never accessed at runtime, so real CBs
         # can safely share their slot index.
         for phantom_idx in phantom_cb_indices:
-            # A GlobalCB's local alias and remote index look like phantoms (no pooled
-            # CBInfo) but already have a real assignment; leave it alone.
-            if phantom_idx in remap:
-                continue
             if phantom_idx not in self._allocated_indices:
                 self._allocated_indices.add(phantom_idx)
             remap[phantom_idx] = phantom_idx
@@ -668,7 +592,6 @@ class CBPoolAllocator:
     def build_merged_cb_descriptors(
         self,
         phases: List["PhaseInfo"],
-        emitted_global_cb_ids: Optional[Set[Tuple[int, int]]] = None,
     ) -> Tuple[list, list, list]:
         """Build merged CB descriptors from the pool.
 
@@ -688,15 +611,6 @@ class CBPoolAllocator:
 
         The C++ CBFormatDescriptor bindings do not support deepcopy, so
         in-place mutation + restore is the only viable pattern.
-
-        Args:
-            emitted_global_cb_ids: Keys ``(id(OpDescriptor), cbs position)`` of
-                GlobalCB-backed CBs already emitted by an earlier build that will
-                be merged into the same program (the other core groups of a
-                branching tree).
-                A GlobalCB CB is declared over the GlobalCircularBuffer's own
-                cores, which span every group sharing it, so it must be emitted
-                exactly once.  Newly emitted ids are added to the set.
 
         Returns:
             (merged, cb_source_map, global_cb_source_map) where:
@@ -737,9 +651,7 @@ class CBPoolAllocator:
         merged = []
         cb_source_map: List[Tuple] = []
         global_cb_source_map: List[Tuple] = []
-        # Track GlobalCB pass-through dedup, both within this build and across
-        # the sibling core-group builds merged into the same program.
-        seen_ids: Set[Tuple[int, int]] = emitted_global_cb_ids if emitted_global_cb_ids is not None else set()
+        seen_ids: Set[int] = set()  # Track GlobalCB pass-through dedup
 
         for group_id in sorted(groups.keys()):
             slot_indices = groups[group_id]
@@ -801,17 +713,9 @@ class CBPoolAllocator:
         for phase in phases:
             for cb_idx, cb_desc in enumerate(phase.op_descriptor.descriptor.cbs):
                 if cb_desc.has_global_circular_buffer():
-                    key = (id(phase.op_descriptor), cb_idx)
-                    if key not in seen_ids:
-                        seen_ids.add(key)
-                        # MUTATION (same save/restore bracket as the pooled CBs above):
-                        # move the CB onto the indices assign_global_cb_indices reserved,
-                        # which is what this phase's kernels now name.
-                        assigned = self._global_cb_index_maps.get(key, {})
-                        for fmt_desc in list(cb_desc.format_descriptors) + list(cb_desc.remote_format_descriptors):
-                            new_idx = assigned.get(fmt_desc.buffer_index)
-                            if new_idx is not None:
-                                fmt_desc.buffer_index = new_idx
+                    cid = id(cb_desc)
+                    if cid not in seen_ids:
+                        seen_ids.add(cid)
                         global_cb_source_map.append((len(merged), phase.op_descriptor, cb_idx))
                         merged.append(cb_desc)
 
@@ -868,9 +772,6 @@ class CBPoolAllocator:
             ValueError: If the projected pool has > 32 slots.
         """
         projected = CBPoolAllocator(max_slots=self.max_slots)
-        # GlobalCB assignments are program-wide (a GlobalCB spans every group that
-        # shares it), so they carry over whole rather than being re-derived per group.
-        projected._global_cb_index_maps = self._global_cb_index_maps
 
         # Collect phase_remaps for this group (re-indexed to local 0..K)
         for global_idx in group_global_indices:
@@ -947,19 +848,10 @@ def extract_cb_info(
         unpack_to_dest_modes: Optional vector of UnpackToDestMode indexed by CB index,
             typically from ComputeConfigDescriptor.unpack_to_dest_mode.
 
-    GlobalCB-backed CBs are skipped: their L1 is owned by the
-    GlobalCircularBuffer, so the CBDescriptor is passed through by
-    ``build_merged_cb_descriptors`` instead of being rebuilt from pool slots.
-    Pool-allocating them here would emit a second CBDescriptor at the same
-    buffer index on the same cores, which ``Program::add_circular_buffer``
-    rejects.  Their indices are assigned by ``_assign_global_cb_indices``.
-
     Returns a dict mapping CB index -> CBInfo.
     """
     cb_info = {}
     for cb_group_id, cb_desc in enumerate(descriptor.cbs):
-        if cb_desc.has_global_circular_buffer():
-            continue
         for fmt_desc in cb_desc.format_descriptors:
             cb_idx = fmt_desc.buffer_index
             data_format = fmt_desc.data_format_as_uint8  # int (raw tt::DataFormat uint8)
@@ -1011,20 +903,6 @@ def _extract_remote_cb_indices(descriptor: "ttnn.ProgramDescriptor") -> Set[int]
                 indices.add(fmt_desc.buffer_index)
     return indices
 
-def _assign_global_cb_indices(pool: "CBPoolAllocator", op_descriptor: OpDescriptor) -> Dict[int, int]:
-    """Assign pool indices to every GlobalCB-backed CB of one op.
-
-    Covers both indices such a CB occupies: the local alias, which is the
-    tile-paged view compute indexes into, and the remote index, which is the
-    page-paged view the GlobalCB delivers credits on (see matmul_decode's
-    program factories).  Returns the merged {original: assigned} map for the
-    op, ready to hand to ``CBPoolAllocator.allocate_phase``.
-    """
-    remap: Dict[int, int] = {}
-    for cb_idx, cb_desc in enumerate(op_descriptor.descriptor.cbs):
-        if cb_desc.has_global_circular_buffer():
-            remap.update(pool.assign_global_cb_indices((id(op_descriptor), cb_idx), cb_desc))
-    return remap
 
 # Convention: CB/DFB-reference named compile-time args use one of these
 # prefixes and have a non-negative integer value. Other named args, such as
@@ -1081,11 +959,7 @@ def _save_cb_state(program_descriptors: List[Any]) -> List[dict]:
                     "cb": cb_desc,
                     "total_size": cb_desc.total_size,
                     "core_ranges": cb_desc.core_ranges,
-                    "fmt": [
-                        (fmt, fmt.buffer_index)
-                        for fmt in list(cb_desc.format_descriptors)
-                        + list(getattr(cb_desc, "remote_format_descriptors", []))
-                    ],
+                    "fmt": [(fmt, fmt.buffer_index) for fmt in cb_desc.format_descriptors],
                 }
             )
     return saved
@@ -1209,5 +1083,4 @@ __all__ = [
     "_get_phantom_cb_indices",
     "_compute_rebind_info",
     "_extract_remote_cb_indices",
-    "_assign_global_cb_indices",
 ]
