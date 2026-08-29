@@ -1163,9 +1163,7 @@ void kernel_main() {
 
                 // Make K available to compute.
                 if (is_reference_iter) {
-                    DPRINT(
-                        "RKpush ri" << ring_iter << " qi" << q_iter << " kc" << k_chunk << " nkv" << num_kv_chunks
-                                    << ENDL());
+                    DPRINT("RKpush ri{} qi{} kc{} nkv{}\n", ring_iter, q_iter, k_chunk, num_kv_chunks);
                 }
                 cb_k.push_back(k_chunk_tiles);
                 KV_chunks_processed_in_iter++;

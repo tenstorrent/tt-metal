@@ -2606,7 +2606,7 @@ void sdpa_ring_v2(
         }
 
         if (force_ref_k_frame) {
-            DPRINT("Cref q" << q << " pqv" << per_q_valid_kv << " nkv" << num_kv_chunks << ENDL());
+            DPRINT("Cref q{} pqv{} nkv{}\n", q, per_q_valid_kv, num_kv_chunks);
         }
 
         // Sparse computation zero-work-iter fast path: this Q chunk has no processed K chunks in
