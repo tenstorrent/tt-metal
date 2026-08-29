@@ -161,8 +161,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = T / tt::constants::TILE_WIDTH;
     const uint32_t Dt = D / tt::constants::TILE_WIDTH;
-    // Per-SP-shard chunk width in tiles (block-cyclic only; 0 otherwise). Used by the overlap warning and the
-    // band-readiness shard mapping. The ternary keeps it null-safe when block-cyclic is off.
+    // Per-SP-shard block-cyclic run width in tiles (0 for a contiguous cache).
     const uint32_t cl_t = args.has_block_cyclic() ? args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH : 0;
 
     const auto& cfg = args.program_config;
@@ -174,22 +173,6 @@ ProgramDescriptor build_ring_program_descriptor(
     // Step-E band reorder assumes no head streaming (all heads resident): stream_heads pads the band loop with
     // phantom q-mcast bands that the reorder would perturb. HB == Hi means head_group_size was 0 or Hi.
     TT_FATAL(HB == Hi, "indexer_score fused: head_group_size must be 0 or Hi (no head streaming) on the fused path");
-
-    // Overlap-quality guidance for block-cyclic: a k-band (KC tiles) should not straddle a per-SP-shard chunk
-    // boundary (cl_t tiles), or it inherits the LATER of two shards and piles onto the final ring-arrival wave
-    // (KC=16, cl_t=20 -> ~40% of bands wait for the farthest shard -> long exposed tail). If KC divides cl_t the
-    // readiness histogram is flat and block-cyclic overlaps as well as contiguous. Correctness is unaffected
-    // either way (the reader gates every shard a band touches); this only shapes the AG/compute overlap.
-    if (args.has_block_cyclic() && (KC == 0 || cl_t % KC != 0)) {
-        log_warning(
-            tt::LogOp,
-            "indexer_score fused: k_chunk_size ({} tiles) does not divide block_cyclic chunk_local ({} tiles); "
-            "bands straddle SP-shard boundaries and back-load the ring-arrival tail. For best AG/compute "
-            "overlap pick a k_chunk_size whose tile count divides {}.",
-            KC,
-            cl_t,
-            cl_t);
-    }
 
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         ttnn::get_compute_kernel_config_args(q.device()->arch(), args.compute_kernel_config);
@@ -220,74 +203,69 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t compute_cols_x = phys_grid.x - reserved_cols;
     const CoreCoord ccl_core_grid_offset{compute_cols_x, 0};  // AG workers start in the first reserved column
 
-    const uint32_t group_count = Sqt / QC;                                  // q-groups (banded schedule rows)
-    const uint32_t band_count = units_in_group(KC, Tt);                     // k-bands = ceil(Tt/KC)
-    const uint32_t group_rows = rows_for_groups(group_count, grid_y);       // grid rows per group (k-mcast)
-    const uint32_t cols_used = cols_for_bands(band_count, compute_cols_x);  // grid columns used by compute
-    const uint32_t num_blocks = band_row_blocks(group_count, band_count, compute_cols_x, grid_y);  // row-block reps
-    const uint32_t rows_used = group_rows * num_blocks;    // grid rows used by compute
+    const uint32_t ring_size = ring_size_for(args, q);  // shared with validate/signaler (same ring extent)
+    const uint32_t sll_t = Tt / ring_size;              // physical tiles per SP shard in gathered K
+    const bool partial_readiness_enabled =
+        ag_rt::uses_output_bank_owned_schedule({k_local}, {k}, /*dim=*/2, ring_size, args.cache_batch_idx);
+    const uint32_t units_per_shard = units_in_group(KC, sll_t);
+    const uint32_t work_unit_count = ring_size * units_per_shard;
+    const uint32_t group_count = Sqt / QC;                             // q-groups (banded schedule rows)
+    const uint32_t group_rows = rows_for_groups(group_count, grid_y);  // grid rows per group (k-mcast)
+    const uint32_t cols_used = cols_for_bands(work_unit_count, compute_cols_x);
+    const uint32_t num_blocks =
+        band_row_blocks(group_count, work_unit_count, compute_cols_x, grid_y);  // row-block reps
+    const uint32_t rows_used = group_rows * num_blocks;                         // grid rows used by compute
     const uint32_t num_groups = group_count / group_rows;  // phase-stack count (groups per row, round-robin)
 
-    // Ring-arrival readiness, hoisted above the band->column assignment (which now balances it) AND reused by the
-    // per-column visit sort below. shard_order[c] = the ring iteration that delivers SP shard c (local shard -> 0);
-    // replay the RingIdSequencer on the HOST with the same seed as the reader. A band's readiness = max arrival-
-    // iter over the shards its tiles land in.
-    const uint32_t ring_size = ring_size_for(args, q);  // shared with validate/signaler (same ring extent)
+    // shard_order[c] is the ring iteration that delivers physical SP shard c (the local shard is iteration 0).
+    // Work units never cross a shard boundary, so each has exactly one readiness dependency.
     const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
     std::vector<uint32_t> shard_order(ring_size, 0);
+    std::vector<uint32_t> shard_wave(ring_size, 0);
     {
         RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
         for (uint32_t i = 0; i < ring_size; ++i) {
             const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
             shard_order[rid] = i;
+            shard_wave[rid] = (i + 1) / 2;
         }
     }
-    const uint32_t sll_t = Tt / ring_size;  // tiles per SP shard in the gathered buffer (cl_t hoisted above)
-    const auto band_readiness = [&](uint32_t band_abs) -> uint32_t {
-        const uint32_t start = band_abs * KC;
-        const uint32_t end = std::min(start + KC, Tt);
-        uint32_t readiness = 0;
-        for (uint32_t logical_tile = start; logical_tile < end; ++logical_tile) {
-            const uint32_t shard = args.has_block_cyclic() ? (logical_tile / cl_t) % ring_size : (logical_tile / sll_t);
-            readiness = std::max(readiness, shard_order[shard]);
-        }
-        return readiness;
-    };
-
-    // READINESS-BALANCED band -> column assignment (fused overlap balance). Distribute a block's bands across
-    // columns round-robin WITHIN each ring-arrival readiness level, using a shared column cursor. This balances
-    // BOTH the total band count AND the per-readiness count across columns, so every column front-loads an equal
-    // share of already-available (local, readiness 0) work before it needs any remote shard, and every column
-    // also carries an equal share of the last-arriving shard (its tail spreads across ALL columns).
-    //   A plain `i % cols_used` stripe instead CORRELATES shard with column: since a block-cyclic band maps to
-    // shard (band's first tile / cl_t) % ring_size and the stripe maps it to column band % cols_used, a column
-    // sees only cols_used / gcd(cols_used, ring_size) distinct shards (e.g. 10 cols x ring 4 -> 2 shards/col).
-    // Half the columns then hold NO local band and stall on a remote shard at their VERY FIRST band, exposing the
-    // entire first-slab arrival (~95us here) instead of overlapping it behind local work. Bands stay ABSOLUTE
-    // indices (reader/compute/writer get band0=0 + the absolute list); the per-column readiness sort below still
-    // walks local-first-then-arrival exactly as before.
-    std::vector<std::vector<std::vector<uint32_t>>> band_list(
+    // Deal each shard's physical KC units across row-blocks and columns. This gives every compute column an even
+    // share of the local shard before it encounters a Fabric gate, while retaining KC-sized math units. The last
+    // unit of a shard is padded rather than crossing into the next shard.
+    std::vector<std::vector<std::vector<uint32_t>>> work_list(
         num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
     uint32_t max_bands = 0;
     {
+        const uint32_t max_wave = ring_size / 2;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            uint32_t col_cursor = 0;
-            for (uint32_t rlevel = 0; rlevel < ring_size; ++rlevel) {
-                // Keep every row-block useful when kv_len is a runtime prefix of the persistent K capacity.
-                // A contiguous split would give block 0 [0, capacity/blocks), block 1 the next range, etc.
-                // Consequently a short valid prefix activates only block 0 even though all row-blocks are live.
-                // Deal bands round-robin across blocks instead: every prefix is balanced to within one band, while
-                // each block still has a disjoint band set and its K-mcast remains lockstep down the block's rows.
-                for (uint32_t band_abs = blk; band_abs < band_count; band_abs += num_blocks) {
-                    if (band_readiness(band_abs) != rlevel) {
-                        continue;
+            for (uint32_t wave = 0; wave <= max_wave; ++wave) {
+                std::vector<uint32_t> wave_shards;
+                for (uint32_t shard = 0; shard < ring_size; ++shard) {
+                    if (shard_wave[shard] == wave) {
+                        wave_shards.push_back(shard);
                     }
-                    band_list[blk][col_cursor % cols_used].push_back(band_abs);
-                    ++col_cursor;
+                }
+                std::stable_sort(wave_shards.begin(), wave_shards.end(), [&](uint32_t a, uint32_t b) {
+                    return shard_order[a] < shard_order[b];
+                });
+                // Give each column matching offsets from both directions. Its visit order becomes
+                // A0,B0,A1,B1,..., so a core that reaches shard A's completion gate can consume the
+                // simultaneously arriving midpoint of shard B instead of idling.
+                for (uint32_t col = 0; col < cols_used; ++col) {
+                    for (uint32_t unit_slot = col;; unit_slot += cols_used) {
+                        const uint32_t unit_in_shard = blk + unit_slot * num_blocks;
+                        if (unit_in_shard >= units_per_shard) {
+                            break;
+                        }
+                        for (uint32_t shard : wave_shards) {
+                            work_list[blk][col].push_back(shard * sll_t + unit_in_shard * KC);
+                        }
+                    }
                 }
             }
             for (uint32_t col = 0; col < cols_used; ++col) {
-                max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(band_list[blk][col].size()));
+                max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(work_list[blk][col].size()));
             }
         }
     }
@@ -430,21 +408,28 @@ ProgramDescriptor build_ring_program_descriptor(
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    reader_ct.push_back(static_cast<uint32_t>(partial_readiness_enabled));
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
     const uint32_t out_elem_bytes = out.element_size();
     writer_ct.push_back(T * out_elem_bytes);  // row-major page = one output row (no pooling)
+    writer_ct.push_back(block_cyclic_ct[0]);  // shard-major physical -> logical output mapping
+    writer_ct.push_back(block_cyclic_ct[1]);
+    writer_ct.push_back(ring_size);  // physical shard count (also block-cyclic SP when enabled)
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
     compute_ct.push_back(qk_batch_heads);
     compute_ct.push_back(qk_col_batch);
-    compute_ct.push_back(1u);  // apply_relu (DSA)
-    compute_ct.push_back(0u);  // fuse_single off
-    compute_ct.push_back(0u);  // fused_stream_k off
-    compute_ct.push_back(1u);  // fused_ring on
+    compute_ct.push_back(1u);                  // apply_relu (DSA)
+    compute_ct.push_back(0u);                  // fuse_single off
+    compute_ct.push_back(0u);                  // fused_stream_k off
+    compute_ct.push_back(1u);                  // fused_ring on
+    compute_ct.push_back(block_cyclic_ct[0]);  // shard-major physical -> logical causal mapping
+    compute_ct.push_back(block_cyclic_ct[1]);
+    compute_ct.push_back(ring_size);  // physical shard count (also block-cyclic SP when enabled)
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     KernelDescriptor reader_kernel{};
@@ -489,12 +474,7 @@ ProgramDescriptor build_ring_program_descriptor(
     std::vector<uint32_t> fused_rt;
     sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // the fused_rt_width-wide block (see rt_arg above)
 
-    // ---- Step E: band-visit reorder (local-first, then remote by ring arrival) --------------------------
-    // shard_order / band_readiness are computed above (hoisted so the band->column assignment can balance
-    // readiness across columns). The per-column stable_sort by band_readiness below makes each core score its
-    // local + already-arrived bands first and hide the farther slabs' transport behind that compute. The SAME
-    // permutation is fed to reader/compute/writer (band identity preserved) so the cb_k / cb_out FIFOs stay in
-    // lockstep.
+    // ---- Shard-major visit order: local physical shard first, then remote shards by ring arrival. --------
     for (uint32_t row = 0; row < rows_used; ++row) {
         // Q/W row mcast rect + diagonal sender (shared with the classic factory).
         const auto qb = q_mcast_bbox(phys, row, cols_used);
@@ -508,16 +488,9 @@ ProgramDescriptor build_ring_program_descriptor(
             const uint32_t k_ys = kb.ys, k_ye = kb.ye, k_px = kb.px;
             const CoreCoord k_sender = kb.sender;
             const CoreCoord core{col, row};
-            // This column's ABSOLUTE band indices (striped set), sorted by ring arrival readiness so the core
-            // scores its local + already-arrived bands first and hides the farther slabs behind that compute.
-            // band0 is passed as 0 and the kernels read these absolute indices straight from the perm slots
-            // (span.set(group, 0 + band)); identical for every row in a k-mcast column (same set + schedule), so
-            // the k-mcast stays in lockstep.
-            std::vector<uint32_t> band_perm = band_list[block][col];
-            std::stable_sort(band_perm.begin(), band_perm.end(), [&](uint32_t a, uint32_t b) {
-                return band_readiness(a) < band_readiness(b);
-            });
-            const uint32_t col_num_bands = static_cast<uint32_t>(band_perm.size());
+            // Physical K-tile starts, identical for every row in a K-mcast column.
+            const std::vector<uint32_t>& physical_starts = work_list[block][col];
+            const uint32_t col_num_bands = static_cast<uint32_t>(physical_starts.size());
             const std::array<uint32_t, 6> sched = {
                 row % group_rows, group_rows, num_groups, /*band0=*/0u, col_num_bands, max_bands};
 
@@ -564,7 +537,7 @@ ProgramDescriptor build_ring_program_descriptor(
             reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
             reader_rt.push_back(k_local.buffer());     // rt_arg::reader_k_local_addr (36): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
-            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (38..): band-visit perm
+            reader_rt.append(physical_starts);               // rt_arg::reader_band_perm_base (38..): physical K starts
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
@@ -573,7 +546,7 @@ ProgramDescriptor build_ring_program_descriptor(
             compute_rt.push_back(chunk_t);
             compute_rt.push_back(geom.straddle_q_tile);
             compute_rt.push_back(geom.straddle_jump_tiles);
-            compute_rt.append(band_perm);  // rt_arg::compute_band_perm_base (10..): band-visit permutation
+            compute_rt.append(physical_starts);  // rt_arg::compute_band_perm_base (10..): physical K starts
             compute_kernel.emplace_runtime_args(core, compute_rt);
 
             KernelDescriptor::RTArgList writer_rt;
@@ -583,7 +556,7 @@ ProgramDescriptor build_ring_program_descriptor(
             writer_rt.push_back(chunk_t);
             writer_rt.push_back(geom.straddle_q_tile);
             writer_rt.push_back(geom.straddle_jump_tiles);
-            writer_rt.append(band_perm);  // rt_arg::writer_band_perm_base (11..): band-visit permutation
+            writer_rt.append(physical_starts);  // rt_arg::writer_band_perm_base (11..): physical K starts
             writer_kernel.emplace_runtime_args(core, writer_rt);
         }
     }
@@ -637,13 +610,14 @@ ProgramDescriptor build_ring_program_descriptor(
         /*chunk_local_tiles=*/0,
         /*kv_cache_num_layers=*/1,
         /*kv_cache_layer_idx=*/0,
-        // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
-        /*split_forwarding_enabled=*/false);
+        // This consumer uses midpoint/completion readiness rather than diametric split forwarding.
+        /*split_forwarding_enabled=*/false,
+        /*partial_readiness_enabled=*/partial_readiness_enabled);
 
     log_debug(
         tt::LogOp,
         "indexer_score FUSED coord=({}) ring_size={} ring_index={} fwd_exp={} bwd_exp={} grid={}x{}(+{} ag) "
-        "rows_used={} cols_used={} band_count={} k_mcast={} q_mcast={}",
+        "rows_used={} cols_used={} work_unit_count={} k_mcast={} q_mcast={}",
         device_index,
         ring_size,
         device_index,
@@ -654,7 +628,7 @@ ProgramDescriptor build_ring_program_descriptor(
         reserved_cols,
         rows_used,
         cols_used,
-        band_count,
+        work_unit_count,
         k_mcast_on,
         q_mcast_on);
 

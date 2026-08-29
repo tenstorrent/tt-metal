@@ -337,6 +337,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    reader_ct.push_back(0u);  // partial all-gather readiness off (non-fused path)
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off
@@ -344,6 +345,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // row-major page = one output row: T scores, or nblocks block-scores when pooling.
     const uint32_t out_row_elems = block_pool ? nblocks : T;
     writer_ct.push_back(out_row_elems * out_elem_bytes);
+    writer_ct.push_back(0u);  // shard-major mapping off
+    writer_ct.push_back(1u);  // unused block-cyclic run width
+    writer_ct.push_back(1u);  // unused SP size
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = common_ct;
@@ -356,6 +360,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(fuse_single ? 1u : 0u);
     compute_ct.push_back(fused_stream_k ? 1u : 0u);  // fused: incremental k wait (stream) vs whole-chunk
     compute_ct.push_back(0u);                        // fused_ring off
+    compute_ct.push_back(0u);                        // shard-major block-cyclic mapping off
+    compute_ct.push_back(1u);                        // unused block-cyclic run width
+    compute_ct.push_back(1u);                        // unused SP size
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
     auto reader_id = tt::tt_metal::CreateKernel(

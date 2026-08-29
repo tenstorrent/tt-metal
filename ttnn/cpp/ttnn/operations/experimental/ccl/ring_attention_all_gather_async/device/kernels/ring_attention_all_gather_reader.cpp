@@ -36,6 +36,7 @@ enum CompileTimeArg : uint32_t {
     kHasMetadata,
     kNumLinks,
     kSplitForwardingEnabled,
+    kPartialReadinessEnabled,
     kOutputBankOwnedSchedule,
     kNumDramBanks,
     kPrefetchPackets,
@@ -58,6 +59,7 @@ constexpr uint32_t num_links = get_compile_time_arg_val(kNumLinks);
 // The parent fused op owns this protocol decision and passes the same flag to both
 // all-gather directions and its receiver, keeping producer and consumer in sync.
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(kSplitForwardingEnabled);
+constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 
@@ -215,17 +217,44 @@ void kernel_main() {
                 const uint32_t input_page_base = input_batch_base[input_idx] + bh_idx * input_pages_per_batch_head;
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_chip_id * input_pages_per_batch_head;
-                prefetch_bank_owned_slices<false>(
-                    noc_obj,
-                    cb_output,
-                    cb_fifo_limit,
-                    cb_fifo_size,
-                    input_tensor_addrgens[input_idx],
-                    input_page_base,
-                    output_page_base,
-                    input_valid_pages[input_idx],
-                    worker_link[input_idx],
-                    num_links);
+                if constexpr (partial_readiness_enabled) {
+                    const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                        input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                    prefetch_bank_owned_slices<false>(
+                        noc_obj,
+                        cb_output,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_tensor_addrgens[input_idx],
+                        input_page_base,
+                        output_page_base,
+                        first_pages,
+                        worker_link[input_idx],
+                        num_links);
+                    prefetch_bank_owned_slices<false>(
+                        noc_obj,
+                        cb_output,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_tensor_addrgens[input_idx],
+                        input_page_base + first_pages,
+                        output_page_base + first_pages,
+                        input_valid_pages[input_idx] - first_pages,
+                        worker_link[input_idx],
+                        num_links);
+                } else {
+                    prefetch_bank_owned_slices<false>(
+                        noc_obj,
+                        cb_output,
+                        cb_fifo_limit,
+                        cb_fifo_size,
+                        input_tensor_addrgens[input_idx],
+                        input_page_base,
+                        output_page_base,
+                        input_valid_pages[input_idx],
+                        worker_link[input_idx],
+                        num_links);
+                }
             }
         } else {
             // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
@@ -294,24 +323,34 @@ void kernel_main() {
         // Device 2.0: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore
         // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
         // GlobalSemaphore.
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
-        // Got it
-        slices_received++;
+        const uint32_t next_slice = slices_received + 1;
+        if constexpr (partial_readiness_enabled) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
+        } else {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice);
+        }
 
         int sender_chip_id;
         uint32_t actual_sender_chip_id;
         if constexpr (direction == 1) {
-            sender_chip_id = my_chip_id + slices_received;
+            sender_chip_id = my_chip_id + next_slice;
             actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
         } else {
-            sender_chip_id = my_chip_id - slices_received;
+            sender_chip_id = my_chip_id - next_slice;
             actual_sender_chip_id = (sender_chip_id < 0) ? ring_size + sender_chip_id : sender_chip_id;
         }
 
         if constexpr (fuse_op) {
-            // Signal matmul to go
+            // In partial mode this first signal exposes the completed prefix of the shard.
             op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }
+        if constexpr (partial_readiness_enabled) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2);
+            if constexpr (fuse_op) {
+                op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+            }
+        }
+        slices_received = next_slice;
         // Direction == backward: Should I forward what I got from the left to my right?
         // In the linear case, if I have any targets to my right, always forward
         // In the ring case, if I have received on the left less than my targets on the right, forward
@@ -335,17 +374,44 @@ void kernel_main() {
                     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                         const uint32_t output_page_base =
                             bh_idx * output_pages_per_batch_head + actual_sender_chip_id * input_pages_per_batch_head;
-                        prefetch_bank_owned_slices<true>(
-                            noc_obj,
-                            cb_output,
-                            cb_fifo_limit,
-                            cb_fifo_size,
-                            output_tensor_addrgens[input_idx],
-                            output_page_base,
-                            output_page_base,
-                            input_valid_pages[input_idx],
-                            first_bank,
-                            bank_stride);
+                        if constexpr (partial_readiness_enabled) {
+                            const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                                input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                            prefetch_bank_owned_slices<true>(
+                                noc_obj,
+                                cb_output,
+                                cb_fifo_limit,
+                                cb_fifo_size,
+                                output_tensor_addrgens[input_idx],
+                                output_page_base,
+                                output_page_base,
+                                first_pages,
+                                first_bank,
+                                bank_stride);
+                            prefetch_bank_owned_slices<true>(
+                                noc_obj,
+                                cb_output,
+                                cb_fifo_limit,
+                                cb_fifo_size,
+                                output_tensor_addrgens[input_idx],
+                                output_page_base + first_pages,
+                                output_page_base + first_pages,
+                                input_valid_pages[input_idx] - first_pages,
+                                first_bank,
+                                bank_stride);
+                        } else {
+                            prefetch_bank_owned_slices<true>(
+                                noc_obj,
+                                cb_output,
+                                cb_fifo_limit,
+                                cb_fifo_size,
+                                output_tensor_addrgens[input_idx],
+                                output_page_base,
+                                output_page_base,
+                                input_valid_pages[input_idx],
+                                first_bank,
+                                bank_stride);
+                        }
                     }
                 } else {
                     // Packet-aligned midpoint of this worker's page range (matches the writer).

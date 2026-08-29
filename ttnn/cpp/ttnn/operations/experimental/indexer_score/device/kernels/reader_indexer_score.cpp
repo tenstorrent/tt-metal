@@ -63,6 +63,7 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
+constexpr bool partial_readiness_enabled = get_compile_time_arg_val(bc_ct_base + 5) != 0;
 
 // Thin alias over the shared block-cyclic invP map (tt::block_cyclic, block_cyclic_remap.hpp): identity for
 // contiguous K, invP for the per-SP-shard block-cyclic layout. One name shared between the non-fused reader and
@@ -283,13 +284,8 @@ inline void read_k_chunk(
         });
 }
 
-/** Ring-fused k chunk: dual-source per tile. The gathered buffer (k_acc) holds every REMOTE SP-shard's slab
- *  (the all-gather wrote them); this device's OWN shard is read straight from the SP-sharded local cache
- *  (k_local_acc) -- the all-gather omits the local band from the gathered buffer. shard(logical tile L) =
- *  bc_ktile(L)/tiles_per_shard; local page = k_batch_page_offset/ring_size +
- *  (bc_ktile(L) - ring_index*tiles_per_shard)*head_dim_tiles (the slot offset is 1/ring of the gathered
- *  buffer's since k_local holds only sll=T/ring keys per slot). In indexed fused mode the gathered buffer is
- *  batch-1 (remote offset 0) while local_batch_page_offset selects the original cache slot. */
+/** Ring-fused shard-major K chunk. Every unit is a consecutive physical range inside one SP shard. Remote
+ *  shards come from the gathered buffer; this device's own shard comes directly from the AG input cache. */
 template <typename KAcc, typename KLocalAcc>
 inline void read_k_chunk_fused(
     Noc noc,
@@ -298,7 +294,7 @@ inline void read_k_chunk_fused(
     uint32_t ring_index,
     uint32_t ring_size,
     uint32_t tiles_per_shard,
-    uint32_t k_tile_start,
+    uint32_t physical_tile_start,
     uint32_t k_tiles_in_unit,
     const McastDir& k_dir,
     uint32_t gathered_batch_page_offset,
@@ -307,15 +303,18 @@ inline void read_k_chunk_fused(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
-                const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
-                const uint32_t shard = seq_tile / tiles_per_shard;
+                const uint32_t physical_tile = physical_tile_start + k_col;
+                const uint32_t shard = physical_tile / tiles_per_shard;
                 if (shard == ring_index) {
                     const uint32_t local_base =
-                        local_batch_page_offset + (seq_tile - ring_index * tiles_per_shard) * head_dim_tiles;
+                        local_batch_page_offset + (physical_tile - ring_index * tiles_per_shard) * head_dim_tiles;
                     read_ktile_dims(noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
                 } else {
                     read_ktile_dims(
-                        noc, k_acc, ptr, gathered_batch_page_offset + seq_tile * head_dim_tiles);  // remote slab
+                        noc,
+                        k_acc,
+                        ptr,
+                        gathered_batch_page_offset + physical_tile * head_dim_tiles);  // remote shard
                 }
             }
         });
@@ -337,13 +336,14 @@ struct FusedRingGate {
 
     uint32_t ring_index;
     uint32_t ring_size;
-    uint32_t tiles_per_shard;           // tiles per SP shard in the gathered buffer
-    uint32_t sem_id[2];                 // the two direction semaphore ids
-    KLocalAcc k_local_acc;              // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
-    uint32_t local_batch_page_offset;   // selected slot in k_local; gathered k may be batch-1
-    uint32_t perm_base;                 // rt slot of the band-visit permutation (one entry per band)
-    uint32_t shard_dir[max_ring_size];  // shard -> direction semaphore index
-    uint32_t shard_val[max_ring_size];  // shard -> wait threshold
+    uint32_t tiles_per_shard;                // tiles per SP shard in the gathered buffer
+    uint32_t sem_id[2];                      // the two direction semaphore ids
+    KLocalAcc k_local_acc;                   // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
+    uint32_t local_batch_page_offset;        // selected slot in k_local; gathered k may be batch-1
+    uint32_t perm_base;                      // rt slot of the band-visit permutation (one entry per band)
+    uint32_t shard_dir[max_ring_size];       // shard -> direction semaphore index
+    uint32_t shard_half_val[max_ring_size];  // shard -> midpoint-ready threshold
+    uint32_t shard_val[max_ring_size];       // shard -> wait threshold
 
     // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
@@ -356,6 +356,7 @@ struct FusedRingGate {
         local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
         perm_base(argidx),
         shard_dir{},
+        shard_half_val{},
         shard_val{} {
         RingIdSequencer s = recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard id
         for (uint32_t i = 0; i < ring_size; ++i) {
@@ -365,24 +366,33 @@ struct FusedRingGate {
                 cap_val = v;
             });
             shard_dir[rid] = cap_dir;
-            shard_val[rid] = cap_val;
+            if constexpr (partial_readiness_enabled) {
+                if (rid == ring_index) {
+                    continue;
+                }
+                // Partial-readiness AG emits midpoint + completion for every remote shard. Direction 0's
+                // semaphore also contains the existing local-slice pre-signal.
+                shard_half_val[rid] = cap_dir == 0 ? 2 * (cap_val - 1) : 2 * cap_val - 1;
+                shard_val[rid] = cap_dir == 0 ? 2 * cap_val - 1 : 2 * cap_val;
+            } else {
+                shard_val[rid] = cap_val;
+            }
         }
     }
 
-    // Absolute band index this column visits at iteration band_i (striped set, band0=0).
-    uint32_t band(uint32_t band_i) const { return get_arg_val<uint32_t>(perm_base + band_i); }
+    // Physical K-tile start this column visits at iteration work_i.
+    uint32_t physical_start(uint32_t work_i) const { return get_arg_val<uint32_t>(perm_base + work_i); }
 
-    // Wait on each distinct non-local SP-shard the band [k_tile_start, +k_tiles_in_unit) lands in. Shards form
-    // contiguous runs over the tiles (change only at block boundaries), so wait once per run start.
-    void gate_band(uint32_t k_tile_start, uint32_t k_tiles_in_unit) const {
-        uint32_t prev_shard = 0xFFFFFFFFu;
-        for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
-            const uint32_t shard = bc_ktile(k_tile_start + c) / tiles_per_shard;
-            if (shard != prev_shard) {
-                prev_shard = shard;
-                if (shard != ring_index) {
-                    Semaphore<>(sem_id[shard_dir[shard]]).wait_min(shard_val[shard]);
-                }
+    void gate_shard(uint32_t physical_tile_start, uint32_t k_tiles_in_unit, uint32_t midpoint_tiles) const {
+        const uint32_t shard = physical_tile_start / tiles_per_shard;
+        if (shard != ring_index) {
+            if constexpr (partial_readiness_enabled) {
+                const uint32_t shard_offset = physical_tile_start - shard * tiles_per_shard;
+                const bool entirely_in_first_half = shard_offset + k_tiles_in_unit <= midpoint_tiles;
+                Semaphore<>(sem_id[shard_dir[shard]])
+                    .wait_min(entirely_in_first_half ? shard_half_val[shard] : shard_val[shard]);
+            } else {
+                Semaphore<>(sem_id[shard_dir[shard]]).wait_min(shard_val[shard]);
             }
         }
     }
@@ -393,12 +403,13 @@ struct FusedRingGate {
     void read_k(
         Noc noc,
         const KAcc& k_acc,
-        uint32_t k_tile_start,
+        uint32_t physical_tile_start,
         uint32_t k_tiles_in_unit,
+        uint32_t midpoint_tiles,
         const McastDir& k_dir,
         uint32_t k_batch_page_offset) const {
         if (k_mcast_on == 0 || k_dir.role == iscore::mcast_role_sender) {
-            gate_band(k_tile_start, k_tiles_in_unit);
+            gate_shard(physical_tile_start, k_tiles_in_unit, midpoint_tiles);
         }
         read_k_chunk_fused(
             noc,
@@ -407,7 +418,7 @@ struct FusedRingGate {
             ring_index,
             ring_size,
             tiles_per_shard,
-            k_tile_start,
+            physical_tile_start,
             k_tiles_in_unit,
             k_dir,
             k_batch_page_offset,
@@ -494,6 +505,8 @@ void kernel_main() {
 
         WorkUnitSpan span;
         span.set_valid_k_len_tiles(kv_len_tiles);
+        ShardMajorWorkUnitSpan<block_cyclic, bc_chunk_local, bc_sp> shard_span;
+        shard_span.set_valid_k_len_tiles(kv_len_tiles);
         const uint32_t band_iters = stream_heads ? max_bands : num_bands;
         for (uint32_t phase = 0; phase < num_groups; ++phase) {
             const uint32_t group = row_group0 + phase * group_stride;
@@ -512,15 +525,23 @@ void kernel_main() {
             }
             for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
                 if constexpr (fused_ring_enabled) {
-                    const uint32_t band = gate->band(band_i);
-                    span.set(group, band0 + band);
+                    const uint32_t physical_start = gate->physical_start(band_i);
+                    shard_span.set(group, physical_start, gate->tiles_per_shard);
                     // q/w were multicasted before this loop. Every row of this K-mcast column has
-                    // the same band list, so skipping an empty runtime-prefix band preserves both
+                    // the same work list, so skipping an empty runtime-prefix unit preserves both
                     // the fabric gate and the local CB protocol.
-                    if (span.k_tiles() == 0) {
+                    if (shard_span.k_tiles() == 0) {
                         continue;
                     }
-                    gate->read_k(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                    uint32_t gathered_shard_tiles = gate->tiles_per_shard;
+                    if constexpr (block_cyclic) {
+                        const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
+                        const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
+                        gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                    }
+                    const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
+                    gate->read_k(
+                        noc, k_acc, physical_start, shard_span.k_tiles(), midpoint_tiles, k_dir, k_batch_page_offset);
                 } else {
                     const uint32_t band = band_i;
                     const bool real_band = band < num_bands;
