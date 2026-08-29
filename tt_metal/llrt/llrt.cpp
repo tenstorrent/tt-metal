@@ -384,6 +384,15 @@ void wait_until_cores_done(
             std::chrono::duration_cast<std::chrono::milliseconds>(rtoptions.get_timeout_duration_for_operations())
                 .count();
     }
+    // DIAGNOSTIC (local, not for upstream as-is): on a simulator the wait is
+    // deliberately unbounded, so a core that never reports done becomes a
+    // silent forever-spin instead of the TT_THROW below that names the stuck
+    // cores. Let the operator opt into a bound to get that diagnosis.
+    if (timeout_ms == 0 && is_simulator) {
+        if (const char* env = std::getenv("TT_METAL_SIM_CORE_WAIT_TIMEOUT_MS")) {
+            timeout_ms = std::atoi(env);
+        }
+    }
     while (!not_done_phys_cores.empty()) {
         throw_if_watcher_tripped_in_test_mode(device_id);
 
