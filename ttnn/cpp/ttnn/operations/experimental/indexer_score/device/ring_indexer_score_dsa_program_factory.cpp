@@ -739,10 +739,12 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
 
         // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
         // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
-        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert.
+        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert
+        // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
+        // 9-wide fused block at 27..35 and k_local_addr at 36).
         patch_field(0, 25u, k_batch_page_offset);
         patch_field(0, 26u, pcache.kv_len_tiles);
-        patch_field(0, 34u, k_local_batch_page_offset);
+        patch_field(0, 37u, k_local_batch_page_offset);
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
         patch_field(2, 6u, pcache.kv_len_tiles);
         patch_field(2, 7u, geom.chunk_start_tiles);
