@@ -2430,6 +2430,12 @@ void sdpa_ring_v2(
 
     // Skip KV chunks beyond the logical sequence length (padding tiles).
     auto try_skip_oob_kv = [&](uint32_t source_ring_id, uint32_t k_chunk, bool kv_chunk_is_joint) -> bool {
+        // Reference iteration: every chunk is a real reference-frame token (never OOB). The placeholder
+        // ring_id would otherwise put k_global past logical_nt on high devices and skip chunks the reader
+        // pushed (the reader bypasses this same OOB check for the reference iter), desyncing the CBs.
+        if (force_ref_k_frame) {
+            return false;
+        }
         if (kv_chunk_is_joint) {
             // Skip joint chunk at/after logical_lt - pure padding
             if constexpr (joint_n_skip_enabled) {
