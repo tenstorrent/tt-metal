@@ -150,10 +150,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     // x^2 is filled to Wt tiles and then drained by a single BulkWaitBulkPop reduce in the SAME
     // compute kernel, so the second half of a double buffer can never be live: nothing produces
     // into it while the reduce consumes the first. Sizing it at Wt keeps the access pattern
-    // identical (tiles are packed at absolute index wt+wtr over one row) and saves Wt * fp32 tile
-    // bytes, which is exactly what pushes a wide fp32_dest_acc_en row past L1: at width 4096 the
-    // program asks 1684672 B against 1499136 B (wormhole) / 1572864 B (blackhole). in0 keeps its
-    // double buffer -- there the reader genuinely prefetches ahead of compute.
+    // identical -- tiles are packed at absolute index wt+wtr over one row -- and gives back a full
+    // row's worth of L1, which a wide fp32_dest_acc_en row needs to fit at all (see #54697).
+    // in0 keeps its double buffer: there the reader genuinely prefetches ahead of compute.
     const uint32_t intermed0_tiles = Wt;  // x^2
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
