@@ -93,9 +93,6 @@ target_sources(
         ${TTNN_OP_WAVELET_SRCS}
 )
 
-# The implementation sources instantiate all 106 static schemes. Compile them
-# outside the unity source to avoid anonymous-namespace collisions and an
-# excessively large translation unit.
 set_source_files_properties(
     device/wavelet_1d_operation_impl.cpp
     device/wavelet_2d_operation_impl.cpp

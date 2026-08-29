@@ -15,6 +15,7 @@
 
 #include <tt_stl/assert.hpp>
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/wavelet/common/storage_contract.hpp"
 #include "ttnn/operations/wavelet/planner/inverse_plan.hpp"
 #include "ttnn/operations/wavelet/planner/plan_2d.hpp"
@@ -42,7 +43,7 @@ namespace inverse_2d_detail {
     TT_FATAL(output.end <= std::numeric_limits<size_t>::max() - pad, "2D ILWT padded output interval overflows");
     const size_t padded_begin = output.begin + pad;
     const size_t padded_end = output.end + pad;
-    return even ? IndexInterval{.begin = (padded_begin + 1) / 2, .end = (padded_end + 1) / 2}
+    return even ? IndexInterval{.begin = ceil_div(padded_begin, size_t{2}), .end = ceil_div(padded_end, size_t{2})}
                 : IndexInterval{.begin = padded_begin / 2, .end = padded_end / 2};
 }
 
@@ -230,8 +231,7 @@ inline void append_axis_routes(
         .oo = interval_product(y_cone.initial_odd, x_cone.initial_odd),
     };
     auto [routes, parity_slots] = build_route_schedule(y_cone, x_cone);
-    constexpr Lwt2DWorkspacePolicy workspace_policy = Lwt2DWorkspacePolicy::kFivePlaneGeneric;
-    const Lwt2DResourceModel resources = plan_2d_detail::make_resource_model(initial, routes, workspace_policy);
+    const Lwt2DResourceModel resources = plan_2d_detail::make_resource_model(initial, routes);
     const Lwt2DBandSourceRectangles parity_sources{
         .ll = interval_product(y_cone.final_even, x_cone.final_even),
         .lh = interval_product(y_cone.final_even, x_cone.final_odd),
@@ -252,13 +252,13 @@ inline void append_axis_routes(
             IndexRectangle{
                 .y =
                     IndexInterval{
-                        .begin = (output.y.begin / kTileHeight2D) * kTileHeight2D,
-                        .end = round_up(output.y.end, kTileHeight2D),
+                        .begin = tt::round_down(output.y.begin, kTileHeight2D),
+                        .end = tt::round_up(output.y.end, kTileHeight2D),
                     },
                 .x =
                     IndexInterval{
-                        .begin = (output.x.begin / kTileWidth2D) * kTileWidth2D,
-                        .end = round_up(output.x.end, kTileWidth2D),
+                        .begin = tt::round_down(output.x.begin, kTileWidth2D),
+                        .end = tt::round_up(output.x.end, kTileWidth2D),
                     },
             },
         .initial = initial,
@@ -388,7 +388,6 @@ inline void append_axis_routes(
         .input = TiledShape2D::from_logical(Shape2D{.height = y_plan.original_length, .width = x_plan.original_length}),
         .band = TiledShape2D::from_logical(
             Shape2D{.height = y_plan.coefficient_length, .width = x_plan.coefficient_length}),
-        .padding_precedes_split = true,
     };
     return Ilwt2DExecutionPlan{
         .y_plan = std::move(y_plan),

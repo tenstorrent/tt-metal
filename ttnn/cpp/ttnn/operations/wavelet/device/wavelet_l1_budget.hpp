@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/math.hpp"
 #include "tt-metalium/mesh_device.hpp"
 
 namespace ttnn::prim::detail {
@@ -28,7 +29,7 @@ inline constexpr uint32_t kWaveletL1BudgetQuantumBytes = 16U * 1024U;
         available <= std::numeric_limits<uint32_t>::max(),
         "Wavelet available static L1 size {} exceeds uint32_t",
         available);
-    return static_cast<uint32_t>(available / kWaveletL1BudgetQuantumBytes) * kWaveletL1BudgetQuantumBytes;
+    return static_cast<uint32_t>(tt::round_down(available, uint64_t{kWaveletL1BudgetQuantumBytes}));
 }
 
 }  // namespace ttnn::prim::detail

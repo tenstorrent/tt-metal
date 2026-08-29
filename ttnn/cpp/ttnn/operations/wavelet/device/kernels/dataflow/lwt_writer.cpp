@@ -18,6 +18,9 @@
 
 namespace {
 
+using ttnn::operations::wavelet::device_protocol::config_word_index;
+using ttnn::operations::wavelet::device_protocol::LwtChunkConfigWord;
+using ttnn::operations::wavelet::device_protocol::RouteConfigWord;
 using ttnn::operations::wavelet::kernels::primitives::write_direct_interleaved_signal;
 using ttnn::operations::wavelet::kernels::primitives::write_reconstructed_signal;
 
@@ -320,13 +323,13 @@ void kernel_main() {
                 chunk_words[word] = loaded_chunk[word];
             }
             config_buffer.pop_front(1);
-            chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenAddr] = resolve_workspace_slot(
-                chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenAddr],
+            chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenAddr)] = resolve_workspace_slot(
+                chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenAddr)],
                 workspace_a_addr,
                 workspace_b_addr,
                 workspace_scratch_addr);
-            chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddAddr] = resolve_workspace_slot(
-                chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddAddr],
+            chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddAddr)] = resolve_workspace_slot(
+                chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddAddr)],
                 workspace_a_addr,
                 workspace_b_addr,
                 workspace_scratch_addr);
@@ -335,7 +338,7 @@ void kernel_main() {
             for (uint32_t route_index = 0; route_index < route_count; ++route_index) {
                 const uint32_t config_index = global_chunk * route_count + route_index;
                 const uint32_t* route = load_route_config(config_args, route_config_addr, cb_config, config_index);
-                const uint32_t route_flags = route[ttnn::operations::wavelet::device_protocol::kRouteFlags];
+                const uint32_t route_flags = route[config_word_index(RouteConfigWord::kRouteFlags)];
                 const bool direct_interleave =
                     (route_flags & ttnn::operations::wavelet::device_protocol::kRouteFlagIlwtFinalInterleave) != 0;
                 if (direct_interleave) {
@@ -346,29 +349,29 @@ void kernel_main() {
                         cb_interleave,
                         tile_bytes,
                         left_pad,
-                        route[ttnn::operations::wavelet::device_protocol::kRouteType],
-                        route[ttnn::operations::wavelet::device_protocol::kRouteGroupCount],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenAddr],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenOffset],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenBegin],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddAddr],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddOffset],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddBegin],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtOutputBegin],
-                        chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtOutputLength]);
+                        route[config_word_index(RouteConfigWord::kRouteType)],
+                        route[config_word_index(RouteConfigWord::kRouteGroupCount)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenAddr)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenOffset)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenBegin)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddAddr)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddOffset)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddBegin)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtOutputBegin)],
+                        chunk_words[config_word_index(LwtChunkConfigWord::kIlwtOutputLength)]);
                     direct_interleave_written = true;
                 } else {
                     write_local_output_groups<use_noc_local_write, tile_native_workspace, hybrid_tile_mirror>(
                         resolve_workspace_slot(
-                            route[ttnn::operations::wavelet::device_protocol::kRouteOutputAddr],
+                            route[config_word_index(RouteConfigWord::kRouteOutputAddr)],
                             workspace_a_addr,
                             workspace_b_addr,
                             workspace_scratch_addr),
                         cb_output,
                         tile_bytes,
-                        route[ttnn::operations::wavelet::device_protocol::kRouteOutputOffset],
-                        route[ttnn::operations::wavelet::device_protocol::kRouteOutputLength],
-                        route[ttnn::operations::wavelet::device_protocol::kRouteGroupCount],
+                        route[config_word_index(RouteConfigWord::kRouteOutputOffset)],
+                        route[config_word_index(RouteConfigWord::kRouteOutputLength)],
+                        route[config_word_index(RouteConfigWord::kRouteGroupCount)],
                         tile_mirror_offset,
                         (route_flags & ttnn::operations::wavelet::device_protocol::kRouteFlagOutputTileMirror) != 0);
                 }
@@ -386,14 +389,14 @@ void kernel_main() {
                     output_page,
                     cb_interleave,
                     left_pad,
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenAddr],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenOffset],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalEvenBegin],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddAddr],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddOffset],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtFinalOddBegin],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtOutputBegin],
-                    chunk_words[ttnn::operations::wavelet::device_protocol::kIlwtOutputLength]);
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenAddr)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenOffset)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalEvenBegin)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddAddr)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddOffset)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtFinalOddBegin)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtOutputBegin)],
+                    chunk_words[config_word_index(LwtChunkConfigWord::kIlwtOutputLength)]);
             }
             if (local_chunk + 1 < chunk_count) {
                 sync_buffer.reserve_back(1);
@@ -416,11 +419,11 @@ void kernel_main() {
             for (uint32_t route_index = 0; route_index < route_count; ++route_index, ++flattened_route) {
                 const uint32_t config_index = global_chunk * route_count + route_index;
                 const uint32_t* route = load_route_config(config_args, route_config_addr, cb_config, config_index);
-                uint32_t output_addr = route[ttnn::operations::wavelet::device_protocol::kRouteOutputAddr];
-                const uint32_t output_length = route[ttnn::operations::wavelet::device_protocol::kRouteOutputLength];
-                const uint32_t output_offset = route[ttnn::operations::wavelet::device_protocol::kRouteOutputOffset];
-                const uint32_t group_count = route[ttnn::operations::wavelet::device_protocol::kRouteGroupCount];
-                const uint32_t route_flags = route[ttnn::operations::wavelet::device_protocol::kRouteFlags];
+                uint32_t output_addr = route[config_word_index(RouteConfigWord::kRouteOutputAddr)];
+                const uint32_t output_length = route[config_word_index(RouteConfigWord::kRouteOutputLength)];
+                const uint32_t output_offset = route[config_word_index(RouteConfigWord::kRouteOutputOffset)];
+                const uint32_t group_count = route[config_word_index(RouteConfigWord::kRouteGroupCount)];
+                const uint32_t route_flags = route[config_word_index(RouteConfigWord::kRouteFlags)];
                 const bool final_dram =
                     (route_flags & ttnn::operations::wavelet::device_protocol::kRouteFlagFinalDram) != 0;
                 if (final_dram) {

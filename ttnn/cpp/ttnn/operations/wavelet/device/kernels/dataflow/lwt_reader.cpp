@@ -36,6 +36,9 @@ constexpr uint32_t kGroupOutputBytes = kGroupOutputElements * sizeof(float);
 constexpr uint32_t kNocL1ReadAlignmentElements = NOC_L1_READ_ALIGNMENT_BYTES / sizeof(float);
 static_assert(NOC_L1_READ_ALIGNMENT_BYTES % sizeof(float) == 0);
 
+using ttnn::operations::wavelet::device_protocol::config_word_index;
+using ttnn::operations::wavelet::device_protocol::LwtChunkConfigWord;
+using ttnn::operations::wavelet::device_protocol::RouteConfigWord;
 using ttnn::operations::wavelet::kernels::primitives::WorkspaceIndexCursor;
 
 ALWI uint32_t resolve_workspace_slot(
@@ -721,12 +724,11 @@ void kernel_main() {
         if constexpr (inverse) {
             const auto input1 = TensorAccessor(input1_args, input1_or_length, input_page_size);
             const uint32_t coefficient_length = input_length_or_left_pad;
-            const uint32_t approximation_begin =
-                chunk[ttnn::operations::wavelet::device_protocol::kIlwtApproximationBegin];
+            const uint32_t approximation_begin = chunk[config_word_index(LwtChunkConfigWord::kIlwtApproximationBegin)];
             const uint32_t approximation_length =
-                chunk[ttnn::operations::wavelet::device_protocol::kIlwtApproximationLength];
-            const uint32_t detail_begin = chunk[ttnn::operations::wavelet::device_protocol::kIlwtDetailBegin];
-            const uint32_t detail_length = chunk[ttnn::operations::wavelet::device_protocol::kIlwtDetailLength];
+                chunk[config_word_index(LwtChunkConfigWord::kIlwtApproximationLength)];
+            const uint32_t detail_begin = chunk[config_word_index(LwtChunkConfigWord::kIlwtDetailBegin)];
+            const uint32_t detail_length = chunk[config_word_index(LwtChunkConfigWord::kIlwtDetailLength)];
             config_buffer.pop_front(1);
             initialize_inverse_stream<tile_native_workspace>(
                 input0,
@@ -749,11 +751,10 @@ void kernel_main() {
         } else {
             const uint32_t input_length = input1_or_length;
             const uint32_t left_pad = input_length_or_left_pad;
-            const uint32_t initial_even_begin = chunk[ttnn::operations::wavelet::device_protocol::kLwtInitialEvenBegin];
-            const uint32_t initial_even_length =
-                chunk[ttnn::operations::wavelet::device_protocol::kLwtInitialEvenLength];
-            const uint32_t initial_odd_begin = chunk[ttnn::operations::wavelet::device_protocol::kLwtInitialOddBegin];
-            const uint32_t initial_odd_length = chunk[ttnn::operations::wavelet::device_protocol::kLwtInitialOddLength];
+            const uint32_t initial_even_begin = chunk[config_word_index(LwtChunkConfigWord::kLwtInitialEvenBegin)];
+            const uint32_t initial_even_length = chunk[config_word_index(LwtChunkConfigWord::kLwtInitialEvenLength)];
+            const uint32_t initial_odd_begin = chunk[config_word_index(LwtChunkConfigWord::kLwtInitialOddBegin)];
+            const uint32_t initial_odd_length = chunk[config_word_index(LwtChunkConfigWord::kLwtInitialOddLength)];
             config_buffer.pop_front(1);
             initialize_lwt_streams<boundary_mode, tile_native_workspace>(
                 input0,
@@ -777,25 +778,25 @@ void kernel_main() {
             }
             const uint32_t config_index = global_chunk * route_count + route_index;
             const uint32_t* route = load_config_page(config_args, route_config_addr, cb_config, config_index);
-            const uint32_t route_type = route[ttnn::operations::wavelet::device_protocol::kRouteType];
+            const uint32_t route_type = route[config_word_index(RouteConfigWord::kRouteType)];
             const uint32_t source_addr = resolve_workspace_slot(
-                route[ttnn::operations::wavelet::device_protocol::kRouteSourceAddr],
+                route[config_word_index(RouteConfigWord::kRouteSourceAddr)],
                 workspace_a_addr,
                 workspace_b_addr,
                 workspace_scratch_addr);
-            const uint32_t source_end = route[ttnn::operations::wavelet::device_protocol::kRouteSourceLength];
+            const uint32_t source_end = route[config_word_index(RouteConfigWord::kRouteSourceLength)];
             const uint32_t base_addr = resolve_workspace_slot(
-                route[ttnn::operations::wavelet::device_protocol::kRouteBaseAddr],
+                route[config_word_index(RouteConfigWord::kRouteBaseAddr)],
                 workspace_a_addr,
                 workspace_b_addr,
                 workspace_scratch_addr);
-            const uint32_t base_end = route[ttnn::operations::wavelet::device_protocol::kRouteBaseLength];
-            const uint32_t output_length = route[ttnn::operations::wavelet::device_protocol::kRouteOutputLength];
-            const uint32_t source_offset = route[ttnn::operations::wavelet::device_protocol::kRouteSourceOffset];
-            const uint32_t base_offset = route[ttnn::operations::wavelet::device_protocol::kRouteBaseOffset];
-            const uint32_t source_left_pad = route[ttnn::operations::wavelet::device_protocol::kRouteSourceLeftPad];
-            const uint32_t group_count = route[ttnn::operations::wavelet::device_protocol::kRouteGroupCount];
-            const uint32_t route_flags = route[ttnn::operations::wavelet::device_protocol::kRouteFlags];
+            const uint32_t base_end = route[config_word_index(RouteConfigWord::kRouteBaseLength)];
+            const uint32_t output_length = route[config_word_index(RouteConfigWord::kRouteOutputLength)];
+            const uint32_t source_offset = route[config_word_index(RouteConfigWord::kRouteSourceOffset)];
+            const uint32_t base_offset = route[config_word_index(RouteConfigWord::kRouteBaseOffset)];
+            const uint32_t source_left_pad = route[config_word_index(RouteConfigWord::kRouteSourceLeftPad)];
+            const uint32_t group_count = route[config_word_index(RouteConfigWord::kRouteGroupCount)];
+            const uint32_t route_flags = route[config_word_index(RouteConfigWord::kRouteFlags)];
             const bool source_tile_mirror =
                 (route_flags & ttnn::operations::wavelet::device_protocol::kRouteFlagSourceTileMirror) != 0;
             const bool base_tile_mirror =
