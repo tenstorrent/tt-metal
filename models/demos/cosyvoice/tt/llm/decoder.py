@@ -188,6 +188,12 @@ class TtARDecoder:
         for layer in self.layers:
             layer.attn.cache_pos_proj = True
 
+    def release_pos_proj_cache(self):
+        """Drop every layer's cached positional projection -- see
+        `TtRelPosAttention.release_pos_proj_cache` for when this is safe."""
+        for layer in self.layers:
+            layer.attn.release_pos_proj_cache()
+
     def positional(self, key_size: int):
         """The `[1, 2*key_size - 1, d_model]` window, cached per size.
 
@@ -322,7 +328,7 @@ class TtARDecoder:
             return mask, False
         return decode_mask(mask, self.meta["n_head"]), True
 
-    def empty_cache(self, max_len: int, chunk: int):
+    def empty_cache(self, max_len: int, chunk: int, batch: int = 1):
         """Zeroed `[1, h, max_len - chunk, d_k]` k/v per layer.
 
         Sized so the attention's own concat with this step's `chunk` tokens lands
@@ -330,14 +336,11 @@ class TtARDecoder:
         there is no separate prefill shape to compile.
         """
         n_head, d_k = self.meta["n_head"], self.meta["d_k"]
+        shape = (batch, n_head, max_len - chunk, d_k)
         return [
             (
-                ttnn.zeros(
-                    (1, n_head, max_len - chunk, d_k), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
-                ),
-                ttnn.zeros(
-                    (1, n_head, max_len - chunk, d_k), dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device
-                ),
+                ttnn.zeros(shape, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device),
+                ttnn.zeros(shape, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device),
             )
             for _ in range(self.meta["n_layers"])
         ]
@@ -371,9 +374,22 @@ class TracedDecodeStep:
     the key positions.
     """
 
-    def __init__(self, decoder, max_len: int):
+    def __init__(self, decoder, max_len: int, batch: int = 1):
         self.dec = decoder
         self.max_len = max_len
+        # One decode step for `batch` sequences at once. Every buffer below simply
+        # gains a leading dimension: the AR decoder's own ops are written against
+        # `[B, ...]` already, and `right_aligned_bias` takes one `valid` per row, so
+        # sequences with different prompt lengths batch with no further bookkeeping.
+        # `TtTransformerLM.generate_batch` is the caller, and its docstring carries
+        # why it is worth doing -- a decode step at one row is bound by reading the
+        # decoder's weights out of DRAM, and that read is shared across the batch.
+        #
+        # Only the moving cache is batched. `TracedDecodeStepInPlace` captures 65
+        # traces where this captures one, and multiplying that by a batch is a trace
+        # region no board here has. The two are within 1.15x of each other on
+        # Blackhole, and batching moves far more than 1.15x.
+        self.batch = batch
         # Before the first `_body()`, so the projection is computed and cached during
         # warm-up and the trace records only the read.
         decoder.enable_pos_proj_cache()
@@ -382,7 +398,7 @@ class TracedDecodeStep:
         d_in = meta["input_size"]
         dev, dt = decoder.device, decoder.dtype
 
-        self.x_buf = ttnn.from_torch(torch.zeros(1, 1, d_in), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+        self.x_buf = ttnn.from_torch(torch.zeros(batch, 1, d_in), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
         # Heads on dim 2 when the fused path is on, built on the **host**. Doing the
         # expansion with a device `ttnn.repeat` inside the traced body is what took
         # traced-vs-untraced from 1.0 to 0.918: the op is correct on its own
@@ -392,7 +408,7 @@ class TracedDecodeStep:
         # nothing and removes the op from the trace entirely.
         self.mask_heads = self.h if decoder.sdpa_decode else 1
         self.mask_buf = ttnn.from_torch(
-            right_aligned_bias(max_len, max_len, 1, heads=self.mask_heads),
+            right_aligned_bias(max_len, [max_len] * batch, 1, heads=self.mask_heads),
             dtype=dt,
             layout=ttnn.TILE_LAYOUT,
             device=dev,
@@ -401,7 +417,7 @@ class TracedDecodeStep:
         # two dims, so this puts the time axis on a *free* one -- appending a token then
         # costs 19.7 us instead of 207.2, and a 13.9 us permute puts it back in
         # `[1, h, T, d_k]` for the matmuls. See `TtRelPosAttention.forward_cached`.
-        shape = (1, max_len, self.h, self.d_k)
+        shape = (batch, max_len, self.h, self.d_k)
         self.k_buf = [
             ttnn.from_torch(torch.zeros(shape), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
             for _ in range(self.n_layers)
@@ -414,7 +430,7 @@ class TracedDecodeStep:
         # trace's own pool, and reading it after a replay is fragile -- copying into
         # a buffer allocated up front is the same discipline the KV cache uses, for
         # the same reason.
-        self.ys = ttnn.from_torch(torch.zeros(1, 1, meta["d_model"]), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
+        self.ys = ttnn.from_torch(torch.zeros(batch, 1, meta["d_model"]), dtype=dt, layout=ttnn.TILE_LAYOUT, device=dev)
         self.trace_id = None
 
     # ------------------------------------------------------------------
@@ -443,8 +459,8 @@ class TracedDecodeStep:
         for i, layer in enumerate(self.dec.layers):
             # Drop the oldest slot so the attention's own concat lands on max_len.
             trimmed = (
-                ttnn.slice(self.k_buf[i], [0, 1, 0, 0], [1, self.max_len, self.h, self.d_k]),
-                ttnn.slice(self.v_buf[i], [0, 1, 0, 0], [1, self.max_len, self.h, self.d_k]),
+                ttnn.slice(self.k_buf[i], [0, 1, 0, 0], [self.batch, self.max_len, self.h, self.d_k]),
+                ttnn.slice(self.v_buf[i], [0, 1, 0, 0], [self.batch, self.max_len, self.h, self.d_k]),
             )
             h, (k_new, v_new) = layer(h, pos, mask=self.mask_buf, cache=trimmed, return_cache=True, cache_free=True)
             for t in trimmed:
@@ -474,14 +490,22 @@ class TracedDecodeStep:
             ttnn.end_trace_capture(self.dec.device, self.trace_id, cq_id=0)
         return self
 
-    def step(self, x_host: torch.Tensor, valid: int):
-        """One token in, `[1, 1, d]` hidden state out. Buffers updated in place."""
+    def step(self, x_host: torch.Tensor, valid):
+        """One token per row in, `[B, 1, d]` hidden states out. Buffers updated in place.
+
+        `valid` is one int at batch 1, or one int per row when batching -- the rows
+        genuinely differ, because batched utterances start from prompts of different
+        lengths.
+        """
+        valids = (
+            [min(valid, self.max_len)] * self.batch if isinstance(valid, int) else [min(v, self.max_len) for v in valid]
+        )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(x_host, dtype=self.dec.dtype, layout=ttnn.TILE_LAYOUT), self.x_buf
         )
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(
-                right_aligned_bias(self.max_len, min(valid, self.max_len), 1, heads=self.mask_heads),
+                right_aligned_bias(self.max_len, valids, 1, heads=self.mask_heads),
                 dtype=self.dec.dtype,
                 layout=ttnn.TILE_LAYOUT,
             ),
@@ -738,21 +762,29 @@ def slot_bias(width: int, tile: int, valid: int, slot: int, heads: int = 1, dtyp
     return m.to(dtype)
 
 
-def right_aligned_bias(
-    max_len: int, valid: int, chunk: int = 1, causal: bool = False, heads: int = 1, dtype=torch.float32
-):
-    """Additive `[1, 1, chunk, max_len]` mask for a right-aligned cache.
+def right_aligned_bias(max_len: int, valid, chunk: int = 1, causal: bool = False, heads: int = 1, dtype=torch.float32):
+    """Additive `[B, 1, chunk, max_len]` mask for a right-aligned cache.
 
     Slots before `max_len - valid` are padding and are suppressed. When `causal`,
     query `i` (sitting at slot `max_len - chunk + i`) additionally may not see any
     slot beyond its own.
+
+    **`valid` may be a sequence, one entry per batch row**, which is what makes a
+    batched decode step possible at all. Utterances batched together have different
+    prompt lengths and stop at different tokens, so at any given step they have
+    different amounts of real history -- but because the cache is *right*-aligned,
+    each row's live span always ends at the last slot and differs only in where it
+    starts. One mask row per sequence expresses exactly that, and nothing else about
+    the decode step has to know that the rows are unequal. A left-aligned cache would
+    need per-row gather instead.
     """
+    valids = [valid] if isinstance(valid, int) else list(valid)
     slots = torch.arange(max_len)
-    live = slots >= (max_len - valid)
-    m = torch.where(live, 0.0, NEG_INF).reshape(1, 1, 1, max_len).repeat(1, 1, chunk, 1)
+    live = torch.stack([slots >= (max_len - v) for v in valids])  # [B, max_len]
+    m = torch.where(live, 0.0, NEG_INF).reshape(len(valids), 1, 1, max_len).repeat(1, 1, chunk, 1)
     if causal:
         q_slot = (max_len - chunk) + torch.arange(chunk)
         m = torch.where(slots.reshape(1, 1, 1, -1) <= q_slot.reshape(1, 1, -1, 1), m, NEG_INF)
     if heads > 1:  # decode only: chunk is 1, so dim 2 is free to carry heads instead
-        m = m.expand(1, 1, heads, max_len).contiguous()
+        m = m.expand(len(valids), 1, heads, max_len).contiguous()
     return m.to(dtype)

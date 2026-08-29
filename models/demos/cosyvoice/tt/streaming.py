@@ -228,39 +228,128 @@ class TtStreamingSynthesizer:
         return emit, n_samples - cfg.source_cache_len
 
     # ----------------------------------------------------------------------
+    def session(self, ctx, rng_for_chunk) -> "StreamSession":
+        """An incremental driver: push tokens in, take waveform chunks out.
+
+        This is the form the pipelined path needs -- see `StreamSession`.
+        """
+        return StreamSession(self, ctx, rng_for_chunk)
+
     def synthesize(self, tokens, ctx, rng_for_chunk, on_chunk=None):
         """Full streaming run over an already-generated token list.
 
-        Yields waveform chunks. `ctx` carries the flow's prompt (tokens, mel and
-        speaker vector); `rng_for_chunk(mel_frames)` returns `(phase, noise_unit)`.
+        Returns the waveform chunks. `ctx` carries the flow's prompt (tokens, mel
+        and speaker vector); `rng_for_chunk(mel_frames)` returns
+        `(phase, noise_unit)`.
 
-        The LLM is upstream of this: `tts()` overlaps generation with synthesis by
-        running them in separate threads, which is a latency optimisation rather
-        than a different computation. Driving from a completed token list keeps
-        the *content* comparison exact.
+        Implemented by pushing the finished list through `StreamSession` one token
+        at a time, so this and the pipelined path share **one** chunk scheduler
+        rather than two that have to be kept in agreement. Chunk boundaries are a
+        pure function of the token count, so feeding a completed list token by token
+        produces exactly the chunks the original loop did -- which is what lets the
+        pipelined path inherit `test_device_streamed_matches_non_streamed`'s content
+        guarantee instead of re-proving it. `test_incremental_session_cuts_the_same_
+        chunks_as_the_batch_loop` checks that equivalence on the host, across
+        lengths, rather than once at whatever length the golden happens to be.
         """
-        cfg = self.cfg
-        state = StreamState()
         out = []
-        i, hop = 0, cfg.token_hop_len
-        try:
-            while i + hop + cfg.token_overlap_len <= len(tokens):
-                chunk = tokens[i : i + hop + cfg.token_overlap_len]
-                wav, n = self._one(chunk, ctx, state, rng_for_chunk, finalize=False)
-                out.append(wav)
-                if on_chunk:
-                    on_chunk(wav, n)
-                i += hop
-                hop = min(cfg.token_max_hop_len, int(hop * cfg.stream_scale_factor))
-            wav, n = self._one(tokens[i:], ctx, state, rng_for_chunk, finalize=True)
+        with self.session(ctx, rng_for_chunk) as session:
+            for token in tokens:
+                for wav, n in session.push(token):
+                    out.append(wav)
+                    if on_chunk:
+                        on_chunk(wav, n)
+            wav, n = session.finish()
             out.append(wav)
             if on_chunk:
                 on_chunk(wav, n)
-        finally:
-            state.free()
         return out
 
     def _one(self, chunk_tokens, ctx, state, rng, finalize):
         """Flow-decode one token chunk, then vocode it with the carried caches."""
         mel, mel_frames = ctx.flow_chunk(chunk_tokens)
         return self.token2wav(mel, mel_frames, state, rng, finalize)
+
+
+class StreamSession:
+    """The chunk scheduler, driven one token at a time.
+
+    **This is the difference between chunked vocoding and streaming.** The batch
+    form -- hand it a finished token list and let it cut that list into chunks --
+    can only ever measure whether chunked synthesis reconstructs the same audio. It
+    cannot start the flow decoder before the LLM has produced its last token,
+    because it is given the list only once the list exists.
+
+    Driving the same scheduler from a callback inverts that. `push` is called by the
+    AR decode loop as each token is sampled (`TtTransformerLM.generate`'s `on_token`);
+    the moment `hop + overlap` tokens have accumulated, the flow decoder and the
+    vocoder run on them and hand back audio, and generation resumes. So the first
+    waveform chunk exists after roughly `token_hop_len + token_overlap_len` tokens
+    rather than after the whole utterance -- **time to first audio stops growing with
+    utterance length**, which is the property that makes a TTS pipeline streamable.
+
+    The three stages still run one after another on one device and one command queue.
+    There is no overlap of *compute*, and a chunk's flow/vocoder work does pause token
+    generation while it runs, so the total gets slightly worse. What changes is when
+    the first sample can be handed to a caller, and that is the number the streaming
+    requirement is about. `tests/perf/test_streaming_perf.py` measures both.
+
+    The schedule itself is unchanged from the batch loop it replaces, deliberately:
+    same `hop`, same growth by `stream_scale_factor`, same overlap, same finalize.
+    """
+
+    def __init__(self, synth: TtStreamingSynthesizer, ctx, rng_for_chunk):
+        self.synth, self.ctx, self.rng = synth, ctx, rng_for_chunk
+        self.state = StreamState()
+        self.tokens: list[int] = []
+        self.i = 0
+        self.hop = synth.cfg.token_hop_len
+        self.n_chunks = 0
+        self._done = False
+
+    # ------------------------------------------------------------------
+    def push(self, token: int):
+        """Accept one freshly generated token; yield any chunk it completes.
+
+        A generator rather than an optional return: one token can complete at most
+        one chunk, but `extend` may complete several, and a caller written as
+        `for wav, n in session.push(t)` works for both.
+        """
+        self.tokens.append(token)
+        yield from self._drain()
+
+    def extend(self, tokens):
+        """Accept several tokens at once."""
+        self.tokens.extend(tokens)
+        yield from self._drain()
+
+    def _drain(self):
+        cfg = self.synth.cfg
+        while self.i + self.hop + cfg.token_overlap_len <= len(self.tokens):
+            chunk = self.tokens[self.i : self.i + self.hop + cfg.token_overlap_len]
+            wav, n = self.synth._one(chunk, self.ctx, self.state, self.rng, finalize=False)
+            self.i += self.hop
+            self.hop = min(cfg.token_max_hop_len, int(self.hop * cfg.stream_scale_factor))
+            self.n_chunks += 1
+            yield wav, n
+
+    def finish(self):
+        """Vocode whatever is left. Call once -- a second call would re-run the tail
+        against caches the first call has already consumed."""
+        if self._done:
+            raise RuntimeError("StreamSession.finish() called twice")
+        self._done = True
+        wav, n = self.synth._one(self.tokens[self.i :], self.ctx, self.state, self.rng, finalize=True)
+        self.n_chunks += 1
+        return wav, n
+
+    def close(self):
+        """Free whatever the carried caches still hold. Idempotent."""
+        self.state.free()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False

@@ -24,6 +24,7 @@ import time
 import pytest
 import torch
 
+from models.demos.cosyvoice.tests.perf.gates import enforce, report
 from models.demos.cosyvoice.tt.common import GOLDEN_DIR, as_torch, load_golden
 from models.demos.cosyvoice.tt.weights import default_weights_path
 
@@ -176,11 +177,18 @@ def test_device_end_to_end_rtf(device):
     print(f"  flow     10 Euler steps               = {flow_s:6.3f} s   RTF {flow_s/audio_seconds:5.3f}")
     print(f"  vocoder  mel -> {want.shape[1]} samples        = {hift_s:6.3f} s   RTF {hift_s/audio_seconds:5.3f}")
     print(f"  TOTAL                                 = {total_s:6.3f} s   RTF {rtf:5.3f}")
-    print(f"  targets: RTF < 0.5, then < 0.2")
     print(f"  LLM share of total: {100*llm_total_s/total_s:.1f}%")
 
-    assert total_s > 0
-    # Reported honestly rather than xfailed: a missed target gets a number and an
-    # explanation, because an xfail was read as concealment on the previous attempt.
-    if rtf >= 0.5:
-        print(f"  ABOVE the 0.5 target -- measured {rtf:.3f}.")
+    # The gates, enforced. Every threshold is asserted -- a met one against the
+    # requirement itself, a missed one against its recorded band, both bounds. See
+    # `gates.py` for why a missed target is not an `xfail`.
+    tok_s = 1e3 / llm_step_ms
+    report(
+        [
+            enforce("tok_s", tok_s, device),
+            enforce("tok_s_stretch", tok_s, device),
+            enforce("rtf", rtf, device, extra=f"{n_generated} tokens, {audio_seconds:.2f} s audio"),
+            enforce("rtf_stretch", rtf, device),
+        ],
+        "bounty gates -- end-to-end",
+    )

@@ -63,6 +63,74 @@ needs_golden = pytest.mark.skipif(
 # --------------------------------------------------------------------------
 # host tier
 # --------------------------------------------------------------------------
+def test_incremental_session_cuts_the_same_chunks_as_the_batch_loop():
+    """Pushing tokens one at a time must schedule exactly the batch loop's chunks.
+
+    This is what lets the pipelined path inherit the content guarantee below without
+    re-proving it on device. `synthesize` and `synthesize_streaming` share one
+    scheduler (`StreamSession`), and the claim that they cut identically is a pure
+    property of the token count -- so it is checked here, on the host, over many
+    lengths, instead of once on hardware at whatever length the golden happens to be.
+
+    The synthesizer itself is stubbed: this is a test of the schedule, not of the
+    flow decoder. What it must catch is an off-by-one in the hop or the overlap,
+    which would leave the two paths producing different audio for the same tokens.
+    """
+    from models.demos.cosyvoice.tt.streaming import StreamConfig, StreamSession
+
+    cfg = StreamConfig()
+
+    class FakeSynth:
+        """Records the token spans it is asked to synthesise."""
+
+        def __init__(self):
+            self.cfg = cfg
+            self.spans = []
+
+        def _one(self, chunk_tokens, ctx, state, rng, finalize):
+            self.spans.append((tuple(chunk_tokens), finalize))
+            return None, 0
+
+    def batch_spans(tokens):
+        """The loop `synthesize` used before the scheduler was extracted."""
+        spans, i, hop = [], 0, cfg.token_hop_len
+        while i + hop + cfg.token_overlap_len <= len(tokens):
+            spans.append((tuple(tokens[i : i + hop + cfg.token_overlap_len]), False))
+            i += hop
+            hop = min(cfg.token_max_hop_len, int(hop * cfg.stream_scale_factor))
+        spans.append((tuple(tokens[i:]), True))
+        return spans
+
+    # Lengths either side of every boundary the scheduler can trip on: shorter than
+    # one chunk, exactly one chunk, one token over, and several chunks deep.
+    for n in (0, 1, 119, 120, 121, 164, 219, 220, 221, 400, 1000):
+        tokens = list(range(n))
+        synth = FakeSynth()
+        session = StreamSession(synth, ctx=None, rng_for_chunk=None)
+        for t in tokens:
+            list(session.push(t))
+        session.finish()
+        session.close()
+        assert synth.spans == batch_spans(tokens), f"schedules diverge at {n} tokens"
+
+
+def test_session_finish_is_not_reusable(expect_error):
+    """A second `finish()` would re-vocode the tail against caches the first call
+    already consumed, which is a use-after-free rather than a duplicate chunk."""
+    from models.demos.cosyvoice.tt.streaming import StreamConfig, StreamSession
+
+    class FakeSynth:
+        cfg = StreamConfig()
+
+        def _one(self, *a, **k):
+            return None, 0
+
+    session = StreamSession(FakeSynth(), ctx=None, rng_for_chunk=None)
+    session.finish()
+    with expect_error(RuntimeError, "called twice"):
+        session.finish()
+
+
 def test_window_is_symmetric_hamming_not_periodic():
     """`np.hamming` is the **symmetric** form; `scipy.signal.get_window` returns the
     periodic one by default. The discriminator is palindromy: the symmetric window
