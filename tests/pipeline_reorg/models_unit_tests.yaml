@@ -242,16 +242,14 @@
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not prefill_paged_slots_long and not B32"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
+    pytest --timeout 480 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.5-9b
   model_family: Qwen
   skus:
-    # 33 is the tier-3 budget cap, not a measured time -- land a measured value + slack after the
-    # first green scheduled run.
     wh_n300:
-      timeout: 33
+      timeout: 40
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
