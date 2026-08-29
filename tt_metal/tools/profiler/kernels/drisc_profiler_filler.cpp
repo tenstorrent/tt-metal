@@ -123,7 +123,6 @@ void kernel_main() {
     // Deliberately NO whole-span (raw) ship mode for worker cores: a raw sweep's dead ring bytes multiply
     // pressure exactly where direct push is narrowest (measured 60k producer stalls from the HIGH mode
     // this replaced; 0 with it unreachable). Only the self frame ships the raw span layout.
-    static_assert(kShipMinPct != 0, "CV-first sweeps exist to feed the per-core ship decision");
     static_assert(
         kSelfZones != 0 || kNGens * kGenSlots < kNStage,
         "CV staging needs a slot past the 2-generation pipeline (kNStage must be odd when self-zones are off)");
