@@ -517,6 +517,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         input_tensor, output_tensor, dim, ring_size, input_batch_slice_idx);
     if (partial_readiness_enabled) {
         TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
+        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "Partial all-gather readiness requires Ring topology");
+        TT_FATAL(
+            num_targets_forward > 0 && num_targets_backward > 0,
+            "Partial all-gather readiness requires active traffic in both ring directions");
         TT_FATAL(
             output_bank_owned_schedule,
             "Partial all-gather readiness currently requires the bank-owned packet schedule");

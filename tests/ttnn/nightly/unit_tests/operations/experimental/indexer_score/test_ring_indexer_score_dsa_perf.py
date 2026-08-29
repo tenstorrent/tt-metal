@@ -78,8 +78,8 @@ RING_INDEXER_PERF_MARGIN = 0.02
 RING_INDEXER_PERF_REPLAYS = 3
 RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
-    (4, GLM52_KV_55K): 43.74,
-    (4, GLM52_KV_512K): 47.26,
+    (4, GLM52_KV_55K): 46.26,
+    (4, GLM52_KV_512K): 62.99,
     (8, GLM52_KV_55K): 58.07,
     (8, GLM52_KV_512K): 60.15,
 }

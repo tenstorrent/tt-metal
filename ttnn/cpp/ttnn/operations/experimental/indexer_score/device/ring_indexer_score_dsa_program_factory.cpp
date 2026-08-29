@@ -205,7 +205,10 @@ ProgramDescriptor build_ring_program_descriptor(
 
     const uint32_t ring_size = ring_size_for(args, q);  // shared with validate/signaler (same ring extent)
     const uint32_t sll_t = Tt / ring_size;              // physical tiles per SP shard in gathered K
+    // The two-marker protocol requires both ring directions to carry slices. Linear topologies and a two-chip
+    // ring leave one direction with no targets, whose writer intentionally discards its local packet stream.
     const bool partial_readiness_enabled =
+        fused.topology == ttnn::ccl::Topology::Ring && ring_size > 2 &&
         ag_rt::uses_output_bank_owned_schedule({k_local}, {k}, /*dim=*/2, ring_size, args.cache_batch_idx);
     const uint32_t units_per_shard = units_in_group(KC, sll_t);
     const uint32_t work_unit_count = ring_size * units_per_shard;
@@ -217,17 +220,17 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t rows_used = group_rows * num_blocks;                         // grid rows used by compute
     const uint32_t num_groups = group_count / group_rows;  // phase-stack count (groups per row, round-robin)
 
-    // shard_order[c] is the ring iteration that delivers physical SP shard c (the local shard is iteration 0).
-    // Work units never cross a shard boundary, so each has exactly one readiness dependency.
+    // Group physical SP shards by their ring-arrival wave (the local shard is wave 0). Work units never cross a
+    // shard boundary, so each has exactly one readiness dependency. RingIdSequencer already emits each wave in
+    // the desired paired-direction order; preserve it directly rather than reconstructing and sorting it later.
     const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
-    std::vector<uint32_t> shard_order(ring_size, 0);
-    std::vector<uint32_t> shard_wave(ring_size, 0);
+    const uint32_t max_wave = ring_size / 2;
+    std::vector<std::vector<uint32_t>> shards_by_wave(max_wave + 1);
     {
         RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
         for (uint32_t i = 0; i < ring_size; ++i) {
             const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
-            shard_order[rid] = i;
-            shard_wave[rid] = (i + 1) / 2;
+            shards_by_wave[(i + 1) / 2].push_back(rid);
         }
     }
     // Deal each shard's physical KC units across row-blocks and columns. This gives every compute column an even
@@ -237,18 +240,8 @@ ProgramDescriptor build_ring_program_descriptor(
         num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
     uint32_t max_bands = 0;
     {
-        const uint32_t max_wave = ring_size / 2;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             for (uint32_t wave = 0; wave <= max_wave; ++wave) {
-                std::vector<uint32_t> wave_shards;
-                for (uint32_t shard = 0; shard < ring_size; ++shard) {
-                    if (shard_wave[shard] == wave) {
-                        wave_shards.push_back(shard);
-                    }
-                }
-                std::stable_sort(wave_shards.begin(), wave_shards.end(), [&](uint32_t a, uint32_t b) {
-                    return shard_order[a] < shard_order[b];
-                });
                 // Give each column matching offsets from both directions. Its visit order becomes
                 // A0,B0,A1,B1,..., so a core that reaches shard A's completion gate can consume the
                 // simultaneously arriving midpoint of shard B instead of idling.
@@ -258,7 +251,7 @@ ProgramDescriptor build_ring_program_descriptor(
                         if (unit_in_shard >= units_per_shard) {
                             break;
                         }
-                        for (uint32_t shard : wave_shards) {
+                        for (uint32_t shard : shards_by_wave[wave]) {
                             work_list[blk][col].push_back(shard * sll_t + unit_in_shard * KC);
                         }
                     }

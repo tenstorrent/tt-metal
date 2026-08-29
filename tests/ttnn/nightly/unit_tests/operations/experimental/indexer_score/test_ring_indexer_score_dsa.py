@@ -20,6 +20,7 @@ import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
     assert_indexer_match,
     glx_config,
+    indexer_score_dsa_ref,
     _global_inputs,
     _nd_sharded_dram_config,
     _per_sp_ref,
@@ -48,6 +49,21 @@ pytestmark = [
     pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score is Blackhole-only"),
     pytest.mark.skipif(ttnn.get_num_devices() < 8, reason="ring-of-4 needs the 8-chip LoudBox (2x4)"),
 ]
+
+
+def _ring8_partial_router_config():
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = 14 * 1024
+    return config
+
+
+_RING8_PARTIAL_DEVICE_PARAMS = {
+    "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
+    "fabric_tensix_config": ttnn.FabricTensixConfig.DISABLED,
+    "fabric_router_config": _ring8_partial_router_config(),
+    "require_exact_physical_num_devices": True,
+}
 
 
 def _fused_dev_inputs(submesh, q_g, w_g, k_host, *, k_dtype=ttnn.bfloat16):
@@ -428,6 +444,119 @@ def test_indexer_score_ring4_fused_program_cache_reuse(k_dtype):
         )
     finally:
         _close_ring4_ccl(parent, submesh, stall_group)
+
+
+@pytest.mark.requires_host_iommu
+@pytest.mark.parametrize("mesh_device", [(8, 1)], ids=["ring8"], indirect=True)
+@pytest.mark.parametrize("device_params", [_RING8_PARTIAL_DEVICE_PARAMS], indirect=True)
+def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
+    """Reference-check the production Ring two-marker protocol, including its cache-hit runtime patch.
+
+    The smaller correctness shapes above intentionally use the legacy packet schedule. This test keeps query
+    work small but makes the BF16 K capacity large enough that forwarded payload exceeds the 20 MiB bank-owned
+    threshold. Two runtime prefixes then exercise different midpoint/completion locations on one cached program.
+    Sampled first/last rows on every rank cover both directions without constructing a capacity-sized CPU score.
+    """
+    sp = mesh_device.shape[0]
+    heads = 4
+    q_per_rank = 32
+    chunk_global = sp * q_per_rank
+    k_capacity = 128 * 1024
+    kv_lens = (56320, 112640)
+    dim = 128
+    bf16_bytes = 2
+    forwarded_capacity_bytes = k_capacity // sp * dim * bf16_bytes * (sp - 1)
+    assert forwarded_capacity_bytes > 20 * 1024 * 1024, "test capacity must activate bank-owned partial readiness"
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    subdevice_id = ttnn.SubDeviceId(0)
+    stall_group = [subdevice_id]
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([worker_cores])], 0)
+    mesh_device.load_sub_device_manager(manager)
+    mesh_device.set_sub_device_stall_group(stall_group)
+    ccl_semaphores = [ttnn.create_global_semaphore(mesh_device, worker_cores, 0) for _ in range(2)]
+    try:
+        q_g, k_nat, w_g = _global_inputs(heads, chunk_global, k_capacity, seed=4242)
+        k_bc = _to_slab(k_nat, sp, chunk_global)
+        sp_shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, 1), dims=(2, None))
+        q_dev = ttnn.from_torch(
+            q_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
+        )
+        w_dev = ttnn.from_torch(
+            w_g, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
+        )
+        k_local = ttnn.from_torch(
+            k_bc,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=sp_shard,
+        )
+        k_gathered = ttnn.from_torch(
+            torch.zeros_like(k_nat),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        program_config = ttnn.IndexerScoreProgramConfig(
+            q_chunk_size=32,
+            k_chunk_size=320,
+            head_group_size=0,
+        )
+
+        def _score(kv_len):
+            chunk_start = kv_len - chunk_global
+            out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=0,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                kv_len=kv_len,
+                block_cyclic_sp_axis=0,
+                block_cyclic_chunk_local=q_per_rank,
+                program_config=program_config,
+            )
+            ttnn.synchronize_device(mesh_device, sub_device_ids=stall_group)
+            out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+            ttnn.deallocate(out)
+            return out_t, chunk_start
+
+        entries_before = mesh_device.num_program_cache_entries()
+        for dispatch, kv_len in enumerate(kv_lens):
+            out_t, chunk_start = _score(kv_len)
+            if dispatch == 0:
+                entries_after_compile = mesh_device.num_program_cache_entries()
+                assert entries_after_compile > entries_before
+            else:
+                assert (
+                    mesh_device.num_program_cache_entries() == entries_after_compile
+                ), "changing kv_len/midpoint recompiled instead of patching the cached Ring program"
+
+            for rank in range(sp):
+                for local_row in (0, q_per_rank - 1):
+                    global_row = rank * q_per_rank + local_row
+                    row = slice(global_row, global_row + 1)
+                    ref = indexer_score_dsa_ref(
+                        q_g[:, :, row, :],
+                        k_nat[:, :, :kv_len, :],
+                        w_g[:, :, row, :],
+                        chunk_start + global_row,
+                    )
+                    assert_indexer_match(out_t[:, :, row, :kv_len], ref, sq=1, t=kv_len, check_neg=False)
+        logger.info("Ring-8 partial readiness matched sampled reference across a kv_len cache hit")
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
 
 
 def test_indexer_score_ring4_fused_rejects_head_streaming(expect_error):

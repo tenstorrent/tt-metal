@@ -49,8 +49,8 @@ inline void write_strip(
 }
 
 /** Scatter one shard-major packed strip back to logical K columns. Consecutive physical tiles map to short
- *  logical runs; coalesce each run so KC=7 over a five-tile block-cyclic run needs only two or three writes
- *  per output row rather than one write per score tile. */
+ *  logical runs; coalesce each run so a KC-sized work unit needs only a few writes per output row rather than
+ *  one write per score tile. */
 template <typename OutAcc>
 inline void write_shard_major_strip(
     Noc noc,
@@ -227,8 +227,8 @@ void kernel_main() {
             for (uint32_t g = 0; g < num_out_groups; ++g) {
                 const uint32_t plane_row0 = g * sq_rows;
                 for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
-                    const uint32_t q_tile_start = fused_ring_enabled ? shard_span.q_tile_start() : span.q_tile_start();
-                    const uint32_t q_seq_row0 = (q_tile_start + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
+                    const uint32_t q_seq_row0 =
+                        (group * q_tiles_per_unit + q_row) * tt::constants::TILE_HEIGHT;  // within Sq
                     const uint32_t page_row_start = plane_row0 + q_seq_row0;
                     if constexpr (block_pool) {
                         write_pooled_strip(
@@ -242,12 +242,8 @@ void kernel_main() {
                             straddle_q_keys,
                             straddle_jump_keys);
                     } else {
-                        if constexpr (fused_ring_enabled) {
-                            if constexpr (shard_block_cyclic) {
-                                write_shard_major_strip(noc, out_acc, page_row_start, shard_span, valid_w);
-                            } else {
-                                write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
-                            }
+                        if constexpr (fused_ring_enabled && shard_block_cyclic) {
+                            write_shard_major_strip(noc, out_acc, page_row_start, shard_span, valid_w);
                         } else {
                             write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
                         }
