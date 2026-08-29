@@ -632,11 +632,13 @@ class Qwen3VlVisionAttention(Module):
         of the tower's end-to-end error. Purely k-sided: q256/k256 measured identical to q128/k256,
         and q256/k512 exceeds L1, so q stays at 128.
 
-        (64, 1024) is the accuracy-optimal point on the L1 frontier: the scores CB scales with
-        q*k (~65K elements fits, ~98K does not) and the K/V chunk CBs with k alone (k1536 fails
-        even at q64), so k1024 requires q64. Chosen deliberately over (128, 512)'s 6.5 % / 270 ms:
-        ~0.6 RMSE points for ~10 % tower time (q64 doubles Q-loop iterations). q chunk size has no
-        accuracy effect (measured); only the K-chunk count does. The fitted sweep puts the
+        (64, 960) is the accuracy-optimal point that fits the PIPELINE's L1 tenancy: the scores CB
+        scales with q*k (~65K elements is the bare frontier) and the K/V chunk CBs with k alone
+        (k1536 fails even at q64), so large k requires q64. (64, 1024) fits standalone but clashes
+        with the pipeline's resident L1 buffers by ~13 KB (CCL persistent state etc. -- caught by
+        test_pipeline_encode_vision_smoke), so k steps down one tile-multiple. Chosen deliberately
+        over (128, 512)'s 6.5 % / 270 ms: ~0.6 RMSE points for ~10 % tower time (q64 doubles Q-loop
+        iterations). q chunk size has no accuracy effect (measured); only the K-chunk count does. The fitted sweep puts the
         non-chunking error floor at ~0.27 %/step -- the bf16 CPU reference's own level -- so a
         kernel carrying the rescale path in higher precision would reach reference parity at any
         chunk size and reclaim both the L1 and the q64 latency.
@@ -645,7 +647,7 @@ class Qwen3VlVisionAttention(Module):
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=min(tiles, 64),
-            k_chunk_size=min(tiles, 1024),
+            k_chunk_size=min(tiles, 960),
             exp_approx_mode=False,  # False is the more accurate softmax
         )
 
