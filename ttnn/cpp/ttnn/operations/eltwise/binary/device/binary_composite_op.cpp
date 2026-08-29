@@ -563,7 +563,12 @@ Tensor floor_div(
             t_nan,
             ttnn::multiply(ttnn::sign(input_a, output_mem_config), t_inf, std::nullopt, output_mem_config));
     }
-    Tensor temp = ttnn::multiply(input_a, (1.0f / value_f), std::nullopt, output_mem_config);
+    // Divide directly rather than multiplying by a host-computed reciprocal:
+    // 1.0f / value_f is a single fp32 rounding of the true reciprocal and,
+    // for most non-power-of-two divisors, rounds down, so an exact multiple
+    // lands one ULP below the true integer quotient and floor() drops a
+    // whole unit (see issue #54847, e.g. floor_div(41.0, 41.0) returned 0).
+    Tensor temp = ttnn::divide(input_a, value, std::nullopt, output_mem_config);
     return ttnn::floor(temp);
 }
 
