@@ -322,6 +322,14 @@ class TestConfig:
         return [(base, TestConfig.DEVICE_PRINT_BUFFER_SIZE, TestConfig.PROCESSOR_COUNT)]
 
     @staticmethod
+    def extra_defines() -> str:
+        """Extra -D flags from TT_LLK_EXTRA_DEFINES, for A/B arms without source edits.
+
+        Folded into ARTEFACTS_DIR so each define set builds into its own tree.
+        """
+        return os.environ.get("TT_LLK_EXTRA_DEFINES", "").strip()
+
+    @staticmethod
     def setup_arch():
         TestConfig.CHIP_ARCH = get_chip_architecture()
         match TestConfig.CHIP_ARCH:
@@ -387,6 +395,9 @@ class TestConfig:
     @staticmethod
     def setup_paths(sources_path: Path):
         TestConfig.ARTEFACTS_DIR = TestConfig.resolve_artefacts_path()
+        if TestConfig.extra_defines():
+            slug = sha256(TestConfig.extra_defines().encode()).hexdigest()[:8]
+            TestConfig.ARTEFACTS_DIR = Path(f"{TestConfig.ARTEFACTS_DIR}-{slug}")
 
         TestConfig.LLK_ROOT = sources_path
         TestConfig.TESTS_WORKING_DIR = TestConfig.LLK_ROOT / "tests"
@@ -525,6 +536,7 @@ class TestConfig:
             "-Wuninitialized -Wmaybe-uninitialized "
             f"{no_wh_ebreak_fixup}"
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
+            f"{TestConfig.extra_defines()} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = (

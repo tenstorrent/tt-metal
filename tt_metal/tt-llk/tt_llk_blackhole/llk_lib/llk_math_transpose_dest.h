@@ -168,6 +168,23 @@ inline void transpose_dest_32b()
  *       @ref _llk_unpack_set_srcb_dummy_valid_ marks SrcB valid so the MOVB2D/MOVD2B sequence can run.
  * @note <transpose_of_faces=false, is_32bit=false> is not supported.
  */
+
+#ifdef TD_AB_NOPS
+// A/B repro knob (tt-metal#53415), selected by TT_LLK_EXTRA_DEFINES=-DTD_AB_NOPS=<n>;
+// compiled out of ordinary builds. Emits N consecutive Tensix NOPs with no loop or
+// branch, so the run is one gathering-eligible .ttinsn group. On Blackhole with
+// instruction gathering enabled, N=1..3 hangs this kernel deterministically.
+template <int N>
+inline void _td_ab_nops_()
+{
+    if constexpr (N > 0)
+    {
+        TTI_NOP;
+        _td_ab_nops_<N - 1>();
+    }
+}
+#endif
+
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
 {
@@ -178,7 +195,15 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     // for SrcA[MatrixUnit.SrcABank].AllowedClient == SrcClient::MatrixUnit.
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    // STALL_SYNC holds the latch: only one wait is latched per thread, so a later STALLWAIT
+    // (the config writes below) would otherwise replace it while Src is still invalid.
+    // MATH (C4) drains the FPU first: C7/C8 are indexed by MatrixUnit.SrcABank/SrcBBank, so
+    // without it they can sample the pre-flip bank of an unretired SETRWC(CLR_AB).
+    TTI_STALLWAIT(p_stall::STALL_MATH | p_stall::STALL_SYNC, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+
+#ifdef TD_AB_NOPS
+    _td_ab_nops_<TD_AB_NOPS>();
+#endif
 
     if constexpr (is_32bit)
     {

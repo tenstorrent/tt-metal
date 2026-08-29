@@ -58,8 +58,36 @@ void copy_runtimes_from_L1(struct RuntimeParams* temp_args)
     ckernel::memcpy_blocking(temp_args, __runtime_args_start, sizeof(struct RuntimeParams));
 }
 
+// A/B ARM SELECT (tt-metal#53415 VCS experiment): mirror tt-metal firmware's
+// configure_gathering() (tt_metal/hw/inc/internal/firmware_common.h) — the
+// tt-metal#16439 workaround the tt-llk harness never applies.
+#if defined(ARCH_BLACKHOLE) && defined(TD_AB_DISABLE_GATHERING)
+inline __attribute__((always_inline)) void td_ab_configure_gathering()
+{
+    asm(R"ASM(
+        .option push
+        li   t1, 0x2
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x1
+        slli t1, t1, 18
+        fence
+        csrrs zero, 0x7c0, t1
+        li   t1, 0x2
+        csrrc zero, 0x7c0, t1
+        fence
+        .option pop
+         )ASM" ::
+            : "t1");
+}
+#else
+inline void td_ab_configure_gathering()
+{
+}
+#endif
+
 int main(void)
 {
+    td_ab_configure_gathering();
     mailbox_t mailbox = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start + mailbox_offset);
 #if defined(LLK_TRISC_UNPACK) && defined(LLK_BOOT_MODE_TRISC)
     mailbox_t mailbox_base = reinterpret_cast<volatile std::uint32_t*>(mailboxes_start);

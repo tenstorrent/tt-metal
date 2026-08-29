@@ -177,7 +177,11 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
     // for SrcA[MatrixUnit.SrcABank].AllowedClient == SrcClient::MatrixUnit.
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
     // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
+    // STALL_SYNC holds the latch: only one wait is latched per thread, so a later STALLWAIT
+    // (the config writes below) would otherwise replace it while Src is still invalid.
+    // MATH (C4) drains the FPU first: C7/C8 are indexed by MatrixUnit.SrcABank/SrcBBank, so
+    // without it they can sample the pre-flip bank of an unretired SETRWC(CLR_AB).
+    TTI_STALLWAIT(p_stall::STALL_MATH | p_stall::STALL_SYNC, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD | p_stall::SRCB_VLD);
 
     if constexpr (is_32bit)
     {
