@@ -247,7 +247,14 @@
       "source_run_id": "33152052210",
       "source_job_id": "98790147778",
       "pattern": "ttnn::tilize log_warning fired on every legacy-sharded-factory call (28x in 5000 log lines)"
+    },
+    {
+      "branch": "silencer/pydantic-optest-model-name-namespace-33265022276",
+      "pattern": "Field \"model_name\" in OpTest has conflict with protected namespace \"model_\"",
+      "status": "open-pr-awaiting-validation",
+      "dispatched_workflow": "perf-device-models.yaml",
+      "note": "PR opened for pydantic protected-namespace warning fix in infra/data_collection/pydantic_models.py (OpTest.model_name). Source: perf-device-models run 33265022276, jobs 99134632540 (P150 BH) + 99134632544 (N300 WH B0 Set 1), 9 occurrences each in last 5000 lines. Dispatched perf-device-models on branch for validation."
     }
   ],
-  "backlog_cursor": "models-t3-e2e-tests.yaml sampled this run (run 33152052210, jobs 98790147778 Llama3.2-3B + 98790147855 Falcon-7B). Next: continue rotation with perf-device-models.yaml or re-sample models-t3-e2e-tests.yaml with different jobs/runs."
+  "backlog_cursor": "perf-device-models.yaml sampled this run (run 33265022276, jobs 99134632540 P150 BH + 99134632544 N300 WH B0 Set 1). Found+fixed pydantic OpTest.model_name protected-namespace warning (PR opened, validation dispatched). Next: continue rotation to a workflow not yet sampled recently, or re-sample perf-device-models.yaml other jobs (Set 2 device perf)."
 }
