@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Vendored copy of ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp for the
+// quasar sdpa_decode fork. Carries the Metal 2.0 `read_page_table_for_batch` overload (DataflowBuffer&),
+// moved here so the main-tree prefill header can stay on its recipe base. Transitive includes
+// (q_chunk_remapping.hpp, sliding_window_geometry.hpp) still resolve to the unmodified main-tree headers.
 #pragma once
 
 #include <cstdint>
@@ -9,6 +13,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -89,6 +94,29 @@ volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
         {});
     noc.async_read_barrier();
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+}
+
+// Metal 2.0 overload. Reads one page-table stick into an already-reserved DataflowBuffer entry, from a
+// TensorAccessor the caller builds from its bound tensor::<page_table> parameter. Unlike the legacy overload
+// above it takes no TensorAccessorArgs / address / page-size-for-the-accessor triple — the binding token
+// supplies the layout and aligned page size — so page_table_stick_size here is only the read size. The
+// caller owns the DFB's reserve_back / push_back (matching the legacy contract, where this helper only reads).
+template <typename PageTableReaderType>
+volatile tt_l1_ptr uint32_t* read_page_table_for_batch(
+    Noc noc,
+    DataflowBuffer& page_table_dfb,
+    uint32_t batch_idx,
+    const PageTableReaderType& page_table_reader,
+    uint32_t page_table_stick_size) {
+    uint32_t page_table_wr_ptr = page_table_dfb.get_write_ptr();
+    noc.async_read(
+        page_table_reader,
+        CoreLocalMem<uint32_t>(page_table_wr_ptr),
+        page_table_stick_size,
+        {.page_id = batch_idx},
+        {});
+    noc.async_read_barrier();
+    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
 }
 
 class TensorTileShape {
@@ -655,11 +683,7 @@ void generate_lightweight_mask_tiles(Noc noc) {
 
 template <uint32_t tile_bytes>
 inline void fill_custom_diagonal_tile_bfp4(
-    Noc noc,
-    uint32_t cb_id,
-    uint32_t tile_id,
-    int32_t leading_diagonal_offset,
-    int32_t trailing_diagonal_offset) {
+    Noc noc, uint32_t cb_id, uint32_t tile_id, int32_t leading_diagonal_offset, int32_t trailing_diagonal_offset) {
     // Assert that we're not in a case where the entire tile should be fully masked or fully allowed
     // Those cases should be handled before calling this function
     ASSERT(leading_diagonal_offset >= -32 && trailing_diagonal_offset >= -32);
@@ -1445,12 +1469,8 @@ struct PaddedAddrGenerator {
     }
 
     void issue_writes_no_padding(
-        Noc noc,
-        const Slice& slice,
-        uint32_t src_addr,
-        uint32_t outer_stride,
-        uint32_t inner_stride,
-        uint32_t trid = 0) const {
+        Noc noc, const Slice& slice, uint32_t src_addr, uint32_t outer_stride, uint32_t inner_stride, uint32_t trid = 0)
+        const {
         issue_block_writes(
             noc,
             reader,

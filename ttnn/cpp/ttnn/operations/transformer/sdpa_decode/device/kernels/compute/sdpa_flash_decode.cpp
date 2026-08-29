@@ -24,8 +24,6 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
-#include "api/dataflow/dataflow_buffer.h"
-#include "experimental/kernel_args.h"
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 #include "api/compute/pack_untilize.h"
@@ -37,135 +35,111 @@ void kernel_main() {
     // Compile time arguments
 
     // Input dimensions in tiles
-    constexpr auto St = get_arg(args::St);
-    constexpr auto DHt = get_arg(args::DHt);
-    constexpr auto vDHt = get_arg(args::vDHt);
-    constexpr auto Sq_chunk_t = get_arg(args::Sq_chunk_t);
-    constexpr auto Sk_chunk_t = get_arg(args::Sk_chunk_t);
+    constexpr uint32_t St = get_compile_time_arg_val(0);
+    constexpr uint32_t DHt = get_compile_time_arg_val(1);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(2);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
 
     // Matmul configs
-    constexpr auto qk_in0_block_w = get_arg(args::qk_in0_block_w);
-    constexpr auto qk_subblock_w = get_arg(args::qk_subblock_w);
-    constexpr auto qk_subblock_h = get_arg(args::qk_subblock_h);
-    constexpr auto qk_in0_num_subblocks = get_arg(args::qk_in0_num_subblocks);
-    constexpr auto qk_in1_num_subblocks = get_arg(args::qk_in1_num_subblocks);
-    constexpr auto qk_num_blocks = get_arg(args::qk_num_blocks);
-    constexpr auto out_in0_block_w = get_arg(args::out_in0_block_w);
-    constexpr auto out_subblock_w = get_arg(args::out_subblock_w);
-    constexpr auto out_subblock_h = get_arg(args::out_subblock_h);
-    constexpr auto out_in0_num_subblocks = get_arg(args::out_in0_num_subblocks);
-    constexpr auto out_in1_num_subblocks = get_arg(args::out_in1_num_subblocks);
-    constexpr auto out_num_blocks = get_arg(args::out_num_blocks);
-    constexpr auto num_cores_per_head = get_arg(args::num_cores_per_head);
-    constexpr auto num_heads_per_core = get_arg(args::num_heads_per_core);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(5);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(6);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(7);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(8);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(9);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(10);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(11);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(12);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(13);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(14);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(15);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(16);
+    constexpr uint32_t num_cores_per_head = get_compile_time_arg_val(19);
+    constexpr uint32_t num_heads_per_core = get_compile_time_arg_val(20);
 
     // Attention-specific parameters
-    constexpr auto max_dynamic_chunk_size = get_arg(args::max_dynamic_chunk_size);
-    constexpr auto q_heads_parallel_factor = get_arg(args::q_heads_parallel_factor);
-    constexpr bool use_half_tile = get_arg(args::use_half_tile);
-    constexpr auto scale_fp32 = get_arg(args::scale_fp32);
-    constexpr auto sliding_window_size = get_arg(args::sliding_window_size);
-    constexpr auto num_tree_reduction_rounds = get_arg(args::num_tree_reduction_rounds);
-    constexpr auto original_block_size = get_arg(args::original_block_size);
-
-#ifdef IS_CAUSAL
-    constexpr bool is_causal = true;
-#else
-    constexpr bool is_causal = false;
-#endif
-#ifdef USE_ATTENTION_MASK
-    constexpr bool use_attention_mask = true;
-#else
-    constexpr bool use_attention_mask = false;
-#endif
+    constexpr bool is_causal = get_compile_time_arg_val(21) == 1;
+    constexpr bool use_attention_mask = get_compile_time_arg_val(22) == 1;
+    constexpr bool use_attention_sink = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(24);
+    constexpr bool tilize_q = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
+    constexpr bool use_half_tile = get_compile_time_arg_val(27);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
+    constexpr uint32_t sliding_window_size = get_compile_time_arg_val(29);
+    constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(30);
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(31);
     constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    constexpr bool untilize_output = tilize_q;
 
-    // DFB accessors (each exists only where the host bound it — see #ifdef gates).
-    constexpr auto dfb_q_in = dfb::q_in;
-    constexpr auto dfb_k_in = dfb::k_in;
-    constexpr auto dfb_v_in = dfb::v_in;
-    constexpr auto dfb_mask_in = dfb::mask_in;
-#ifdef SLIDING_WINDOW
-    constexpr auto dfb_sliding_window_mask_in = dfb::sliding_window_mask_in;
-#endif
-#ifdef HAS_BLOCK_PADDING
-    constexpr auto dfb_block_pad_mask = dfb::block_pad_mask;
-#endif
-#ifdef USE_ATTENTION_SINK
-    constexpr auto dfb_attention_sink = dfb::attention_sink;
-#endif
-    constexpr auto dfb_identity_scale_in = dfb::identity_scale_in;
-    constexpr auto dfb_m_in = dfb::m_in;
-    constexpr auto dfb_l_in = dfb::l_in;
-#ifdef TILIZE_Q
-    constexpr auto dfb_q_rm = dfb::q_rm;
-#endif
-    constexpr auto dfb_zero_in = dfb::zero_in;
-#ifdef USE_CUR_POS_TENSOR
-    // #44366: compute reads cur_pos from compute_cur_pos (writer reads writer_cur_pos)
-    // — see reader_decode_all.cpp.
-    constexpr auto dfb_cur_pos = dfb::cur_pos;
-#endif
+    // CB index definitions
+    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
+    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
+    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
+    constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
+    constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
+    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
+    // #44366: compute reads cur_pos from c_15 (writer reads from c_8) — see reader_decode_all.cpp.
+    constexpr uint32_t cb_cur_pos = tt::CBIndex::c_15;
 
-    constexpr auto dfb_qk_im = dfb::qk_im;
-    constexpr auto dfb_out_im = dfb::out_im;
-    constexpr auto dfb_out_accumulate_im = dfb::out_accumulate_im;
-    constexpr auto dfb_max_1 = dfb::max_1;
-    constexpr auto dfb_max_2 = dfb::max_2;
-    constexpr auto dfb_sum_1 = dfb::sum_1;
-    constexpr auto dfb_sum_2 = dfb::sum_2;
-    constexpr auto dfb_exp_max_diff = dfb::exp_max_diff;
-    constexpr auto dfb_prev_sum_2 = dfb::prev_sum_2;
-    constexpr auto dfb_exp_max_diff_2 = dfb::exp_max_diff_2;
-    constexpr auto dfb_out_accumulate_im_2 = dfb::out_accumulate_im_2;
+    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
+    constexpr uint32_t cb_out_im = tt::CBIndex::c_25;
+    constexpr uint32_t cb_out_accumulate_im = tt::CBIndex::c_26;
+    constexpr uint32_t cb_max_1 = tt::CBIndex::c_27;
+    constexpr uint32_t cb_max_2 = tt::CBIndex::c_28;
+    constexpr uint32_t cb_sum_1 = tt::CBIndex::c_29;
+    constexpr uint32_t cb_sum_2 = tt::CBIndex::c_30;
+    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
+    constexpr uint32_t cb_prev_sum_2 = tt::CBIndex::c_21;
+    constexpr uint32_t cb_exp_max_diff_2 = tt::CBIndex::c_22;
+    constexpr uint32_t cb_out_accumulate_im_2 = tt::CBIndex::c_23;
 
-    constexpr auto dfb_out_o = dfb::out_o;
-    constexpr auto dfb_out_m = dfb::out_m;
-    constexpr auto dfb_out_l = dfb::out_l;
-    constexpr auto dfb_out_final = dfb::out;
-
-#ifdef TILIZE_Q
-    constexpr bool untilize_output = true;
-#else
-    constexpr bool untilize_output = false;
-#endif
+    constexpr uint32_t cb_out_o = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
+    constexpr uint32_t cb_out_final = tt::CBIndex::c_20;
 
     // Runtime arguments
-
-    // Idle core: get_arg(args::do_reduce) is 0 or 1 for active cores; 65 is out of range and marks an
-    // idle core (no assigned work). Exit before touching any buffer.
-    if (get_arg(args::do_reduce) == 65) {
-        return;
-    }
-
-    const bool do_reduce = get_arg(args::do_reduce) == 1;
+    uint32_t arg_idx = 0;
+    const bool do_reduce = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool apply_mask_at_last_chunk = do_reduce && is_causal;
-    const bool do_output = get_arg(args::do_output) == 1;
-    const uint32_t cur_head = get_arg(args::cur_head);
-    const uint32_t cur_batch = get_arg(args::cur_batch);
-    const uint32_t core_num_in_reduce = get_arg(args::core_num_in_reduce);
-    const uint32_t core_num_in_output = get_arg(args::core_num_in_output);
-    const uint32_t cur_pos_arg = get_arg(args::cur_pos_arg);
+    const bool do_output = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t cur_head = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // Tree reduction runtime arguments
-    const bool is_tree_root = get_arg(args::is_tree_root) == 1;
-    const uint32_t parent_core_in_group = get_arg(args::parent_core_in_group);
-    const uint32_t send_at_round = get_arg(args::send_at_round);
-    const uint32_t num_children = get_arg(args::num_children);
-    const uint32_t my_active_rounds = get_arg(args::my_active_rounds);
+    const bool is_tree_root = get_arg_val<uint32_t>(arg_idx++) == 1;
+    const uint32_t parent_core_in_group = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t send_at_round = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_children = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t my_active_rounds = get_arg_val<uint32_t>(arg_idx++);
     const bool has_parent = parent_core_in_group != UINT32_MAX;
 
     // Read children_per_round array
-    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS] = {
-        get_arg(args::children_per_round_0),
-        get_arg(args::children_per_round_1),
-        get_arg(args::children_per_round_2),
-        get_arg(args::children_per_round_3),
-        get_arg(args::children_per_round_4),
-        get_arg(args::children_per_round_5)};
+    uint32_t children_per_round[MAX_TREE_REDUCTION_ROUNDS];
+    for (uint32_t r = 0; r < MAX_TREE_REDUCTION_ROUNDS; ++r) {
+        children_per_round[r] = get_arg_val<uint32_t>(arg_idx++);
+    }
+
+    // Idle core
+    // get_arg_val<uint32_t>(0) can go from 0-63 for the core_num; for active cores 65 is out of range so 65 indicates
+    // an idle_core
+    if (get_arg_val<uint32_t>(0) == 65) {
+        return;
+    }
 
     // Get cur_pos
     constexpr uint32_t cur_pos_base = St * 32 - 1;
@@ -176,13 +150,10 @@ void kernel_main() {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
-#ifdef USE_CUR_POS_TENSOR
-            // Read cur_pos from the DFB using mailbox-based synchronization (issue #27979).
-            DataflowBuffer dfb_cur_pos_buf(dfb_cur_pos);
-            dfb_cur_pos_buf.wait_front(1);
-            cur_pos = dfb_cur_pos_buf.read_tile_value(0, cur_batch / q_heads_parallel_factor);
-            dfb_cur_pos_buf.pop_front(1);
-#endif
+            // Read cur_pos from CB using mailbox-based synchronization (issue #27979).
+            CircularBuffer(cb_cur_pos).wait_front(1);
+            cur_pos = read_tile_value(cb_cur_pos, 0, cur_batch / q_heads_parallel_factor);
+            CircularBuffer(cb_cur_pos).pop_front(1);
         }
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
@@ -242,47 +213,41 @@ void kernel_main() {
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
-#ifdef TILIZE_Q
-    {
-        compute_kernel_hw_startup(dfb_q_rm, dfb_q_in);
+    if constexpr (tilize_q) {
+        compute_kernel_hw_startup(cb_q_rm, cb_q_in);
         // Keep InitAndUninit: the helper picks fast- vs regular-tilize at compile time and its
         // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
         // (use_half_tile==false, e.g. >16 heads) can take the fast-tilize path, so we must not
         // hand-roll the uninit here.
         compute_kernel_lib::tilize<
             q_chunk_tiles,
-            dfb_q_rm,
-            dfb_q_in,
+            cb_q_rm,
+            cb_q_in,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
-        matmul_init(dfb_q_in, dfb_k_in);
+        matmul_init(cb_q_in, cb_k_in);
         // #49266: The Q tilize runs on SrcA; on galaxy Q is a half-tile (num_faces=2), and
         // tilize_uninit correctly restores SrcA to Q's geometry. But the QK matmul reads operands
-        // REVERSED (SrcA <- in1 = dfb_k_in, num_faces=4), and the per-k_chunk reconfig below is
+        // REVERSED (SrcA <- in1 = cb_k_in, num_faces=4), and the per-k_chunk reconfig below is
         // IGNORE (format-only). Reprogram SrcA/SrcB tile geometry ONCE here for the matmul
         // operands (is_tile_dim_reconfig_en=true) so K is unpacked with the correct num_faces.
         // One-time, not per-chunk: nothing after this re-establishes Q's geometry on SrcA (K and V
         // are both full tiles), so the per-chunk reconfig can stay IGNORE. Without this, SrcA stays
         // at num_faces=2 and the matmul reads K wrong -> Top-1 0%. (Full-tile Q: this is a no-op
         // re-assert of num_faces=4.)
-        reconfig_full_operand(dfb_k_in, dfb_q_in);
+        reconfig_full_operand(cb_k_in, cb_q_in);
+    } else {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+        matmul_init(cb_q_in, cb_k_in);
     }
-#else
-    {
-        compute_kernel_hw_startup<SrcOrder::Reverse>(dfb_q_in, dfb_k_in, dfb_qk_im);
-        matmul_init(dfb_q_in, dfb_k_in);
-    }
-#endif
-    DataflowBuffer(dfb_q_in).wait_front(q_chunk_tiles);
+    CircularBuffer(cb_q_in).wait_front(q_chunk_tiles);
 
     // Wait for block padding mask (generated once by writer, reused every chunk without popping)
-#ifdef HAS_BLOCK_PADDING
-    {
+    if constexpr (has_block_padding) {
         uint32_t block_pad_mask_tiles = Sq_chunk_t * Sk_chunk_t_dynamic;
-        DataflowBuffer(dfb_block_pad_mask).wait_front(block_pad_mask_tiles);
+        CircularBuffer(cb_block_pad_mask).wait_front(block_pad_mask_tiles);
     }
-#endif
 
     // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
@@ -309,18 +274,18 @@ void kernel_main() {
     constexpr VectorMode vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
     // We set up Ping Pong intermediate buffers between loops
-    uint32_t dfb_cur_max = dfb_max_1;
-    uint32_t dfb_prev_max = dfb_max_2;
-    uint32_t dfb_cur_sum = dfb_sum_1;
-    uint32_t dfb_prev_sum = dfb_sum_2;
+    uint32_t cb_cur_max = cb_max_1;
+    uint32_t cb_prev_max = cb_max_2;
+    uint32_t cb_cur_sum = cb_sum_1;
+    uint32_t cb_prev_sum = cb_sum_2;
 
     // Loop through all heads assigned to core
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
         // Reset ping-pong buffer assignments at the start of each head iteration
-        dfb_cur_max = dfb_max_1;
-        dfb_prev_max = dfb_max_2;
-        dfb_cur_sum = dfb_sum_1;
-        dfb_prev_sum = dfb_sum_2;
+        cb_cur_max = cb_max_1;
+        cb_prev_max = cb_max_2;
+        cb_cur_sum = cb_sum_1;
+        cb_prev_sum = cb_sum_2;
 
         /******************************************************************************
          *                           FLASH ATTENTION LOOP                             *
@@ -347,23 +312,23 @@ void kernel_main() {
          * @tparam use_attention_mask - Whether to use attention mask for non-causal attention
          *
          * Circular Buffer Parameters:
-         * @tparam dfb_q_in - Query input buffer
-         * @tparam dfb_k_in - Key input buffer
-         * @tparam dfb_v_in - Value input buffer
-         * @tparam dfb_mask_in - Mask input buffer
-         * @tparam dfb_scale_in - Scale input buffer
-         * @tparam dfb_identity_scale_in - Identity scale buffer
-         * @tparam dfb_qk_im - QK intermediate buffer
-         * @tparam dfb_out_im - Output intermediate buffer
-         * @tparam dfb_out_accumulate_im - Output accumulate buffer
-         * @tparam dfb_cur_max - Current max buffer
-         * @tparam dfb_prev_max - Previous max buffer
-         * @tparam dfb_cur_sum - Current sum buffer
-         * @tparam dfb_prev_sum - Previous sum buffer
-         * @tparam dfb_exp_max_diff - Exp max diff buffer
-         * @tparam dfb_out_o - Output O buffer
-         * @tparam dfb_out_m - Output M buffer
-         * @tparam dfb_out_l - Output L buffer
+         * @tparam cb_q_in - Query input buffer
+         * @tparam cb_k_in - Key input buffer
+         * @tparam cb_v_in - Value input buffer
+         * @tparam cb_mask_in - Mask input buffer
+         * @tparam cb_scale_in - Scale input buffer
+         * @tparam cb_identity_scale_in - Identity scale buffer
+         * @tparam cb_qk_im - QK intermediate buffer
+         * @tparam cb_out_im - Output intermediate buffer
+         * @tparam cb_out_accumulate_im - Output accumulate buffer
+         * @tparam cb_cur_max - Current max buffer
+         * @tparam cb_prev_max - Previous max buffer
+         * @tparam cb_cur_sum - Current sum buffer
+         * @tparam cb_prev_sum - Previous sum buffer
+         * @tparam cb_exp_max_diff - Exp max diff buffer
+         * @tparam cb_out_o - Output O buffer
+         * @tparam cb_out_m - Output M buffer
+         * @tparam cb_out_l - Output L buffer
          *
          * Runtime Parameters:
          * @param k_chunk_start - Start index of key chunk
@@ -373,190 +338,186 @@ void kernel_main() {
          * @param out_chunk_tiles - Number of output chunk tiles
          */
         /* START OF FLASH ATTENTION LOOP */
-        uint32_t dfb_out_mm = dfb_out_accumulate_im;
+        uint32_t cb_out_mm = cb_out_accumulate_im;
 
         // Loop through all K chunks
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             // Reconfig register DF
-            reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
+            reconfig_data_format(cb_k_in, cb_q_in);
+            pack_reconfig_data_format(cb_qk_im);
 
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
-            bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-            bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
-            bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
+                bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
+                bool add_sliding_window_mask_fusion = k_chunk == window_start_chunk && window_start_unaligned > 0;
+                bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
-            bool add_mask_fusion = false;
-            bool add_sliding_window_mask_fusion = false;
+                bool add_mask_fusion = false;
+                bool add_sliding_window_mask_fusion = false;
 #endif
 
-            /* QK = Q_CHUNK @ K_CHUNK */
-            // Determine which mask buffer to use for fusion
-            uint32_t mask_dfb_to_use = dfb_mask_in;  // Default to causal mask buffer
-#ifdef SLIDING_WINDOW
-            if (add_sliding_window_mask_fusion) {
-                mask_dfb_to_use = dfb_sliding_window_mask_in;  // Use sliding window mask buffer
-            }
-#endif
+                /* QK = Q_CHUNK @ K_CHUNK */
+                // Determine which mask buffer to use for fusion
+                uint32_t mask_cb_to_use = cb_mask_in;  // Default to causal mask buffer
+                if (add_sliding_window_mask_fusion) {
+                    mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
+                }
 
-            matmul_blocks(
-                dfb_q_in,
-                dfb_k_in,
-                dfb_qk_im,
-                Sq_chunk_t,
-                Sk_chunk_t_dynamic,
-                DHt,
-                qk_num_blocks,
-                qk_in0_num_subblocks_dynamic,
-                qk_in1_num_subblocks_dynamic,
-                qk_in0_block_w,
-                qk_subblock_h_dynamic,
-                qk_subblock_w_dynamic,
-                true,
-                add_mask_fusion,
-                mask_dfb_to_use,
-                dfb_zero_in);
+                matmul_blocks(
+                    cb_q_in,
+                    cb_k_in,
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    Sk_chunk_t_dynamic,
+                    DHt,
+                    qk_num_blocks,
+                    qk_in0_num_subblocks_dynamic,
+                    qk_in1_num_subblocks_dynamic,
+                    qk_in0_block_w,
+                    qk_subblock_h_dynamic,
+                    qk_subblock_w_dynamic,
+                    true,
+                    add_mask_fusion,
+                    mask_cb_to_use,
+                    cb_zero_in);
 
-            /* QK += MASK */
-            // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
-            // Uses <false> to NOT pop the mask DFB so it can be reused for subsequent chunks.
-            // Applied outside mask_fusion conditional since it's always needed independently.
-#ifdef HAS_BLOCK_PADDING
-            reconfig_data_format(dfb_qk_im, dfb_block_pad_mask);
-            add_block_inplace<false>(dfb_qk_im, dfb_block_pad_mask, qk_chunk_tiles_dynamic);
-#endif
+                /* QK += MASK */
+                // Apply block padding mask for every chunk when block_size < TILE_HEIGHT.
+                // Uses <false> to NOT pop the mask CB so it can be reused for subsequent chunks.
+                // Applied outside mask_fusion conditional since it's always needed independently.
+                if constexpr (has_block_padding) {
+                    reconfig_data_format(cb_qk_im, cb_block_pad_mask);
+                    add_block_inplace<false>(cb_qk_im, cb_block_pad_mask, qk_chunk_tiles_dynamic);
+                }
 
-            if (!add_mask_fusion) {
-                if constexpr (is_causal) {
-                    // For decode, we only apply mask at the last chunk for causal mode
-                    if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                        reconfig_data_format(dfb_qk_im, dfb_mask_in);
-                        add_block_inplace<false>(dfb_qk_im, dfb_mask_in, qk_chunk_tiles_dynamic);
+                if (!add_mask_fusion) {
+                    if constexpr (is_causal) {
+                        // For decode, we only apply mask at the last chunk for causal mode
+                        if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
+                    } else {
+                        if constexpr (use_attention_mask) {
+                            reconfig_data_format(cb_qk_im, cb_mask_in);
+                            add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
+                        }
                     }
-                } else {
-                    if constexpr (use_attention_mask) {
-                        reconfig_data_format(dfb_qk_im, dfb_mask_in);
-                        add_block_inplace<true>(dfb_qk_im, dfb_mask_in, qk_chunk_tiles_dynamic);
+
+                    // Apply sliding window mask to the first chunk (only on the core that processes it)
+                    if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
+                        reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
+                        add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
                 }
 
-                // Apply sliding window mask to the first chunk (only on the core that processes it)
-#ifdef SLIDING_WINDOW
-                if (k_chunk == window_start_chunk && window_start_unaligned > 0) {
-                    reconfig_data_format(dfb_qk_im, dfb_sliding_window_mask_in);
-                    add_block_inplace<false>(dfb_qk_im, dfb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
-                }
-#endif
-            }
+                /**
+                 * OPTIMIZATION
+                 * Typically, scores are multiplied by a scalar here, but an optimization was employed
+                 * where the scaling is fused into exp both in exp(x - max) and exp(prev_max - cur_max).
+                 * This gives us scaling for free on the performance-critical exp(x - max) computation.
+                 */
 
-            /**
-             * OPTIMIZATION
-             * Typically, scores are multiplied by a scalar here, but an optimization was employed
-             * where the scaling is fused into exp both in exp(x - max) and exp(prev_max - cur_max).
-             * This gives us scaling for free on the performance-critical exp(x - max) computation.
-             */
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                pack_reconfig_data_format(cb_cur_max);
 
-            reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
-            pack_reconfig_data_format(dfb_cur_max);
+                /**
+                 * OPTIMIZATION
+                 * reduce_c can perform both reduce_max and eltwise max with previous result.
+                 * if do_eltwise_max:
+                 *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
+                 * else:
+                 *  cur_max = max(qk, dim=-1)
+                 */
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
+                    cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
+                /* QK -= cb_cur_max */
+                /* QK = exp(QK)*/
+                reconfig_data_format(cb_qk_im, cb_cur_max);
+                pack_reconfig_data_format(cb_qk_im);
 
-            /**
-             * OPTIMIZATION
-             * reduce_c can perform both reduce_max and eltwise max with previous result.
-             * if do_eltwise_max:
-             *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
-             * else:
-             *  cur_max = max(qk, dim=-1)
-             */
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                dfb_cur_max, dfb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
-            /* QK -= dfb_cur_max */
-            /* QK = exp(QK)*/
-            reconfig_data_format(dfb_qk_im, dfb_cur_max);
-            pack_reconfig_data_format(dfb_qk_im);
+                /**
+                 * sub_exp performs `QK = exp((QK - cur_max) * scale)`
+                 */
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
+                    cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                CircularBuffer(cb_qk_im).wait_front(qk_chunk_tiles_dynamic);
 
-            /**
-             * sub_exp performs `QK = exp((QK - cur_max) * scale)`
-             */
-            sub_exp_block_bcast_cols_inplace<dfb_qk_im, Sq_chunk_t, scale_fp32, true, false, vector_mode>(
-                dfb_cur_max, dfb_cur_sum, Sk_chunk_t_dynamic);
-            DataflowBuffer(dfb_qk_im).wait_front(qk_chunk_tiles_dynamic);
-
-            // Reconfig register DF
-            reconfig_data_format(dfb_qk_im, dfb_identity_scale_in);
-            pack_reconfig_data_format(dfb_cur_sum);
-
-            /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
-            reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb_qk_im, dfb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                dfb_cur_sum, dfb_cur_sum, Sk_chunk_t_dynamic, false);
-
-            /* OUT_IM = QK @ V_CHUNK */
-            reconfig_data_format(dfb_v_in, dfb_qk_im);  // DEBUG
-            pack_reconfig_data_format(dfb_out_im);
-            matmul_blocks(
-                dfb_qk_im,
-                dfb_v_in,
-                dfb_out_mm,
-                Sq_chunk_t,
-                vDHt,
-                Sk_chunk_t_dynamic,
-                out_num_blocks_dynamic,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_in0_block_w_dynamic,
-                out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/,
-                false,
-                dfb_mask_in,
-                dfb_zero_in);
-
-            // Reconfig register DF
-            reconfig_data_format_srca(dfb_out_im);
-            DataflowBuffer(dfb_qk_im).pop_front(qk_chunk_tiles_dynamic);
-
-            /* OUT_ACC += OUT_IM */
-            if (k_chunk == k_chunk_start) {
-                dfb_out_mm = dfb_out_im;
-            } else {
-                // When there is more than 1 chunk, we perform Lazy Softmax
                 // Reconfig register DF
-                reconfig_data_format(dfb_prev_max, dfb_cur_max);
-                pack_reconfig_data_format(dfb_exp_max_diff);
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                pack_reconfig_data_format(cb_cur_sum);
 
-                /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
-                sub_exp_block<scale_fp32>(dfb_prev_max, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
-                DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
+                /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
+                reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
+                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
 
-                /* PREV_SUM *= EXP_MAX_DIFF */
-                mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                /* OUT_IM = QK @ V_CHUNK */
+                reconfig_data_format(cb_v_in, cb_qk_im);  // DEBUG
+                pack_reconfig_data_format(cb_out_im);
+                matmul_blocks(
+                    cb_qk_im,
+                    cb_v_in,
+                    cb_out_mm,
+                    Sq_chunk_t,
+                    vDHt,
+                    Sk_chunk_t_dynamic,
+                    out_num_blocks_dynamic,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_in0_block_w_dynamic,
+                    out_subblock_h,
+                    out_subblock_w,
+                    false /*transpose*/,
+                    false,
+                    cb_mask_in,
+                    cb_zero_in);
 
-                /* OUT_ACC *= EXP_MAX_DIFF */
-                reconfig_data_format(dfb_out_accumulate_im, dfb_exp_max_diff);
-                pack_reconfig_data_format(dfb_out_accumulate_im);
-                mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
-                    dfb_out_accumulate_im, dfb_exp_max_diff, dfb_out_accumulate_im);
-
-                /* CUR_SUM += PREV_SUM */
-                reconfig_data_format(dfb_cur_sum, dfb_prev_sum);
-                pack_reconfig_data_format(dfb_cur_sum);
-                add_block_inplace<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+                // Reconfig register DF
+                reconfig_data_format_srca(cb_out_im);
+                CircularBuffer(cb_qk_im).pop_front(qk_chunk_tiles_dynamic);
 
                 /* OUT_ACC += OUT_IM */
-                reconfig_data_format(dfb_out_accumulate_im, dfb_out_im);
-                pack_reconfig_data_format(dfb_out_accumulate_im);
-                add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_im, out_chunk_tiles);
-            }
+                if (k_chunk == k_chunk_start) {
+                    cb_out_mm = cb_out_im;
+                } else {
+                    // When there is more than 1 chunk, we perform Lazy Softmax
+                    // Reconfig register DF
+                    reconfig_data_format(cb_prev_max, cb_cur_max);
+                    pack_reconfig_data_format(cb_exp_max_diff);
 
-            // More local chunks to process - move intermediate sum and max values to ping-pong buffers
-            reconfig_data_format(dfb_cur_max, dfb_cur_max);
-            pack_reconfig_data_format(dfb_prev_max);
+                    /* EXP_MAX_DIFF = exp(PREV_MAX - CUR_MAX) */
+                    sub_exp_block<scale_fp32>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
 
-            // PREV_MAX <- CUR_MAX
-            move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
+                    /* PREV_SUM *= EXP_MAX_DIFF */
+                    mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
-            // PREV_SUM <- CUR_SUM
-            move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+                    /* OUT_ACC *= EXP_MAX_DIFF */
+                    reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);
+                    pack_reconfig_data_format(cb_out_accumulate_im);
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt, true, false>(
+                        cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im);
+
+                    /* CUR_SUM += PREV_SUM */
+                    reconfig_data_format(cb_cur_sum, cb_prev_sum);
+                    pack_reconfig_data_format(cb_cur_sum);
+                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+
+                    /* OUT_ACC += OUT_IM */
+                    reconfig_data_format(cb_out_accumulate_im, cb_out_im);
+                    pack_reconfig_data_format(cb_out_accumulate_im);
+                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
+                }
+
+                // More local chunks to process - move intermediate sum and max values to ping-pong buffers
+                reconfig_data_format(cb_cur_max, cb_cur_max);
+                pack_reconfig_data_format(cb_prev_max);
+
+                // PREV_MAX <- CUR_MAX
+                move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+
+                // PREV_SUM <- CUR_SUM
+                move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
         }
 
         /* END OF FLASH ATTENTION LOOP */
@@ -577,21 +538,21 @@ void kernel_main() {
          */
         // Tree reduction: receive from children and combine
         // Buffer state entering tree reduction:
-        //   - dfb_out_accumulate_im: local O (output accumulator)
-        //   - dfb_prev_max: local M (max of logits)
-        //   - dfb_prev_sum: local L (sum of exp)
+        //   - cb_out_accumulate_im: local O (output accumulator)
+        //   - cb_prev_max: local M (max of logits)
+        //   - cb_prev_sum: local L (sum of exp)
         // Only receive from children that actually have data
         if (num_active_children > 0) {
             // Iterate through each round and receive from child if one exists AND has data
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
                 uint32_t child_id = active_children_per_round[round];
                 if (child_id != UINT32_MAX) {
-                    // Writer kernel handles the semaphore wait and data transfer to dfb_m_in, dfb_l_in, dfb_out_o
+                    // Writer kernel handles the semaphore wait and data transfer to cb_m_in, cb_l_in, cb_out_o
                     // Data arrives in order: l, m, o
 
                     // Combine child with existing local/accumulated data
-                    // Move child's L to dfb_prev_sum_2 for correction
-                    move_block<true>(dfb_l_in, dfb_prev_sum_2, Sq_chunk_t);
+                    // Move child's L to cb_prev_sum_2 for correction
+                    move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     // Fused Softmax Correction
                     // * Fused Correction is a fused operation that performs the following steps:
                     // * 1. CUR_MAX = max(PREV_MAX, WORKER_MAX)
@@ -601,34 +562,34 @@ void kernel_main() {
                     // * 5. PREV_SUM *= EXP_MAX_DIFF
                     // * 6. CUR_SUM = PREV_SUM_2 + PREV_SUM
                     correction_block<scale_fp32, vector_mode>(
-                        dfb_m_in,        // child max
-                        dfb_prev_sum_2,  // child sum
-                        dfb_cur_max,
-                        dfb_prev_max,
-                        dfb_cur_sum,
-                        dfb_prev_sum,
-                        dfb_exp_max_diff,
-                        dfb_exp_max_diff_2,
+                        cb_m_in,        // cb child max
+                        cb_prev_sum_2,  // cb child sum
+                        cb_cur_max,
+                        cb_prev_max,
+                        cb_cur_sum,
+                        cb_prev_sum,
+                        cb_exp_max_diff,
+                        cb_exp_max_diff_2,
                         Sq_chunk_t);
 
                     // OUT_ACC_2 <- CHILD_OUT
-                    move_block<true>(dfb_out_o, dfb_out_accumulate_im_2, out_chunk_tiles);
+                    move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // OUT_ACC *= EXP_MAX_DIFF (scale local accumulator)
                     // OUT_ACC_2 *= EXP_MAX_DIFF_2 (scale child's accumulator)
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_exp_max_diff);
-                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im_2, dfb_exp_max_diff_2);
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
+                    mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im_2, cb_exp_max_diff_2);
 
                     // OUT_ACC = OUT_ACC + OUT_ACC_2
-                    add_block_inplace<true>(dfb_out_accumulate_im, dfb_out_accumulate_im_2, out_chunk_tiles);
+                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // Update prev buffers for next round
                     // PREV_MAX <- CUR_MAX
                     // PREV_SUM <- CUR_SUM
-                    DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
-                    DataflowBuffer(dfb_m_in).pop_front(Sq_chunk_t);
-                    move_block<true>(dfb_cur_max, dfb_prev_max, Sq_chunk_t);
-                    move_block<true>(dfb_cur_sum, dfb_prev_sum, Sq_chunk_t);
+                    CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
+                    CircularBuffer(cb_m_in).pop_front(Sq_chunk_t);
+                    move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
+                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
         }
@@ -637,86 +598,84 @@ void kernel_main() {
         if (is_tree_root) {
             // Root node: perform final normalization and output
             // Determine which sum/max buffer to use based on whether we did tree reduction
-            // If we had children with data, results are in dfb_prev_sum/dfb_prev_max after tree reduction
-            // If single core (no children with data), results are in dfb_cur_sum/dfb_cur_max from FA loop
+            // If we had children with data, results are in cb_prev_sum/cb_prev_max after tree reduction
+            // If single core (no children with data), results are in cb_cur_sum/cb_cur_max from FA loop
 
             /* SUM = 1.0 / SUM */
-            reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_prev_sum);
+            reconfig_data_format(cb_prev_sum, cb_prev_sum);
+            pack_reconfig_data_format(cb_prev_sum);
 
             // Handle attention sink here
-#ifdef USE_ATTENTION_SINK
-            {
+            if constexpr (use_attention_sink) {
                 // Use appropriate max buffer based on tree reduction
-                uint32_t max_dfb_for_sink = dfb_prev_max;
+                uint32_t max_cb_for_sink = cb_prev_max;
 
                 // m_new
-                max_block<vector_mode>(dfb_attention_sink, max_dfb_for_sink, dfb_cur_max, Sq_chunk_t);
+                max_block<vector_mode>(cb_attention_sink, max_cb_for_sink, cb_cur_max, Sq_chunk_t);
 
                 // exp(m - m_new)
-                sub_exp_block<scale_fp32>(max_dfb_for_sink, dfb_cur_max, dfb_exp_max_diff, Sq_chunk_t);
+                sub_exp_block<scale_fp32>(max_cb_for_sink, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
 
                 // l -> l * exp(m - m_new)
-                mul_block_inplace(dfb_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
+                mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                 // exp(sink - m_new)
-                sub_exp_block<scale_fp32>(dfb_attention_sink, dfb_cur_max, dfb_exp_max_diff_2, Sq_chunk_t);
-                DataflowBuffer(dfb_cur_max).pop_front(Sq_chunk_t);
+                sub_exp_block<scale_fp32>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                CircularBuffer(cb_cur_max).pop_front(Sq_chunk_t);
 
                 // l -> l + exp(sink - m_new)
-                add_block_inplace<true>(dfb_prev_sum, dfb_exp_max_diff_2, Sq_chunk_t);
+                add_block_inplace<true>(cb_prev_sum, cb_exp_max_diff_2, Sq_chunk_t);
 
                 // O -> O * exp(m - m_new)
-                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_exp_max_diff);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff);
             }
-#endif
 
-            reconfig_data_format(dfb_prev_sum, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_prev_sum);
-            recip_block_inplace(dfb_prev_sum, Sq_chunk_t);
+            reconfig_data_format(cb_prev_sum, cb_prev_sum);
+            pack_reconfig_data_format(cb_prev_sum);
+            recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */
-            reconfig_data_format(dfb_out_accumulate_im, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_out_accumulate_im);
+            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);
+            pack_reconfig_data_format(cb_out_accumulate_im);
 
-            // dfb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
-            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(dfb_out_accumulate_im, dfb_prev_sum);
-            pack_reconfig_data_format(dfb_out_final);
+            // cb_prev_sum is consumed and popped by mul_block_bcast_cols_inplace
+            mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_prev_sum);
+            pack_reconfig_data_format(cb_out_final);
 
             // Pop the max buffer that still has data
-            DataflowBuffer(dfb_prev_max).pop_front(Sq_chunk_t);
+            CircularBuffer(cb_prev_max).pop_front(Sq_chunk_t);
 
             // Untilize output to ROW MAJOR if input Q was also ROW MAJOR
             if constexpr (untilize_output) {
                 // Unified untilize - auto-dispatches based on out_chunk_tiles vs DEST limit
                 compute_kernel_lib::untilize<
                     out_chunk_tiles,
-                    dfb_out_accumulate_im,
-                    dfb_out_final,
+                    cb_out_accumulate_im,
+                    cb_out_final,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
             } else {
                 // Move output to buffer for the writer
-                move_block<true>(dfb_out_accumulate_im, dfb_out_final, out_chunk_tiles);
+                move_block<true>(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);
             }
 
         } else if (has_parent) {
             // Non-root node with parent: send intermediate results
             // We have data (checked at function start), so send it
             // After tree reduction (if any), results are in:
-            //   - dfb_out_accumulate_im: O
-            //   - dfb_prev_sum: L
-            //   - dfb_prev_max: M
-            // Move O to the output DFB
-            move_block<true>(dfb_out_accumulate_im, dfb_out_o, out_chunk_tiles);
-            // Move M to the output DFB
-            move_block<true>(dfb_prev_max, dfb_out_m, Sq_chunk_t);
-            // Move L to the output DFB
-            move_block<true>(dfb_prev_sum, dfb_out_l, Sq_chunk_t);
+            //   - cb_out_accumulate_im: O
+            //   - cb_prev_sum: L
+            //   - cb_prev_max: M
+            // Move O to output CB
+            move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
+            // Move M to output CB
+            move_block<true>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            // Move L to output CB
+            move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
         }
     }
 
-    // Free up dfb_q_in after Q chunks
-    DataflowBuffer(dfb_q_in).pop_front(q_chunk_tiles);
+    // Free up cb_q_in after Q chunks
+    CircularBuffer(cb_q_in).pop_front(q_chunk_tiles);
 }
