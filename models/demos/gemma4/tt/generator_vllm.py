@@ -1120,6 +1120,20 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # requests. Clear only on a fresh prefill (all start_pos == 0).
             # start_pos may be a list or numpy/torch vector — never use
             # ``array or []`` (ambiguous truth value for multi-element arrays).
+            if not rings_live_before_prefill:
+                # Fresh wave (no live rings): drop captured decode traces so the
+                # next decode recaptures against this wave's state. Replaying a
+                # decode trace captured before the wave -- in practice the
+                # warmup-captured traces -- corrupts every batch after the first
+                # even when all trace input tensors are restaged each step
+                # (measured on P150x8 / 12B / 32k bounded: batch 1 clean, every
+                # later batch nondeterministic garbage at any concurrency >= 2;
+                # ring fingerprints show prefill hidden states already diverging
+                # for identical inputs). With this release the first serving
+                # wave recaptures once and 16+ consecutive batches across
+                # concurrencies 1..32 and bucket switches replay it cleanly.
+                # Program caches persist, so the one recapture costs seconds.
+                self._release_decode_traces_for_fresh_wave()
             start_pos_for_clear = kwargs.get("start_pos")
             if start_pos_for_clear is None:
                 self._clear_bounded_sliding_kv_rings(kwargs.get("kv_cache"), live_before=rings_live_before_prefill)
@@ -1372,6 +1386,26 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             return None
         max_batch = int(self.model_args[0].max_batch_size)
         return (int(sliding_window) // block_size) * max_batch
+
+    def _release_decode_traces_for_fresh_wave(self) -> None:
+        """Release captured decode traces (see fresh-wave comment at call site)."""
+        released = 0
+        try:
+            for _key, tids in list(self.trace_ids_decode.items()):
+                if not tids:
+                    continue
+                for mid, tid in tids.items():
+                    ttnn.release_trace(self.model_args[mid].mesh_device, tid)
+                    released += 1
+        except Exception as exc:
+            logger.warning("Gemma4 bounded: decode trace release failed: {}", exc)
+        if released:
+            self.trace_ids_decode = defaultdict(lambda: None)
+            self.trace_inputs_decode = defaultdict(lambda: None)
+            self.trace_output_decode = defaultdict(lambda: None)
+            self._prev_decode_batch = None
+            self.prev_page_table = None
+            logger.info("Gemma4 bounded: released {} decode trace(s) at fresh wave", released)
 
     def _clear_bounded_sliding_kv_rings(self, kv_cache, live_before: int = 0) -> None:
         """Zero sliding-layer paged KV buffers before a fresh prefill.
