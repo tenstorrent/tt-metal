@@ -59,7 +59,12 @@ needs_golden = pytest.mark.skipif(
 # schedules, and the flow decoder JIT-compiles per mel length -- so the one-time
 # compile bill here is minutes, not seconds. `pytest.ini`'s 300 s default would fire
 # during warm-up and report a timeout for work that has not started being measured.
-@pytest.mark.timeout(1800)
+#
+# Most of that bill is paid once per *machine* rather than once per run: mounting
+# `~/.cache/tt-metal-cache` into the container carries the compiled kernels across
+# runs (PERF.md, *Operational notes*). Without it, every configuration of the perf
+# suite recompiles everything, and this test is where that shows up first.
+@pytest.mark.timeout(3600)
 @needs_weights
 @needs_golden
 @needs_l1_small
@@ -107,7 +112,13 @@ def test_device_streaming_first_audio_latency(device):
     # it. The longer sequence is the golden's own tokens repeated, so it is a real
     # token stream of a realistic length; what it says as speech is not meaningful and
     # nothing here reads its content.
-    lengths = [len(generated), 3 * len(generated)]
+    #
+    # **Two lengths, not more, and 2x rather than 3x.** Every distinct utterance length
+    # is a fresh JIT compile of the flow decoder and the vocoder, and each length here
+    # is compiled for both schedules plus a throwaway warm-up pass. A third point, or a
+    # 3x arm, costs minutes of compilation to sharpen a trend that two points already
+    # establish -- and it timed out this test's first draft.
+    lengths = [len(generated), 2 * len(generated)]
     token_streams = {n: (generated * ((n // len(generated)) + 1))[:n] for n in lengths}
 
     prefix_len = prefix.shape[1]
