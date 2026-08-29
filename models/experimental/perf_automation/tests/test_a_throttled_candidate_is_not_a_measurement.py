@@ -93,5 +93,10 @@ def test_one_owner_for_cool_enough_to_measure():
     """Two definitions is how these two paths drifted apart in the first place."""
     i = _SRC.index("def _cool_before_remeasure(")
     body = _SRC[i : _SRC.index("\ndef ", i + 1)]
-    assert "from ..cc_optimize.perf_mcp import _cooldown_after_clamp" in body
+    # Delegation is the property; the IMPORT MECHANISM is not. A bare `from ..cc_optimize...` is
+    # what this used to assert, and that import raises "attempted relative import beyond top-level
+    # package" whenever probes is loaded as `agent.probes` -- which is how an optimize run loads it.
+    # Inside `except: pass` that is silent, so on 2026-08-29 the board reached 99-102C and not one
+    # thermal gate fired. _cc_optimize resolves the owner under either import shape.
+    assert '_cc_optimize("perf_mcp")._cooldown_after_clamp()' in body, "does not delegate to the owner"
     assert "_await_cool()" in body, "no fallback if the import fails -- the run would die on a cooldown"

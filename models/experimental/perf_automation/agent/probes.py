@@ -889,6 +889,30 @@ _COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
 _MAX_THROTTLE_RETRIES = int(os.environ.get("PERF_MCP_THROTTLE_RETRIES", "2") or "2")
 
 
+def _cc_optimize(name: str):
+    """Import a cc_optimize module however THIS process happens to have loaded the tool.
+
+    probes is imported two ways. As `models.experimental.perf_automation.agent.probes` a relative
+    `..cc_optimize` resolves; as `agent.probes`, with perf_automation itself on sys.path, the SAME
+    import raises "attempted relative import beyond top-level package" -- and the second is what an
+    optimize run actually uses. Every thermal call in this file sat behind a bare relative import
+    inside `except: pass`, so on 2026-08-29 the board climbed to 99-102C, chip 2 died, and not one
+    gate had fired: the import failed before the thermometer was ever read, silently, exactly as a
+    swallowed ImportError does. The same shape is already handled elsewhere in the tool
+    (perf_test_gen's stack_knob_repair import), so this resolves it once for every caller here.
+    """
+    import importlib
+
+    parent = (__package__ or "").rpartition(".")[0]
+    candidates = ([parent + ".cc_optimize." + name] if parent else []) + ["cc_optimize." + name]
+    for candidate in candidates:
+        try:
+            return importlib.import_module(candidate)
+        except ImportError:
+            continue
+    raise ImportError("cc_optimize.%s is not importable from %r" % (name, __package__))
+
+
 def _cool_before_remeasure():
     """Cool the way the full-pipeline gate does: to an ABSOLUTE target, with no deadline on physics.
 
@@ -898,9 +922,7 @@ def _cool_before_remeasure():
     measurement paths cannot drift apart again.
     """
     try:
-        from ..cc_optimize.perf_mcp import _cooldown_after_clamp
-
-        return _cooldown_after_clamp()
+        return _cc_optimize("perf_mcp")._cooldown_after_clamp()
     except Exception:  # noqa: BLE001 -- never let the cooldown import stop a run
         _await_cool()
         return True, None
@@ -932,9 +954,7 @@ def thermal_yield(label: str = "") -> None:
         if now - _thermal_yield_last[0] < _THERMAL_YIELD_MIN_GAP_S:
             return
         _thermal_yield_last[0] = now
-        from ..cc_optimize.run import _wait_for_thermal_headroom_before_device_work
-
-        _wait_for_thermal_headroom_before_device_work(label or "next unit")
+        _cc_optimize("run")._wait_for_thermal_headroom_before_device_work(label or "next unit")
     except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
         return
 
@@ -1170,10 +1190,10 @@ def _execute(
     remains as a generous ABSOLUTE backstop against a pathological busy-spin."""
     _therm_label = "generated-test run"
     try:
-        from ..cc_optimize.run import _thermal_watch_new, _thermal_watch_sample
-        from ..cc_optimize.run import _wait_for_thermal_headroom_before_device_work
-
-        _wait_for_thermal_headroom_before_device_work(_therm_label)
+        _run = _cc_optimize("run")
+        _thermal_watch_new = _run._thermal_watch_new
+        _thermal_watch_sample = _run._thermal_watch_sample
+        _run._wait_for_thermal_headroom_before_device_work(_therm_label)
     except Exception:  # noqa: BLE001 -- a gate that cannot run must never stop the work
 
         def _thermal_watch_new():
@@ -1475,9 +1495,7 @@ def make_run_profiled(
         # attempt is how a profile ends up sampled entirely at the 800 MHz clamp. The gate lives in
         # one place (perf_mcp) and is called from the two points where device work STARTS.
         try:
-            from ..cc_optimize.run import _wait_for_thermal_headroom_before_device_work
-
-            _wait_for_thermal_headroom_before_device_work("profiled run")
+            _cc_optimize("run")._wait_for_thermal_headroom_before_device_work("profiled run")
         except Exception:  # noqa: BLE001 -- never let the gate stop the run
             pass
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
