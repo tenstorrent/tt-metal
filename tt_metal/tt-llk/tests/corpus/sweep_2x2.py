@@ -1423,6 +1423,28 @@ KNOBS = {
     # level).  Composes on -mtt-tensix-optimize-replay-record-hoist
     # (reviewed ON).
     "record-hoist-lift": "-mtt-tensix-optimize-record-hoist-lift",
+    # IM (replay-window-sizing, 2026-08-28): re-size a replay window
+    # that HOISTS out of its loop (record-hoist / replay-hoist
+    # preheader placement, incl. the IL lift).  pick_replay's
+    # (clones-1)x(length-1) key prices in-block exec-while-record
+    # economics (shorter window with more instances wins — measured
+    # RIGHT in-block, lane IH); a hoisted record is delivered once per
+    # placement and per-trip cost is launches alone, so the widened
+    # same-anchor word-exact window that fits the free slots and
+    # strictly reduces per-trip deliveries commits instead, with the
+    # trailing window-prefix run delivered as ONE partial playback
+    # (REPLAY Count below the recorded length — the hand gcd/lcm
+    # REPLAY(0,13) trim discipline; ISA prefix-launch semantics).
+    # lcm-fresh: entry record 14 -> 28 words (18 slots free), per row
+    # 7 x REPLAY(0,14) + 4 inline trim words -> 3 x REPLAY(0,28) +
+    # 1 x REPLAY(0,18) = the hand kernel's exact 4-launch row shape.
+    # The widened candidate re-proves the whole hoist admission;
+    # refusals by name keep the picked window byte-identically
+    # (window-sizing-slot-exhausted / -no-wider-candidate /
+    # -no-cheaper-delivery / -coverage-short / -clone-arithmetic /
+    # -hoist-refused / -reform-composition-unaudited).  Composes on
+    # record-hoist (reviewed ON) + record-hoist-lift for the lcm shape.
+    "replay-window-sizing": "-mtt-tensix-optimize-replay-window-sizing",
 }
 
 
@@ -1615,6 +1637,13 @@ KNOB_MODES = {
     # vs plain ON.  on-plus while a booking knob; promotion requires an
     # R9 witness and the ON-vs-ON attribution ceremony.
     "record-hoist-lift": "on-plus",
+    # IM replay-window-sizing: default-off Init(0) booking knob
+    # composing on record-hoist (reviewed ON) — it re-sizes only
+    # windows the hoist machinery already placed — so the booking A/B
+    # is (ON + flag) vs plain ON.  on-plus while a booking knob;
+    # promotion requires an R9 witness and the ON-vs-ON attribution
+    # ceremony.
+    "replay-window-sizing": "on-plus",
 }
 
 # ---- LICENSED knobs (lane EJ, owner ratification 2026-08-21) ----
