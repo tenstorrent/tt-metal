@@ -38,6 +38,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -47,8 +48,27 @@
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
+#include <llrt/tt_cluster.hpp>
+#include <umd/device/types/risc_type.hpp>
 
 namespace ttnvtop {
+
+// AGGREGATOR LIFECYCLE -- READ BEFORE LAUNCHING TWICE.
+//
+// The aggregator kernel never returns; that is how it persists (3.5). The
+// consequence is that it CANNOT be replaced by a second launch. The idle-erisc
+// firmware loop that consumes launch messages only runs between kernels, so a new
+// RUN_MSG_GO is never seen -- and worse, ConfigureDeviceWithProgram writes the new
+// binary and runtime args straight over the live kernel, which keeps running on
+// corrupted state and keeps pushing plausible-looking WRONG telemetry.
+//
+// Measured 2026-08-29 by launching twice on one core:
+//     sender markers state=0x00000000 sweeps=0 head=0 cores=0   <- 2nd never started
+//     landed magic=0x00000000 sweeps=5400 lost=5586 cores=0 cap=2240  <- 1st corrupted
+//
+// So a launcher MUST either use a core with no aggregator on it, or reset the core
+// first. Never launch onto a live one. Two callers in one process, or two processes,
+// must not pick the same core -- hence rank_aggregator_eth_cores() below.
 
 struct EthCoreChoice {
     bool ok = false;
@@ -75,7 +95,27 @@ inline bool is_never_routed_channel(uint32_t channel) {
     }
 }
 
-inline EthCoreChoice select_aggregator_eth_core(tt::tt_metal::IDevice* device) {
+// Inactive eth cores in preference order: never-routed channels first, then the
+// rest, each group by ascending channel. Deterministic, so independent callers
+// agree on the ordering and can take distinct ranks rather than colliding.
+inline std::vector<tt::tt_metal::CoreCoord> rank_aggregator_eth_cores(tt::tt_metal::IDevice* device) {
+    std::vector<tt::tt_metal::CoreCoord> ranked(
+        device->get_inactive_ethernet_cores().begin(), device->get_inactive_ethernet_cores().end());
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
+        const bool na = is_never_routed_channel(a.y);
+        const bool nb = is_never_routed_channel(b.y);
+        if (na != nb) {
+            return na;
+        }
+        return a.y < b.y;
+    });
+    return ranked;
+}
+
+// `rank` selects among the available cores: 0 is the best choice, 1 the next, and so
+// on. Callers that must not collide (a second aggregator, or a test that cannot
+// relaunch onto a live kernel) take successive ranks.
+inline EthCoreChoice select_aggregator_eth_core(tt::tt_metal::IDevice* device, size_t rank = 0) {
     EthCoreChoice choice;
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
@@ -94,30 +134,53 @@ inline EthCoreChoice select_aggregator_eth_core(tt::tt_metal::IDevice* device) {
         return choice;
     }
 
-    const auto inactive = device->get_inactive_ethernet_cores();
-    if (inactive.empty()) {
-        choice.reason = "device " + std::to_string(device->id()) + " has no inactive ethernet core";
-        return choice;
-    }
-
     // Logical eth coords are (0, channel) -- see CoordinateManager's
     // CoreCoord(0, eth_channel, CoreType::ETH, CoordSystem::LOGICAL).
-    bool have_fallback = false;
-    tt::tt_metal::CoreCoord fallback{};
-    for (const auto& c : inactive) {
-        if (is_never_routed_channel(c.y)) {
-            choice.ok = true;
-            choice.core = c;
-            return choice;
-        }
-        if (!have_fallback || c.y < fallback.y) {
-            fallback = c;
-            have_fallback = true;
-        }
+    const auto ranked = rank_aggregator_eth_cores(device);
+    if (ranked.size() <= rank) {
+        choice.reason = "device " + std::to_string(device->id()) + " has " + std::to_string(ranked.size()) +
+                        " inactive ethernet core(s), need rank " + std::to_string(rank);
+        return choice;
     }
     choice.ok = true;
-    choice.core = fallback;
+    choice.core = ranked[rank];
     return choice;
+}
+
+// Stop an aggregator: the ONLY way, short of closing the device.
+//
+// The kernel never returns, so there is no go-signal or mailbox handshake that ends
+// it -- the firmware loop that would read one is not running. Asserting the RISC
+// reset is what stops it. The core then holds no running firmware until device init
+// reloads it, which is acceptable because the aggregator's lifetime is one
+// device-open epoch anyway (3.5).
+//
+// Call this before relaunching on a core that may already hold an aggregator.
+// Launching over a live one does NOT replace it: the new launch message is never
+// consumed and ConfigureDeviceWithProgram corrupts the running kernel's binary and
+// args underneath it, after which it keeps pushing plausible-looking wrong telemetry.
+//
+// RiscType::ALL, deliberately. RiscType::ERISC0 and ERISC1 are aliases for BRISC and
+// TRISC0 in UMD (risc_type.hpp has a standing "Consider having separate entries"
+// TODO), so naming them invites a copy-paste that means something else elsewhere.
+inline void stop_aggregator(tt::tt_metal::IDevice* device, tt::tt_metal::CoreCoord logical_eth_core) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto virtual_core = device->virtual_core_from_logical_core(logical_eth_core, tt::CoreType::ETH);
+    const tt_cxy_pair core(device->id(), virtual_core);
+
+    // Assert only. This stops the kernel and RELEASES ITS FABRIC CONNECTION, which is
+    // the property that matters -- but it leaves the core with no running firmware,
+    // so the core is NOT relaunchable afterwards until device init reloads it.
+    //
+    // Deasserting does not bring it back: measured 2026-08-29, an assert+deassert pair
+    // leaves the next launch on that core silently never starting (the new kernel's
+    // markers stay at the zero the host wrote). Restarting an ERISC needs its reset
+    // vector pointed at the firmware, which is device-init's job, not ours. Do not
+    // add a deassert here on the assumption that it restores the firmware.
+    //
+    // The aggregator's lifetime is one device-open epoch regardless (3.5), so
+    // "stopped until the device is reopened" is the intended semantics, not a gap.
+    cluster.assert_risc_reset_at_core(core, tt::umd::RiscType::ALL);
 }
 
 }  // namespace ttnvtop

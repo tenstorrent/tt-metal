@@ -60,11 +60,16 @@ static_assert(
 constexpr uint32_t UTIL_AGG_MAGIC = 0x47415454u;  // 'TTAG' little-endian
 constexpr uint32_t UTIL_AGG_VERSION = 1u;
 
-// Upper bound on Tensix cores an aggregator sweeps on one chip. WH is 8x10
-// with 2 rows harvested in every shipped part (= 64), but 224 of the 278 chip
-// entries in the shipped cluster descriptors carry harvest_mask 0 (= 80), so
-// 64 is NOT a constant. See PLAN_ETH_AGGREGATOR.md 2.1.
-constexpr uint32_t UTIL_AGG_MAX_CORES = 128u;
+// Upper bound on Tensix cores an aggregator sweeps on one chip. Sized from the
+// UNHARVESTED grids, because harvesting is not guaranteed:
+//   WH  tensix_grid_size 8x10  =  80  (shipped parts harvest 2 rows -> 64, but 224
+//                                      of 278 shipped descriptor entries carry
+//                                      harvest_mask 0, so 64 is NOT a constant)
+//   BH  TENSIX_GRID_SIZE 14x10 = 140  (a p150a measured here has 2 columns
+//                                      harvested -> 120)
+// 160 leaves headroom over the largest of those. This was 128, which is smaller
+// than an unharvested Blackhole part. See PLAN_ETH_AGGREGATOR.md 2.1.
+constexpr uint32_t UTIL_AGG_MAX_CORES = 160u;
 
 // M1 uses a 32-BYTE entry rather than the 20 B the plan sketched.
 //

@@ -856,6 +856,84 @@ failed loudly:
 - **`MEM_IERISC_STACK_MIN_SIZE` is 128 BYTES.** A per-core `seq[]` array of 128 u32
   is 512 B and silently smashes the ERISC stack. It lives in L1.
 
+## 5f. Multi-core sweep, journal wrap, and three lifecycle findings -- 2026-08-29
+
+5e ran `num_cores=1` against a 6142-entry journal, which left three kernel paths
+never executed: the mid-core flush, the wrap-split write, and the `lost` accounting.
+`TestEthAggregatorMultiCoreAndWrap` forces all three by shrinking `capacity` and
+`stage_entries_max` (both runtime args) and sweeping the whole grid:
+
+```
+multicore: fabric link_idx 1
+multicore: 120 cores, capacity=256 stage=8 landing chip 2 eth 0-3
+multicore: head=972249 sweeps=73298 lost=0 cores=120 cap=256
+multicore: 120 distinct core_ids, 0 unwritten slots, 0 bad core_ids
+```
+
+120 Tensix cores swept, journal wrapped **3798 times**, mid-core flush firing ~15x per
+sweep, all 120 core_ids present, no unwritten slots, no out-of-range core_ids, and a
+1 KiB poison guard band immediately after the journal came back untouched -- so no
+wrap-split write ran off the end of the ring. No bug found in the paths that had
+never run.
+
+### Finding 1 -- UTIL_AGG_MAX_CORES was too small for an unharvested Blackhole
+
+It was 128. `blackhole::TENSIX_GRID_SIZE` is `{14, 10}` = **140** unharvested; the
+p150a measured here has 2 columns harvested and reports 120, which is why it passed.
+Raised to 160, sized from the unharvested grids of both arches (WH 8x10 = 80).
+
+### Finding 2 -- a persistent kernel CANNOT be relaunched over
+
+The kernel never returns, so the firmware loop that consumes launch messages is not
+running. A second `LaunchProgram` on the same core is therefore never picked up --
+AND `ConfigureDeviceWithProgram` writes the new binary and runtime args straight over
+the live kernel, which keeps running on corrupted state and keeps pushing
+plausible-looking WRONG telemetry:
+
+```
+sender markers state=0x00000000 sweeps=0 head=0 cores=0            <- 2nd never started
+landed magic=0x00000000 sweeps=5400 lost=5586 cores=0 cap=2240     <- 1st corrupted
+```
+
+This is the "two armers" hazard from the collector work, in the aggregator. A launcher
+must detect an existing aggregator and refuse, or stop it first -- never launch onto a
+live core. `host/agg_core_select.hpp` grows `rank_aggregator_eth_cores()` so
+independent callers take distinct cores deterministically instead of colliding.
+
+`stop_aggregator()` asserts `RiscType::ALL` and stops there. Deasserting does NOT
+bring the core back: an assert+deassert pair leaves the next launch silently never
+starting. Restarting an ERISC needs its reset vector pointed at the firmware, which is
+device-init's job. "Stopped until the device is reopened" is the intended semantics --
+the aggregator's lifetime is one device-open epoch anyway (3.5).
+
+### Finding 3 -- a dead fabric client does NOT release its EDM connection (7.4)
+
+The strongest result here, and it is 7.4 measured rather than assumed.
+
+The first aggregator was stopped by asserting its reset. It never reached
+`sender.close()` -- it cannot, the kernel does not return. A second aggregator on a
+DIFFERENT core, pushing to a DIFFERENT landing slot, then starved:
+
+| link_idx | sweeps in 6 s |
+|---|---|
+| 0 (held by the dead client) | **5** |
+| 1 | **73,284** |
+
+Same kernel, same everything else. ~15,000x, from the link index alone. The EDM still
+believes a client is connected on link 0 and the new client blocks in
+`wait_for_empty_write_slot()`.
+
+Consequences for the design:
+
+- **An aggregator holds its EDM connection for the whole device-open epoch.** If it
+  dies -- reset, crash, a workload tearing the device down -- that link is degraded
+  until fabric re-init. This needs saying to the fabric owners alongside 7.4.
+- **Two fabric clients must not share a `link_idx`.** On a T3K each remote chip runs
+  one aggregator pushing to its own MMIO chip, so the production topology does not hit
+  this; a second monitoring client on the same chip would.
+- It makes 7.4 sharper: the question is not only whether a separate PID can *join* an
+  EDM, but whether it can ever *safely leave* one.
+
 ## 6. Risks
 
 | Risk | Mitigation |
@@ -868,6 +946,8 @@ failed loudly:
 | WH-only — BH eth differs (2 ERISCs, different L1 map) **and BH harvests eth/PCIe** (2.1): 2 of 14 eth channels always fused off, and exactly one of the two PCIe tiles is always harvested with the survivor varying | Scope to WH. BH p150a has no remote chips; 6U BH is all-MMIO. If a BH topology with remote chips ships: derive the landing tile from `get_cores(CoreType::PCIE)` (never constant `(2,0)`) and compute the spare-eth budget rather than asserting it |
 | Tensix row harvesting differs per chip within one system, so a NOC0 core walk needs a per-chip table | Gatherer walks TRANSLATED space, where WH compacts live rows to a fixed contiguous range (2.1b); fall back to an explicit list if `noc_translation_enabled` is false |
 | `RiscType::ERISC0`/`ERISC1` alias `BRISC`/`TRISC0` in UMD (`risc_type.hpp`), so reset code copy-pasted to a Tensix core silently means something else | The launch-message path (3.5) needs no reset call at all; if one is ever added, use `RiscType::ALL` |
+| A dead fabric client never releases its EDM connection — the aggregator cannot call `sender.close()` because it never returns, so every exit is a dirty one. The next client on that `link_idx` starves (5f: 5 sweeps vs 73,284) | One aggregator per chip on its own `link_idx`. Raise with fabric owners (7.4). The link recovers at fabric re-init |
+| Launching onto a core that already runs an aggregator corrupts the live kernel and starts nothing (5f finding 2) | `rank_aggregator_eth_cores()` gives independent callers distinct cores; `stop_aggregator()` before any relaunch; never launch blind |
 | Aggregator dies silently → stale data read as live | Host checks `sweep_count` advances; falls back to per-core drain if stalled |
 
 ## 7. Open questions
@@ -886,7 +966,12 @@ failed loudly:
 3. **Should this land with `configure_active_ethernet_cores_for_mmio_device()`?**
    Pinning UMD's remote traffic away from fabric-carrying channels is a separate,
    smaller win that stacks with this. Worth measuring independently.
-4. **Can a separate PID join an EDM whose flow-control state another process owns?**
+4. **Can a separate PID join an EDM whose flow-control state another process owns —
+   and can a client ever safely LEAVE one?** Sharpened by 5f finding 3: a client that
+   dies without `sender.close()` does not release its connection, and the next client
+   on that `link_idx` starves (measured 5 sweeps vs 73,284). Since the aggregator's
+   kernel never returns, it can never call `close()` -- so this is its normal exit
+   path, not an edge case.
    *For the fabric team.* **Blocks M3 (mid-workload attach) and nothing else** -- M1/M2
    launch in the process that initialised fabric. The free eth channels have no peer
    (5d), so fabric is the only way off a remote chip, and the workload owns the EDM.

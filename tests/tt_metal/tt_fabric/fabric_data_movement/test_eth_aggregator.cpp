@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <thread>
+#include <set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -555,6 +556,271 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLaunchesWithoutDispatch) {
     EXPECT_EQ(util_agg_hdr_checksum(h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]), h[8])
         << "landed header checksum mismatch";
     EXPECT_GT(h[5], 0u) << "landed sweep_count is zero";
+
+    // Stop it. A persistent kernel outlives the test, and a later test relaunching on
+    // this core would neither replace it nor survive it -- two aggregators sharing a
+    // fabric link_idx starve each other on wait_for_empty_write_slot() (measured: 5
+    // sweeps in 6 s, against 73288 for one aggregator alone).
+    ttnvtop::stop_aggregator(dev, core);
+}
+
+// Multi-core sweep, forced journal wrap, and a guard band.
+//
+// The other tests run num_cores=1 with a 6142-entry journal, which leaves three
+// kernel paths NEVER EXECUTED:
+//   - the mid-core flush (`staged == stage_entries_max`), because one core
+//     contributes ~1 entry per sweep and staging holds 8;
+//   - the wrap-split write, because head reached 5403 of 6142 and stopped;
+//   - the `lost` accounting, because a 1 ms sweep trivially keeps up with a 1 ms
+//     producer on a single core.
+//
+// A bad wrap-split is the dangerous one: a single write across the end of the ring
+// runs off the journal and into whatever follows it in the receiver's L1, silently.
+// So this shrinks capacity and staging via their runtime args to hammer both paths
+// within seconds, sweeps every Tensix core on the chip, and puts a poison guard band
+// immediately after the journal that MUST come back untouched.
+TEST_F(Fabric1DFixture, TestEthAggregatorMultiCoreAndWrap) {
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    auto* dev = devices[0]->get_devices()[0];
+
+    // Rank 1, and the other launching test stops its aggregator on the way out.
+    // BOTH are needed: a core that already holds a persistent kernel cannot be
+    // relaunched onto (the launch message is never consumed and the live kernel is
+    // corrupted by the binary write), and two live aggregators sharing fabric
+    // link_idx 0 starve each other -- measured at 5 sweeps in 6 s against 73288 for
+    // one alone. See the lifecycle note in agg_core_select.hpp.
+    const auto pick = ttnvtop::select_aggregator_eth_core(dev, /*rank=*/1);
+    if (!pick.ok) {
+        GTEST_SKIP() << pick.reason;
+    }
+    const tt::tt_metal::CoreCoord core = pick.core;
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t eth_l1 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& soc = cluster.get_soc_desc(dev->id());
+    const auto tensix = soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+    const uint32_t num_cores = static_cast<uint32_t>(tensix.size());
+    ASSERT_GT(num_cores, 1u) << "this test is about the multi-core path";
+    ASSERT_LE(num_cores, UTIL_AGG_MAX_CORES)
+        << "chip has " << num_cores << " Tensix cores but UTIL_AGG_MAX_CORES is " << UTIL_AGG_MAX_CORES;
+
+    // Small on purpose. Both are runtime args, so shrinking them forces the paths a
+    // production-sized journal would take minutes to reach.
+    constexpr uint32_t kCapacity = 256;
+    constexpr uint32_t kStageEntries = 8;
+    static_assert(kStageEntries <= kCapacity, "a flush larger than the ring cannot be split in two");
+
+    const SenderL1 l1 = layout_sender_l1(eth_l1, num_cores, kStageEntries);
+
+    std::vector<uint32_t> ring_tbl;
+    ring_tbl.reserve(num_cores * 2);
+    for (const auto& c : tensix) {
+        const uint64_t a = noc_addr_translated(c.x, c.y, /*addr=*/0);
+        ring_tbl.push_back(static_cast<uint32_t>(a & 0xFFFFFFFFull));
+        ring_tbl.push_back(static_cast<uint32_t>(a >> 32));
+    }
+    tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.ring_table, ring_tbl, CoreType::ETH);
+
+    std::vector<uint32_t> clear(4, 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.dbg, clear, CoreType::ETH);
+
+    auto program = tt::tt_metal::CreateProgram();
+    auto kernel = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/tools/ttnvtop/kernels/eth_aggregator.cpp",
+        core,
+        tt::tt_metal::EthernetConfig{
+            .eth_mode = tt::tt_metal::Eth::IDLE, .processor = tt::tt_metal::DataMovementProcessor::RISCV_0});
+
+    constexpr uint32_t kGuardBytes = 1024;
+    constexpr uint32_t kJournalBytes = sizeof(util_agg_msg_t) + kCapacity * sizeof(util_agg_entry_t);
+
+    auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    bool connected = false;
+    tt::tt_metal::IDevice* landing_dev = nullptr;
+    tt::tt_metal::CoreCoord landing_core;
+    std::vector<uint32_t> rt_args;
+    for (const auto& d : devices) {
+        auto* peer = d->get_devices()[0];
+        if (peer->id() == dev->id()) {
+            continue;
+        }
+        const auto peer_pick = ttnvtop::select_aggregator_eth_core(peer, /*rank=*/1);
+        if (!peer_pick.ok) {
+            continue;
+        }
+        const tt::tt_metal::CoreCoord pcore = peer_pick.core;
+        const auto& psoc = cluster.get_soc_desc(peer->id());
+        const auto pt = psoc.translate_coord_to(
+            tt::umd::CoreCoord(pcore.x, pcore.y, CoreType::ETH, CoordSystem::LOGICAL), CoordSystem::TRANSLATED);
+        const uint64_t dest = noc_addr_translated(pt.x, pt.y, eth_l1);
+
+        std::vector<uint32_t> attempt = {
+            num_cores,
+            l1.ring_table,
+            l1.last_head,
+            l1.head_scratch,
+            l1.stage,
+            kStageEntries,
+            l1.hdr_stage,
+            static_cast<uint32_t>(dest & 0xFFFFFFFFull),
+            static_cast<uint32_t>(dest >> 32),
+            kCapacity,
+            0u,
+            100000u,
+            1u,
+            l1.seq_scratch,
+            l1.dbg};
+        // link_idx 1 before 0. The other launching test's aggregator holds an EDM
+        // connection on link 0 that is never reclaimed -- it dies by reset without
+        // ever reaching sender.close(), since the kernel does not return. A second
+        // client on that link then starves in wait_for_empty_write_slot() (5 sweeps
+        // in 6 s, against 73288 on an uncontended link). This is open question 7.4
+        // observed in-process rather than across PIDs.
+        bool linked = false;
+        for (uint32_t link_idx : {1u, 0u}) {
+            std::vector<uint32_t> per_link = attempt;
+            try {
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    cp.get_fabric_node_id_from_physical_chip_id(dev->id()),
+                    cp.get_fabric_node_id_from_physical_chip_id(peer->id()),
+                    link_idx,
+                    program,
+                    core,
+                    per_link,
+                    CoreType::ETH);
+            } catch (const std::exception&) {
+                continue;
+            }
+            attempt = std::move(per_link);
+            log_info(tt::LogTest, "multicore: fabric link_idx {}", link_idx);
+            linked = true;
+            break;
+        }
+        if (!linked) {
+            continue;
+        }
+        rt_args = std::move(attempt);
+        landing_dev = peer;
+        landing_core = pcore;
+        connected = true;
+        break;
+    }
+    if (!connected) {
+        GTEST_SKIP() << "no adjacent peer with a free idle eth core";
+    }
+    tt::tt_metal::SetRuntimeArgs(program, kernel, core, rt_args);
+
+    // Poison the journal AND a guard band immediately after it. Any entry slot that
+    // still reads 0xDEADBEEF was never written; any guard word that does NOT is a
+    // write that ran off the end of the ring.
+    std::vector<uint32_t> poison((kJournalBytes + kGuardBytes) / 4, 0xDEADBEEFu);
+    tt::tt_metal::detail::WriteToDeviceL1(landing_dev, landing_core, eth_l1, poison, CoreType::ETH);
+
+    log_info(
+        tt::LogTest,
+        "multicore: {} cores, capacity={} stage={} landing chip {} eth {}",
+        num_cores,
+        kCapacity,
+        kStageEntries,
+        landing_dev->id(),
+        landing_core.str());
+
+    tt::tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    std::this_thread::sleep_for(std::chrono::seconds(6));
+
+    std::vector<uint32_t> dbg(4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, core, l1.dbg, 16, dbg, CoreType::ETH);
+    log_info(
+        tt::LogTest,
+        "multicore: sender markers state=0x{:08x} sweeps={} head={} cores={}",
+        dbg[0],
+        dbg[1],
+        dbg[2],
+        dbg[3]);
+
+    std::vector<uint32_t> h(sizeof(util_agg_msg_t) / 4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(landing_dev, landing_core, eth_l1, sizeof(util_agg_msg_t), h, CoreType::ETH);
+    log_info(
+        tt::LogTest,
+        "multicore: magic=0x{:08x} head={} sweeps={} lost={} cores={} cap={}",
+        h[0],
+        h[2],
+        h[5],
+        h[6],
+        h[4],
+        h[3]);
+
+    ASSERT_EQ(h[0], UTIL_AGG_MAGIC) << "journal never landed";
+    EXPECT_EQ(h[4], num_cores);
+    EXPECT_EQ(h[3], kCapacity);
+    EXPECT_EQ(util_agg_hdr_checksum(h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7]), h[8]);
+
+    const uint32_t head = h[2];
+    EXPECT_GT(head, kCapacity * 2u) << "journal did not wrap twice; the wrap-split path is still untested";
+
+    // The guard band must be pristine.
+    std::vector<uint32_t> guard(kGuardBytes / 4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        landing_dev, landing_core, eth_l1 + kJournalBytes, kGuardBytes, guard, CoreType::ETH);
+    uint32_t clobbered = 0;
+    for (uint32_t i = 0; i < guard.size(); i++) {
+        if (guard[i] != 0xDEADBEEFu) {
+            if (clobbered == 0) {
+                log_info(tt::LogTest, "multicore: guard word {} = 0x{:08x}, expected 0xDEADBEEF", i, guard[i]);
+            }
+            clobbered++;
+        }
+    }
+    EXPECT_EQ(clobbered, 0u) << clobbered
+                             << " guard words past the journal were overwritten -- "
+                                "a wrap-split write ran off the end of the ring";
+
+    // Every slot must hold a plausible entry. A runaway write shows up here as an
+    // out-of-range core_id long before it shows up as wrong utilization numbers.
+    std::vector<uint32_t> ent(kCapacity * sizeof(util_agg_entry_t) / 4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        landing_dev,
+        landing_core,
+        eth_l1 + UTIL_AGG_JOURNAL_OFFSET,
+        kCapacity * sizeof(util_agg_entry_t),
+        ent,
+        CoreType::ETH);
+
+    std::set<uint32_t> seen;
+    uint32_t unwritten = 0, bad_core = 0;
+    for (uint32_t i = 0; i < kCapacity; i++) {
+        const uint32_t* e = &ent[i * (sizeof(util_agg_entry_t) / 4)];
+        if (e[0] == 0xDEADBEEFu && e[4] == 0xDEADBEEFu) {
+            unwritten++;
+            continue;
+        }
+        if (e[4] >= num_cores) {
+            if (bad_core == 0) {
+                log_info(tt::LogTest, "multicore: slot {} has core_id {} (num_cores {})", i, e[4], num_cores);
+            }
+            bad_core++;
+            continue;
+        }
+        seen.insert(e[4]);
+    }
+    log_info(
+        tt::LogTest,
+        "multicore: {} distinct core_ids, {} unwritten slots, {} bad core_ids",
+        seen.size(),
+        unwritten,
+        bad_core);
+
+    EXPECT_EQ(bad_core, 0u) << "journal slots hold out-of-range core_ids";
+    EXPECT_EQ(unwritten, 0u) << "journal has unwritten slots after wrapping twice";
+    EXPECT_GT(seen.size(), num_cores / 2)
+        << "only " << seen.size() << " of " << num_cores << " cores appear -- the sweep is not covering the grid";
+
+    ttnvtop::stop_aggregator(dev, core);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
