@@ -2912,6 +2912,9 @@ void sdpa_ring_v2(
             step_kv_pad_rotation.ring_id = source_ring_id;
             step_kv_pad_rotation.logical_tile_count = logical_nt;
 
+            if (force_ref_k_frame) {
+                DPRINT("CQK q{} k{} first{}\n", q, k_chunk, (uint32_t)is_first);
+            }
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
                 Sq_chunk_t,
@@ -2972,6 +2975,9 @@ void sdpa_ring_v2(
                 step_straddle_jump,
                 step_kv_pad_rotation);
 
+            if (force_ref_k_frame) {
+                DPRINT("CQKd q{} k{}\n", q, k_chunk);
+            }
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
             if (!is_first) {

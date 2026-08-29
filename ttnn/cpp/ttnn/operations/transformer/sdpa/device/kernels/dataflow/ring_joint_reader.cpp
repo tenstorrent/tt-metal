@@ -1212,6 +1212,9 @@ void kernel_main() {
                         materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
                             noc, cb_k_start_address, v_rows_to_materialize);
                     }
+                    if (is_reference_iter) {
+                        DPRINT("RVpush qi{} kc{} shared\n", q_iter, k_chunk);
+                    }
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
@@ -1268,6 +1271,9 @@ void kernel_main() {
                     }
 
                     // Make V available to compute.
+                    if (is_reference_iter) {
+                        DPRINT("RVpush qi{} kc{} sep\n", q_iter, k_chunk);
+                    }
                     cb_v.push_back(v_cb_entry_tiles);
                 }
             }
