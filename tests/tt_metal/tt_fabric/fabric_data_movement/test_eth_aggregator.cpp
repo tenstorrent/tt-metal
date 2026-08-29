@@ -49,7 +49,6 @@ constexpr uint32_t kSweepIntervalCycles = 1000000u;
 // L1 layout inside the sender eth core's UNRESERVED region. All 16 B aligned:
 // every one of these is either a NOC read destination or a fabric write source.
 struct SenderL1 {
-    uint32_t ring_table;    // num_cores * 8 B
     uint32_t last_head;     // num_cores * 4 B
     uint32_t head_scratch;  // num_cores * 16 B
     uint32_t seq_scratch;   // num_cores * 4 B
@@ -63,8 +62,6 @@ static SenderL1 layout_sender_l1(uint32_t base, uint32_t num_cores, uint32_t sta
     auto align16 = [](uint32_t v) { return (v + 15u) & ~15u; };
     SenderL1 l{};
     uint32_t p = align16(base);
-    l.ring_table = p;
-    p = align16(p + num_cores * 8u);
     l.last_head = p;
     p = align16(p + num_cores * 4u);
     l.head_scratch = p;
@@ -79,6 +76,47 @@ static SenderL1 layout_sender_l1(uint32_t base, uint32_t num_cores, uint32_t sta
     p = align16(p + 16u);
     l.end = p;
     return l;
+}
+
+// The live Tensix cores as a CROSS PRODUCT of translated x and y coordinates.
+//
+// This replaces the per-core address table the host used to write to the chip -- on a
+// remote chip that write crosses the NON_MMIO tunnel and aggravates the launch
+// flakiness in 5g. Harvesting removes whole rows (WH) or whole columns (BH), so the
+// live set is always live_x x live_y: nx+ny numbers describe all nx*ny cores.
+//
+// NOT a contiguous rectangle. WH translated Tensix coords are synthetic and
+// contiguous, but BH takes them from the NOC0 core list, which skips the non-Tensix
+// columns -- so BH's live translated x values have gaps. Hence coordinate LISTS, not
+// an origin and a width.
+//
+// VERIFIED, not assumed: if the translated set is ever not a clean cross product the
+// aggregator would silently sweep the wrong cores, so this returns false instead.
+struct TensixGrid {
+    std::vector<uint32_t> xs, ys;
+};
+
+static bool translated_tensix_grid(const std::vector<tt::umd::CoreCoord>& cores, TensixGrid& out) {
+    if (cores.empty()) {
+        return false;
+    }
+    std::set<uint32_t> xs, ys;
+    std::set<std::pair<uint32_t, uint32_t>> seen;
+    for (const auto& c : cores) {
+        xs.insert(c.x);
+        ys.insert(c.y);
+        seen.insert({c.x, c.y});
+    }
+    out.xs.assign(xs.begin(), xs.end());
+    out.ys.assign(ys.begin(), ys.end());
+    return out.xs.size() * out.ys.size() == cores.size() && seen.size() == cores.size();
+}
+
+// Splice the coordinate lists in after num_cores/nx/ny, matching the kernel's arg
+// layout: 0 num_cores, 1 nx, 2 ny, then nx x-values, then ny y-values.
+static void insert_grid_coords(std::vector<uint32_t>& args, const TensixGrid& g) {
+    args.insert(args.begin() + 3, g.ys.begin(), g.ys.end());
+    args.insert(args.begin() + 3, g.xs.begin(), g.xs.end());
 }
 
 // Build the 64-bit NOC address of `addr` on the core at TRANSLATED (tx, ty).
@@ -176,19 +214,11 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
         << "journal (" << UTIL_AGG_JOURNAL_BYTES << " B) exceeds idle-eth UNRESERVED (" << eth_l1_size << " B)";
 
     // Ring-address table: one host-computed 64-bit NOC address per Tensix core.
-    std::vector<uint32_t> ring_tbl;
-    ring_tbl.reserve(num_cores * 2);
-    for (const auto& c : tensix) {
-        const uint64_t a = noc_addr_translated(c.x, c.y, /*addr=*/0);
-        ring_tbl.push_back(static_cast<uint32_t>(a & 0xFFFFFFFFull));
-        ring_tbl.push_back(static_cast<uint32_t>(a >> 32));
-    }
-    // NOTE: this 512 B write goes to the REMOTE chip over the NON_MMIO tunnel, and it
-    // measurably aggravates the launch flakiness below (5g). It should go away
-    // entirely: in TRANSLATED space the live Tensix cores are a fixed contiguous
-    // rectangle on every chip regardless of harvest pattern (2.1b), so the kernel can
-    // generate its own core list with a double loop and needs no table at all.
-    tt::tt_metal::detail::WriteToDeviceL1(sender, send_core, l1.ring_table, ring_tbl, CoreType::ETH);
+    TensixGrid grid;
+    ASSERT_TRUE(translated_tensix_grid(tensix, grid))
+        << "live Tensix cores are not a clean translated cross product -- the kernel's "
+           "x-list/y-list addressing would sweep the wrong cores";
+    log_info(tt::LogTest, "aggregator: translated grid {}x{}", grid.xs.size(), grid.ys.size());
 
     // Clear the landing header so a stale journal from a previous run cannot be
     // mistaken for a live one.
@@ -222,7 +252,8 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
 
     std::vector<uint32_t> rt_args = {
         num_cores,
-        l1.ring_table,
+        static_cast<uint32_t>(grid.xs.size()),
+        static_cast<uint32_t>(grid.ys.size()),
         l1.last_head,
         l1.head_scratch,
         l1.stage,
@@ -237,6 +268,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
         l1.seq_scratch,
         l1.dbg,
     };
+    insert_grid_coords(rt_args, grid);
     tt::tt_fabric::append_fabric_connection_rt_args(
         src_node, dst_node, /*link_idx=*/0, program, send_core, rt_args, CoreType::ETH);
     tt::tt_metal::SetRuntimeArgs(program, kernel, send_core, rt_args);
@@ -380,9 +412,14 @@ TEST_F(Fabric1DFixture, TestEthAggregatorKernelCompiles) {
                 tt::tt_metal::EthernetConfig{
                     .eth_mode = tt::tt_metal::Eth::IDLE, .processor = tt::tt_metal::DataMovementProcessor::RISCV_0});
 
+            // num_cores=1, nx=1, ny=1, then one translated x and one y. Nothing is
+            // launched here, so the coordinates only have to be well-formed.
             std::vector<uint32_t> rt_args = {
                 1u,
-                0x10000u,
+                1u,
+                1u,
+                18u,
+                18u,
                 0x10100u,
                 0x10200u,
                 0x11000u,
@@ -461,9 +498,10 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLaunchesWithoutDispatch) {
     const auto& soc = cluster.get_soc_desc(dev->id());
     const auto tensix = soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
     ASSERT_FALSE(tensix.empty());
-    const uint64_t ring0 = noc_addr_translated(tensix[0].x, tensix[0].y, /*addr=*/0);
-    std::vector<uint32_t> ring_tbl = {static_cast<uint32_t>(ring0 & 0xFFFFFFFFull), static_cast<uint32_t>(ring0 >> 32)};
-    tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.ring_table, ring_tbl, CoreType::ETH);
+    // One core: a 1x1 grid at the first live Tensix core.
+    TensixGrid grid;
+    grid.xs = {static_cast<uint32_t>(tensix[0].x)};
+    grid.ys = {static_cast<uint32_t>(tensix[0].y)};
 
     std::vector<uint32_t> clear(4, 0u);
     tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.dbg, clear, CoreType::ETH);
@@ -501,7 +539,8 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLaunchesWithoutDispatch) {
 
         std::vector<uint32_t> attempt = {
             num_cores,
-            l1.ring_table,
+            static_cast<uint32_t>(grid.xs.size()),
+            static_cast<uint32_t>(grid.ys.size()),
             l1.last_head,
             l1.head_scratch,
             l1.stage,
@@ -515,6 +554,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLaunchesWithoutDispatch) {
             1u,
             l1.seq_scratch,
             l1.dbg};
+        insert_grid_coords(attempt, grid);
         try {
             tt::tt_fabric::append_fabric_connection_rt_args(
                 cp.get_fabric_node_id_from_physical_chip_id(dev->id()),
@@ -643,14 +683,9 @@ TEST_F(Fabric1DFixture, TestEthAggregatorMultiCoreAndWrap) {
 
     const SenderL1 l1 = layout_sender_l1(eth_l1, num_cores, kStageEntries);
 
-    std::vector<uint32_t> ring_tbl;
-    ring_tbl.reserve(num_cores * 2);
-    for (const auto& c : tensix) {
-        const uint64_t a = noc_addr_translated(c.x, c.y, /*addr=*/0);
-        ring_tbl.push_back(static_cast<uint32_t>(a & 0xFFFFFFFFull));
-        ring_tbl.push_back(static_cast<uint32_t>(a >> 32));
-    }
-    tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.ring_table, ring_tbl, CoreType::ETH);
+    TensixGrid grid;
+    ASSERT_TRUE(translated_tensix_grid(tensix, grid)) << "live Tensix cores are not a clean translated cross product";
+    log_info(tt::LogTest, "multicore: translated grid {}x{}", grid.xs.size(), grid.ys.size());
 
     std::vector<uint32_t> clear(4, 0u);
     tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.dbg, clear, CoreType::ETH);
@@ -688,7 +723,8 @@ TEST_F(Fabric1DFixture, TestEthAggregatorMultiCoreAndWrap) {
 
         std::vector<uint32_t> attempt = {
             num_cores,
-            l1.ring_table,
+            static_cast<uint32_t>(grid.xs.size()),
+            static_cast<uint32_t>(grid.ys.size()),
             l1.last_head,
             l1.head_scratch,
             l1.stage,
@@ -702,6 +738,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorMultiCoreAndWrap) {
             1u,
             l1.seq_scratch,
             l1.dbg};
+        insert_grid_coords(attempt, grid);
         // link_idx 1 before 0. The other launching test's aggregator holds an EDM
         // connection on link 0 that is never reclaimed -- it dies by reset without
         // ever reaching sender.close(), since the kernel does not return. A second

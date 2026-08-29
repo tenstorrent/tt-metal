@@ -42,25 +42,25 @@
 //                               safe, and is what cq_prefetch.cpp does. It is NOT
 //                               the same as decomposing an address the driver gave
 //                               us -- that hung the fabric router once already.
-//    2: last_head_scratch       L1 addr of num_cores u32s, our per-core cursor
-//    3: head_scratch            L1 addr of num_cores * 16 B. Sixteen, not four:
+//    4: last_head_scratch       L1 addr of num_cores u32s, our per-core cursor
+//    5: head_scratch            L1 addr of num_cores * 16 B. Sixteen, not four:
 //                               a NOC read into L1 must be 16 B aligned at BOTH
 //                               ends, and `head` sits at offset 8 of the ring
 //                               header -- so we pull the aligned 16 B chunk that
 //                               contains it and index into it locally.
-//    4: stage_addr              L1 staging for outgoing journal entries
-//    5: stage_entries_max       entries that fit in one fabric packet AND in stage
-//    6: hdr_stage_addr          L1 staging for the 64 B journal header
-//    7: dest_base_lo            landing journal base on the MMIO chip, lo
-//    8: dest_base_hi            landing journal base on the MMIO chip, hi
-//    9: capacity                entries in the landing journal ring
-//   10: src_chip                fabric node id of this chip, stamped into the header
-//   11: sweep_interval_cyc      idle cycles between sweeps
-//   12: unicast_hops            fabric distance to the MMIO chip
-//   13: seq_scratch              L1 addr of num_cores u32s. In L1 and not on the
+//    6: stage_addr              L1 staging for outgoing journal entries
+//    7: stage_entries_max       entries that fit in one fabric packet AND in stage
+//    8: hdr_stage_addr          L1 staging for the 64 B journal header
+//    9: dest_base_lo            landing journal base on the MMIO chip, lo
+//   10: dest_base_hi            landing journal base on the MMIO chip, hi
+//   11: capacity                entries in the landing journal ring
+//   12: src_chip                fabric node id of this chip, stamped into the header
+//   13: sweep_interval_cyc      idle cycles between sweeps
+//   14: unicast_hops            fabric distance to the MMIO chip
+//   15: seq_scratch              L1 addr of num_cores u32s. In L1 and not on the
 //                               stack: MEM_IERISC_STACK_MIN_SIZE is 128 BYTES, so
 //                               a local seq[] array silently smashes the stack.
-//   14: dbg_addr                 L1 addr of 4 u32 liveness markers, written locally.
+//   16: dbg_addr                 L1 addr of 4 u32 liveness markers, written locally.
 //                               A local write cannot fail, so the host can tell
 //                               "kernel never started" from "started but the fabric
 //                               connection never opened" from "running, sweeping".
@@ -96,7 +96,11 @@ static constexpr uint8_t kSweepNoc = 0;
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t ring_addr_table = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tensix_nx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tensix_ny = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t x_arg_base = arg_idx;
+    const uint32_t y_arg_base = x_arg_base + tensix_nx;
+    arg_idx = y_arg_base + tensix_ny;
     const uint32_t last_head_scratch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t head_scratch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stage_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -119,7 +123,37 @@ void kernel_main() {
     dbg[2] = 0;            // entries pushed
     dbg[3] = num_cores;
 
-    volatile tt_l1_ptr uint32_t* ring_tbl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_addr_table);
+    // Core i's sampler ring, addressed directly in TRANSLATED space.
+    //
+    // No host-supplied address table: the live cores are the CROSS PRODUCT of a live-x
+    // list and a live-y list, because harvesting removes whole rows (WH) or whole
+    // columns (BH). So nx + ny coordinates describe all nx*ny cores.
+    //
+    // NOT a contiguous rectangle, which an earlier revision assumed. WH translated
+    // Tensix coords are synthetic and contiguous (`x + tensix_translated_coordinate_
+    // start_x`), but BH takes them from the NOC0 core list, which skips the non-Tensix
+    // columns -- so on BH the live translated x values have gaps. The host asserts the
+    // cross-product property rather than trusting either shape.
+    //
+    // Cost: nx+ny runtime args (WH 16, BH 22) instead of a num_cores*8 B L1 table
+    // (WH 512 B, BH 960 B) plus its own WriteToDeviceL1. On a REMOTE chip every one of
+    // those bytes crosses the NON_MMIO tunnel, which aggravates the launch flakiness in
+    // 5g -- so this is a reliability fix, not just tidying.
+    //
+    // Deriving the address here is safe ONLY because these are TRANSLATED coordinates,
+    // which are NOC-independent by construction. NOC_XY_ADDR does no NOC_X_PHYS_COORD
+    // flip -- it is (y << 42) | (x << 36) | addr, byte-identical on WH and BH. Do not
+    // switch this to get_noc_addr()/NOC_X_PHYS_COORD, which resolve against this
+    // kernel's own noc_index and would silently address the mirrored core.
+    //
+    // This replaces a num_cores*8 B table the host had to write to the chip. On a
+    // REMOTE chip that write crosses the NON_MMIO tunnel and measurably aggravates the
+    // launch flakiness in 5g -- so removing it is a reliability fix, not just tidying.
+    auto ring_base_of = [&](uint32_t i) -> uint64_t {
+        const uint32_t tx = get_arg_val<uint32_t>(x_arg_base + (i % tensix_nx));
+        const uint32_t ty = get_arg_val<uint32_t>(y_arg_base + (i / tensix_nx));
+        return NOC_XY_ADDR(tx, ty, (uint64_t)MEM_UTIL_SAMPLER_BASE);
+    };
     volatile tt_l1_ptr uint32_t* last_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(last_head_scratch);
     volatile tt_l1_ptr uint32_t* seq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seq_scratch);
     volatile tt_l1_ptr util_agg_entry_t* stage = reinterpret_cast<volatile tt_l1_ptr util_agg_entry_t*>(stage_addr);
@@ -205,8 +239,7 @@ void kernel_main() {
         // instead of serializing. At 64 cores this is ~64 * 4 B of NOC traffic
         // per sweep and never touches ethernet.
         for (uint32_t i = 0; i < num_cores; i++) {
-            const uint64_t ring_base =
-                (((uint64_t)ring_tbl[2 * i + 1] << 32) | (uint64_t)ring_tbl[2 * i]) | (uint64_t)MEM_UTIL_SAMPLER_BASE;
+            const uint64_t ring_base = ring_base_of(i);
             // 16 B from the ring base, NOT 4 B from base+8. Both ends of a NOC
             // L1 read must be 16 B aligned (NOC_L1_READ_ALIGNMENT_BYTES == 16 on
             // WH and BH alike); base+8 is not, and neither is a 4 B-strided
@@ -240,8 +273,7 @@ void kernel_main() {
                 behind = kRingSize;
             }
 
-            const uint64_t ring_base =
-                (((uint64_t)ring_tbl[2 * i + 1] << 32) | (uint64_t)ring_tbl[2 * i]) | (uint64_t)MEM_UTIL_SAMPLER_BASE;
+            const uint64_t ring_base = ring_base_of(i);
             for (uint32_t k = 0; k < behind; k++) {
                 if (staged == stage_entries_max) {
                     // Staging (or the fabric packet) is full. Ship it and keep

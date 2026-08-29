@@ -145,18 +145,26 @@ Three consequences:
 dispatches to `CoordinateManager::get_tensix_cores()`, which skips harvested rows.
 The 64/64 is the evidence.
 
-**(b) The gatherer kernel must walk TRANSLATED space, not NOC0.** WH translation
-compacts live rows: `WormholeCoordinateManager::fill_tensix_noc0_translated_mapping()`
-assigns live rows to translated y in [18, 18+8) and pushes harvested rows past the end
-(y = 26, 27). So a fixed loop
+**(b) The gatherer kernel must walk TRANSLATED space, not NOC0.** Harvesting removes
+whole rows (WH) or whole columns (BH), so the live set is always the CROSS PRODUCT of a
+live-x list and a live-y list. `nx + ny` coordinates therefore describe all `nx * ny`
+cores -- WH 8+8 = 16 numbers for 64 cores, BH 12+10 = 22 for 120 -- instead of a
+per-core address table.
 
-```
-for y in 18..25:            // tensix_translated_coordinate_start_y = 18
-    for x in 18..25:        // tensix_translated_coordinate_start_x = 18
-```
+CORRECTED 2026-08-29. This section previously claimed the live cores form a CONTIGUOUS
+translated rectangle, so a fixed `for y in 18..25 / for x in 18..25` loop would do. That
+is true on WH only. `WormholeCoordinateManager` synthesises translated coords as
+`x + tensix_translated_coordinate_start_x`, which is contiguous; but
+`BlackholeCoordinateManager::fill_tensix_noc0_translated_mapping()` takes them from the
+NOC0 core list, which skips the non-Tensix columns -- so BH's live translated x values
+have GAPS. The generalisation was wrong and a host-side assertion caught it on the first
+Blackhole run. Pass coordinate lists, not an origin and a width, and assert the
+cross-product property rather than trusting either shape.
 
-hits exactly the 64 live cores on EVERY chip -- one kernel, no per-chip core table
-shipped into eth L1. Do not walk NOC0; that would need a per-chip runtime-arg blob.
+Deriving the NOC address in-kernel is safe here ONLY because translated coordinates are
+NOC-independent by construction: `NOC_XY_ADDR` is `(y << 42) | (x << 36) | addr`,
+byte-identical on WH and BH, with no `NOC_X_PHYS_COORD` flip. Do not substitute
+`get_noc_addr()`, which resolves against the kernel's own `noc_index`.
 
 CAVEAT: holds only when `noc_translation_enabled`. `CoordinateManager::initialize()`
 runs `identity_map_noc0_cores()` unconditionally and inserts the translated maps only
@@ -1000,12 +1008,16 @@ path 5c showed collapsing under load. On an idle T3K it already fails half the t
 
 Actions:
 
-1. **Drop the ring-address table.** 2.1b established that in TRANSLATED space the live
-   Tensix cores are a fixed contiguous rectangle on every chip regardless of harvest
-   pattern. The kernel can generate its own core list with a double loop over
-   `y = 18..25, x = 18..25` and needs no table. That removes the 512 B remote pre-write
-   that measurably aggravates this, and removes a per-chip runtime-arg blob. **Do this
-   first** -- it is the one mitigation entirely within our control.
+1. ~~**Drop the ring-address table.**~~ **DONE 2026-08-29, and it helped measurably.**
+   The kernel now addresses cores from a live-x / live-y cross product (2.1b) instead of
+   a host-written table, removing a `num_cores * 8` B L1 write to the remote chip and
+   its `WriteToDeviceL1` call -- WH 512 B, BH 960 B, replaced by 16 and 22 runtime-arg
+   words respectively.
+
+   Remote launch success on the T3K went from **2 of 7 to 4 of 6**. An improvement, not
+   a fix: the tunnel still wedges about a third of the time, so 7.7 stands. Correctness
+   held on both arches -- BH `translated grid 12x10` = 120 cores, WH `8x8` = 64, all
+   core_ids present, `lost=0`.
 2. Raise with the UMD owners as 7.7.
 3. It sharpens M3 (mid-workload attach) considerably: if launch is unreliable on an
    IDLE T3K, launching into a saturated one is worse. M3 may need the aggregator
