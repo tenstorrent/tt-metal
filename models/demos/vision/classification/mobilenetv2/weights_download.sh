@@ -1,6 +1,6 @@
-# This script automatically download the model weights from Google Drive
-
 #!/usr/bin/env bash
+
+# This script automatically download the model weights from Google Drive
 
 # Output filename
 OUTPUT="models/demos/vision/classification/mobilenetv2/mobilenet_v2-b0353104.pth"
