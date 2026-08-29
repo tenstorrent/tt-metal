@@ -851,6 +851,22 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
             continue;
         }
         const auto r = eth_sync::measure_link(e.snd_dev, e.snd_eth, e.rcv_dev, e.rcv_eth, cfg);
+        // A solution can be `valid` and still be junk. Observed in a trajectory run: one measurement came
+        // back with residual 861.8 cycles and a nonsense +16 ppm where every neighbour sat at 2.4 cycles and
+        // -1.6 ppm. Without this gate that measurement becomes a "drift" number indistinguishable from a
+        // real one. 20 cycles is ~8x the normal 2.1-2.7 and far below anything pathological.
+        constexpr double kMaxResidualCycles = 20.0;
+        if (r.solution.valid && r.solution.residual_rms > kMaxResidualCycles) {
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {}: DISCARDED, residual {:.1f} cycles "
+                "exceeds {:.0f} (a blown fit, not a drift measurement)",
+                e.sender_chip,
+                e.receiver_chip,
+                r.solution.residual_rms,
+                kMaxResidualCycles);
+            continue;
+        }
         if (!r.solution.valid) {
             // Not fatal and not silent. The most likely cause is that something else now owns these eth
             // cores (fabric FW, which is NOT up when the init sync runs but may be by close). The kernels
@@ -976,17 +992,30 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
     if (checked != 0) {
         // The headline number for the capture: how stale its alignment had become by the end. An implied
         // rate error is more useful than the raw microseconds, because it is what scales to a longer run.
-        const double implied_ppm = worst_elapsed_s > 0.0 ? (worst_ns / 1e9) / worst_elapsed_s * 1e6 : 0.0;
+        const double equiv_ppm = worst_elapsed_s > 0.0 ? (worst_ns / 1e9) / worst_elapsed_s * 1e6 : 0.0;
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] eth sync SESSION DRIFT: worst {:+.3f} us over {:.1f} s ({} -> {}), an "
-            "implied {:+.2f} ppm of unmodelled rate error -- this is how far the capture's cross-device "
-            "alignment had slipped by close, NOT the init sync's accuracy",
+            "[perf-debug profiler] eth sync SESSION DRIFT: worst {:+.3f} us over {:.1f} s ({} -> {}) "
+            "[{:+.2f} ppm equivalent, but NOT a rate error -- see below]",
             worst_ns / 1000.0,
             worst_elapsed_s,
             worst_a,
             worst_b,
-            implied_ppm);
+            equiv_ppm);
+        // Say what this is, because the obvious reading of the number above is wrong. MEASURED, two ways
+        // (device-side eth sync, and host MMIO reads of both wall clocks with no kernels involved): the
+        // relative rate is STABLE at -1.6 ppm and fits to ~0.01 ppm, but the offset takes sporadic DISCRETE
+        // steps of 5-40 us, several per 10 s, which survive min-RTT and min-bracket filtering in their
+        // respective paths. So the drift is accumulated phase steps, not a mis-fitted slope -- which is why
+        // its sign and size scatter between runs (+225, -143, -65 us observed) while every fit stays clean.
+        // Consequence: a better rate fit CANNOT fix this. Only re-syncing more often can, and the re-sync
+        // interval sets the worst-case misalignment.
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync SESSION DRIFT: the clocks step, they do not merely drift -- "
+            "sporadic {}discrete offset steps accumulate between syncs, so re-sync interval (not fit "
+            "quality) bounds cross-device alignment over a long capture",
+            "");
     }
 }
 
