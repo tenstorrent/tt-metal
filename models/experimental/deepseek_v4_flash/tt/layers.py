@@ -590,11 +590,12 @@ class LinearDecode(DeepSeekV4Module):
         cache_file_name = _prefetch_cache_file(cache_file_name)
         w = _materialize(weight, cache_file_name, dtype)
         if w is not None:
-            # torch nn.Linear stores [out=N, in=K]; the op wants [K, N]. Unlike the L1 partial
-            # path there is no K-block fold -- the ND shard supplies that enumeration.
-            # Keep global N here when a mesh mapper will cut it into per-rank
-            # ``self.N`` slices after this host transform.
-            w = w.t().contiguous().reshape(1, 1, self.K, -1)
+            # torch nn.Linear stores [out=N, in=K]; the op wants [K, N]. Rank-4 so a
+            # mesh mapper can cut either K (dim=-2, row-parallel) or N (dim=-1,
+            # column-parallel). Use the host shape, not ``self.K``/``self.N``, which
+            # are already the per-rank sizes under TP.
+            w = w.t().contiguous()
+            w = w.reshape(1, 1, w.shape[0], w.shape[1])
         self.weight = ttnn.as_tensor(
             w,
             dtype=dtype,

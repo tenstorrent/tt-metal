@@ -7,11 +7,14 @@ This reuses the real-weight HuggingFace reference bundle from
 ``test_decoder_layer_pcc.py`` and runs ``DeepSeekV4DecoderLayer.decode_static``
 on a 1x4 submesh. It covers the same path used by the traced full-model demo:
 hyperconnections, norms, tensor-parallel attention, tensor-parallel routed and
-shared experts, their all-reduce, and both residual-stream mixes.
+shared experts, their all-reduce, residual-stream mixes, and the DRISC weight
+prefetcher (the shared 64-core decode GCB; sequential o_a and TP gate/up stay on
+the DRAM->L1 copy).
 """
 
 from __future__ import annotations
 
+import contextlib
 import types
 
 import pytest
@@ -38,8 +41,10 @@ from models.experimental.deepseek_v4_flash.tt.attention import (
     make_rope_table,
 )
 from models.experimental.deepseek_v4_flash.tt.decoder_layer import DeepSeekV4DecoderLayer
+from models.experimental.deepseek_v4_flash.tt.decode_prefetch import make_decode_prefetch_buffers
 from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
+from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher_session
 
 TP_SIZE = 4
 PARENT_MESH = (8, 4)
@@ -165,6 +170,13 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
         cache=cache.sub("mlp") if cache else None,
         tp_size=TP_SIZE,
     )
+    use_prefetcher = ttnn.experimental.is_tensor_prefetcher_supported(submesh)
+    prefetch_buffers = None
+    if use_prefetcher:
+        # Same shallower ring as the TP1 decoder-layer PCC: the 256-token cache sits in
+        # L1 beside the weights, and the production 16-page depth leaves SDPA nowhere to
+        # sit. One mapping is passed into attention and MoE so they share the 64-core GCB.
+        prefetch_buffers = make_decode_prefetch_buffers(submesh, ttnn.bfloat4_b, num_prefetch_pages=8)
     layer = DeepSeekV4DecoderLayer(
         cfg,
         layer_idx,
@@ -174,7 +186,8 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
         gate=gate,
         cache=cache,
         weight_dtype=ttnn.bfloat4_b,
-        use_prefetcher=False,
+        use_prefetcher=use_prefetcher,
+        prefetch_buffers=prefetch_buffers,
         tp_size=TP_SIZE,
     )
     assert layer.self_attn.tp_size == TP_SIZE
@@ -195,56 +208,61 @@ def test_decoder_layer_decode_static_pcc_tp4(mesh_device, reset_seeds, tmp_path,
         batch=batch,
     )
 
-    for pos in range(split + _DECODE_STEPS):
-        cos, sin, neg_sin = _rope_rows(
-            bundle["cos_q"][pos : pos + 1],
-            bundle["sin_q"][pos : pos + 1],
-            submesh,
-        )
-        cos_win = sin_win = win_slot = win_row = None
-        pool = False
-        if compress_rate is not None:
-            window = max((pos + 1) // compress_rate - 1, 0)
-            pool = (pos + 1) % compress_rate == 0
-            win_cos, win_sin = make_rope_table(
-                bundle["cos_win"][window : window + 1],
-                bundle["sin_win"][window : window + 1],
+    with contextlib.ExitStack() as prefetcher:
+        if use_prefetcher:
+            prefetcher.enter_context(tensor_prefetcher_session(submesh))
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(submesh, cq_id=0)
+        for pos in range(split + _DECODE_STEPS):
+            layer.prefetch_weights()
+            cos, sin, neg_sin = _rope_rows(
+                bundle["cos_q"][pos : pos + 1],
+                bundle["sin_q"][pos : pos + 1],
+                submesh,
             )
-            cos_win = _to_tt_replicated(win_cos, submesh)
-            sin_win = _to_tt_replicated(win_sin, submesh)
-            win_slot = int32_pos_tensor(pos % compress_rate, submesh, batch)
-            win_row = int32_pos_tensor(cfg.sliding_window + window, submesh, batch)
+            cos_win = sin_win = win_slot = win_row = None
+            pool = False
+            if compress_rate is not None:
+                window = max((pos + 1) // compress_rate - 1, 0)
+                pool = (pos + 1) % compress_rate == 0
+                win_cos, win_sin = make_rope_table(
+                    bundle["cos_win"][window : window + 1],
+                    bundle["sin_win"][window : window + 1],
+                )
+                cos_win = _to_tt_replicated(win_cos, submesh)
+                sin_win = _to_tt_replicated(win_sin, submesh)
+                win_slot = int32_pos_tensor(pos % compress_rate, submesh, batch)
+                win_row = int32_pos_tensor(cfg.sliding_window + window, submesh, batch)
 
-        out_tt = layer.decode_static(
-            _to_tt_replicated(streams[:, pos : pos + 1], submesh),
-            cos,
-            sin,
-            neg_sin,
-            cos_win,
-            sin_win,
-            host_decode_mask(cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh),
-            kv_cache,
-            int32_pos_tensor(pos % cfg.sliding_window, submesh, batch),
-            int32_pos_tensor(pos, submesh, batch),
-            hash_token=_token_row(bundle["input_ids"][:, pos : pos + 1], submesh) if is_hash else None,
-            pool_compressor=pool,
-            win_slot=win_slot,
-            win_row=win_row,
-        )
-        if pos < split:
-            continue
-
-        ref_row = reference[:, pos : pos + 1]
-        out_torch = ttnn.to_torch(
-            out_tt,
-            mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
-        )
-        rank_outputs = out_torch.reshape(TP_SIZE, *ref_row.shape).to(torch.float32)
-        for rank, rank_output in enumerate(rank_outputs):
-            passing, pcc_message = comp_pcc(ref_row, rank_output, pcc=DECODE_PCC_THRESHOLD)
-            logger.info(comp_allclose(ref_row, rank_output))
-            logger.info(f"[decoder layer TP{TP_SIZE} rank {rank} layer {layer_idx} pos {pos}] PCC: {pcc_message}")
-            assert passing, (
-                f"decoder layer TP{TP_SIZE} rank {rank} layer {layer_idx} pos {pos} "
-                f"PCC < {DECODE_PCC_THRESHOLD}: {pcc_message}"
+            out_tt = layer.decode_static(
+                _to_tt_replicated(streams[:, pos : pos + 1], submesh),
+                cos,
+                sin,
+                neg_sin,
+                cos_win,
+                sin_win,
+                host_decode_mask(cfg.sliding_window, layer_type, compress_rate, pos, seq_len, submesh),
+                kv_cache,
+                int32_pos_tensor(pos % cfg.sliding_window, submesh, batch),
+                int32_pos_tensor(pos, submesh, batch),
+                hash_token=_token_row(bundle["input_ids"][:, pos : pos + 1], submesh) if is_hash else None,
+                pool_compressor=pool,
+                win_slot=win_slot,
+                win_row=win_row,
             )
+            if pos < split:
+                continue
+
+            ref_row = reference[:, pos : pos + 1]
+            out_torch = ttnn.to_torch(
+                out_tt,
+                mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
+            )
+            rank_outputs = out_torch.reshape(TP_SIZE, *ref_row.shape).to(torch.float32)
+            for rank, rank_output in enumerate(rank_outputs):
+                passing, pcc_message = comp_pcc(ref_row, rank_output, pcc=DECODE_PCC_THRESHOLD)
+                logger.info(comp_allclose(ref_row, rank_output))
+                logger.info(f"[decoder layer TP{TP_SIZE} rank {rank} layer {layer_idx} pos {pos}] PCC: {pcc_message}")
+                assert passing, (
+                    f"decoder layer TP{TP_SIZE} rank {rank} layer {layer_idx} pos {pos} "
+                    f"PCC < {DECODE_PCC_THRESHOLD}: {pcc_message}"
+                )

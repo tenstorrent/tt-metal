@@ -15,7 +15,9 @@ The test has two deployment variants:
 * ``pp8_tp1``: eight single-chip pipeline stages (the existing 8-chip path).
 * ``pp8_tp4``: eight 1x4 tensor-parallel stages on a 32-chip Galaxy. Attention
   uses head-sharded SDPA, sequential local-group O_A and row-parallel O_B; MoE
-  shards the intermediate dimension and all-reduces its output.
+  shards the intermediate dimension and all-reduces its output. The DRISC
+  prefetcher stays on (same as TP1) for every projection that still fits the
+  shared GCB.
 
 All weights live on device in ``bfloat4_b``. Set ``DEEPSEEK_V4_CACHE_DIR`` to
 reuse the converted ttnn weight tiles across runs, and optionally cap the stack
@@ -171,7 +173,7 @@ def _build_and_prefill(
         max_layers=max_layers,
         use_submeshes=True,
         system_config=system_config,
-        use_prefetcher=False if tp_size > 1 else None,
+        use_prefetcher=None,
         tp_size=tp_size,
     )
     lm_head = Linear(

@@ -245,8 +245,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         ``tp_size`` groups adjacent chips into ``1 x tp_size`` pipeline stages and
         forwards it to attention and MoE. Their outputs are replicated, so every
         rank-to-rank pipeline socket carries the corresponding copy to the next stage.
-        TP is incompatible with packed L1 weights; callers should also disable the
-        prefetcher to select the latency-tuned attention path.
+        TP is incompatible with packed L1 weights. The DRISC prefetcher stays on
+        under TP for every projection whose per-rank B-core count still matches
+        the shared decode GCB; see :class:`~.attention.DeepSeekV4Attention`.
 
         ``system_config`` is the per-machine tuning profile (see
         :mod:`.system_config`); it defaults to the one matching ``full_device``'s device

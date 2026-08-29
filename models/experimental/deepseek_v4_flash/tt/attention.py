@@ -10,7 +10,12 @@ from .decode_prefetch import (
     decode_prefetch_page_bytes,
     make_decode_prefetch_buffers,
 )
-from .layers import BatchedLinearDecode, DeepSeekV4RMSNorm, LinearDecode, _rms_norm_unweighted
+from .layers import (
+    BatchedLinearDecode,
+    DeepSeekV4RMSNorm,
+    LinearDecode,
+    _rms_norm_unweighted,
+)
 from .l1_weights import packed_weight_spec
 from .paged_cache import PagedLayerView
 from .system_config import active_system_config
@@ -958,11 +963,15 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     it consumes those local groups directly and all-reduces the full-hidden
     partials. Column-parallel ``o_b`` remains available as an alternative.
 
-    ``use_prefetcher=True`` switches the four decode projections (q_a, q_b, kv, o_b), plus the
-    compressor's kv/gate pair on the layers that have one, onto DRISC-prefetched weights: each
-    keeps its weight DRAM ND-sharded and has the tensor
-    prefetcher push it into the matmul's in1 buffer, instead of copying DRAM -> L1 before
-    every call. Two things come with it:
+    ``use_prefetcher=True`` switches the decode projections that still fit the shared
+    64-receiver GCB (q_b, row-parallel o_b, the compressor's kv/gate pair) onto
+    DRISC-prefetched weights. Sequential o_a stays on the DRAM->L1 copy: a private
+    32-core GCB on the same cores as the shared ring (and the pipeline socket at
+    ``(0,0)``) collides with ``fused_hyperconnection`` static CBs. Fused q_a+kv also
+    stays on the transient L1 path: its 1536-wide weight cannot share the decode GCB's
+    page size. Each prefetched weight stays DRAM ND-sharded and the tensor prefetcher
+    pushes it into the matmul's in1 buffer, instead of copying DRAM -> L1 before every
+    call. Two things come with it:
 
     * The caller must open a prefetcher session around the decode steps
       (``ttnn.experimental.start_tensor_prefetcher`` / ``stop_tensor_prefetcher``, with a
@@ -1079,9 +1088,13 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             # A restricted matmul cannot consume a mesh-wide prefetch request:
             # pages sent to inactive ranks would never be acknowledged. q_a/kv
             # therefore use their ordinary transient L1 weight path under TP.
+            # Column-parallel o_b and balanced q_a/kv cut N, so their B-core
+            # count no longer matches the shared 64-receiver GCB. Row-parallel
+            # o_b only cuts K and stays on 64 cores, so it can share that buffer.
             restricted_projection = self.dedicated_qkv_ranks and name in ("q_a_proj", "kv_proj")
             local_receiver_grid = tp_size > 1 and (
-                name == "o_b_proj" or (self.balanced_qkv and name in ("q_a_proj", "kv_proj"))
+                (name == "o_b_proj" and not self.row_parallel_o_b)
+                or (self.balanced_qkv and name in ("q_a_proj", "kv_proj"))
             )
             projection_uses_prefetcher = use_prefetcher and not (restricted_projection or local_receiver_grid)
             prefetch = {"use_prefetcher": projection_uses_prefetcher}
@@ -1209,6 +1222,10 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         in_per_group = (self.num_heads * self.head_dim) // self.o_groups  # K; unchanged by group sharding
         o_a_layout = check_decode_layout("o_a_proj", in_per_group, self.o_lora_rank, batch=self.o_groups)
         if self.sequential_o_a:
+            # Two [K, o_lora_rank] matmuls on 32 cores cannot join the shared 64-receiver
+            # decode GCB. A private GCB on those cores also collides with
+            # fused_hyperconnection static CBs (core (0,0) is a pipeline socket), so
+            # they stay on the transient DRAM->L1 path.
             self.o_a_projs = [
                 LinearDecode(
                     _tp_group_slot_weight(weights["o_a_proj.weight"], self.o_groups, tp_size, slot),
@@ -1335,10 +1352,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         and o_b_proj are left out because their weights do not fit alongside the others.
 
         On the prefetcher path it instead queues each projection configured for the shared
-        GCB. TP-local receiver grids use the ordinary transient L1 path because they cannot
-        consume that global 64-receiver buffer. Requires an open prefetcher session (see the
-        class docstring), and every queued request must be consumed by a matching ``decode``:
-        queueing without the follow-up matmul leaves pages nobody drains.
+        GCB. Column-parallel o_b, balanced q_a/kv, and sequential o_a keep a local receiver
+        grid and stay on the transient L1 path because they cannot consume the global
+        64-receiver buffer. Requires an open prefetcher session (see the class docstring),
+        and every queued request must be consumed by a matching ``decode``: queueing without
+        the follow-up matmul leaves pages nobody drains.
 
         Projections on the shared GCB use one FIFO, so they are queued here in the order
         ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
@@ -1358,7 +1376,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 self.kv_proj.fetch_weights()
         if self.compressor is not None:
             self.compressor.prefetch_weights()
-        if not self.sequential_o_a and self.o_a_proj.use_prefetcher:
+        if self.sequential_o_a:
+            for proj in self.o_a_projs:
+                if proj.use_prefetcher:
+                    proj.fetch_weights()
+        elif self.o_a_proj.use_prefetcher:
             self.o_a_proj.fetch_weights()
         if self.o_b_proj.use_prefetcher:
             self.o_b_proj.fetch_weights()

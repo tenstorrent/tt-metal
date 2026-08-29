@@ -4,7 +4,12 @@ import ttnn
 import torch
 
 from .common import DeepSeekV4Module, _profile, _region
-from .decode_prefetch import check_decode_layout, decode_prefetch_page_bytes, make_decode_prefetch_buffers
+from .decode_prefetch import (
+    check_decode_layout,
+    decode_prefetch_page_bytes,
+    make_decode_prefetch_buffers,
+    tp_gate_up_layout,
+)
 from .layers import Linear, LinearDecode
 from .l1_weights import packed_weight_spec
 from .system_config import active_system_config
@@ -65,12 +70,14 @@ class DeepSeekV4MLP(DeepSeekV4Module):
     Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))`` with
     no clamp (the routed experts clamp; the shared expert does not).
 
-    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode` on
-    DRISC-prefetched weights, streamed through the same GCB the attention block uses (see
-    ``decode_prefetch``) instead of reading them from DRAM on every call. That path is decode
-    shaped: it width-shards the tokens over one tile-row, which caps it at the 32 rows a tile
-    holds, so a prefill-width input has to use the default ``ttnn.linear`` path. It also needs
-    ``config``, to check the fixed weight layouts against the shapes this model wants.
+    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode`. Down
+    stays on the shared 64-core decode GCB. Under TP, gate and up cannot join that ring
+    (``N = I/TP`` is only 8 cores) and a private GCB on those cores collides with
+    ``fused_hyperconnection`` static CBs, so they use the transient DRAM->L1 copy.
+    That path is decode shaped: it width-shards the tokens over one tile-row, which
+    caps it at the 32 rows a tile holds, so a prefill-width input has to use the
+    default ``ttnn.linear`` path. It also needs ``config``, to check the fixed weight
+    layouts against the shapes this model wants.
     """
 
     def __init__(
@@ -144,43 +151,66 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             return
 
         hidden, inter = config.hidden_size, config.moe_intermediate_size
+        local_inter = inter // tp_size if tp_size > 1 else inter
         if prefetch_buffers is None:
             prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype)
-        prefetch = {"use_prefetcher": True, "global_cb_page_bytes": decode_prefetch_page_bytes(weight_dtype)}
+        page_bytes = decode_prefetch_page_bytes(weight_dtype)
+        gate_up_layout = dict(check_decode_layout("shared_gate_proj", hidden, inter))
+        down_layout = dict(check_decode_layout("shared_down_proj", inter, hidden))
+        gate_up_prefetch = {
+            "use_prefetcher": True,
+            "global_cb": prefetch_buffers["shared_gate_proj"],
+            "global_cb_page_bytes": page_bytes,
+        }
+        down_cb = prefetch_buffers["shared_down_proj"]
+        decode_gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=-1) if tp_size > 1 else None
+        decode_down_mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
+        if tp_size > 1:
+            # Per-rank gate/up is N=I/TP (8 cores at I=2048, TP=4) and cannot join the
+            # 64-receiver shared GCB. A private GCB on those cores also collides with
+            # fused_hyperconnection static CBs on (0,0), so they stay on DRAM->L1.
+            # Down only cuts K and stays on 64 cores.
+            gate_up_layout = tp_gate_up_layout(tp_size, hidden, local_inter)
+            down_layout = {"K": local_inter, "N": hidden}
+            gate_up_prefetch = {"use_prefetcher": False}
         self.gate_proj = LinearDecode(
             weights[f"{prefix}.gate_proj.weight"],
             device,
-            cache.file(f"{prefix}.gate_proj{tp_tag}"),
+            cache.file(f"{prefix}.gate_proj{tp_tag}.decode" if tp_size > 1 else f"{prefix}.gate_proj{tp_tag}"),
             dtype=weight_dtype,
-            **check_decode_layout("shared_gate_proj", hidden, inter),
-            global_cb=prefetch_buffers["shared_gate_proj"],
-            **prefetch,
+            mesh_mapper=decode_gate_up_mapper,
+            **gate_up_layout,
+            **gate_up_prefetch,
         )
         self.up_proj = LinearDecode(
             weights[f"{prefix}.up_proj.weight"],
             device,
-            cache.file(f"{prefix}.up_proj{tp_tag}"),
+            cache.file(f"{prefix}.up_proj{tp_tag}.decode" if tp_size > 1 else f"{prefix}.up_proj{tp_tag}"),
             dtype=weight_dtype,
-            **check_decode_layout("shared_up_proj", hidden, inter),
-            global_cb=prefetch_buffers["shared_up_proj"],
-            **prefetch,
+            mesh_mapper=decode_gate_up_mapper,
+            **gate_up_layout,
+            **gate_up_prefetch,
         )
         self.down_proj = LinearDecode(
             weights[f"{prefix}.down_proj.weight"],
             device,
             cache.file(f"{prefix}.down_proj{tp_tag}"),
             dtype=weight_dtype,
-            **check_decode_layout("shared_down_proj", inter, hidden),
-            global_cb=prefetch_buffers["shared_down_proj"],
-            **prefetch,
+            mesh_mapper=decode_down_mapper,
+            global_cb=down_cb,
+            global_cb_page_bytes=page_bytes,
+            num_inputA_cores=max(1, local_inter // 64) if tp_size > 1 else 32,
+            use_prefetcher=True,
+            **down_layout,
         )
 
     def prefetch_weights(self):
         """Stage the three projection weights ahead of the :meth:`forward` that uses them.
 
-        Queued gate, up, down: the order :meth:`forward` runs them, which is the order they
-        must come off the shared GCB's single FIFO. The attention block's weights precede
-        them, since it runs first in the decoder layer.
+        Queued gate, up, then down. Under TP, gate/up are DRAM->L1 copies (they cannot
+        join the shared 64-core GCB); down uses that GCB. Queue order still has to match
+        :meth:`forward` on the shared buffer. The attention block's weights precede down
+        on it, since attention runs first in the decoder layer.
         """
         if not self.use_prefetcher:
             return
@@ -196,9 +226,9 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         would decode as T one-token matmuls -- and it is what the caller already built for the
         router, so nothing is reshaped here.
         """
-        # Prefetched, gate and up leave their results width-sharded over the 32 cores holding
-        # 64 columns each, which is exactly how down_proj wants its activation sharded along
-        # K, so the product feeds it where it already sits and nothing reshards in between.
+        # Prefetched, gate and up leave their results width-sharded over the cores
+        # holding 64 columns each, which is how down_proj wants its activation
+        # sharded along K, so the product feeds it where it already sits.
         out = self.down_proj(ttnn.multiply(ttnn.silu(self.gate_proj(x)), self.up_proj(x)))
         return out
 
