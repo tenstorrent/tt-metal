@@ -177,10 +177,22 @@ def run_multi_mode(args) -> int:
                 device, WeightBag.load(llm_path), WeightBag.load(flow_path), WeightBag.load(hift_path)
             )
             t0 = time.perf_counter()
-            wav, tokens = model.synthesize(ctx, rng=RandomSources(), sampler=args.sampler, seed=args.seed)
-            dt = time.perf_counter() - t0
-            out = ttnn.to_torch(wav).float().reshape(1, -1)
-            ttnn.deallocate(wav)
+            if args.stream:
+                # Interleaved: the flow decoder and the vocoder run on each finished
+                # chunk while the LLM is still decoding later tokens, so audio starts
+                # before generation does. `first_audio_s` is the number that
+                # distinguishes this from chunked vocoding after the fact.
+                res = model.synthesize_streaming(ctx, sampler=args.sampler, seed=args.seed)
+                dt = time.perf_counter() - t0
+                out = torch.cat([ttnn.to_torch(c).float().reshape(1, -1) for c in res.chunks], dim=1)
+                tokens, first_s, n_chunks = res.tokens, res.first_audio_s, res.n_chunks
+                res.free()
+            else:
+                wav, tokens = model.synthesize(ctx, rng=RandomSources(), sampler=args.sampler, seed=args.seed)
+                dt = time.perf_counter() - t0
+                out = ttnn.to_torch(wav).float().reshape(1, -1)
+                ttnn.deallocate(wav)
+                first_s, n_chunks = dt, 1  # nothing can be emitted before the end
         except Exception as e:  # noqa: BLE001
             print(f"  {mode:<14} FAILED: {str(e)[:160]}")
             continue
@@ -189,9 +201,10 @@ def run_multi_mode(args) -> int:
         out_path = os.path.join(out_dir, f"{mode}_{args.lang}.wav")
         write_wav(out_path, out)
         secs = out.shape[1] / SAMPLE_RATE
+        tail = f"  first audio {first_s:5.2f}s in {n_chunks} chunks" if args.stream else ""
         print(
             f"  {mode:<14} {meta['text'][:40]!r:<44} {len(tokens):>3} tokens  "
-            f"{secs:5.2f}s audio  {dt:5.2f}s wall  -> {out_path}"
+            f"{secs:5.2f}s audio  {dt:5.2f}s wall{tail}  -> {out_path}"
         )
     return 0
 
@@ -208,6 +221,12 @@ def main() -> int:
     ap.add_argument("--sampler", default="ras", choices=["ras", "greedy"])
     ap.add_argument("--seed", type=int, default=1986)
     ap.add_argument("--skip-llm", action="store_true", help="use the captured tokens instead of generating")
+    ap.add_argument(
+        "--stream",
+        action="store_true",
+        help="interleave the stages (--inputs path only): emit audio chunks as tokens are generated "
+        "instead of after the last one, and report time to first audio",
+    )
     ap.add_argument(
         "--run-dir",
         default=None,
