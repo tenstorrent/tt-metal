@@ -2,12 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Simulated-device distributed RMSNorm backward (concat stands in for all-gather).
-
-Mirrors test_distributed_rmsnorm_allgather.py in the nightly suite: the sharded hidden dim is
-chunked on one device and the all-gather of the one-tile stats columns is modelled by ttnn.concat,
-so the two backward stages can be checked against a full-width reference without a mesh.
-"""
 
 import pytest
 import torch
