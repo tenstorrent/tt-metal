@@ -273,11 +273,14 @@ class TtRelPosAttention:
         fixed for an utterance. Caching `pt` therefore removes a `linear`, a `reshape`
         and a `permute` per layer per token, and the `linear` is the expensive one.
 
-        The cache is keyed on `id(pos_emb)` rather than on its width, because width
-        alone would be a lie: two different callers can legitimately pass different
-        `[B, N, d_model]` windows. Keying on identity makes a hit mean "the very
-        tensor whose projection this is". The entry holds a reference to `pos_emb`
-        precisely so that CPython cannot recycle its `id` into a stale hit.
+        The cache is keyed on `(id(pos_emb), batch)` rather than on width, because
+        width alone would be a lie: two different callers can legitimately pass
+        different `[B, N, d_model]` windows. Keying on identity makes a hit mean "the
+        very tensor whose projection this is". The entry holds a reference to
+        `pos_emb` precisely so that CPython cannot recycle its `id` into a stale hit.
+        The batch is part of the key because the projection is *widened* to the batch
+        (`_project_pos`), so entries for different batch sizes are different tensors
+        and must not alias -- a batch sweep visits several in one process.
 
         Allocation happens on first call, which for the traced path is a warm-up pass
         -- outside `begin_trace_capture`, like the weights, so the replay only reads.
