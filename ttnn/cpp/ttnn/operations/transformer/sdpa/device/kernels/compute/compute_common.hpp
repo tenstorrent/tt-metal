@@ -793,9 +793,9 @@ void correction_block(
         cb_exp_max_diff_2_obj.wait_front(num_head_tiles);
         for (uint32_t i = 0; i < num_head_tiles; i++) {
             tile_regs_acquire();
-            mul_tiles_init(cb_prev_sum, cb_exp_max_diff);
+            mul_init(cb_prev_sum, cb_exp_max_diff);
             mul_tiles(cb_prev_sum, cb_exp_max_diff, i, i, dst_reg_0);
-            mul_tiles_init(cb_worker_sum, cb_exp_max_diff_2);
+            mul_init(cb_worker_sum, cb_exp_max_diff_2);
             mul_tiles(cb_worker_sum, cb_exp_max_diff_2, i, i, dst_reg_1);
             add_binary_tile_init();
             add_binary_tile(dst_reg_0, dst_reg_1, dst_reg_0);
