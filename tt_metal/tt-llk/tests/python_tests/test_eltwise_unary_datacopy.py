@@ -23,7 +23,6 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_perf_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -99,18 +98,35 @@ DATACOPY_FORMATS = input_output_formats(
     ]
 )
 
+SUB_BYTE_DATACOPY_FORMATS = [
+    fmt
+    for fmt in input_output_formats(
+        [
+            *SUB_BYTE_BFP_FORMATS,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+            DataFormat.Float32,
+        ]
+    )
+    if fmt.input_format in SUB_BYTE_BFP_FORMATS
+    or fmt.output_format in SUB_BYTE_BFP_FORMATS
+]
 
-def generate_eltwise_unary_datacopy_perf_combinations():
-    """Dest-full tall/wide matrices, 4-face, no tilize."""
-    combinations = []
-    for fmt in DATACOPY_FORMATS:
-        for dest_acc in get_valid_dest_accumulation_modes(fmt):
-            for dimensions in generate_perf_input_dimensions(dest_acc, DestSync.Half):
-                combinations.append((fmt, dest_acc, dimensions))
-    return combinations
-
-
-PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_perf_combinations()
+# Shared with perf_eltwise_unary_datacopy.py so the two sweeps stay aligned.
+DATACOPY_SWEEP = dict(
+    formats=DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=get_valid_num_faces_datacopy,
+    tilize=get_valid_tilize_datacopy,
+    input_dimensions=[[64, 64], [32, 256], [128, 256]],
+)
+DATACOPY_SUB_BYTE_SWEEP = dict(
+    formats=SUB_BYTE_DATACOPY_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=get_valid_num_faces_datacopy,
+    tilize=Tilize.No,
+    input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
+)
 
 
 def _run_unary_datacopy_test(
@@ -238,22 +254,8 @@ def _run_unary_datacopy_test(
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
-        ]
-    ),
-    dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=get_valid_num_faces_datacopy,
-    tilize=get_valid_tilize_datacopy,
-    input_dimensions=[[64, 64], [32, 256], [128, 256]],
-)
-def test_unary_datacopy(
+@parametrize(**DATACOPY_SWEEP)
+def test_eltwise_unary_datacopy(
     formats,
     dest_acc,
     num_faces,
@@ -263,26 +265,8 @@ def test_unary_datacopy(
     _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
 
 
-@parametrize(
-    formats=[
-        fmt
-        for fmt in input_output_formats(
-            [
-                *SUB_BYTE_BFP_FORMATS,
-                DataFormat.Float16_b,
-                DataFormat.Bfp8_b,
-                DataFormat.Float32,
-            ]
-        )
-        if fmt.input_format in SUB_BYTE_BFP_FORMATS
-        or fmt.output_format in SUB_BYTE_BFP_FORMATS
-    ],
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
-    tilize=Tilize.No,
-    input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
-)
-def test_unary_datacopy_sub_byte_bfp(
+@parametrize(**DATACOPY_SUB_BYTE_SWEEP)
+def test_eltwise_unary_datacopy_sub_byte_bfp(
     formats,
     dest_acc,
     num_faces,
