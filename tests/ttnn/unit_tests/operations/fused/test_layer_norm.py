@@ -386,7 +386,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
 
 
 @pytest.mark.parametrize("h", [24, 32, 2048])
-@pytest.mark.parametrize("w", [42, 64, 127, 519, 4096])
+@pytest.mark.parametrize("w", [42, 64, 127, 487, 519, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
