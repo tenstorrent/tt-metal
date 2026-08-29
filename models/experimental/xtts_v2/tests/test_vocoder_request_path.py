@@ -57,6 +57,7 @@ def run_voc_bucket_invariance(device):
         mesh_device=device,
         vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
         _voc_traces={},
+        last_timings={},
     )
     bucketed = XttsV2._vocode(model, z, g)  # pads L -> _voc_bucket(L)
     at_cap = XttsV2._vocode(model, _voc_pad(z, VOC_L), g)[:, :, : L * HOP]  # as if there were no buckets
@@ -75,6 +76,7 @@ def run_voc_trace_replay(device):
         vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
         _voc_slots={},
         _voc_traces={},
+        last_timings={},
     )
     XttsV2._alloc_vocoder(model, g)
     XttsV2._capture_vocoder(model)
@@ -105,6 +107,7 @@ def run_voc_traced_reference(device):
         vocoder=TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device)),
         _voc_slots={},
         _voc_traces={},
+        last_timings={},
     )
     XttsV2._alloc_vocoder(model, g)
     XttsV2._capture_vocoder(model)
@@ -149,7 +152,7 @@ def run_voc_pad_tail(device):
     assert _voc_bucket(L) > L, "these latents must need padding or this compares nothing"
 
     voc = TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device))
-    model = types.SimpleNamespace(mesh_device=device, vocoder=voc, _voc_traces={})
+    model = types.SimpleNamespace(mesh_device=device, vocoder=voc, _voc_traces={}, last_timings={})
     bucketed = XttsV2._vocode(model, z, g)
     exact = _at_true_length(voc, device, z, g)
 
@@ -167,7 +170,7 @@ def run_voc_prepared_weight_dedup(device):
     """Every bucket eagerly, then check the prepared weights collapsed to distinct layouts."""
     g = torch.randn(1, 512, 1, generator=torch.Generator().manual_seed(0))
     voc = TTNNHifiganGenerator(device, preprocess_hifigan_parameters(device))
-    model = types.SimpleNamespace(mesh_device=device, vocoder=voc, _voc_traces={})
+    model = types.SimpleNamespace(mesh_device=device, vocoder=voc, _voc_traces={}, last_timings={})
     for Lb in VOC_BUCKETS:
         XttsV2._vocode(model, torch.zeros(1, 1024, Lb), g)
 
