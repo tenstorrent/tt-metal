@@ -2483,6 +2483,9 @@ void sdpa_ring_v2(
     // also skipped and we return true without draining. Otherwise reader pushed so drain.
     auto try_skip_sparse_frames = [&](uint32_t k_chunk, uint32_t q_frame_for_chunk, bool kv_chunk_is_joint) -> bool {
         if constexpr (sparse_frames_enabled) {
+            if (force_ref_k_frame) {
+                return false;  // reference frame is attended by every query, never skipped
+            }
             if (kv_chunk_is_joint) {
                 return false;  // joint K is always attended
             }
@@ -2592,9 +2595,11 @@ void sdpa_ring_v2(
             }
             if constexpr (sparse_frames_enabled) {
                 // Pre-scan: skip k_chunks this q_frame doesn't attend when counting valid KV.
-                if (!is_joint) {
+                // The reference frame is attended by every query, so the peeled mask (whose
+                // reference column is zeroed) must not gate it.
+                if (!is_joint && !force_ref_k_frame) {
                     const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
-                    const uint32_t k_frame = force_ref_k_frame ? forced_k_frame : (k_global / tiles_per_frame);
+                    const uint32_t k_frame = k_global / tiles_per_frame;
                     const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
                     const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
                     if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
