@@ -8,9 +8,10 @@
 // ttnn.argmax (ArgMaxEngine::Rvv).
 //
 // The incumbent TILE-input argmax has NO compute kernel: the whole reduction
-// is a scalar C++ loop on a dataflow RISC at ~23 cyc/element (single core,
-// serialized NOC read + scan per tile). Here the reader streams tiles into a
-// double-buffered CB and this kernel scans them with 16-lane bf16 vector ops:
+// is a scalar C++ loop on a single dataflow RISC, with the NOC read and the
+// scan of each tile serialized against each other. Here the reader streams
+// tiles into a double-buffered CB, the scan of one chunk overlaps the staging
+// of the next, and this kernel scans with 16-lane bf16 vector ops:
 //
 //   - TRISC0/1 (unpack/math) are complete no-ops: no Tensix instruction is
 //     ever issued, so there is no LReg/MOP/ADDR_MOD state to conflict with.
@@ -41,6 +42,14 @@
 //   even the all-negative-NaN-row corner matches the incumbent bit-for-bit.
 //   Strictly-greater updates + first-match re-scan preserve the smallest-
 //   index tie-break across lanes, faces, tiles, and chunks.
+//
+// MULTICORE: this kernel only ever scans ITS OWN slice of the tile-row —
+//   w_count tiles, a runtime arg — so the indices it emits are LOCAL to that
+//   slice (element 0 of the slice is index 0). The reader adds the slice's
+//   w_start * 32 offset before any cross-core compare, and merges the
+//   per-core candidates in the same bit-pattern total order; see
+//   reader_argmax_rvv_tile.cpp. Nothing about the scan itself changes: a core
+//   with the whole row (num_cores == 1) sees exactly the single-core case.
 //
 // REGISTER BUDGET (hard-earned): e16m4 dual-stream uses 16 of 32 vregs.
 // e16m8 dual-stream needs all 32 and GCC spills a multi-KB stack frame
@@ -248,10 +257,14 @@ void kernel_main() {
     constexpr uint32_t cb_out_idx = get_compile_time_arg_val(1);
     constexpr uint32_t cb_out_val = get_compile_time_arg_val(2);
     constexpr uint32_t chunk_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t w_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t h_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t logical_height = get_compile_time_arg_val(6);
-    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(7);
+    constexpr uint32_t h_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t logical_height = get_compile_time_arg_val(5);
+    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(6);
+
+    // This core's slice of the reduction dim's tiles. Runtime, not compile
+    // time: the leading cores carry one extra tile when w_tiles does not
+    // divide evenly, and every core must share one compiled kernel.
+    const uint32_t w_count = get_arg_val<uint32_t>(0);
 
     uint16_t acked_in = 0;  // local mirror of cb_in acked (sole acker)
     uint16_t recv_idx = 0;  // local mirror of cb_out_idx received (sole producer)
@@ -271,8 +284,8 @@ void kernel_main() {
             }
 
             uint32_t tiles_done = 0;
-            while (tiles_done < w_tiles) {
-                const uint32_t chunk = (w_tiles - tiles_done < chunk_pages) ? (w_tiles - tiles_done) : chunk_pages;
+            while (tiles_done < w_count) {
+                const uint32_t chunk = (w_count - tiles_done < chunk_pages) ? (w_count - tiles_done) : chunk_pages;
                 amx_in_wait(cb_in, acked_in, (uint16_t)chunk);
                 invalidate_l1_cache();
                 for (uint32_t g = 0; g < n_groups; g++) {

@@ -225,35 +225,84 @@ uint32_t argmax_rows_per_tile_row(const Tensor& input) {
 }
 
 // Smallest H at which the SFPU engine is MEASURED to win. See the table below.
-constexpr uint32_t kSfpuMinRows = 8;
+constexpr uint32_t kSfpuMinRows = 32;
 
-// Blackhole P150 device-kernel medians measured for this change (microseconds;
-// last-dim argmax over V columns of B = H rows):
+// HOW THE NUMBERS BELOW WERE TAKEN. Blackhole p150, 13x10 = 130-core compute
+// grid, last-dim argmax over a [1, 1, H, V] BFLOAT16 TILE input. Per-op
+// DEVICE time by trace replay: N back-to-back argmax ops are captured into
+// one trace, the trace is replayed, and the wall time is divided by N (min of
+// 3 replays). That is THROUGHPUT-mode timing -- per-op host dispatch is
+// amortized to nothing by construction -- so it is NOT the latency an
+// isolated eager caller sees, which the same benchmark measures separately at
+// 20-90 us higher. It is the right number for this decision because what is
+// being chosen is which engine costs the DEVICE less. Regenerate everything
+// here with tests/ttnn/unit_tests/operations/reduce/
+// _argmax_engine_crossover_bench.py.
 //
-//   V         B    incumbent      RVV     SFPU (multicore)
-//   262144    1        9128       462     loses -- 32 lanes for 1 valid row
-//    32768    8        5253       192      35
-//   131072   32       77762      2712     136
-//   262144   32      155561      5275     190
+// The two engines are compared AT THE SAME CORE COUNT (pinned through
+// sub_core_grids), because otherwise the comparison is between two different
+// core-count heuristics rather than between two engines. Entries are
+// SFPU_time / RVV_time, so a value > 1 means RVV is faster:
 //
-// Both accelerated engines beat the scalar readers by 10-30x at every measured
-// point, so the only real decision is RVV vs SFPU. The SFPU recipe reduces all
-// 32 rows of a tile-row in one lane-parallel pass (~802 cycles per tile,
-// whether 1 or 32 of those rows are real), while the RVV scan costs 63-100
-// cycles per tile PER ROW. The discriminator is therefore the number of valid
-// rows per tile-row -- the H dim: at H == 1 the SFPU pays for 32 lanes to
-// serve one row and loses, at H >= 8 it wins decisively.
+//   V         H     1 core   8 cores   32 cores   64 cores   111 cores
+//   32768     1     12.37x     5.88x      1.88x      1.00x       1.00x
+//   32768     8      3.14x     1.94x      1.57x      1.21x       1.00x
+//   32768    32      0.87x     0.76x      1.06x      1.17x       1.20x
+//   262144    1     13.92x     7.60x      3.33x      2.34x       1.22x
+//   262144    8      3.75x     3.18x      2.06x      1.57x       1.34x
+//   262144   32      0.95x     0.86x      0.81x      0.85x       0.94x
 //
-// 1 < H < 8 IS NOT MEASURED. The boundary sits at the smallest measured SFPU
-// win rather than at H == 2, so the whole unmeasured band goes to RVV -- the
-// engine that is bit-identical to the scalar readers. Being wrong there costs
-// throughput on shapes nobody benchmarked; being wrong the other way would
-// silently change special-value results on them.
+// Two things fall out of that table.
+//
+// (1) H is the discriminator, and at small H it is worth 3-14x. The SFPU
+//     recipe reduces all 32 rows of a tile-row in one lane-parallel pass, so
+//     its cost is nearly FLAT in H: at 1 core, V = 262144, it measures 4875 us
+//     at H = 1, 4881 us at H = 8 and 4911 us at H = 32 -- a 0.7% spread across
+//     a 32x change in real work. The RVV scan is per ROW, and at the same
+//     three points measures 350 / 1302 / 5191 us. So at small H the SFPU is
+//     paying for 32 lanes to serve a handful of real rows; by H = 32 every
+//     lane is doing useful work and it is at worst even.
+//
+// (2) The ratios decay toward 1 as cores are added because BOTH engines
+//     converge on a shared per-program dispatch floor of ~0.44 us per core
+//     (the slope of every curve past its knee). At 111 cores the four
+//     V = 32768, H in {1, 8} points -- two engines over two very different
+//     workloads -- all land between 50.6 and 50.9 us, and the H = 32 pair
+//     costs MORE than that, not less. A comparison read only at the top of
+//     the grid measures
+//     that floor, not the engines. The same floor makes both engines scale
+//     NEGATIVELY past their knee (RVV at V = 32768, H = 1: 12.1 us on 16
+//     cores, 50.6 us on 111), which is why each factory picks a core count
+//     rather than taking the grid.
+//
+// WHY 32, and where it is wrong. The boundary is mildly V-DEPENDENT, so no
+// H-only rule is right everywhere. H = 1 and H = 8 never lose on RVV at any
+// core count up to 64, at either V, and at the low core counts a fused
+// epilogue can actually afford they win by 1.9x-13.9x. H = 32 is the case that
+// splits: comparing each engine at the core count its own factory picks, at
+// V = 32768 RVV still edges the SFPU (84.6 us on 63 cores vs 87.0 us on 40 --
+// RVV 1.03x) while at V = 262144 the SFPU wins (215.3 us on 130 cores vs
+// 203.8 us on 111 -- RVV 0.95x). 32 is chosen as the simple H-only boundary
+// that gets both large-V cases right in the direction that matters: every H
+// below it goes to RVV, where the margin is large and unambiguous, and
+// H >= 32 goes to the SFPU, which is correct at the larger V and gives up
+// about 3% at the smaller one. Buying that 3% back would take a V-dependent
+// rule, and the SFPU side of it is the side that diverges on special values.
+// The SFPU also reaches its H = 32 result on FEWER cores (40 vs 63 at
+// V = 32768, 111 vs 130 at V = 262144), which is what a fused epilogue
+// sharing the grid with a matmul actually has to budget.
+//
+// The previous boundary of 8 came from a table that has since been shown to
+// compare a SINGLE-CORE RVV against a MULTICORE SFPU: its RVV column (192 us
+// at V = 32768 H = 8, 5275 us at V = 262144 H = 32) reproduces today's
+// ONE-CORE RVV measurements (198 us and 5191 us), not the multicore ones
+// (26 us and 216 us). Its SFPU column, by contrast, is multicore and still
+// reproduces (35 us and 190 us vs 38 us and 204 us today). Against today's
+// multicore RVV, H = 8 is not an SFPU win at ANY core count in the sweep.
 ArgMaxEngine select_argmax_engine(
     const Tensor& input,
     const std::optional<int>& dim,
     bool keepdim,
-    const std::optional<CoreRangeSet>& sub_core_grids,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     bool exact_special_values) {
@@ -261,10 +310,12 @@ ArgMaxEngine select_argmax_engine(
         return ArgMaxEngine::Incumbent;
     }
 
-    // The RVV engine is single core and currently hard-wired to core (0, 0):
-    // an explicit grid that excludes it would make the engine throw, so such a
-    // call is not RVV's to take. The SFPU engine honours any grid.
-    const bool rvv_can_serve = !sub_core_grids.has_value() || sub_core_grids->contains(CoreCoord{0, 0});
+    // Both accelerated engines split the reduction dim's tiles across cores
+    // and honour any sub_core_grids the caller supplies, so the grid no longer
+    // constrains the choice -- it is purely the H comparison below. (It used
+    // to: the RVV engine was pinned to core (0, 0) and a grid excluding it had
+    // to be handed to the SFPU.)
+    //
     // The SFPU engine's special-value divergence is documented and measured,
     // but it is still a divergence: a caller that asked for the scalar
     // readers' exact behaviour must never be routed to it.
@@ -272,28 +323,21 @@ ArgMaxEngine select_argmax_engine(
     // Rank 1 is excluded for a different reason. It reaches the accelerated
     // engines because the RVV engine served it before (see
     // accelerated_engines_can_serve), and nothing has ever run it on the SFPU
-    // kernels -- not a test, not a measurement. It cannot reach the H >= 8
-    // branch below (rank 1 is H == 1 by construction), so the only way it
-    // could land on the SFPU is the last-resort branch, i.e. an explicit
-    // sub_core_grids that excludes core (0, 0) and so puts RVV out of reach.
-    // At H == 1 the SFPU is the measured LOSER anyway (see the table above),
-    // so there is nothing to win by making an unexercised shape class the
-    // first caller of that combination: rank 1 falls back to the incumbent
-    // instead. That is not a regression -- the old use_rvv API raised on a
-    // grid excluding (0, 0) rather than serving it.
+    // kernels -- not a test, not a measurement. It cannot reach the
+    // H >= kSfpuMinRows branch below (rank 1 is H == 1 by construction), and at
+    // H == 1 the SFPU is the measured LOSER by 12-14x at equal core counts
+    // (see the table above), so there is nothing to win by making an
+    // unexercised shape class the first caller of that combination.
     const int32_t rank = static_cast<int32_t>(input.logical_shape().rank());
     const bool sfpu_can_serve = !exact_special_values && rank >= 2;
 
     if (sfpu_can_serve && argmax_rows_per_tile_row(input) >= kSfpuMinRows) {
         return ArgMaxEngine::Sfpu;
     }
-    if (rvv_can_serve) {
-        return ArgMaxEngine::Rvv;
-    }
-    if (sfpu_can_serve) {
-        return ArgMaxEngine::Sfpu;
-    }
-    return ArgMaxEngine::Incumbent;
+    // Everything else the accelerated preconditions admit goes to RVV: it
+    // serves every rank >= 1, every grid, and is bit-identical to the scalar
+    // readers, so there is no case left for a demotion to the incumbent here.
+    return ArgMaxEngine::Rvv;
 }
 
 }  // namespace
@@ -377,15 +421,11 @@ Tensor argmax_impl(
 
     // Engine choice happens here, once, and only after the dim has been range
     // checked (select_argmax_engine normalizes it against the rank).
-    const ArgMaxEngine engine = forced_engine.has_value() ? forced_engine.value()
-                                                          : select_argmax_engine(
-                                                                input_tensor,
-                                                                dim,
-                                                                keepdim,
-                                                                sub_core_grids,
-                                                                output_memory_config,
-                                                                optional_output_tensor,
-                                                                exact_special_values);
+    const ArgMaxEngine engine =
+        forced_engine.has_value()
+            ? forced_engine.value()
+            : select_argmax_engine(
+                  input_tensor, dim, keepdim, output_memory_config, optional_output_tensor, exact_special_values);
 
     // The maxval contract check must precede the zero-volume and rank-0 early
     // returns below: a scalar or empty-tensor call that supplied a
@@ -397,9 +437,7 @@ Tensor argmax_impl(
         "call was routed to the scalar reader path. Those engines require a Blackhole device, a BFLOAT16 TILE-layout "
         "input of rank >= 1 in INTERLEAVED memory, an explicit last-dim reduction, standard 32x32 tiles, a reduction "
         "dim that is a multiple of 32, an INTERLEAVED output, and (if a preallocated output tensor is supplied) that "
-        "its logical shape is the reduction output shape. A rank-1 input additionally needs a sub_core_grids that "
-        "contains core (0, 0), or none at all, because only the single-core RVV engine serves rank 1. Drop "
-        "maxval_tensor, or use ttnn.max separately.");
+        "its logical shape is the reduction output shape. Drop maxval_tensor, or use ttnn.max separately.");
     if (engine != ArgMaxEngine::Incumbent) {
         TT_FATAL(
             rank > 0 && input_tensor.logical_volume() > 0,
@@ -450,10 +488,10 @@ Tensor argmax_impl(
     // Accelerated engines: TILE-layout last-dim argmax (Blackhole). Both take
     // TILE input DIRECTLY -- no to_layout / untilize hop -- and optionally
     // return the max values alongside the indices. Rvv scans on the pack
-    // RISC's vector unit (single core, the engine at H == 1); Sfpu reduces all
-    // 32 rows of each tile-row in one lane-parallel pass and runs multicore
-    // (flat in H, the batch-shape engine). Eligibility is re-checked by the
-    // device op.
+    // RISC's vector unit, one row at a time (the engine at H == 1); Sfpu
+    // reduces all 32 rows of each tile-row in one lane-parallel pass (flat in
+    // H, the batch-shape engine). Both split the reduction dim across cores.
+    // Eligibility is re-checked by the device op.
     if (engine != ArgMaxEngine::Incumbent) {
         // The reader kernel derives its output paging from the preallocated
         // tensor, so a wrong logical shape means unwritten results or writes

@@ -24,17 +24,35 @@ enum class ArgMaxEngine : uint8_t {
     // FLOAT32 dtypes, and widths that are not a multiple of the tile width.
     Incumbent,
     // Blackhole TILE-layout last-dim scan on the pack RISC's RVV (Zve32f)
-    // vector unit. Single core; reads TILE directly (no untilize hop) and can
+    // vector unit, multicore. Reads TILE directly (no untilize hop) and can
     // fill the optional max-value output. Bit-identical to Incumbent on every
-    // input, special values included. Costs ~63-100 cycles per tile PER ROW,
-    // so it is the engine of choice when a tile-row holds few valid rows.
+    // input, special values included, at any core count -- the cross-core
+    // merge runs the same bit-pattern order the scan does.
+    //
+    // COST MODEL: linear in the reduction width AND in H, because the scan
+    // visits each tile once PER VALID ROW. Measured on one core over an
+    // 8192-tile row (V = 262144), trace-replay device time on a p150: 350 us
+    // at H = 1 and 5191 us at H = 32, i.e. ~0.043 us per tile for the first
+    // row plus ~0.019 us per tile for each further row. That is what makes it
+    // the engine for tile-rows holding few valid rows.
     Rvv,
     // Blackhole TILE-layout last-dim reduction on the SFPU (Tensix vector
     // FPU), multicore. Phase 1 reduces all 32 rows of a tile-row in one
-    // lane-parallel pass (~802 cycles per tile regardless of how many of those
-    // rows are real), so it is essentially flat in the batch dim; phase 2 and
-    // the cross-core merge are per-row scalar compares on the dataflow RISC.
-    // Also fills the optional max-value output.
+    // lane-parallel pass; phase 2 and the cross-core merge are per-row scalar
+    // compares on the dataflow RISC. Also fills the optional max-value output.
+    //
+    // COST MODEL: linear in the reduction width and essentially FLAT in H,
+    // because the lane-parallel pass runs whether 1 or 32 of a tile-row's rows
+    // are real. Same measurement as above (one core, 8192-tile row): 4875 us
+    // at H = 1, 4881 us at H = 8, 4911 us at H = 32 -- ~0.60 us per tile, a
+    // 0.7% spread over a 32x change in real work. So it is the engine for
+    // batch shapes, and the loser by an order of magnitude at H = 1.
+    //
+    // Both cost models are throughput-mode trace-replay device time, not
+    // single-op latency; regenerate with
+    // tests/ttnn/unit_tests/operations/reduce/_argmax_engine_crossover_bench.py.
+    // The routing boundary those numbers imply lives in
+    // select_argmax_engine (argmax.cpp), which carries the full table.
     //
     // DIVERGES from Incumbent on special values -- the compare is IEEE-on-fp32
     // behind a bf16 gasket, so NaN behaves as same-signed infinity, denormals

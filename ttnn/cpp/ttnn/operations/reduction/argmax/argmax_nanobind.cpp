@@ -61,25 +61,49 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             Among eligible calls the choice keys on the size of the second-to-last dim (H -- the rows per tile-row),
             because that is what the two accelerated engines price differently:
 
-            - **H >= 8** runs on the SFPU (the Tensix vector FPU), multicore, reading TILE layout directly. All 32
+            - **H >= 32** runs on the SFPU (the Tensix vector FPU), multicore, reading TILE layout directly. All 32
               rows of a tile-row are reduced in one lane-parallel pass, so the cost is essentially flat in H; the
               reduction dim is additionally split across cores, with a per-row scalar merge on a gather core. Pass a
               single-core ``sub_core_grids`` to keep it on one core.
-            - **H < 8** runs on TRISC2 (the pack-thread RISC-V core) and its Zve32f vector unit ("RVV"), single core,
-              also reading TILE layout directly. Its scan costs 63-100 cycles per tile per row, so it wins where the
-              SFPU would pay for all 32 lanes to serve a handful of real rows. It is also the engine for eligible
-              calls that ask for ``exact_special_values``, at any H.
+            - **H < 32** runs on TRISC2 (the pack-thread RISC-V core) and its Zve32f vector unit ("RVV"), multicore,
+              also reading TILE layout directly. Its scan visits every tile once per valid ROW, so it wins wherever
+              the SFPU would pay for all 32 lanes to serve fewer than 32 real rows. It splits the reduction dim
+              across cores the same way, and merges the per-core candidates in the scalar readers' bit-pattern order,
+              so the result is bit-identical however many cores it runs on. It is also the engine for eligible calls
+              that ask for ``exact_special_values``, at any H.
 
             A rank-1 input has no second-to-last dim; it counts as H == 1 (one valid row in a tile-row whose other 31
-            rows are padding) and always runs on RVV -- it is never routed to the SFPU. Because RVV is single core and
-            currently runs on core (0, 0), a rank-1 call that passes a ``sub_core_grids`` excluding (0, 0) falls back
-            to the scalar readers instead (and therefore cannot supply ``maxval_tensor``).
+            rows are padding) and always runs on RVV -- it is never routed to the SFPU. Both engines honour any
+            ``sub_core_grids``, so the grid never changes which engine serves a call. When none is given they pick
+            DIFFERENT core counts, because their cost models differ: the SFPU factory uses
+            ``ceil(sqrt(1.5 * w_tiles))`` and the RVV factory ``ceil(sqrt(w_tiles * (H + 2)) / 3)``, each capped by
+            the compute grid and by ``w_tiles``. Neither takes the whole grid: past those counts both engines scale
+            NEGATIVELY, because every additional core adds roughly 0.44 us of per-program dispatch.
 
-            Blackhole P150 device-kernel medians behind the boundary (microseconds, over V columns of H rows):
-            V=262144, H=1: 9128 scalar, 462 RVV, SFPU loses; V=32768, H=8: 5253, 192, 35; V=131072, H=32: 77762,
-            2712, 136; V=262144, H=32: 155561, 5275, 190. The band 1 < H < 8 is not measured, so the boundary sits at
-            the smallest measured SFPU win and the unmeasured band goes to RVV -- the engine that is bit-identical to
-            the scalar readers.
+            Where the boundary comes from: Blackhole p150, 13x10 = 130-core grid, per-op DEVICE time from trace
+            replay of a throughput-mode capture -- N argmax ops recorded into one trace, replayed, wall time / N.
+            Host dispatch is amortized away by construction, so these are NOT single-op latencies (an isolated eager
+            caller pays 20-90 us more; the benchmark reports that separately). Regenerate with
+            ``tests/ttnn/unit_tests/operations/reduce/_argmax_engine_crossover_bench.py``. Comparing the engines at
+            the SAME core count, as SFPU time / RVV time (> 1 means RVV is faster):
+
+              =============  ======  =======  ========  ========
+              shape          1 core  8 cores  32 cores  64 cores
+              =============  ======  =======  ========  ========
+              V=32768 H=1    12.4x   5.9x     1.9x      1.0x
+              V=32768 H=8    3.1x    1.9x     1.6x      1.2x
+              V=32768 H=32   0.9x    0.8x     1.1x      1.2x
+              V=262144 H=1   13.9x   7.6x     3.3x      2.3x
+              V=262144 H=8   3.8x    3.2x     2.1x      1.6x
+              V=262144 H=32  0.95x   0.9x     0.8x      0.9x
+              =============  ======  =======  ========  ========
+
+            H = 32 is the first row where the SFPU is not beaten outright, and the boundary is mildly V-dependent
+            there: comparing each engine at the core count its own factory picks, V=32768 H=32 is still a narrow
+            RVV win (85 us on 63 cores vs 87 us on 40) while V=262144 H=32 is an SFPU win (215 us on 130 cores vs
+            204 us on 111). 32 is the simple H-only boundary that keeps every unambiguous case on the right engine;
+            below it the RVV margin is 1.2x-13.9x, and the most it gives up above it is about 3% -- on more cores,
+            at that.
 
             Supported:
 

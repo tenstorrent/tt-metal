@@ -40,6 +40,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
+  # is_blackhole() is true under ttsim, so run_for_blackhole would let these run;
+  # the accelerated engines (TRISC2 Zve32f, SFPU) may not be modelled there.
   - tests/ttnn/unit_tests/operations/reduce/test_argmax_rvv.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax_sfpu.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py

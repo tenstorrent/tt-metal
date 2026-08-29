@@ -24,7 +24,8 @@ struct ArgMaxMultiCoreProgramFactory {
 };
 
 // TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit
-// (Blackhole). Single core; returns indices and (optionally) max values.
+// (Blackhole). Single- or multi-core (the reduction dim's tiles are split
+// across cores); returns indices and (optionally) max values.
 // Selected by ArgMaxEngine::Rvv -- see select_argmax_engine in argmax.cpp.
 struct ArgMaxRvvTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(

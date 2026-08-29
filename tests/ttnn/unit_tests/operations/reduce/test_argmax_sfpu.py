@@ -346,11 +346,25 @@ def _assert_program_cache_active(device):
     assert device.num_program_cache_entries() > 0, msg
 
 
-@pytest.mark.parametrize("h", [8, 32])
+# The routing boundary is kSfpuMinRows in argmax.cpp: H >= 32 goes to the SFPU,
+# H < 32 goes to RVV. Both sides are asserted -- H = 32 here (just above) and
+# H = 31 in test_argmax_rvv.py::test_argmax_auto_routes_to_rvv_below_the_sfpu_boundary
+# (just below) -- so moving the constant in either direction fails a test.
+SFPU_MIN_ROWS = 32
+
+
+@pytest.mark.parametrize("h", [SFPU_MIN_ROWS, 64], ids=["at_boundary", "above_boundary"])
 def test_argmax_auto_routes_to_sfpu_at_batch(device, h):
-    """H >= 8 is the SFPU engine's shape: one lane-parallel pass covers all 32
-    rows of a tile-row, so the cost is flat in H where the RVV scan pays per
-    row. 8 is the smallest H the measurements cover."""
+    """H >= kSfpuMinRows is the SFPU engine's shape: one lane-parallel pass
+    covers all 32 rows of a tile-row, so its cost is flat in H where the RVV
+    scan pays per row, and 32 is where every one of those 32 lanes is finally
+    doing useful work. h = 32 is the just-at-the-boundary case: it must route
+    to the SFPU, or kSfpuMinRows is not where argmax.cpp says it is.
+
+    32, not 8: at H = 8 the multicore RVV engine is measured FASTER than the
+    multicore SFPU at every core count up to 64 (SFPU/RVV 3.1x on one core,
+    1.2x on 64). The older boundary of 8 came from a table that compared a
+    single-core RVV against a multicore SFPU -- see argmax.cpp."""
     _assert_empty_program_cache(device)
     x = torch.randn(1, 1, h, 4096).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

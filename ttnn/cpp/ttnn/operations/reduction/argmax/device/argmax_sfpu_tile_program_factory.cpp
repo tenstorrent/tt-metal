@@ -17,12 +17,23 @@
 // lexicographic rule. The cross-core traffic is 256 B per core per pass —
 // per-row scalar candidates, never tiles.
 //
-// Core-count heuristic: per-core phase 1 costs ~800 cycles per tile while
-// the gather merge costs ~32 scalar compares per extra core per pass, so the
-// optimum sits near sqrt(w_tiles); we use ceil(sqrt(1.5 * w_tiles)) capped
-// by the grid and by w_tiles. An explicit sub_core_grids overrides the
-// heuristic (capped by w_tiles only) — pass a single-core grid to force the
-// single-core variant.
+// Core-count heuristic: per-core phase 1 is a fixed cost per tile that does
+// not depend on H (measured at ~0.60 us/tile on one core: 4875 / 4881 /
+// 4911 us over an 8192-tile row at H = 1 / 8 / 32), while every extra core
+// adds a gather-merge pass and ~0.44 us of per-program dispatch. The optimum
+// therefore sits near sqrt(w_tiles) and does NOT move with H; we use
+// ceil(sqrt(1.5 * w_tiles)) capped by the grid and by w_tiles. Trace-replay
+// device time (throughput mode, not single-op latency) puts that default
+// within 0.87x-1.04x of this engine's own per-shape optimum at every point
+// measured -- regenerate with tests/ttnn/unit_tests/operations/reduce/
+// _argmax_engine_crossover_bench.py.
+//
+// This is deliberately NOT the RVV engine's formula: that scan costs per ROW,
+// so its optimum grows with H and it fits ceil(sqrt(w_tiles * (H + 2)) / 3)
+// instead (see argmax_rvv_tile_program_factory.cpp).
+//
+// An explicit sub_core_grids overrides the heuristic (capped by w_tiles
+// only) — pass a single-core grid to force the single-core variant.
 
 #include "argmax_device_operation.hpp"
 
