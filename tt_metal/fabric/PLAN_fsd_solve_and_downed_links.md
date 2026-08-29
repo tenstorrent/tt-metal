@@ -27,28 +27,101 @@ FSD present: convert FSD→PSD at init, map on that, diff against live PSD. Miss
 
 No FSD: today's path (map on live). Every link healthy; `fsd_rerouting_active() == false`.
 
-```
-has_factory_system_descriptor_path()?
-        yes                                      no
-         │                                        │
-         ▼                                        │
-  build_physical_descriptor_from_file             │
-         │                                        │
-         └────────────┬───────────────────────────┘
-                      ▼
-         run_physical_system_discovery() → live_psd  (ControlPlane always; generate_rank_bindings does not)
-                      │
-         TopologyMapper(fsd_psd or live_psd)   // keys on (host, tray, loc), not AsicID — §5.5
-                      │
-         generate_intermesh_connectivity()   // live PSD + ETH-up only
-                      │
-         if FSD: throw_on_fsd_chips_absent_from_live()  // ControlPlane provision only — §7.4
-                 LinkHealth(mapper, live_psd)          // join cables by (host, tray, loc, chan)
-                 check_fsd_compatibility_and_downed_fraction()
-                 confirm_local_downed_links()
+Same `TopologyMapper` on both paths. Physical identity is `PhysicalNodeId` = `{canonical host[64], tray, loc}` — §5.5 and [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md). UMD `chip_unique_id` is a Cluster ChipId label **after** the solve, never a mapper key.
+
+```mermaid
+flowchart TB
+  classDef data fill:#e8f1ff,stroke:#3b6ea5,color:#123
+  classDef step fill:#fff,stroke:#444
+  classDef gate fill:#fff4d6,stroke:#b8860b
+  classDef stop fill:#e8f8e8,stroke:#2e7d32
+  classDef fail fill:#fdecea,stroke:#c0392b
+
+  FSD["FSD textproto<br/>expected hosts, trays, locs, cables"]
+  MGD["Mesh graph descriptor<br/>logical FabricNodeId grid"]
+  RT{"FSD path set?"}
+  WHO{"Who is calling?"}
+
+  class FSD,MGD data
+  class RT,WHO gate
+
+  FSD --> RT
+  RT -->|no — today's path| WHO_NO
+  RT -->|yes| WHO
+
+  WHO -->|"generate_rank_bindings<br/>placement"| HF
+  WHO -->|"ControlPlane<br/>provision"| DISC
+
+  %% ── Placement: FSD, no live ────────────────────────────────
+  subgraph P["Placement — generate_rank_bindings"]
+    direction TB
+    HF["tt-run --hosts / Phase 1 hostfile<br/>no live PSD exists"]
+    FILTP["filter_factory_descriptor<br/>canonical host names §5.2"]
+    BUILDP["fsd_psd<br/>expected graph for the allocation"]
+    PACKP["PhysicalNodeId per chip<br/>host[] + tray + loc"]
+    SOLVEP["TopologyMapper(fsd_psd, MGD)<br/>same FabricNodeId per PhysicalNodeId"]
+    BIND["rank bindings written<br/>STOP — no discovery, no LinkHealth"]
+
+    class HF,FILTP,BUILDP,PACKP,SOLVEP step
+    class BIND stop
+    HF --> FILTP --> BUILDP --> PACKP --> SOLVEP --> BIND
+  end
+
+  MGD --> SOLVEP
+
+  %% ── Provision: live always; FSD optional ───────────────────
+  subgraph C["Provision — ControlPlane"]
+    direction TB
+    DISC["run_physical_system_discovery<br/>→ live_psd  host set = the allocation"]
+    HOST["live host strings<br/>UMD hostname field, else basename"]
+    FILTC["fsd_host_filter_from_live<br/>alias or canonical §5.2"]
+    AGREE["agree_or_throw_fsd_host_filter<br/>every rank, same message"]
+    BUILDC["fsd_psd<br/>expected graph, live host_to_rank copied"]
+    ABSENT["throw if any FSD host+tray+loc<br/>is missing from live_psd  §7.4"]
+    PACKC["PhysicalNodeId per chip<br/>same pack as placement"]
+    SOLVEC["TopologyMapper(fsd_psd, MGD)"]
+    PAIR["generate_intermesh_connectivity<br/>live_psd + ETH-up cables only"]
+    DIFF["diff_physical_system_descriptors<br/>join cable by host+tray+loc+chan"]
+    LH["LinkHealth(mapper, live_psd)<br/>downed_ = FSD cable missing from live"]
+    CHECK["compatibility + downed fraction<br/>confirm_local_downed_links"]
+
+    class DISC,HOST,FILTC,AGREE,BUILDC,PACKC,SOLVEC,PAIR,DIFF,LH,CHECK step
+    class ABSENT fail
+
+    DISC --> HOST
+    HOST --> FILTC --> AGREE --> BUILDC --> ABSENT
+    DISC --> ABSENT
+    ABSENT --> PACKC --> SOLVEC --> PAIR
+    DISC --> PAIR
+    BUILDC --> DIFF
+    DISC --> DIFF
+    PAIR --> DIFF --> LH --> CHECK
+  end
+
+  MGD --> SOLVEC
+  FSD --> FILTP
+  FSD --> FILTC
+
+  %% ── No FSD: ControlPlane maps on live ──────────────────────
+  WHO_NO{"Who is calling?"}
+  class WHO_NO gate
+  WHO_NO -->|"generate_rank_bindings"| LIVE_BIND["map on whatever Phase 1 already uses<br/>no FSD, no LinkHealth"]
+  WHO_NO -->|"ControlPlane"| LIVE_DISC["live_psd"]
+  LIVE_PACK["PhysicalNodeId from live host+tray+loc"]
+  LIVE_SOLVE["TopologyMapper(live_psd, MGD)"]
+  LIVE_PAIR["intermesh pairing on live"]
+  LIVE_OK["link_health_ = null<br/>every query healthy / empty"]
+
+  class LIVE_BIND,LIVE_DISC,LIVE_PACK,LIVE_SOLVE,LIVE_PAIR step
+  class LIVE_OK stop
+
+  LIVE_DISC --> LIVE_PACK --> LIVE_SOLVE --> LIVE_PAIR --> LIVE_OK
+  MGD --> LIVE_SOLVE
 ```
 
-Same `TopologyMapper`. Phase 1 (`generate_rank_bindings`): FSD → map on `fsd_psd`, **no live discovery, no overlay**. Overlay of UMD AsicIDs is a post-solve translation for Cluster ChipId, not a mapper input.
+**What moves.** FSD + host list → `fsd_psd`. Live discovery (ControlPlane only) → `live_psd`. Both graphs are re-keyed to `PhysicalNodeId` before the solver, so placement and provision assign the same `FabricNodeId`. Pairing never reads the FSD. `LinkHealth` diffs the two graphs by `(host, tray, loc, chan)` after pairing.
+
+**What does not move.** Placement never calls discovery. Overlay of live UMD ids onto the FSD graph is gone — Cluster ChipId is a post-solve lookup, not a mapper input. Missing **chip** at provision is a fatal **before** the mapper (§7.4), not a downed-link record.
 
 ---
 

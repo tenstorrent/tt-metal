@@ -1,15 +1,36 @@
 # Plan: hostname on the UMD cluster descriptor
 
 **Status:** Implementation plan — **UMD change**, consumed by PhysicalNodeId / FSD mock
-**Why:** A cluster descriptor is one host's chips. It has no hostname today, so metal mock discovery keys on the YAML **filename**. That string is not the FSD / OS hostname, so FSD-built and mock-discovered graphs disagree. Put the real hostname on the descriptor and query it.
 **Repos:** [tt-umd](https://github.com/tenstorrent/tt-umd) (API + YAML), then [tt-cluster-descriptors](https://github.com/tenstorrent/tt-cluster-descriptors) (fill the field), then tt-metal (read it). Land UMD first.
-**Consumers:** [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §8, [`PLAN_downed_links_testing.md`](PLAN_downed_links_testing.md) §6.3.
+**Consumers:** [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §8 (problem / solution / checklist), [`PLAN_downed_links_testing.md`](PLAN_downed_links_testing.md) §6.3.
 
-This is the better source for the name. Do **not** parse `bh-glx-c01u02` out of the filename at runtime. `PhysicalNodeId` still packs `char host[64]` of the **exact** hostname; this plan is how mock and live both obtain that string.
+---
 
-**Backward compatible.** The field is optional forever at the UMD layer. Old YAMLs without `hostname:` keep loading. New YAMLs with the key keep loading on old UMD (parser ignores unknown keys). Metal prefers the field and falls back to today's basename / `gethostname()` when it is absent. No existing mock test breaks because we added the key.
+## 0. Problem, then solution
 
-**TODO (tt-cluster-descriptors):** add `hostname:` to **every** cluster descriptor YAML in that repo (BH superclusters, ClosetBox, wormhole, T3K, dual-host, … — all ~230 files). Not only FSD-paired BH. See §7. Do not block the UMD PR on this fill.
+### Problem
+
+A cluster descriptor is one host's chips. It has **no hostname field**. Metal mock discovery therefore keys on the YAML **filename** (`get_local_discovery_hostname` = basename of `TT_METAL_MOCK_CLUSTER_DESC_PATH`). That string is not the FSD / OS hostname.
+
+| Side | String | Example |
+|------|--------|---------|
+| FSD / silicon (what we must pack) | real hostname | `bh-glx-110-c01u02` |
+| Mock YAML filename | asset name, not a hostname | `SC20_…_bh-glx-c01u02_rank_0.yaml` (hall dropped) |
+| SC36 filename token | hall **wrong** | file `bh-glx-120-d10u20` vs FSD `bh-glx-110-d10u20` |
+
+If mock and FSD pack different `host[]` bytes, `PhysicalNodeId` graphs disagree and the solver sees two topologies. Parsing a name out of the filename cannot work (SC20 omits hall, SC36 disagrees). Do **not** parse `bh-glx-c01u02` at runtime.
+
+### Solution
+
+Add optional top-level `hostname:` to the UMD cluster descriptor and query it. Value is the **exact** FSD / OS name. Metal prefers `desc.get_hostname()`, falls back to today's basename if absent. Live discovery stamps `gethostname()`. Field is optional forever — old YAMLs still load; old UMD ignores the unknown key; existing mock tests stay green.
+
+```yaml
+hostname: bh-glx-110-c01u02
+arch:
+  ...
+```
+
+**TODO:** write that field on **every** YAML in tt-cluster-descriptors (~230 files). Does not block this UMD PR. Full checklist: [`PLAN_physical_node_id.md`](PLAN_physical_node_id.md) §8.3.
 
 ---
 
