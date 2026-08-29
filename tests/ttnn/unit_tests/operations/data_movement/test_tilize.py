@@ -1071,7 +1071,7 @@ def test_tilize_row_major_to_tiny_tile(device, tensor_shape, shard_layout, tile_
 )
 @pytest.mark.parametrize("input_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
 @pytest.mark.parametrize("output_tile_shape", [(32, 32), (16, 32), (8, 32), (4, 32), (2, 32), (1, 32)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, output_tile_shape, dtype):
     """Retile an already-tiled input into a different tile shape (invokes the retile factory)."""
     torch.manual_seed(42)
@@ -1127,10 +1127,10 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     assert tt_output.layout == ttnn.TILE_LAYOUT
     if shard_layout is not None:
         assert tt_output.memory_config().memory_layout == shard_layout
-    if dtype == ttnn.bfloat8_b:
-        assert_with_pcc(torch_input, ttnn.to_torch(tt_output), pcc=0.9999)
-    else:
-        assert_equal(torch_input, ttnn.to_torch(tt_output))
+    # Compare against the already-quantized tiled input. Retile is a layout change and must
+    # preserve values; comparing to the original bfloat16 source would fail for BFP4/BFP8
+    # due to host quantization, not retile error.
+    assert_equal(ttnn.to_torch(tt_input), ttnn.to_torch(tt_output))
 
 
 # Tilize with simultaneous tile-shape and dtype change (the retile path).
