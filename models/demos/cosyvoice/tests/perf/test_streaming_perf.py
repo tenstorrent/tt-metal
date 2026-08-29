@@ -113,12 +113,25 @@ def test_device_streaming_first_audio_latency(device):
     # token stream of a realistic length; what it says as speech is not meaningful and
     # nothing here reads its content.
     #
-    # **Two lengths, not more, and 2x rather than 3x.** Every distinct utterance length
-    # is a fresh JIT compile of the flow decoder and the vocoder, and each length here
-    # is compiled for both schedules plus a throwaway warm-up pass. A third point, or a
-    # 3x arm, costs minutes of compilation to sharpen a trend that two points already
-    # establish -- and it timed out this test's first draft.
-    lengths = [len(generated), 2 * len(generated)]
+    # **The long length is `short + 2 * hop`, and that is not arbitrary.** The chunk
+    # scheduler cuts at multiples of `token_hop_len`, so shifting the total by an exact
+    # multiple of the hop shifts the final chunk's start by the same amount and leaves
+    # its *length* unchanged. Both lengths therefore stream through exactly the same
+    # set of geometries. That matters because **every distinct mel length is a fresh
+    # JIT compile of the flow decoder and the vocoder** -- an arbitrary second length
+    # adds several minutes of compilation and, worse, several more live geometries on
+    # one open device, which is the pattern the known L1_SMALL growth across geometries
+    # is worst at. A first draft using an arbitrary 3x length wedged mid-test.
+    #
+    # For the same reason the **batch** schedule is measured at the short length only.
+    # Its first audio *is* its total by construction -- nothing can be handed out
+    # before the last token is vocoded -- so the head-to-head belongs where the batch
+    # path is most favourable, and the long arm exists to show what streaming's first
+    # audio does when the utterance grows. Adding a batch arm there would cost the
+    # single most expensive geometry in the test to measure a quantity that only grows.
+    short = len(generated)
+    long = short + 2 * StreamConfig().token_hop_len
+    lengths = [short, long]
     token_streams = {n: (generated * ((n // len(generated)) + 1))[:n] for n in lengths}
 
     prefix_len = prefix.shape[1]
@@ -168,35 +181,7 @@ def test_device_streaming_first_audio_latency(device):
     from types import SimpleNamespace
 
     ctx = SimpleNamespace(flow_chunk=flow_chunk)
-    synth_warm = TtStreamingSynthesizer(device, flow, hift, StreamConfig())
-
-    # ------------------------------------------------------------------ warm-up
-    # **Every geometry both schedules will ask for, not one.** The flow decoder and
-    # the vocoder are JIT-compiled per mel length, and the two schedules run
-    # *different* lengths: the batch path decodes a whole utterance in one call, the
-    # streaming path decodes chunks. A warm-up that touches only the chunk geometry
-    # leaves the batch path paying a ~60 s compile inside the timed region, which is
-    # not a latency measurement of anything -- it made first audio read 65 s against
-    # an utterance of 3.27 s the first time this ran.
     cfg = StreamConfig()
-    for n in lengths:
-        warm_mel, warm_frames = flow_chunk(token_streams[n])
-        wp, wn = rng(warm_frames)
-        w_wav, _, w_src = hift.inference(
-            warm_mel, warm_frames, phase_vec=dev(wp, ttnn.float32), sine_noise_unit=dev(wn, ttnn.float32)
-        )
-        for t in (warm_mel, w_wav, w_src):
-            ttnn.deallocate(t)
-        # The streaming path vocodes chunks carrying the mel cache and the overlap
-        # trim, so their frame counts are not any of the plain lengths above. One
-        # throwaway streaming run per length compiles exactly those.
-        with synth_warm.session(ctx, rng) as warm_session:
-            for token in token_streams[n]:
-                for wav, _n in warm_session.push(token):
-                    ttnn.deallocate(wav)
-            wav, _n = warm_session.finish()
-            ttnn.deallocate(wav)
-    ttnn.synchronize_device(device)
 
     # ------------------------------------------------------------------ measure
     def decode_all(step, tokens, on_token=None):
@@ -230,7 +215,7 @@ def test_device_streaming_first_audio_latency(device):
         """The same three stages, interleaved -- `synthesize_streaming`'s order."""
         synth = TtStreamingSynthesizer(device, flow, hift, cfg)
         step = new_decoder()
-        first_s, chunks = None, []
+        first_s, chunks, n_samples = None, [], 0
         t0 = time.perf_counter()
         with synth.session(ctx, rng) as session:
 
@@ -240,73 +225,86 @@ def test_device_streaming_first_audio_latency(device):
                     ttnn.synchronize_device(device)
                     if first_s is None:
                         first_s = time.perf_counter() - t0
-                    chunks.append(wav)
+                    chunks.append((wav, _n))
 
             decode_all(step, tokens, on_token=push)
-            wav, _n = session.finish()
+            wav, n = session.finish()
             ttnn.synchronize_device(device)
             if first_s is None:  # an utterance shorter than one chunk never streams
                 first_s = time.perf_counter() - t0
-            chunks.append(wav)
+            chunks.append((wav, n))
         total = time.perf_counter() - t0
         step.release()
         n_chunks = len(chunks)
-        for c in chunks:
+        for c, n in chunks:
+            n_samples += n
             ttnn.deallocate(c)
-        return {"first_s": first_s, "total_s": total, "n_chunks": n_chunks}
+        return {"first_s": first_s, "total_s": total, "n_chunks": n_chunks, "audio_s": n_samples / SAMPLE_RATE}
 
-    results = {}
+    # **Warm-up is the measured sequence itself, run once and thrown away.** Warming a
+    # hand-listed set of geometries is how the first draft ended up compiling the
+    # batch path's full-utterance flow decoder *inside* the timed region -- first audio
+    # read 65 s for a 3.27 s utterance. Replaying the exact sequence cannot miss a
+    # geometry, because it is the same sequence.
+    run_batch(token_streams[short])
     for n in lengths:
-        tokens = token_streams[n]
-        results[n] = (run_batch(tokens), run_streaming(tokens))
+        run_streaming(token_streams[n])
+    ttnn.synchronize_device(device)
+
+    batch = run_batch(token_streams[short])
+    stream = {n: run_streaming(token_streams[n]) for n in lengths}
 
     # ------------------------------------------------------------------ report
     chunk_seconds = cfg.chunk_size() / 50.0
-    print(f"\n  first-audio latency, batch schedule against streaming schedule")
+    s_short, s_long = stream[short], stream[long]
+    print("\n  first audio: batch schedule against streaming schedule")
     print(f"    chunk size {cfg.chunk_size()} tokens = {chunk_seconds:.2f} s of speech")
-    print("    tokens  audio s  chunks   LLM s   batch first/total   stream first/total   TTFA gain")
+    print(f"    batch     {short:4d} tokens, {batch['audio_s']:5.2f} s audio   LLM {batch['llm_s']:6.3f} s")
+    print(f"              first audio {batch['first_s']:6.3f} s = total {batch['total_s']:6.3f} s")
     for n in lengths:
-        b, st = results[n]
+        r = stream[n]
         print(
-            f"    {n:6d}  {b['audio_s']:7.2f}  {st['n_chunks']:6d}  {b['llm_s']:6.3f}"
-            f"   {b['first_s']:6.3f} / {b['total_s']:6.3f}"
-            f"   {st['first_s']:6.3f} / {st['total_s']:6.3f}"
-            f"   {b['first_s'] / st['first_s']:8.2f}x"
+            f"    streaming {n:4d} tokens, {r['audio_s']:5.2f} s audio, {r['n_chunks']} chunks"
+            f"   first audio {r['first_s']:6.3f} s   total {r['total_s']:6.3f} s"
         )
-    short, long = lengths[0], lengths[-1]
-    b_s, s_s = results[short]
-    b_l, s_l = results[long]
+    print(f"    first-audio gain at {short} tokens: {batch['first_s'] / s_short['first_s']:.2f}x")
+    print(f"    cost of interleaving on the total:  {s_short['total_s'] / batch['total_s']:.2f}x")
     print(
-        f"    tripling the utterance moves batch first audio {b_l['first_s'] / b_s['first_s']:.2f}x "
-        f"but streaming first audio only {s_l['first_s'] / s_s['first_s']:.2f}x"
+        f"    {long / short:.2f}x the utterance moves streaming first audio "
+        f"{s_long['first_s'] / s_short['first_s']:.2f}x and its total "
+        f"{s_long['total_s'] / s_short['total_s']:.2f}x"
     )
 
+    # The claim, asserted: audio exists before generation has finished. This is what
+    # "streaming begins after token generation completes" said was missing.
+    assert s_short["first_s"] < batch["total_s"], (
+        f"streaming first audio {s_short['first_s']:.3f} s is no earlier than the batch "
+        f"path's {batch['total_s']:.3f} s -- the interleaving is not happening"
+    )
+    # It must also beat playback, or a player stalls waiting for samples...
+    assert s_short["first_s"] < batch["audio_s"], (
+        f"first audio at {s_short['first_s']:.3f} s for a {batch['audio_s']:.2f} s utterance "
+        "-- the stream cannot stay ahead of playback"
+    )
+    # ...and sustain it, which is the bound that matters once playback has started.
     for n in lengths:
-        b, st = results[n]
-        # The claim, asserted: audio exists before generation has finished. This is
-        # what "streaming begins after token generation completes" said was missing.
-        assert st["first_s"] < b["total_s"], (
-            f"{n} tokens: streaming first audio {st['first_s']:.3f} s is no earlier than "
-            f"the batch path's {b['total_s']:.3f} s -- the interleaving is not happening"
-        )
-        # It must also beat playback, or a player stalls waiting for samples...
-        assert st["first_s"] < b["audio_s"], (
-            f"{n} tokens: first audio at {st['first_s']:.3f} s for a {b['audio_s']:.2f} s "
-            "utterance -- the stream cannot stay ahead of playback"
-        )
-        # ...and sustain it, which is the bound that matters once playback has started.
-        assert st["total_s"] < b["audio_s"], (
-            f"{n} tokens: streamed total {st['total_s']:.3f} s exceeds the {b['audio_s']:.2f} s "
-            "it produces -- the stream cannot sustain real time"
+        r = stream[n]
+        assert r["total_s"] < r["audio_s"], (
+            f"{n} tokens: streamed total {r['total_s']:.3f} s exceeds the {r['audio_s']:.2f} s it "
+            "produces -- the stream cannot sustain real time"
         )
 
-    # And the scaling claim, which is the reason streaming exists: first audio must
-    # grow far more slowly than the utterance does. A schedule where it grew in step
+    # And the scaling claim, which is the reason streaming exists: first audio is
+    # bounded by one chunk, so it must stay roughly put while the utterance -- and
+    # therefore the total -- grows. A schedule where first audio grew with the total
     # would be the batch path wearing a callback.
-    growth_batch = b_l["first_s"] / b_s["first_s"]
-    growth_stream = s_l["first_s"] / s_s["first_s"]
-    assert growth_stream < growth_batch * 0.6, (
-        f"first audio scales with utterance length almost as fast as the batch path does "
-        f"({growth_stream:.2f}x against {growth_batch:.2f}x over a {long / short:.0f}x longer "
-        "utterance) -- the chunk schedule is not bounding it"
+    grew = s_long["total_s"] / s_short["total_s"]
+    moved = s_long["first_s"] / s_short["first_s"]
+    assert grew > 1.4, (
+        f"the long arm is not actually longer: total {s_short['total_s']:.3f} -> "
+        f"{s_long['total_s']:.3f} s for {short} -> {long} tokens"
+    )
+    assert moved < grew * 0.6, (
+        f"first audio scales with the utterance almost as fast as the whole run does "
+        f"({moved:.2f}x against {grew:.2f}x) -- the chunk schedule is not bounding it"
     )
