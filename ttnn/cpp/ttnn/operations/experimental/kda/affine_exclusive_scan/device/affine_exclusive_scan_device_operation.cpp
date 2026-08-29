@@ -7,9 +7,11 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
+#include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -102,6 +104,61 @@ AffineExclusiveScanOperation::spec_return_value_t AffineExclusiveScanOperation::
 AffineExclusiveScanOperation::tensor_return_value_t AffineExclusiveScanOperation::create_output_tensors(
     const operation_attributes_t& a, const tensor_args_t& in) {
     return {ttnn::create_device_tensor(compute_output_specs(a, in)[0], in.a.device())};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<AffineExclusiveScanOperation::tensor_return_value_t>
+AffineExclusiveScanOperation::create_op_performance_model(
+    const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
+    using namespace kda_performance_model;
+
+    constexpr std::size_t input_count = 3;
+    auto fallback = to_profiler_model<tensor_return_value_t>(zero_estimate(input_count, outputs.size()));
+    if (in.a.storage_type() != StorageType::DEVICE || !in.a.is_allocated() || in.a.device() == nullptr) {
+        log_warning(tt::LogOp, "KDA affine_exclusive_scan performance model expected an allocated device input");
+        return fallback;
+    }
+
+    auto* device = in.a.device();
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        log_warning(tt::LogOp, "KDA affine_exclusive_scan performance model supports Blackhole only");
+        return fallback;
+    }
+
+    const auto work =
+        affine_exclusive_scan_work(attrs.batch_heads, attrs.groups_per_head, attrs.key_dim, attrs.value_dim);
+    if (!work) {
+        return fallback;
+    }
+
+    const std::array<const Tensor*, input_count> input_tensors = {&in.a, &in.b, &in.initial_state};
+    std::array<KdaTensorTraffic, input_count> input_traffic;
+    for (std::size_t index = 0; index < input_tensors.size(); ++index) {
+        const auto traffic = tensor_traffic(*input_tensors[index]);
+        if (!traffic) {
+            return fallback;
+        }
+        input_traffic[index] = *traffic;
+    }
+
+    std::vector<KdaTensorTraffic> output_traffic;
+    output_traffic.reserve(outputs.size());
+    for (const auto& output : outputs) {
+        const auto traffic = tensor_traffic(output);
+        if (!traffic) {
+            return fallback;
+        }
+        output_traffic.push_back(*traffic);
+    }
+
+    const auto grid = device->compute_with_storage_grid_size();
+    const auto estimate_result = estimate(
+        *work,
+        input_traffic,
+        output_traffic,
+        static_cast<uint64_t>(grid.x) * grid.y,
+        device->get_clock_rate_mhz(),
+        attrs.compute_kernel_config.math_fidelity);
+    return to_profiler_model<tensor_return_value_t>(estimate_result);
 }
 Tensor affine_exclusive_scan(
     const Tensor& a,

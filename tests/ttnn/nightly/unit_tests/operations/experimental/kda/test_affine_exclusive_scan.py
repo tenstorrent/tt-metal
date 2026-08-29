@@ -12,6 +12,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
+    affine_exclusive_scan_work,
+    estimate_for_tensors,
+    utilization,
+)
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -431,9 +436,27 @@ def test_affine_exclusive_scan_production_performance(device: ttnn.Device, case:
     )
     assert output.dtype == ttnn.float32
     assert_accurate(expected, ttnn.to_torch(output), name=f"{case.case_id} production output", pcc_threshold=0.999)
+    work = affine_exclusive_scan_work(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
+    assert work is not None
+    estimate = estimate_for_tensors(
+        work,
+        device_inputs,
+        (output,),
+        device=device,
+        frequency_ghz=perf_record["frequency_ghz"],
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+    )
+    assert estimate.valid
+    percentages = utilization(estimate, duration_ns)
     logger.info(
-        f"affine exclusive scan {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"affine exclusive scan {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, ideal_fpu_cycles={estimate.ideal_fpu_cycles}, "
+        f"ideal_fpu_ns={estimate.ideal_fpu_ns}, mandatory_dram_bytes={estimate.mandatory_dram_bytes}, "
+        f"ideal_dram_ns={estimate.ideal_dram_ns}, ideal_ns={estimate.ideal_ns}, "
+        f"omitted_sfpu_results={estimate.omitted_sfpu_results}, "
+        f"fpu_utilization_pct={percentages.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={percentages.dram_utilization_pct:.2f}, "
+        f"roofline_utilization_pct={percentages.roofline_utilization_pct:.2f}"
     )
     if case.expected_duration_ns is not None:
         lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
