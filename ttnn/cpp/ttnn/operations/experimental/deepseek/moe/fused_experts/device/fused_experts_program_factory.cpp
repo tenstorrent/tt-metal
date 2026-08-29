@@ -105,8 +105,21 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t num_weights = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
     const uint32_t num_active = operation_attributes.num_experts;
-    const bool parallel_experts = num_active == kParallelExperts;
-    const uint32_t GRID_X = parallel_experts ? (kParallelExperts * 2u) : 8u;
+    constexpr uint32_t kParallelGridX = kParallelExperts * 2u;
+    constexpr uint32_t kSerialGridX = 8u;
+    const bool want_parallel = num_active == kParallelExperts;
+    const bool have_parallel_grid = grid.x >= kParallelGridX && grid.y >= kGridY;
+    if (want_parallel && !have_parallel_grid) {
+        log_warning(
+            tt::LogOp,
+            "fused_experts: 6-expert path needs at least {}x{} compute grid, got {}x{}; falling back to 8x8",
+            kParallelGridX,
+            kGridY,
+            grid.x,
+            grid.y);
+    }
+    const bool parallel_experts = want_parallel && have_parallel_grid;
+    const uint32_t GRID_X = parallel_experts ? kParallelGridX : kSerialGridX;
     const uint32_t GRID_Y = kGridY;
     const uint32_t cores_per_expert = parallel_experts ? kCoresPerExpertParallel : kNumWeightShards;
     const uint32_t num_expert_groups = parallel_experts ? kParallelExperts : 1u;
