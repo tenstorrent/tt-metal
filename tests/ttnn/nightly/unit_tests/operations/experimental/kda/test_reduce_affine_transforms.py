@@ -13,6 +13,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
+    estimate_for_tensors,
+    reduce_affine_transforms_work,
+    utilization,
+)
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -408,9 +413,27 @@ def test_reduce_affine_transforms_production_performance(device: ttnn.Device) ->
     assert all(output.dtype == ttnn.float32 for output in outputs)
     for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
         assert_accurate(golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999)
+    work = reduce_affine_transforms_work(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
+    assert work is not None
+    estimate = estimate_for_tensors(
+        work,
+        (a_tt, b_tt),
+        outputs,
+        device=device,
+        frequency_ghz=perf_record["frequency_ghz"],
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+    )
+    assert estimate.valid
+    percentages = utilization(estimate, duration_ns)
     logger.info(
-        f"affine-transform reduction {case.case_id}: duration={duration_ns:.0f} ns, "
-        f"profiler_runtime_id={perf_record['runtime_id']}"
+        f"affine-transform reduction {case.case_id}: measured_ns={duration_ns:.0f}, "
+        f"runtime_id={perf_record['runtime_id']}, ideal_fpu_cycles={estimate.ideal_fpu_cycles}, "
+        f"ideal_fpu_ns={estimate.ideal_fpu_ns}, mandatory_dram_bytes={estimate.mandatory_dram_bytes}, "
+        f"ideal_dram_ns={estimate.ideal_dram_ns}, ideal_ns={estimate.ideal_ns}, "
+        f"omitted_sfpu_results={estimate.omitted_sfpu_results}, "
+        f"fpu_utilization_pct={percentages.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={percentages.dram_utilization_pct:.2f}, "
+        f"roofline_utilization_pct={percentages.roofline_utilization_pct:.2f}"
     )
     lower = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
     upper = _PRODUCTION_PERF_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)
