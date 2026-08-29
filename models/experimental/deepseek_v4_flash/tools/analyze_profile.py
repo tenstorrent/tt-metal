@@ -17,9 +17,15 @@ this file -- tune ``MODULE_RULES`` if your config differs. Anything that matches
 rule lands in the ``unclassified`` bucket and is reported separately so the breakdown
 stays honest.
 
+The first decode pass is skipped by default (compile/capture: ``EMBED_START`` /
+``LM_HEAD_START`` boundaries, else the first trace-replay session, else
+``PROGRAM CACHE HIT=False``). Pass ``--keep-first-pass`` to include it. The
+per-op table always reports mean device-kernel duration as ``avg kern [us]``.
+
 Usage:
     python analyze_profile.py path/to/ops_perf_results_*.csv
     python analyze_profile.py path/to/ops_perf_results_*.csv --metric device --json out.json
+    python analyze_profile.py path/to/ops_perf_results_*.csv --keep-first-pass
 """
 
 from __future__ import annotations
@@ -31,6 +37,9 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+# ttnn dumps very wide rows (100+ columns); lift the field-size cap.
+csv.field_size_limit(sys.maxsize)
 
 # --------------------------------------------------------------------------- #
 # Model-derived constants (DeepSeek-V4-Flash). Adjust if your config changes.
@@ -65,6 +74,8 @@ class Op:
     in1: tuple[Optional[int], Optional[int]]
     out0: tuple[Optional[int], Optional[int]]
     attributes: str
+    cache_hit: Optional[bool] = None
+    trace_session: Optional[int] = None
 
     @property
     def in0_x(self) -> Optional[int]:
@@ -142,14 +153,17 @@ def classify(op: Op) -> str:
 class Bucket:
     count: int = 0
     total_ns: float = 0.0
-    by_opcode: dict[str, list[float]] = field(default_factory=lambda: defaultdict(lambda: [0, 0.0]))
+    kernel_ns: float = 0.0
+    by_opcode: dict[str, list[float]] = field(default_factory=lambda: defaultdict(lambda: [0, 0.0, 0.0]))
 
     def add(self, op: Op, value: float) -> None:
         self.count += 1
         self.total_ns += value
+        self.kernel_ns += op.device_ns
         rec = self.by_opcode[op.code]
         rec[0] += 1
         rec[1] += value
+        rec[2] += op.device_ns
 
 
 def parse_csv(path: str) -> list[Op]:
@@ -164,6 +178,13 @@ def parse_csv(path: str) -> list[Op]:
                 except ValueError:
                     return 0.0
 
+            hit_raw = (row.get("PROGRAM CACHE HIT") or "").strip().lower()
+            cache_hit = True if hit_raw == "true" else False if hit_raw == "false" else None
+            session_raw = (row.get("METAL TRACE REPLAY SESSION ID") or "").strip()
+            try:
+                trace_session = int(session_raw) if session_raw else None
+            except ValueError:
+                trace_session = None
             ops.append(
                 Op(
                     code=row["OP CODE"],
@@ -174,9 +195,47 @@ def parse_csv(path: str) -> list[Op]:
                     in1=(_int(row.get("INPUT_1_Y_PAD[LOGICAL]", "")), _int(row.get("INPUT_1_X_PAD[LOGICAL]", ""))),
                     out0=(_int(row.get("OUTPUT_0_Y_PAD[LOGICAL]", "")), _int(row.get("OUTPUT_0_X_PAD[LOGICAL]", ""))),
                     attributes=row.get("ATTRIBUTES", ""),
+                    cache_hit=cache_hit,
+                    trace_session=trace_session,
                 )
             )
     return ops
+
+
+def skip_first_decode_pass(ops: list[Op]) -> tuple[list[Op], str]:
+    """Drop the compile/capture decode step, keep later steady-state passes.
+
+    Prefers Tracy ``EMBED_START`` (then ``LM_HEAD_START``) as a per-token boundary.
+    Falls back to ``METAL TRACE REPLAY SESSION ID``, then to ``PROGRAM CACHE HIT=False``.
+    """
+    marker = "EMBED_START" if any(o.code == "EMBED_START" for o in ops) else None
+    if marker is None and any(o.code == "LM_HEAD_START" for o in ops):
+        marker = "LM_HEAD_START"
+    if marker is not None:
+        pass_id = -1
+        ids: list[int] = []
+        for op in ops:
+            if op.code == marker:
+                pass_id += 1
+            ids.append(pass_id)
+        n_passes = pass_id + 1
+        if n_passes <= 1:
+            return ops, f"only {n_passes} decode pass via {marker}; not skipped"
+        kept = [op for op, pid in zip(ops, ids) if pid != 0]
+        return kept, f"skipped first decode pass ({marker}; {n_passes - 1} later pass(es) kept)"
+
+    sessions = sorted({op.trace_session for op in ops if op.trace_session is not None})
+    if len(sessions) >= 2:
+        first = sessions[0]
+        kept = [op for op in ops if op.trace_session != first]
+        return kept, f"skipped METAL TRACE REPLAY SESSION {first} ({len(sessions) - 1} later session(s) kept)"
+
+    hits = {op.cache_hit for op in ops if op.cache_hit is not None}
+    if True in hits and False in hits:
+        kept = [op for op in ops if op.cache_hit is not False]
+        return kept, "skipped PROGRAM CACHE HIT=False (first/compile decode pass)"
+
+    return ops, "could not identify a first decode pass; using all ops"
 
 
 METRICS = {
@@ -210,27 +269,30 @@ def print_report(buckets: dict[str, Bucket], total: float, metric: str, n_ops: i
     print()
     print(f"  DeepSeek-V4-Flash profile breakdown  ({n_ops} ops, metric = {label})")
     print(f"  total {label.lower()}: {_us(total):,.1f} us")
-    print("=" * 72)
-    print(f"  {'module':<22}{'ops':>7}{'time [us]':>16}{'% total':>10}")
-    print("-" * 72)
+    print("=" * 88)
+    print(f"  {'module':<22}{'ops':>7}{'time [us]':>16}{'avg kern [us]':>16}{'% total':>10}")
+    print("-" * 88)
     order = sorted(buckets.items(), key=lambda kv: -kv[1].total_ns)
     for name, b in order:
-        print(f"  {name:<22}{b.count:>7}{_us(b.total_ns):>16,.1f}{100 * b.total_ns / total:>9.1f}%")
-    print("-" * 72)
-    print(f"  {'TOTAL':<22}{n_ops:>7}{_us(total):>16,.1f}{100.0:>9.1f}%")
+        avg_k = b.kernel_ns / b.count if b.count else 0.0
+        print(f"  {name:<22}{b.count:>7}{_us(b.total_ns):>16,.1f}{_us(avg_k):>16,.1f}{100 * b.total_ns / total:>9.1f}%")
+    print("-" * 88)
+    print(f"  {'TOTAL':<22}{n_ops:>7}{_us(total):>16,.1f}{'':>16}{100.0:>9.1f}%")
 
     if show_ops:
         print()
         print("  per-op-code breakdown within each module")
-        print("=" * 72)
+        print("=" * 88)
         for name, b in order:
             print(f"\n  [{name}]  {_us(b.total_ns):,.1f} us")
-            for code, (cnt, t) in sorted(b.by_opcode.items(), key=lambda kv: -kv[1][1]):
-                print(f"    {code:<42}{cnt:>6}{_us(t):>13,.1f} us")
+            print(f"    {'op':<42}{'ops':>6}{'time [us]':>14}{'avg kern [us]':>16}")
+            for code, (cnt, t, kern) in sorted(b.by_opcode.items(), key=lambda kv: -kv[1][1]):
+                avg_k = kern / cnt if cnt else 0.0
+                print(f"    {code:<42}{cnt:>6}{_us(t):>14,.1f}{_us(avg_k):>16,.1f}")
     print()
 
 
-def analyze_signposts(path: str, metric: str) -> tuple[dict[str, Bucket], float]:
+def analyze_signposts(ops: list[Op], metric: str) -> tuple[dict[str, Bucket], float]:
     """Ground-truth attribution using ``_region`` Tracy signposts.
 
     Signpost markers land in the profile as pseudo-op rows whose ``OP CODE`` ends
@@ -244,30 +306,19 @@ def analyze_signposts(path: str, metric: str) -> tuple[dict[str, Bucket], float]
     buckets: dict[str, Bucket] = defaultdict(Bucket)
     stack: list[str] = []
     total = 0.0
-    with open(path, newline="") as f:
-        for row in csv.DictReader(f):
-            code = row["OP CODE"]
-            if code.endswith("_START"):
-                stack.append(code[: -len("_START")])
-                continue
-            if code.endswith("_END"):
-                name = code[: -len("_END")]
-                if name in stack:  # pop back to the matching frame (robust to gaps)
-                    del stack[stack.index(name) :]
-                continue
-            op = Op(
-                code=code,
-                device_ns=float(row.get("DEVICE KERNEL DURATION [ns]") or 0),
-                host_ns=float(row.get("HOST DURATION [ns]") or 0),
-                op_to_op_ns=float(row.get("OP TO OP LATENCY [ns]") or 0),
-                in0=(None, None),
-                in1=(None, None),
-                out0=(None, None),
-                attributes="",
-            )
-            v = getter(op)
-            buckets[stack[-1] if stack else "(outside_regions)"].add(op, v)
-            total += v
+    for op in ops:
+        code = op.code
+        if code.endswith("_START"):
+            stack.append(code[: -len("_START")])
+            continue
+        if code.endswith("_END"):
+            name = code[: -len("_END")]
+            if name in stack:  # pop back to the matching frame (robust to gaps)
+                del stack[stack.index(name) :]
+            continue
+        v = getter(op)
+        buckets[stack[-1] if stack else "(outside_regions)"].add(op, v)
+        total += v
     return buckets, total
 
 
@@ -282,6 +333,11 @@ def main() -> int:
     )
     ap.add_argument("--no-ops", action="store_true", help="hide the per-op-code breakdown")
     ap.add_argument(
+        "--keep-first-pass",
+        action="store_true",
+        help="include the first decode pass (compile/capture). Default is to skip it.",
+    )
+    ap.add_argument(
         "--mode",
         choices=("auto", "signpost", "heuristic"),
         default="auto",
@@ -292,6 +348,9 @@ def main() -> int:
     args = ap.parse_args()
 
     ops = parse_csv(args.csv)
+    if not args.keep_first_pass:
+        ops, skip_note = skip_first_decode_pass(ops)
+        print(f"  {skip_note}")
     has_markers = any(o.code.endswith(("_START", "_END")) for o in ops)
     use_signpost = args.mode == "signpost" or (args.mode == "auto" and has_markers)
 
@@ -299,7 +358,7 @@ def main() -> int:
         if not has_markers:
             print("  no signpost markers found in this CSV; re-run with --mode heuristic")
             return 1
-        buckets, total = analyze_signposts(args.csv, args.metric)
+        buckets, total = analyze_signposts(ops, args.metric)
         n_ops = sum(b.count for b in buckets.values())
         print("  attribution: SIGNPOST regions (ground truth)")
     else:
@@ -314,13 +373,21 @@ def main() -> int:
         out = {
             "metric": args.metric,
             "total_ns": total,
-            "n_ops": len(ops),
+            "n_ops": n_ops,
             "modules": {
                 name: {
                     "ops": b.count,
                     "total_ns": b.total_ns,
+                    "avg_kernel_ns": b.kernel_ns / b.count if b.count else 0.0,
                     "pct": 100 * b.total_ns / (total or 1.0),
-                    "by_opcode": {c: {"ops": cnt, "total_ns": t} for c, (cnt, t) in b.by_opcode.items()},
+                    "by_opcode": {
+                        c: {
+                            "ops": cnt,
+                            "total_ns": t,
+                            "avg_kernel_ns": kern / cnt if cnt else 0.0,
+                        }
+                        for c, (cnt, t, kern) in b.by_opcode.items()
+                    },
                 }
                 for name, b in buckets.items()
             },

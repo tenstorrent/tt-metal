@@ -243,8 +243,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         receiver core for the whole model rather than per layer.
 
         ``tp_size`` groups adjacent chips into ``1 x tp_size`` pipeline stages and
-        forwards it to attention and MoE. Their outputs are replicated, so every
-        rank-to-rank pipeline socket carries the corresponding copy to the next stage.
+        forwards it to attention, MoE, and the final HyperHead. Their outputs are
+        replicated, so every rank-to-rank pipeline socket carries the corresponding
+        copy to the next stage.
         TP is incompatible with packed L1 weights. The DRISC prefetcher stays on
         under TP for every projection whose per-rank B-core count still matches
         the shared decode GCB; see :class:`~.attention.DeepSeekV4Attention`.
@@ -525,6 +526,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             },
             self.last_device,
             cache=cache.sub("hc_head"),
+            tp_size=tp_size,
         )
         self.norm = DeepSeekV4RMSNorm(
             self._thunk("norm.weight"), config.rms_norm_eps, self.last_device, cache.file("norm"), sharded=True

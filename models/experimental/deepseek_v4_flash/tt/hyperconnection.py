@@ -8,6 +8,14 @@ from .layers import Linear, LinearDecode, _rms_norm_unweighted
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
 
+def _tp_cluster_axis(device: ttnn.MeshDevice) -> int:
+    """Mesh axis that holds the TP group. A 1xN submesh shards along axis 1."""
+    shape = tuple(device.shape)
+    if len(shape) == 2 and shape[1] > 1:
+        return 1
+    return 0
+
+
 class DeepSeekV4HyperConnection(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4HyperConnection`` (Manifold-Constrained Hyper-
     Connections / mHC).
@@ -160,9 +168,21 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
     ``weights`` keys: ``hc_fn`` ``[H, H*D]``, ``hc_base`` ``[H]``, ``hc_scale``
     (scalar). Unlike :class:`DeepSeekV4HyperConnection` there is no ``post`` /
     ``comb`` placement: the head only produces the collapsed sequence.
+
+    ``tp_size > 1`` is row-parallel over ``hc_fn``: after the full-K RMSNorm each
+    rank keeps ``K / tp_size`` of the flattened streams, runs a local
+    ``[K/tp, H]`` matmul, and all-reduces the ``[T, H]`` mix logits. Bias and
+    scale stay replicated; the weighted stream sum still needs the full ``pre``.
     """
 
-    def __init__(self, config, weights: dict, device: ttnn.MeshDevice, cache: Optional[WeightCache] = None):
+    def __init__(
+        self,
+        config,
+        weights: dict,
+        device: ttnn.MeshDevice,
+        cache: Optional[WeightCache] = None,
+        tp_size: int = 1,
+    ):
         self.device = device
         self.hc = config.hc_mult
         self.hidden = config.hidden_size
@@ -170,7 +190,28 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
         self.norm_eps = config.rms_norm_eps
         cache = _as_cache(cache)
 
-        self.fn = Linear(weights["hc_fn"], device, cache.file("hc_fn"))  # [H, H*D]
+        if tp_size < 1:
+            raise ValueError(f"tp_size must be >= 1, got {tp_size}")
+        k = self.hc * self.hidden
+        if k % tp_size:
+            raise ValueError(f"hc_mult * hidden_size {k} is not divisible by tp_size {tp_size}")
+        local_k = k // tp_size
+        if local_k % ttnn.TILE_SIZE:
+            raise ValueError(f"HyperHead local K {local_k} is not tile-aligned for tp_size {tp_size}")
+        if tp_size > 1 and device.get_num_devices() != tp_size:
+            raise ValueError(
+                f"tensor-parallel HyperHead expects one device per TP rank, got tp_size={tp_size} "
+                f"on a {device.get_num_devices()}-device mesh"
+            )
+        self.tp_size = tp_size
+        self.local_k = local_k
+
+        # After Linear's transpose, ``hc_fn`` is ``[K, H]``; shard K so each rank
+        # holds ``[K/tp, H]``. Cache tag keeps the row-parallel tiles apart from
+        # the replicated ``hc_fn`` dump.
+        mapper = ttnn.ShardTensorToMesh(device, dim=-2) if tp_size > 1 else None
+        tp_tag = f".tp{tp_size}.row" if tp_size > 1 else ""
+        self.fn = Linear(weights["hc_fn"], device, cache.file(f"hc_fn{tp_tag}"), mesh_mapper=mapper)
         base_src = weights["hc_base"]
         self.base = _load_weight(
             _materialize(
@@ -190,12 +231,33 @@ class DeepSeekV4HyperHead(DeepSeekV4Module):
         b, s, hc, d = hidden_streams.shape
         t = b * s
 
+        # RMSNorm over the full flattened streams (replicated). Partitioning K
+        # first would normalize each rank independently and change the math.
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d])
         flat_mem_config = width_sharded_l1_config(1, hc * d, self.device)
         flat = ttnn.to_memory_config(flat, flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
 
-        mixes = self.fn(flat)  # [1,1,T,H]
+        if self.tp_size > 1:
+            full = ttnn.to_memory_config(flat, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(flat)
+            partitioned = ttnn.mesh_partition(full, dim=-1, cluster_axis=_tp_cluster_axis(self.device))
+            ttnn.deallocate(full)
+            local_mem_config = width_sharded_l1_config(1, self.local_k, self.device)
+            flat = ttnn.to_memory_config(partitioned, local_mem_config)
+            ttnn.deallocate(partitioned)
+
+        mixes = self.fn(flat)  # [1,1,T,H] (TP partials before the reduce)
+        if self.tp_size > 1:
+            reduced = ttnn.all_reduce(
+                mixes,
+                cluster_axis=_tp_cluster_axis(self.device),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(mixes)
+            mixes = reduced
         pre = ttnn.add(ttnn.sigmoid(ttnn.add(ttnn.multiply(mixes, self.scale), self.base)), self.eps)
         _profile(self.device)
         hs = ttnn.reshape(hidden_streams, [1, t, hc, d])
