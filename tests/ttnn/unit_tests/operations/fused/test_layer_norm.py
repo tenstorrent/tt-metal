@@ -927,6 +927,29 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
+def test_layer_norm_welford_large_path_partial_last_tile(device):
+    """A full-sized final tile block can still have a partial logical population."""
+    h, w = 32, 487
+    torch_input = torch.zeros((h, w), dtype=torch.float32)
+    torch_input[:, :439] = 1.0
+    torch_residual = torch.zeros_like(torch_input)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
+    residual_tensor = ttnn.from_torch(torch_residual, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_tensor = ttnn.fill_implicit_tile_padding(residual_tensor, PAD_VALUE)
+
+    output = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_tensor,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=create_recip_tensor(device, w, use_welford=True),
+    )
+    reference = torch.nn.functional.layer_norm(torch_input + torch_residual, normalized_shape=[w])
+
+    assert_output_accuracy(reference, ttnn.to_torch(output), use_welford=True)
+
+
 def test_layer_norm_inputs_requires_input_tensor(expect_error):
     """``LayerNormInputs()`` without an input tensor must raise."""
 

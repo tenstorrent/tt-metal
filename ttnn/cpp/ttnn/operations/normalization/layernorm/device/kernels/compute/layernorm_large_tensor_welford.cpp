@@ -199,7 +199,7 @@ void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             two_pass_stats_combine_block(
                 mean_dst,
                 reciprocal_lut[accumulated_n + block_n - 1],
-                block.is_full() ? full_block_n_bits : last_block_n_bits);
+                block.last() == Wt ? last_block_n_bits : full_block_n_bits);
         }
         accumulated_n += block_n;
         tile_regs_commit();
@@ -348,7 +348,7 @@ void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             two_pass_stats_combine_block(
                 mean_dst,
                 reciprocal_lut[accumulated_n + block_n - 1],
-                block.is_full() ? full_block_n_bits : last_block_n_bits);
+                block.last() == Wt ? last_block_n_bits : full_block_n_bits);
         }
         accumulated_n += block_n;
 
