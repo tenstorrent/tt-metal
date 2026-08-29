@@ -32,6 +32,7 @@ set(UNIT_TESTS_FABRIC_SRC
     disaggregation/test_kv_chunk_address_table_protobuf.cpp
     fabric_data_movement/test_basic_fabric_apis.cpp
     fabric_data_movement/test_fabric_pcie_host_target.cpp
+    fabric_data_movement/test_eth_aggregator.cpp
     fabric_data_movement/test_basic_1d_fabric.cpp
     fabric_data_movement/test_basic_fabric_mux.cpp
     fabric_data_movement/test_basic_fabric_mux_v2.cpp

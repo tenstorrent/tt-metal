@@ -71,15 +71,122 @@ everywhere:
 | Chip role | Channels ever active | Never routed | Idle (worst case) |
 |---|---|---|---|
 | N300 local | `0,1,6,7,8,9,14,15` | `2,3,4,5,10,11,12,13` | 8 |
-| **N300 remote** | `0,1,6,7,14,15` | `2,3,4,5,8,9,10,11,12,13` | **10** |
+| **N300 remote** | `0,1,6,7` | `2,3,4,5,8,9,10,11,12,13,14,15` | **12** |
 | T3K remote (measured config) | `0,1,6,7` | — | **12** |
 
-Channels `2,3,4,5,8,9,10,11,12,13` on a remote chip have no PHY link routed on any
-N300 configuration. They are structurally idle — no recabling can claim them.
+Corrected 2026-08-29 against the physical board map (corsix.org/content/tt-wh-part4),
+which the T3K cluster descriptor agrees with. Per-ASIC wiring on an n300:
+
+| | E0,E1 | E6,E7 | E8,E9 | E14,E15 | used | free |
+|---|---|---|---|---|---|---|
+| local (MMIO) | QSFP-DD #1 | QSFP-DD #2 | internal -> 2nd ASIC | Warp 100 Bridge | 8/16 | **8** |
+| remote | internal <- E8/E9 | Warp 100 Bridge | — | — | 4/16 | **12** |
+
+The remote row previously listed `14,15` as ever-active. That was wrong: on the
+second ASIC the Warp 100 Bridge lands on E6/E7, and E14/E15 go nowhere. Remote chips
+have **12** free channels, not 10, even with every QSFP-DD and TFly populated.
+
+Provisioning is therefore comfortable at both ends: the gatherer needs one free core
+on a remote chip (12 available) and the journal landing spot needs one on the MMIO
+chip (8 available), in the maximally-cabled case.
+
+Note the free-channel count is not binning-dependent on WH: eth harvesting is
+impossible there, enforced by a UMD throw (see 2.1).
+
+CAVEAT: "no recabling can claim them" is an inference from board wiring and shipped
+descriptors, not a schematic. Probing those cores' ERISC mailboxes directly
+(2026-08-29) shows them FIRMWARE-ALIVE but peer-less -- magic `0xabcd1234` present,
+sensible per-channel identity, `0xffffffff` in the remote-info words, zero traffic
+counters. That distinguishes has-peer from no-peer, NOT has-PHY from no-PHY.
+
+SECOND CAVEAT: free of links != free of users -- but ONLY under ETH dispatch.
+Corrected 2026-08-29: `dispatch_core_manager.cpp:268` adds every
+`get_inactive_ethernet_cores()` core to the FD pool inside
+`if (resolve_dispatch_core_type(...) == CoreType::ETH)`. The default is WORKER
+(`DispatchCoreConfig()` is `DispatchCoreType::WORKER`, and on WH/BH resolve returns
+whatever the config says), so on a stock run dispatch never touches idle eth cores at
+all. Under ETH dispatch it takes ALL of them. See 3.4.
 
 6U Galaxy is the only WH topology with zero idle channels, and it has **32 MMIO-capable
 chips and zero remote chips** — it does not need this feature. Scope the aggregator to
 `is_remote` chips and the constraint never binds.
+
+### 2.1 Harvesting invariants (verified 2026-08-29)
+
+**On Wormhole, harvesting cannot touch the transport.** This is enforced in the
+driver, not merely absent from the descriptors --
+`third_party/umd/device/coordinates/coordinate_manager.cpp:80`:
+
+```cpp
+if (harvesting_masks.dram_harvesting_mask != 0)
+    UMD_THROW(error::RuntimeError, "DRAM harvesting is supported only for Blackhole.");
+if (harvesting_masks.eth_harvesting_mask != 0)
+    UMD_THROW(error::RuntimeError, "ETH harvesting is supported only for Blackhole.");
+```
+
+A WH part with a fused-off eth channel, DRAM bank, or PCIe tile cannot be constructed
+by UMD at all. All 278 chip entries across every shipped WH cluster descriptor carry
+`eth_harvesting_mask: 0`, `dram_harvesting_mask: 0`, `pcie_harvesting_mask: 0`.
+
+So the 2 free-eth budget (8 MMIO / 12 remote, fully cabled) is **not binning-dependent
+on WH**. Likewise the PCIe landing tile and the DRAM-BW axis's 6 banks x 3 NIUs.
+
+#### Tensix row harvesting IS real, and differs per chip
+
+Every nonzero WH `harvest_mask` in the descriptor set has popcount 2 -- 2 rows of 10
+fused off, 8x8 = **64 live Tensix**. Live T3K agrees: `armed FPU counter on 64/64` on
+all 8 chips. Critically the mask **differs chip to chip inside one system** (dual_t3k:
+132, 520, 514, 192, 96, 72, 130, 272 -- eight distinct masks), so no two chips have the
+same physical NOC0 rows alive.
+
+Three consequences:
+
+**(a) Collector enumeration -- already correct.** `soc.get_cores(TENSIX, NOC0)`
+dispatches to `CoordinateManager::get_tensix_cores()`, which skips harvested rows.
+The 64/64 is the evidence.
+
+**(b) The gatherer kernel must walk TRANSLATED space, not NOC0.** WH translation
+compacts live rows: `WormholeCoordinateManager::fill_tensix_noc0_translated_mapping()`
+assigns live rows to translated y in [18, 18+8) and pushes harvested rows past the end
+(y = 26, 27). So a fixed loop
+
+```
+for y in 18..25:            // tensix_translated_coordinate_start_y = 18
+    for x in 18..25:        // tensix_translated_coordinate_start_x = 18
+```
+
+hits exactly the 64 live cores on EVERY chip -- one kernel, no per-chip core table
+shipped into eth L1. Do not walk NOC0; that would need a per-chip runtime-arg blob.
+
+CAVEAT: holds only when `noc_translation_enabled`. `CoordinateManager::initialize()`
+runs `identity_map_noc0_cores()` unconditionally and inserts the translated maps only
+under `if (noc_translation_enabled)`, so with translation off TRANSLATED degenerates to
+NOC0 and the compaction disappears. The gatherer must read the flag and fall back to an
+explicit core list. T3K has translation on (the collector uses translated coords today).
+
+**(c) Journal core count is not a constant.** 64 is a T3K value; 224 descriptor entries
+have `harvest_mask: 0` -> 80 cores. `util_agg_msg_t.num_cores` (3.1) already carries it;
+never bake 64 into the host drain or the viewer.
+
+Nothing here moves eth core coords, the PCIe tile, the fabric route, the VC assignment,
+or AICLK. **The push transport is untouched by WH harvesting.**
+
+#### Blackhole: none of the above transfers
+
+| mask | BH value | meaning |
+|---|---|---|
+| `eth_harvesting_mask` | **288** on 250/251 entries, 320 on 1 | channels 5 & 8 fused off -- always 2 of 14 |
+| `pcie_harvesting_mask` | **1** (224) or **2** (27) | two PCIe tiles, NOC0 `(2,0)` and `(11,0)`; exactly one is ALWAYS harvested, and which one varies |
+| `harvest_mask` | single bits 1..8192 | **column** harvesting, 1 of 14 -- different geometry from WH's rows |
+| `dram_harvesting_mask` | 0 in all shipped BH | but legal on BH, unlike WH |
+
+Two hard requirements when this design reaches BH:
+
+1. **The landing tile must come from `get_cores(CoreType::PCIE)`, never a constant.**
+   A hardcoded `(2,0)` is wrong on ~11% of the BH descriptor set, and it fails the way
+   the fabric bug in 5d failed: silently, into a tile that is not there.
+2. **The spare-eth budget must be computed, not asserted.** BH always loses 2 channels,
+   so the "structurally free" argument in 2 is **WH-only**.
 
 ## 3. Design
 
@@ -271,52 +378,214 @@ message over the same tunnel — `get_clock()` -> `write_to_arc_apb` -> `write_t
 — which is exactly the call that blocked the collector's publish thread in §5c. It has
 the identical failure mode and would need the same push treatment.
 
-### 3.4 Placement and launch
+### 3.4 Placement and launch  (rewritten 2026-08-29, see 3.5)
 
-- New env gate `TTNVTOP_ETH_AGGREGATOR=1`, matching the `TTNVTOP_REGISTER_PROGRAMS`
-  pattern in `registrar/ttnvtop_register.hpp`. Default off.
-- Launched from the same registrar seam already hooked into tt-metal, after device init.
-- Core selection: request from `get_inactive_ethernet_cores()` **through the dispatch
-  core manager**, preferring the never-routed set `{2,3,4,5,8,9,10,11,12,13}`. Fail
-  loudly at init if unavailable — never silently share a core with a dispatch kernel.
-- Kernel via `CreateKernel(program, "...aggregator.cpp", core, EthernetConfig{.eth_mode
-  = Eth::IDLE, ...})`.
+- Core selection: `host/agg_core_select.hpp`. Corrected 2026-08-29 -- there is NO
+  reservation API to claim through on Wormhole:
+    - `ServiceCoreManager` looks like the right registry (`dispatch_core_manager`
+      already drops its `claimed_cores()` from the pool, and `service_active` is an
+      escape in the `LaunchProgram` assert) but `claim()` opens with
+      `TT_FATAL(cluster.is_ubb_galaxy() || arch == BLACKHOLE, "Service core claims are
+      only supported on Blackhole and UBB Galaxy clusters.")`. Unavailable on exactly
+      the system that has the problem.
+    - So the implemented behaviour is: resolve the dispatch core type; under WORKER
+      take an idle eth core, preferring the never-routed set `{2,3,4,5,10,11,12,13}`;
+      under **ETH dispatch, refuse to start** with a reason, rather than gamble that
+      dispatch will not reach the core we picked. A monitor that silently corrupts a
+      dispatch kernel is a far worse failure than one that declines to start.
+    - The fix that lifts the ETH-dispatch restriction is the pattern the real-time
+      profiler already uses fifteen lines below the eth branch in
+      `dispatch_core_manager.cpp`: reserve from the BACK of the pool at construction
+      time, because dispatch consumes from the FRONT. That is an upstream change, and
+      it is 7.6.
 - Journal base: `hal::get_erisc_l1_unreserved_base()` + fixed offset, passed to the
   kernel as a compile-time arg and recomputed host-side. Avoids touching
   `dev_mem_map.h` and the cross-layer lockstep it implies (host C++, dev_msgs codegen,
-  RISC-V linker scripts) — the reason the Tensix reservation was painful in Phase 2.1.a.
+  RISC-V linker scripts) -- the reason the Tensix reservation was painful in Phase 2.1.a.
+- Env gate `TTNVTOP_ETH_AGGREGATOR=1`, default off.
+- **Launch mechanism: the idle-eth HOST-dispatch launch-message path (3.5).** The
+  earlier `CreateKernel(..., EthernetConfig{.eth_mode = Eth::IDLE})` sketch is
+  withdrawn: 5d established that fast dispatch cannot launch to IDLE_ETH, so that
+  form only ever worked under slow dispatch, before the workload.
 
-## 4. Phasing
+### 3.5 Why the launch path is a launch MESSAGE, not a reset  (2026-08-29)
 
-> **Transport direction revised 2026-08-28 (§3.3, §5c): the aggregator PUSHES its
-> journal to the MMIO chip; the host never reads a remote chip.** The phase descriptions
-> below predate that and still describe a host pull. Sizing and sequencing are unchanged;
-> the direction of the final hop is not.
+The mid-workload attach requirement made `CreateKernel` unusable and pointed at raw
+`assert_risc_reset`/`deassert_risc_reset` over UMD. Reading the firmware shows a third
+option that is strictly better, and it is the mechanism slow dispatch already uses.
 
-### Phase 2.2.a — Transport only (~1 week)
+**Idle eth cores are ALWAYS in host dispatch mode**, even when the workload runs fast
+dispatch -- `risc_firmware_initializer.cpp:1225`:
 
-Aggregator mirrors each core's 1 KiB ring verbatim into a 64 KiB eth-L1 buffer; host
-does one 64 KiB block read per chip. **No change to sample-loss behavior** — this phase
-only proves the transport, the core allocation, the kernel lifetime, and the host
-fallback path. Host decode logic is literally unchanged.
+```cpp
+launch_msg.kernel_config().mode() = (!rtoptions_.get_fast_dispatch() or is_idle_eth)
+                                        ? dev_msgs::DISPATCH_MODE_HOST
+                                        : dev_msgs::DISPATCH_MODE_DEV;
+```
 
-Exit criteria: remote chip fidelity identical to today, tunnel transactions per tick
-drop from 256 to 1, measured workload slowdown from telemetry falls to noise.
+That is *why* fast dispatch cannot reach IDLE_ETH -- not an unimplemented feature, a
+deliberate mode split. And the idle-erisc firmware is already running and already
+polling, `hw/firmware/src/tt-1xx/idle_erisc.cc:145`:
 
-### Phase 2.2.b — Drain-and-accumulate (~1–2 weeks)
+```c
+mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+while (1) {
+    while (mailboxes->go_messages[0].signal != RUN_MSG_GO) { ... }
+    launch_msg_t* launch_msg = &mailboxes->launch[mailboxes->launch_msg_rd_ptr];
+    ... kernel_init(kernel_config_base + launch_msg->kernel_config.kernel_text_offset[i])
+    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) { /* notify, advance rd_ptr */ }
+}
+```
 
-Replace the mirror with the sweep loop and journal of §3.2. Drop
-`UTIL_SAMPLER_DEFAULT_PERIOD_CYCLES` back toward 100 µs on aggregated chips and confirm
-`lost` stays at zero.
+So the aggregator launches in three host writes over UMD, mid-workload, from any PID:
 
-Exit criteria: 100 µs sampling with <1% structural loss on an aggregated chip, vs the
-~84% loss that forced the 1 ms period.
+1. write the aggregator ELF's spans into the core's kernel-config region
+2. write a `launch_msg_t` naming `kernel_text_offset` / `enables`
+3. write `RUN_MSG_GO` into `go_messages[0].signal`
 
-### Phase 2.2.c — Local chips, opt-in (~3 days)
+**This also resolves the kernel-lifetime open question (7.1) by construction.** The
+firmware only regains control when the kernel *returns*. An aggregator that never
+returns owns the core outright: `RUN_MSG_DONE` is never written, the `DISPATCH_MODE_DEV`
+notify/rd-ptr-advance branch is not taken in host mode, and nothing else is looking.
+This is exactly how the fabric EDM kernels persist -- it is a supported pattern, not a
+trick.
 
-Enable on local chips too. The transport win is smaller (PCIe is cheaper than the
-tunnel) but the sample-loss win is identical. Gate separately so a regression on local
-chips cannot take out the common path.
+#### Verified: program dispatch cannot disturb it
+
+Every ethernet reference in `impl/program/dispatch.cpp` -- launch messages, kernel
+config addresses, go-signal unicast, worker counts -- is
+`HalProgrammableCoreType::ACTIVE_ETH`. `IDLE_ETH` appears nowhere in the dispatch path.
+A kernel on an idle eth core is invisible to program dispatch, so it needs no
+"persistent across dispatch" mechanism.
+
+#### What DOES kill it: device init, not dispatch
+
+`RiscFirmwareInitializer::assert_inactive_ethernet_cores()` resets `RiscType::ALL` on
+every inactive eth core. It is called unconditionally from `assert_cores()`, and from
+the init path when `FabricManagerMode::INIT_FABRIC` is set. The aggregator's lifetime
+is therefore **one device-open epoch**: attach after init, and expect to be killed by
+the next device open or close. The host must detect this (`sweep_count` stops
+advancing, 3.3) and re-attach, not assume permanence.
+
+#### Two implementation hazards
+
+- **`RiscType::ERISC0` and `ERISC1` are aliases for `BRISC` and `TRISC0`**
+  (`umd/device/types/risc_type.hpp`: `ERISC0 = 1ULL << 3` == `BRISC`, with a standing
+  "Consider having separate entries" TODO). Any reset code that gets copy-pasted onto a
+  Tensix core silently means something else. Prefer `RiscType::ALL`, and if the
+  launch-message path is used as designed, no reset call is needed at all.
+- **The collector needs the ELF and the `launch_msg_t` layout, not tt-metal.**
+  `llrt::get_risc_binary(path)` is a pure ELF-to-`ll_api::memory` parse with no cluster
+  dependency; the span writes can go straight through UMD `write_to_device`, and the
+  dev_msgs layout is already generated into `tt_metal/hw/inc` (the collector includes
+  `util_sampler.h` from there today). This keeps 7.2 answered in favour of the
+  collector staying standalone. The build-system task is to emit the aggregator ERISC
+  ELF as a fixed artifact at tt-metal build time rather than JIT-compiling it.
+
+### 3.6 The launcher already exists: `LaunchProgram(force_slow_dispatch=true)`
+
+3.5 concluded we would write the launch message ourselves. We do not have to.
+`detail::LaunchProgram(dev, program, wait_until_cores_done=false,
+force_slow_dispatch=true)` already does exactly the three writes 3.5 describes --
+`ConfigureDeviceWithProgram` (binaries), `WriteRuntimeArgsToDevice`, then
+`llrt::write_launch_msg_to_core`, which forces `DISPATCH_MODE_HOST` and writes the
+launch message and go signal with `cluster.write_core_immediate`. No command queue,
+no `EnqueueProgram`.
+
+`wait_until_cores_done` MUST be false. A kernel that never returns never writes
+`RUN_MSG_DONE`, so waiting on it hangs forever. That is the persistence mechanism,
+not a bug.
+
+**The one blocker was an assert, and it already had a carve-out for our exact case.**
+`LaunchProgram` guards force-slow-dispatch with:
+
+```cpp
+TT_ASSERT(!(fd_active && rt_done) || service_active || dram_only,
+          "Cannot force slow dispatch while fast dispatch firmware is active ...");
+```
+
+`dram_only` exists for the persistent tensor-prefetcher DRISC senders, on the stated
+grounds that DRAM cores are "disjoint from the FD worker grid and dispatch column, so
+launching them via slow dispatch does not perturb an active FD session."
+
+That reasoning applies verbatim to IDLE_ETH, and we verified it independently: every
+ethernet reference in `impl/program/dispatch.cpp` is ACTIVE_ETH, and the three sites
+that meet IDLE_ETH skip it ("Fast dispatch not supported on IDLE_ETH yet"). So the
+predicate was generalised from `program_targets_only_dram_cores` to
+`program_targets_only_fd_disjoint_cores`, accepting DRAM and IDLE_ETH. DRAM behaviour
+is unchanged.
+
+That is the whole production launch path: a three-line predicate change, not a
+bespoke ELF loader. It keeps `ConfigureDeviceWithProgram`'s kernel-config base and
+rta-offset computation instead of duplicating it -- the fragile part.
+
+## 4. Phasing  (re-cut 2026-08-29 around the launch-message path, 3.5)
+
+> The original a/b/c split predates both the push revision (3.3, 5c) and the launch
+> mechanism (3.5). It is superseded by the milestones below. The 5d verdict stands:
+> build the drain-and-accumulate directly; the old "2.2.a transport only" survives only
+> as the subset of work needed to stand the kernel up.
+
+**The ordering principle: M1 deliberately dodges the one unanswered external
+question.** Joining an EDM from a separate PID (7.4) is unresolved and owned by the
+fabric team. Launching the aggregator in the same process that initialised fabric makes
+that question moot, and still delivers the entire fidelity win -- which is the actual
+justification per 5d. Mid-workload attach is a capability, not a prerequisite.
+
+### M1 — Aggregator up, same-process launch  (~1–1.5 weeks)
+
+Aggregator kernel on one idle eth core per remote chip, launched by the workload process
+after device init, sweeping the Tensix L1 rings that `util_sampler.h` already publishes
+and pushing the journal over fabric into an idle-eth L1 slot on the MMIO chip (3.3).
+Host reads that slot over plain PCIe.
+
+Build: aggregator ERISC kernel; ELF emitted as a fixed build artifact; host-side
+launch-message writer (3.5); core claim through the dispatch core manager; journal
+decode in the collector; `sweep_count` staleness detection and fallback to the existing
+per-core drain.
+
+Walks TRANSLATED space (2.1b), so one kernel covers every harvest pattern.
+
+Exit criteria:
+- `NON_MMIO` tunnel transactions per tick for remote chips: 256 -> **0**
+- remote-chip fidelity no worse than today
+- workload slowdown from telemetry at noise on the 5b dispatch-bound workload, not
+  just on large matmuls
+- kernel survives a full Llama-3.3-70B run without the collector stalling (the 5c
+  failure, reproduced as a negative control)
+
+### M2 — Restore 100 µs sampling  (~1 week)
+
+Drop `UTIL_SAMPLER_DEFAULT_PERIOD_CYCLES` back toward 100 µs on aggregated chips and
+size the journal for it (3.1: ~15 ms of buffering, needs a 50–100 Hz host drain).
+
+Exit criteria: 100 µs sampling with `lost` at **zero** and <1% structural loss on an
+aggregated chip, against the ~59% loss measured in Result 2 and the ~84% that forced
+the 1 ms period in the first place. **This is the milestone that justifies the feature.**
+
+### M3 — Mid-workload attach  (gated on 7.4)
+
+Launch the aggregator from the `tt-coremon` process against a device another PID is
+driving. The launch-message path (3.5) already works from any PID; what is unresolved
+is whether that PID can join an EDM whose flow-control state the workload owns.
+
+**Blocked until the fabric team answers 7.4.** File it now; do not design around it
+speculatively.
+
+### M4 — Local chips, opt-in  (~3 days)
+
+Enable on MMIO chips too. The transport win is smaller (PCIe is cheaper than the tunnel)
+but the sample-loss win is identical. Gate separately so a regression on local chips
+cannot take out the common path.
+
+### Explicitly out of scope
+
+- **Blackhole.** 2.1 documents why the WH invariants do not transfer: BH harvests eth
+  and PCIe, and exactly one of its two PCIe tiles is always fused off. Revisit only if a
+  BH topology with remote chips ships.
+- **Push all the way to host memory.** Blocked on the EDM static-VC finding (3.3, 5d)
+  and unnecessary: landing in MMIO-chip L1 removes the tunnel, which is the whole point.
 
 ## 5. Evaluation — homelab-1
 
@@ -548,28 +817,87 @@ Also settled along the way:
 
 ---
 
+## 5e. M1 transport verified on Blackhole -- 2026-08-29
+
+`TestEthAggregatorLaunchesWithoutDispatch` (fabric_unit_tests) on the 4x p150a box:
+
+```
+landing on chip 2 eth 0-6 translated (26,25) dest=0x000065a000015740
+launch: t1 state=0x09e00000 sweeps=2698 head=2701 cores=1
+launch: t2 state=0x09e00000 sweeps=5396 head=5402 cores=1
+landed: magic=0x47415454 head=5404 sweeps=5398 lost=0 cores=1
+```
+
+Established, on hardware:
+
+| link | status |
+|---|---|
+| aggregator launches with NO dispatch | `LaunchProgram(force_slow_dispatch=true)`, 3.6 |
+| kernel persists (never returns) | `sweeps` advancing 2698 -> 5396 across 2 s |
+| runtime args read correctly | `cores=1` matches what was passed |
+| fabric connection opens from idle ETH | marker `0x09E00000` |
+| Tensix ring sweep produces entries | `head` advancing with `sweeps` |
+| sweep keeps up with the producer | `lost=0` |
+| journal LANDS in peer idle-eth L1 | `magic=0x47415454` ('TTAG') read back over PCIe |
+| header checksum survives the wire | verified host-side |
+
+NOT yet covered: the REMOTE-chip case. This box is all-MMIO, so
+`TestEthAggregatorJournalLands` skips ("no remote chip") and the WH T3K on homelab-1
+is still required for the case the feature exists for. Multi-core sweep (64 cores
+rather than 1) and the collector-side decode are also outstanding.
+
+Two bugs found by construction, both worth recording because neither would have
+failed loudly:
+- **L1 NOC reads need 16 B alignment at both ends** (`NOC_L1_READ_ALIGNMENT_BYTES` 16
+  on WH and BH). Reading the 4 B ring `head` at offset 8 is misaligned. The sweep now
+  pulls the aligned 16 B chunk containing it. This also forced `util_agg_entry_t` to
+  put the 16 B sample at offset 0 rather than after `core_id`/`seq`, so a ring slot
+  can be read straight into it.
+- **`MEM_IERISC_STACK_MIN_SIZE` is 128 BYTES.** A per-core `seq[]` array of 128 u32
+  is 512 B and silently smashes the ERISC stack. It lives in L1.
+
 ## 6. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Dispatch owns idle eth cores — `dispatch_core_manager.cpp:269` adds *every* inactive eth core to the dispatch pool when dispatch core type is ETH (2 CQs on N300 needs 10) | Allocate through the dispatch core manager; fail loudly at init |
-| `assert_inactive_ethernet_cores()` resets all RISCs on idle eth cores at device init | Launch after init, same lifecycle position as `util_sampler` |
-| Kernel lifetime — aggregator must be persistent across program dispatch | **Open question.** Fabric EDM kernels are persistent on eth cores; follow that pattern. Resolve before 2.2.a |
+| Dispatch owns idle eth cores — but **only under ETH dispatch**. `dispatch_core_manager.cpp:268` adds *every* inactive eth core to the pool, guarded by `resolve_dispatch_core_type(...) == CoreType::ETH`. Default is WORKER, where idle eth is untouched. ETH dispatch is not exotic: 8-chip WH needs it for 2 CQs | `host/agg_core_select.hpp` refuses to start under ETH dispatch (3.4). There is no claim API on WH — `ServiceCoreManager::claim()` is Blackhole/UBB-Galaxy only. Lifting this needs the RT-profiler's reserve-from-the-back pattern upstream (7.6) |
+| `assert_inactive_ethernet_cores()` resets `RiscType::ALL` on idle eth cores — called unconditionally from `assert_cores()` and from init under `INIT_FABRIC` | Aggregator lives for ONE device-open epoch. Launch after init; host detects the reset via a stalled `sweep_count` and re-attaches. Do not assume permanence |
+| Kernel lifetime — aggregator must be persistent across program dispatch | **RESOLVED (3.5).** `IDLE_ETH` appears nowhere in `impl/program/dispatch.cpp`; a kernel that never returns owns the core by construction. No mechanism needed |
 | Watcher / inspector walk inactive eth cores (`watcher_server.cpp:523`, `watcher_device_reader.cpp:430`, `inspector/data.cpp:383`) | Verify they tolerate a non-dispatch kernel; may need an exclusion |
 | Aggregator NOC traffic shares the chip NOC with the workload | ~2.6 MB/s at 10 kHz sweep; measure in run C, tune sweep rate |
-| WH-only — BH eth differs (2 ERISCs, different L1 map) | Scope to WH. BH p150a has no remote chips; 6U BH is all-MMIO. Revisit only if a BH topology with remote chips ships |
+| WH-only — BH eth differs (2 ERISCs, different L1 map) **and BH harvests eth/PCIe** (2.1): 2 of 14 eth channels always fused off, and exactly one of the two PCIe tiles is always harvested with the survivor varying | Scope to WH. BH p150a has no remote chips; 6U BH is all-MMIO. If a BH topology with remote chips ships: derive the landing tile from `get_cores(CoreType::PCIE)` (never constant `(2,0)`) and compute the spare-eth budget rather than asserting it |
+| Tensix row harvesting differs per chip within one system, so a NOC0 core walk needs a per-chip table | Gatherer walks TRANSLATED space, where WH compacts live rows to a fixed contiguous range (2.1b); fall back to an explicit list if `noc_translation_enabled` is false |
+| `RiscType::ERISC0`/`ERISC1` alias `BRISC`/`TRISC0` in UMD (`risc_type.hpp`), so reset code copy-pasted to a Tensix core silently means something else | The launch-message path (3.5) needs no reset call at all; if one is ever added, use `RiscType::ALL` |
 | Aggregator dies silently → stale data read as live | Host checks `sweep_count` advances; falls back to per-core drain if stalled |
 
 ## 7. Open questions
 
-1. **Persistent idle-eth kernel lifetime** — what is the supported mechanism for a
-   kernel that outlives program dispatch? Fabric does this; confirm the pattern is
-   reusable outside fabric init. *Blocks 2.2.a.*
-2. **Does the collector need tt-metal, or can it stay standalone?** Today it uses
-   `umd::TopologyDiscovery` and never calls `LocalChip::start_device()`
-   (`collector/main.cpp:16`). Launching a kernel needs tt-metal. Either the aggregator
-   launches from the workload process via the registrar seam (preferred — keeps the
-   collector standalone), or the collector gains a tt-metal dependency (rejected).
+1. ~~**Persistent idle-eth kernel lifetime.**~~ **RESOLVED 2026-08-29 (3.5).** A kernel
+   that never returns owns the idle eth core by construction: the firmware regains
+   control only on return, and `IDLE_ETH` appears nowhere in `impl/program/dispatch.cpp`.
+   No dispatch-persistence mechanism is needed. The real lifetime bound is device init --
+   `assert_inactive_ethernet_cores()` resets `RiscType::ALL` -- so the aggregator lives
+   for one device-open epoch and the host must detect the reset and re-attach.
+2. ~~**Does the collector need tt-metal?**~~ **RESOLVED 2026-08-29 (3.5): no.**
+   `llrt::get_risc_binary()` is a pure ELF parse with no cluster dependency, the span
+   writes go through UMD, and the dev_msgs `launch_msg_t` layout is already generated
+   into `tt_metal/hw/inc`. The collector stays standalone. The remaining work is a build
+   task: emit the aggregator ERISC ELF as a fixed artifact instead of JIT-compiling it.
 3. **Should this land with `configure_active_ethernet_cores_for_mmio_device()`?**
    Pinning UMD's remote traffic away from fabric-carrying channels is a separate,
    smaller win that stacks with this. Worth measuring independently.
+4. **Can a separate PID join an EDM whose flow-control state another process owns?**
+   *For the fabric team.* **Blocks M3 (mid-workload attach) and nothing else** -- M1/M2
+   launch in the process that initialised fabric. The free eth channels have no peer
+   (5d), so fabric is the only way off a remote chip, and the workload owns the EDM.
+5. **Can `EDM_NOC_VC` be made configurable, or use VC 1 for PCIe destinations?**
+   *For the fabric team.* Would unblock pushing straight to host memory (5d). Not on
+   the critical path -- the MMIO-chip-L1 landing spot removes the tunnel regardless.
+6. **Reserve an idle eth core from the back of the FD dispatch pool.** *For the
+   dispatch owners.* Needed only under ETH dispatch, where the pool swallows every
+   inactive eth core and no claim API exists on WH. The real-time profiler already
+   does exactly this for a tensix, in the same function
+   (`logical_dispatch_cores.back(); pop_back();` into
+   `reserved_realtime_profiler_core_by_device_`), so the shape is established. Until
+   then the aggregator refuses to start under ETH dispatch (3.4). **Blocks 2-CQ T3K
+   only** -- every WORKER-dispatch configuration is unaffected.

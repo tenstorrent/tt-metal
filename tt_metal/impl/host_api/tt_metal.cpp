@@ -893,11 +893,18 @@ void LaunchProgram(
     LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
 }
 
-// Returns true iff the program has kernels and every core it targets is a DRAM programmable core.
-// Such programs (e.g. the persistent tensor-prefetcher DRISC senders) are disjoint from the FD
-// worker grid and dispatch column, so launching them via slow dispatch does not perturb an active
-// FD session. Used to scope the force-slow-dispatch guard in LaunchProgram.
-bool program_targets_only_dram_cores(const Program& program) {
+// Returns true iff the program has kernels and every core it targets is disjoint from the fast
+// dispatch pipeline -- i.e. outside the FD worker grid and the dispatch column -- so that launching
+// it via slow dispatch cannot perturb an active FD session. Used to scope the force-slow-dispatch
+// guard in LaunchProgram.
+//
+// Two such core types today:
+//   DRAM      the persistent tensor-prefetcher DRISC senders
+//   IDLE_ETH  the ttnvtop utilization aggregator. Fast dispatch cannot address idle eth at all --
+//             every ethernet reference in impl/program/dispatch.cpp is ACTIVE_ETH, and the three
+//             sites that meet IDLE_ETH skip it with "Fast dispatch not supported on IDLE_ETH yet".
+//             The core is therefore invisible to the FD pipeline, exactly as a DRAM core is.
+bool program_targets_only_fd_disjoint_cores(const Program& program) {
     const auto& logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     bool has_any_core = false;
@@ -907,7 +914,8 @@ bool program_targets_only_dram_cores(const Program& program) {
             continue;
         }
         has_any_core = true;
-        if (hal.get_programmable_core_type(programmable_core_type_index) != HalProgrammableCoreType::DRAM) {
+        const auto core_type = hal.get_programmable_core_type(programmable_core_type_index);
+        if (core_type != HalProgrammableCoreType::DRAM && core_type != HalProgrammableCoreType::IDLE_ETH) {
             return false;
         }
     }
@@ -930,13 +938,13 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             // Scope the service bypass to this device
             const bool service_active =
                 !tt::tt_metal::MetalContext::instance().get_service_core_manager().claimed_cores(device->id()).empty();
-            // DRAM-only programs (e.g. the persistent tensor-prefetcher DRISC senders) run on the DRAM
-            // programmable cores, which are disjoint from the FD worker grid and dispatch column. Launching
-            // them via slow dispatch does not touch FD-owned cores or the FD pipeline, so it is safe to mix
-            // with an active FD session regardless of profiler init state.
-            const bool dram_only = detail::program_targets_only_dram_cores(program);
+            // Programs confined to DRAM or IDLE_ETH cores are disjoint from the FD worker grid and
+            // dispatch column. Launching them via slow dispatch does not touch FD-owned cores or the
+            // FD pipeline, so it is safe to mix with an active FD session regardless of profiler
+            // init state.
+            const bool fd_disjoint = detail::program_targets_only_fd_disjoint_cores(program);
             TT_ASSERT(
-                !(fd_active && rt_done) || service_active || dram_only,
+                !(fd_active && rt_done) || service_active || fd_disjoint,
                 "Cannot force slow dispatch while fast dispatch firmware is active and real-time profiler init has "
                 "completed on this device.");
         }
