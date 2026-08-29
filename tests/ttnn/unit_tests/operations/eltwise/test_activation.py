@@ -231,6 +231,69 @@ def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
+def _bfloat16_neighbour(value, steps):
+    """Return ``value`` moved ``steps`` bfloat16 ULP away from zero (``steps`` may be negative).
+
+    Adding to the raw bit pattern moves magnitude the right way for either sign, but only away
+    from zero: stepping down from ``+0.0`` gives ``0xFFFF`` and from ``-0.0`` wraps past the int16
+    floor to ``0x7FFF``, both NaN. Reject zero rather than feed NaN into a caller's stimulus.
+    """
+    assert value != 0, "bfloat16 neighbour is undefined at zero; the bit step would produce NaN"
+    bits = torch.tensor(value, dtype=torch.bfloat16).view(torch.int16)
+    return (bits + steps).view(torch.bfloat16).item()
+
+
+def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
+    """``beta * x == threshold`` must evaluate softplus, not the linear fallback.
+
+    torch reverts to the linear function only when ``beta * x > threshold`` holds strictly, so the
+    boundary point itself still takes the softplus path. The reference is computed from torch
+    directly rather than through ``ttnn.get_golden_function(ttnn.softplus)``, which drops ``beta``
+    and ``threshold`` and would otherwise compare against the defaults.
+
+    ``beta`` and ``threshold`` are powers of two so that ``threshold / beta`` is exact in bfloat16
+    and ``beta * x`` reproduces ``threshold`` exactly, which is what puts an element on the
+    boundary at all.
+    """
+    boundary = threshold / beta
+    assert boundary == torch.tensor(boundary, dtype=torch.bfloat16).item(), "boundary must be exact in bf16"
+
+    # One bf16 step either side pins the split: below and on the boundary are softplus, above is linear.
+    values = [_bfloat16_neighbour(boundary, steps=-1), boundary, _bfloat16_neighbour(boundary, steps=1)]
+    stride = len(values)
+    torch_input_tensor = torch.tensor(values, dtype=torch.bfloat16).repeat(64, 32)
+
+    torch_output_tensor = torch.nn.functional.softplus(torch_input_tensor, beta=beta, threshold=threshold)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.softplus(input_tensor, beta=beta, threshold=threshold)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
+
+    # The regression assertion is tolerance-free and per-element. softplus(x) is strictly greater
+    # than x, so on the boundary any lane equal to its input took the linear branch. Comparing
+    # elementwise rather than with torch.equal is what makes this catch an error confined to a
+    # subset of lanes, faces or unrolled iterations; a whole-tensor equality check would pass as
+    # long as any single lane differed.
+    on_boundary = output_tensor[:, 1::stride]
+    assert torch.all(
+        on_boundary > torch_input_tensor[:, 1::stride]
+    ), f"softplus took the linear branch at beta*x == threshold (beta={beta}, threshold={threshold})"
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+# `threshold` must stay at roughly 4 or below. The boundary residual is log1p(exp(-threshold))/beta,
+# which falls under half a bfloat16 output ULP by threshold=5, and past SOFTPLUS_POLY_BOUNDARY = 5.0f
+# the kernel drops the residual entirely. A correct softplus then returns the input bit for bit and
+# the strict-inequality assertion below would fail spuriously. Note the neighbouring test_softplus
+# uses thresholds up to 40 and the ttnn default is 20; neither can be reused here.
+@pytest.mark.parametrize("beta, threshold", [(2, 1), (1, 2), (0.5, 1), (4, 1), (1, 0.5)])
+def test_softplus_threshold_boundary(device, beta, threshold):
+    run_softplus_boundary_test(device, beta, threshold)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanhshrink(device, h, w):
