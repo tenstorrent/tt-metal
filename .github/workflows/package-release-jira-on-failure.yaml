@@ -136,6 +136,14 @@ jobs:
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
           echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
+          # Owner per failed job, from tests/pipeline_reorg (best-effort:
+          # an unmapped job, or the script breaking, just drops the note).
+          declare -A owners=()
+          while IFS=$'\t' read -r jname jowner jteam; do
+            owners["$jname"]="$jowner ($jteam)"
+          done < <(for j in "${failed[@]}"; do echo "${j##*/ }"; done \
+                   | python3 .github/actions/scripts/job_owners.py 2>/dev/null || true)
+
           summary=$(printf '%s\n' "${failed[@]}" \
             | python3 .github/actions/scripts/failure_title.py "$BRANCH")
 
@@ -150,7 +158,12 @@ jobs:
             echo "### Failed jobs"
             # The leaf name, not the whole "a / b / c / leaf" path -- the prefix
             # is the same for every row and the link carries the full context.
-            for i in "${!failed[@]}"; do echo "- [${failed[$i]##*/ }](${urls[$i]})"; done
+            for i in "${!failed[@]}"; do
+              leaf="${failed[$i]##*/ }"
+              line="- [$leaf](${urls[$i]})"
+              [ -n "${owners[$leaf]:-}" ] && line="$line — owner: ${owners[$leaf]}"
+              echo "$line"
+            done
             echo "### Environment"
             echo "- Branch: $BRANCH"
             if [ -n "${HEAD_SHA:-}" ]; then
