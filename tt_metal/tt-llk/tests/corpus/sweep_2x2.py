@@ -605,6 +605,20 @@ KNOBS = {
     # inert without the pressure-schedule pass flag.  Fires only on
     # pressure>8 regions — most rows honestly record
     # REFUSAL_BYTE_IDENTICAL.
+    # MEASURABILITY (IP-6, closed by lane IZ 2026-08-29): the pass
+    # originally gated on debug_info_level==DINFO_LEVEL_NONE while this
+    # harness compiles with -g (test_config.py debug_flag), so every
+    # milp cell booked before the fix was an A/A leg — the pass had
+    # NEVER run in a harness compile.  From sfpi-gcc
+    # agent/lp-schedule-debug-transparency (6af4fb42f9b) the pass is
+    # debug-TRANSPARENT (regions/pressure/order computed debug-blind,
+    # span binds re-emitted after the region, -fcompare-debug-clean
+    # twins) and this knob leg measures for real under the harness's
+    # stock -g.  First-ever census at that binary:
+    # laneIZ-evidence-20260830/ (corpus fire count + refusal census;
+    # the pass's corpus domain is straight-line single-BB SFPU
+    # functions, so the expected honest verdict on loop-shaped LLK
+    # kernels is refusal-by-cfg with byte-identical legs).
     "milp": "-mtt-tensix-optimize-pressure-schedule "
     "-mtt-tensix-pressure-schedule-use-milp",
     # ---- pin-16 NEW default-off flags (lane EN ceremony): knob legs
