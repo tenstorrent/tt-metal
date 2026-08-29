@@ -533,8 +533,6 @@ KNOBS = {
     # extension, never strip the long-standing parent with it (the
     # on-plus-era parent token existed purely for the dedup note above).
     "lut-select-fp16": "-mtt-tensix-optimize-lut-select-fp16",
-    "lut-select-fp16": "-mtt-tensix-optimize-lut-select "
-    "-mtt-tensix-optimize-lut-select-fp16",
     # HC (lut-prefix-hoist, 2026-08-25): crosscall CONFIG-PREFIX +
     # placement RESIDENCY — the geluappx-fresh +6.25 residual's named
     # "per-tile table-prefix/crosscall-residency" class.  The licensed
@@ -1529,7 +1527,6 @@ KNOB_MODES = {
     "replay-loop-unroll": "on-plus",
     "int-abs": "on-plus",
     "lut-select-leaf-ext": "on-plus",
-    "lut-select-fp16": "on-plus",
     "crosscall-config-prefix": "on-plus",
     "repr-prop": "on-plus",
     # pin-15 crown-jewel booking flags (lane DZ): shapes only materialize
