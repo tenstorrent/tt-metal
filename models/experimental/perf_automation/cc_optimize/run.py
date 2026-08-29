@@ -3284,6 +3284,9 @@ def _device_answers() -> bool:
         return False
 
 
+_THERMAL_GATE_BROKEN = [False]
+
+
 def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
     """Let the board cool BEFORE any device subprocess, not just before a measurement.
 
@@ -3318,8 +3321,18 @@ def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
                 % (label or "device work", temp),
                 flush=True,
             )
-    except Exception:  # noqa: BLE001 -- a gate that cannot run must not stop the work
-        pass
+    except Exception as exc:  # noqa: BLE001 -- a gate that cannot run must not stop the work
+        if not _THERMAL_GATE_BROKEN[0]:
+            _THERMAL_GATE_BROKEN[0] = True
+            print(
+                "  [thermal-gate] WARNING: THE THERMAL GATE CANNOT RUN (%s: %s). Device work will "
+                "proceed with NO temperature protection for the rest of this run. On 2026-08-29 this "
+                "same failure was silent, the board held 99-103C for an hour, and two chips stopped "
+                "answering; a gate that cannot run must not stop the work, but it must SAY SO."
+                % (type(exc).__name__, str(exc)[:120]),
+                file=sys.stderr,
+                flush=True,
+            )
 
 
 _THERMAL_WATCH_REPORT_S = 300.0

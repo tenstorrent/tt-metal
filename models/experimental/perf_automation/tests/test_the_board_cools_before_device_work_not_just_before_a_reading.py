@@ -70,6 +70,12 @@ def test_a_gate_that_cannot_run_never_blocks_the_work():
     a hot board into a failed run -- worse than a reading the clamp check already knows to reject."""
     src = (_PA / "cc_optimize" / "run.py").read_text()
     i = src.index("def _wait_for_thermal_headroom_before_device_work(")
-    body = src[i : i + 2200]
+    body = src[i : src.index("\ndef ", i + 1)]
     assert "except Exception" in body, "the gate can raise into the launcher"
-    assert "pass" in body.split("except Exception")[1][:120], "the gate does not swallow its own failure"
+    tail = body.split("except Exception")[1][:600]
+    # SWALLOW, BUT SAY SO. This used to assert the literal `pass` -- that is asserting on SILENCE,
+    # and silence is exactly what let an inert gate go unnoticed on 2026-08-29 while the board held
+    # 99-103C for an hour and two chips stopped answering. The property is that the failure does not
+    # propagate into the launcher, AND that an operator can see protection is off.
+    assert "raise" not in tail, "the gate propagates its own failure into the launcher"
+    assert "WARNING" in tail, "an inert gate must announce itself, not fail silently"

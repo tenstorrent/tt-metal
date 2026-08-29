@@ -889,6 +889,29 @@ _COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
 _MAX_THROTTLE_RETRIES = int(os.environ.get("PERF_MCP_THROTTLE_RETRIES", "2") or "2")
 
 
+_THERMAL_INERT_WARNED = [False]
+
+
+def _warn_thermal_inert(where: str, exc: BaseException) -> None:
+    """Say ONCE, loudly, that temperature protection is not running.
+
+    "A gate that cannot run must not stop the work" is right, but it was implemented as `except:
+    pass`, which also means a gate that cannot run does not TELL anyone. On 2026-08-29 a swallowed
+    ImportError left every thermal gate inert; the board held 99-103C for an hour and chips 2 and 3
+    stopped answering, and the log looked completely ordinary throughout. The run still continues --
+    that part was never wrong -- but silence is what made a one-line bug cost two chips.
+    """
+    if _THERMAL_INERT_WARNED[0]:
+        return
+    _THERMAL_INERT_WARNED[0] = True
+    print(
+        "  [thermal-gate] WARNING: temperature protection is INERT at %s (%s: %s). Device work will "
+        "continue with NO thermal gating for the rest of this run." % (where, type(exc).__name__, str(exc)[:110]),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _cc_optimize(name: str):
     """Import a cc_optimize module however THIS process happens to have loaded the tool.
 
@@ -955,7 +978,8 @@ def thermal_yield(label: str = "") -> None:
             return
         _thermal_yield_last[0] = now
         _cc_optimize("run")._wait_for_thermal_headroom_before_device_work(label or "next unit")
-    except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+    except Exception as exc:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+        _warn_thermal_inert("thermal_yield", exc)
         return
 
 
@@ -1194,7 +1218,8 @@ def _execute(
         _thermal_watch_new = _run._thermal_watch_new
         _thermal_watch_sample = _run._thermal_watch_sample
         _run._wait_for_thermal_headroom_before_device_work(_therm_label)
-    except Exception:  # noqa: BLE001 -- a gate that cannot run must never stop the work
+    except Exception as exc:  # noqa: BLE001 -- a gate that cannot run must never stop the work
+        _warn_thermal_inert("_execute launch gate", exc)
 
         def _thermal_watch_new():
             return {}
@@ -1496,8 +1521,8 @@ def make_run_profiled(
         # one place (perf_mcp) and is called from the two points where device work STARTS.
         try:
             _cc_optimize("run")._wait_for_thermal_headroom_before_device_work("profiled run")
-        except Exception:  # noqa: BLE001 -- never let the gate stop the run
-            pass
+        except Exception as exc:  # noqa: BLE001 -- never let the gate stop the run
+            _warn_thermal_inert("make_run_profiled", exc)
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
         support_count = int(env.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or 0)
