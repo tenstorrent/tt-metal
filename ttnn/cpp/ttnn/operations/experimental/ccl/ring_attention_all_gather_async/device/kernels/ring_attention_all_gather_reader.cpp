@@ -36,6 +36,10 @@ constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr bool has_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t num_links = get_compile_time_arg_val(13);
+// Host-derived even-ring split-forwarding gate: the parent fused op owns this protocol decision and
+// passes the same flag to both all-gather directions and its own receiver, so producer and consumer
+// cannot disagree. Standalone (non-fused) callers get the legacy even-ring topology gate from the host.
+constexpr bool split_forwarding_enabled = get_compile_time_arg_val(14);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -43,7 +47,7 @@ constexpr uint32_t num_links = get_compile_time_arg_val(13);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 14;
+    constexpr uint32_t page_size_base_idx = 15;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -198,7 +202,7 @@ void kernel_main() {
     }
 
     // Mirror the writer's split-forwarding (see ring_attention_all_gather_writer.cpp): on an even ring the diametric
-    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    // slice is relayed half per direction. The gate is a host-derived compile-time flag (see top of file).
     if (split_forwarding_enabled && direction == 1) {
         slices_expected++;
         writes_expected++;

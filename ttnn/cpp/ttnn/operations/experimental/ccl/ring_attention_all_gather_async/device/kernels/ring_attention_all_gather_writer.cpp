@@ -49,9 +49,11 @@ constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
 constexpr bool has_metadata = get_compile_time_arg_val(16);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
 constexpr uint32_t num_links = get_compile_time_arg_val(18);
+// Host-derived even-ring split-forwarding gate; see ring_attention_all_gather_reader.cpp for semantics.
+constexpr bool split_forwarding_enabled = get_compile_time_arg_val(19);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 19;
+    constexpr uint32_t page_size_base_idx = 20;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
     // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
@@ -306,8 +308,8 @@ void kernel_main() {
         }
     }
 
-    // On an even ring the terminal relayed slice
-    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    // On an even ring the terminal relayed slice (the downstream neighbor's diametric shard) is relayed
+    // half per direction. The gate is a host-derived compile-time flag (see top of file).
     if (split_forwarding_enabled && direction == 1) {
         writes_expected++;
     }

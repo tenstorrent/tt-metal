@@ -1182,11 +1182,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         sdpa_fused_op_signaler->initialized_fused_op = true;
     }
 
-    // Must match the all-gather kernels' split-forwarding gate exactly
+    // Single host-derived split-forwarding decision, shared with the all-gather (passed to the
+    // helper below), so producer and consumer cannot disagree. Latent-V stays on the established
+    // unsplit protocol (its cache-replay consumption would deadlock waiting for a second half);
+    // sliding-window consumes shards via get_next_ring_id_and_consume_one_signal, which has no
+    // split second-half wait.
     sdpa_fused_op_signaler->split_forwarding_enabled =
         (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) &&
         (args.all_gather_operation_attributes.ring_size % 2 == 0) &&
-        (args.all_gather_operation_attributes.ring_size > 2);
+        (args.all_gather_operation_attributes.ring_size > 2) && !tensor_args.has_latent_v() &&
+        !args.has_sliding_window();
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
@@ -2864,7 +2869,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
-            args.kv_cache_layer_idx);
+            args.kv_cache_layer_idx,
+            // Share the split-forwarding decision derived above so the all-gather only splits when this
+            // consumer implements the second-half wait.
+            sdpa_fused_op_signaler->split_forwarding_enabled);
     }
 
     return desc;
