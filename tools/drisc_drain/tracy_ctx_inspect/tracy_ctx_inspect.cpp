@@ -79,6 +79,8 @@ struct EthIv {
 };
 static std::vector<EthIv> g_rtt;
 static std::vector<long long> g_echo;
+static std::vector<long long> g_meas;
+static std::vector<long long> g_pred;
 
 static void collect_rtt(const tracy::Worker& w, const tracy::Vector<tracy::short_ptr<tracy::GpuEvent>>& vec) {
     auto take = [&](const tracy::GpuEvent& e) {
@@ -230,6 +232,16 @@ int main(int argc, char** argv) {
                     if (mn != nullptr && strcmp(mn, "ETH_SYNC_ECHO") == 0) {
                         g_echo.push_back((long long)m->gpuTime);
                     }
+                    // The close-time pair: MEASURED is where the peer's clock actually stood, PREDICTED is
+                    // where the init fit said it would. Their separation is the session's accumulated error,
+                    // and it must match the SESSION DRIFT the profiler logged -- one is drawn, one is
+                    // computed, so agreeing is a real cross-check rather than a restatement.
+                    if (mn != nullptr && strcmp(mn, "ETH_SYNC_ECHO_MEASURED") == 0) {
+                        g_meas.push_back((long long)m->gpuTime);
+                    }
+                    if (mn != nullptr && strcmp(mn, "ETH_SYNC_ECHO_PREDICTED") == 0) {
+                        g_pred.push_back((long long)m->gpuTime);
+                    }
                 }
             }
             if (win_hi > 0) {
@@ -309,6 +321,25 @@ int main(int argc, char** argv) {
             total_markers += ctx_markers;
             total_zones += c->count;
         }
+        // ---- SESSION DRIFT, as drawn ----
+        if (!g_meas.empty() && g_meas.size() == g_pred.size()) {
+            std::sort(g_meas.begin(), g_meas.end());
+            std::sort(g_pred.begin(), g_pred.end());
+            // Pair by rank: both series are the same 64 samples per link, drawn together.
+            long long lo = 0x7fffffffffffffffLL, hi = -0x7fffffffffffffffLL;
+            double sum = 0.0;
+            for (size_t i = 0; i < g_meas.size(); i++) {
+                const long long d = g_meas[i] - g_pred[i];
+                if (d < lo) { lo = d; }
+                if (d > hi) { hi = d; }
+                sum += (double)d;
+            }
+            printf("=== session drift, as drawn (%zu measured/predicted pairs) ===\n", g_meas.size());
+            printf("  measured - predicted: mean %+.3f us, range [%+.3f .. %+.3f] us\n",
+                   sum / (double)g_meas.size() / 1000.0, (double)lo / 1000.0, (double)hi / 1000.0);
+            printf("  [this is the gap visible on the eth lanes; it must match the logged SESSION DRIFT]\n");
+        }
+
         // ---- ETH DOMAIN vs WORKLOAD ----
         if (eth_hi > 0 && wrk_hi > 0) {
             // The sync runs BEFORE the workload, so a correctly anchored eth window ends before it. The

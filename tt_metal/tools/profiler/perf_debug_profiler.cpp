@@ -813,8 +813,9 @@ uint32_t eth_sync_gap_us() {
 // available as a consistency check when we want one.
 // Draw the eth sync's RAW round trips onto the two eth cores' own Tracy lanes: the sender's [t0,t2] as a
 // zone, the peer's t1 as a marker. This is the one alignment indicator in the trace that is NOT derived
-// from the anchors -- SYNC_ANCHOR markers are computed FROM the fit, so they line up by construction and
-// cannot contradict a wrong offset. These can: each is a measurement on its own device's clock, rendered
+// from the anchors. A marker derived FROM the fit lines up by construction and cannot contradict a wrong
+// offset, which is why an earlier per-core SYNC_ANCHOR marker was dropped rather than kept as decoration.
+// These can: each is a measurement on its own device's clock, rendered
 // through that device's own anchor, so if the anchors are right the peer's t1 lands INSIDE the sender's
 // zone. A t1 outside its zone is a causality violation, and therefore proof the alignment is wrong.
 //
@@ -873,6 +874,83 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
         const double err_ns = static_cast<double>(err_cycles) / freq;
         const double elapsed_s = dt_cycles / (freq * 1e9);
         const double rate_delta_ppm = (r.solution.rate - e.rate) * 1e6;
+        // ---- DRAW IT: measured vs predicted, on the peer's own eth lane ----
+        // Both timestamps are readings of the SAME clock (the receiver's), so rendering them through that
+        // core's one context puts them exactly `err_cycles` apart on screen -- the session's accumulated
+        // error, made visible instead of inferred from a log line. The context's anchor is the INIT one and
+        // is now stale, so their absolute position drifts with it; the SEPARATION is the honest quantity,
+        // and it is the one being read here.
+        if (tracy_ != nullptr) {
+            auto& cl = MetalContext::instance().get_cluster();
+            const CoreCoord rn = cl.get_physical_coordinate_from_logical_coordinates(
+                e.rcv_dev->id(), e.rcv_eth, CoreType::ETH, /*no_warn=*/true);
+            const CoreCoord sn = cl.get_physical_coordinate_from_logical_coordinates(
+                e.snd_dev->id(), e.snd_eth, CoreType::ETH, /*no_warn=*/true);
+            static constexpr std::string_view kCloseRtt = "ETH_SYNC_CLOSE_RTT";
+            static constexpr std::string_view kMeasured = "ETH_SYNC_ECHO_MEASURED";
+            static constexpr std::string_view kPredicted = "ETH_SYNC_ECHO_PREDICTED";
+            constexpr size_t kMaxDraw = 64;
+            const size_t n = std::min(r.trips.size(), kMaxDraw);
+
+            // Tracy wants non-decreasing arrival per lane, and the predicted marker can fall on either side
+            // of the measured one depending on the sign of the drift -- so order them explicitly rather
+            // than assuming. Interleaving them unsorted is what would corrupt the lane.
+            std::vector<std::pair<uint64_t, std::string_view>> echo;
+            echo.reserve(n * 2);
+            for (size_t i = 0; i < n; i++) {
+                const uint64_t mid = (r.trips[i].t0 + r.trips[i].t2) / 2;
+                const double d = static_cast<double>(static_cast<int64_t>(mid - e.ref_mid));
+                // What the INIT fit says the peer's clock read at this instant.
+                const uint64_t t1_pred = static_cast<uint64_t>(
+                    static_cast<int64_t>(mid) + e.offset + static_cast<int64_t>(std::llround(d * (e.rate - 1.0))));
+                echo.emplace_back(r.trips[i].t1, kMeasured);
+                echo.emplace_back(t1_pred, kPredicted);
+            }
+            std::sort(echo.begin(), echo.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+            for (const auto& [ts, nm] : echo) {
+                perf_debug::WorkerEventPacket ev;
+                ev.chip_id = e.receiver_chip;
+                ev.core_virtual_x = static_cast<uint32_t>(rn.x);
+                ev.core_virtual_y = static_cast<uint32_t>(rn.y);
+                ev.core_noc0_x = static_cast<uint32_t>(rn.x);
+                ev.core_noc0_y = static_cast<uint32_t>(rn.y);
+                ev.risc = 0;
+                ev.id = 0;
+                ev.name = nm;
+                ev.timestamp = ts;
+                ev.num_values = 0;
+                tracy_->HandleWorkerEvent(ev);
+            }
+            // The sender's round trips too, so the peer's pair has something to sit against.
+            for (size_t i = 0; i < n; i++) {
+                perf_debug::WorkerZonePacket z;
+                z.chip_id = e.sender_chip;
+                z.core_virtual_x = static_cast<uint32_t>(sn.x);
+                z.core_virtual_y = static_cast<uint32_t>(sn.y);
+                z.core_noc0_x = static_cast<uint32_t>(sn.x);
+                z.core_noc0_y = static_cast<uint32_t>(sn.y);
+                z.risc = 0;
+                z.timer_id = 0;
+                z.name = kCloseRtt;
+                z.start = r.trips[i].t0;
+                z.end = r.trips[i].t2;
+                z.color = 0xC0392Bu;  // red: the close-time pass, distinct from the green init pass
+                tracy_->HandleWorkerZone(z);
+            }
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {}: drew {} measured/predicted echo pair(s) "
+                "on chip {} eth NOC0 ({},{}) -- the gap between ETH_SYNC_ECHO_MEASURED and "
+                "ETH_SYNC_ECHO_PREDICTED IS the session's accumulated error ({:+.3f} us)",
+                e.sender_chip,
+                e.receiver_chip,
+                n,
+                e.receiver_chip,
+                rn.x,
+                rn.y,
+                err_ns / 1000.0);
+        }
+
         ++checked;
         if (std::fabs(err_ns) > std::fabs(worst_ns)) {
             worst_ns = err_ns;
@@ -1024,7 +1102,7 @@ void PerfDebugProfiler::emit_eth_sync_lanes() {
     log_info(
         tt::LogMetal,
         "[perf-debug profiler] eth sync lanes: {} zone(s) + {} marker(s) across {} link(s) -- RAW samples, "
-        "not fitted values, so they can contradict the anchors (SYNC_ANCHOR cannot)",
+        "not fitted values, so they can contradict the anchors rather than restate them",
         n_zones,
         n_marks,
         eth_sync_traces_.size());
@@ -1429,13 +1507,6 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             ctx.freq_ghz = root_freq_ghz_ * derived_rate;
             tracy_->AddDevice(
                 ctx.chip_id, root_host_anchor_, static_cast<double>(derived_clock), ctx.freq_ghz);
-            // Same PHYSICAL instant as every other device's marker (it is the root's host anchor mapped
-            // onto this chip's clock), so the markers line up vertically iff the anchors are right.
-            tracy_->SetSyncMarker(
-                ctx.chip_id,
-                derived_clock,
-                eth_sync_closure_valid_ ? eth_sync_worst_closure_ : 0,
-                (derived_rate - 1.0) * 1e6);
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} anchored via eth to root {}: device clock {} at the root's "
@@ -1469,13 +1540,6 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             }
             tracy_->AddDevice(
                 ctx.chip_id, sync.host_anchor, static_cast<double>(sync.device_at_anchor), sync.frequency);
-            // The root's own anchor IS the common instant every derived device was mapped onto, so it gets
-            // the same marker with rate 0 ppm -- it is the reference the others are quoted against.
-            tracy_->SetSyncMarker(
-                ctx.chip_id,
-                sync.device_at_anchor,
-                eth_sync_closure_valid_ ? eth_sync_worst_closure_ : 0,
-                0.0);
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} clock sync: frequency={:.6f} GHz (aiclk reports {:.6f}), "

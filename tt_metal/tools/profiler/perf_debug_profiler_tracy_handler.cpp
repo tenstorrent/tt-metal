@@ -142,54 +142,9 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     TracyTTContextPopulateCalibrated(ctx, a.host_start, a.first_timestamp, a.frequency);
     TracyTTContextName(ctx, ctx_name.c_str(), ctx_name.size());
     tracy_contexts_[key] = ctx;
-    EmitSyncMarkerLocked(chip_id, ctx, core_x, core_y);
     return ctx;
 #else
     return nullptr;
-#endif
-}
-
-void PerfDebugTracyHandler::SetSyncMarker(
-    uint32_t chip_id, uint64_t device_ticks, int64_t closure_cycles, double ppm_vs_root) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    sync_markers_[chip_id] = SyncMarker{device_ticks, closure_cycles, ppm_vs_root};
-}
-
-void PerfDebugTracyHandler::EmitSyncMarkerLocked(
-    [[maybe_unused]] uint32_t chip_id,
-    [[maybe_unused]] TracyTTCtx ctx,
-    [[maybe_unused]] uint32_t core_x,
-    [[maybe_unused]] uint32_t core_y) {
-#if defined(TRACY_ENABLE)
-    if (eth_cores_.count(ContextKey(chip_id, core_x, core_y)) != 0) {
-        return;  // an eth lane: its own raw samples say more than a derived anchor would
-    }
-    const auto it = sync_markers_.find(chip_id);
-    if (it == sync_markers_.end() || ctx == nullptr) {
-        return;  // no sync for this chip: better a lane with no marker than a marker with no meaning
-    }
-    // BRISC ONLY. Stamping all five lanes put five identical markers on every core, which reads as
-    // clutter across every RISC row and adds nothing: the anchor is a property of the CORE, not the lane.
-    {
-        const tracy::RiscType r = tracy::RiscType::BRISC;
-        tracy::TTDeviceMarker marker;
-        marker.chip_id = chip_id;
-        marker.core_x = core_x;
-        marker.core_y = core_y;
-        marker.risc = r;
-        marker.timestamp = it->second.device_ticks;
-        marker.runtime_host_id = 0;
-        marker.marker_type = tracy::TTDeviceMarkerType::DATA;
-        // ONE name for every device on purpose: identical names are what let the eye (and a filter) pick the
-        // whole cross-device column out at once. Which device it belongs to is already the row it sits on.
-        marker.marker_name = "SYNC_ANCHOR";
-        marker.file = "eth_wallclock_sync";
-        marker.line = 0;
-        // Tooltip reads these as Data / Data high: the alignment ACCURACY bound, and this device's rate.
-        marker.data = static_cast<uint64_t>(it->second.closure_cycles);
-        marker.data_high = static_cast<uint64_t>(static_cast<int64_t>(it->second.ppm_vs_root * 1000.0));
-        TracyTTPushMarker(ctx, marker);
-    }
 #endif
 }
 
