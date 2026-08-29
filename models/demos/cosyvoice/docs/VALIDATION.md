@@ -63,12 +63,19 @@ the other board of the same architecture.
 | Blackhole `p150a` | Blackhole | actively cooled, the faster of the two |
 | Blackhole `p150b` | Blackhole | passively cooled; ~5 % slower per token on identical work |
 
-**N150 was not available and is not claimed.** The scope is satisfied by N300. The two
-parts differ in chip count rather than in anything this model uses — nothing here is
-multi-chip — so an N150 result would be expected to track the n300 numbers, but that
-is a prediction and nothing in `PERF.md` reports it as a measurement.
-`tests/perf/gates.py`'s Wormhole expectations are recorded from n300 and will trip
-their band rather than silently absorb a different part.
+**N150 was not available, and what that does and does not leave open is worth being
+precise about.** The n300 board reports two Wormhole B0 chips — `n300 L` and `n300 R` —
+and the model runs on the local one, selected with `TT_VISIBLE_DEVICES=0`. **Nothing in
+this port is multi-chip**: there are no collectives, no fabric traffic and no mesh
+device; the tensor-parallel prototype that would have used the second chip was measured
+and not shipped (see below). So the compute the model actually uses on the n300 is one
+Wormhole B0 with an 8 × 8 grid — the same compute an N150 provides.
+
+That makes an N150 result *predictable* rather than *measured*, and the distinction is
+kept: nothing in `PERF.md` reports an N150 figure, and `tests/perf/gates.py`'s Wormhole
+expectations are recorded from n300 and will trip their two-sided band rather than
+silently absorb a different part. What would be expected to differ on an N150 is the
+host interface and the board's power envelope, not the grid the kernels run on.
 
 ---
 
