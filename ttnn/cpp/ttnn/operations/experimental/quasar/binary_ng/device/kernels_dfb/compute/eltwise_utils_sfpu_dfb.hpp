@@ -15,6 +15,12 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#if defined(ARCH_QUASAR) && defined(TT_UNPACK_TO_DEST_SECTION_SYNC)
+static_assert(
+    ckernel::trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>() >= 2,
+    "Quasar binary SFPU kernels require two sequential DEST slots per output");
+#endif
+
 template <typename ActivationFn>
 ALWI void preprocess_sfpu_impl_dfb(
     uint32_t dfb_pre_id,
@@ -38,19 +44,39 @@ ALWI void preprocess_sfpu_impl_dfb(
     dfb_pre.wait_front(per_core_block_size);
     dfb_post.reserve_back(per_core_block_size);
 
-    tile_regs_acquire();
-    for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_init(dfb_pre_id);
-        copy_tile(dfb_pre_id, i, i);
-        process_activations(i);
-    }
-    tile_regs_commit();
+#ifdef ARCH_QUASAR
+    if constexpr (UnpackToDestEn) {
+        // UNP_DEST advances sequentially within one physical DEST section and
+        // cannot select an arbitrary tile. Bound every preprocessing acquire
+        // to one source/result tile so it cannot overrun the section.
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            tile_regs_acquire();
+            copy_init(dfb_pre_id);
+            copy_tile(dfb_pre_id, i, 0);
+            process_activations(0);
+            tile_regs_commit();
 
-    tile_regs_wait();
-    for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        pack_tile(i, dfb_post_id);
+            tile_regs_wait();
+            pack_tile(0, dfb_post_id);
+            tile_regs_release();
+        }
+    } else
+#endif
+    {
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            copy_init(dfb_pre_id);
+            copy_tile(dfb_pre_id, i, i);
+            process_activations(i);
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            pack_tile(i, dfb_post_id);
+        }
+        tile_regs_release();
     }
-    tile_regs_release();
 
     dfb_pre.pop_front(per_core_block_size);
     dfb_post.push_back(per_core_block_size);

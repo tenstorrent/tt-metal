@@ -143,11 +143,17 @@ inline void llk_pack_dest_section_done() {
     if constexpr (UnpackToDestEn) {
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+#ifdef TT_UNPACK_TO_DEST_SECTION_SYNC
             _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::PACK0>();
+#else
+            _llk_sync_advance_dest_section_<ckernel::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
+#endif
         }
+#ifdef TT_UNPACK_TO_DEST_SECTION_SYNC
         // Return the physical-bank credit only after PACK0 has drained and
         // this thread has advanced its private section base.
         _llk_sync_post_(semaphore::PACK_UNPACK);
+#endif
     } else {
         _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
     }
@@ -166,9 +172,11 @@ inline void llk_pack_dest_init() {
     // Unpack-to-dest PACR addresses destination through the pack thread's SEC2 base.
     // Initialize it once here; later llk_pack_init() calls may retarget the output DFB
     // mid-kernel and must preserve the current SyncHalf bank parity.
+#ifdef TT_UNPACK_TO_DEST_SECTION_SYNC
     if constexpr (UnpackToDestEn && DST_SYNC_MODE == DstSync::SyncHalf) {
         _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
     }
+#endif
 }
 
 /**

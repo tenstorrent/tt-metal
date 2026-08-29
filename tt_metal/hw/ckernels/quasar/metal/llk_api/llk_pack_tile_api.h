@@ -29,6 +29,16 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 
     llk_pack_program_bfd(output_id);
     _llk_pack_init_(ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+
+#ifndef TT_UNPACK_TO_DEST_SECTION_SYNC
+    // The legacy per-copy unpack-to-DEST protocol resets pack parity whenever
+    // the output is retargeted. Section-scoped clients preserve parity across
+    // pack_init calls and initialize it once in llk_pack_dest_init instead.
+    if constexpr (UnpackToDestEn && DST_SYNC_MODE == DstSync::SyncHalf) {
+        _reset_dest_register_offset_();
+        _set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());
+    }
+#endif
 }
 
 /**

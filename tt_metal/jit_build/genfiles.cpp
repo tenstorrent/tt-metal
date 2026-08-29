@@ -71,6 +71,9 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
+    // Kernel defines must precede Metal 2 generated headers: bindings and named
+    // arguments can include compute APIs whose declarations are define-sensitive.
+    prolog << "#include \"defines_generated.h\"\n";
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
@@ -83,7 +86,6 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool 
         prolog << "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
-    prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
 

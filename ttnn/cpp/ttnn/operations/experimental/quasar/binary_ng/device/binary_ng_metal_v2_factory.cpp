@@ -497,6 +497,12 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     const bool has_lhs_act = !compute_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty();
     const bool has_rhs_act = !compute_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
+    if (is_sfpu) {
+        // The Metal 2 SFPU kernels process one output per DEST section. Opt them into the
+        // tile_regs-scoped unpack-to-DEST protocol without changing the descriptor/legacy
+        // kernels, whose batched layouts still rely on the original per-copy handshake.
+        compute_defines["TT_UNPACK_TO_DEST_SECTION_SYNC"] = "1";
+    }
     const bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
 

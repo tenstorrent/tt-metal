@@ -25,6 +25,10 @@
 
 /**
  * @brief Reset the unpack thread's destination-section tracking at program start.
+ *
+ * Unpack owns this section base in the unpack-to-DEST path because UNP_DEST is
+ * the DEST producer. It must program its private SEC0 slot directly instead of
+ * relying on the math thread to select a destination section on its behalf.
  */
 inline void llk_unpack_dest_section_sync_init() {
     if constexpr (UnpackToDestEn) {
@@ -42,6 +46,10 @@ inline void llk_unpack_dest_section_sync_init() {
 
 /**
  * @brief Reserve one destination section for all unpack-to-DEST writes in the current acquire/commit scope.
+ *
+ * Callers must keep their sequential direct-to-DEST writes within the physical
+ * capacity of one section. The binary DFB kernels enforce this by processing a
+ * single output at a time, using DEST 0/1 for its two operands.
  */
 inline void llk_unpack_wait_for_dest_available() {
     if constexpr (UnpackToDestEn) {
@@ -103,7 +111,9 @@ inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
  * @param operandB: The input1 operand circular buffer
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+#ifdef TT_UNPACK_TO_DEST_SECTION_SYNC
     llk_unpack_dest_section_sync_init();
+#endif
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
     const std::uint32_t unpB_operand_id = get_operand_id(unpB_operand);
 

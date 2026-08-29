@@ -320,6 +320,13 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
+#ifndef TT_UNPACK_TO_DEST_SECTION_SYNC
+        // The legacy per-copy protocol owns and advances the unpack section
+        // here. Section-scoped clients initialize it once at kernel startup.
+        ckernel::trisc::_reset_dest_register_offset_();
+        ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(ckernel::trisc::_get_dest_buffer_base_());
+#endif
+
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0 /*TRANSPOSE_EN forced false for UNP_DEST*/);
         cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
         _llk_unpack_unary_operand_mop_config_<UNP_SEL, IS_32b_DEST_EN>(buf_desc_id, num_tiles);
@@ -386,11 +393,25 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
     {
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
+#ifdef TT_UNPACK_TO_DEST_SECTION_SYNC
         // UNP_DEST is driven off the UNP_A bank's counters. Its destination
         // counter is reset once at tile_regs_acquire and advances by one in
         // the MOP, so direct-to-DEST copies must be issued sequentially.
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+#else
+        // Legacy descriptor kernels synchronize and advance one physical
+        // DEST bank per direct copy.
+        _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
+        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
+        TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+        if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
+        {
+            _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
+        }
+#endif
         return;
     }
 

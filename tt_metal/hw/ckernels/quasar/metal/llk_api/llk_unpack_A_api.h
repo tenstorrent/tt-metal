@@ -111,8 +111,9 @@ inline void llk_unpack_A_init(
  *
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
- * For the non-broadcast path, destination synchronization is scoped by tile_regs_acquire/tile_regs_commit; the
- * UNP_DEST routing decision is made solely from the `unpack_to_dest` template parameter (no format inspection).
+ * For the non-broadcast path, Metal 2 kernels opt into destination synchronization scoped by
+ * tile_regs_acquire/tile_regs_commit; legacy descriptor kernels retain the per-copy handshake. The UNP_DEST routing
+ * decision is made solely from the `unpack_to_dest` template parameter (no format inspection).
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches

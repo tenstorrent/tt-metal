@@ -30,7 +30,7 @@ namespace ckernel {
  */
 [[deprecated("Use tile_regs_acquire() instead")]]
 ALWI void acquire_dst() {
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(TT_UNPACK_TO_DEST_SECTION_SYNC)
     UNPACK((llk_unpack_wait_for_dest_available()));
 #endif
     MATH((llk_math_wait_for_dest_available()));
@@ -46,7 +46,7 @@ ALWI void acquire_dst() {
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  */
 ALWI void tile_regs_acquire() {
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(TT_UNPACK_TO_DEST_SECTION_SYNC)
     UNPACK((llk_unpack_wait_for_dest_available()));
 #endif
     MATH((llk_math_wait_for_dest_available()));
@@ -77,7 +77,7 @@ ALWI void tile_regs_wait() {
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Use tile_regs_release() instead")]]
 ALWI void release_dst() {
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(TT_UNPACK_TO_DEST_SECTION_SYNC)
     UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
 #endif
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
@@ -91,7 +91,7 @@ ALWI void release_dst() {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tile_regs_commit() {
-#ifdef ARCH_QUASAR
+#if defined(ARCH_QUASAR) && defined(TT_UNPACK_TO_DEST_SECTION_SYNC)
     UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
 #endif
     MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));
