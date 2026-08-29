@@ -80,8 +80,8 @@ RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
     (4, GLM52_KV_55K): 43.74,
     (4, GLM52_KV_512K): 47.26,
-    (8, GLM52_KV_55K): 51.82,
-    (8, GLM52_KV_512K): 55.12,
+    (8, GLM52_KV_55K): 58.07,
+    (8, GLM52_KV_512K): 60.15,
 }
 
 _FABRIC_2D_TORUS_DEVICE_PARAMS = {

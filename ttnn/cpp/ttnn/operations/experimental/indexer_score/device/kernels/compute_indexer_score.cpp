@@ -42,6 +42,9 @@ constexpr bool fuse_single = get_compile_time_arg_val(num_common_ct_args + 4) !=
 constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5) != 0;
 // Fused ring visits bands in the arrival-order permutation supplied in runtime args.
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
+constexpr bool shard_block_cyclic = get_compile_time_arg_val(num_common_ct_args + 7) != 0;
+constexpr uint32_t shard_chunk_local = get_compile_time_arg_val(num_common_ct_args + 8);
+constexpr uint32_t shard_sp = get_compile_time_arg_val(num_common_ct_args + 9);
 
 // k-cols sharing ONE dest acquire in the blocked-custom mul (dest-bounded). One unpack context per head
 // (w[h] + ct_dim qk cols), so unpack-context sync is paid 1/ct_dim of the per-tile bcast-mul rate.
@@ -418,6 +421,30 @@ inline void stamp_masked_suffix(
     }
 }
 
+/** Causal mask for a shard-major packed unit. Its logical tile ids are monotone but may jump between
+ *  block-cyclic runs, so find the prefix below the diagonal using the inverse physical mapping. */
+inline void stamp_masked_shard_major(
+    const ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp>& shard_span,
+    uint32_t q_row,
+    uint32_t slot_base,
+    uint32_t k_tiles_in_unit,
+    uint32_t chunk_start_tiles,
+    uint32_t straddle_q_tile,
+    uint32_t straddle_jump_tiles) {
+    const uint32_t q_row_abs = shard_span.q_tile_start() + q_row;
+    const uint32_t diag_tile =
+        iscore::causal_diag_tile(q_row_abs, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles);
+    uint32_t valid = 0;
+    while (valid < k_tiles_in_unit && shard_span.logical_tile(valid) < diag_tile) {
+        ++valid;
+    }
+    const uint32_t capacity = shard_span.capacity_tiles();
+    for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
+        const uint32_t logical_tile = k_col < capacity ? shard_span.logical_tile(k_col) : 0xFFFFFFFFu;
+        stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, logical_tile, diag_tile);
+    }
+}
+
 void kernel_main() {
     // Banded schedule: this core owns a (group-phase x band) rectangle. groups stream in num_groups phases
     // (group = row_group0 + p*group_stride); each walks num_bands k-bands (band = band0 + j). One cell ==
@@ -455,6 +482,8 @@ void kernel_main() {
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
+    ShardMajorWorkUnitSpan<shard_block_cyclic, shard_chunk_local, shard_sp> shard_span;
+    shard_span.set_valid_k_len_tiles(kv_len_tiles);
 
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;  // QC x KC accumulator slots
     constexpr uint32_t q_row_tiles = q_group_tiles / q_tiles_per_unit;    // heads_per_group * head_dim_tiles
@@ -468,10 +497,14 @@ void kernel_main() {
         const uint32_t group = row_group0 + phase * group_stride;
         for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
             uint32_t band = band_i;
+            uint32_t k_tiles_in_unit = 0;
             if constexpr (fused_ring_enabled) {
-                // Reordered band-visit order (local-first, then remote by ring arrival), IDENTICAL to
-                // reader/writer so the cb_k / cb_out FIFOs stay in lockstep. Permutation starts at rt slot 10.
-                band = get_arg_val<uint32_t>(10 + band_i);
+                const uint32_t physical_start = get_arg_val<uint32_t>(10 + band_i);
+                shard_span.set(group, physical_start, k_len_tiles / shard_sp);
+                k_tiles_in_unit = shard_span.k_tiles();
+            } else {
+                span.set(group, band0 + band);
+                k_tiles_in_unit = span.k_tiles();
             }
             if constexpr (stream_heads) {
                 if (band >= num_bands) {
@@ -479,11 +512,10 @@ void kernel_main() {
                     continue;
                 }
             }
-            span.set(group, band0 + band);
             // kv_len is runtime-variable while the work split is compiled for K capacity. Cells
             // wholly past that prefix have no K/output work. Head streaming still receives one
             // q-mcast block per band, so drain it to keep the row rendezvous in lockstep.
-            if (span.k_tiles() == 0) {
+            if (k_tiles_in_unit == 0) {
                 if constexpr (stream_heads) {
                     drain_phantom_band_q();
                 }
@@ -494,8 +526,6 @@ void kernel_main() {
             if constexpr (!fuse_single || !fused_stream_k) {
                 k.wait_front(k_chunk_tiles);
             }
-            const uint32_t k_tiles_in_unit = span.k_tiles();
-
             // Fused single-head: gate resident q by w IN PLACE once per group load (band 0; q is reused
             // across bands, so per-band scaling would compound w). One pass per output plane's head.
             if constexpr (fuse_single) {
@@ -537,14 +567,25 @@ void kernel_main() {
                     // Matmul left srcA in k's format; the mask copies a bf16 -inf tile -> reconfig srcA to bf16.
                     reconfig_data_format_srca(cb_k, cb_mask);
                     for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                        stamp_masked_suffix(
-                            span,
-                            r,
-                            r * k_tiles_per_unit,
-                            k_tiles_in_unit,
-                            chunk_start_tiles,
-                            straddle_q_tile,
-                            straddle_jump_tiles);
+                        if constexpr (fused_ring_enabled) {
+                            stamp_masked_shard_major(
+                                shard_span,
+                                r,
+                                r * k_tiles_per_unit,
+                                k_tiles_in_unit,
+                                chunk_start_tiles,
+                                straddle_q_tile,
+                                straddle_jump_tiles);
+                        } else {
+                            stamp_masked_suffix(
+                                span,
+                                r,
+                                r * k_tiles_per_unit,
+                                k_tiles_in_unit,
+                                chunk_start_tiles,
+                                straddle_q_tile,
+                                straddle_jump_tiles);
+                        }
                     }
                     acc.push_back(unit_strip);
                 } else {
@@ -572,14 +613,25 @@ void kernel_main() {
                             accumulate_row_streaming(q_row, slot_base);
                         }
 
-                        stamp_masked_suffix(
-                            span,
-                            q_row,
-                            slot_base,
-                            k_tiles_in_unit,
-                            chunk_start_tiles,
-                            straddle_q_tile,
-                            straddle_jump_tiles);
+                        if constexpr (fused_ring_enabled) {
+                            stamp_masked_shard_major(
+                                shard_span,
+                                q_row,
+                                slot_base,
+                                k_tiles_in_unit,
+                                chunk_start_tiles,
+                                straddle_q_tile,
+                                straddle_jump_tiles);
+                        } else {
+                            stamp_masked_suffix(
+                                span,
+                                q_row,
+                                slot_base,
+                                k_tiles_in_unit,
+                                chunk_start_tiles,
+                                straddle_q_tile,
+                                straddle_jump_tiles);
+                        }
                     }
                     acc.push_back(unit_strip);
                 }

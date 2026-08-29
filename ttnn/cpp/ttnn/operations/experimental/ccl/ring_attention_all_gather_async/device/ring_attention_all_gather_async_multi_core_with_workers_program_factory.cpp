@@ -176,6 +176,19 @@ bool supports_output_bank_owned_schedule(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+bool ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<Tensor>& output_tensors,
+    int32_t dim,
+    uint32_t ring_size,
+    const std::optional<uint32_t>& input_batch_slice_idx) {
+    return !input_tensors.empty() &&
+           CMAKE_UNIQUE_NAMESPACE::supports_output_bank_owned_schedule(
+               output_tensors, dim, input_tensors.front().buffer()->page_size()) &&
+           CMAKE_UNIQUE_NAMESPACE::forwarded_payload_bytes(input_tensors, ring_size, input_batch_slice_idx) >=
+               CMAKE_UNIQUE_NAMESPACE::kMinBankOwnedForwardedPayloadBytes;
+}
+
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
     const std::vector<Tensor>& input_tensors,
@@ -449,7 +462,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t chunk_local_tiles,
     uint32_t kv_cache_num_layers,
     uint32_t kv_cache_layer_idx,
-    bool split_forwarding_enabled) {
+    bool split_forwarding_enabled,
+    bool partial_readiness_enabled) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -498,13 +512,24 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    const bool bank_owned_supported =
-        supports_output_bank_owned_schedule(output_tensor, dim, l1_scratch_cb_page_size_bytes);
     // Keep this class stable for cached/traced programs: runtime valid-prefix changes only adjust page counts.
-    const uint64_t configured_forwarded_payload_bytes =
-        forwarded_payload_bytes(input_tensor, ring_size, input_batch_slice_idx);
-    const bool output_bank_owned_schedule =
-        bank_owned_supported && configured_forwarded_payload_bytes >= kMinBankOwnedForwardedPayloadBytes;
+    const bool output_bank_owned_schedule = ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
+        input_tensor, output_tensor, dim, ring_size, input_batch_slice_idx);
+    if (partial_readiness_enabled) {
+        TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
+        TT_FATAL(
+            output_bank_owned_schedule,
+            "Partial all-gather readiness currently requires the bank-owned packet schedule");
+        TT_FATAL(!split_forwarding_enabled, "Partial readiness and split forwarding cannot be enabled together");
+        TT_FATAL(input_tensor.size() == 1, "Partial all-gather readiness currently supports one input tensor");
+        const auto shape = input_tensor.front().padded_shape();
+        const uint32_t batch_heads =
+            (input_batch_slice_idx.has_value() ? 1u : shape[kBatchDimension]) * shape[kHeadDimension];
+        TT_FATAL(
+            batch_heads == 1,
+            "Partial all-gather readiness currently supports one gathered batch/head, got {}",
+            batch_heads);
+    }
     struct WorkerPlacement {
         CoreCoord core;
         uint32_t link;
@@ -655,6 +680,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(has_metadata),                // kHasMetadata
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
+            static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
             kPrefetchPackets,                                   // kPrefetchPackets
@@ -697,6 +723,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             meta_cb_index,                                      // kCbMetaId
             num_links,                                          // kNumLinks
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
+            static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
         };

@@ -43,6 +43,7 @@ enum CompileTimeArg : uint32_t {
     kCbMetaId,
     kNumLinks,
     kSplitForwardingEnabled,
+    kPartialReadinessEnabled,
     kOutputBankOwnedSchedule,
     kNumDramBanks,
     kNumFixedCompileTimeArgs,
@@ -69,6 +70,7 @@ constexpr bool has_metadata = get_compile_time_arg_val(kHasMetadata);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(kCbMetaId);
 constexpr uint32_t num_links = get_compile_time_arg_val(kNumLinks);
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(kSplitForwardingEnabled);
+constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 
@@ -236,6 +238,20 @@ void kernel_main() {
     constexpr uint32_t num_targets_in_direction =
         direction == 1 ? num_targets_backward_direction : num_targets_forward_direction;
 
+    const uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+    auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
+    const auto signal_output_ready = [&]() {
+        if constexpr (num_targets_in_direction) {
+            fabric_direction_connection->wait_for_empty_write_slot();
+            fabric_direction_connection->send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
+    };
+
     uint32_t slice_writes = 0;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
@@ -254,15 +270,39 @@ void kernel_main() {
                 const uint32_t output_page_base =
                     bh_idx * output_pages_per_batch_head + my_chip_id * input_pages_per_batch_head;
                 if constexpr (num_targets_in_direction) {
-                    write_bank_owned_slices(
-                        cb_output,
-                        output_addrgens[input_idx],
-                        pkt_hdr,
-                        *fabric_direction_connection,
-                        output_page_base,
-                        input_valid_pages[input_idx],
-                        worker_link[input_idx],
-                        num_links);
+                    if constexpr (partial_readiness_enabled) {
+                        const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                            input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                        write_bank_owned_slices(
+                            cb_output,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            output_page_base,
+                            first_pages,
+                            worker_link[input_idx],
+                            num_links);
+                        signal_output_ready();
+                        write_bank_owned_slices(
+                            cb_output,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            output_page_base + first_pages,
+                            input_valid_pages[input_idx] - first_pages,
+                            worker_link[input_idx],
+                            num_links);
+                    } else {
+                        write_bank_owned_slices(
+                            cb_output,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            output_page_base,
+                            input_valid_pages[input_idx],
+                            worker_link[input_idx],
+                            num_links);
+                    }
                 } else {
                     discard_bank_owned_slices(
                         cb_output, output_page_base, input_valid_pages[input_idx], worker_link[input_idx], num_links);
@@ -354,22 +394,9 @@ void kernel_main() {
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
     }
 
-    // 2. unicast output ready semaphore
-    uint64_t out_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-    auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
-
-    // Write the unicast packet. num_hops=1 is correct under both topologies: 1D ring-AG always
-    // targets the immediate neighbor; 2D ignores num_hops (HybridMesh::to_chip_unicast is a no-op
-    // and route_info carries the 2D destination).
-    if constexpr (num_targets_in_direction) {
-        fabric_direction_connection->wait_for_empty_write_slot();
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
-        fabric_direction_connection->send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-    }
+    // The completion marker is the only marker in the legacy protocol and the second marker in
+    // partial-readiness mode. num_hops=1 is correct for both supported Fabric topologies.
+    signal_output_ready();
 
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
@@ -425,15 +452,39 @@ void kernel_main() {
                 for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; ++bh_idx) {
                     const uint32_t output_page_base =
                         bh_idx * output_pages_per_batch_head + actual_slice_chip_id * input_pages_per_batch_head;
-                    write_bank_owned_slices(
-                        cb_output,
-                        output_addrgens[input_idx],
-                        pkt_hdr,
-                        *fabric_direction_connection,
-                        output_page_base,
-                        input_valid_pages[input_idx],
-                        first_bank,
-                        bank_stride);
+                    if constexpr (partial_readiness_enabled) {
+                        const uint32_t first_pages = ring_attention_all_gather::midpoint_prefix_pages(
+                            input_valid_pages[input_idx], input_tensor_Wt[input_idx]);
+                        write_bank_owned_slices(
+                            cb_output,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            output_page_base,
+                            first_pages,
+                            first_bank,
+                            bank_stride);
+                        signal_output_ready();
+                        write_bank_owned_slices(
+                            cb_output,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            output_page_base + first_pages,
+                            input_valid_pages[input_idx] - first_pages,
+                            first_bank,
+                            bank_stride);
+                    } else {
+                        write_bank_owned_slices(
+                            cb_output,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            output_page_base,
+                            input_valid_pages[input_idx],
+                            first_bank,
+                            bank_stride);
+                    }
                 }
             } else {
                 const uint32_t total_pages = input_tile_id_end[input_idx] - input_tile_id_start[input_idx];
@@ -512,12 +563,7 @@ void kernel_main() {
             }
         }
 
-        // 2. unicast output ready semaphore forward — route was set once on pkt_hdr_sem_inc
-        // before the writes loop above; unicast_route_info is constexpr, so no need to
-        // re-set it each iteration.
-        fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_direction_connection->send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        signal_output_ready();
 
         slice_writes++;
     }

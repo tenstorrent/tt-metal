@@ -26,6 +26,11 @@ struct LinkPageRange {
     uint32_t end;
 };
 
+// Row-aligned prefix exposed by the midpoint readiness marker.
+FORCE_INLINE uint32_t midpoint_prefix_pages(uint32_t valid_pages, uint32_t row_pages) {
+    return ((valid_pages / row_pages + 1) / 2) * row_pages;
+}
+
 struct BankOwnedSlice {
     uint32_t first_page_offset;
     uint32_t page_count;

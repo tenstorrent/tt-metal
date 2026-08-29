@@ -587,12 +587,12 @@ def get_sdpa_config(seq_len_local: int) -> dict | list | None:
 
 # DSA lightning-indexer scoring config, keyed by resident index-head count (index_n_heads). The
 # indexer runs indexer_score with head_group_size=0, so ALL index heads stay on-chip and the key
-# chunk is L1-bound, scaling ~1/heads. Values are the measured per-model optima (k_chunk sweep on
-# LoudBox / Blackhole at Sq=640, T=56320): a larger k_chunk OOMs L1 (DeepSeek@64h fits <=96,
-# GLM@32h fits <=256). DeepSeek is flat so 64 is optimal and L1-safe; GLM is ~8% faster at 224.
+# chunk is L1-bound, scaling ~1/heads. Values are measured per-model optima on Blackhole.
+# DeepSeek is flat at 64. GLM's fused ring path uses five-tile block-cyclic runs, so KC=10 avoids
+# splitting a run across work units while remaining fast at both 55K and 512K prefixes.
 DSA_INDEXER_CONFIG: dict[int, dict[str, int]] = {
     64: {"k_chunk_size": 64},  # DeepSeek V3.2
-    32: {"k_chunk_size": 224},  # GLM 5.1 / 5.2
+    32: {"k_chunk_size": 320},  # GLM 5.1 / 5.2
 }
 
 
