@@ -47,17 +47,21 @@ What it deliberately does NOT claim
   placement question, so it belongs to ``test_mtp_device_windows.py``.
 * **Multi-rank.** ``TtPrefillTransformer`` asserts MTP needs an embedding table on the rank that
   runs the tail, which today means single-galaxy (``is_first_rank == is_last_rank``).
-* **Weight loading, past the four MTP tensors.** MLA, the 256 experts, the embedding table and the
-  LM head stay seeded-random on both legs; the decoder layer's real weights cannot be covered at
-  this scale anyway -- a trained GLM gate on a synthetic input collapses isolated-block PCC to ~0.1
-  (measured by ``test_glm_prefill_block``). See the ``use_pretrained`` parametrize.
+* **A checkpoint-free run.** Every weight is a real GLM-5.2 one: the 78-layer trunk, the embedding
+  table and the LM head come out of the TTNN weight cache, layer 78 out of the checkpoint. There is
+  no random leg left, so the test skips on a box with neither rather than degrading into one.
+* **Real text.** The prompt is still ``p + 1`` at absolute position ``p``, the property claims 1, 3
+  and 4 read their failures through. Real token ids would make ``h^0`` a realistic hidden state;
+  they would also make every window assertion illegible.
 """
 
 from __future__ import annotations
 
 import copy
 import gc
+import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -69,7 +73,6 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import SparseMLARef
 from models.demos.deepseek_v3_d_p.reference.glm_5_2.mtp import glm_mtp_predictor_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.token_windows import GEN_SLOT, mtp_chunk_stream
@@ -78,7 +81,9 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import enable_mtp_indexer
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
+from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 SP_AXIS, TP_AXIS = 0, 1
@@ -89,35 +94,51 @@ SP_AXIS, TP_AXIS = 0, 1
 # test_prefill_block.py's block threshold. No per-level drift allowance: the reference is
 # teacher-forced, so nothing is inherited.
 FUSED_MTP_PCC = 0.999
-MTP_MODULE_OUTPUT_PCC = 0.98
 
-# The pretrained leg's own allowance; the random leg keeps 0.98 rather than both dropping to the
-# looser number, which would cost it half its sensitivity to buy nothing it needs.
+# The block-output allowance. MEASURED, but in a regime this test no longer runs: against a RANDOM
+# trunk and random layer-78 weights, L0's block output was 0.99319 / 0.99286 / 0.99268 by chunk;
+# swapping in the four real MTP tensors while everything else stayed random moved it to
+# 0.98259 / 0.97435 / 0.97085, sliding by -0.0082 then -0.0035. Teacher forcing pins each level's
+# hidden INPUT but not the KV caches -- each side accumulates K/V from its own outputs -- so chunk
+# 0's divergence seeds chunk 1's and compounds; the deltas halve per chunk, so it saturates rather
+# than diverging. 0.96 covered that plus 1.6e-4 to 2.9e-4 of run-to-run noise.
 #
-# MEASURED L0 block output by chunk -- random 0.99319 / 0.99286 / 0.99268, flat; pretrained
-# 0.98259 / 0.97435 / 0.97085, sliding by -0.0082 then -0.0035. Two drivers, only the first
-# established:
-#   * Teacher forcing pins each level's hidden INPUT but NOT the KV caches -- each side accumulates
-#     K/V from its own outputs -- so chunk 0's divergence seeds chunk 1's and compounds. The deltas
-#     halve per chunk, so it saturates rather than diverging.
-#   * The starting gap is HYPOTHESIS: a realistically-distributed ``x`` through a SYNTHETIC gate
-#     plausibly puts more top-8 selections near ties. Unmeasured -- it needs a device-vs-CPU top-8
-#     mismatch count.
+# At full depth on real weights this is PROVISIONAL and could move either way. The mechanism behind
+# the drop above is a TRAINED gate scoring a SYNTHETIC input, which ``test_glm_prefill_block``
+# measures at ~0.1 in isolation against ~0.995 in context -- and a real 78-layer trunk is the "in
+# context" end of that, so the number may well come back up. Against it: bfloat4_b experts, and 78
+# layers of accumulated KV on both sides. Re-measure before treating it as a floor.
+MTP_MODULE_OUTPUT_PCC = 0.96
+
+# Real routing is not uniform -- a trained gate concentrates tokens on some experts -- so the MoE
+# dispatch buffer needs headroom the random leg never did. 8 is what
+# test_prefill_transformer_chunked.py runs the pretrained 78-layer model with; the default is 2.
+DISPATCH_BUFFER_CAPACITY_FACTOR = 8
+
+# Cache-key namespace for the four MTP tensors, TtFusedMTP's own default. Named here because the
+# constructor and check_cache_complete must be handed the same one.
+MTP_CACHE_PREFIX = "mtp_0"
+
+# Where layer 78's cache goes: a SIBLING of the trunk cache, derived from it rather than hardcoded,
+# so it follows wherever TT_GLM52_PREFILL_TTNN_CACHE points. Layer 78 is not part of the transformer
+# the trunk cache was built for, and that directory is read-only to us anyway -- but its parent is
+# writable, which is what makes a sibling the right home:
 #
-# 0.96, not the measured 0.97085 floor: run-to-run noise is 1.6e-4 to 2.9e-4, and extrapolating the
-# halving deltas puts a 5-chunk run near 0.9686. It does not weaken the claim this leg exists for --
-# the fused projection is flat at 0.99995, gated at 0.999.
-MTP_MODULE_OUTPUT_PCC_PRETRAINED = 0.96
+#   /mnt/models/deepseek-prefill-cache/glm52_ttnn_cache/glm_5_2_bh_32dev/8x4      trunk, 401 GB
+#   /mnt/models/deepseek-prefill-cache/glm52_mtp_ttnn_cache/glm_5_2_bh_32dev/8x4  layer 78, 5.5 GB
+#
+# It must be on SHARED storage. ``~/.cache`` is node-local ext4 on these galaxy nodes -- a cache
+# written there is invisible from the login node and is rebuilt from scratch by the next job that
+# lands on a different node. /mnt/models is NFS and is visible everywhere.
+#
+# 48 files, written on the first run and read on every run after. ONE layer, not four:
+# TtMTPPredictor builds a single TtMTPModule and replays it K times, so all four levels share it.
+MTP_CACHE_ENV = "TT_GLM52_MTP_TTNN_CACHE"
 
 CHUNK = 5 * 1024  # 5120 -- the "5k chunk" of #53533, and TtPrefillTransformer.seq_len
 NUM_CHUNKS = 3
 NUM_LEVELS = 4  # MTP4
 TOTAL = CHUNK * NUM_CHUNKS  # 15360 prompt tokens
-
-# Only needs to exceed TOTAL so "id = absolute position + 1" stays injective; GLM-5.2's real 154880
-# would cost ~1.9 GiB per table instead of ~400 MiB. Nothing under test depends on it: the embedding
-# is a gather, and the LM head need only produce SOME in-vocab id for the generation slots.
-VOCAB = 32768
 
 
 def _shard_dims():
@@ -192,42 +213,44 @@ _MESH_PARAMS = [
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-# One trunk layer. GLM-5.2's NUM_DENSE_LAYERS is 3, so layer 0 is dense: a real h^0 through the real
-# embedding, norm and LM head, without 256 random experts whose numerics this test never checks.
-@pytest.mark.parametrize("num_layers", [1], ids=["layers1"])
+# Trunk depth: GLM-5.2's real one. It fits on ONE mesh because the trunk is loaded from the TTNN
+# weight cache -- ``state_dict={}``, every module reads its own .tensorbin straight to device -- so
+# there is no host-side peak at all, and the routed experts are stored bfloat4_b: 401 GB of cache
+# over 32 chips is 12.5 GiB/chip against 32 GB. Only layer 78 costs host memory (~19 GiB of fp8
+# dequant), because it is the one layer the cache has no entry for.
+#
+# 78 is also the ONLY depth this test can run at, which is why the axis has one value. Every block
+# cache key is ``f"layer_{layer_idx}"`` (tt_prefill_block.py, tt/moe/tt_moe.py), so a shorter trunk
+# would put the MTP block at an index the trunk already owns and write MTP weights into a trunk
+# layer's slot of the SHARED 401 GB cache. And the index-K stride the trunk derives
+# (``full_indexer_rank(first_layer_idx + i)``) equals the one TtMTPModule derives
+# (``num_full_indexer_layers``) only against the model's own 78-entry map -- both are 22 here.
+@pytest.mark.parametrize("num_layers", [78], ids=["layers78"])
 @pytest.mark.parametrize("variant", ["glm_5_2"], indirect=True, ids=["glm52"])
-# Weight axis. ``use_pretrained`` reaches ONLY the four MTP tensors -- enorm, hnorm, eh_proj and
-# shared_head.norm, via conftest's ``mtp_cfg`` + ``mtp_state_dict``. MLA, the 256-expert MoE, the
-# embedding table and the LM head are seeded-random on BOTH legs, built below.
+# Weight axis: pretrained only. Everything is real -- the 78-layer trunk, the embedding table and
+# the LM head out of the TTNN cache, layer 78's MLA + indexer + 256-expert MoE and the four MTP
+# tensors out of the checkpoint. There is no random leg because there is no random 78-layer trunk:
+# the cache is the only reason full depth fits, and it holds one particular model's weights.
+# ``test_mtp.py`` keeps the checkpoint-free coverage of the same modules at depth 1.
 #
-# That narrowness is what makes this leg a measurement rather than noise: test_mtp.py's module and
-# predictor tests are random-only because a TRAINED GLM gate on a synthetic input picks different
-# top-8 experts on device than on CPU, collapsing isolated-block PCC to ~0.1 while the same layer
-# scores ~0.995 in context (measured by ``test_glm_prefill_block``) -- an artifact, not an op bug.
-# This axis never touches the gate, so that mode is ATTENUATED, not absent, and that was learned the
-# hard way by this leg failing at 0.98: making the INPUT realistic while the gate stays synthetic
-# moved L0's block output 0.9932 -> 0.9827 -> 0.9746. Hence MTP_MODULE_OUTPUT_PCC_PRETRAINED above.
-#
-# What the axis changes, measured off the checkpoint at layer 78:
+# What the four MTP tensors look like, measured off the checkpoint at layer 78:
 #
 #     eh_proj embed half   std 0.0149   max|w| 0.227   max/mean|w|    19.2
 #     eh_proj hidden half  std 0.0238   max|w| 2.359   max/mean|w|   211.6
 #     enorm gain           std 0.0033   max|w| 0.053   max/mean|w|     1.3
 #     hnorm gain           std 0.0110   max|w| 0.459   max/mean|w|     6.2
 #
-# ``random_mtp_state_dict`` draws eh_proj from ``randn * (2H)**-0.5`` (both halves alike, no tail)
-# and both gains from ``randn*0.1 + 1``, so this leg is the only place the real half-to-half
-# asymmetry and 211:1 tail go through the concat, the bf16 matmul and the reduce_scatter at four
-# levels and across chunk seams. It holds at 0.99995.
-# ``test_mtp.py::test_fused_mtp_pcc[pretrained]`` covers the same four tensors standalone and
-# single-shot; this is the only place they run inside the transformer. Four tensors out of 141
-# shards, and it skips cleanly on a box with no checkpoint.
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
+# The half-to-half asymmetry and the 211:1 tail are what the concat, the bf16 matmul and the
+# reduce_scatter carry at four levels and across chunk seams; ``random_mtp_state_dict`` draws both
+# halves alike from ``randn * (2H)**-0.5`` and has neither.
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_mtp_transformer_chunks(
     variant,
     config_only,
+    model_path,
+    weight_cache_path,
     mesh_device,
     device_params,
     num_links,
@@ -235,6 +258,7 @@ def test_mtp_transformer_chunks(
     use_pretrained,
     mtp_cfg,
     mtp_state_dict,
+    mtp_layer_state_dict,
     monkeypatch,
 ):
     """3 x 5120 tokens of GLM-5.2 MTP4 end to end: every window, every level, exact ids.
@@ -263,32 +287,34 @@ def test_mtp_transformer_chunks(
     start because that is how much cache each level attends over. It is not in any CI yaml.
     """
     torch.manual_seed(42)
-
-    block_output_pcc = MTP_MODULE_OUTPUT_PCC_PRETRAINED if use_pretrained else MTP_MODULE_OUTPUT_PCC
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
 
     topology = per_axis_topology(device_params["fabric_config"])
     mesh_shape = list(mesh_device.shape)
-    sp_factor = mesh_shape[SP_AXIS]
+    sp_factor, tp_factor = mesh_shape[SP_AXIS], mesh_shape[TP_AXIS]
 
     # copy.copy, not the shared object: config_only is lru_cached, so the mutations below would
     # otherwise follow every other GLM-5.2 test. They rebind attributes, so shallow is enough.
     config = copy.copy(config_only)
     config.max_seq_len = TOTAL
-    config.vocab_size = VOCAB
+    assert (
+        config.num_hidden_layers == num_layers
+    ), f"this test runs the checkpoint's own depth; config says {config.num_hidden_layers}, not {num_layers}"
 
-    # The indexer map is rebuilt for the truncated model this test builds, and the MTP layer sits at
-    # NUM_DENSE_LAYERS rather than its real 78. Both follow from ONE constraint: trunk and MTP share
-    # a single index-K cache whose per-user slot stride TtIndexer derives two ways -- the trunk from
-    # ``full_indexer_rank(first_layer_idx + layer_num)``, the MTP block from
-    # ``num_full_indexer_layers`` (TtMTPModule passes no first_layer_idx, so it reads the whole-model
-    # count) -- and update_padded_kv_cache asserts the cache's batch dim is a multiple of it. Against
-    # the model's own 78-entry map the two disagree (3 vs 22 at num_layers=1), because layer 78's
-    # compacted rank of 21 is a fact about the full model, not a truncated one. Truncating the map,
-    # then appending the MTP slot, makes both sides agree by construction. NUM_DENSE_LAYERS is the
-    # smallest index that still sends TtPrefillBlock down its MoE branch, so the MTP block stays the
-    # full 256-expert MoE that the real layer 78 is.
-    config.indexer_types = list(config.indexer_types[:num_layers])
-    layer_idx = enable_mtp_indexer_slot(config, GLM52Config.NUM_DENSE_LAYERS)
+    # One index-K cache is shared by the trunk and the MTP block, and its per-user slot stride is
+    # derived TWICE: the trunk from ``full_indexer_rank(first_layer_idx + layer_num)``, the MTP block
+    # from ``num_full_indexer_layers`` (TtMTPModule passes no first_layer_idx, so it reads the
+    # whole-model count). update_padded_kv_cache TT_FATALs if the cache's batch dim is not a multiple
+    # of it, before any assertion below is reached -- so they are asserted equal here.
+    #
+    # Against the model's OWN 78-entry map they agree by construction: appending one "full" slot at
+    # 78 makes both 22. That is the whole reason this test only runs at full depth; a truncated map
+    # would need the MTP slot pinned somewhere it does not belong.
+    layer_idx = enable_mtp_indexer_slot(config)
+    assert (
+        layer_idx == mtp_cfg.mtp_layer_idx == num_layers
+    ), f"MTP slot {layer_idx} should be the checkpoint's layer {mtp_cfg.mtp_layer_idx} == depth {num_layers}"
     trunk_stride = full_indexer_rank(config, num_layers + NUM_LEVELS)
     mtp_stride = num_full_indexer_layers(config)
     assert trunk_stride == mtp_stride, (
@@ -301,45 +327,76 @@ def test_mtp_transformer_chunks(
 
     logger.info(
         f"[mtp chunks] mesh={mesh_shape} chunks={NUM_CHUNKS}x{CHUNK} total={TOTAL} K={NUM_LEVELS} "
-        f"trunk_layers={num_layers} mtp_layer={layer_idx} vocab={VOCAB} "
-        f"mtp_weights={'pretrained' if use_pretrained else 'random'}"
+        f"trunk_layers={num_layers} mtp_layer={layer_idx} vocab={config.vocab_size} "
+        f"cache={weight_cache_path}"
     )
 
     # --- Prompt: id at absolute position p is p + 1, so a decoded id names its own position -------
     prompt = list(range(1, TOTAL + 1))
-    assert max(prompt) < VOCAB
+    assert max(prompt) < config.vocab_size
 
     # --- Weights ---------------------------------------------------------------------------------
-    # Assembled directly in TtPrefillTransformer's state_dict format, not via create_hf_model /
-    # extract_tt_state_dict: those need ``variant.reference_model_cls`` and neither GLM adapter wires
-    # one, GLM shipping no HF modeling code this repo can instantiate. So the weights are generated
-    # here, seeded, at the shapes the device modules ask for.
-    #
-    # build_weights (not extract_layer_state_dict) supplies MLA because it emits GLM's indexer
-    # tensors -- wk / wq_b / weights_proj / k_norm -- which the extractor does not, and TtIndexer's
-    # fallback for a missing weight is torch.empty, which would make the last chunk's generated
-    # tokens irreproducible. One set shared by every block: nothing here checks their numerics.
-    mla_weights, _ = build_weights(variant, config, seed=42)
+    # The trunk never becomes a host tensor. ``state_dict={}`` puts TtPrefillTransformer in its
+    # load-from-cache mode, where every module hands ttnn.as_tensor a cache_file_name and the tensor
+    # goes .tensorbin -> device with no torch intermediate. That is the only reason 78 layers fit,
+    # and it is checked here rather than discovered as a missing-file error 40 layers in.
+    effective_cache_path = weight_cache_path / f"{sp_factor}x{tp_factor}"
+    experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
+    assert TtPrefillTransformer.check_cache_complete(
+        effective_cache_path,
+        num_layers,
+        experts_per_chip=experts_per_chip,
+        first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
-    def _randn(*shape, seed):
-        return torch.randn(*shape, generator=torch.Generator().manual_seed(seed)) * hidden**-0.5
+    # Layer 78 is the one layer the trunk cache has no entry for -- it is not part of the transformer
+    # that cache was built for -- so it gets its own directory, and it is NOT asserted: on a first run
+    # the constructor writes it (as_tensor prefers an existing cache file and creates it otherwise),
+    # on every run after it is loaded. Logged either way so a slow first run explains itself.
+    # weight_cache_path is <TT_GLM52_PREFILL_TTNN_CACHE>/<variant>_<arch>_<n>dev, so .parent.parent
+    # is the directory holding the trunk cache and the sibling lands beside it. See MTP_CACHE_ENV.
+    mtp_cache_root = Path(os.getenv(MTP_CACHE_ENV) or weight_cache_path.parent.parent / "glm52_mtp_ttnn_cache")
+    mtp_cache_path = mtp_cache_root / f"{variant.name}_{'bh' if is_blackhole() else 'wh'}_{ttnn.get_num_devices()}dev"
+    mtp_cache_path = mtp_cache_path / f"{sp_factor}x{tp_factor}"
+    mtp_cache_path.mkdir(parents=True, exist_ok=True)
 
-    state_dict = {
-        # float32 to match what extract_tt_state_dict hands the embedding.
-        "embed_weight": _randn(VOCAB, hidden, seed=10).float(),
-        "norm_weight": (torch.randn(hidden, generator=torch.Generator().manual_seed(12)) * 0.1 + 1.0).to(
-            torch.bfloat16
-        ),
-        "layers": [_random_glm_layer_state_dict(config, mla_weights, layer_idx=i) for i in range(num_layers)],
-        "lm_head_weight": _randn(VOCAB, hidden, seed=11).to(torch.bfloat16),
-    }
+    # check_cache_complete resolves every pattern against the PROCESS-GLOBAL checker directory that
+    # init_checker last set -- tt_distributed_rms_norm.check_cache_complete takes a cache_path and
+    # ignores it -- so the checker has to be aimed at this directory before it is asked about it,
+    # as tests/test_prefill_block.py:879 does. Without this the call above (TtPrefillTransformer's,
+    # which inits the checker to the TRUNK dir) leaves it pointed there, and a complete MTP cache is
+    # reported ABSENT. Only the message was ever wrong -- as_tensor does its own per-file check and
+    # loaded all 48 correctly -- but a status line that cannot say "present" is not worth printing.
+    init_checker(mtp_cache_path)
+    mtp_cached = TtMTPPredictor.check_cache_complete(
+        mtp_cache_path,
+        layer_idx,
+        cache_name_prefix=MTP_CACHE_PREFIX,
+        experts_per_chip=experts_per_chip,
+        model_cfg=variant.model_config,
+    )
+    init_checker(effective_cache_path)  # restore: the trunk owns the checker for its own build
+    logger.info(
+        f"[mtp chunks] MTP layer {layer_idx} cache at {mtp_cache_path}: "
+        f"{'present -- loading it' if mtp_cached else 'ABSENT -- building it (first run)'}"
+    )
 
-    # --- The MTP predictor -------------------------------------------------------------------------
-    # Built outside the constructor call and kept: claim (2)'s CPU reference needs the SAME layer
-    # weights the device got, so the dict must outlive construction. ~19 GiB resident (256 x 3 x
-    # [2048, 6144] bf16 plus the shared expert), which is why the trunk's state_dict is dropped
-    # below.
-    mtp_layer_sd = _random_glm_layer_state_dict(config, mla_weights, layer_idx=layer_idx)
+    # The embedding table, host side, for the MTP window embeddings claim 2 is teacher-forced from.
+    # bf16 is the dtype TtParallelEmbedding stores it in, so the gather matches the device row for
+    # row. Pulled from the checkpoint rather than the cache because the cache holds it sharded.
+    embed_table = load_hf_state_dict_filtered(str(model_path), ["model.embed_tokens."])["model.embed_tokens.weight"].to(
+        torch.bfloat16
+    )
+    assert list(embed_table.shape) == [
+        config.vocab_size,
+        config.hidden_size,
+    ], f"embedding table {list(embed_table.shape)} != [{config.vocab_size}, {config.hidden_size}]"
+
+    # Layer 78's own decoder weights, kept: claim 2's CPU reference needs the SAME tensors the device
+    # got, so the dict must outlive construction. ~19 GiB resident (256 x 3 x [2048, 6144] bf16 plus
+    # the shared expert), the one large host allocation in this test.
+    mtp_layer_sd = mtp_layer_state_dict
+    mla_weights = mtp_layer_sd["mla_weights"]
     ref_moe_weights = {k: mtp_layer_sd[k] for k in ("gate_weights", "routed_expert_weights", "shared_expert_weights")}
 
     # first_cache_slot / layer_num are the two the transformer asserts on: levels write KV slots
@@ -361,6 +418,9 @@ def test_mtp_transformer_chunks(
         num_links=num_links,
         topology=topology,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        dispatch_buffer_capacity_factor=DISPATCH_BUFFER_CAPACITY_FACTOR,
+        weight_cache_path=mtp_cache_path,
+        cache_name_prefix=MTP_CACHE_PREFIX,
         is_chunked=True,
         max_seq_len=TOTAL,
         slot_num=1,
@@ -371,10 +431,12 @@ def test_mtp_transformer_chunks(
         mesh_device=mesh_device,
         config=config,
         model_cfg=variant.model_config,
-        state_dict=state_dict,
+        state_dict={},
+        weight_cache_path=effective_cache_path,
         num_layers=num_layers,
         seq_len=CHUNK,
         max_seq_len=TOTAL,
+        dispatch_buffer_capacity_factor=DISPATCH_BUFFER_CAPACITY_FACTOR,
         num_links=num_links,
         topology=topology,
         sp_axis=SP_AXIS,
@@ -387,10 +449,6 @@ def test_mtp_transformer_chunks(
         slot_num=1,
         mtp_predictor=predictor,
     )
-    # Taken BEFORE the free: every MTP window below is embedded from this, host side. bf16 is the
-    # dtype TtParallelEmbedding stores the table in, so the gather matches the device row for row.
-    embed_table = state_dict["embed_weight"].to(torch.bfloat16)
-    del state_dict
     gc.collect()
     ttnn.synchronize_device(mesh_device)
 
@@ -581,9 +639,9 @@ def test_mtp_transformer_chunks(
             # adds a whole DSA-MLA + 256-expert MoE, the third is that plus one more norm.
             _, msg = assert_with_pcc(ref_xs[level].unsqueeze(0), dev_x[level], FUSED_MTP_PCC)
             logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: fused projection PCC {msg}")
-            _, msg = assert_with_pcc(ref_outs[level].unsqueeze(0), dev_out[level], block_output_pcc)
+            _, msg = assert_with_pcc(ref_outs[level].unsqueeze(0), dev_out[level], MTP_MODULE_OUTPUT_PCC)
             logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: block output PCC {msg}")
-            _, msg = assert_with_pcc(ref_normeds[level].unsqueeze(0), dev_normed[level], block_output_pcc)
+            _, msg = assert_with_pcc(ref_normeds[level].unsqueeze(0), dev_normed[level], MTP_MODULE_OUTPUT_PCC)
             logger.info(f"[mtp chunks] chunk {chunk_idx} L{level}: shared_head.norm PCC {msg}")
 
             # Two claims the whole-tensor PCC cannot resolve: each turns on at most K rows out of C,
@@ -607,45 +665,3 @@ def test_mtp_transformer_chunks(
         del dev_x, dev_out, dev_normed, ref_hiddens, ref_xs, ref_outs, ref_normeds
 
     logger.info(f"[mtp chunks] generated tokens for the final K slots: {generated}")
-
-
-def _random_glm_layer_state_dict(config, mla_weights, layer_idx):
-    """Random weights for one GLM-5.2 DSA decoder block, in ``TtPrefillBlock``'s state_dict format.
-
-    ``layer_idx`` selects dense vs MoE by ``TtPrefillBlock``'s own rule (``layer_idx >=
-    first_k_dense_replace``), so the choice is made the same way the device makes it. Defined here
-    rather than reusing ``test_mtp.py``'s ``_glm_layer_weights`` -- that module is itself collected
-    by pytest, and only the state_dict half of what it returns is needed. ``mla_weights`` is shared
-    across blocks: nothing here checks their numerics, and one set means one allocation.
-    """
-    hidden = config.hidden_size
-    g = torch.Generator().manual_seed(3 + layer_idx)
-    hs = hidden**-0.5
-
-    def _norm(seed):
-        return (torch.randn(hidden, generator=torch.Generator().manual_seed(seed)) * 0.1 + 1.0).to(torch.bfloat16)
-
-    def _mlp(inter):
-        ds = inter**-0.5
-        return {
-            "gate_proj": (torch.randn(inter, hidden, generator=g) * hs).to(torch.bfloat16),
-            "up_proj": (torch.randn(inter, hidden, generator=g) * hs).to(torch.bfloat16),
-            "down_proj": (torch.randn(hidden, inter, generator=g) * ds).to(torch.bfloat16),
-        }
-
-    layer_sd = {
-        "attn_norm_weight": _norm(1 + layer_idx),
-        "mla_weights": mla_weights,
-        "ffn_norm_weight": _norm(1001 + layer_idx),
-    }
-    if layer_idx < config.first_k_dense_replace:
-        layer_sd["ffn_weights"] = _mlp(config.intermediate_size)
-        return layer_sd
-    moe_inter = GLM52Config.MOE_INTERMEDIATE_SIZE
-    layer_sd["gate_weights"] = {
-        "weight": (torch.randn(GLM52Config.NUM_ROUTED_EXPERTS, hidden, generator=g) * hs).to(torch.bfloat16),
-        "e_score_correction_bias": (torch.randn(GLM52Config.NUM_ROUTED_EXPERTS, generator=g) * 0.01).to(torch.float32),
-    }
-    layer_sd["routed_expert_weights"] = [_mlp(moe_inter) for _ in range(GLM52Config.NUM_ROUTED_EXPERTS)]
-    layer_sd["shared_expert_weights"] = _mlp(moe_inter)
-    return layer_sd
