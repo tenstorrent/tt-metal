@@ -31,6 +31,9 @@ set(TTNN_OP_NORMALIZATION_SRCS
     layernorm_distributed/layernorm_post_all_gather.cpp
     layernorm_distributed/layernorm_pre_all_gather.cpp
     rmsnorm/rmsnorm.cpp
+    rmsnorm_distributed/rmsnorm_distributed_bw_utils.cpp
+    rmsnorm_distributed/rmsnorm_post_all_gather_bw.cpp
+    rmsnorm_distributed/rmsnorm_pre_all_gather_bw.cpp
     shard_spec_validation.cpp
     softmax/softmax.cpp
     softmax/device/softmax_device_operation.cpp
@@ -65,7 +68,6 @@ set(TTNN_OP_NORMALIZATION_NANOBIND_SRCS
     layernorm/layernorm_nanobind.cpp
     layernorm_distributed/layernorm_distributed_nanobind.cpp
     normalization_nanobind.cpp
-    rmsnorm/rmsnorm_nanobind.cpp
     rmsnorm/rmsnorm_nanobind.cpp
     rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
     softmax/softmax_nanobind.cpp

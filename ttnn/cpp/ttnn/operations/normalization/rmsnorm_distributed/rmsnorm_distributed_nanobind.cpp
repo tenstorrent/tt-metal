@@ -8,12 +8,16 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 
 #include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
+#include "rmsnorm_pre_all_gather_bw.hpp"
+#include "rmsnorm_post_all_gather_bw.hpp"
 
 namespace ttnn::operations::normalization::detail {
 
@@ -175,6 +179,90 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
 void bind_normalization_rms_norm_distributed(nb::module_& mod) {
     bind_normalization_rmsnorm_pre_all_gather_operation(mod);
     bind_normalization_rmsnorm_post_all_gather_operation(mod);
+
+    ttnn::bind_function<"rms_norm_pre_all_gather_bw">(
+        mod,
+        R"doc(
+              First stage of distributed RMSNorm backward. Pair with :func:`ttnn.all_gather` on the last
+              dim, then :func:`ttnn.rms_norm_post_all_gather_bw`.
+
+              ``stats`` is the gathered output of :func:`ttnn.rms_norm_pre_all_gather`. The returned
+              tensor uses the same one-tile-column layout, with this shard's
+              :math:`\sum x \cdot (\gamma \partial L / \partial y) / \mathrm{rms}` in column 0.
+
+              Args:
+                input_tensor (ttnn.Tensor): the forward input shard.
+                output_grad (ttnn.Tensor): gradient of the RMSNorm output shard.
+                stats (ttnn.Tensor): gathered forward stats.
+
+              Keyword args:
+                epsilon (float, optional): Defaults to `1e-12`.
+                weight (ttnn.Tensor, optional): gamma shard. Defaults to `None`.
+                compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+              Returns:
+                ttnn.Tensor: one-tile-wide backward stats to all-gather.
+
+              Limitations:
+                - Rank-4 interleaved TILE tensors on-device, BFLOAT16 or FLOAT32.
+                - :attr:`weight` must be a ``[1, 1, 1, W]`` TILE row matching the shard's last dim.
+                - All shards must have the same width.
+                - Composite of eltwise / reduction ops with FP32 accumulation. The output follows
+                  the input's memory config; there is no :attr:`memory_config` argument.
+        )doc",
+        &ttnn::rms_norm_pre_all_gather_bw,
+        nb::arg("input_tensor"),
+        nb::arg("output_grad"),
+        nb::arg("stats"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
+
+    ttnn::bind_function<"rms_norm_post_all_gather_bw">(
+        mod,
+        R"doc(
+              Second stage of distributed RMSNorm backward.
+
+              ``stats`` is the gathered forward stats; ``bw_stats`` is the all-gathered output of
+              :func:`ttnn.rms_norm_pre_all_gather_bw`.
+
+              Returns this shard's ``input_grad`` and ``weight_grad``. ``weight_grad`` is local to the
+              shard: gamma is sharded alongside the input, so it needs no cross-device reduction.
+
+              Args:
+                input_tensor (ttnn.Tensor): the forward input shard.
+                output_grad (ttnn.Tensor): gradient of the RMSNorm output shard.
+                stats (ttnn.Tensor): gathered forward stats.
+                bw_stats (ttnn.Tensor): gathered backward stats.
+
+              Keyword args:
+                epsilon (float, optional): Defaults to `1e-12`.
+                weight (ttnn.Tensor, optional): gamma shard. Defaults to `None`.
+                compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+              Returns:
+                list[ttnn.Tensor | None]: ``[input_grad, weight_grad]``, where ``weight_grad`` is
+                ``None`` when :attr:`weight` is not provided.
+
+              Limitations:
+                - Rank-4 interleaved TILE tensors on-device, BFLOAT16 or FLOAT32.
+                - :attr:`weight` must be a ``[1, 1, 1, W]`` TILE row matching the shard's last dim;
+                  ``weight_grad`` comes back in that same shape.
+                - :attr:`stats` and :attr:`bw_stats` must be all-gathered over the same devices.
+                - All shards must have the same width.
+                - Composite of eltwise / reduction ops with FP32 accumulation. The outputs follow
+                  the input's memory config; there is no :attr:`memory_config` argument.
+        )doc",
+        &ttnn::rms_norm_post_all_gather_bw,
+        nb::arg("input_tensor"),
+        nb::arg("output_grad"),
+        nb::arg("stats"),
+        nb::arg("bw_stats"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::normalization::detail
