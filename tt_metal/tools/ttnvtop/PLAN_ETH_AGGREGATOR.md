@@ -1026,6 +1026,70 @@ Actions:
 The test SKIPs rather than fails when the launch wedges, since the data path is what
 it covers and that is proven.
 
+## 5h. 7.7 RESOLVED -- the tunnel was waiting on channels it never uses -- 2026-08-29
+
+7.7 (remote launch wedging the NON_MMIO tunnel) is fixed, and the fix was already
+sitting in the plan as 7.3.
+
+### Cause
+
+`cluster.cpp:780`, the default when nobody overrides it:
+
+```cpp
+const std::set<uint32_t> active_channels = cluster_desc->get_active_eth_channels(chip_id);
+remote_communications_.at(chip_id)->set_remote_transfer_ethernet_cores(... active_channels ...);
+```
+
+UMD uses **every active eth channel on the MMIO chip** for remote transfers, and
+tt-metal **never calls** `configure_active_ethernet_cores_for_mmio_device` to narrow it.
+On a T3K MMIO chip that is six channels, confirmed on hardware:
+
+```
+tunnel: mmio chip 3 active eth channels: 6 7 8 9 14 15
+```
+
+Per the board map (2): 6,7 -> a QSFP-DD cage, 8,9 -> the internal trace to this chip's
+own remote ASIC, 14,15 -> the Warp 100 bridge. Only **8,9** can carry a transfer to
+chip 4. The other four link to entirely different boards.
+
+`wait_for_non_mmio_flush` nevertheless iterates ALL of them and waits for each to drain
+its request queue and match its write-response counters. Four of those six are busy
+carrying fabric traffic for other chips and do not drain inside the fixed 5 s
+`NON_MMIO_RW_TIMEOUT`. UMD also round-robins `active_eth_core_idx` across the whole set,
+so transfers get issued on channels that cannot reach the target at all.
+
+### Measurement
+
+Remote launch of the aggregator on the T3K, varying only the tunnel's channel set:
+
+| tunnel channels | pass rate |
+|---|---|
+| default (6,7,8,9,14,15) | **1/6** |
+| **8,9 -- the link pair to the remote chip** | **14/14** |
+| 8 alone | 0/4 |
+| 9 alone | 0/6 |
+| 6,7 (QSFP -- wrong link) | 0/3 |
+
+Both channels of the pair, and nothing else. Deriving the set from the cluster
+descriptor rather than hardcoding it -- `get_directly_connected_ethernet_channels_
+between_chips(mmio_id, remote_id)` -- gives **8/8**, with the aggregator's own numbers
+unchanged and correct (64 cores, `lost=0`).
+
+### This is bigger than the aggregator
+
+Nothing here is specific to this feature. It applies to **every remote-chip operation
+on a T3K**: the tunnel waits on four ethernet cores that are irrelevant to the transfer
+and contended by fabric. That is very likely a contributor to 5c, where the collector
+held NON_MMIO for tens of seconds under Llama-3.3-70B and stalled the workload.
+
+**Recommendation for the tt-metal/UMD owners:** call
+`configure_active_ethernet_cores_for_mmio_device()` at device init with the channels
+that actually link each MMIO chip to its remote chips, instead of leaving UMD to
+default to all active channels. It is a one-call change with a measured 1/6 -> 14/14
+effect on an idle machine.
+
+Until that lands, the aggregator's launcher applies the pinning itself.
+
 ## 6. Risks
 
 | Risk | Mitigation |
@@ -1055,9 +1119,12 @@ it covers and that is proven.
    writes go through UMD, and the dev_msgs `launch_msg_t` layout is already generated
    into `tt_metal/hw/inc`. The collector stays standalone. The remaining work is a build
    task: emit the aggregator ERISC ELF as a fixed artifact instead of JIT-compiling it.
-3. **Should this land with `configure_active_ethernet_cores_for_mmio_device()`?**
-   Pinning UMD's remote traffic away from fabric-carrying channels is a separate,
-   smaller win that stacks with this. Worth measuring independently.
+3. ~~**Should this land with `configure_active_ethernet_cores_for_mmio_device()`?**~~
+   **ANSWERED 2026-08-29 (5h): YES, and it is not a smaller win -- it is the fix for
+   7.7.** Restricting the tunnel to the channel pair that actually links the MMIO chip
+   to its remote chip took remote launch from 1/6 to 14/14. It applies to every
+   remote-chip operation on a T3K, not just this feature, and is very likely a
+   contributor to 5c. Recommend tt-metal call it at device init.
 4. **Can a separate PID join an EDM whose flow-control state another process owns —
    and can a client ever safely LEAVE one?** Sharpened by 5f finding 3: a client that
    dies without `sender.close()` does not release its connection, and the next client
@@ -1078,10 +1145,9 @@ it covers and that is proven.
    `reserved_realtime_profiler_core_by_device_`), so the shape is established. Until
    then the aggregator refuses to start under ETH dispatch (3.4). **Blocks 2-CQ T3K
    only** -- every WORKER-dispatch configuration is unaffected.
-7. **Why does launching a kernel onto a remote chip wedge the NON_MMIO tunnel about
-   half the time on an IDLE T3K?** *For the UMD owners.* `wait_for_non_mmio_flush`
-   times out at its fixed 5 s `NON_MMIO_RW_TIMEOUT`; the condition is all-or-nothing
-   per process and survives a full board reset, and a control test launching a remote
-   idle-eth kernel the same way passes 4/4. See 5g for what is ruled out. **Blocks
-   reliable remote-chip launch**, which is M1's exit criterion, though the data path
-   itself is proven.
+7. ~~**Why does launching a kernel onto a remote chip wedge the NON_MMIO tunnel?**~~
+   **RESOLVED 2026-08-29 (5h).** UMD defaults the tunnel to every active eth channel on
+   the MMIO chip -- six on a T3K, four of which link to other boards entirely and are
+   contended by fabric -- and `wait_for_non_mmio_flush` waits for all of them. Pinning
+   to the link pair that reaches the target remote chip: 1/6 -> 14/14. The remaining
+   work is upstream (see 7.3), not investigation.

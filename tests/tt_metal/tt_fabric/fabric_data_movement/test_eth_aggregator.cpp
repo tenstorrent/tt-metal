@@ -19,6 +19,8 @@
 #include <memory>
 #include <thread>
 #include <set>
+#include <sstream>
+#include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -155,6 +157,47 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
         GTEST_SKIP() << "no remote chip";
     }
     const auto mmio_id = cluster.get_associated_mmio_device(sender->id());
+
+    // 7.3 -- the fix for 7.7, measured.
+    //
+    // By default UMD uses EVERY active eth channel on the MMIO chip for remote
+    // transfers (cluster.cpp: `get_active_eth_channels(chip_id)`), and tt-metal never
+    // calls configure_active_ethernet_cores_for_mmio_device to narrow it. On a T3K MMIO
+    // chip that is six channels -- 6,7 to a QSFP cage, 8,9 the internal trace to this
+    // chip's own remote ASIC, 14,15 the Warp bridge. wait_for_non_mmio_flush then waits
+    // for ALL SIX to drain, including four that link to entirely different boards and
+    // can never carry this transfer, but which are busy with fabric traffic.
+    //
+    // Restricting the tunnel to the channel pair that actually reaches the target
+    // remote chip (T3K, remote launch of the aggregator):
+    //
+    //   default (all six)         1/6
+    //   pinned 8,9                14/14
+    //   pinned 8 alone            0/4
+    //   pinned 9 alone            0/6
+    //   pinned 6,7 (wrong link)   0/3
+    //
+    // Both channels of the pair, and nothing else. Derived here rather than hardcoded.
+    {
+        const auto& desc = *cluster.get_driver()->get_cluster_description();
+        const auto pairs = desc.get_directly_connected_ethernet_channels_between_chips(mmio_id, sender->id());
+        std::unordered_set<tt::umd::CoreCoord> pinned;
+        std::string chans;
+        for (const auto& [local_ch, remote_ch] : pairs) {
+            pinned.insert(tt::umd::CoreCoord(0, local_ch, CoreType::ETH, CoordSystem::LOGICAL));
+            chans += std::to_string(local_ch) + " ";
+        }
+        ASSERT_FALSE(pinned.empty()) << "no direct eth link from mmio chip " << mmio_id << " to remote chip "
+                                     << sender->id();
+        cluster.get_driver()->configure_active_ethernet_cores_for_mmio_device(mmio_id, pinned);
+        log_info(
+            tt::LogTest,
+            "tunnel: pinned mmio chip {} to channels [{}] for remote chip {}",
+            mmio_id,
+            chans,
+            sender->id());
+    }
+
     tt::tt_metal::IDevice* receiver = nullptr;
     for (const auto& d : devices) {
         if (d->get_devices()[0]->id() == mmio_id) {
