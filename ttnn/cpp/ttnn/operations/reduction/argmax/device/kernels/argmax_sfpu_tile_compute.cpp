@@ -98,7 +98,11 @@ void kernel_main() {
     DataflowBuffer dfb_val(cb_res_val);
     DataflowBuffer dfb_idx(cb_res_idx);
 
-    init_sfpu(cb_in, cb_res_val);
+    // One-time hardware config, then the copy-op pipeline init that feeds the
+    // SFPU chain below. (This pair is exactly what the deprecated
+    // init_sfpu(icb, ocb) forwarded to; same model as argmax_nc_compute.cpp.)
+    compute_kernel_hw_startup(cb_in, cb_res_val);
+    copy_init(cb_in);
     // Single where_tile_init for BOTH updates (fp32 max / int32 argmax) —
     // where_tile_init and binary_max_min_init both write SFPCONFIG macros 0
     // and 1, so they cannot coexist; see argmax_nc_compute.cpp.

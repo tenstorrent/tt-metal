@@ -38,7 +38,7 @@
 // dispatcher's semaphore init — starts clean.
 //
 // The exchange buffer is a CB allocated identically on every core, so a
-// worker's local get_write_ptr(cb_xchg) equals the gather core's address.
+// worker's local cb_xchg write pointer equals the gather core's address.
 //
 // Compile-time args: see the factory (argmax_sfpu_tile_program_factory.cpp).
 // Runtime args:
@@ -50,6 +50,12 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "internal/tt-1xx/risc_common.h"  // invalidate_l1_cache()
 
 namespace {
@@ -146,31 +152,37 @@ void kernel_main() {
     constexpr auto s_val_args = TensorAccessorArgs<s_dst_args.next_compile_time_args_offset()>();
     const auto s_val = TensorAccessor(s_val_args, val_base_addr, val_page_size);
 
-    // Input CB ring base (write pointer sits at base before any push).
-    const uint32_t in_base = get_write_ptr(cb_in);
+    Noc noc;
+    CircularBuffer in_cb(cb_in);
+    CircularBuffer res_val_cb(cb_res_val);
+    CircularBuffer res_idx_cb(cb_res_idx);
+    CircularBuffer xchg_cb(cb_xchg);
+    CircularBuffer stage_idx_cb(cb_stage_idx);
+    CircularBuffer stage_val_cb(cb_stage_val);
+
+    // Input CB ring base (write pointer sits at base before any push). The ring
+    // is addressed by GLOBAL page index, so the base is captured ONCE here: the
+    // CB's own write pointer advances on every push_back and cannot be used as
+    // the NoC destination, hence a CoreLocalMem over the fixed base + offset.
+    const CoreLocalMem<uint32_t> in_ring(in_cb.get_write_ptr());
 
     // Exchange buffer: allocated identically on every core, so the local
     // address doubles as the gather core's address for remote deposits.
-    const uint32_t xchg_base = get_write_ptr(cb_xchg);
-    volatile tt_l1_ptr uint32_t* const my_slot = (volatile tt_l1_ptr uint32_t*)(xchg_base + core_id * xchg_slot_bytes);
+    const uint32_t xchg_base = xchg_cb.get_write_ptr();
+    const uint32_t my_slot_addr = xchg_base + core_id * xchg_slot_bytes;
+    const CoreLocalMem<volatile uint32_t> my_slot(my_slot_addr);
 
     // Output staging buffers (gather core only; plain L1 scratch, no FIFO
     // semantics).
-    const uint32_t stage_idx_addr = get_write_ptr(cb_stage_idx);
-    const uint32_t stage_val_addr = get_write_ptr(cb_stage_val);
-    uint32_t* const stage_idx = (uint32_t*)stage_idx_addr;
-    uint16_t* const stage_val = (uint16_t*)stage_val_addr;
+    const CoreLocalMem<uint32_t> stage_idx(stage_idx_cb.get_write_ptr());
+    const CoreLocalMem<uint16_t> stage_val(stage_val_cb.get_write_ptr());
 
-    volatile tt_l1_ptr uint32_t* done_sem_ptr = nullptr;
-    volatile tt_l1_ptr uint32_t* start_sem_ptr = nullptr;
-    uint64_t gather_done_sem_noc = 0;
-    uint64_t gather_xchg_slot_noc = 0;
-    if constexpr (num_cores > 1) {
-        done_sem_ptr = (volatile tt_l1_ptr uint32_t*)get_semaphore(done_sem_id);
-        start_sem_ptr = (volatile tt_l1_ptr uint32_t*)get_semaphore(start_sem_id);
-        gather_done_sem_noc = get_noc_addr(gather_noc_x, gather_noc_y, get_semaphore(done_sem_id));
-        gather_xchg_slot_noc = get_noc_addr(gather_noc_x, gather_noc_y, xchg_base + core_id * xchg_slot_bytes);
-    }
+    // Semaphore handles resolve to a local L1 offset only — constructing them
+    // has no side effect, so they are unconditional even though every use is
+    // guarded by `if constexpr (num_cores > 1)` (the factory only allocates
+    // the semaphores in the multicore case).
+    Semaphore<> done_sem(done_sem_id);
+    Semaphore<> start_sem(start_sem_id);
 
     constexpr uint32_t num_passes = outer_dim_units * h_tiles;
 
@@ -189,26 +201,32 @@ void kernel_main() {
             uint32_t done = 0;
             while (done < w_count) {
                 const uint32_t chunk = (w_count - done < chunk_pages) ? (w_count - done) : chunk_pages;
-                cb_reserve_back(cb_in, chunk);
+                in_cb.reserve_back(chunk);
                 for (uint32_t k = 0; k < chunk; k++) {
                     const uint32_t slot = (t_global + k) % in_cb_pages;
-                    noc_async_read_tile(slice_first + done + k, s_src, in_base + slot * src_page_size);
+                    noc.async_read(
+                        s_src,
+                        in_ring,
+                        src_page_size,
+                        {.page_id = slice_first + done + k},
+                        {.offset_bytes = slot * src_page_size});
                     if ((k & 31u) == 31u) {
-                        noc_async_read_barrier();
+                        // Bound the outstanding NOC read count within a chunk.
+                        noc.async_read_barrier();
                     }
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_in, chunk);
+                noc.async_read_barrier();
+                in_cb.push_back(chunk);
                 t_global += chunk;
                 done += chunk;
             }
 
             // ---- phase 2: 32 lexicographic compares per valid row ----------
-            cb_wait_front(cb_res_val, 1);
-            cb_wait_front(cb_res_idx, 1);
+            res_val_cb.wait_front(1);
+            res_idx_cb.wait_front(1);
             invalidate_l1_cache();
-            const volatile tt_l1_ptr uint16_t* vals = (const volatile tt_l1_ptr uint16_t*)get_read_ptr(cb_res_val);
-            const volatile tt_l1_ptr uint32_t* tidx = (const volatile tt_l1_ptr uint32_t*)get_read_ptr(cb_res_idx);
+            const CoreLocalMem<volatile uint16_t> vals(res_val_cb.get_read_ptr());
+            const CoreLocalMem<volatile uint32_t> tidx(res_idx_cb.get_read_ptr());
 
             for (uint32_t r = 0; r < units; r++) {
                 uint16_t best_v = vals[face_elem(r, 0)];
@@ -225,36 +243,40 @@ void kernel_main() {
                 my_slot[r] = best_i;
                 my_slot[32u + r] = best_v;
             }
-            cb_pop_front(cb_res_val, 1);
-            cb_pop_front(cb_res_idx, 1);
+            res_val_cb.pop_front(1);
+            res_idx_cb.pop_front(1);
 
             if constexpr (num_cores > 1) {
                 if (!is_gather) {
                     // Slot-reuse credit: the gather core has consumed pass
                     // p-1 once start_sem >= p (cumulative).
                     if (pass > 0) {
-                        noc_semaphore_wait_min(start_sem_ptr, pass);
+                        start_sem.wait_min(pass);
                     }
-                    noc_async_write(xchg_base + core_id * xchg_slot_bytes, gather_xchg_slot_noc, xchg_slot_bytes);
-                    noc_async_write_barrier();
-                    noc_semaphore_inc(gather_done_sem_noc, 1);
-                    noc_async_atomic_barrier();
+                    noc.async_write(
+                        my_slot,
+                        UnicastEndpoint{},
+                        xchg_slot_bytes,
+                        {},
+                        {.noc_x = gather_noc_x, .noc_y = gather_noc_y, .addr = my_slot_addr});
+                    noc.async_write_barrier();
+                    done_sem.up(noc, gather_noc_x, gather_noc_y, 1);
+                    noc.async_atomic_barrier();
                 }
             }
 
             if (is_gather) {
                 if constexpr (num_cores > 1) {
-                    noc_semaphore_wait_min(done_sem_ptr, (pass + 1) * (num_cores - 1));
+                    done_sem.wait_min((pass + 1) * (num_cores - 1));
                     invalidate_l1_cache();
                 }
                 // ---- merge the per-core candidates, stage output rows ------
                 for (uint32_t r = 0; r < units; r++) {
-                    const volatile tt_l1_ptr uint32_t* slot0 = (const volatile tt_l1_ptr uint32_t*)xchg_base;
+                    const CoreLocalMem<volatile uint32_t> slot0(xchg_base);
                     uint32_t best_i = slot0[r];
                     uint16_t best_v = (uint16_t)slot0[32u + r];
                     for (uint32_t j = 1; j < num_cores; j++) {
-                        const volatile tt_l1_ptr uint32_t* slot =
-                            (const volatile tt_l1_ptr uint32_t*)(xchg_base + j * xchg_slot_bytes);
+                        const CoreLocalMem<volatile uint32_t> slot(xchg_base + j * xchg_slot_bytes);
                         const uint32_t ic = slot[r];
                         const uint16_t vc = (uint16_t)slot[32u + r];
                         if (ieee_gt(vc, best_v) || (ieee_eq(vc, best_v) && ic < best_i)) {
@@ -268,11 +290,11 @@ void kernel_main() {
                     }
                     collected++;
                     if (collected == out_page_elems) {
-                        noc_async_write(stage_idx_addr, s_dst.get_noc_addr(out_page_id), dst_page_size);
+                        noc.async_write(stage_idx, s_dst, dst_page_size, {}, {.page_id = out_page_id});
                         if constexpr (has_maxval) {
-                            noc_async_write(stage_val_addr, s_val.get_noc_addr(out_page_id), val_page_size);
+                            noc.async_write(stage_val, s_val, val_page_size, {}, {.page_id = out_page_id});
                         }
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
                         collected = 0;
                         out_page_id++;
                     }
@@ -285,9 +307,9 @@ void kernel_main() {
                         for (uint32_t j = 1; j < num_cores; j++) {
                             const uint32_t wx = get_arg_val<uint32_t>(coord_args_base + 2 * j);
                             const uint32_t wy = get_arg_val<uint32_t>(coord_args_base + 2 * j + 1);
-                            noc_semaphore_inc(get_noc_addr(wx, wy, get_semaphore(start_sem_id)), 1);
+                            start_sem.up(noc, wx, wy, 1);
                         }
-                        noc_async_atomic_barrier();
+                        noc.async_atomic_barrier();
                     }
                 }
             }
@@ -301,9 +323,9 @@ void kernel_main() {
     // no credit after their final wait (none is sent for the last pass).
     if constexpr (num_cores > 1) {
         if (is_gather) {
-            noc_semaphore_set(done_sem_ptr, 0);
+            done_sem.set(0);
         } else {
-            noc_semaphore_set(start_sem_ptr, 0);
+            start_sem.set(0);
         }
     }
 }

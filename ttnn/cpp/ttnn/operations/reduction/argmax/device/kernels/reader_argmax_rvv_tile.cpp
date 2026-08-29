@@ -18,6 +18,10 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "internal/tt-1xx/risc_common.h"  // invalidate_l1_cache()
 
 void kernel_main() {
@@ -56,14 +60,22 @@ void kernel_main() {
     constexpr auto s_val_args = TensorAccessorArgs<s_dst_args.next_compile_time_args_offset()>();
     const auto s_val = TensorAccessor(s_val_args, val_base_addr, val_page_size);
 
-    // Input CB ring base (write pointer sits at base before any push).
-    const uint32_t in_base = get_write_ptr(cb_in);
+    Noc noc;
+    CircularBuffer in_cb(cb_in);
+    CircularBuffer res_idx_cb(cb_res_idx);
+    CircularBuffer res_val_cb(cb_res_val);
+    CircularBuffer stage_idx_cb(cb_stage_idx);
+    CircularBuffer stage_val_cb(cb_stage_val);
+
+    // Input CB ring base (write pointer sits at base before any push). The ring
+    // is addressed by GLOBAL page index, so the base is captured ONCE here: the
+    // CB's own write pointer advances on every push_back and cannot be used as
+    // the NoC destination, hence a CoreLocalMem over the fixed base + offset.
+    const CoreLocalMem<uint32_t> in_ring(in_cb.get_write_ptr());
 
     // Staging buffers for output pages (plain L1 scratch, no FIFO semantics).
-    const uint32_t stage_idx_addr = get_write_ptr(cb_stage_idx);
-    const uint32_t stage_val_addr = get_write_ptr(cb_stage_val);
-    uint32_t* const stage_idx = (uint32_t*)stage_idx_addr;
-    uint16_t* const stage_val = (uint16_t*)stage_val_addr;
+    const CoreLocalMem<uint32_t> stage_idx(stage_idx_cb.get_write_ptr());
+    const CoreLocalMem<uint16_t> stage_val(stage_val_cb.get_write_ptr());
 
     uint32_t t_global = 0;   // global input page counter (matches compute side)
     uint32_t collected = 0;  // elements accumulated toward the current output page
@@ -78,26 +90,32 @@ void kernel_main() {
             uint32_t done = 0;
             while (done < w_tiles) {
                 const uint32_t chunk = (w_tiles - done < chunk_pages) ? (w_tiles - done) : chunk_pages;
-                cb_reserve_back(cb_in, chunk);
+                in_cb.reserve_back(chunk);
                 for (uint32_t k = 0; k < chunk; k++) {
                     const uint32_t slot = (t_global + k) % in_cb_pages;
-                    noc_async_read_tile(tile_row_first + done + k, s_src, in_base + slot * src_page_size);
+                    noc.async_read(
+                        s_src,
+                        in_ring,
+                        src_page_size,
+                        {.page_id = tile_row_first + done + k},
+                        {.offset_bytes = slot * src_page_size});
                     if ((k & 31u) == 31u) {
-                        noc_async_read_barrier();
+                        // Bound the outstanding NOC read count within a chunk.
+                        noc.async_read_barrier();
                     }
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_in, chunk);
+                noc.async_read_barrier();
+                in_cb.push_back(chunk);
                 t_global += chunk;
                 done += chunk;
             }
 
             // Collect this tile-row pass's results from the compute kernel.
-            cb_wait_front(cb_res_idx, 1);
-            cb_wait_front(cb_res_val, 1);
+            res_idx_cb.wait_front(1);
+            res_val_cb.wait_front(1);
             invalidate_l1_cache();
-            volatile tt_l1_ptr uint32_t* ip = (volatile tt_l1_ptr uint32_t*)get_read_ptr(cb_res_idx);
-            volatile tt_l1_ptr uint16_t* vp = (volatile tt_l1_ptr uint16_t*)get_read_ptr(cb_res_val);
+            const CoreLocalMem<volatile uint32_t> ip(res_idx_cb.get_read_ptr());
+            const CoreLocalMem<volatile uint16_t> vp(res_val_cb.get_read_ptr());
             for (uint32_t r = 0; r < units; r++) {
                 stage_idx[collected] = ip[r];
                 if constexpr (has_maxval) {
@@ -105,17 +123,17 @@ void kernel_main() {
                 }
                 collected++;
                 if (collected == out_page_elems) {
-                    noc_async_write(stage_idx_addr, s_dst.get_noc_addr(out_page_id), dst_page_size);
+                    noc.async_write(stage_idx, s_dst, dst_page_size, {}, {.page_id = out_page_id});
                     if constexpr (has_maxval) {
-                        noc_async_write(stage_val_addr, s_val.get_noc_addr(out_page_id), val_page_size);
+                        noc.async_write(stage_val, s_val, val_page_size, {}, {.page_id = out_page_id});
                     }
-                    noc_async_write_barrier();
+                    noc.async_write_barrier();
                     collected = 0;
                     out_page_id++;
                 }
             }
-            cb_pop_front(cb_res_idx, 1);
-            cb_pop_front(cb_res_val, 1);
+            res_idx_cb.pop_front(1);
+            res_val_cb.pop_front(1);
         }
     }
 }
