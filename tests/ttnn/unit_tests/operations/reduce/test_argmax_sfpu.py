@@ -2,16 +2,23 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ttnn.argmax(..., use_sfpu=True): the opt-in Blackhole TILE-layout
-last-dim argmax path that runs phase 1 lane-parallel on the SFPU (all 32 rows
-of a tile-row per pass — the batch-shape path) and finishes each row with a
-scalar phase 2 / cross-core merge on the dataflow RISC.
+"""Tests for the SFPU argmax engine: the Blackhole TILE-layout last-dim argmax
+that runs phase 1 lane-parallel on the SFPU (all 32 rows of a tile-row per
+pass — the batch-shape engine) and finishes each row with a scalar phase 2 /
+cross-core merge on the dataflow RISC.
+
+ttnn.argmax picks an engine on its own and takes no argument that names one, so
+the engine under test is pinned through the verification-only entry in the
+private module (see ttnn/cpp/ttnn/operations/reduction/argmax/argmax_force.hpp).
+The same entries supply the incumbent (scalar reader) golden, which a plain
+ttnn.argmax over an eligible TILE bfloat16 last dim no longer runs on Blackhole.
+Automatic routing is covered separately at the bottom of this file.
 
 Gating: architecture only. The kernels are plain SFPU compute kernels that JIT
 with the stock toolchain, so these tests run automatically on any Blackhole
 host and skip on every other architecture.
 
-Goldens: the SFPU path's compare is IEEE-on-fp32 behind a bf16 special-value
+Goldens: the SFPU engine's compare is IEEE-on-fp32 behind a bf16 special-value
 gasket (silicon-measured; see argmax_sfpu_tile_compute.cpp), NOT the scalar
 readers' bfloat16_greater bit order. On finite, normal data — including every
 exact tie — the two orders agree bit-for-bit, so finite cases score against
@@ -33,7 +40,10 @@ import ttnn
 
 from models.common.utility_functions import run_for_blackhole
 
-pytestmark = run_for_blackhole("ttnn.argmax use_sfpu=True is currently Blackhole-only")
+pytestmark = run_for_blackhole("the SFPU argmax engine is currently Blackhole-only")
+
+_force_sfpu = ttnn._ttnn.operations.reduction.argmax_force_sfpu
+_force_incumbent = ttnn._ttnn.operations.reduction.argmax_force_incumbent
 
 
 SINGLE_CORE_GRID = None  # filled lazily (ttnn import-time objects inside fixtures)
@@ -62,7 +72,7 @@ def _gasket_map(bits: np.ndarray) -> np.ndarray:
 
 
 def _gasket_argmax_row(bits_row: np.ndarray):
-    """SFPU-path semantics: IEEE compare on gasket-mapped values, smallest
+    """SFPU-engine semantics: IEEE compare on gasket-mapped values, smallest
     index on ties; the max-value output is the gasket-mapped winner."""
     g = _gasket_map(bits_row)
     m = _monotone(g)  # post-gasket there are no NaNs and only +0, so the
@@ -177,9 +187,7 @@ def test_argmax_sfpu_battery(device, v, b, keepdim, with_maxval, grid):
                 device=device,
             )
 
-        idx_t = ttnn.argmax(
-            t_tile, dim=3, keepdim=keepdim, use_sfpu=True, maxval_tensor=mv, sub_core_grids=sub_core_grids
-        )
+        idx_t = _force_sfpu(t_tile, dim=3, keepdim=keepdim, maxval_tensor=mv, sub_core_grids=sub_core_grids)
         got_idx = ttnn.to_torch(idx_t).flatten().numpy().astype(np.uint32)
         got_val = _bits_of(ttnn.to_torch(mv).flatten()) if with_maxval else None
 
@@ -206,8 +214,8 @@ def test_argmax_sfpu_matches_upstream_tile_path(device, name, v, b):
     x = torch.from_numpy(bits.astype(np.int16)).view(torch.bfloat16).reshape(1, 1, b, v)
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    idx_sfpu = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True))
-    idx_ref = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True))
+    idx_sfpu = ttnn.to_torch(_force_sfpu(t_tile, dim=3, keepdim=True))
+    idx_ref = ttnn.to_torch(_force_incumbent(t_tile, dim=3, keepdim=True))
     assert torch.equal(
         idx_sfpu.to(torch.int64), idx_ref.to(torch.int64)
     ), f"SFPU/incumbent index mismatch on case {name!r} (v={v}, b={b})"
@@ -232,7 +240,7 @@ def test_argmax_sfpu_multi_tile_row_batch(device, grid):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    idx_t = ttnn.argmax(t_tile, dim=3, keepdim=False, use_sfpu=True, maxval_tensor=mv, sub_core_grids=sub_core_grids)
+    idx_t = _force_sfpu(t_tile, dim=3, keepdim=False, maxval_tensor=mv, sub_core_grids=sub_core_grids)
     got_idx = ttnn.to_torch(idx_t).flatten().numpy().astype(np.uint32)
     got_val = _bits_of(ttnn.to_torch(mv).flatten())
 
@@ -243,20 +251,30 @@ def test_argmax_sfpu_multi_tile_row_batch(device, grid):
         assert int(got_val[r]) == ref_val, f"row {r} ({grid}): val {int(got_val[r]):#06x} != {ref_val:#06x}"
 
 
+# The three refusals below are unreachable through ttnn.argmax: automatic
+# dispatch checks the same preconditions and demotes to the scalar readers
+# instead of routing a case the engine cannot serve. They are checked through
+# the forced entry, which must refuse rather than fall back — a forced leg that
+# quietly served another engine would make every comparison against it vacuous.
+
+
 def test_argmax_sfpu_rejects_row_major_input(device, expect_error):
-    """use_sfpu=True is a TILE-layout path; ROW_MAJOR input must be rejected."""
+    """The SFPU engine is a TILE-layout engine; ROW_MAJOR input must be rejected."""
     x = torch.randn(1, 1, 32, 2048).bfloat16()
     t_rm = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     with expect_error(RuntimeError, "requires TILE layout input"):
-        ttnn.argmax(t_rm, dim=3, keepdim=True, use_sfpu=True)
+        _force_sfpu(t_rm, dim=3, keepdim=True)
 
 
-def test_argmax_sfpu_rejects_use_rvv_combo(device, expect_error):
-    """use_rvv and use_sfpu are mutually exclusive engine knobs."""
+@pytest.mark.parametrize("removed_flag", ["use_rvv", "use_sfpu"])
+def test_argmax_rejects_removed_engine_flags(device, removed_flag):
+    """The engine is not caller-selectable: the old opt-in flags are gone from
+    the public signature, so passing either is a TypeError rather than a knob
+    that could be set to a contradictory pair."""
     x = torch.randn(1, 1, 32, 2048).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with expect_error(RuntimeError, "mutually exclusive"):
-        ttnn.argmax(t_tile, dim=3, keepdim=True, use_rvv=True, use_sfpu=True)
+    with pytest.raises(TypeError):  # allow-pytest.raises: host binding TypeError (unknown kwarg), not a device fault
+        ttnn.argmax(t_tile, dim=3, keepdim=True, **{removed_flag: True})
 
 
 def test_argmax_sfpu_rejects_ragged_last_dim(device, expect_error):
@@ -264,28 +282,124 @@ def test_argmax_sfpu_rejects_ragged_last_dim(device, expect_error):
     x = torch.randn(1, 1, 32, 2000).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "multiple of the tile width"):
-        ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True)
+        _force_sfpu(t_tile, dim=3, keepdim=True)
 
 
 def test_argmax_sfpu_rejects_sub_core_grid_outside_device(device, expect_error):
-    """SFPU core placement must stay inside the device compute grid."""
+    """SFPU core placement must stay inside the device compute grid. This one is
+    reachable through ttnn.argmax too — the grid check is engine-independent —
+    so it is asserted on the public entry."""
     grid = device.compute_with_storage_grid_size()
     outside = ttnn.CoreCoord(grid.x, 0)
     invalid_grid = ttnn.CoreRangeSet([ttnn.CoreRange(outside, outside)])
     x = torch.randn(1, 1, 32, 2048).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "must be contained in device compute grid"):
-        ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True, sub_core_grids=invalid_grid)
+        ttnn.argmax(t_tile, dim=3, keepdim=True, sub_core_grids=invalid_grid)
 
 
 def test_argmax_sfpu_runs_on_explicit_nonzero_core(device):
-    """A valid explicit grid may place the single-core SFPU path away from (0, 0)."""
+    """A valid explicit grid may place the single-core SFPU engine away from (0, 0)."""
     grid = device.compute_with_storage_grid_size()
     core = ttnn.CoreCoord(grid.x - 1, grid.y - 1)
     sub_core_grids = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
     x = torch.randn(1, 1, 8, 2048).bfloat16()
     t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    got = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True, use_sfpu=True, sub_core_grids=sub_core_grids))
-    expected = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True))
+    got = ttnn.to_torch(_force_sfpu(t_tile, dim=3, keepdim=True, sub_core_grids=sub_core_grids))
+    expected = ttnn.to_torch(_force_incumbent(t_tile, dim=3, keepdim=True))
     assert torch.equal(got.to(torch.int64), expected.to(torch.int64))
+
+
+# ---------------------------------------------------------------------------
+# Automatic routing
+# ---------------------------------------------------------------------------
+# ttnn.argmax exposes no engine argument, so "which engine ran" is read off the
+# program cache: warming the expected engine through its forced entry means a
+# correctly routed ttnn.argmax hits that cached program and leaves the count
+# alone, while a mis-route compiles a second program and grows it.
+
+
+def _assert_empty_program_cache(device):
+    """Precondition for the delta-0 proxy, checked BEFORE anything is warmed.
+
+    "The auto call added no cache entry" only proves the route when the warmed
+    engine is the ONLY argmax program cached for this shape. A stale entry for a
+    different engine -- left by an earlier test sharing the device -- would
+    absorb a mis-route as a cache hit and the assertion would pass vacuously.
+    The `device` fixture is function-scoped (conftest.py), so each of these tests
+    starts from an empty cache; assert that, so that marking this file
+    `use_module_device` (a natural CI speed-up) fails loudly instead of silently
+    gutting every routing test below."""
+    msg = (
+        "routing tests need a per-test device: the program cache is not empty at test start, so a "
+        "mis-route could hit a stale entry for another engine and the delta-0 assertions below would "
+        "prove nothing (do not mark this file use_module_device)"
+    )
+    assert device.num_program_cache_entries() == 0, msg
+
+
+def _assert_program_cache_active(device):
+    """The routing assertions read "which engine ran" off program-cache growth,
+    so an empty (or disabled) cache would make them pass vacuously."""
+    msg = "device program cache is empty after warming an engine; the routing assertions below would be vacuous"
+    assert device.num_program_cache_entries() > 0, msg
+
+
+@pytest.mark.parametrize("h", [8, 32])
+def test_argmax_auto_routes_to_sfpu_at_batch(device, h):
+    """H >= 8 is the SFPU engine's shape: one lane-parallel pass covers all 32
+    rows of a tile-row, so the cost is flat in H where the RVV scan pays per
+    row. 8 is the smallest H the measurements cover."""
+    _assert_empty_program_cache(device)
+    x = torch.randn(1, 1, h, 4096).bfloat16()
+    t_tile = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    expected = ttnn.to_torch(_force_sfpu(t_tile, dim=3, keepdim=True))
+    _assert_program_cache_active(device)
+    entries_before = device.num_program_cache_entries()
+    got = ttnn.to_torch(ttnn.argmax(t_tile, dim=3, keepdim=True))
+    assert torch.equal(got.to(torch.int64), expected.to(torch.int64))
+    assert device.num_program_cache_entries() == entries_before, f"auto did not route h={h} to the SFPU engine"
+
+
+@pytest.mark.parametrize(
+    "shape,layout",
+    [
+        # last dim not a multiple of the tile width
+        ((1, 1, 32, 2000), ttnn.TILE_LAYOUT),
+        # ROW_MAJOR input: the accelerated engines read TILE directly
+        ((1, 1, 32, 2048), ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["ragged_last_dim", "row_major"],
+)
+def test_argmax_auto_falls_back_to_incumbent(device, shape, layout):
+    """A case outside the accelerated engines' preconditions must demote to the
+    scalar readers, not raise: automatic dispatch may never turn a call that
+    used to work into an error."""
+    _assert_empty_program_cache(device)
+    x = torch.randn(*shape).bfloat16()
+    t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+    expected = ttnn.to_torch(_force_incumbent(t, dim=3, keepdim=True))
+    _assert_program_cache_active(device)
+    entries_before = device.num_program_cache_entries()
+    got = ttnn.to_torch(ttnn.argmax(t, dim=3, keepdim=True))
+    assert torch.equal(got.to(torch.int64), expected.to(torch.int64))
+    assert device.num_program_cache_entries() == entries_before, "auto did not fall back to the scalar readers"
+
+
+def test_argmax_maxval_tensor_on_incumbent_route_raises(device, expect_error):
+    """maxval_tensor can only be filled by the accelerated engines. A call the
+    heuristic sends to the scalar readers must say so rather than hand the
+    buffer back untouched."""
+    x = torch.randn(1, 1, 32, 2048).bfloat16()
+    t_rm = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    mv = ttnn.from_torch(
+        torch.zeros((1, 1, 32, 1), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "only produced by the accelerated engines"):
+        ttnn.argmax(t_rm, dim=3, keepdim=True, maxval_tensor=mv)

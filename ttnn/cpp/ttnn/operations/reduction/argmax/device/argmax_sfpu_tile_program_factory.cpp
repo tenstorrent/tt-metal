@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Opt-in TILE-layout last-dim argmax on the SFPU — Blackhole, single- or
-// multi-core. See kernels/argmax_sfpu_tile_compute.cpp for the algorithm and
+// TILE-layout last-dim argmax on the SFPU — Blackhole, single- or multi-core.
+// Selected by ArgMaxEngine::Sfpu; ttnn::argmax decides that on its own (see
+// select_argmax_engine in argmax.cpp).
+// See kernels/argmax_sfpu_tile_compute.cpp for the algorithm and
 // the (documented, silicon-measured) special-value semantics.
 //
 // Work split: phase 1 reduces all 32 rows of a tile-row lane-parallel, so a
@@ -77,7 +79,7 @@ ProgramDescriptor ArgMaxSfpuTileProgramFactory::create_descriptor(
         const uint32_t want = static_cast<uint32_t>(std::ceil(std::sqrt(1.5 * static_cast<double>(w_tiles))));
         num_cores = std::min<uint32_t>({want, static_cast<uint32_t>(cores.size()), w_tiles});
     }
-    TT_FATAL(num_cores >= 1, "argmax use_sfpu=true requires at least one core");
+    TT_FATAL(num_cores >= 1, "the argmax SFPU engine requires at least one core");
     cores.resize(num_cores);
 
     std::vector<CoreRange> core_ranges_vec;

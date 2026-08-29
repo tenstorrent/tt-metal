@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Opt-in TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit —
-// Blackhole only, single core. See kernels/argmax_rvv_tile_compute.cpp for
+// TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit — Blackhole
+// only, single core. Selected by ArgMaxEngine::Rvv; ttnn::argmax decides that
+// on its own (see select_argmax_engine in argmax.cpp). See
+// kernels/argmax_rvv_tile_compute.cpp for
 // the algorithm and semantics notes. Unlike the other argmax paths, this one
 // launches a compute kernel: the unpack/math threads are no-ops and the pack
 // thread does the whole scan, so the dataflow RISC only streams tiles and
@@ -56,12 +58,15 @@ ProgramDescriptor ArgMaxRvvTileProgramFactory::create_descriptor(
     // arbitrary sub_core_grids placement is a documented follow-up; until then
     // a grid that excludes (0,0) must fail loudly rather than be silently
     // ignored (the op would run outside the caller's core partition).
+    // select_argmax_engine already declines to route such a call here, so this
+    // fires only for a forced-engine caller (argmax_force.hpp).
     const CoreCoord core{0, 0};
     if (operation_attributes.sub_core_grids.has_value()) {
         TT_FATAL(
             operation_attributes.sub_core_grids->contains(core),
-            "argmax use_rvv=true currently runs on core (0,0) only, but the supplied sub_core_grids {} excludes it. "
-            "Pass a grid containing (0,0) or omit sub_core_grids.",
+            "the argmax RVV engine currently runs on core (0,0) only, but the supplied sub_core_grids {} excludes "
+            "it. Pass a grid containing (0,0), omit sub_core_grids, or use ttnn::argmax, which routes such a call "
+            "to another engine.",
             operation_attributes.sub_core_grids.value());
     }
     const CoreRangeSet all_cores(CoreRange(core, core));

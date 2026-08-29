@@ -23,14 +23,15 @@ struct ArgMaxMultiCoreProgramFactory {
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
-// Opt-in TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit
+// TILE-layout last-dim argmax on the pack RISC's RVV (Zve32f) unit
 // (Blackhole). Single core; returns indices and (optionally) max values.
+// Selected by ArgMaxEngine::Rvv -- see select_argmax_engine in argmax.cpp.
 struct ArgMaxRvvTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
 };
 
-// Opt-in TILE-layout last-dim argmax on the SFPU (Blackhole). Lane-parallel
+// TILE-layout last-dim argmax on the SFPU (Blackhole). Lane-parallel
 // phase 1 reduces every tile of a 32-row tile-row to one (max value, winning
 // tile) candidate per column in DST; a scalar phase 2 on the dataflow RISC
 // finishes each row with 32 lexicographic compares. All 32 rows of a tile-row
@@ -40,7 +41,8 @@ struct ArgMaxRvvTileProgramFactory {
 // compares — no cross-core tile reduce). Returns indices and (optionally)
 // max values. Semantics are IEEE-compare behind the SFPU's bf16
 // special-value gasket, documented in detail in
-// kernels/argmax_sfpu_tile_compute.cpp.
+// kernels/argmax_sfpu_tile_compute.cpp. Selected by ArgMaxEngine::Sfpu -- see
+// select_argmax_engine in argmax.cpp.
 struct ArgMaxSfpuTileProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ArgmaxParams& operation_attributes, const ArgmaxInputs& tensor_args, Tensor& tensor_return_value);
@@ -74,8 +76,7 @@ ttnn::Tensor argmax(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
-    bool use_rvv = false,
-    bool use_sfpu = false,
+    ArgMaxEngine engine = ArgMaxEngine::Incumbent,
     std::optional<ttnn::Tensor> optional_maxval_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

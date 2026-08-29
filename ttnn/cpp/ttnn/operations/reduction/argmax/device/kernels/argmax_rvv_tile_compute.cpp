@@ -4,7 +4,8 @@
 //
 // =============================================================================
 // argmax_rvv_tile_compute.cpp — TILE-layout last-dim argmax+maxval on the pack
-// RISC's RVV (Zve32f) unit. Blackhole only; opt-in via ttnn.argmax(use_rvv).
+// RISC's RVV (Zve32f) unit. Blackhole only; selected internally by
+// ttnn.argmax (ArgMaxEngine::Rvv).
 //
 // The incumbent TILE-input argmax has NO compute kernel: the whole reduction
 // is a scalar C++ loop on a dataflow RISC at ~23 cyc/element (single core,
