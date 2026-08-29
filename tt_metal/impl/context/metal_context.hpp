@@ -101,6 +101,7 @@ public:
     // (WORKER, unset axis) until then. Teardown does not clear it.
     const DispatchCoreConfig& get_dispatch_core_config() const { return dispatch_core_config_; }
 
+    // TEMPORARY:
     // Propose a complete dispatch-core config from the environment attached to
     // this context, plus optional caller preferences.
     //
