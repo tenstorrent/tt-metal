@@ -45,7 +45,6 @@ enum CompileTimeArg : uint32_t {
     kSplitForwardingEnabled,
     kOutputBankOwnedSchedule,
     kNumDramBanks,
-    kRoundRobinBankPackets,
     kNumFixedCompileTimeArgs,
 };
 
@@ -72,10 +71,9 @@ constexpr uint32_t num_links = get_compile_time_arg_val(kNumLinks);
 constexpr bool split_forwarding_enabled = get_compile_time_arg_val(kSplitForwardingEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
-constexpr bool round_robin_bank_packets = get_compile_time_arg_val(kRoundRobinBankPackets);
 
 template <typename AddrGenType, typename FabricSender>
-FORCE_INLINE void write_bank_owned_slices_round_robin(
+FORCE_INLINE void write_bank_owned_slices(
     CircularBuffer& cb_output,
     AddrGenType& output_addrgen,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
@@ -101,35 +99,6 @@ FORCE_INLINE void write_bank_owned_slices_round_robin(
     }
 }
 
-template <typename AddrGenType, typename FabricSender>
-FORCE_INLINE void write_bank_owned_slices_whole_bank(
-    CircularBuffer& cb_output,
-    AddrGenType& output_addrgen,
-    volatile PACKET_HEADER_TYPE* pkt_hdr,
-    FabricSender& fabric_direction_connection,
-    uint32_t output_page_base,
-    uint32_t valid_pages,
-    uint32_t first_bank,
-    uint32_t bank_stride) {
-    for (uint32_t bank = first_bank; bank < num_dram_banks; bank += bank_stride) {
-        const auto bank_slice =
-            ring_attention_all_gather::get_bank_owned_slice(output_page_base, valid_pages, bank, num_dram_banks);
-        for (uint32_t pages_sent = 0; pages_sent < bank_slice.page_count;) {
-            const uint32_t batch = std::min(packet_size_in_pages, bank_slice.page_count - pages_sent);
-            cb_output.wait_front(packet_size_in_pages);
-            fabric_write_unidir(
-                output_page_base + bank_slice.first_page_offset + pages_sent * num_dram_banks,
-                output_addrgen,
-                pkt_hdr,
-                fabric_direction_connection,
-                cb_output.get_read_ptr(),
-                batch * output_page_size);
-            cb_output.pop_front(packet_size_in_pages);
-            pages_sent += batch;
-        }
-    }
-}
-
 FORCE_INLINE void discard_bank_owned_slices(
     CircularBuffer& cb_output,
     uint32_t output_page_base,
@@ -144,39 +113,6 @@ FORCE_INLINE void discard_bank_owned_slices(
             cb_output.wait_front(packet_size_in_pages);
             cb_output.pop_front(packet_size_in_pages);
         }
-    }
-}
-
-template <typename AddrGenType, typename FabricSender>
-FORCE_INLINE void write_bank_owned_slices(
-    CircularBuffer& cb_output,
-    AddrGenType& output_addrgen,
-    volatile PACKET_HEADER_TYPE* pkt_hdr,
-    FabricSender& fabric_direction_connection,
-    uint32_t output_page_base,
-    uint32_t valid_pages,
-    uint32_t first_bank,
-    uint32_t bank_stride) {
-    if constexpr (round_robin_bank_packets) {
-        write_bank_owned_slices_round_robin(
-            cb_output,
-            output_addrgen,
-            pkt_hdr,
-            fabric_direction_connection,
-            output_page_base,
-            valid_pages,
-            first_bank,
-            bank_stride);
-    } else {
-        write_bank_owned_slices_whole_bank(
-            cb_output,
-            output_addrgen,
-            pkt_hdr,
-            fabric_direction_connection,
-            output_page_base,
-            valid_pages,
-            first_bank,
-            bank_stride);
     }
 }
 

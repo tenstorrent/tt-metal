@@ -39,7 +39,6 @@ enum CompileTimeArg : uint32_t {
     kOutputBankOwnedSchedule,
     kNumDramBanks,
     kPrefetchPackets,
-    kRoundRobinBankPackets,
     kNumFixedCompileTimeArgs,
 };
 
@@ -66,10 +65,9 @@ constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
 // CB depth must be >= 2 * prefetch_packets * packet_size_in_pages (see program_factory cb_num_pages).
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
-constexpr bool round_robin_bank_packets = get_compile_time_arg_val(kRoundRobinBankPackets);
 
 template <bool physically_contiguous, typename Accessor>
-FORCE_INLINE void prefetch_bank_owned_slices_round_robin(
+FORCE_INLINE void prefetch_bank_owned_slices(
     const Noc& noc,
     CircularBuffer& cb_output,
     uint32_t cb_fifo_limit,
@@ -103,96 +101,6 @@ FORCE_INLINE void prefetch_bank_owned_slices_round_robin(
             accessor,
             next_packet,
             [](uint32_t first_page_id, uint32_t page) { return first_page_id + page * num_dram_banks; });
-    }
-}
-
-template <bool physically_contiguous, typename Accessor>
-FORCE_INLINE void prefetch_bank_owned_slices_whole_bank(
-    const Noc& noc,
-    CircularBuffer& cb_output,
-    uint32_t cb_fifo_limit,
-    uint32_t cb_fifo_size,
-    const Accessor& accessor,
-    uint32_t accessor_page_base,
-    uint32_t output_page_base,
-    uint32_t valid_pages,
-    uint32_t first_bank,
-    uint32_t bank_stride) {
-    for (uint32_t bank = first_bank; bank < num_dram_banks; bank += bank_stride) {
-        const auto bank_slice =
-            ring_attention_all_gather::get_bank_owned_slice(output_page_base, valid_pages, bank, num_dram_banks);
-        uint32_t pages_read = 0;
-        if constexpr (physically_contiguous) {
-            prefetch_batch_read_physically_contiguous_tiles<
-                input_tensor_page_size,
-                packet_size_in_pages,
-                prefetch_packets>(
-                noc,
-                cb_output,
-                pages_read,
-                bank_slice.page_count,
-                cb_fifo_limit,
-                cb_fifo_size,
-                accessor,
-                [&](uint32_t page) {
-                    return accessor_page_base + bank_slice.first_page_offset + page * num_dram_banks;
-                });
-        } else {
-            prefetch_batch_read_tiles<
-                input_tensor_page_size,
-                packet_size_in_pages,
-                prefetch_packets,
-                contig_pages_advanced>(
-                noc,
-                cb_output,
-                pages_read,
-                bank_slice.page_count,
-                cb_fifo_limit,
-                cb_fifo_size,
-                accessor,
-                [&](uint32_t page) {
-                    return accessor_page_base + bank_slice.first_page_offset + page * num_dram_banks;
-                });
-        }
-    }
-}
-
-template <bool physically_contiguous, typename Accessor>
-FORCE_INLINE void prefetch_bank_owned_slices(
-    const Noc& noc,
-    CircularBuffer& cb_output,
-    uint32_t cb_fifo_limit,
-    uint32_t cb_fifo_size,
-    const Accessor& accessor,
-    uint32_t accessor_page_base,
-    uint32_t output_page_base,
-    uint32_t valid_pages,
-    uint32_t first_bank,
-    uint32_t bank_stride) {
-    if constexpr (round_robin_bank_packets) {
-        prefetch_bank_owned_slices_round_robin<physically_contiguous>(
-            noc,
-            cb_output,
-            cb_fifo_limit,
-            cb_fifo_size,
-            accessor,
-            accessor_page_base,
-            output_page_base,
-            valid_pages,
-            first_bank,
-            bank_stride);
-    } else {
-        prefetch_bank_owned_slices_whole_bank<physically_contiguous>(
-            noc,
-            cb_output,
-            cb_fifo_limit,
-            cb_fifo_size,
-            accessor,
-            accessor_page_base,
-            output_page_base,
-            valid_pages,
-            first_bank,
-            bank_stride);
     }
 }
 

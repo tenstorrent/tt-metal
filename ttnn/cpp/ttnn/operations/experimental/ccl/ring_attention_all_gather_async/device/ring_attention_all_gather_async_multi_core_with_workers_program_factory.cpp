@@ -505,14 +505,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         forwarded_payload_bytes(input_tensor, ring_size, input_batch_slice_idx);
     const bool output_bank_owned_schedule =
         bank_owned_supported && configured_forwarded_payload_bytes >= kMinBankOwnedForwardedPayloadBytes;
-    // Rotation exposes useful partial rows when at least one gathered tensor reaches every bank. This is based
-    // only on the configured tensor shape, so every runtime valid-prefix reuses the same traced program.
-    const bool any_row_spans_all_dram_banks =
-        std::any_of(input_tensor.begin(), input_tensor.end(), [num_dram_banks](const Tensor& tensor) {
-            return tensor.padded_shape()[kWidthDimension] / tt::constants::TILE_WIDTH >= num_dram_banks;
-        });
-    const bool round_robin_bank_packets = output_bank_owned_schedule && any_row_spans_all_dram_banks;
-
     struct WorkerPlacement {
         CoreCoord core;
         uint32_t link;
@@ -556,9 +548,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreRangeSet sender_backward_core_ranges = placements_to_core_ranges(backward_workers);
 
     const uint32_t max_pages_per_packet = max_payload_size_bytes / l1_scratch_cb_page_size_bytes;
-    const uint32_t num_pages_per_packet = round_robin_bank_packets || !output_bank_owned_schedule
-                                              ? std::min(max_pages_per_packet, kMaxScatterPagesPerPacket)
-                                              : max_pages_per_packet;
+    const uint32_t num_pages_per_packet =
+        output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
     // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
     const uint32_t cb_num_pages = kDoubleBufferingFactor * kPrefetchPackets * num_pages_per_packet;
@@ -667,7 +658,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
             kPrefetchPackets,                                   // kPrefetchPackets
-            static_cast<uint32_t>(round_robin_bank_packets),    // kRoundRobinBankPackets
         };
         // TensorAccessorArgs tuples expect one page-size entry per tensor before the accessor blocks.
         args.insert(args.end(), num_inputs, op_config.get_page_size());
@@ -709,7 +699,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(effective_split_forwarding),  // kSplitForwardingEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
-            static_cast<uint32_t>(round_robin_bank_packets),    // kRoundRobinBankPackets
         };
         // TensorAccessorArgs tuples expect one page-size entry per tensor before the accessor blocks.
         args.insert(args.end(), num_inputs, op_config.get_page_size());

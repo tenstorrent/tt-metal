@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ring Attention All-Gather — DRAM Coalescing Optimization Report</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #09100f;
+      --surface: #101b19;
+      --surface-2: #162421;
+      --surface-3: #1b2d29;
+      --ink: #eef7f3;
+      --muted: #a6bcb5;
+      --faint: #748b84;
+      --line: #29423b;
+      --mint: #64e3b4;
+      --mint-soft: #183d32;
+      --cyan: #5cd6df;
+      --amber: #ffc66d;
+      --rose: #ff8d8d;
+      --violet: #b9a5ff;
+      --max: 1180px;
+      --radius: 18px;
+      --shadow: 0 18px 55px rgb(0 0 0 / 28%);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 88% 3%, rgb(92 214 223 / 11%), transparent 29rem),
+        radial-gradient(circle at 6% 17%, rgb(100 227 180 / 9%), transparent 32rem),
+        var(--bg);
+      color: var(--ink);
+      font: 16px/1.62 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a { color: var(--cyan); text-underline-offset: 3px; }
+    a:hover { color: var(--mint); }
+    code, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: .91em;
+    }
+    code {
+      padding: .14rem .35rem;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0b1513;
+      color: #d7f8eb;
+    }
+    h1, h2, h3 { line-height: 1.15; letter-spacing: -.025em; }
+    h1 { max-width: 900px; margin: 1.1rem 0; font-size: clamp(2.6rem, 6vw, 5.6rem); }
+    h2 { margin: 0 0 1rem; font-size: clamp(1.75rem, 3vw, 2.6rem); }
+    h3 { margin: 0 0 .65rem; font-size: 1.1rem; }
+    p { margin: .5rem 0 1rem; }
+
+    .wrap { width: min(calc(100% - 2rem), var(--max)); margin: 0 auto; }
+    .hero { padding: 5rem 0 3rem; }
+    .eyebrow {
+      display: inline-flex;
+      gap: .5rem;
+      align-items: center;
+      color: var(--mint);
+      font-weight: 750;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      font-size: .77rem;
+    }
+    .eyebrow::before { content: ""; width: 2rem; height: 2px; background: var(--mint); }
+    .lede { max-width: 830px; color: var(--muted); font-size: clamp(1.08rem, 2vw, 1.28rem); }
+    .badges { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1.5rem; }
+    .badge {
+      padding: .45rem .75rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgb(16 27 25 / 78%);
+      color: var(--muted);
+      font-size: .83rem;
+    }
+    .badge.good { border-color: #2b6a56; background: var(--mint-soft); color: #aef3d7; }
+
+    .toc {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      border-block: 1px solid var(--line);
+      background: rgb(9 16 15 / 91%);
+      backdrop-filter: blur(15px);
+    }
+    .toc .wrap { display: flex; gap: 1.15rem; overflow-x: auto; padding: .76rem 0; }
+    .toc a { color: var(--muted); text-decoration: none; white-space: nowrap; font-size: .86rem; }
+    .toc a:hover { color: var(--ink); }
+
+    main section { padding: 4.5rem 0; border-bottom: 1px solid var(--line); }
+    .section-intro { max-width: 790px; color: var(--muted); font-size: 1.05rem; }
+    .grid { display: grid; gap: 1rem; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card {
+      padding: 1.35rem;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgb(22 36 33 / 94%), rgb(13 23 21 / 94%));
+      box-shadow: var(--shadow);
+    }
+    .card p:last-child { margin-bottom: 0; }
+    .metric { font-size: clamp(2rem, 4vw, 3.15rem); font-weight: 780; letter-spacing: -.045em; color: var(--mint); }
+    .metric-label { color: var(--muted); font-size: .88rem; }
+    .kicker { margin-bottom: .45rem; color: var(--faint); font-size: .76rem; font-weight: 760; letter-spacing: .09em; text-transform: uppercase; }
+    .callout {
+      margin: 1.25rem 0;
+      padding: 1rem 1.15rem;
+      border-left: 4px solid var(--mint);
+      border-radius: 0 12px 12px 0;
+      background: var(--mint-soft);
+      color: #ccebe0;
+    }
+    .callout.warn { border-color: var(--amber); background: #392b17; color: #ffe2af; }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 2rem;
+      margin-top: 1.4rem;
+      counter-reset: pipe;
+    }
+    .pipe-step { position: relative; min-height: 155px; }
+    .pipe-step::before {
+      counter-increment: pipe;
+      content: counter(pipe);
+      display: grid;
+      place-items: center;
+      width: 2rem;
+      height: 2rem;
+      margin-bottom: .9rem;
+      border-radius: 50%;
+      background: var(--mint);
+      color: #092019;
+      font-weight: 850;
+    }
+    .pipe-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 4rem;
+      right: -1.45rem;
+      color: var(--faint);
+      font-size: 1.5rem;
+    }
+    .pipe-step p { color: var(--muted); font-size: .9rem; }
+
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1.4rem;
+    }
+    .compare .old { border-top: 4px solid var(--rose); }
+    .compare .new { border-top: 4px solid var(--mint); }
+    .flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .5rem;
+      align-items: center;
+      margin-top: 1rem;
+    }
+    .flow span { padding: .48rem .65rem; border: 1px solid var(--line); border-radius: 8px; background: #0a1412; font-size: .82rem; }
+    .flow i { color: var(--faint); font-style: normal; }
+
+    .bank-legend { display: flex; flex-wrap: wrap; gap: .8rem; margin: 1.1rem 0 .8rem; color: var(--muted); font-size: .82rem; }
+    .swatch { display: inline-block; width: .8rem; height: .8rem; margin-right: .35rem; border-radius: 3px; vertical-align: -.05rem; }
+    .s0 { background: var(--mint); } .s1 { background: var(--cyan); }
+    .s2 { background: var(--amber); } .s3 { background: var(--violet); }
+    .banks { display: grid; grid-template-columns: repeat(8, minmax(44px, 1fr)); gap: .5rem; overflow-x: auto; padding-bottom: .35rem; }
+    .bank {
+      min-width: 44px;
+      padding: .75rem .35rem;
+      border-radius: 9px;
+      text-align: center;
+      color: #091410;
+      font-weight: 820;
+      font-size: .83rem;
+    }
+    .bank small { display: block; opacity: .72; font-size: .61rem; }
+    .b0 { background: var(--mint); } .b1 { background: var(--cyan); }
+    .b2 { background: var(--amber); } .b3 { background: var(--violet); }
+
+    .formula {
+      margin: 1rem 0;
+      padding: 1rem;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #081210;
+      color: #c9f4e4;
+      font: .91rem/1.7 "SFMono-Regular", Consolas, monospace;
+    }
+
+    .decision { display: grid; grid-template-columns: 1.3fr .2fr 1fr; gap: 1rem; align-items: center; margin-top: 1.4rem; }
+    .decision .checks { display: grid; gap: .6rem; }
+    .check { padding: .7rem .85rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .check::before { content: "✓"; margin-right: .55rem; color: var(--mint); font-weight: 900; }
+    .decision .arrow { text-align: center; color: var(--mint); font-size: 2rem; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; background: rgb(13 23 21 / 85%); }
+    th, td { padding: .85rem 1rem; border-bottom: 1px solid var(--line); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-size: .76rem; letter-spacing: .06em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    td strong { color: var(--mint); }
+    .delta { color: var(--mint); font-weight: 780; }
+    .bar-track { width: 120px; height: 7px; margin-left: auto; border-radius: 99px; background: #263b36; overflow: hidden; }
+    .bar { width: var(--w); height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--cyan), var(--mint)); }
+
+    .timeline { position: relative; display: grid; gap: 1rem; margin-top: 1.5rem; padding-left: 2rem; }
+    .timeline::before { content: ""; position: absolute; left: .55rem; top: .5rem; bottom: .5rem; width: 2px; background: var(--line); }
+    .event { position: relative; padding: 1rem 1.15rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    .event::before { content: ""; position: absolute; left: -1.78rem; top: 1.3rem; width: .78rem; height: .78rem; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 5px var(--bg); }
+    .event.rejected::before { background: var(--rose); }
+    .event .status { color: var(--mint); font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .event.rejected .status { color: var(--rose); }
+
+    .file-list { display: grid; gap: .7rem; margin-top: 1.2rem; }
+    .file { display: grid; grid-template-columns: minmax(300px, 1.25fr) 2fr; gap: 1rem; padding: .8rem 1rem; border: 1px solid var(--line); border-radius: 10px; }
+    .file .path { color: var(--cyan); overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: .79rem; }
+    .file .role { color: var(--muted); font-size: .9rem; }
+
+    ul.clean { padding-left: 1.2rem; }
+    ul.clean li { margin-bottom: .45rem; color: var(--muted); }
+    .ok { color: var(--mint); }
+    .not { color: var(--rose); }
+    details { margin-top: .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    summary { cursor: pointer; padding: .9rem 1rem; color: var(--ink); font-weight: 720; }
+    details > div { padding: 0 1rem 1rem; color: var(--muted); }
+    footer { padding: 2.5rem 0 4rem; color: var(--faint); font-size: .85rem; }
+
+    @media (max-width: 900px) {
+      .grid.four, .grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .pipe-step:nth-child(2)::after { display: none; }
+      .decision { grid-template-columns: 1fr; }
+      .decision .arrow { transform: rotate(90deg); }
+      .file { grid-template-columns: 1fr; gap: .3rem; }
+    }
+    @media (max-width: 620px) {
+      .hero { padding-top: 3.5rem; }
+      .grid.two, .grid.three, .grid.four, .compare, .pipeline { grid-template-columns: 1fr; }
+      .pipe-step::after { display: none; }
+      main section { padding: 3.3rem 0; }
+      .banks { grid-template-columns: repeat(8, 48px); }
+    }
+    @media print {
+      :root { color-scheme: light; --bg: #fff; --surface: #fff; --surface-2: #f5f7f6; --ink: #15231f; --muted: #40554e; --faint: #63756f; --line: #cad6d2; --mint-soft: #e8f8f2; }
+      body { background: #fff; }
+      .toc { display: none; }
+      .card, .event { box-shadow: none; break-inside: avoid; }
+      main section { break-inside: auto; }
+      a { color: #08745d; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero wrap">
+    <div class="eyebrow">Engineering report · August 2026</div>
+    <h1>Making ring all-gather feed compute faster</h1>
+    <p class="lede">
+      The final change coalesces Ring Attention All-Gather traffic by giving each direct worker a disjoint set of
+      destination DRAM banks. Pages that are far apart in logical interleaved order become contiguous inside one
+      physical bank, so the workers can move larger packets, amortize synchronization, and keep more DRAM banks in flight.
+    </p>
+    <div class="badges">
+      <span class="badge good">Final design: DRAM coalescing</span>
+      <span class="badge">No mux cores</span>
+      <span class="badge">Trace-stable across KV lengths</span>
+      <span class="badge mono">base c11080ba341</span>
+      <span class="badge">14 KiB Fabric packets</span>
+      <span class="badge">Draft PR #54741</span>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Document sections">
+    <div class="wrap">
+      <a href="#summary">Summary</a>
+      <a href="#problem">Problem</a>
+      <a href="#design">Final design</a>
+      <a href="#bank-map">Bank mapping</a>
+      <a href="#trace">Trace safety</a>
+      <a href="#performance">Performance</a>
+      <a href="#history">Experiments</a>
+      <a href="#implementation">Implementation</a>
+      <a href="#validation">Validation</a>
+      <a href="#limits">Limits</a>
+    </div>
+  </nav>
+
+  <main>
+    <section id="summary">
+      <div class="wrap">
+        <div class="kicker">Outcome</div>
+        <h2>What shipped</h2>
+        <p class="section-intro">
+          A stable four-worker topology for the measured two-link Ring Indexer case, with a Blackhole-only fast path
+          that reorganizes DRAM traversal—not the tensor layout or the ring protocol. The runtime valid prefix still
+          changes on every replay, but the program selection does not.
+        </p>
+        <div class="grid four">
+          <article class="card">
+            <div class="metric">+47.5%</div>
+            <div class="metric-label">largest FPU-utilization uplift, SP8 / 55K</div>
+          </article>
+          <article class="card">
+            <div class="metric">4</div>
+            <div class="metric-label">direct AG workers in the measured 2-link setup</div>
+          </article>
+          <article class="card">
+            <div class="metric">4</div>
+            <div class="metric-label">packets prefetched per reader window</div>
+          </article>
+          <article class="card">
+            <div class="metric">±2%</div>
+            <div class="metric-label">symmetric traced-performance gate</div>
+          </article>
+        </div>
+        <div class="callout">
+          The 14 KiB performance baseline in this report is the rebased mainline parent
+          <code>d0c8df83044</code> configured with the same 14 KiB router payload—not the old feature branch and not an
+          earlier P=1/KC=7 experiment.
+        </div>
+      </div>
+    </section>
+
+    <section id="problem">
+      <div class="wrap">
+        <div class="kicker">Original bottleneck</div>
+        <h2>The ring was delivering data, but DRAM traffic was too fragmented</h2>
+        <p class="section-intro">
+          Interleaved tensors distribute consecutive logical pages across DRAM banks. Walking those pages in logical
+          order is convenient, but it produces small or scattered transactions and frequent synchronization in the AG
+          reader/writer pipeline. The first ring iterations are especially visible because compute cannot hide their
+          readiness latency yet.
+        </p>
+        <div class="compare">
+          <article class="card old">
+            <div class="kicker">Before</div>
+            <h3>Logical-order traversal</h3>
+            <div class="flow" aria-label="Old dataflow">
+              <span>page 0</span><i>→</i><span>bank 0</span><i>→</i><span>page 1</span><i>→</i><span>bank 1</span>
+            </div>
+            <ul class="clean">
+              <li>Bank changes from page to page.</li>
+              <li>Forwarded reads have little physical contiguity.</li>
+              <li>Small packets expose barrier and Fabric-header overhead.</li>
+              <li>Compute sees more bubbles while waiting for usable K data.</li>
+            </ul>
+          </article>
+          <article class="card new">
+            <div class="kicker">After</div>
+            <h3>Bank-owned traversal</h3>
+            <div class="flow" aria-label="New dataflow">
+              <span>worker 0</span><i>→</i><span>banks 0,2,…</span><i>→</i><span>contiguous packets</span>
+            </div>
+            <ul class="clean">
+              <li>Each direct worker owns non-overlapping bank classes.</li>
+              <li>Pages separated by the DRAM-bank count are contiguous inside a bank.</li>
+              <li>Four packets are issued before the read barrier.</li>
+              <li>Full packets rotate across the worker's banks.</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="design">
+      <div class="wrap">
+        <div class="kicker">Final architecture</div>
+        <h2>Coalesce at the DRAM boundary; keep the ring topology stable</h2>
+        <div class="pipeline">
+          <article class="pipe-step card">
+            <h3>Partition ownership</h3>
+            <p>Each link worker receives a disjoint residue class of destination banks. Reader and writer derive the same ownership.</p>
+          </article>
+          <article class="pipe-step card">
+            <h3>Build bank slices</h3>
+            <p>For each owned bank, calculate the first valid page and page count inside the current gathered prefix.</p>
+          </article>
+          <article class="pipe-step card">
+            <h3>Prefetch packets</h3>
+            <p>Issue four reads per prefetch window, rotating across banks. Forwarded pages use physically contiguous NOC reads inside a bank.</p>
+          </article>
+          <article class="pipe-step card">
+            <h3>Write and signal</h3>
+            <p>The writer drains the identical schedule to interleaved output and preserves the existing consumer readiness protocol.</p>
+          </article>
+        </div>
+
+        <div class="grid three" style="margin-top: 1rem">
+          <article class="card">
+            <div class="kicker">Local input</div>
+            <h3>Correct over convenient</h3>
+            <p>Local input pages are not guaranteed physically contiguous under destination-bank ownership, so the reader uses accessor-based per-page reads.</p>
+          </article>
+          <article class="card">
+            <div class="kicker">Forwarded output</div>
+            <h3>Exploit physical layout</h3>
+            <p>In interleaved DRAM, logical pages <code>b</code>, <code>b+B</code>, <code>b+2B</code> are consecutive within bank <code>b</code>, enabling large contiguous NOC reads.</p>
+          </article>
+          <article class="card">
+            <div class="kicker">Buffering</div>
+            <h3>Deadlock-safe depth</h3>
+            <p>The circular buffer holds <code>2 × prefetch_packets × pages_per_packet</code>: two prefetch windows with four packets each.</p>
+          </article>
+        </div>
+
+        <div class="callout warn">
+          The speedup is not from adding cores. Mux cores and variable worker counts were removed. This isolates the win to
+          better DRAM transactions, bank parallelism, and less synchronization overhead.
+        </div>
+        <div class="callout">
+          With a 14 KiB Fabric payload limit, each 1088-byte BFP8 tile page yields
+          <code>floor(14336 / 1088) = 13</code> pages per packet: 14144 bytes of data and 192 bytes left over. The
+          remainder is expected because a page is the indivisible transport unit.
+        </div>
+      </div>
+    </section>
+
+    <section id="bank-map">
+      <div class="wrap">
+        <div class="kicker">Concrete mapping</div>
+        <h2>How workers divide the banks</h2>
+        <p class="section-intro">
+          This Blackhole eight-bank, two-link example shows the ownership rule. In ordinary forwarding, link 0 owns the even banks and
+          link 1 the odd banks. For an even ring's diametric shard, the two directions split those classes again so all
+          four worker/direction pairs remain exhaustive and non-overlapping.
+        </p>
+
+        <h3>Ordinary shard: <code>first_bank = worker_link</code>, <code>stride = num_links</code></h3>
+        <div class="bank-legend">
+          <span><i class="swatch s0"></i>link 0</span>
+          <span><i class="swatch s1"></i>link 1</span>
+        </div>
+        <div class="banks" aria-label="Ordinary two-link bank ownership">
+          <div class="bank b0">0<small>L0</small></div><div class="bank b1">1<small>L1</small></div>
+          <div class="bank b0">2<small>L0</small></div><div class="bank b1">3<small>L1</small></div>
+          <div class="bank b0">4<small>L0</small></div><div class="bank b1">5<small>L1</small></div>
+          <div class="bank b0">6<small>L0</small></div><div class="bank b1">7<small>L1</small></div>
+        </div>
+
+        <h3 style="margin-top: 2rem">Diametric split: <code>first_bank = link + direction × num_links</code>, <code>stride = 2 × num_links</code></h3>
+        <div class="bank-legend">
+          <span><i class="swatch s0"></i>forward / link 0</span>
+          <span><i class="swatch s1"></i>forward / link 1</span>
+          <span><i class="swatch s2"></i>backward / link 0</span>
+          <span><i class="swatch s3"></i>backward / link 1</span>
+        </div>
+        <div class="banks" aria-label="Split two-link and two-direction bank ownership">
+          <div class="bank b0">0<small>F/L0</small></div><div class="bank b1">1<small>F/L1</small></div>
+          <div class="bank b2">2<small>B/L0</small></div><div class="bank b3">3<small>B/L1</small></div>
+          <div class="bank b0">4<small>F/L0</small></div><div class="bank b1">5<small>F/L1</small></div>
+          <div class="bank b2">6<small>B/L0</small></div><div class="bank b3">7<small>B/L1</small></div>
+        </div>
+
+        <div class="formula">
+logical page offset for a bank = first_page_offset + n × number_of_dram_banks
+
+physical result: every successive n advances to the next page inside the same DRAM bank
+        </div>
+        <p>
+          The same <code>BankOwnedPacketSchedule</code> drives the reader and writer. Owning packet size inside the schedule
+          prevents the two sides from silently disagreeing about packet boundaries or circular-buffer counts.
+        </p>
+      </div>
+    </section>
+
+    <section id="trace">
+      <div class="wrap">
+        <div class="kicker">Program-cache contract</div>
+        <h2>One strategy across runtime sequence lengths</h2>
+        <p class="section-intro">
+          Trace replay requires 55K, 512K, and intermediate valid prefixes to hit the same cached program when tensor
+          capacity is unchanged. Selecting the strategy from runtime <code>kv_len</code> would violate that contract.
+          The final heuristic therefore uses only compile-time/configured properties.
+        </p>
+
+        <div class="decision">
+          <div class="checks">
+            <div class="check">Gather dimension is sequence dimension 2</div>
+            <div class="check">Architecture is Blackhole</div>
+            <div class="check">Output is DRAM interleaved with matching aligned page size</div>
+            <div class="check">Fabric payload holds at least two pages</div>
+            <div class="check">Configured forwarded capacity is at least 20 MiB</div>
+          </div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="card">
+            <div class="kicker">Cached-program choice</div>
+            <h3>Enable bank-owned scheduling</h3>
+            <p>The decision is stable because it depends on architecture, padded tensor shape/capacity, ring size, layout, page size, and fixed batch slicing.</p>
+            <p class="mono ok">runtime KV length is not consulted</p>
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top: 1rem">
+          <article class="card">
+            <div class="kicker">Compile-time/configured</div>
+            <h3>What may select the path</h3>
+            <p>Architecture, memory layout, aligned page size, padded shape, ring size, gather dimension, batch-slice mode, and configured forwarding volume.</p>
+          </article>
+          <article class="card">
+            <div class="kicker">Runtime patched</div>
+            <h3>What may change on a cache hit</h3>
+            <p>Valid pages, cache slot/base, semaphore and buffer values, plus logical sequence metadata. These change extent—not the kernel class or work topology.</p>
+          </article>
+        </div>
+        <p>
+          The per-input AG descriptor was reduced and named: <code>Wt</code>, <code>Ht</code>, <code>out_Wt</code>,
+          <code>out_Ht</code>, batch-head count, input-batch base, valid pages, and worker link. Reader and writer share
+          the gather-extent and link-range formulas so their producer/consumer page counts cannot drift.
+        </p>
+      </div>
+    </section>
+
+    <section id="performance">
+      <div class="wrap">
+        <div class="kicker">Measured result</div>
+        <h2>14 KiB packets improve both LoudBox Ring Indexer regimes</h2>
+        <p class="section-intro">
+          Both sides of this comparison use the same 14 KiB router configuration. FPU utilization is the fused program's
+          fixed ideal compute work divided by its measured critical-path duration. “Equivalent time reduction” is inferred
+          from that fixed-work ratio; it is not a separately reported wall-clock benchmark.
+        </p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Native box / SP</th>
+                <th>KV prefix</th>
+                <th>Main baseline</th>
+                <th>Final target</th>
+                <th>Utilization uplift</th>
+                <th>Equivalent time reduction</th>
+                <th>Final level</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>LoudBox / SP8</td><td>55K</td><td>35.13%</td><td><strong>51.82%</strong></td><td class="delta">+47.5%</td><td>32.2%</td>
+                <td><div class="bar-track"><div class="bar" style="--w:94.0%"></div></div></td>
+              </tr>
+              <tr>
+                <td>LoudBox / SP8</td><td>512K</td><td>39.28%</td><td><strong>55.12%</strong></td><td class="delta">+40.3%</td><td>28.7%</td>
+                <td><div class="bar-track"><div class="bar" style="--w:100%"></div></div></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout warn">
+          QuietBox/SP4 must be remeasured on a native four-device runner. A four-device subset of LoudBox does not
+          reproduce QuietBox routing, so its existing targets are intentionally not presented as 14 KiB results here.
+        </div>
+
+        <div class="grid three" style="margin-top: 1rem">
+          <article class="card">
+            <div class="kicker">Execution</div>
+            <h3>Captured trace replay</h3>
+            <p>The gate measures the same captured command stream used by the model-facing execution mode.</p>
+          </article>
+          <article class="card">
+            <div class="kicker">Sampling</div>
+            <h3>Median of three windows</h3>
+            <p>One profiled warm replay is discarded, then three separate device-time windows are measured and their median is used.</p>
+          </article>
+          <article class="card">
+            <div class="kicker">Acceptance</div>
+            <h3>Symmetric ±2%</h3>
+            <p>Both regressions and implausibly large deviations fail. The targets sit at the center of the accepted range.</p>
+          </article>
+        </div>
+
+        <details>
+          <summary>Why separate measurement windows?</summary>
+          <div>
+            Captured replays reuse a runtime identifier. Combining repetitions into one profiler window can merge records
+            and select the maximum rather than produce independent samples. A profiled warm-up also prevents an asynchronous
+            stale record from leaking into the measured callback. These changes stabilized the 55K gate without loosening
+            its margin.
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section id="history">
+      <div class="wrap">
+        <div class="kicker">Decision history</div>
+        <h2>What was tried, learned, and deliberately removed</h2>
+        <p class="section-intro">
+          The branch passed through several latency-hiding ideas. They were useful experiments, but the final patch keeps
+          only the mechanism that improved all measured Ring Indexer cases while preserving a fixed trace topology.
+        </p>
+        <div class="timeline">
+          <article class="event rejected">
+            <div class="status">Experiment only</div>
+            <h3>Phased slab readiness and P=1 / KC=7</h3>
+            <p>The first approach tried to expose partial slabs sooner and alternate compute between halves arriving from opposite directions. The P=1/KC=7 point was an earlier branch baseline, not a final knob or the mainline comparison.</p>
+          </article>
+          <article class="event rejected">
+            <div class="status">Removed</div>
+            <h3>Mux cores and expanded worker topologies</h3>
+            <p>Muxing helped a narrow large-ring case by decoupling routing and sometimes enabling more workers, but it was not a universal win: the 6-worker + 2-mux setup regressed 512K in ablation and the 55K benefit was unclear. A worker cannot simply double as a persistent mux because the roles have different lifetimes and resources.</p>
+          </article>
+          <article class="event rejected">
+            <div class="status">Rejected variants</div>
+            <h3>Extra packet and prefetch schemes</h3>
+            <p>Staged prefetch, static packet layouts, grouped Fabric sends, and other packet-count variants were swept. Unstable or negative variants were dropped instead of accumulating workload-specific gates.</p>
+          </article>
+          <article class="event">
+            <div class="status">Kept</div>
+            <h3>Bank-owned DRAM traversal</h3>
+            <p>This was the general win: it improved SP4 and SP8 at both 55K and 512K without changing worker count or selecting from runtime length.</p>
+          </article>
+          <article class="event">
+            <div class="status">Integrated from latest main</div>
+            <h3>Correct even-ring split forwarding</h3>
+            <p>The branch rebased over mainline's restored diametric split and second-half wait. Bank ownership was extended to split directions. Ring Indexer disables the split because its consumer lacks that second-half wait; Ring Joint enables it only for compatible dense consumers.</p>
+          </article>
+          <article class="event">
+            <div class="status">Final cleanup</div>
+            <h3>Smaller, named, reviewable interfaces</h3>
+            <p>Magic runtime slots became named constants, worker placement is derived from link and direction, duplicated helpers were consolidated, packet size has one owner, and anonymous namespaces use the repository's jumbo-build wrapper.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="implementation">
+      <div class="wrap">
+        <div class="kicker">Code map</div>
+        <h2>Where the change lives</h2>
+        <p class="section-intro">
+          The implementation stays inside the experimental Ring Attention AG and its two fused consumers. No generic
+          <code>ttnn/cpp/ttnn/operations/ccl/**</code> implementation was modified.
+        </p>
+        <div class="file-list">
+          <div class="file"><div class="path">.../kernels/ring_attention_all_gather_metadata.hpp</div><div class="role">Shared bank-slice schedule, packet rotation, link-page partition, and gather-extent derivation.</div></div>
+          <div class="file"><div class="path">.../kernels/ring_attention_all_gather_reader.cpp</div><div class="role">Bank-owned local/forwarded reads, four-packet prefetch windows, and split-direction ownership.</div></div>
+          <div class="file"><div class="path">.../kernels/ring_attention_all_gather_writer.cpp</div><div class="role">Mirrored packet drain/write schedule and discard handling for non-output shards.</div></div>
+          <div class="file"><div class="path">.../kernels/ring_attention_prefetch_utils.hpp</div><div class="role">Generic batched packet prefetch and contiguous-tile delegation.</div></div>
+          <div class="file"><div class="path">.../ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp</div><div class="role">Trace-stable eligibility heuristic, packet sizing, circular-buffer sizing, and link/direction worker placement.</div></div>
+          <div class="file"><div class="path">.../ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp</div><div class="role">Named descriptor layout and shared kernel offsets used by fused parents.</div></div>
+          <div class="file"><div class="path">.../indexer_score/device/ring_indexer_score_dsa_program_factory.cpp</div><div class="role">Fused Ring Indexer integration, fixed compute/AG column reservation, named cache-hit patch points, and split disablement.</div></div>
+          <div class="file"><div class="path">.../transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp</div><div class="role">Uses shared AG kernel offsets so cache-hit patching remains aligned with the helper.</div></div>
+          <div class="file"><div class="path">tests/.../test_ring_indexer_score_dsa_perf.py</div><div class="role">Updated positive targets, three-window median measurement, and symmetric ±2% gating.</div></div>
+        </div>
+
+        <div class="grid two" style="margin-top: 1rem">
+          <article class="card">
+            <div class="kicker">Protocol safety</div>
+            <h3>Consumer owns split compatibility</h3>
+            <p>The AG helper accepts a named split-forwarding capability. A fused consumer may enable it only if it implements the diametric shard's second-half wait.</p>
+          </article>
+          <article class="card">
+            <div class="kicker">Build safety</div>
+            <h3>Jumbo namespace wrapping</h3>
+            <p>File-local helpers use <code>namespace { namespace CMAKE_UNIQUE_NAMESPACE { ... }}</code> to prevent collisions when translation units are combined.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="validation">
+      <div class="wrap">
+        <div class="kicker">Evidence</div>
+        <h2>Correctness, determinism, performance, and compatibility checks</h2>
+        <div class="grid two">
+          <article class="card">
+            <h3 class="ok">Completed locally</h3>
+            <ul class="clean">
+              <li>TTNN jumbo/unity build.</li>
+              <li>13/13 fused Ring Indexer correctness and program-cache tests.</li>
+              <li>MLA 100K Ring Joint BF16 accuracy across three configurations, approximately 0.99941 PCC.</li>
+              <li>MLA 100K determinism: ten outputs for each tested Q/K configuration.</li>
+              <li>Traced LoudBox 55K and 512K performance gates.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3 class="ok">Independent review</h3>
+            <ul class="clean">
+              <li>Codex/Sol reviewed for correctness, simplification, and refactor opportunities.</li>
+              <li>Claude/Fable independently reviewed the same final patch.</li>
+              <li>Both final review rounds approved after cleanup.</li>
+              <li>Blackhole multi-card sanity and minimal T3K coverage were dispatched for the published commit.</li>
+            </ul>
+          </article>
+        </div>
+        <div class="callout">
+          Wormhole does not enter the Blackhole bank-owned fast path. It compiles the legacy row-strided behavior via
+          <code>if constexpr</code>, while T3K coverage verifies shared Ring SDPA consumers on Wormhole hardware.
+        </div>
+      </div>
+    </section>
+
+    <section id="limits">
+      <div class="wrap">
+        <div class="kicker">Boundaries and follow-up</div>
+        <h2>What this optimization does not claim</h2>
+        <div class="grid three">
+          <article class="card">
+            <h3>Not a universal CCL rewrite</h3>
+            <p>The fast path currently targets Blackhole, sequence-dimension gathers, and aligned interleaved DRAM output. Unsupported cases retain the existing path.</p>
+          </article>
+          <article class="card">
+            <h3>Not dynamic device selection</h3>
+            <p>The device does not choose between strategies from runtime KV length. Instead, one capacity-based host choice deliberately covers every length in the trace class.</p>
+          </article>
+          <article class="card">
+            <h3>Not the final SP=32 topology</h3>
+            <p>Galaxy's planned 32-device slab sharding and larger all-gather may change traffic balance. Mux/core topology should be reevaluated after that path lands.</p>
+          </article>
+        </div>
+        <ul class="clean">
+          <li>The 20 MiB threshold is an empirical, trace-stable amortization boundary—not a universal hardware law.</li>
+          <li>Every bank-owned worker rotates full packets across its banks; only the unsupported legacy scatter path retains its two-page cap.</li>
+          <li>The LoudBox targets cover Ring Indexer because that is where the 14 KiB end-to-end improvement is locally established. QuietBox needs native CI measurement, and other ops retain their targets unless their own measured gates justify a change.</li>
+          <li>FPU utilization differs between native QuietBox/SP4 and LoudBox/SP8 paths because topology and critical-path behavior differ; core count alone does not determine the result.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap">
+    <p>
+      Generated for branch <code>pjosipovic/ring-indexer-dram-coalescing-multiworker</code> at
+      <code>c11080ba3413ea50d685fde2ed50349a4ac108fa</code>. Baseline parent:
+      <code>d0c8df830449b18848c1a7060e57550b15f1f15a</code>.
+    </p>
+  </footer>
+</body>
+</html>

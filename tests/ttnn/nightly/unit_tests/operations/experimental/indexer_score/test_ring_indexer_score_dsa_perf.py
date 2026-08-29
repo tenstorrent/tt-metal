@@ -58,6 +58,16 @@ GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 # 4x1 on QuietBox and 8x1 on LoudBox.
 RING_PERF_MESHES = ((4, 1), (8, 1))
 RING_PERF_MESH_IDS = ("quietbox_4x1", "loudbox_8x1")
+# The 14 KiB router limit carries 13 complete 1088-byte BFP8 tile pages
+# (14144 bytes); the remaining 192 bytes cannot hold another complete page.
+RING_INDEXER_FABRIC_PAYLOAD_BYTES = 14 * 1024
+
+
+def _ring_indexer_fabric_router_config():
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = RING_INDEXER_FABRIC_PAYLOAD_BYTES
+    return config
+
 
 # Match the indexer_score perf gate: expected FPU utilization is compared with
 # a symmetric relative band. These are warm trace-replay realtime-profiler
@@ -70,14 +80,15 @@ RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
     (4, GLM52_KV_55K): 43.74,
     (4, GLM52_KV_512K): 47.26,
-    (8, GLM52_KV_55K): 48.90,
-    (8, GLM52_KV_512K): 47.14,
+    (8, GLM52_KV_55K): 51.82,
+    (8, GLM52_KV_512K): 55.12,
 }
 
 _FABRIC_2D_TORUS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
     "fabric_tensix_config": ttnn.FabricTensixConfig.DISABLED,
+    "fabric_router_config": _ring_indexer_fabric_router_config(),
     "require_exact_physical_num_devices": True,
 }
 
