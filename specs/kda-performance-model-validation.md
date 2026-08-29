@@ -2,8 +2,8 @@
 
 Date: 2026-08-29
 Branch: `momcilo/kda_perf_model`
-Implementation range: `ed6cab68943` through `0fef8b1211b`
-Base: `ee7353a69eb38a2da9e059b276cf546c0dc46811`
+Implementation range: `f7adab1dab5` through `3fa501c0b7a`
+Base: `d0541ee7fceae284f31969b78824a61bfdeaf850`
 Hardware: Blackhole, device 0, 110 available worker cores
 
 ## Verdict
@@ -24,8 +24,9 @@ uses the repository `python_env` and passed.
 Commands:
 
 ```sh
-pre-commit run --from-ref ee7353a69eb --to-ref HEAD
+pre-commit run --from-ref origin/main --to-ref HEAD
 cmake --build build_kda_perf_model --target ttnn -j 16
+cmake --install build_kda_perf_model --component tt_pybinds
 
 env PYTHONPATH=/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model:/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model/ttnn:/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model/tools \
     LD_LIBRARY_PATH=/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model/build_kda_perf_model/ttnn:/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model/build_kda_perf_model/tt_metal:/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model/build_kda_perf_model/tt_stl:/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model/build_kda_perf_model/tt_metal/third_party/umd/lib \
@@ -36,8 +37,8 @@ env PYTHONPATH=/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model:/localde
 Results:
 
 - branch-range pre-commit: PASS
-- incremental `ttnn` build: PASS (`ninja: no work to do`)
-- independent Python formula/model tests: 23 passed in 0.06 s
+- rebased `ttnn` build and binding install: PASS (335/335 build targets)
+- independent Python formula/model tests: 23 passed in 0.09 s
 - coverage includes all seven work formulas, production and overflow values,
   `G=1`, all fidelities, non-square harvested grids, DRAM sum/dedup/alias and
   decimal rounding, L1, physical padding, invalid fallbacks, realtime clock
@@ -54,29 +55,35 @@ env PYTHONPATH=/localdev/mvasilijevic/tt-metal.worktrees/kda_perf_model:/localde
     scripts/run_safe_pytest.sh --run-all tests/ttnn/nightly/unit_tests/operations/experimental/kda -k production_performance -s -vv
 ```
 
-Result: `13 passed, 252 deselected in 6.63s`; `SAFE_PYTEST_RESULT: PASS`.
+Result: `13 passed, 252 deselected in 40.20s`; `SAFE_PYTEST_RESULT: PASS`.
+The longer pytest wall time includes cold JIT compilation after rebasing onto
+current main; the per-operation realtime-profiler measurements remain stable.
 
 | API / case | measured ns | FPU ns | DRAM/roofline ns | FPU / DRAM / roofline util. % | Accuracy evidence |
 | --- | ---: | ---: | ---: | ---: | --- |
-| affine scan `sp1-tp8` | 97,231 | 1,232 | 26,112 | 1.27 / 26.86 / 26.86 | PCC 0.999958 |
-| affine scan `sp2-tp4` | 74,879 | 1,056 | 27,648 | 1.41 / 36.92 / 36.92 | PCC 0.999987 |
-| affine scan `sp4-tp2` | 64,712 | 704 | 30,720 | 1.09 / 47.47 / 47.47 | PCC 0.999998 |
-| prepare recurrence | 25,405 | 32 | 736 | 0.13 / 2.90 / 2.90 | perf contract only |
-| QKV Conv1D `single-block` | 86,561 | 99 | 1,554 | 0.11 / 1.80 / 1.80 | perf contract only |
-| QKV Conv1D `multiple-blocks` | 46,894 | 198 | 3,108 | 0.42 / 6.63 / 6.63 | perf contract only |
-| QKV Conv1D `asymmetric-split` | 51,963 | 58 | 907 | 0.11 / 1.75 / 1.75 | perf contract only |
-| recurrent scan | 361,944 | 28,963 | 301,056 | 8.00 / 83.18 / 83.18 | perf contract only |
-| reduce affine transforms | 45,942 | 2,049 | 18,432 | 4.46 / 40.12 / 40.12 | A 0.999989; B 0.999987 |
-| sigmoid RMSNorm `sp1-tp8-local` | 154,631 | 7,452 | 92,176 | 4.82 / 59.61 / 59.61 | timing band passed |
-| sigmoid RMSNorm `sp2-tp4-local` | 155,267 | 7,452 | 92,176 | 4.80 / 59.37 / 59.37 | timing band passed |
-| sigmoid RMSNorm `sp4-tp2-local` | 155,234 | 7,452 | 92,176 | 4.80 / 59.38 / 59.38 | timing band passed |
-| recurrence summary | 302,532 | 77,039 | 245,760 | 25.46 / 81.23 / 81.23 | perf contract only |
+| affine scan `sp1-tp8` | 97,373 | 1,232 | 26,112 | 1.27 / 26.82 / 26.82 | PCC 0.999958 |
+| affine scan `sp2-tp4` | 74,634 | 1,056 | 27,648 | 1.41 / 37.04 / 37.04 | PCC 0.999987 |
+| affine scan `sp4-tp2` | 65,248 | 704 | 30,720 | 1.08 / 47.08 / 47.08 | PCC 0.999998 |
+| prepare recurrence | 25,393 | 32 | 736 | 0.13 / 2.90 / 2.90 | perf contract only |
+| QKV Conv1D `single-block` | 88,151 | 99 | 1,554 | 0.11 / 1.76 / 1.76 | perf contract only |
+| QKV Conv1D `multiple-blocks` | 47,833 | 198 | 3,108 | 0.41 / 6.50 / 6.50 | perf contract only |
+| QKV Conv1D `asymmetric-split` | 52,970 | 58 | 907 | 0.11 / 1.71 / 1.71 | perf contract only |
+| recurrent scan | 365,123 | 28,963 | 301,056 | 7.93 / 82.45 / 82.45 | perf contract only |
+| reduce affine transforms | 45,451 | 2,049 | 18,432 | 4.51 / 40.55 / 40.55 | A 0.999989; B 0.999987 |
+| sigmoid RMSNorm `sp1-tp8-local` | 154,644 | 7,452 | 92,176 | 4.82 / 59.61 / 59.61 | timing band passed |
+| sigmoid RMSNorm `sp2-tp4-local` | 156,156 | 7,452 | 92,176 | 4.77 / 59.03 / 59.03 | timing band passed |
+| sigmoid RMSNorm `sp4-tp2-local` | 155,147 | 7,452 | 92,176 | 4.80 / 59.41 / 59.41 | timing band passed |
+| recurrence summary | 300,881 | 77,039 | 245,760 | 25.60 / 81.68 / 81.68 | perf contract only |
 
 Every item reported `ideal_ns = max(ideal_fpu_ns, ideal_dram_ns)`. The
 prepare and sigmoid cases also reported the expected omitted-SFPU result counts
 of 25,344 and 7,925,760 respectively.
 
 ## Tracy reconciliation
+
+The affine scan `sp1-tp8` item was rerun independently after the integrated
+suite to retain fresh, directly inspectable evidence: `1 passed in 4.38s`,
+`measured_ns=97373`, and `SAFE_PYTEST_RESULT: PASS`.
 
 Each exact node below was run with:
 
@@ -91,13 +98,13 @@ Python roofline, FPU, and DRAM values exactly.
 
 | API / exact case | Tracy report directory | PM ideal / compute / bandwidth ns | input / output BW slots |
 | --- | --- | ---: | ---: |
-| affine scan `sp1-tp8` | `2026_08_29_09_03_30` | 26,112 / 1,232 / 26,112 | 3 / 1 |
-| prepare recurrence | `2026_08_29_09_03_50` | 736 / 32 / 736 | 5 / 7 |
-| QKV Conv1D `single-block` | `2026_08_29_09_04_09` | 1,554 / 99 / 1,554 | 6 / 3 |
-| recurrent scan | `2026_08_29_09_04_30` | 301,056 / 28,963 / 301,056 | 8 / 2 |
-| reduce affine transforms | `2026_08_29_09_04_50` | 18,432 / 2,049 / 18,432 | 2 / 2 |
-| sigmoid RMSNorm `sp1-tp8-local` | `2026_08_29_09_05_10` | 92,176 / 7,452 / 92,176 | 3 / 1 |
-| recurrence summary | `2026_08_29_09_05_31` | 245,760 / 77,039 / 245,760 | 7 / 2 |
+| affine scan `sp1-tp8` | `2026_08_29_14_33_53` | 26,112 / 1,232 / 26,112 | 3 / 1 |
+| prepare recurrence | `2026_08_29_14_34_14` | 736 / 32 / 736 | 5 / 7 |
+| QKV Conv1D `single-block` | `2026_08_29_14_34_34` | 1,554 / 99 / 1,554 | 6 / 3 |
+| recurrent scan | `2026_08_29_14_35_02` | 301,056 / 28,963 / 301,056 | 8 / 2 |
+| reduce affine transforms | `2026_08_29_14_35_24` | 18,432 / 2,049 / 18,432 | 2 / 2 |
+| sigmoid RMSNorm `sp1-tp8-local` | `2026_08_29_14_35_45` | 92,176 / 7,452 / 92,176 | 3 / 1 |
+| recurrence summary | `2026_08_29_14_36_09` | 245,760 / 77,039 / 245,760 | 7 / 2 |
 
 Reports are under `generated/profiler/reports/<directory>/`. The summary's two
 output bandwidth entries are both `0.0`, as required for its height-sharded L1
