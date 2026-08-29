@@ -473,7 +473,9 @@ Normalization
    ttnn.layer_norm_pre_all_gather
    ttnn.rms_norm
    ttnn.rms_norm_post_all_gather
+   ttnn.rms_norm_post_all_gather_bw
    ttnn.rms_norm_pre_all_gather
+   ttnn.rms_norm_pre_all_gather_bw
    ttnn.scale_causal_mask_hw_dims_softmax_in_place
    ttnn.scale_mask_softmax
    ttnn.scale_mask_softmax_in_place
