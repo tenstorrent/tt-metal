@@ -62,7 +62,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     build_minimax_h3_vision_tower,
 )
 from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
+from ...encoders.qwen3vl.vision_qwen3vl import pad_patches_for_sp, vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
@@ -761,10 +761,26 @@ class MiniMaxH3Pipeline:
 
     def _prepare_vision_tower(self):
         if self._vision_tower is None:
-            self._host_log("building the Qwen3-VL vision tower (replicated)")
-            self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
-                self.weights_dir / "text_encoder", mesh_device=self.mesh_device
-            )
+            # Sharded on the pipeline's own axes (TP on tp_axis, SP on sp_axis), the tp4_sp8
+            # configuration the conditioner tests validate: TP fractures heads, SP shards the patch
+            # rows, and the tower gathers its merged tokens back to full replication, so the
+            # decoder handoff is unchanged. Falls back to replicated when the mesh has no SP axis.
+            if self.sp_factor > 1:
+                self._host_log(f"building the Qwen3-VL vision tower (tp{self.tp_factor}_sp{self.sp_factor})")
+                self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
+                    self.weights_dir / "text_encoder",
+                    mesh_device=self.mesh_device,
+                    parallel_config=EncoderParallelConfig(
+                        tensor_parallel=ParallelFactor(mesh_axis=self.tp_axis, factor=self.tp_factor),
+                        sequence_parallel=ParallelFactor(mesh_axis=self.sp_axis, factor=self.sp_factor),
+                    ),
+                    ccl_manager=self.ccl_manager,
+                )
+            else:
+                self._host_log("building the Qwen3-VL vision tower (replicated)")
+                self._vision_tower, self._vision_config = build_minimax_h3_vision_tower(
+                    self.weights_dir / "text_encoder", mesh_device=self.mesh_device
+                )
         return self._vision_tower
 
     def encode_prompt(
@@ -831,18 +847,32 @@ class MiniMaxH3Pipeline:
         if has_vision:
             tower = self._prepare_vision_tower()
             vis_cos, vis_sin = tower.prepare_rope(grid_thw)
+            # One attention block per image and one per FRAME of a video, so `fl2va`'s single
+            # image reduces to full attention. Block form rather than a dense mask: an `s x s`
+            # mask is 17 GiB for a nine-image request.
+            #
+            # Under the SP tower, pad_patches_for_sp aligns the patch count to sp * 32 (a no-op
+            # when already aligned): the pad rides its own phantom attention window and the
+            # tower trims its merged garbage after the SP gather via `logical_patches`, so the
+            # decoder handoff below always carries exactly the real tokens. Inputs shard on the
+            # SP axis; replicated meshes shard nothing and pad nothing (sp_factor 1).
+            p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+                pixel_values.float(),
+                tower.prepare_pos_embeds(grid_thw),
+                (vis_cos, vis_sin),
+                vision_cu_seqlens(grid_thw),
+                sp_factor=self.sp_factor,
+            )
+            sp_kw = {"mesh_axis": self.sp_axis, "shard_dim": 0} if self.sp_factor > 1 else {}
             merged, deepstack = tower.forward(
-                bf16_tensor(pixel_values.float(), device=self.mesh_device),
-                pos_embeds=bf16_tensor(tower.prepare_pos_embeds(grid_thw), device=self.mesh_device),
+                bf16_tensor(p_patches, device=self.mesh_device, **sp_kw),
+                pos_embeds=bf16_tensor(p_pos, device=self.mesh_device, **sp_kw),
                 rope=(
-                    bf16_tensor(vis_cos, device=self.mesh_device),
-                    bf16_tensor(vis_sin, device=self.mesh_device),
+                    bf16_tensor(p_cos, device=self.mesh_device, **sp_kw),
+                    bf16_tensor(p_sin, device=self.mesh_device, **sp_kw),
                 ),
-                # One attention block per image and one per FRAME of a video, so `fl2va`'s
-                # single image reduces to full attention. Block form rather than a dense mask:
-                # an `s x s` mask is 17 GiB for a nine-image request. Requires the tower to be
-                # replicated (sp_factor 1), per `vision_qwen3vl.py`.
-                cu_seqlens=vision_cu_seqlens(grid_thw),
+                cu_seqlens=p_cu,
+                logical_patches=logical,
             )
             # Both pad ids, in sequence order. `_scatter_rows` consumes the tower's rows in run
             # order and the patches were concatenated in presentation order, so the two match.
