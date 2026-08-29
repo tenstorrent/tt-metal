@@ -130,21 +130,23 @@ RecurrentChunkScanOperation::create_op_performance_model(
 
     const std::size_t input_count = 7 + static_cast<std::size_t>(in.initial_state.has_value());
     auto fallback = to_profiler_model<tensor_return_value_t>(zero_estimate(input_count, outputs.size()));
+    const std::string_view operation_name =
+        attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
     if (in.v_beta.storage_type() != StorageType::DEVICE || !in.v_beta.is_allocated() || in.v_beta.device() == nullptr) {
-        log_warning(tt::LogOp, "KDA recurrent_chunk_scan performance model expected an allocated device input");
-        return fallback;
-    }
-    if (attrs.mode != RecurrentChunkScanMode::RECURRENT) {
+        log_warning(tt::LogOp, "KDA {} performance model expected an allocated device input", operation_name);
         return fallback;
     }
 
     auto* device = in.v_beta.device();
     if (device->arch() != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "KDA recurrent_chunk_scan performance model supports Blackhole only");
+        log_warning(tt::LogOp, "KDA {} performance model supports Blackhole only", operation_name);
         return fallback;
     }
 
-    const auto work = recurrent_chunk_scan_work(attrs.batch_heads, attrs.num_chunks, attrs.key_dim, attrs.value_dim);
+    const auto work =
+        attrs.mode == RecurrentChunkScanMode::RECURRENT
+            ? recurrent_chunk_scan_work(attrs.batch_heads, attrs.num_chunks, attrs.key_dim, attrs.value_dim)
+            : summarize_chunk_recurrence_work(attrs.batch_heads, attrs.num_chunks, attrs.key_dim, attrs.value_dim);
     if (!work) {
         return fallback;
     }
