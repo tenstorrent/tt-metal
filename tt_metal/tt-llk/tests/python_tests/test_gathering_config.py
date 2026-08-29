@@ -40,11 +40,18 @@ CSRRS_ZERO_CFG0_T1 = 0x7C032073  # csrrs zero, 0x7c0, t1   (funct3=010)
 CSRRC_ZERO_CFG0_T1 = 0x7C033073  # csrrc zero, 0x7c0, t1   (funct3=011)
 
 # configure_gathering() issues csrrs twice (bit 1, then bit 18) and csrrc once (bit 1).
-# Asserted as a lower bound: other cfg0 writes (tt-metal's configure_l1_data_cache()
-# uses the same encoding) must not turn this into a spurious failure. The exact
-# sequence is pinned by test_harness_gathering_sequence_matches_tt_metal below.
+# Counted as a lower bound so an unrelated cfg0 write (tt-metal's
+# configure_l1_data_cache() uses the same encoding) cannot cause a spurious failure.
+# That tolerance alone would admit a false pass -- another writer could satisfy the
+# bound while configure_gathering() itself had been dropped -- so the ordered triple
+# must also appear inside one short window, which is what proves this sequence, and
+# not merely some cfg0 traffic, reached the binary. The source-level sequence is
+# pinned separately by test_harness_gathering_sequence_matches_tt_metal below.
 MIN_CSRRS = 2
 MIN_CSRRC = 1
+# The three words span 7 words when emitted (one asm block, so the compiler cannot
+# interleave); allow slack for scheduling changes without admitting unrelated writes.
+SEQUENCE_WINDOW_WORDS = 16
 
 
 def _executable_words(elf_path):
@@ -66,6 +73,25 @@ def _executable_words(elf_path):
         for off in range(sh_offset, sh_offset + sh_size - 3, 4):
             words.append(struct.unpack_from("<I", data, off)[0])
     return words
+
+
+def _has_gathering_sequence(words):
+    """True if csrrs, csrrs, csrrc appear in that order inside one short window.
+
+    configure_gathering() emits them from a single asm block, so they land together.
+    Requiring the ordered triple is what distinguishes "this sequence was emitted"
+    from "the ELF happens to contain enough cfg0 writes".
+    """
+    for i, word in enumerate(words):
+        if word != CSRRS_ZERO_CFG0_T1:
+            continue
+        window = words[i + 1 : i + SEQUENCE_WINDOW_WORDS]
+        if CSRRS_ZERO_CFG0_T1 not in window:
+            continue
+        after_second = window[window.index(CSRRS_ZERO_CFG0_T1) + 1 :]
+        if CSRRC_ZERO_CFG0_T1 in after_second:
+            return True
+    return False
 
 
 @blackhole_only
@@ -122,6 +148,11 @@ def test_gathering_disabled_in_all_risc_firmware():
             f"expected at least x{MIN_CSRRS} / x{MIN_CSRRC}). "
             "do_crt0() must call configure_gathering() so the tests run in the same "
             "gathering configuration as tt-metal firmware."
+        )
+        assert _has_gathering_sequence(words), (
+            f"{name}.elf contains cfg0 writes but not configure_gathering()'s ordered "
+            f"csrrs/csrrs/csrrc triple within {SEQUENCE_WINDOW_WORDS} words. The counts "
+            "above are met by some other cfg0 writer, not by do_crt0()."
         )
 
 
