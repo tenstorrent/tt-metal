@@ -770,7 +770,7 @@ for entry in \
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
     # Pending tt-cluster-descriptors merge + submodule bump (see the mapping vars' TODOs).
-    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping not in the submodule pin yet: ${cluster_map}" >&2
+    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping is in tt-cluster-descriptors PR 19 (https://github.com/tenstorrent/tt-cluster-descriptors/pull/19), pending merge + submodule bump: ${cluster_map}" >&2
     continue
   fi
   for stage in ${stages}; do
@@ -819,7 +819,7 @@ for entry in \
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; bigmeshes="${rest#*:}"
   if [[ ! -f "${cluster_map}" ]]; then
     # Pending tt-cluster-descriptors merge + submodule bump (see the mapping vars' TODOs).
-    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping not in the submodule pin yet: ${cluster_map}" >&2
+    echo "WARNING: [bh-ring-stress] skipping ${entry%%:*} -- mock mapping is in tt-cluster-descriptors PR 19 (https://github.com/tenstorrent/tt-cluster-descriptors/pull/19), pending merge + submodule bump: ${cluster_map}" >&2
     continue
   fi
   for bigmesh in ${bigmeshes}; do
