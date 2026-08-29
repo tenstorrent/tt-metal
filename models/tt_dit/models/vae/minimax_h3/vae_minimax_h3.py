@@ -483,13 +483,7 @@ class MiniMaxH3Vae(Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
-            # Composer, not `_read_wave_units`: this output is rank 5 and `CCLManager.all_gather` only
-            # reshapes rank < 4, so the fabric path would need a flatten around it. An encode wave is
-            # ~31 MB against the decode wave's 1.4 GB, so the multi-host broadcast is not worth it.
-            out = ttnn.to_torch(
-                encoder(x_device),
-                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
-            ).float()
+            out = fast_device_to_host(encoder(x_device), self.mesh_device, [0, 0], ccl_manager=self.ccl_manager).float()
             for index in range(count):
                 results.append(out[index : index + 1, ..., :moments].permute(0, 4, 1, 2, 3).contiguous())
         return results
