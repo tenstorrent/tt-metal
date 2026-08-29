@@ -26,6 +26,7 @@ import time
 import pytest
 import torch
 
+from models.demos.cosyvoice.tests.perf.gates import enforce, report
 from models.demos.cosyvoice.tt.common import GOLDEN_DIR
 from models.demos.cosyvoice.tt.weights import default_weights_path
 
@@ -359,7 +360,18 @@ def test_device_inplace_throughput(device):
     print(f"    value of in-place     {wide_ms - inplace_ms:+7.2f} ms   (at equal width)")
     print(f"    net vs shipped        {moving_ms - inplace_ms:+7.2f} ms   ({moving_ms/inplace_ms:.2f}x)")
     print(f"    LLM RTF contribution at 50 tok/s of speech: {50 * inplace_ms / 1e3:.3f}")
-    assert inplace_ms > 0
+
+    # Both cache mechanisms ship -- `kv_inplace_default` picks between them by
+    # architecture -- so both carry the throughput gates, not only the faster one.
+    report(
+        [
+            enforce("tok_s", 1e3 / moving_ms, device, extra="moving cache"),
+            enforce("tok_s_stretch", 1e3 / moving_ms, device, extra="moving cache"),
+            enforce("tok_s", 1e3 / inplace_ms, device, extra="in-place cache"),
+            enforce("tok_s_stretch", 1e3 / inplace_ms, device, extra="in-place cache"),
+        ],
+        "bounty gates -- AR decode step, both cache mechanisms",
+    )
 
 
 @needs_weights
@@ -415,9 +427,15 @@ def test_device_traced_throughput(device):
     print(f"    untraced   {untraced_ms:7.2f} ms   ({1e3/untraced_ms:6.1f} tok/s)")
     print(f"    traced     {traced_ms:7.2f} ms   ({1e3/traced_ms:6.1f} tok/s)")
     print(f"    speedup    {speedup:7.2f}x")
-    print(f"    targets: >= 30 tok/s, then >= 60")
     print(f"    LLM RTF contribution at 50 tok/s of speech: {50 * traced_ms / 1e3:.3f}")
-    assert traced_ms > 0
+
+    # The traced step is what `generate()` runs, so it is where the token-throughput
+    # gates are enforced. The untraced figure above is the control, not the claim.
+    tok_s = 1e3 / traced_ms
+    report(
+        [enforce("tok_s", tok_s, device), enforce("tok_s_stretch", tok_s, device)],
+        f"bounty gates -- traced AR decode step, max_len={max_len}",
+    )
 
 
 # ---------------------------------------------------------------- HiFT vocoder
