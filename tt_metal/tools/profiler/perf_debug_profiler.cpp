@@ -365,21 +365,19 @@ uint32_t nstage_cap(uint32_t computed) {
 // provably the bottleneck.
 
 
-// TT_METAL_PERF_DEBUG_SHIP_MIN_PCT: a FILLER defers shipping a live core until its span holds at least
-// this percent of live capacity (kNumRisc * ring words), unless a lane hit the ship trigger (serviced
-// regardless) or the core aged out. 0 disables (ship every live core every sweep, the old behaviour).
-//
-// Why 50 is the default (measured on the DRAM-ring pipeline this knob predates, kimi_k2 fused loop): a
-// frame costs the pipe its fixed overheads whatever it carries, and shipping every live core every sweep
-// produced ~37%-full frames whose aggregate outran egress -- the elastic buffer absorbed the deficit for
-// ~250 iterations, filled, and every producer on the device then stalled for the rest of the run (71k
-// stalls). 65 was tried and REGRESSED (35 stalls vs 0 at 50): it cut frames only ~10% while letting worker
-// rings ride ~380 words higher before shipping -- and a core whose emission is concentrated in one or two
-// lanes can NEVER reach a whole-span threshold that high, so it lives on the lane trigger with less slack.
+// TT_METAL_PERF_DEBUG_SHIP_MIN_PCT: a FILLER defers shipping a live core until its FULLEST lane holds at
+// least this percent of its own ring, unless the core aged out (serviced regardless). 0 disables (ship
+// every live core every sweep). Per-lane, not per-span: the producer that blocks is always a lane, and a
+// span percent under-reads a concentrated core's binding ring by up to kNumRisc x (span-5% let BRISC ride
+// to a quarter ring and cost 551 stalls at delay 10; lane-5% opens the blind window at 5%). Values past
+// 50 are capped by the kernel's half-ring lane trigger. Default 5: the largest value that holds every
+// knee metric (burst d8, direct d9, sustained-150k d10, all lossless) while batching ~5% of a ring per
+// frame instead of 1's every-sweep slivers; the cliff past it is steep (lane-10 = 8 stalls at delay 10,
+// lane-25 = 47.8k).
 uint32_t ship_min_pct() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_SHIP_MIN_PCT");
-        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 50u;
+        const uint32_t n = (s != nullptr && *s != '\0') ? static_cast<uint32_t>(std::strtoul(s, nullptr, 10)) : 5u;
         return n > 100 ? 100u : n;
     }();
     return v;

@@ -117,11 +117,14 @@ void kernel_main() {
     // and barrier deadlines, the pace gap, stop-path timing) are NOT behind this.
     constexpr uint32_t kInstr = get_compile_time_arg_val(41);
     // PER-CORE SHIP THRESHOLD (0 = ship every live core every sweep). A frame costs the pipe the same
-    // whether it carries 200 live words or 2,000, so a core ships only when it is worth the frame:
-    // enough live words, any lane past kLaneShipWords, or the age bound below.
+    // whether it carries 200 live words or 2,000, so a core ships only when it is worth the frame. The
+    // threshold binds on the core's FULLEST lane, not its span: the producer that blocks is always a
+    // lane, and a span percent under-reads a concentrated core's binding ring by up to kNumRisc x
+    // (span-5% let BRISC ride to a quarter ring, 551 stalls at delay 10; lane-5% opens the blind
+    // window at 5%).
     constexpr uint32_t kShipMinPct = get_compile_time_arg_val(39);
     constexpr uint32_t kShipMaxAgeSweeps = 512u;
-    constexpr uint32_t kShipMinWords = (kLiveWords * kShipMinPct) / 100u;
+    constexpr uint32_t kLaneShipWords = (kRingWords * kShipMinPct) / 100u;
     // CV-FIRST SWEEPS: read each core's ring TAILS (32 B), decide the ship set, then GATHER-READ only the
     // ship set's live runs -- each straight to its packed wire offset in staging, so a staged frame is its
     // own wire image and ships in ONE PCIe write (two across the FIFO wrap). The tails read is
@@ -1227,7 +1230,7 @@ void kernel_main() {
                         // PER-LANE trigger, not span fill: one hot lane at 90% of its own ring is only ~18% of the span,
                         // and the producer that blocks is always a LANE. Level check only -- no growth term, so the
                         // producer's batched tail publish cannot fool it.
-                        if (stop_seen_at == 0 && live < kShipMinWords && peak < lane_trigger &&
+                        if (stop_seen_at == 0 && peak < kLaneShipWords && peak < lane_trigger &&
                             ship_age[c] < kShipMaxAgeSweeps) {
                             ship_age[c]++;
                             ship_deferred++;
