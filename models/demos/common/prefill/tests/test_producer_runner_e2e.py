@@ -184,6 +184,22 @@ if _PROMPT_FILE:
     }
 
 
+# Opt-in traced-runner scenario (PREFILL_E2E_TRACE=1): the same full-depth single-user gate, but with the
+# runner capturing its chunk forward as a ttnn trace and replaying it per chunk. Off by default because it
+# roughly doubles this leg's wall clock; it is the ONLY e2e coverage of the traced path -- the persistent
+# inbound destination (#52451) that lets the H2D drain write straight to the captured address, and the
+# on-device metadata consumption plus D2H layer-ack under trace (#52464). Everything else is inherited,
+# including the LayerAck backend, so PREFILL_USE_TRACE is the single variable between the two arms.
+if os.environ.get("PREFILL_E2E_TRACE") == "1":
+    SCENARIOS["single_user_full_depth_traced"] = {
+        **SCENARIOS["single_user_full_depth"],
+        "env": {
+            **SCENARIOS["single_user_full_depth"].get("env", {}),
+            "PREFILL_USE_TRACE": "1",
+        },
+    }
+
+
 def _transport_env(num_users: int, max_seq_len: int, num_layers: int = NUM_LAYERS, **extra) -> dict:
     """Inherit the CI/dev env (weights cache, HF, golden trace) and add the shared orchestration knobs
     for this scenario's runner+producer. `extra` layers on the runner (MOCK_MIGRATION) or producer
@@ -388,9 +404,12 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(
-        sc, PREFILL_MOCK_MIGRATION="1", PREFILL_ENABLE_LAYER_ACK="1", PREFILL_LAYER_ACK_D2H="1", **extra
-    )
+    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_ENABLE_LAYER_ACK="1", **extra)
+    # LayerAck backend, defaulted rather than pinned: the D2H-socket backend is what CI wants (the
+    # host-callback fallback is measured at ~1.2 s/ack), and since #52464 it is recorded inside the
+    # capture too, so the traced arm can use it as well. Defaulting instead of pinning keeps a scenario
+    # able to pick the other backend through its own `env`: scenario env > inherited env > "1".
+    env.setdefault("PREFILL_LAYER_ACK_D2H", "1")
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":
