@@ -147,13 +147,19 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
     const uint32_t fused_tiles = Wt;                           // a + b
 
-    // x^2 is filled to Wt tiles and then drained by a single BulkWaitBulkPop reduce in the SAME
-    // compute kernel, so the second half of a double buffer can never be live: nothing produces
-    // into it while the reduce consumes the first. Sizing it at Wt keeps the access pattern
-    // identical -- tiles are packed at absolute index wt+wtr over one row -- and gives back a full
-    // row's worth of L1, which a wide fp32_dest_acc_en row needs to fit at all (see #54697).
-    // in0 keeps its double buffer: there the reader genuinely prefetches ahead of compute.
-    const uint32_t intermed0_tiles = Wt;  // x^2
+    // The x^2 buffer is sized per ROW, so a wide fp32_dest_acc_en row is what pushes this program
+    // past L1 (#54697). Keep the double buffer wherever it fits -- the packer and the unpacker are
+    // different RISCs, so it buys real overlap (measured ~1-3% on shapes that already fit) -- and
+    // fall back to a single buffer only when the double-buffered program would not fit at all,
+    // which today throws at allocation instead of running.
+    const uint32_t x2_tiles_double_buffered = Wt * double_buffer_constant;
+    const uint32_t out0_tiles_estimate = is_rmsnorm ? 1 : 2;
+    const uint32_t static_bytes_double_buffered =
+        in0_tiles * in_single_tile_size + in1_tiles * scaler_tile_size +
+        (fuse_pre_add ? (res_tiles * inb_single_tile_size + fused_tiles * single_tile_size) : 0) +
+        x2_tiles_double_buffered * single_tile_size + out0_tiles_estimate * out_single_tile_size;
+    const uint32_t intermed0_tiles =
+        (static_bytes_double_buffered <= device->l1_size_per_core()) ? x2_tiles_double_buffered : Wt;  // x^2
     uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
         out0_tiles = 2;
