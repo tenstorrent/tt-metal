@@ -133,14 +133,29 @@ definition.
 
 ### (iii) executed-instruction semantics — KEPT, justified
 
-5. **`__builtin_rvtt_sfppushc(0); __builtin_rvtt_sfppopc(0);` pairs** in
-   `helpers/include/fresh_cpp_operations.h` (signbit, binary max/min, unary
-   max/min float+int bodies) and
-   `sources/eltwise_unary_typecast_test.cpp` (semantic typecast).  These
-   execute real SFPPUSHC/SFPPOPC CC-stack instructions establishing the
-   all-lanes predicate boundary locally in the semantic body; the compiler
-   models their CC effects (gimple-rvtt-cc contract) and may hoist proven
-   enables itself.  Executed semantics, not hints.
+5. **RESOLVED 2026-08-29 (lane IS, owner-ratified F1 honest fix)** —
+   the `__builtin_rvtt_sfppushc(0); __builtin_rvtt_sfppopc(0);` pairs
+   formerly kept here are DELETED from all 11 sites (this file's original
+   5 in `fresh_cpp_operations.h`, the typecast driver, and the 5
+   fresh_cpp headers the idiom had spread to: gcd, isclose, lcm,
+   lcm_legacy, mul_int32_limb2).  This item's original justification
+   ("executed semantics, not hints … establishing the all-lanes
+   predicate boundary") was adjudicated FALSE by the lane-IQ adversarial
+   audit (AUDIT-IQ F1, laneIQ-evidence-20260829): the pinned compiler
+   NEVER emits the pair (pass_rvtt_cc lowers the outermost pair to one
+   all-lanes SFPENCC), a mod1=0 push+pop is architecturally a pure
+   identity on lane predication (it could not establish all-lanes even
+   if executed), and a shim A/B proved the lowered SFPENCC was a
+   LOAD-BEARING COMPILER SIGNAL gating macro-planner formation and
+   blocking dst-iteration fusion.  Owner ratification
+   (review_records-local/OWNER-RATIFICATION-F1-honest-fix.md, remedy a):
+   the compiler now derives the fn-entry ambient-all-lanes fact itself
+   and synthesizes the canonical enable where a formation needs one
+   (sfpi-gcc agent/f1-ambient-entry: entry-ambient kill-aware walk +
+   immediate-delta row admission), the sources carry NO marker, and
+   every affected booked row was re-measured 3-rep same-leg and booked
+   as it measured (lane IS evidence, laneIS-evidence-20260829).  The
+   fresh_cpp/README "no markers" contract now holds on its face.
 
 6. **`lltt::setrwc<...>()` typed face boundaries** in
    `sources/eltwise_unary_typecast_test.cpp` (adopted probe form) — typed
@@ -183,9 +198,11 @@ typed `_sfpu_exp_21f_bf16_*` math from the pristine experimental header);
 * hand-isms rewritten: **1** (welford vfloat impls 2/3/4 — the assigned fix).
 * boundary contracts documented: **3** (reduce-sdpa generated arm,
   binary-bcast generated arm, topk probe).
-* kept-with-justification executed-instruction sites: **4 classes**
-  (pushc/popc pairs, lltt::setrwc, inc_dst_face_addr wrappers, harness
-  scaffolding), plus welford's subvec_transp + dst parks.
+* kept-with-justification executed-instruction sites: **3 classes**
+  (lltt::setrwc, inc_dst_face_addr wrappers, harness scaffolding), plus
+  welford's subvec_transp + dst parks.  (The former 4th class —
+  pushc/popc pairs — was RESOLVED-BY-DELETION 2026-08-29; see item
+  (iii).5.)
 * leftover trusted annotations found: **3** (all in
   `sfpu_reduce_sdpa_test.cpp`; escalated above, deliberately not deleted —
   removal without rewrite reproduces the welford breakage on the flagship
