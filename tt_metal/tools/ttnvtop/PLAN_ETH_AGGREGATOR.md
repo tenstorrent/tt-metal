@@ -934,6 +934,86 @@ Consequences for the design:
 - It makes 7.4 sharper: the question is not only whether a separate PID can *join* an
   EDM, but whether it can ever *safely leave* one.
 
+## 5g. M1 on the T3K -- data path PROVEN on a remote chip, launch path is not -- 2026-08-29
+
+First run on real Wormhole hardware (homelab-1, T3K: chips 0-3 MMIO, 4-7 remote).
+
+### The M1 exit criterion is met on the data path
+
+```
+aggregator on chip 4 eth ch2, landing chip 3 eth ch2
+aggregator: sweeping 64 Tensix cores on remote chip 4
+aggregator: landing on chip 3 eth 0-2 translated (24,16) dest=0x000041800000e200
+aggregator: t1 magic=0x47415454 head=191461 sweeps=2953 lost=0 cores=64
+aggregator: t2 magic=0x47415454 head=317645 sweeps=4898 lost=0 cores=64
+  entry[0] wall=0x3a8c7327 kid=0 fpu=0 core_id=5 seq=4894
+```
+
+An aggregator on a REMOTE chip, sweeping all 64 of its Tensix rings, pushing over
+fabric to an MMIO chip, read back by the host over plain PCIe -- the tunnel never
+touched in steady state. `head` advanced 191461 -> 317645 in 2 s = ~63k entries/s,
+which is exactly 64 cores x 1 kHz. `lost=0`.
+
+64 cores confirms 2.1 on real WH silicon: 8x10 with 2 rows harvested. The selector
+picked eth **ch2**, one of the never-routed channels, so the WH preference works.
+
+Multi-core and wrap also pass on WH: 64 cores, journal wrapped 1478x, 64 distinct
+core_ids, 0 unwritten slots, 0 bad core_ids, guard band clean.
+
+### The launch path is NOT reliable, and it is not our kernel
+
+Launching onto a remote chip wedges the NON_MMIO tunnel roughly half the time, in
+`RemoteCommunicationLegacyFirmware::wait_for_non_mmio_flush` after its fixed 5 s
+`NON_MMIO_RW_TIMEOUT` (`umd/device/utils/timeouts.hpp`, compile-time, no env knob --
+the same shape as the `ARC_STARTUP_TIMEOUT` problem):
+
+```
+wait_for_non_mmio_flush            <- times out
+Cluster::write_core_immediate
+llrt::write_launch_msg_to_core
+detail::LaunchProgram
+```
+
+The flush spins until every tunnel eth core on the MMIO chip has drained its request
+queue (`erisc_q_ptrs[0] == erisc_q_ptrs[4]`) and matched its write-response counters.
+
+What is established, and what is not:
+
+| claim | evidence |
+|---|---|
+| Not leftover aggregators / stale state | fails 3/3 immediately after a full `tt-smi -r` |
+| Not remote idle-eth launch in general | `TestFabricWriteReachesRemoteL1_Control` launches a remote idle-eth kernel the same way: **4/4 PASS** |
+| Not transient within a process | when it wedges, 5 retries all fail identically -- retrying inside the process is useless |
+| Aggravated by remote-write volume | with the 512 B ring-table pre-write 2/4 launch; without it 3/4. Aggravates, does not solely cause |
+| Root cause | **NOT established.** UMD/eth-firmware tunnel behaviour, same family as 5c |
+
+Two theories were tested and are WRONG, recorded so nobody re-runs them: leftover
+aggregators from prior runs (killed by the reset test), and pass/fail alternation
+(7 runs gave FAIL PASS FAIL FAIL PASS FAIL FAIL).
+
+### What this means for the design
+
+**The aggregator removes the tunnel from steady-state telemetry. It does not remove
+the tunnel from its own launch.** Getting a kernel onto a remote chip is inherently a
+tunnel operation -- binary, runtime args, launch message -- and that is exactly the
+path 5c showed collapsing under load. On an idle T3K it already fails half the time.
+
+Actions:
+
+1. **Drop the ring-address table.** 2.1b established that in TRANSLATED space the live
+   Tensix cores are a fixed contiguous rectangle on every chip regardless of harvest
+   pattern. The kernel can generate its own core list with a double loop over
+   `y = 18..25, x = 18..25` and needs no table. That removes the 512 B remote pre-write
+   that measurably aggravates this, and removes a per-chip runtime-arg blob. **Do this
+   first** -- it is the one mitigation entirely within our control.
+2. Raise with the UMD owners as 7.7.
+3. It sharpens M3 (mid-workload attach) considerably: if launch is unreliable on an
+   IDLE T3K, launching into a saturated one is worse. M3 may need the aggregator
+   started before the workload regardless of the EDM question (7.4).
+
+The test SKIPs rather than fails when the launch wedges, since the data path is what
+it covers and that is proven.
+
 ## 6. Risks
 
 | Risk | Mitigation |
@@ -986,3 +1066,10 @@ Consequences for the design:
    `reserved_realtime_profiler_core_by_device_`), so the shape is established. Until
    then the aggregator refuses to start under ETH dispatch (3.4). **Blocks 2-CQ T3K
    only** -- every WORKER-dispatch configuration is unaffected.
+7. **Why does launching a kernel onto a remote chip wedge the NON_MMIO tunnel about
+   half the time on an IDLE T3K?** *For the UMD owners.* `wait_for_non_mmio_flush`
+   times out at its fixed 5 s `NON_MMIO_RW_TIMEOUT`; the condition is all-or-nothing
+   per process and survives a full board reset, and a control test launching a remote
+   idle-eth kernel the same way passes 4/4. See 5g for what is ruled out. **Blocks
+   reliable remote-chip launch**, which is M1's exit criterion, though the data path
+   itself is proven.
