@@ -77,17 +77,6 @@
   team: ttnn
   category: reduction
 
-- name: ttnn Blackhole accelerated argmax tests
-  cmd: 'TT_ENABLE_RVV_TESTS=1 pytest tests/ttnn/unit_tests/operations/reduce/test_argmax_rvv.py tests/ttnn/unit_tests/operations/reduce/test_argmax_sfpu.py -xv --timeout=300'
-  skus:
-    bh_p100:
-      timeout: 5
-    bh_p150b_civ2:
-      timeout: 5
-  owner_id: U084B1CES7M # Borys Bradel
-  team: ttnn
-  category: reduction
-
 - name: ttnn nightly experimental tests (wormhole)
   # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" -m "not requires_host_iommu" --timeout=600'

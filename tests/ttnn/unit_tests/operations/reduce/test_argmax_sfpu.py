@@ -7,9 +7,9 @@ last-dim argmax path that runs phase 1 lane-parallel on the SFPU (all 32 rows
 of a tile-row per pass — the batch-shape path) and finishes each row with a
 scalar phase 2 / cross-core merge on the dataflow RISC.
 
-Gating: is_blackhole only. Unlike the RVV path there is no special-toolchain
-opt-in — the kernels are plain SFPU compute kernels that JIT with the stock
-toolchain — so these tests can run in normal Blackhole CI (no env-var gate).
+Gating: architecture only. The kernels are plain SFPU compute kernels that JIT
+with the stock toolchain, so these tests run automatically on any Blackhole
+host and skip on every other architecture.
 
 Goldens: the SFPU path's compare is IEEE-on-fp32 behind a bf16 special-value
 gasket (silicon-measured; see argmax_sfpu_tile_compute.cpp), NOT the scalar
@@ -31,11 +31,9 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import run_for_blackhole
 
-pytestmark = [
-    pytest.mark.skipif(not is_blackhole(), reason="ttnn.argmax use_sfpu=True is currently Blackhole-only"),
-]
+pytestmark = run_for_blackhole("ttnn.argmax use_sfpu=True is currently Blackhole-only")
 
 
 SINGLE_CORE_GRID = None  # filled lazily (ttnn import-time objects inside fixtures)

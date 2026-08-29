@@ -5,30 +5,22 @@
 """Tests for ttnn.argmax(..., use_rvv=True): the opt-in Blackhole TILE-layout
 last-dim argmax path that runs the reduction on TRISC2's Zve32f vector unit.
 
-Gating: the RVV kernels JIT-compile with the in-tree opt-in
+Gating: architecture only. The RVV kernels JIT-compile with the in-tree opt-in
 (ComputeConfigDescriptor::enable_trisc2_rvv, which adds zve32f to the TRISC2
-compile). Compile-side coverage runs device-free in CI
-(tests/tt_metal/tt_metal/jit_build/test_trisc2_rvv.cpp); these tests execute
-on silicon, so they stay behind TT_ENABLE_RVV_TESTS=1 until a Blackhole
-runner picks them up; otherwise they skip.
+compile), so no special toolchain or environment setup is needed — these tests
+run automatically on any Blackhole host and skip on every other architecture.
+Compile-side coverage runs device-free in CI
+(tests/tt_metal/tt_metal/jit_build/test_trisc2_rvv.cpp).
 """
-
-import os
 
 import numpy as np
 import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_blackhole
+from models.common.utility_functions import run_for_blackhole
 
-pytestmark = [
-    pytest.mark.skipif(not is_blackhole(), reason="ttnn.argmax use_rvv=True is Blackhole-only (TRISC2 Zve32f)"),
-    pytest.mark.skipif(
-        os.environ.get("TT_ENABLE_RVV_TESTS") != "1",
-        reason="RVV device-test gate: set TT_ENABLE_RVV_TESTS=1 to run the RVV argmax tests on a Blackhole device",
-    ),
-]
+pytestmark = run_for_blackhole("ttnn.argmax use_rvv=True is Blackhole-only (TRISC2 Zve32f)")
 
 
 def _monotone(bits: np.ndarray) -> np.ndarray:

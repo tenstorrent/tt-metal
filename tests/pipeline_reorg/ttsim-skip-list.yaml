@@ -40,6 +40,8 @@ blackhole:
   - tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py
   - tests/ttnn/unit_tests/operations/pool/test_mpwi.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
+  - tests/ttnn/unit_tests/operations/reduce/test_argmax_rvv.py
+  - tests/ttnn/unit_tests/operations/reduce/test_argmax_sfpu.py
   - tests/ttnn/unit_tests/operations/reduce/test_cumsum.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
