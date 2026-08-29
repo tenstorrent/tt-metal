@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/wavelet/common/signal.hpp"
 #include "ttnn/operations/wavelet/common/storage_contract.hpp"
 #include "ttnn/operations/wavelet/device/protocol/lwt_config.hpp"
@@ -199,10 +200,10 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
         if (closure_extent == 0 || interval.empty()) {
             return interval;
         }
-        const size_t begin = (interval.begin / closure_extent) * closure_extent;
+        const size_t begin = tt::round_down(interval.begin, closure_extent);
         const size_t rounded_end = interval.end > std::numeric_limits<size_t>::max() - (closure_extent - 1)
                                        ? stream_length
-                                       : round_up(interval.end, closure_extent);
+                                       : tt::round_up(interval.end, closure_extent);
         return IndexInterval{.begin = begin, .end = std::min(rounded_end, stream_length)};
     };
     std::vector<RequiredStreams> required(plan.routes.size() + 1);
@@ -247,19 +248,21 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
                 odd_length = route.source_length;
                 break;
             }
-            case StepType::kScaleEven:
+            case StepType::kScaleEven: {
                 TT_FATAL(even_length == route.output_length, "Scale-even output length is inconsistent");
                 before.even = translated(after.even, route.source_offset);
                 before.odd = after.odd;
                 even_length = route.source_length;
                 break;
-            case StepType::kScaleOdd:
+            }
+            case StepType::kScaleOdd: {
                 TT_FATAL(odd_length == route.output_length, "Scale-odd output length is inconsistent");
                 before.even = after.even;
                 before.odd = translated(after.odd, route.source_offset);
                 odd_length = route.source_length;
                 break;
-            case StepType::kSwap:
+            }
+            case StepType::kSwap: {
                 TT_FATAL(
                     even_length == route.base_length && odd_length == route.source_length,
                     "Swap route length state is inconsistent with the forward plan");
@@ -268,6 +271,7 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
                 even_length = route.source_length;
                 odd_length = route.base_length;
                 break;
+            }
         }
 
         before.even = close_interval(before.even, even_length);
@@ -497,10 +501,7 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
                 requirement.source = execution_detail::translated(requirement.output, route.source_offset);
                 requirement.base = requirement.source;
                 break;
-            case StepType::kSwap:
-                // A swap changes stream descriptors only and has no data
-                // source/base/output transfer of its own.
-                break;
+            case StepType::kSwap: break;
         }
         routes.push_back(requirement);
     }
@@ -539,7 +540,7 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
         const size_t workspace_alignment = workspace_layout == WorkspaceLayout::kTileNative
                                                ? static_cast<size_t>(device_protocol::kLwtGroupOutputElements)
                                                : static_cast<size_t>(kStickWidth);
-        const size_t aligned_workspace = round_up(candidate_max_workspace_elements, workspace_alignment);
+        const size_t aligned_workspace = tt::round_up(candidate_max_workspace_elements, workspace_alignment);
         TT_FATAL(
             aligned_workspace <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()),
             "LWT workspace length {} overflows uint32_t",
@@ -570,10 +571,10 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
 
     const uint32_t groups_per_chunk =
         static_cast<uint32_t>(ceil_div(static_cast<size_t>(final_group_count), chunks.size()));
-    double max_dependency_overhead = 0.0;
-    for (const auto& chunk : chunks) {
-        max_dependency_overhead = std::max(max_dependency_overhead, chunk.dependency_overhead);
-    }
+    const auto max_dependency =
+        std::max_element(chunks.begin(), chunks.end(), [](const LwtChunkPlan& lhs, const LwtChunkPlan& rhs) {
+            return lhs.dependency_overhead < rhs.dependency_overhead;
+        });
 
     return LwtExecutionPlan{
         .full_plan = std::move(full_plan),
@@ -581,7 +582,7 @@ inline void validate_interval(const IndexInterval interval, const size_t stream_
         .groups_per_chunk = groups_per_chunk,
         .workspace_elements = workspace_elements,
         .max_workspace_elements = max_workspace_elements,
-        .max_dependency_overhead = max_dependency_overhead,
+        .max_dependency_overhead = max_dependency->dependency_overhead,
         .workspace_layout = workspace_layout,
     };
 }

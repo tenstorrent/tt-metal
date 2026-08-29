@@ -8,7 +8,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +39,9 @@
 namespace ttnn::prim {
 
 using namespace operations::wavelet;
+using operations::wavelet::device_protocol::config_word_index;
+using operations::wavelet::device_protocol::LwtChunkConfigWord;
+using operations::wavelet::device_protocol::RouteConfigWord;
 using wavelet_program_utils::add_generated_scheme_include_path;
 using wavelet_program_utils::checked_u32;
 using wavelet_program_utils::core_range_set;
@@ -346,13 +348,13 @@ void add_narrow_tile_circular_buffer(
     for (size_t chunk_index = 0; chunk_index < plan.chunks.size(); ++chunk_index) {
         const auto& chunk = plan.chunks[chunk_index];
         const size_t offset = chunk_index * device_protocol::kLwtChunkConfigWordCount;
-        words[offset + device_protocol::kLwtInitialEvenBegin] =
+        words[offset + config_word_index(LwtChunkConfigWord::kLwtInitialEvenBegin)] =
             checked_u32(chunk.initial_even.begin, "initial even begin");
-        words[offset + device_protocol::kLwtInitialEvenLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kLwtInitialEvenLength)] =
             checked_u32(chunk.initial_even.length(), "initial even length");
-        words[offset + device_protocol::kLwtInitialOddBegin] =
+        words[offset + config_word_index(LwtChunkConfigWord::kLwtInitialOddBegin)] =
             checked_u32(chunk.initial_odd.begin, "initial odd begin");
-        words[offset + device_protocol::kLwtInitialOddLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kLwtInitialOddLength)] =
             checked_u32(chunk.initial_odd.length(), "initial odd length");
     }
     return words;
@@ -374,23 +376,28 @@ void add_narrow_tile_circular_buffer(
             const uint32_t output_offset = checked_u32(route.output_offset_elements, "LWT output offset");
             const size_t word_offset =
                 (chunk_index * route_count + route_index) * device_protocol::kRouteConfigWordCount;
-            words[word_offset + device_protocol::kRouteType] = static_cast<uint32_t>(route.type);
-            words[word_offset + device_protocol::kRouteSourceAddr] = resolve_workspace_address(buffers, route.source);
-            words[word_offset + device_protocol::kRouteSourceLength] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteType)] = static_cast<uint32_t>(route.type);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceAddr)] =
+                resolve_workspace_address(buffers, route.source);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceLength)] =
                 checked_u32(route.source_storage_length, "LWT source storage end");
-            words[word_offset + device_protocol::kRouteBaseAddr] = resolve_workspace_address(buffers, route.base);
-            words[word_offset + device_protocol::kRouteBaseLength] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteBaseAddr)] =
+                resolve_workspace_address(buffers, route.base);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteBaseLength)] =
                 checked_u32(route.base_storage_length, "LWT base storage end");
-            words[word_offset + device_protocol::kRouteOutputAddr] = resolve_output_address(buffers, route.output);
-            words[word_offset + device_protocol::kRouteOutputLength] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteOutputAddr)] =
+                resolve_output_address(buffers, route.output);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteOutputLength)] =
                 checked_u32(route.output_length, "LWT output length");
-            words[word_offset + device_protocol::kRouteSourceOffset] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceOffset)] =
                 checked_u32(route.source_offset_elements, "LWT source offset");
-            words[word_offset + device_protocol::kRouteBaseOffset] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteBaseOffset)] =
                 checked_u32(route.base_offset_elements, "LWT base offset");
-            words[word_offset + device_protocol::kRouteSourceLeftPad] = route.source_left_pad_elements;
-            words[word_offset + device_protocol::kRouteOutputOffset] = output_offset;
-            words[word_offset + device_protocol::kRouteGroupCount] = output_group_count(route.output_length);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceLeftPad)] =
+                route.source_left_pad_elements;
+            words[word_offset + config_word_index(RouteConfigWord::kRouteOutputOffset)] = output_offset;
+            words[word_offset + config_word_index(RouteConfigWord::kRouteGroupCount)] =
+                output_group_count(route.output_length);
             uint32_t route_flags = 0;
             if (route.output.storage == RouteOutputStorage::kFinalEvenDram) {
                 route_flags = device_protocol::kRouteFlagFinalDram | device_protocol::kRouteFlagFinalEven;
@@ -408,7 +415,7 @@ void add_narrow_tile_circular_buffer(
                 route_flags |= produces_tile_mirror ? device_protocol::kRouteFlagOutputTileMirror : 0U;
                 tile_mirror_valid[static_cast<size_t>(route.output.slot)] = produces_tile_mirror;
             }
-            words[word_offset + device_protocol::kRouteFlags] = route_flags;
+            words[word_offset + config_word_index(RouteConfigWord::kRouteFlags)] = route_flags;
         }
     }
     return words;
@@ -608,30 +615,33 @@ void add_narrow_tile_circular_buffer(
     for (size_t chunk_index = 0; chunk_index < plan.chunks.size(); ++chunk_index) {
         const auto& chunk = plan.chunks[chunk_index];
         const size_t offset = chunk_index * device_protocol::kLwtChunkConfigWordCount;
-        words[offset + device_protocol::kIlwtApproximationBegin] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtApproximationBegin)] =
             checked_u32(chunk.canonical_approximation.begin, "ILWT approximation begin");
-        words[offset + device_protocol::kIlwtApproximationLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtApproximationLength)] =
             checked_u32(chunk.canonical_approximation.length(), "ILWT approximation length");
-        words[offset + device_protocol::kIlwtDetailBegin] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtDetailBegin)] =
             checked_u32(chunk.canonical_detail.begin, "ILWT detail begin");
-        words[offset + device_protocol::kIlwtDetailLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtDetailLength)] =
             checked_u32(chunk.canonical_detail.length(), "ILWT detail length");
-        words[offset + device_protocol::kIlwtFinalEvenAddr] = resolve_workspace_address(buffers, chunk.final_even);
-        words[offset + device_protocol::kIlwtFinalEvenStorageLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalEvenAddr)] =
+            resolve_workspace_address(buffers, chunk.final_even);
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalEvenStorageLength)] =
             checked_u32(chunk.final_even_storage_length, "ILWT final even storage length");
-        words[offset + device_protocol::kIlwtFinalEvenOffset] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalEvenOffset)] =
             checked_u32(chunk.final_even_offset_elements, "ILWT final even offset");
-        words[offset + device_protocol::kIlwtFinalEvenBegin] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalEvenBegin)] =
             checked_u32(chunk.reconstructed_even.begin, "ILWT final even begin");
-        words[offset + device_protocol::kIlwtFinalOddAddr] = resolve_workspace_address(buffers, chunk.final_odd);
-        words[offset + device_protocol::kIlwtFinalOddStorageLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalOddAddr)] =
+            resolve_workspace_address(buffers, chunk.final_odd);
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalOddStorageLength)] =
             checked_u32(chunk.final_odd_storage_length, "ILWT final odd storage length");
-        words[offset + device_protocol::kIlwtFinalOddOffset] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalOddOffset)] =
             checked_u32(chunk.final_odd_offset_elements, "ILWT final odd offset");
-        words[offset + device_protocol::kIlwtFinalOddBegin] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtFinalOddBegin)] =
             checked_u32(chunk.reconstructed_odd.begin, "ILWT final odd begin");
-        words[offset + device_protocol::kIlwtOutputBegin] = checked_u32(chunk.output_signal.begin, "ILWT output begin");
-        words[offset + device_protocol::kIlwtOutputLength] =
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtOutputBegin)] =
+            checked_u32(chunk.output_signal.begin, "ILWT output begin");
+        words[offset + config_word_index(LwtChunkConfigWord::kIlwtOutputLength)] =
             checked_u32(chunk.output_signal.length(), "ILWT output length");
     }
     return words;
@@ -654,24 +664,28 @@ void add_narrow_tile_circular_buffer(
                 "ILWT intermediate route must target a local workspace slot");
             const size_t word_offset =
                 (chunk_index * route_count + route_index) * device_protocol::kRouteConfigWordCount;
-            words[word_offset + device_protocol::kRouteType] = static_cast<uint32_t>(route.type);
-            words[word_offset + device_protocol::kRouteSourceAddr] = resolve_workspace_address(buffers, route.source);
-            words[word_offset + device_protocol::kRouteSourceLength] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteType)] = static_cast<uint32_t>(route.type);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceAddr)] =
+                resolve_workspace_address(buffers, route.source);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceLength)] =
                 checked_u32(route.source_storage_length, "ILWT source storage length");
-            words[word_offset + device_protocol::kRouteBaseAddr] = resolve_workspace_address(buffers, route.base);
-            words[word_offset + device_protocol::kRouteBaseLength] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteBaseAddr)] =
+                resolve_workspace_address(buffers, route.base);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteBaseLength)] =
                 checked_u32(route.base_storage_length, "ILWT base storage length");
-            words[word_offset + device_protocol::kRouteOutputAddr] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteOutputAddr)] =
                 resolve_workspace_address(buffers, StreamRef{.slot = route.output.slot});
-            words[word_offset + device_protocol::kRouteOutputLength] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteOutputLength)] =
                 checked_u32(route.output_length, "ILWT output length");
-            words[word_offset + device_protocol::kRouteSourceOffset] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceOffset)] =
                 checked_u32(route.source_offset_elements, "ILWT source offset");
-            words[word_offset + device_protocol::kRouteBaseOffset] =
+            words[word_offset + config_word_index(RouteConfigWord::kRouteBaseOffset)] =
                 checked_u32(route.base_offset_elements, "ILWT base offset");
-            words[word_offset + device_protocol::kRouteSourceLeftPad] = route.source_left_pad_elements;
-            words[word_offset + device_protocol::kRouteOutputOffset] = 0;
-            words[word_offset + device_protocol::kRouteGroupCount] = output_group_count(route.output_length);
+            words[word_offset + config_word_index(RouteConfigWord::kRouteSourceLeftPad)] =
+                route.source_left_pad_elements;
+            words[word_offset + config_word_index(RouteConfigWord::kRouteOutputOffset)] = 0;
+            words[word_offset + config_word_index(RouteConfigWord::kRouteGroupCount)] =
+                output_group_count(route.output_length);
             uint32_t route_flags = plan.final_interleave_direct && route_index + 1 == route_count
                                        ? device_protocol::kRouteFlagIlwtFinalInterleave
                                        : 0U;
@@ -683,7 +697,7 @@ void add_narrow_tile_circular_buffer(
                                : 0U;
             route_flags |= device_protocol::kRouteFlagOutputTileMirror;
             tile_mirror_valid[static_cast<size_t>(route.output.slot)] = true;
-            words[word_offset + device_protocol::kRouteFlags] = route_flags;
+            words[word_offset + config_word_index(RouteConfigWord::kRouteFlags)] = route_flags;
         }
     }
     return words;
@@ -895,8 +909,6 @@ void validate_1d_tensor(const Tensor& tensor, const char* tensor_name) {
     TT_FATAL(shape.length > 0, "{} must be non-empty", tensor_name);
     validate_input_memory_config(tensor.memory_config(), tensor_name);
 
-    // Stick-native shapes expose their complete allocated capacity, including
-    // unspecified final-stick lanes, so validate the complete physical volume.
     const uint64_t physical_bytes = static_cast<uint64_t>(tensor.physical_volume()) * sizeof(float);
     TT_FATAL(
         tensor.buffer()->size() >= physical_bytes,
@@ -958,9 +970,6 @@ template <typename Scheme>
         .element_size_bytes = sizeof(float),
     };
     LiftingForwardPlan full_plan = make_forward_lifting_plan<Scheme>(input, boundary_mode);
-    TT_FATAL(
-        full_plan.preprocess_layout.padded_length() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
-        "LWT padded input length exceeds the device signed-index range");
 
     const uint32_t max_cores =
         wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core");
@@ -1009,10 +1018,6 @@ template <typename Scheme>
     TT_FATAL(architecture_policy.inverse_scale_inline, "ILWT must preserve inline FP32 inverse scaling");
     LiftingInversePlan full_plan =
         make_inverse_lifting_plan<Scheme>(original_length, coefficient_length, boundary_mode);
-    TT_FATAL(
-        full_plan.forward_trace.preprocess_layout.padded_length() <=
-            static_cast<size_t>(std::numeric_limits<int32_t>::max()),
-        "ILWT padded signal length exceeds the device signed-index range");
     IlwtExecutionPlan plan = make_ilwt_execution_plan(
         std::move(full_plan),
         wavelet_program_utils::worker_core_count(mesh_device, "LWT requires at least one hardware worker core"),

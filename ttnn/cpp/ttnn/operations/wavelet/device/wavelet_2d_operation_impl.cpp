@@ -20,6 +20,7 @@
 #include "tt-metalium/circular_buffer_constants.h"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/host_api.hpp"
+#include "tt-metalium/math.hpp"
 #include "tt-metalium/program_descriptors.hpp"
 #include "tt-metalium/shape.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
@@ -471,8 +472,8 @@ void validate_2d_tensor(const Tensor& tensor, const char* tensor_name) {
         tensor_name);
     validate_input_memory_config(tensor.memory_config(), tensor_name);
 
-    const size_t padded_height = round_up(static_cast<size_t>(shape.height), kTileHeight2D);
-    const size_t padded_width = round_up(static_cast<size_t>(shape.width), kTileWidth2D);
+    const size_t padded_height = tt::round_up(static_cast<size_t>(shape.height), kTileHeight2D);
+    const size_t padded_width = tt::round_up(static_cast<size_t>(shape.width), kTileWidth2D);
     TT_FATAL(
         padded_height <= std::numeric_limits<size_t>::max() / padded_width / sizeof(float),
         "{} per-batch physical size calculation overflows size_t",
@@ -532,15 +533,6 @@ template <typename Scheme>
         true,
         true,
         Lwt2DRouteDomainPolicy::kExact);
-    validate_lwt_2d_tiling_contract(plan.tiling);
-    TT_FATAL(
-        plan.input_height <= kMax2DLogicalExtent && plan.input_width <= kMax2DLogicalExtent,
-        "2D LWT input dimensions exceed the signed boundary-index range");
-    TT_FATAL(
-        plan.allocated_l1_bytes <= available_l1_bytes,
-        "2D LWT allocation requires {} L1 bytes but only {} remain below allocator-managed L1 tensors",
-        plan.allocated_l1_bytes,
-        available_l1_bytes);
     return plan;
 }
 
@@ -560,15 +552,6 @@ template <typename Scheme>
         l1_budget_bytes,
         boundary_mode,
         architecture_policy.inverse_2d_coordination_penalty_cycles_per_core);
-    TT_FATAL(!plan.chunks.empty(), "2D ILWT requires at least one planned chunk");
-    TT_FATAL(
-        plan.output_height <= kMax2DLogicalExtent && plan.output_width <= kMax2DLogicalExtent,
-        "2D ILWT output dimensions exceed the signed boundary-index range");
-    TT_FATAL(
-        plan.allocated_l1_bytes <= available_l1_bytes,
-        "2D ILWT allocation requires {} L1 bytes but only {} remain below allocator-managed L1 tensors",
-        plan.allocated_l1_bytes,
-        available_l1_bytes);
     return plan;
 }
 

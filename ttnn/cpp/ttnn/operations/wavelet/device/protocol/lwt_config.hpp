@@ -26,7 +26,7 @@ constexpr uint32_t kIlwtGroupOutputElements = 2 * kLwtGroupOutputElements;
 constexpr uint32_t kRouteConfigWordCount = 16;
 constexpr uint32_t kRouteConfigPageBytes = kRouteConfigWordCount * sizeof(uint32_t);
 
-enum RouteConfigWord : uint32_t {
+enum class RouteConfigWord : uint32_t {
     kRouteType = 0,
     kRouteSourceAddr = 1,
     kRouteSourceLength = 2,
@@ -56,7 +56,7 @@ static_assert(
     kLwtChunkConfigPageBytes == kRouteConfigPageBytes,
     "The shared 1D config-page loader requires identical chunk and route page sizes");
 
-enum LwtChunkConfigWord : uint32_t {
+enum class LwtChunkConfigWord : uint32_t {
     kLwtInitialEvenBegin = 0,
     kLwtInitialEvenLength = 1,
     kLwtInitialOddBegin = 2,
@@ -76,5 +76,13 @@ enum LwtChunkConfigWord : uint32_t {
     kIlwtOutputBegin = 12,
     kIlwtOutputLength = 13,
 };
+
+[[nodiscard]] constexpr uint32_t config_word_index(const RouteConfigWord word) noexcept {
+    return static_cast<uint32_t>(word);
+}
+
+[[nodiscard]] constexpr uint32_t config_word_index(const LwtChunkConfigWord word) noexcept {
+    return static_cast<uint32_t>(word);
+}
 
 }  // namespace ttnn::operations::wavelet::device_protocol
