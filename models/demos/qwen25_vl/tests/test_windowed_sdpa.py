@@ -271,8 +271,11 @@ def test_windowed_sdpa_basic(
     # attend to an empty set, so their output is unspecified (see windowed_loop_geometry.hpp)
     # and only bitwise-matched the masked reference while the windowed path still visited every
     # K chunk. Compare only the covered rows.
-    covered_lo, covered_hi = int(pt_cu_window_seqlens[0]), int(pt_cu_window_seqlens[-1])
-    max_diff = torch.max(torch.abs(output - output_standard)[:, :, covered_lo:covered_hi, :]).item()
+    covered_lo, covered_hi = int(pt_cu_window_seqlens[0].item()), int(pt_cu_window_seqlens[-1].item())
+    assert covered_lo < covered_hi <= output.shape[-2], f"No covered rows in [{covered_lo}, {covered_hi})"
+    covered = output[:, :, covered_lo:covered_hi, :]
+    covered_standard = output_standard[:, :, covered_lo:covered_hi, :]
+    max_diff = torch.max(torch.abs(covered - covered_standard)).item()
     assert max_diff < 1e-2, f"Max difference {max_diff} exceeds tolerance"
 
     # Assert shapes match
