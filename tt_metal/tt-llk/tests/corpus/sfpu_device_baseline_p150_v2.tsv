@@ -7,7 +7,8 @@
 # update is a REVIEWED manual step (review the run's KERNEL-DELTA.md alongside).
 # Pin anchors (conf_lint R5b/R6b enforce these against sweep_2x2.conf):
 #  CANDIDATE 29. 45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79 (UNRATIFIED SUPERSEDED; never a baseline anchor) — proposed pin 29 (2026-08-25)
-#  43. 7651df7fac781bad57ec68f375eeaf26284b98c5b867766e562c9a3e75bef59e (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 43 = pin 42 + IL record-hoist placement lift (2026-08-28)
+#  44. a68c361f5cd5e622f1a6a956dde38539d85c0c174e81060f498c190ffc7ce1e5 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 44 = pin 43 + endgame pair IN/IM (2026-08-29)
+#  43. 7651df7fac781bad57ec68f375eeaf26284b98c5b867766e562c9a3e75bef59e (superseded by 44; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 43 = pin 42 + IL record-hoist placement lift (2026-08-28)
 #  42. a7d856a79a6c4a3a2ef786f1fffe297df3d5dfcbb65357348e2b332a24c51791 (superseded by 43; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 42 = pin 41 + near-parity pair IK/IJ (2026-08-28)
 #  41. d8046e29c2b382d39a4b2f154cd9e26a4aad5649c5a6efd81aeabd077fd23b33 (superseded by 42; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 41 = pin 40 + II cross-row shared-reload dedupe (2026-08-28)
 #  40. 48e381718f5cc888e8acb37feb0853adef275c411a2c0232b72d2b0e81965e92 (superseded by 41; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 40 = pin 39 + IH post-autoincr window re-formation (2026-08-28)
