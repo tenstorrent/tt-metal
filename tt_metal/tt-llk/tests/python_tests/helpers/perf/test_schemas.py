@@ -1080,6 +1080,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "vector_mode",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {"perf_sfpu_where_quasar": "perf_sfpu_where_quasar"},
     },
     "perf_transpose_dest_quasar": {
         "version": 4,
