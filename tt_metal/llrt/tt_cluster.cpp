@@ -113,12 +113,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         cluster_desc = temp_cluster_desc.get();
     }
     tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
-    for (const auto& chip_id : cluster_desc->get_all_chips()) {
-        if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
-            cluster_type = tt::tt_metal::ClusterType::TG;
-            break;
-        }
-    }
+
     const auto num_chips = cluster_desc->get_all_chips().size();
     TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
@@ -217,7 +212,7 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
     return (
         cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
         cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::N300_2x2 || cluster_type == tt::tt_metal::ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2);
 }
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
@@ -261,7 +256,7 @@ void Cluster::detect_arch_and_target() {
 }
 
 // TODO: remove this when we deprecate TG
-bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
+bool Cluster::is_galaxy_cluster() const { return false; }
 
 bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
@@ -555,13 +550,7 @@ Cluster::~Cluster() {
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_user_chip_ethernet_coordinates() const {
-    auto user_chip_ethernet_coordinates = this->get_cluster_desc()->get_chip_locations();
-    if (this->is_galaxy_cluster()) {
-        std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
-            return this->get_cluster_desc()->get_board_type(entry.first) != BoardType::GALAXY;
-        });
-    }
-    return user_chip_ethernet_coordinates;
+    return this->get_cluster_desc()->get_chip_locations();
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_all_chip_ethernet_coordinates() const {
@@ -579,26 +568,10 @@ ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) c
 }
 
 size_t Cluster::number_of_user_devices() const {
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        const auto& chips = this->driver_->get_target_device_ids();
-        return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
-            return this->get_cluster_desc()->get_board_type(id) == BoardType::GALAXY;
-        });
-    }
     return this->driver_->get_target_device_ids().size();
 }
 
 std::set<ChipId> Cluster::user_exposed_chip_ids() const {
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        std::set<ChipId> galaxy_boards;
-        const auto& chips = this->driver_->get_target_device_ids();
-        for (const auto& id : chips) {
-            if (this->get_cluster_desc()->get_board_type(id) == BoardType::GALAXY) {
-                galaxy_boards.insert(id);
-            }
-        }
-        return galaxy_boards;
-    }
     return this->driver_->get_target_device_ids();
 }
 

@@ -42,6 +42,9 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, get_padded_pr
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import determine_device_name
 
+# Decode steps recorded when ttnn logging (graph capture) is on -- see the cap in the demo body.
+_CAPTURE_MAX_GENERATED_TOKENS = 8
+
 
 def create_long_context_page_table(
     global_batch_size: int,
@@ -480,6 +483,30 @@ def test_gpt_oss_demo(
     state_dict,
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
+    # ttnn logging and device trace capture are mutually exclusive: with enable_logging on, every op
+    # calls ttnn.synchronize_device and the python I/O recorder reads tensors back to host, both
+    # hard-fatal inside a trace region ("Event Synchronization / Reads are not supported during
+    # trace capture"). A graph-capture run therefore gives up device tracing; the ops it records are
+    # the eager calls a traced run would replay.
+    if ttnn.CONFIG.enable_logging:
+        if enable_decode_trace or enable_prefill_trace:
+            logger.info("ttnn logging is enabled: running without device trace capture so graph capture can complete")
+            enable_decode_trace = False
+            enable_prefill_trace = False
+        # Without device trace, decode runs eagerly and every op of every step is recorded. Each
+        # step repeats the same ops, so a handful covers the decode surface while 200 steps only
+        # multiply the record count -- a 200-token capture of a comparable model produced ~750k
+        # records and 5 GB. Fewer steps make `count` in a generated suite smaller, not the set of
+        # captured calls narrower. Gated on enable_graph_report, not enable_logging: only a run
+        # writing a report has a capture to keep small, and enable_logging alone is a diagnostics
+        # flag that must not quietly shorten a long-generation debug run.
+        if ttnn.CONFIG.enable_graph_report and max_generated_tokens > _CAPTURE_MAX_GENERATED_TOKENS:
+            logger.info(
+                f"ttnn graph reporting is enabled: generating {_CAPTURE_MAX_GENERATED_TOKENS} tokens instead of "
+                f"{max_generated_tokens} to keep the capture readable"
+            )
+            max_generated_tokens = _CAPTURE_MAX_GENERATED_TOKENS
+
     mesh_shape = tuple(mesh_device.shape)
     test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
     is_seqlen_sweep = "seqlen-sweep" in test_id
