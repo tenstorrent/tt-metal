@@ -15,7 +15,7 @@ Input: a deterministic synthetic voiced clip through the coqui-free mel front-en
 coqui-captured fixtures instead.
 
 Run:
-    pytest -svv models/experimental/xtts_v2/tests/test_cond_pcc.py
+    pytest -svv models/experimental/xtts_v2/tests/pcc/test_cond_pcc.py
 """
 import torch
 import ttnn

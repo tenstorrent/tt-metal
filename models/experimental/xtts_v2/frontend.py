@@ -215,7 +215,7 @@ def conditioning_mels(audio, sr: int, mel_norms):
 
 def speaker_logmel(audio, sr: int):
     """Reference waveform -> [1,64,T] logmel, the ResNet speaker encoder's instancenorm
-    input (= what the TT Block 2 consumes; see tests/test_speaker_pcc.py).
+    input (= what the TT Block 2 consumes; see tests/pcc/test_speaker_pcc.py).
 
     Transcribes Xtts.get_speaker_embedding (resample to 16k) + the encoder's torch_spec:
     PreEmphasis(0.97) -> MelSpectrogram(16000, n_fft=512, win=400, hop=160, hamming window,

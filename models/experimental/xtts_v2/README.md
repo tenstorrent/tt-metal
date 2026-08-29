@@ -95,13 +95,13 @@ The suite is self-contained: references are computed live in-process from the ch
 pytest models/experimental/xtts_v2/tests/
 
 # Individual blocks
-pytest models/experimental/xtts_v2/tests/test_cond_pcc.py       # Block 1
-pytest models/experimental/xtts_v2/tests/test_speaker_pcc.py    # Block 2
-pytest models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py # Block 3 (traced decode)
-pytest models/experimental/xtts_v2/tests/test_hifigan_pcc.py    # Block 4
+pytest models/experimental/xtts_v2/tests/pcc/test_cond_pcc.py       # Block 1
+pytest models/experimental/xtts_v2/tests/pcc/test_speaker_pcc.py    # Block 2
+pytest models/experimental/xtts_v2/tests/pcc/test_gpt_decode_pcc.py # Block 3 (traced decode)
+pytest models/experimental/xtts_v2/tests/pcc/test_hifigan_pcc.py    # Block 4
 
 # Per-stage timings and RTF, gated against per-stage ceilings
-pytest models/experimental/xtts_v2/tests/test_perf.py
+pytest models/experimental/xtts_v2/tests/perf/test_perf.py
 ```
 
 ## Performance

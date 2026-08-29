@@ -21,7 +21,7 @@ Both device tests run the serving order (prefill after capture), so they also co
 request path actually uses. The reference is computed live (see tests/reference_helpers.py).
 
 Run:
-    pytest -svv models/experimental/xtts_v2/tests/test_gpt_prefill_pcc.py
+    pytest -svv models/experimental/xtts_v2/tests/pcc/test_gpt_prefill_pcc.py
 """
 
 import pytest

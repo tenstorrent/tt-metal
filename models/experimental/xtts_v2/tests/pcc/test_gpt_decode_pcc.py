@@ -19,7 +19,7 @@ The reference is computed live in-process (see tests/reference_helpers.py); set 
 use stored fixtures instead.
 
 Run:
-    pytest -svv models/experimental/xtts_v2/tests/test_gpt_decode_pcc.py
+    pytest -svv models/experimental/xtts_v2/tests/pcc/test_gpt_decode_pcc.py
 """
 
 import pytest

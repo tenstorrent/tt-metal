@@ -18,7 +18,7 @@ Ceilings are per stage and deliberately loose. This runs on a shared card, so an
 to catch a few percent would fail on load instead.
 
 Run:
-    pytest -svv models/experimental/xtts_v2/tests/test_perf.py
+    pytest -svv models/experimental/xtts_v2/tests/perf/test_perf.py
 """
 import time
 

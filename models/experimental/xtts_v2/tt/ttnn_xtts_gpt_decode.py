@@ -11,7 +11,7 @@ t we compute Q/K/V for the one new token only, append its K/V to the preallocate
 over positions 0..t via flash-decode SDPA — i.e. the past K/V are cached, never recomputed through
 the c_attn projection.
 
-Equivalence check (see tests/test_gpt_decode_pcc.py): because attention is causal, the
+Equivalence check (see tests/pcc/test_gpt_decode_pcc.py): because attention is causal, the
 latent produced at decode step t must equal position t of the parallel prefill output.
 So the decode loop is validated against the SAME golden `latents.pt` as prefill.
 
