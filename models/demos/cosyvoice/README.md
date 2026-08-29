@@ -273,6 +273,11 @@ RTF, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets a
 which part, and the per-module PCCs under [§ Accuracy](PERF.md#accuracy). The handful of
 PCCs quoted in this file support an argument; PERF.md is the record.
 
+**[`docs/VALIDATION.md`](docs/VALIDATION.md) maps it the other way** — every requirement
+in the bring-up scope against the test that decides it, including the ones that are not
+met and why. It carries no numbers of its own; it links to PERF.md for each. Start there
+to check a specific requirement; start at PERF.md to read the measurements.
+
 ### Two things cannot be gated on exact agreement
 
 RAS sampling is a multinomial draw, so the LLM is gated on its *logits* and the audio
@@ -291,7 +296,8 @@ models/demos/cosyvoice/
 ├── README.md                    this file
 ├── requirements-reference.txt   reference-environment pins (CPU)
 ├── docs/
-│   ├── security.md              dependency and input-handling review
+│   ├── VALIDATION.md            every requirement -> the test that decides it
+│   ├── security.md              dependency review, and the open-advisory disposition
 │   └── diagrams/                .d2 sources + rendered .svg/.png; ./render.sh rebuilds them
 ├── scripts/
 │   ├── download_model.py        stdlib-only, resumable checkpoint fetch
