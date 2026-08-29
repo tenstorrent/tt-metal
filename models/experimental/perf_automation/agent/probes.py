@@ -889,6 +889,7 @@ _COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
 _MAX_THROTTLE_RETRIES = int(os.environ.get("PERF_MCP_THROTTLE_RETRIES", "2") or "2")
 
 
+_SIBLINGS: list = []
 _THERMAL_INERT_WARNED = [False]
 
 
@@ -913,27 +914,27 @@ def _warn_thermal_inert(where: str, exc: BaseException) -> None:
 
 
 def _cc_optimize(name: str):
-    """Import a cc_optimize module however THIS process happens to have loaded the tool.
+    """A cc_optimize module, reachable however THIS process loaded probes.
 
-    probes is imported two ways. As `models.experimental.perf_automation.agent.probes` a relative
-    `..cc_optimize` resolves; as `agent.probes`, with perf_automation itself on sys.path, the SAME
-    import raises "attempted relative import beyond top-level package" -- and the second is what an
-    optimize run actually uses. Every thermal call in this file sat behind a bare relative import
-    inside `except: pass`, so on 2026-08-29 the board climbed to 99-102C, chip 2 died, and not one
-    gate had fired: the import failed before the thermometer was ever read, silently, exactly as a
-    swallowed ImportError does. The same shape is already handled elsewhere in the tool
-    (perf_test_gen's stack_knob_repair import), so this resolves it once for every caller here.
+    probes is imported both as `models.experimental.perf_automation.agent.probes` and, during an
+    optimize run, as `agent.probes` with perf_automation on sys.path -- where `from ..cc_optimize.x`
+    raises "beyond top-level package". Resolution lives in cc_optimize/siblings.py, the one owner,
+    loaded here by path because that is the only route guaranteed under either shape.
     """
-    import importlib
+    if not _SIBLINGS:
+        import importlib.util as _ilu
 
-    parent = (__package__ or "").rpartition(".")[0]
-    candidates = ([parent + ".cc_optimize." + name] if parent else []) + ["cc_optimize." + name]
-    for candidate in candidates:
-        try:
-            return importlib.import_module(candidate)
-        except ImportError:
-            continue
-    raise ImportError("cc_optimize.%s is not importable from %r" % (name, __package__))
+        _spec = _ilu.spec_from_file_location(
+            "cc_optimize_siblings",
+            str(Path(__file__).resolve().parent.parent / "cc_optimize" / "siblings.py"),
+        )
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        _SIBLINGS.append(_mod)
+    mod = _SIBLINGS[0].load(name)
+    if mod is None:
+        raise ImportError("cc_optimize.%s is not reachable from %r" % (name, __package__))
+    return mod
 
 
 def _cool_before_remeasure():

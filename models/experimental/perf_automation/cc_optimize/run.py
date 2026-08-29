@@ -3284,6 +3284,33 @@ def _device_answers() -> bool:
         return False
 
 
+_SIBLINGS: list = []
+
+
+def _siblings():
+    """Load the sibling resolver itself -- the one import that cannot use the resolver.
+
+    Four lines by path, because this module may have no package and no sys.path entry; everything
+    after this point goes through siblings.load(). See cc_optimize/siblings.py.
+    """
+    if _SIBLINGS:
+        return _SIBLINGS[0]
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location(
+        "cc_optimize_siblings", str(Path(__file__).resolve().parent / "siblings.py")
+    )
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _SIBLINGS.append(_mod)
+    return _mod
+
+
+def _perf_mcp():
+    """perf_mcp, reachable under every load style. Delegates to cc_optimize/siblings.py."""
+    return _siblings().load("perf_mcp")
+
+
 _THERMAL_GATE_BROKEN = [False]
 
 
@@ -3312,9 +3339,7 @@ def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
     min at a quarter of it. Cooler and slower delays the hang; it does not prevent it.
     """
     try:
-        from .perf_mcp import _wait_for_thermal_headroom
-
-        ok, temp = _wait_for_thermal_headroom()
+        ok, temp = _perf_mcp()._wait_for_thermal_headroom()
         if not ok and temp is not None:
             print(
                 "  [thermal-gate] %s starting at %.1fC (still above this board's clamp threshold)"
@@ -3361,9 +3386,7 @@ def _thermal_watch_sample(state: dict, label: str = "") -> None:
     if now - float(state.get("last_report") or 0.0) < _THERMAL_WATCH_REPORT_S:
         return
     try:
-        from .perf_mcp import report_board_over_clamp
-
-        if report_board_over_clamp(label):
+        if _perf_mcp().report_board_over_clamp(label):
             state["last_report"] = now
     except Exception:  # noqa: BLE001 -- a watcher that cannot run must not stop the work
         return

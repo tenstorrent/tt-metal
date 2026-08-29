@@ -59,7 +59,11 @@ def test_the_policy_still_lives_in_exactly_one_place():
     # The helper delegates; it does not reimplement the wait.
     i = run_src.index("def _wait_for_thermal_headroom_before_device_work(")
     helper = run_src[i : i + 2200]
-    assert "from .perf_mcp import _wait_for_thermal_headroom" in helper, "the helper does not reuse the gate"
+    # Delegation is the property; the IMPORT MECHANISM is not. run.py is loaded BY PATH with no
+    # package, so a bare `from .perf_mcp import ...` raises "attempted relative import with no known
+    # parent package" -- silently, inside the gate's own except. That is why the board reached
+    # 99-103C on 2026-08-29 with no gate running. _perf_mcp() resolves the sibling either way.
+    assert "_perf_mcp()._wait_for_thermal_headroom()" in helper, "the helper does not reuse the gate"
     for src, name in ((run_src, "run.py"), (probes_src, "probes.py")):
         assert "_THERMAL_POLL_S" not in src, f"{name} grew its own copy of the wait loop"
         assert "_clamp_threshold_c" not in src, f"{name} grew its own threshold"

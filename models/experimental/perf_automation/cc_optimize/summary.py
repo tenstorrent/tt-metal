@@ -376,42 +376,36 @@ def _read_json(path) -> object:
 
 
 _PERF_MCP = None
+_SIBLINGS: list = []
+
+
+def _siblings():
+    """Load the sibling resolver itself -- the one import that cannot use the resolver.
+
+    Four lines by path, because this module may have no package and no sys.path entry; everything
+    after this point goes through siblings.load(). See cc_optimize/siblings.py.
+    """
+    if _SIBLINGS:
+        return _SIBLINGS[0]
+    import importlib.util as _ilu
+
+    _spec = _ilu.spec_from_file_location(
+        "cc_optimize_siblings", str(Path(__file__).resolve().parent / "siblings.py")
+    )
+    _mod = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    _SIBLINGS.append(_mod)
+    return _mod
 
 
 def _perf_mcp():
-    """perf_mcp, loaded so that it works under EVERY load style.
+    """perf_mcp, reachable under every load style. Delegates to cc_optimize/siblings.py.
 
-    This module is loaded by run.py via `spec_from_file_location` -- no package, and no sys.path
-    entry for its own directory. Under that style both `from .perf_mcp import x` and
-    `from perf_mcp import x` raise, and each reader here ended its fallback chain in a bare `except`
-    that returned empty. So the report printed "not measured" over prefill timings, model params,
-    trace paths and the observed ISL that were all sitting on disk, and nothing errored.
-
-    Tries the package import first, then falls back to loading by file path -- which is what run.py
-    already does for tmpstate and for this module. Cached: the readers are called repeatedly.
+    The resolution order used to live here, and was then rewritten a second time in run.py for the
+    thermal gate -- two implementations of one idea, and the copy in run.py was the one that failed.
+    One owner now: cc_optimize/siblings.py. Contract is unchanged: the module, or None.
     """
-    global _PERF_MCP
-    if _PERF_MCP is not None:
-        return _PERF_MCP or None
-    for _name in ("cc_optimize.perf_mcp", "perf_mcp"):
-        try:
-            _PERF_MCP = __import__(_name, fromlist=["*"])
-            return _PERF_MCP
-        except Exception:  # noqa: BLE001
-            pass
-    try:
-        import importlib.util as _ilu
-
-        _p = Path(__file__).resolve().parent / "perf_mcp.py"
-        _spec = _ilu.spec_from_file_location("cc_perf_mcp_by_path", str(_p))
-        _m = _ilu.module_from_spec(_spec)
-        sys.modules.setdefault("cc_perf_mcp_by_path", _m)
-        _spec.loader.exec_module(_m)
-        _PERF_MCP = _m
-        return _m
-    except Exception:  # noqa: BLE001
-        _PERF_MCP = False
-        return None
+    return _siblings().load("perf_mcp")
 
 
 def _measured_stage_paths(model: str = "", task: str = "") -> dict:
