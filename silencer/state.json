@@ -237,7 +237,17 @@
       "workflow": "models-t3-unit-tests.yaml",
       "dispatched_model": "bert-large",
       "note": "Reconciled this run: validation run 33171870759 (models-t3-unit-tests) job 98852300426 completed/success. Re-grepped last-3488-line sample: 0 occurrences of in0_args/out_args/reader_bmm_tile_layout_in0/reader_writer_bmm_tile_layout_in1/unused-but-set-variable - but the tail-anchored sample likely does not cover the earlier JIT-compile step, so absence is not proof. Outcome commented (/codeowners ping) noting this gap; left PR in draft (not marked ready) pending a maintainer or future run checking the full (non-truncated) build log for the compile lines directly."
+    },
+    {
+      "branch": "silencer/demote-tilize-shard-spec-warning-33152052210",
+      "title": "Demote tilize legacy-sharded-factory log to debug severity",
+      "status": "open-pr-awaiting-validation",
+      "workflow_dispatched": "models-t3-e2e-tests.yaml",
+      "dispatch_ref": "silencer/demote-tilize-shard-spec-warning-33152052210",
+      "source_run_id": "33152052210",
+      "source_job_id": "98790147778",
+      "pattern": "ttnn::tilize log_warning fired on every legacy-sharded-factory call (28x in 5000 log lines)"
     }
   ],
-  "backlog_cursor": "continue rotation to next untracked workflow after models-t3-unit-tests.yaml, e.g. models-t3-e2e-tests.yaml or perf-device-models.yaml"
+  "backlog_cursor": "models-t3-e2e-tests.yaml sampled this run (run 33152052210, jobs 98790147778 Llama3.2-3B + 98790147855 Falcon-7B). Next: continue rotation with perf-device-models.yaml or re-sample models-t3-e2e-tests.yaml with different jobs/runs."
 }
