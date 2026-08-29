@@ -489,7 +489,10 @@ void kernel_main() {
                 num_q_chunks,
                 ring_iter,
                 ring_id,
-                num_local_k_chunks,
+                // sdpa_ring_v2 classifies k >= num_local_k_chunks as joint. On the reference iteration the
+                // reference chunks (num_reference_k_chunks) can exceed num_local_k_chunks (sub-frame regime),
+                // so pass the full reference count as the local boundary to keep every chunk spatial.
+                is_reference_iter ? iter_num_kv_chunks : num_local_k_chunks,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
