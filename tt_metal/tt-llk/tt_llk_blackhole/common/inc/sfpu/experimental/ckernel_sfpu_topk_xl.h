@@ -2798,7 +2798,7 @@ inline void _topk_xl_add_lsb_indices_()
             TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPIADD(256, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
             TTI_SFPIADD(256, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-            TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+            TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
             for (int i = 0; i < 4; i++)
             {
@@ -2888,7 +2888,7 @@ inline void _topk_xl_add_lsb_indices_()
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
     for (int j = 1; j < row_scale_factor; j++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
         for (int i = 0; i < 4; i++)
         {
@@ -2962,7 +2962,7 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
     for (int j = 1; j < row_scale_factor; j++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
         for (int i = 0; i < 4; i++)
         {

@@ -45,7 +45,6 @@ on:
           - tteager
           - ethernet
           - trace stress
-          - deepseek-modules
       t3000-e2e:
         required: false
         type: boolean

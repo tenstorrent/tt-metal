@@ -5,10 +5,13 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/experimental/device.hpp"
 #include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -334,6 +337,13 @@ void validate_matmul_reuse_work_split(
 
 namespace ttnn::prim::dram_sharded_helpers {
 
+void validate_num_workers_per_dram_bank(std::size_t workers_per_bank) {
+    TT_FATAL(
+        workers_per_bank >= 1 && workers_per_bank <= 3,
+        "num_workers_per_dram_bank must be in [1, 3], got {}",
+        workers_per_bank);
+}
+
 tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
     ttnn::distributed::MeshDevice* device = a.device();
     const ttnn::distributed::MeshDeviceView& view = device->get_view();
@@ -366,7 +376,10 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons) {
+void move_common_entries(
+    std::vector<tt::tt_metal::CoreCoord>& v1,
+    std::vector<tt::tt_metal::CoreCoord>& v2,
+    std::vector<tt::tt_metal::CoreCoord>& commons) {
     for (const tt::tt_metal::CoreCoord& item : v2) {
         if (std::find(v1.begin(), v1.end(), item) != v1.end()) {
             commons.push_back(item);
@@ -389,5 +402,66 @@ void get_optimal_dram_bank_to_reader_assignment(
         all_cores_set.insert(CoreRange(worker_core));
     }
     all_worker_cores = CoreRangeSet(all_cores_set);
+}
+
+std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
+    tt::tt_metal::IDevice* device,
+    tt::tt_metal::NOC noc,
+    uint32_t workers_per_bank,
+    const CoreRangeSet& secondary_reader_excluded_cores) {
+    validate_num_workers_per_dram_bank(workers_per_bank);
+
+    const auto primary_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    std::vector<DramBankReaderAssignment> assignments;
+    assignments.reserve(primary_workers.size() * workers_per_bank);
+
+    if (workers_per_bank == 1) {
+        for (uint32_t bank = 0; bank < primary_workers.size(); ++bank) {
+            assignments.push_back({primary_workers[bank], bank, 0});
+        }
+        return assignments;
+    }
+
+    TT_FATAL(
+        noc == tt::tt_metal::NOC::NOC_0,
+        "Multiple readers per DRAM bank currently require a NOC0 data-movement kernel");
+
+    const auto worker_grid = device->compute_with_storage_grid_size();
+    std::set<tt::tt_metal::CoreCoord> used(primary_workers.begin(), primary_workers.end());
+
+    for (uint32_t bank = 0; bank < primary_workers.size(); ++bank) {
+        const auto primary = primary_workers[bank];
+        assignments.push_back({primary, bank, 0});
+
+        for (uint32_t worker_index = 1; worker_index < workers_per_bank; ++worker_index) {
+            bool found = false;
+            uint32_t best_cost = std::numeric_limits<uint32_t>::max();
+            tt::tt_metal::CoreCoord best_worker{};
+            for (uint32_t x = 0; x < worker_grid.x; ++x) {
+                for (uint32_t y = 0; y < worker_grid.y; ++y) {
+                    const tt::tt_metal::CoreCoord candidate{x, y};
+                    if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
+                        continue;
+                    }
+                    // All readers use AllocatorBank on the same NOC and therefore target the same
+                    // firmware-approved endpoint. Place additional readers near the bank's primary
+                    // reader to minimize NOC hops without routing one NOC to multiple endpoints.
+                    const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
+                        device, candidate, primary_workers[bank], noc);
+                    // Equal-cost candidates use the same endpoint and hop count. Keep the first candidate in ascending
+                    // x/y scan order so that the assignment is deterministic without adding a second routing objective.
+                    if (cost < best_cost) {
+                        found = true;
+                        best_cost = cost;
+                        best_worker = candidate;
+                    }
+                }
+            }
+            TT_FATAL(found, "No free DRAM reader {} core for bank {}", worker_index, bank);
+            used.insert(best_worker);
+            assignments.push_back({best_worker, bank, worker_index});
+        }
+    }
+    return assignments;
 }
 }  // namespace ttnn::prim::dram_sharded_helpers

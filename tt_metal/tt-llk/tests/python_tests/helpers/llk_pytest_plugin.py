@@ -390,6 +390,17 @@ def pytest_configure(config):
     if config.getoption("--disable-sfploadmacro", default=False):
         os.environ["TT_METAL_DISABLE_SFPLOADMACRO"] = "1"
 
+    # Fix this run's perf report directory here, on the controller, before xdist
+    # spawns workers: they inherit the environment, so every process resolves the
+    # same perf_data/runs/<tag>. Left to first use, each worker would mint its own
+    # timestamp and scatter one run across several directories.
+    #
+    # Unconditional on purpose. It only mints a string into the environment — no
+    # directory is created until a perf report is actually written — and at
+    # configure time there is no reliable way to know whether a perf test will be
+    # selected (a node id selects one without ever naming the marker).
+    TestConfig.perf_run_tag()
+
     config.coverage_enabled = config.getoption("--coverage", default=False)
 
     bit_exact_runs = config.getoption("--bit-exact-runs", default=1)
@@ -442,6 +453,7 @@ def pytest_configure(config):
         config.getoption("--compile-producer", default=False),
         config.getoption("--stimuli-only"),
         config.getoption("--use-stimuli"),
+        collect_only=bool(config.option.collectonly),
     )
 
     # Create directories from all processes - lock in create_directories handles race

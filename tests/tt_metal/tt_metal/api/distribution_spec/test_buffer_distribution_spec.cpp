@@ -537,7 +537,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Device-free check of the shard->core placement formula for both 1D strategies.
 // 8 single-page shards over 2 cores (R = 4 shards per core). Round-robin spreads
 // consecutive shards across cores; CONTIGUOUS_1D (shard-contiguous) packs a contiguous run per core.
-TEST(BufferDistributionSpecContiguous, ShardContiguousVsRoundRobinPlacement) {
+TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousVsRoundRobinPlacement) {
     const tt::tt_metal::Shape tensor_in_pages{8, 1};
     const tt::tt_metal::Shape shard_in_pages{1, 1};
     const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
@@ -563,7 +563,7 @@ TEST(BufferDistributionSpecContiguous, ShardContiguousVsRoundRobinPlacement) {
 }
 
 // CONTIGUOUS_1D requires a uniform shards-per-core; an indivisible count must fatal.
-TEST(BufferDistributionSpecContiguous, ShardContiguousRequiresUniformShardsPerCore) {
+TEST(BufferDistributionSpecContiguous, CPU_ShardContiguousRequiresUniformShardsPerCore) {
     const tt::tt_metal::Shape tensor_in_pages{7, 1};  // 7 shards over 2 cores -> not uniform
     const tt::tt_metal::Shape shard_in_pages{1, 1};
     const CoreRangeSet grid(CoreRange({0, 0}, {1, 0}));  // 2 cores
