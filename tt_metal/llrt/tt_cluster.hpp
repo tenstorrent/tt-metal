@@ -71,8 +71,6 @@ public:
     Cluster(llrt::RunTimeOptions& rtoptions);
     ~Cluster();
 
-    // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
-    // for user facing host apis
     std::unordered_map<ChipId, EthCoord> get_user_chip_ethernet_coordinates() const;
     size_t number_of_user_devices() const;
     std::set<ChipId> user_exposed_chip_ids() const;
