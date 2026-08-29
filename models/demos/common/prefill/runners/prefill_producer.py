@@ -99,6 +99,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
+from models.demos.common.prefill.runners.layer_completion_drainer import (
+    connect_layer_completion_channel,
+    drain_layer_completions,
+)
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -324,44 +328,6 @@ def _read_device_map(timeout_s: int) -> dict:
     if len(files) > 1:
         logger.info(f"[producer] merged {len(files)} device maps: {len(device_map)} chips total")
     return device_map
-
-
-def _connect_layer_ack_channel(timeout_s: int):
-    """Attach (consumer side) to the runner's per-layer LayerAck channel
-    (/tt_prefill_layer_acks_<service_id>). Returns the channel, or None if it isn't available (only the
-    single-rank runner creates it)."""
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
-    try:
-        channel = ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
-    except Exception as e:
-        logger.warning(f"[producer] could not connect LayerAck channel {shm_name}: {e}; skipping ack wait.")
-        return None
-    logger.info(f"[producer] connected LayerAck channel {shm_name}")
-    return channel
-
-
-def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
-    """Block until `expected` per-layer acks (NUM_LAYERS per chunk) have been drained, or timeout.
-    Returns the count actually drained."""
-    if ack_channel is None:
-        return 0
-    drained = 0
-    last_logged = -1
-    start = time.perf_counter()
-    while drained < expected:
-        drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[producer] layer acks {drained}/{expected}")
-            last_logged = drained
-        if drained >= expected:
-            break
-        if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[producer] timed out at {drained}/{expected} acks after {timeout_s}s")
-            break
-        time.sleep(0.01)
-    logger.info(f"[producer] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
-    return drained
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
@@ -1431,7 +1397,7 @@ def main() -> None:
 
     # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
     # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    completion_channel = connect_layer_completion_channel(timeout_s)
     if cfg.verify and ack_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
@@ -1473,10 +1439,8 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed. With a
-    # pipeline runner (num_ranks>1) the branch's LayerCompletionRouter funnels every rank's completions
-    # into this master channel, so this waits for ALL ranks' layers, not just the first stage's.
-    _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+    # Wait for the runner's per-layer completions: NUM_LAYERS per chunk, for every chunk pushed.
+    drain_layer_completions(completion_channel, NUM_LAYERS * stats.total_pushes)
 
     # Multi-rank: all layers of all chunks are now written across every stage's DRAM. Release the
     # validators (they PCC their own host's layers) by broadcasting the resident-slot map. Do it BEFORE

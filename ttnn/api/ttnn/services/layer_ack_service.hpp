@@ -15,7 +15,10 @@ class D2HStreamService;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
-class LayerCompletionQueue;
+struct LayerCompletionMessage;  // fwd — defined in internal/disaggregation/layer_completion_message.hpp
+template <typename MsgT>
+class LayerCompletionQueueT;  // fwd — defined in internal/disaggregation/layer_completion_queue.hpp
+using LayerCompletionQueue = LayerCompletionQueueT<LayerCompletionMessage>;
 }  // namespace tt::tt_metal::internal
 
 namespace tt::tt_metal {

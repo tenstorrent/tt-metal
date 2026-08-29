@@ -177,74 +177,30 @@ def _handle_sigterm(signum, frame):
 # Layer-completion routing (pipeline / num_ranks > 1)
 # ---------------------------------------------------------------------------
 
-# When the completion ring is full, spin waiting for the router to drain rather than
-# dropping/failing immediately. Bounded so a genuinely stalled router still surfaces.
-LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S = float(os.environ.get("PREFILL_LAYER_COMPLETION_PUSH_TIMEOUT_S", 30.0))
-LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S = 10.0
-LAYER_COMPLETION_PUSH_SPIN_SLEEP_S = 0.001  # tiny yield so the spin doesn't peg a core
+# The sink implementations (polymorphic LayerCompletionSink: v1 count protocol and v2
+# structured protocol) and the shared full-ring backpressure policy live in
+# layer_completion_sink.py — dependency-light so they are unit testable without ttnn.
+from models.demos.common.prefill.runners.layer_completion_sink import (
+    build_layer_completion_sink,
+    build_layer_completion_sink_v2,
+)
 
-
-def build_layer_completion_sink(producer, *, source_rank, num_layers):
-    """Build the per-layer completion sink the runtime fires once per layer.
-
-    Computes a globally-dense ordering key and pushes a full completion
-    into `producer` (a ttnn._experimental.layer_completion.LayerCompletionQueue). The
-    master router re-emits completions strictly in ascending `seq`.
-
-    seq = request_id * num_layers + layer_idx — dense across all (request,
-    layer) pairs. For pipelined prefill each rank owns a disjoint set of
-    global layer indices per request, so the union of every rank's seqs
-    tiles [0, num_requests*num_layers) with no gaps or collisions.
-
-    The runtime calls the returned sink as `sink(layer_idx, request_id)`,
-    binding the current chunk's request_id per prefill() call — so this
-    builder needs no request-id accessor and reads no shared mutable state.
-
-    Args:
-        producer: connected LayerCompletionQueue (the host-local ring).
-        source_rank: this rank's world rank (diagnostic in the payload).
-        num_layers: total GLOBAL layers (the seq stride per request), NOT this rank's slice.
-    """
-
-    def on_layer_complete(layer_idx: int, request_id: int) -> None:
-        # Hot path: fired once per layer inside model.forward. Push directly (no per-call closure)
-        # and return on the common success; only the rare full-ring case falls into the spin below.
-        seq = request_id * num_layers + layer_idx
-        if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-            return
-
-        # Ring is sized well above in-flight depth; a full ring means the router
-        # thread is momentarily behind. Spin (don't drop) for up to PUSH_SPIN_TIMEOUT_S
-        # waiting for it to drain; log on entry, every PUSH_SPIN_LOG_EVERY_S while waiting,
-        # and on exit. Only surface an error if it never catches up.
-        start = time.monotonic()
-        next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-        logger.warning(
-            f"[layer-completion] ring full (seq={seq}); spinning up to "
-            f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
-        )
-        while True:
-            if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
-                logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
-                return
-            if _shutdown:
-                # Operator asked to stop (SIGTERM/SIGINT). Abort the spin immediately instead of
-                # ignoring the signal for up to the full timeout; teardown runs via run_request_loop's
-                # finally. Raising (vs. silently dropping) keeps the failure visible.
-                raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
-            now = time.monotonic()
-            if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
-                logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
-                raise RuntimeError(
-                    f"layer-completion ring full (seq={seq}); router not draining after "
-                    f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
-                )
-            if now >= next_log:
-                logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
-                next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
-            time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
-
-    return on_layer_complete
+# Completion protocol (issue #54632), selected once per job — never mixed within a run.
+# Both protocols use the SAME scheduler-facing shm name (/tt_prefill_layer_acks_<service_id>);
+# the protocol decides what the master router creates there:
+#   1 (default): a counter channel — the master reorders by seq and emits only a COUNT. The
+#       scheduler correlates ticks with its in-order chunk FIFO (per-request HoL blocking).
+#   2: a structured ring — every completion is self-describing (request/slot/position range/
+#       layer range); the master forwards as-arrived (no HoL). See layer_completion_sink.py.
+try:
+    LAYER_COMPLETION_PROTOCOL = int(os.environ.get("PREFILL_LAYER_COMPLETION_PROTOCOL", "1").strip())
+except ValueError:
+    LAYER_COMPLETION_PROTOCOL = -1
+if LAYER_COMPLETION_PROTOCOL not in (1, 2):
+    raise ValueError(
+        f"PREFILL_LAYER_COMPLETION_PROTOCOL must be 1 or 2, got "
+        f"{os.environ.get('PREFILL_LAYER_COMPLETION_PROTOCOL')!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1037,6 +993,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             "per-chunk socket tensor whose address cannot be captured, so the replay would emit no acks. "
             "Run untraced for the D2H backend, or leave PREFILL_LAYER_ACK_D2H unset to ack under trace."
         )
+    # D2H + protocol 2: LayerAckService emits v1 (count-protocol) messages only; the v2 router's
+    # structured ring would reject its attach with a confusing magic error. Fail clearly at wiring.
+    if use_d2h and LAYER_COMPLETION_PROTOCOL == 2:
+        raise ValueError(
+            "PREFILL_LAYER_ACK_D2H=1 with PREFILL_LAYER_COMPLETION_PROTOCOL=2: the D2H ack backend "
+            "emits v1 count-protocol messages only (LayerAckService has no v2 mode yet). Unset "
+            "PREFILL_LAYER_ACK_D2H to use the host-callback backend, or run protocol 1."
+        )
     # The router path covers: (a) any multi-rank run (each rank owns only a layer slice, so it can't
     # inject the scheduler channel directly and must route to the master), and (b) the D2H backend on
     # any rank count (its LayerAckService is a pure producer into the ring). The single-rank non-D2H
@@ -1045,8 +1009,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     if use_router:
         # Imported here (not at module top) so single-rank / no-extension builds never need the
-        # standalone _layer_completion .so (built only with WITH_PYTHON_BINDINGS).
-        from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
+        # layer_completion bindings.
+        from ttnn._experimental.layer_completion import (
+            LayerCompletionQueue,
+            LayerCompletionQueueV2,
+            LayerCompletionRouter,
+        )
 
         # Each rank's router OWNS its own ring, so the name must be per-rank — append _{rank} even to
         # the env override (a single literal would make colocated ranks unlink each other's live ring
@@ -1056,15 +1024,18 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         _unlink_stale_shm(ring_shm_name)
         if rank == master_rank:
             _unlink_stale_shm(ack_shm_name)
-        # The router owns the host-local ring (and, on the master, the scheduler counter channel,
-        # which it inject()s in order). Subordinate ranks MPI-forward completions to the master.
+        # The router owns the host-local ring (and, on the master, the scheduler-facing segment,
+        # which it inject()s/forwards into). Subordinate ranks MPI-forward completions to the
+        # master. Both protocols share the scheduler shm NAME (ack_shm_name) — the protocol arg
+        # decides what the master creates there (v1 counter channel vs v2 structured ring).
         # Constructed BEFORE the ring source below: the router creates the ring, the source connects.
         router = LayerCompletionRouter(
             rank=rank,
             world_size=num_ranks,
             master_rank=master_rank,
             ring_shm_name=ring_shm_name,
-            scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+            scheduler_shm_name=ack_shm_name if rank == master_rank else "",
+            protocol=LAYER_COMPLETION_PROTOCOL,
         )
         if use_d2h:
             # Device-record source. The reader thread reconstructs (chunk, global-layer) from a per-rank
@@ -1078,6 +1049,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             # are None and this equals the even split; for a DSA/cross-layer-reuse model (GLM) the snapped
             # split differs, and an unsnapped one here would hand the router overlapping/gapped seqs, which
             # its reorder buffer cannot sequence — it would stall head-of-line instead of failing loudly.
+            #
+            # v1-count-protocol only (LayerAckService has no v2 mode; guarded at wiring).
             first_layer_idx, num_my_layers = compute_layer_split(
                 NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
             )[rank]
@@ -1099,24 +1072,24 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             layer_ack_service.start()  # connects to the router-owned ring (created above)
             source_desc = "D2H device records"
         else:
-            # Host-callback source: the runtime fires on_layer_complete(layer_idx, request_id) per layer
-            # and the sink pushes into the ring (no device D2H). seq stride is the GLOBAL layer total
-            # (NUM_LAYERS), NOT this rank's slice; layer_idx arriving at the sink is already global; the
-            # chunk index is bound per prefill() call as request_id (passed by _compute_and_send), so the
-            # sink reads no shared mutable state.
-            producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+            # Host-callback source: the runtime fires the polymorphic sink per layer and it pushes
+            # into the ring (no device D2H). The only protocol-conditional construction is the
+            # queue/sink message type. seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this
+            # rank's slice; the per-chunk fields are bound per prefill_chunk() call, so the sink
+            # reads no shared mutable state.
+            queue_cls = LayerCompletionQueueV2 if LAYER_COMPLETION_PROTOCOL == 2 else LayerCompletionQueue
+            sink_factory = (
+                build_layer_completion_sink_v2 if LAYER_COMPLETION_PROTOCOL == 2 else build_layer_completion_sink
+            )
+            producer = queue_cls.connect(ring_shm_name, connect_timeout_ms=30000)
             runtime.set_layer_completion_sink(
-                build_layer_completion_sink(
-                    producer,
-                    source_rank=rank,
-                    num_layers=NUM_LAYERS,
-                )
+                sink_factory(producer, source_rank=rank, num_layers=NUM_LAYERS, is_shutdown=lambda: _shutdown)
             )
             source_desc = "host on_layer_complete callback"
         logger.info(
-            f"[migration] layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
-            f"ring={ring_shm_name} source={source_desc} "
-            + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+            f"[migration] layer-completion routing up (v{LAYER_COMPLETION_PROTOCOL}): "
+            f"rank={rank}/{num_ranks} master={master_rank} ring={ring_shm_name} source={source_desc} "
+            + (f"(owns scheduler shm {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
         )
     elif single_rank and enable_layer_ack:
         # Single-rank non-D2H direct path: the runtime owns + inject()s the scheduler counter channel
@@ -1125,6 +1098,12 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+        if LAYER_COMPLETION_PROTOCOL == 2:
+            logger.warning(
+                "[migration] PREFILL_LAYER_COMPLETION_PROTOCOL=2 only rewires the ROUTER completion "
+                "path; single-rank non-D2H still uses the direct counter channel above (no router, "
+                "no HoL blocking to remove)"
+            )
     elif single_rank:
         logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
 
