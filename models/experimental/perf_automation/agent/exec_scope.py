@@ -66,9 +66,9 @@ def ensure_scope(ctx) -> None:
         env["TT_OP_ATTR_ROOT"] = str(model_root)  # attribute ttnn ops to model-source lines
         env["TT_OP_ATTR_OUT"] = attr_out
         env["PYTHONPATH"] = f"{tt_root}:{pa_dir}:" + env.get("PYTHONPATH", "")
-        vd = cfg.get("visible_devices")
-        if vd:
-            env["TT_VISIBLE_DEVICES"] = str(vd)
+        from .mesh_descriptor import apply_scope
+
+        apply_scope(env, cfg)
 
         # one perf-test run, BOTH plugins: exec-trace (which files run) + op-attribution
         # (which source line emits each matmul) -> the automated "where is the hot op" deep-dive.

@@ -460,22 +460,19 @@ def before_loop(
             descriptor = None
         if descriptor is not None:
             visible = ",".join(str(i) for i in range(want_chips))
-    sub_env = dict(os.environ)
+    config["visible_devices"] = visible
+    config["mesh_graph_desc_path"] = str(descriptor) if descriptor is not None else None
+    from .mesh_descriptor import apply_scope
+
+    sub_env = apply_scope(dict(os.environ), config)
     if visible is not None:
-        sub_env["TT_VISIBLE_DEVICES"] = visible
-        sub_env["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor)
-        os.environ["TT_VISIBLE_DEVICES"] = visible
-        os.environ["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor)
+        apply_scope(os.environ, config)
         print(
             "      mesh descriptor : %s (makes a %d-chip subset legal; without it fabric init "
             "refuses with CUSTOM cluster)" % (Path(str(descriptor)).name, want_chips),
             file=sys.stderr,
             flush=True,
         )
-    else:
-        sub_env.pop("TT_VISIBLE_DEVICES", None)
-        sub_env.pop("TT_METAL_VISIBLE_DEVICES", None)
-    config["visible_devices"] = visible
     print(
         f"      devices={devices} -> TT_VISIBLE_DEVICES="
         f"{visible if visible is not None else '(unset: full fabric)'}",

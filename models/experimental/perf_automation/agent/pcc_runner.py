@@ -138,10 +138,9 @@ def run_pcc(ctx) -> dict:
     # arrives as a truthy string and was read by model builders as "build zero layers", which PCC'd
     # a model that had done no work. See agent/layer_depth.py.
     _set_depth(env, None)
-    vd = ctx.manifest.get("config", {}).get("visible_devices")
-    if vd is not None:
-        env["TT_VISIBLE_DEVICES"] = str(vd)
-        env["TT_METAL_VISIBLE_DEVICES"] = str(vd)
+    from .mesh_descriptor import apply_scope
+
+    apply_scope(env, ctx.manifest.get("config", {}))
     try:
         r = subprocess.run(
             # -p depth_guard: correctness must run at FULL depth; see agent/depth_guard_plugin.py

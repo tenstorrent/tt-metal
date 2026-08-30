@@ -42,10 +42,9 @@ def measure_runs(ctx) -> list[dict]:
     xenv["TT_PERF_OSL_TOKENS"] = os.environ.get("TT_PERF_OSL_TOKENS") or os.environ.get(
         "PERF_MCP_PROFILE_TOKENS", "128"
     )
-    vd = cfg.get("visible_devices")
-    if vd is not None:
-        xenv["TT_VISIBLE_DEVICES"] = str(vd)
-        xenv["TT_METAL_VISIBLE_DEVICES"] = str(vd)
+    from .mesh_descriptor import apply_scope
+
+    apply_scope(xenv, cfg)
 
     factory = make_run_profiled(
         str(gitio.repo_root(ctx.model_root())),

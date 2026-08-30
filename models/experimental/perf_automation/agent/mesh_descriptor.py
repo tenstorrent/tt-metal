@@ -82,3 +82,28 @@ def find_descriptor(repo_root, arch: str, chips: int) -> Optional[Path]:
         if meshes == 1 and got_arch == want and total == chips:
             matches.append(path)
     return matches[0] if matches else None
+
+
+def apply_scope(env: dict, config: dict) -> dict:
+    """Put BOTH visibility and its descriptor into `env`, or neither. Never one alone.
+
+    Visibility without a descriptor is fatal, not degraded:
+
+        Using CUSTOM cluster type for P300 board with 1 chips
+        TT_FATAL: Custom fabric mesh graph descriptor path must be specified
+
+    Three callers used to set visibility from config["visible_devices"] with their own copy of the
+    same three lines, which was harmless only because that value was hardcoded to None. The moment
+    it became real, each of those copies was a crash. One helper now owns the pair, so a caller
+    cannot set half of it, and there is one place to change if the pairing ever grows a third term.
+    """
+    visible = config.get("visible_devices")
+    descriptor = config.get("mesh_graph_desc_path")
+    if visible and descriptor:
+        env["TT_VISIBLE_DEVICES"] = str(visible)
+        env["TT_METAL_VISIBLE_DEVICES"] = str(visible)
+        env["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor)
+    else:
+        env.pop("TT_VISIBLE_DEVICES", None)
+        env.pop("TT_METAL_VISIBLE_DEVICES", None)
+    return env
