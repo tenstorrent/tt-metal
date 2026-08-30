@@ -100,7 +100,6 @@ private:
     // Stamp the chip's sync anchor on all 5 RISC lanes of a freshly created context. Caller holds mutex_,
     // and calls it BEFORE any zone reaches the context, which is what keeps the marker's earlier timestamp
     // consistent with Tracy's per-lane non-decreasing arrival contract.
-    void EmitSyncMarkerLocked(uint32_t chip_id, TracyTTCtx ctx, uint32_t core_x, uint32_t core_y);
 
     // ContextKey -> immortal role string ("FILLER"/"MOVER"). Empty for any core never registered, which is
     // why the label falls back to bare coordinates rather than asserting.
@@ -111,6 +110,9 @@ private:
         double first_timestamp = 0.0;
         double frequency = 0.0;
     };
+
+    void EmitSyncMarkerLocked(
+        uint32_t chip_id, TracyTTCtx ctx, uint32_t core_x, uint32_t core_y, const ChipAnchor& anchor);
 
     // Resolve the anchor for one core: its own per-core entry if it has one, else its chip's. Returns false
     // when neither exists (the device was never AddDevice'd). Two flavours because GetOrCreateContext already
