@@ -234,6 +234,23 @@ def make_mock_model_runner(model_root: str | Path) -> Callable[[str], str]:
     return runner
 
 
+def _requested_chip_count(devices: str):
+    """How many chips --devices asks for, or None when it does not narrow the host.
+
+    "all" (and anything unparseable) means the whole host and must NOT pin visibility. "single" is
+    one chip. An explicit list is its own length, so "0,1" is two.
+    """
+    text = str(devices or "").strip().lower()
+    if not text or text == "all":
+        return None
+    if text == "single":
+        return 1
+    ids = [part for part in re.split(r"[,\s]+", text) if part]
+    if ids and all(part.isdigit() for part in ids):
+        return len(ids)
+    return None
+
+
 def mock_run_profiled(pcc_path, batch_size, seq_len, profiles_dir, i):
     dest = Path(profiles_dir) / f"run{i}_raw.csv"
     shutil.copyfile(FIXTURES / "ops_perf_sample.csv", dest)
@@ -414,16 +431,51 @@ def before_loop(
     note_board(str(env.get("card") or ""), chips, box=str(box or ""))
 
     devices = str(config.get("devices") or "single")
-    # DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED (chip-count / hardware agnostic): pinning
-    # TT_VISIBLE_DEVICES to a chip SUBSET makes fabric auto-discovery classify the board as a CUSTOM
-    # cluster and fatally demand a mesh-graph descriptor we don't provide — crashing device/fabric
-    # init before any forward on any multi-chip board. Leave the full topology visible; the mesh
-    # SHAPE (TT_PERF_MESH_ROWS/COLS) is the chip-count lever, not OS-level visibility.
+    # VISIBILITY IS RESTRICTED ONLY WITH THE DESCRIPTOR THAT MAKES IT LEGAL, AND OTHERWISE NOT AT ALL.
+    #
+    # Pinning TT_VISIBLE_DEVICES to a subset makes fabric auto-discovery call the board a CUSTOM
+    # cluster and refuse to start without a mesh-graph descriptor. That used to end the matter --
+    # "a descriptor we don't provide" -- so visibility was left alone and the chip count was steered
+    # by mesh SHAPE instead. tt-metal ships 52 descriptors; supplying the matching one is what makes
+    # a subset request legal, and the shape lever turned out not to steer anything on its own:
+    #
+    # tt-metal sizes a model with `{<labels>}.get(MESH_DEVICE, len(ttnn.get_device_ids()))`, and that
+    # upstream table lists no Blackhole shape but the 8-chip one. Every label this planner emits for
+    # this box MISSED and fell through to the VISIBLE chip count. Measured 2026-08-29: a demo
+    # declaring {"chips": 1, "tp": 1, "mesh": [1, 1]}, asked for with --devices 0 --mesh 1x1, ran on
+    # FOUR chips at 85W each with the ethernet fabric up, reached 99-103C, and two chips stopped
+    # answering. Honest visibility fixes that through the same fallback, and needs no agreement with
+    # an upstream table that is re-merged from upstream regularly and is not ours to patch.
+    #
+    # No descriptor for the requested count means the old behaviour exactly: full fabric, no pinning.
     visible = None
+    descriptor = None
+    want_chips = _requested_chip_count(devices)
+    if want_chips and physical_chips and 0 < want_chips < physical_chips:
+        try:
+            from .mesh_descriptor import find_descriptor
+
+            descriptor = find_descriptor(tt_root, str(env.get("arch") or ""), want_chips)
+        except Exception:  # noqa: BLE001 -- no descriptor is a normal answer, never a failure
+            descriptor = None
+        if descriptor is not None:
+            visible = ",".join(str(i) for i in range(want_chips))
     sub_env = dict(os.environ)
-    sub_env.pop("TT_VISIBLE_DEVICES", None)
-    sub_env.pop("TT_METAL_VISIBLE_DEVICES", None)
-    config["visible_devices"] = None
+    if visible is not None:
+        sub_env["TT_VISIBLE_DEVICES"] = visible
+        sub_env["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor)
+        os.environ["TT_VISIBLE_DEVICES"] = visible
+        os.environ["TT_MESH_GRAPH_DESC_PATH"] = str(descriptor)
+        print(
+            "      mesh descriptor : %s (makes a %d-chip subset legal; without it fabric init "
+            "refuses with CUSTOM cluster)" % (Path(str(descriptor)).name, want_chips),
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        sub_env.pop("TT_VISIBLE_DEVICES", None)
+        sub_env.pop("TT_METAL_VISIBLE_DEVICES", None)
+    config["visible_devices"] = visible
     print(
         f"      devices={devices} -> TT_VISIBLE_DEVICES="
         f"{visible if visible is not None else '(unset: full fabric)'}",
