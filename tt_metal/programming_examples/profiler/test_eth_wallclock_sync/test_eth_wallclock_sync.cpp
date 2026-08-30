@@ -80,6 +80,19 @@ int main(int argc, char** argv) {
     // this state, or the wall-clock counter does not track aiclk -- and those need separating before any
     // clock-derived frequency claim means anything.
     uint32_t aiclkwatch = 0;
+    // --probe-chip N: sample chip N's tile instead of the local one. The point is to reach a chip this
+    // process has NOT opened. Opening a device boosts it to 1350, so a watch on an opened chip can never
+    // see the 800 MHz state -- the act of observing creates the condition being tested. UMD maps every
+    // local chip into the cluster regardless of which one metal opened, so an unopened chip is still
+    // addressable over NoC while it sits at 800 MHz. Its counter should then advance at 800/1350 = 0.593
+    // of host time, which is unmistakable. Uses the reference chip's eth virtual coords: the chips are
+    // identical parts in this mesh, so the tile sits at the same place on each.
+    int probe_chip = -1;
+    // --unit-mesh: open ONLY device 0. Without this the test opens the whole system mesh, which boosts
+    // every chip to 1350 and makes --probe-chip pointless -- it would read another already-boosted chip.
+    // The pair (--unit-mesh --probe-chip N) is the actual experiment: hold one chip open so the cluster is
+    // mapped, and watch a DIFFERENT chip that nothing has opened.
+    bool unit_mesh = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -105,12 +118,21 @@ int main(int argc, char** argv) {
             dvfs = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (std::strcmp(argv[i], "--aiclkwatch") == 0 && i + 1 < argc) {
             aiclkwatch = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--probe-chip") == 0 && i + 1 < argc) {
+            probe_chip = (int)std::strtol(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--unit-mesh") == 0) {
+            unit_mesh = true;
         }
     }
 
     const auto shape = distributed::SystemMesh::instance().shape();
     printf("[ethsync] system mesh %ux%u\n", (unsigned)shape[0], (unsigned)shape[1]);
-    auto mesh_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(shape));
+    auto mesh_device = unit_mesh ? distributed::MeshDevice::create_unit_mesh(0)
+                                 : distributed::MeshDevice::create(distributed::MeshDeviceConfig(shape));
+    if (unit_mesh) {
+        printf("[ethsync] --unit-mesh: only device 0 opened; every other chip left in whatever clock state "
+               "it was already in\n");
+    }
     auto devices = mesh_device->get_devices();
 
     uint64_t first_mid = 0;
@@ -167,17 +189,35 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    if (dvfs != 0 && edges.empty() && probe_chip >= 0 && !devices.empty()) {
+        // Unit-mesh probe: no peer, so take any active eth core on the opened device and address the SAME
+        // tile position on the target chip (identical parts in this mesh).
+        IDevice* d0 = devices.front();
+        const auto eth_cores = d0->get_active_ethernet_cores(true);
+        if (eth_cores.empty()) {
+            printf("[ethsync] no active eth core to take coordinates from\n");
+            mesh_device->close();
+            return 1;
+        }
+        edges.push_back(Edge{d0, *eth_cores.begin(), d0, *eth_cores.begin()});
+    }
     if (dvfs != 0 && !edges.empty()) {
         const auto& e = edges.front();
         constexpr uint64_t kWallL = 0xFFB121F0ULL;
         constexpr uint64_t kWallH = 0xFFB121F8ULL;
         const CoreCoord av = e.a->virtual_core_from_logical_core(e.ac, CoreType::ETH);
-        const tt_cxy_pair ta(e.a->id(), av);
+        const int target_chip = (probe_chip >= 0) ? probe_chip : e.a->id();
+        const tt_cxy_pair ta(target_chip, av);
         struct Smp { double h; uint64_t d; };
         std::vector<Smp> smp;
         smp.reserve(dvfs);
-        printf("\n[ethsync] DVFS WATCH: dev %d eth(%zu,%zu), %u samples, nominal %.4f GHz\n",
-               e.a->id(), e.ac.x, e.ac.y, dvfs, ghz);
+        printf("\n[ethsync] DVFS WATCH: chip %d eth(%zu,%zu)%s, %u samples, nominal %.4f GHz\n",
+               target_chip, e.ac.x, e.ac.y,
+               (probe_chip >= 0 && probe_chip != e.a->id()) ? " [NOT opened by this process]" : "", dvfs,
+               ghz);
+        // Whole-run effective frequency, so a chip parked at a low state shows up even with no transition
+        // to find: a steady 0.593 is the 800 MHz state, a steady 1.000 is 1350.
+        printf("[ethsync] (a steady ratio of 0.593 across the whole run = parked at 800 MHz)\n");
         for (uint32_t i = 0; i < dvfs; i++) {
             uint32_t lo = 0, hi = 0;
             const double h0 = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -222,6 +262,17 @@ int main(int argc, char** argv) {
                 }
             }
             i = j;
+        }
+        {
+            // Overall ratio, robust to the odd corrupted read.
+            std::vector<double> rr;
+            rr.reserve(ratio.size());
+            for (size_t i = 1; i < ratio.size(); i++) {
+                if (ratio[i] > 0.05 && ratio[i] < 3.0) { rr.push_back(ratio[i]); }
+            }
+            std::sort(rr.begin(), rr.end());
+            const double med = rr.empty() ? 0.0 : rr[rr.size() / 2];
+            printf("[ethsync] MEDIAN ratio %.4f => %.4f GHz effective\n", med, med * ghz);
         }
         const double span_s = (smp.back().h - smp.front().h) / 1e9;
         printf("\n[ethsync] %u plateau(s) over %.2f s (%.2f/s), total lost %.1f us\n", plateaus, span_s,
