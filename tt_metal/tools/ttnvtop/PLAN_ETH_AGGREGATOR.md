@@ -1320,6 +1320,63 @@ useful questions now:
    workload, since that -- not transaction count -- is what bounds the design.
 3. Repeats. One run per arm; 0.5% spread is well inside uncharacterised variance.
 
+## 5m. Remote-read latency MEASURED -- 5k and 5l were wrong -- 2026-08-30
+
+`ttnvtop-collector --read-latency-probe`, remote chip 4, median of 3, read-only:
+
+| transfer | idle | under Llama-3.3-70B |
+|---|---|---|
+| 64 B | 0.0 ms | 0.1 ms |
+| 256 B | 0.0 ms | 0.1 ms |
+| 1 KB | 0.1 ms | 0.2 ms |
+| 2 KB | 0.2 ms | 0.2 ms |
+| 4 KB | 0.3 ms | 0.6 ms |
+| 8 KB | 0.6 ms | **1.1 ms** |
+
+Size-proportional, ~13 MB/s idle and ~7 MB/s under full load. Llama in that same run:
+97.05 ms @ 10.3 tok/s, unchanged from every other arm.
+
+### Two retractions
+
+**5l claimed "~250 ms per remote read while Llama runs." That is WRONG.** It was not
+measured -- it was a 2 s drain-tick duration divided by ~8 reads, reported as if it were
+a per-transfer cost. An 8 KB read under the same load is **1.1 ms**, ~230x faster. The
+2 s tick was spent elsewhere: almost certainly waiting on the NON_MMIO mutex held by
+tt-metal's own remote traffic, plus the per-core work still running for LOCAL chips in
+that loop. Drain rate under load is a LOCK CONTENTION story, not a transfer-cost story.
+
+**5k's conclusion "the finer we sample on-chip, the slower and less reliable the host's
+readout becomes" is WITHDRAWN.** The 2512 ms figure behind it was a header read with 8
+RETRIES against a header republishing at 1 kHz -- a self-inflicted retry storm from the
+publish-ordering bug, not transfer cost. A single 64 B read is 0.0-0.1 ms. There is no
+sampling-rate-versus-readout tension; that was an artifact of a bug that is now fixed.
+
+Both errors ran the same direction: inferring per-transfer latency from a loop time that
+contained something else. Measure the transfer.
+
+### What this means for the drain rate
+
+10 Hz is not merely reachable, it is far below the ceiling:
+
+| payload per chip per tick | at ~7 MB/s loaded | 4 remote chips | max drain |
+|---|---|---|---|
+| aggregated per-core state, ~2 KB | 0.2 ms | 0.8 ms | **>1000 Hz** |
+| raw samples, M1 rate (204 KB) | ~29 ms | ~116 ms | ~8 Hz |
+| raw samples, M2 100 us (2 MB) | ~286 ms | ~1.1 s | ~1 Hz |
+
+So on-chip aggregation is still the right design -- it is what makes M2's 100 us
+sampling free, since a fixed per-core state table does not grow with sample rate,
+whereas raw samples are already marginal at M1 and hopeless at M2. But it is an
+optimisation for headroom, not a rescue from a broken transport.
+
+### Operational finding
+
+The collector must not be SIGKILLed. Killing it mid-transaction (`pkill -9`) left UMD
+topology discovery wedging in `wait_arc_core_start` on the next open, unrecoverable
+without a board reset. A monitoring daemon that bricks the tunnel when killed is a
+defect in its own right: it needs a signal handler that completes the in-flight
+transaction and releases NON_MMIO before exiting.
+
 ## 6. Risks
 
 | Risk | Mitigation |

@@ -34,6 +34,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <iostream>
 #include <memory>
@@ -188,6 +189,7 @@ struct CliOptions {
     bool journal_probe = false;  // Phase 2.2 M1: scan for aggregator journals and exit
     std::string launch_go;       // Phase 2.2 7.4: descriptor of a staged aggregator to start
     bool journal_transport = false;  // Phase 2.2 5k: emulate the host-pull journal transport
+    bool read_latency_probe = false;  // Phase 2.2: remote-read latency vs transfer size
 };
 
 void print_help(const char* argv0) {
@@ -273,6 +275,8 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
             out.device_filter.insert(d);
         } else if (a == "--journal-probe") {
             out.journal_probe = true;
+        } else if (a == "--read-latency-probe") {
+            out.read_latency_probe = true;
         } else if (a == "--journal-transport") {
             out.journal_transport = true;
         } else if (a == "--launch-go") {
@@ -759,7 +763,7 @@ int main(int argc, char* argv[]) {
         // perf counters, overriding period_cycles and the FPU_OUT_L liveness probe are
         // all device WRITES, and on a remote chip they cross the NON_MMIO tunnel.
         // Publish the static per-core fields, then skip every write below.
-        if (cli.journal_probe) {
+        if (cli.journal_probe || cli.read_latency_probe) {
             for (size_t i = 0; i < chip.cores.size(); ++i) {
                 auto& v = chip.publisher.cores()[i];
                 v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -839,6 +843,53 @@ int main(int argc, char* argv[]) {
     if (chips.empty()) {
         std::cerr << "ttnvtop-collector: no supported chips to monitor.\n";
         return 1;
+    }
+
+    // Remote-read latency vs transfer size.
+    //
+    // The host-pull design's drain rate is bounded by how long a remote read takes, not
+    // by how many transactions it issues (5l: ~250 ms per read while Llama runs, giving
+    // 0.5 Hz). Whether aggregating on-chip helps depends entirely on whether that
+    // latency is FIXED OVERHEAD -- in which case shrinking the payload buys nothing --
+    // or SIZE-PROPORTIONAL, in which case a 2 KB state table drains comfortably.
+    if (cli.read_latency_probe) {
+        static const size_t kSizes[] = {64, 256, 1024, 2048, 4096, 8192};
+        std::vector<uint8_t> buf(131072);
+        std::cout << "remote-read latency probe (read-only), base 0x" << std::hex << ttnvtop_agg::kLandingBase
+                  << std::dec << "\n";
+        int probed = 0;
+        for (auto& chip : chips) {
+            if (!chip.is_remote || chip.cores.empty() || probed >= 1) {
+                continue;  // one remote chip is enough to characterise the tunnel
+            }
+            ++probed;
+            auto* dev = chip.cores.front().device;
+            const auto core = chip.cores.front().translated;
+            std::cout << "  chip " << chip.chip_id << " (remote):" << std::flush;
+            for (size_t sz : kSizes) {
+                // Three reads, report the median, so one outlier does not set the number.
+                double ms[3] = {0, 0, 0};
+                bool ok = true;
+                for (int r = 0; r < 3 && ok; r++) {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    try {
+                        dev->read_from_device(buf.data(), core, ttnvtop_agg::kLandingBase, sz);
+                    } catch (...) {
+                        ok = false;
+                        break;
+                    }
+                    ms[r] = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                }
+                if (!ok) {
+                    std::cout << "  " << sz << "B=ERR";
+                    continue;
+                }
+                std::sort(ms, ms + 3);
+                std::cout << "  " << sz << "B=" << std::fixed << std::setprecision(1) << ms[1] << "ms" << std::flush;
+            }
+            std::cout << "\n";
+        }
+        return 0;
     }
 
     // Phase 2.2, open question 7.4. Start an aggregator that ANOTHER PROCESS staged.
