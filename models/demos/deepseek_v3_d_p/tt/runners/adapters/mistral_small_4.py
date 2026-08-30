@@ -34,7 +34,9 @@ class MistralSmall4Adapter(MLAPrefillAdapter):
     # softmax -> top-4 -> renormalise. moe_grouped_topk's parse_score_func takes only sigmoid /
     # sqrtsoftplus, so the sigmoid gate applies a wrong affinity silently whatever the grouping.
     default_gate_mode = "GPT_DEVICE"
-    prefill_trace_default = None  # no golden trace recorded yet; pass one via PREFILL_TRACE_DIR
+    # Host-generated torch/HF golden, not a vLLM recording: it localises per layer but is not an
+    # independent reference.
+    prefill_trace_default = "/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Routing
     # consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.

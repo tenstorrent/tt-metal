@@ -404,7 +404,8 @@ models:
     # 488 -> 585: the six Mistral-Small-4-119B entries add 100 min, plus 2 on the shared KV cache
     # table entry it now rides (479 -> 581). Sized from measured test time on run 32793561151
     # plus runner setup, not from a flat margin. 4 min headroom.
-    bh_sc1: 585
+    # +36: the Mistral chunked-padded 55k pair (24 untraced + 12 traced). Same 4 min headroom.
+    bh_sc1: 621
     bh_sc1_high_power: 166
     wh_n150: 500
     wh_n150_civ2: 300
