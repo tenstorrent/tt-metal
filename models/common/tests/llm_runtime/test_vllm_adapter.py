@@ -17,6 +17,9 @@ from models.common.llm_runtime.vllm_adapter import (
     VLLMAdapter,
     VLLMAdapterConfig,
 )
+from models.common.models.llama3_8b import generator as llama3_generator_module
+from models.common.models.llama33_70b import generator as llama70_generator_module
+from models.common.models.qwen3_32b import generator as qwen3_generator_module
 from models.common.models.llama3_8b.executor import Llama3Executor
 from models.common.models.llama3_8b.generator import Llama3Generator
 from models.common.models.qwen25_72b.generator import Qwen25_72BGenerator
@@ -25,7 +28,13 @@ from models.common.models.qwen25_coder_32b.generator import Qwen25Coder32BGenera
 from models.common.models.qwen2_7b.generator import Qwen2Generator
 
 
-def _adapter(*, trace=None, paged_config=None, model_dtype=ttnn.bfloat8_b):
+def _adapter(
+    *,
+    trace=None,
+    paged_config=None,
+    model_dtype=ttnn.bfloat8_b,
+    request_state_fields=("prompt_tokens", "output_tokens", "slot_remap"),
+):
     return VLLMAdapter(
         VLLMAdapterConfig.resolve(
             trace=trace or TraceConfig(mode="all"),
@@ -34,6 +43,7 @@ def _adapter(*, trace=None, paged_config=None, model_dtype=ttnn.bfloat8_b):
             expected_kv_heads_per_device=8,
             expected_head_dim=128,
             model_kv_cache_dtype=model_dtype,
+            request_state_fields=request_state_fields,
         )
     )
 
@@ -60,6 +70,7 @@ def test_config_resolves_canonical_static_policy_and_is_frozen(expect_error):
     assert config.expected_head_dim == 128
     assert isinstance(config.expected_head_dim, int)
     assert config.model_kv_cache_dtypes == (ttnn.bfloat8_b,) * 32
+    assert config.request_state_fields == ()
     with expect_error(dataclasses.FrozenInstanceError, "cannot assign to field"):
         config.expected_num_layers = 1
     with expect_error(ValueError, "expected_num_layers"):
@@ -310,7 +321,7 @@ def test_normalize_decode_converts_existing_tensors_and_flattens_column_tokens()
     (None, {"prompt_tokens": None, "output_tokens": None, "slot_remap": None}),
 )
 def test_normalize_omits_unsupplied_or_none_request_state(method_name, compatibility_kwargs):
-    adapter = _adapter(trace=TraceConfig(mode="all"))
+    adapter = _adapter(trace=TraceConfig(mode="all"), request_state_fields=())
     args = (
         (torch.zeros((1, 1)), torch.zeros((1, 1)))
         if method_name == "normalize_prefill"
@@ -395,19 +406,45 @@ class _NarrowQwenRequestTarget:
 )
 def test_qwen_generator_dispatch_omits_absent_state_for_narrow_request_surface(generator_class):
     generator = object.__new__(generator_class)
-    generator._adapter = _adapter()
+    generator._adapter = _adapter(request_state_fields=())
     generator.target = _NarrowQwenRequestTarget()
     prefill_execution = object()
     decode_execution = object()
     generator._select_prefill_execution = lambda normalized, requested: prefill_execution
     generator._select_execution = lambda operation, requested: decode_execution
 
-    assert generator.prefill_forward([[1]], [[0]], enable_trace=False) == "prefill"
-    assert generator.decode_forward([1], [0], [[0]], enable_trace=False) == "decode"
+    request_state = {"prompt_tokens": object(), "output_tokens": object(), "slot_remap": [0]}
+    assert generator.prefill_forward([[1]], [[0]], enable_trace=False, **request_state) == "prefill"
+    assert generator.decode_forward([1], [0], [[0]], enable_trace=False, **request_state) == "decode"
 
     assert [name for name, _ in generator.target.calls] == ["prefill", "decode"]
     assert generator.target.calls[0][1]["execution"] is prefill_execution
     assert generator.target.calls[1][1]["execution"] is decode_execution
+
+
+@pytest.mark.parametrize(
+    "generator_module",
+    (llama3_generator_module, llama70_generator_module, qwen3_generator_module),
+)
+def test_stateful_generator_adapter_reuses_executor_request_state_allowlist(monkeypatch, generator_module):
+    request_state_fields = ("prompt_tokens", "output_tokens", "slot_remap")
+    lane = SimpleNamespace(
+        model=object(),
+        config=SimpleNamespace(
+            trace=TraceConfig(mode="decode_only"),
+            paged_kv_cache=PagedKVCacheConfig(block_size=32, max_num_blocks=128, dtype=ttnn.bfloat8_b),
+        ),
+        _request_state_fields=request_state_fields,
+    )
+    monkeypatch.setattr(
+        generator_module,
+        "_model_kv_metadata",
+        lambda model: ((ttnn.bfloat8_b,), 1, 1, 128),
+    )
+
+    adapter = generator_module._build_vllm_adapter(lane)
+
+    assert adapter.config.request_state_fields == request_state_fields
 
 
 @pytest.mark.parametrize(

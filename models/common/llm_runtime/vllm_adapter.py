@@ -25,7 +25,8 @@ _IGNORED_VLLM_KWARGS = frozenset(
         "rope_deltas_all_users",
     }
 )
-_SAMPLING_STATE_VLLM_KWARGS = frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
+_SAMPLING_STATE_VLLM_FIELD_ORDER = ("prompt_tokens", "output_tokens", "slot_remap")
+_SAMPLING_STATE_VLLM_KWARGS = frozenset(_SAMPLING_STATE_VLLM_FIELD_ORDER)
 
 
 class _NormalizedPrefillRequiredKwargs(TypedDict):
@@ -69,6 +70,7 @@ class VLLMAdapterConfig:
     expected_kv_heads_per_device: int | None
     expected_head_dim: int | None
     model_kv_cache_dtypes: tuple[Any, ...]
+    request_state_fields: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_resolved_adapter_config(self)
@@ -83,6 +85,7 @@ class VLLMAdapterConfig:
         expected_kv_heads_per_device: int | None = None,
         expected_head_dim: int | None = None,
         model_kv_cache_dtype: Any | Sequence[Any],
+        request_state_fields: Sequence[str] = (),
     ) -> "VLLMAdapterConfig":
         if type(trace) is not TraceConfig:
             raise TypeError("trace must be a TraceConfig")
@@ -107,6 +110,7 @@ class VLLMAdapterConfig:
             expected_kv_heads_per_device=resolved_kv_heads,
             expected_head_dim=resolved_head_dim,
             model_kv_cache_dtypes=model_kv_cache_dtypes,
+            request_state_fields=_resolve_request_state_fields(request_state_fields),
         )
 
 
@@ -157,7 +161,7 @@ class VLLMAdapter:
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
         }
-        _copy_supplied_sampling_state(normalized, compatibility_kwargs)
+        _copy_supplied_sampling_state(normalized, compatibility_kwargs, self.config.request_state_fields)
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
         _normalize_tensor(normalized, "prompt_lens", torch.long)
@@ -188,7 +192,7 @@ class VLLMAdapter:
             "sampling_params": sampling_params,
             "reset_batch": reset_batch,
         }
-        _copy_supplied_sampling_state(normalized, compatibility_kwargs)
+        _copy_supplied_sampling_state(normalized, compatibility_kwargs, self.config.request_state_fields)
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "start_pos", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
@@ -318,6 +322,8 @@ def _validate_resolved_adapter_config(config: VLLMAdapterConfig) -> None:
         raise TypeError("model_kv_cache_dtypes must be a tuple")
     if not config.model_kv_cache_dtypes:
         raise ValueError("model_kv_cache_dtypes cannot be empty")
+    if config.request_state_fields != _resolve_request_state_fields(config.request_state_fields):
+        raise ValueError("request_state_fields must be canonical")
     if len(config.model_kv_cache_dtypes) not in (1, config.expected_num_layers):
         raise ValueError("model_kv_cache_dtypes must be uniform or contain one dtype per model layer")
 
@@ -340,15 +346,29 @@ def _require_resolved_positive_int(name: str, value: Any) -> None:
 def _copy_supplied_sampling_state(
     normalized: NormalizedPrefillKwargs | NormalizedDecodeKwargs,
     compatibility_kwargs: Mapping[str, Any] | None,
+    request_state_fields: Sequence[str],
 ) -> None:
     """Forward only request state that the external caller actually supplied."""
 
     if compatibility_kwargs is None:
         return
-    for name in ("prompt_tokens", "output_tokens", "slot_remap"):
+    for name in request_state_fields:
         value = compatibility_kwargs.get(name)
         if value is not None:
             normalized[name] = value
+
+
+def _resolve_request_state_fields(request_state_fields: Sequence[str]) -> tuple[str, ...]:
+    if isinstance(request_state_fields, (str, bytes)) or not isinstance(request_state_fields, Sequence):
+        raise TypeError("request_state_fields must be a sequence of field names")
+    resolved = tuple(request_state_fields)
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("request_state_fields must not contain duplicates")
+    if any(name not in _SAMPLING_STATE_VLLM_KWARGS for name in resolved):
+        raise ValueError(f"request_state_fields must be drawn from {_SAMPLING_STATE_VLLM_FIELD_ORDER}")
+    if resolved != tuple(name for name in _SAMPLING_STATE_VLLM_FIELD_ORDER if name in resolved):
+        raise ValueError(f"request_state_fields must retain canonical order {_SAMPLING_STATE_VLLM_FIELD_ORDER}")
+    return resolved
 
 
 def _normalize_tensor(kwargs: dict[str, Any], name: str, dtype: torch.dtype) -> None:
