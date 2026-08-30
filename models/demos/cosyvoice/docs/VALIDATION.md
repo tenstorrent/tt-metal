@@ -126,7 +126,7 @@ host interface and the board's power envelope, not the grid the kernels run on.
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
 | **Batch processing for multiple utterances** | ✅ | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, gated) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
-| **Pipeline semantic generation with acoustic modeling** | ✅ | `test_device_streaming_first_audio_latency` (both schedules, all three stages real, two utterance lengths) | *Streaming* |
+| **Pipeline semantic generation with acoustic modeling** | ✅ mechanism verified; one wrapper has an open audio defect (below) | `test_device_streaming_first_audio_latency` (both schedules, all three stages real) | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
 | Minimize memory and TM overheads | ✅ `permute` removed from the decode step | `scripts/count_decode_ops.py` | *Removing token-independent recomputation* |
 | Speculative decoding | ❌ **not explored** — see below | — | — |
@@ -181,6 +181,28 @@ The lever that *was* available at the same place in the pipeline — reducing th
 per-token cost rather than the number of sequential steps — was taken instead: trace
 capture, the fused decode attention, the fixed-width and in-place KV caches, and now
 batching. `PERF.md` *The LLM decode step* carries what each was worth.
+
+### `synthesize_streaming`'s audio — an open defect, stated rather than hidden
+
+The interleaving itself is verified. `StreamSession` drives the flow decoder and the
+vocoder from the AR decode loop's `on_token` callback;
+`test_device_streaming_first_audio_latency` measures both schedules head to head with
+all three stages real and passes, and `test_device_streamed_matches_non_streamed`
+gates the streamed *content* in mel space.
+
+What is **not** verified is the convenience wrapper `CosyVoiceTTNN.synthesize_streaming`.
+Driven from a `prepare_inputs.py` prompt it generates tokens identical to
+`synthesize`'s under greedy sampling — 100 % agreement over 160 tokens, exact prefix
+160/160 — and emits the right number of chunks at the right points, but the assembled
+waveform peaks around 72 where speech peaks near 1. Generation is right and the
+schedule is right, so the fault is in how that wrapper builds each chunk's
+conditioning, downstream of everything the review asked about.
+
+It is **pinned, not printed**: `test_device_streaming_generates_the_same_tokens_as_batch`
+asserts the peak stays inside a recorded *defect* band, so it cannot drift silently,
+and the assertion's own message says that closing the defect means replacing the band
+with `< 1.5` rather than widening it. `demo.py --stream` carries the same warning.
+`synthesize` remains the gated path for audio.
 
 ### Multi-chip tensor parallelism — measured, and it does not compound
 
