@@ -27,6 +27,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // expressed in 32-row-aligned page units, identical for both). `cache` and `input` must share
 // layout and dtype: block-float (bfloat8_b/bfloat4_b) is TILE-only; FP8_E4M3 is ROW_MAJOR-only.
 //
+// When `page_bundle_indices` is supplied, `cache` is a shared bundle pool shaped
+// `[physical_bundles * num_layers, 1, kv_cache_page_size, D]`, with one ND shard per physical
+// bundle/layer pair. The uint16 ROW_MAJOR DRAM table maps this request's logical local pages to
+// physical bundles; `layer_idx` selects the layer within each bundle. Consequently the scalar
+// `slot_idx` must be zero in paged mode, while the metadata form ignores its slot value.
+//
 // In-place: returns a handle to `cache`. Two call forms (identical results):
 
 // `valid_global` (optional, both forms): the end of this chunk's REAL tokens. Given it, only the rows
@@ -44,7 +50,9 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t num_layers,
     uint32_t kv_actual_global,
     std::optional<uint32_t> cluster_axis,
-    std::optional<uint32_t> valid_global = std::nullopt);
+    std::optional<uint32_t> valid_global = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
 //     writer kernel from two 1-element uint32 DRAM tensors ([1,1,1,1], ROW_MAJOR, replicated across
@@ -60,7 +68,9 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<ttnn::Tensor>& valid_global = std::nullopt);
+    const std::optional<ttnn::Tensor>& valid_global = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
 

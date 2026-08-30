@@ -253,7 +253,7 @@ void bind_indexer_score(nb::module_& mod) {
                 See indexer_score_dsa.
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
                 see indexer_score_dsa. Must be unset in complete-mesh mode because all devices are SP ranks.
-                block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
+            block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
                 block_cyclic_sp_axis. In complete-mesh mode pass this argument alone; SP is the complete mesh
                 size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
                 K placement.

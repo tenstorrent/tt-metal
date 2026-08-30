@@ -73,6 +73,13 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     ``ceil32(valid_global)`` rather than ``kv_actual_global + chunk_global``. The
                     32-token block holding the last real token is still written; clear it with
                     ``zero_padded_kv_cache``. Omitted: the whole padded slab is written.
+                page_bundle_indices (ttnn.Tensor, optional): Enables the shared paged-cache layout.
+                    The uint16 ROW_MAJOR DRAM table maps logical local pages for this request to
+                    physical bundles. ``cache`` is then
+                    ``[physical_bundles*num_layers, 1, kv_cache_page_size, D]`` with one bundle/layer
+                    page per ND shard. The table selects the request, so scalar ``slot_idx`` must be 0
+                    (the metadata-path slot value is ignored).
+                kv_cache_page_size (int): Token rows per physical bundle page. Defaults to 32.
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -87,7 +94,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 std::optional<uint32_t>,
-                std::optional<uint32_t>>(&update_padded_kv_cache),
+                std::optional<uint32_t>,
+                const std::optional<Tensor>&,
+                uint32_t>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -95,7 +104,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("num_layers"),
             nb::arg("kv_actual_global"),
             nb::arg("cluster_axis"),
-            nb::arg("valid_global") = nb::none()),
+            nb::arg("valid_global") = nb::none(),
+            nb::arg("page_bundle_indices").noconvert() = nb::none(),
+            nb::arg("kv_cache_page_size") = 32),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -106,7 +117,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 std::optional<uint32_t>,
-                const std::optional<Tensor>&>(&update_padded_kv_cache),
+                const std::optional<Tensor>&,
+                const std::optional<Tensor>&,
+                uint32_t>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx").noconvert(),
@@ -114,7 +127,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("layer_idx"),
             nb::arg("num_layers"),
             nb::arg("cluster_axis"),
-            nb::arg("valid_global").noconvert() = nb::none()));
+            nb::arg("valid_global").noconvert() = nb::none(),
+            nb::arg("page_bundle_indices").noconvert() = nb::none(),
+            nb::arg("kv_cache_page_size") = 32));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

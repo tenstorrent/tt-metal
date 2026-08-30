@@ -43,6 +43,7 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // this chunk's real tokens. Set, only the page-rows holding them are written, so a chunk whose
         // pad window runs past the cache end is legal. Presence is hashed; the value is a runtime arg.
         std::optional<uint32_t> valid_global;
+        uint32_t kv_cache_page_size;
     };
 
     struct tensor_args_t {
@@ -57,6 +58,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> kv_actual_global;
         // Optional, METADATA path only: 1-element uint32 valid_global (= actual_end). Same clamp.
         std::optional<Tensor> valid_global;
+        // Optional HMA bundle table. It maps this request's logical local cache pages to physical
+        // bundles; layer_idx selects the layer page within each bundle.
+        std::optional<Tensor> page_bundle_indices;
+        bool has_paged_cache() const { return page_bundle_indices.has_value(); }
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -129,7 +134,9 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<ttnn::Tensor>& valid_global_tensor = std::nullopt,
-    std::optional<uint32_t> valid_global = std::nullopt);
+    const std::optional<ttnn::Tensor>& valid_global_tensor,
+    std::optional<uint32_t> valid_global,
+    const std::optional<ttnn::Tensor>& page_bundle_indices,
+    uint32_t kv_cache_page_size);
 
 }  // namespace ttnn::prim
