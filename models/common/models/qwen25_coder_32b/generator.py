@@ -273,7 +273,7 @@ def build_qwen25_coder_32b_generator(config: Qwen25Coder32BGeneratorConfig) -> Q
             model_kv_cache_dtypes, _, _, _ = _model_kv_metadata(llm.model)
             executor_config = Qwen25Coder32BExecutorConfig(
                 trace=TraceConfig(mode=config.trace_mode),
-                warmup=WarmupConfig(),
+                warmup=WarmupConfig(include_decode_top_k=config.device_sampling_enabled),
                 paged_kv_cache=PagedKVCacheConfig(
                     block_size=_PROVISIONAL_BLOCK_SIZE,
                     max_num_blocks=max_num_blocks,

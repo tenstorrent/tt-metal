@@ -13,12 +13,13 @@ import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PageTableLayout, PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.decode import DecodeTraceSignature
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.llm_runtime.prefill.signatures import PrefillProgramSignature
 from models.common.llm_runtime.program_compiler import ProgramKey
+from models.common.llm_runtime.warmup import _build_plan
 from models.common.models import executor as shared_model_executor
 from models.common.models import llama3_executor as llama3_family_executor
 from models.common.models import qwen2_executor as qwen2_family_executor
@@ -578,6 +579,63 @@ def test_qwen25_coder_32b_binding_preserves_tp8_runtime_and_sampling_defaults():
     assert runtime.max_prefill_batch_size == 32
     assert config.hf_revision == qwen25_coder_32b_generator.DEFAULT_HF_REVISION
     assert config.device_sampling_enabled is False
+
+
+@pytest.mark.parametrize(
+    "product_binding",
+    (EXECUTOR_BINDINGS["qwen25_72b"], EXECUTOR_BINDINGS["qwen25_coder_32b"]),
+    ids=("qwen25_72b", "qwen25_coder_32b"),
+)
+@pytest.mark.parametrize("device_sampling_enabled", (False, True), ids=("sampling-off", "sampling-on"))
+def test_large_qwen_builder_threads_exact_decode_sampling_coverage(
+    monkeypatch,
+    product_binding,
+    device_sampling_enabled,
+):
+    mesh_device = _Mesh()
+    product = product_binding.make_product(mesh_device, 4)
+    executor_configs = []
+
+    monkeypatch.setattr(product_binding.generator_module, "from_pretrained", lambda **kwargs: product)
+    monkeypatch.setattr(
+        product_binding.generator_module,
+        "_model_kv_metadata",
+        lambda model: ((ttnn.bfloat8_b,), 1, 1, 128),
+    )
+
+    def build_executor(llm, config):
+        executor_configs.append(config)
+        return product_binding.make_lane(llm, config)
+
+    monkeypatch.setattr(product_binding.generator_module, product_binding.build_executor_name, build_executor)
+    generator = getattr(product_binding.generator_module, product_binding.build_generator_name)(
+        product_binding.generator_config_class(
+            hf_model=product_binding.hf_model,
+            mesh_device=mesh_device,
+            max_batch_size=4,
+            max_seq_len=1024,
+            n_layers=1,
+            device_sampling_enabled=device_sampling_enabled,
+        )
+    )
+
+    try:
+        assert len(executor_configs) == 1
+        warmup = executor_configs[0].warmup
+        assert warmup.include_decode_top_k is device_sampling_enabled
+        plan = _build_plan(
+            warmup=warmup,
+            layout=PageTableLayout(block_size=32, raw_capacity_width=32, prefill_width=64, decode_width=32),
+            prefill_sequence_lengths=(128,),
+            lane_batch_size=4,
+            allow_force_argmax=True,
+            can_sample_on_device=device_sampling_enabled,
+        )
+        assert [case.sampling_path for case in plan.decode] == (
+            ["logits", "argmax", "topk"] if device_sampling_enabled else ["logits"]
+        )
+    finally:
+        generator.cleanup()
 
 
 def test_qwen3_32b_binding_preserves_tp8_runtime_and_padded_vocab_defaults():
