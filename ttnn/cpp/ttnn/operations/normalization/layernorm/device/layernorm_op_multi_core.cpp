@@ -326,8 +326,7 @@ LayerNormInterleavedPlan LayerNormMultiCoreProgramFactory::select_plan(
             plan.width_block_tiles = std::min(plan.width_block_tiles, without_weights_max);
         }
     }
-    plan.compact_fp32_finalizer =
-        device->arch() == tt::ARCH::BLACKHOLE && fp32_sfpu_finalizer && !residual.has_value() && !plan.large_tensor;
+    plan.compact_fp32_finalizer = fp32_sfpu_finalizer && !residual.has_value() && !plan.large_tensor;
     if (fp32_sfpu_finalizer && !plan.compact_fp32_finalizer) {
         plan.large_tensor = true;
     }
