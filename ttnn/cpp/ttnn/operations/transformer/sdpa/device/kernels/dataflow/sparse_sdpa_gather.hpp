@@ -66,6 +66,10 @@ template <
     uint32_t Sp,
     uint32_t ShardStrideGap,
     uint32_t SlabStrideGap,
+    bool PagedKV,
+    uint32_t PageSize,
+    uint32_t NumLayers,
+    uint32_t LayerIdx,
     uint32_t RingDepth,
     typename Accessor>
 FORCE_INLINE void trid_ring_gather(
@@ -77,7 +81,8 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t lo,
     uint32_t hi,
     uint32_t k_row_bytes,
-    uint32_t page_offset) {
+    uint32_t page_offset,
+    volatile tt_l1_ptr uint16_t* page_bundle_ids) {
     constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
@@ -88,9 +93,13 @@ FORCE_INLINE void trid_ring_gather(
             experimental::async_read_barrier_with_trid(noc, trid);  // free this trid slot before reuse
         }
         experimental::set_read_trid(noc, trid);
-        const uint32_t page =
+        uint32_t page =
             tt::block_cyclic::logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(
                 idx_ptr[base + p]);
+        if constexpr (PagedKV) {
+            const uint32_t physical_bundle = page_bundle_ids[page / PageSize];
+            page = (physical_bundle * NumLayers + LayerIdx) * PageSize + (page % PageSize);
+        }
         noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;

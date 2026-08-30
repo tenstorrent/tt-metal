@@ -43,6 +43,11 @@ void kernel_main() {
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_KACK);
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PACKED_ROW_BYTES);
+    constexpr bool paged_kv = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::PAGED_KV) != 0;
+    constexpr uint32_t kv_cache_page_size = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::KV_CACHE_PAGE_SIZE);
+    constexpr uint32_t kv_cache_num_layers = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::KV_CACHE_NUM_LAYERS);
+    constexpr uint32_t kv_cache_layer_idx = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::KV_CACHE_LAYER_IDX);
+    constexpr uint32_t cb_page_bundle = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_PAGE_BUNDLE);
     constexpr auto out_args = TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, 0>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
@@ -71,6 +76,14 @@ void kernel_main() {
     const auto kv = TensorAccessor(kv_args, kv_addr);
     experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
+    experimental::CB page_bundle_cb(cb_page_bundle);
+    uint32_t page_bundle_l1 = 0;
+    if constexpr (paged_kv) {
+        page_bundle_cb.wait_front(1);
+        page_bundle_l1 = page_bundle_cb.get_read_ptr();
+        invalidate_l1_cache();
+    }
+    volatile tt_l1_ptr uint16_t* page_bundle_ids = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_bundle_l1);
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
     // Reduce identity scaler (value 1.0; the softmax scale is applied in compute's exp).
@@ -123,8 +136,12 @@ void kernel_main() {
                     bc_sp,
                     bc_shard_stride_gap,
                     bc_slab_stride_gap,
+                    paged_kv,
+                    kv_cache_page_size,
+                    kv_cache_num_layers,
+                    kv_cache_layer_idx,
                     sparse_sdpa::SCALED_K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset);
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset, page_bundle_ids);
                 sparse_sdpa::scatter_packed_scales<scale_blocks>(
                     dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
             } else {
@@ -134,8 +151,12 @@ void kernel_main() {
                     bc_sp,
                     bc_shard_stride_gap,
                     bc_slab_stride_gap,
+                    paged_kv,
+                    kv_cache_page_size,
+                    kv_cache_num_layers,
+                    kv_cache_layer_idx,
                     sparse_sdpa::K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset);
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset, page_bundle_ids);
             }
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);

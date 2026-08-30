@@ -301,6 +301,80 @@ def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv, expected_ms):
 
 
 @run_for_blackhole()
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_sparse_sdpa_paged_perf_matches_contiguous(device):
+    """Paging must preserve production dense-gather throughput, not only the nonpaged specialization."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for sparse_sdpa perf checks (needs IOMMU)")
+    H, S, T, TOPK, kc, page_size = 32, 640, 56320, 2048, 256, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
+
+    num_banks = device.dram_grid_size().x
+    dram_cores = [ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(num_banks)]
+    page_shard = ttnn.NdShardSpec(
+        shard_shape=[1, 1, page_size, K_DIM],
+        grid=ttnn.CoreRangeSet(dram_cores),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    paged_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=page_shard)
+    tt_paged_kv = ttnn.from_torch(
+        kv.reshape(T // page_size, 1, page_size, K_DIM).to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=paged_mem,
+    )
+    tt_table = ttnn.from_torch(
+        torch.arange(T // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def invoke(kv_tensor, **paging):
+        return ttnn.transformer.sparse_sdpa(
+            tt_q,
+            kv_tensor,
+            tt_idx,
+            V_DIM,
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+            **paging,
+        )
+
+    paged_args = {
+        "kv_cache_num_layers": 1,
+        "kv_cache_layer_idx": 0,
+        "page_bundle_indices": tt_table,
+        "kv_cache_page_size": page_size,
+    }
+    invoke(tt_kv)
+    invoke(tt_paged_kv, **paged_args)
+    ttnn.synchronize_device(device)
+    contiguous_ns, paged_ns = [], []
+    for _ in range(5):
+        _, contiguous_record = profile_realtime_program(device, lambda: invoke(tt_kv))
+        _, paged_record = profile_realtime_program(device, lambda: invoke(tt_paged_kv, **paged_args))
+        contiguous_ns.append(contiguous_record["duration_ns"])
+        paged_ns.append(paged_record["duration_ns"])
+    contiguous_ms = sorted(contiguous_ns)[len(contiguous_ns) // 2] / 1e6
+    paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
+    ratio = paged_ms / contiguous_ms
+    logger.info(
+        f"sparse_sdpa paged perf: contiguous={contiguous_ms:.3f} ms, paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+    )
+    assert ratio <= 1.03, f"paged sparse_sdpa regressed production device time by {(ratio - 1) * 100:.2f}%"
+
+
+@run_for_blackhole()
 @pytest.mark.parametrize("H", [32, 64], ids=["deepseek-h32", "glm-h64"])
 def test_sparse_sdpa_perf_scaled_fp8_production(device, H):
     """Production DeepSeek and GLM geometries using the scaled mixed-format cache."""
