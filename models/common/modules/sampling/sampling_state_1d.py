@@ -294,7 +294,20 @@ class SamplingState1D:
             raise ValueError("prepared sampling state does not contain a slot_remap")
         self._validate_prepared_history(prepared)
         active_slots = self._active_slots(prepared)
+        projected_active, projected_seeds = self._project_seed_membership(state.seed_state, prepared.slot_remap)
+        new_slots = self._validate_remapped_decode_membership(
+            prepared,
+            active_slots,
+            projected_active=projected_active,
+            projected_seeds=projected_seeds,
+        )
         self.seed_manager.apply_slot_remap(state.seed_state, prepared.slot_remap)
+        if new_slots:
+            self.seed_manager.admit(
+                state.seed_state,
+                tuple(prepared.seeds[slot] for slot in new_slots),
+                new_slots,
+            )
         self.seed_manager.synchronize(
             state.seed_state,
             prepared.seeds,
@@ -346,6 +359,61 @@ class SamplingState1D:
             state.static_identity = identity
             self._write_penalty_params(prepared)
         return prepared
+
+    @staticmethod
+    def _project_seed_membership(seed_state: SeedState, remap: Sequence[int] | torch.Tensor):
+        """Project active/seed membership through one remap without mutation."""
+
+        flat = remap.reshape(-1).tolist() if isinstance(remap, torch.Tensor) else list(remap)
+        capacity = len(seed_state.active)
+        if len(flat) != capacity:
+            raise ValueError(f"slot remap must contain {capacity} entries")
+        normalized = tuple(int(slot) for slot in flat)
+        if any(slot < 0 or slot >= capacity for slot in normalized):
+            raise ValueError("slot remap source is outside the seed-state capacity")
+        moves = tuple((old_slot, new_slot) for new_slot, old_slot in enumerate(normalized) if old_slot != new_slot)
+        moved_sources = tuple(old_slot for old_slot, _ in moves)
+        if len(set(moved_sources)) != len(moved_sources):
+            raise ValueError("slot remap cannot copy one seed stream into multiple destinations")
+
+        active_before = tuple(seed_state.active)
+        seeds_before = tuple(seed_state.request_seeds)
+        projected_active = list(active_before)
+        projected_seeds = list(seeds_before)
+        for old_slot, new_slot in moves:
+            projected_active[new_slot] = active_before[old_slot]
+            projected_seeds[new_slot] = seeds_before[old_slot] if active_before[old_slot] else None
+        moved_destinations = {new_slot for _, new_slot in moves}
+        for old_slot in set(moved_sources).difference(moved_destinations):
+            projected_active[old_slot] = False
+            projected_seeds[old_slot] = None
+        return tuple(projected_active), tuple(projected_seeds)
+
+    @staticmethod
+    def _validate_remapped_decode_membership(
+        prepared: PreparedSamplingParams,
+        active_slots: Sequence[int],
+        *,
+        projected_active: Sequence[bool],
+        projected_seeds: Sequence[int | None],
+    ) -> tuple[int, ...]:
+        """Return genuinely new destinations or reject a changed survivor."""
+
+        changed_slots = tuple(
+            slot for slot in active_slots if projected_active[slot] and projected_seeds[slot] != prepared.seeds[slot]
+        )
+        if changed_slots:
+            raise RuntimeError(
+                "changed active seed slots require reset_batch=True or an explicit prefill admission: "
+                f"{list(changed_slots)}"
+            )
+        new_slots = tuple(slot for slot in active_slots if not projected_active[slot])
+        if new_slots and not any(projected_active[slot] for slot in active_slots):
+            raise RuntimeError(
+                "new or changed active seed slots require reset_batch=True or an explicit prefill admission: "
+                f"{list(new_slots)}"
+            )
+        return new_slots
 
     def cleanup(
         self,

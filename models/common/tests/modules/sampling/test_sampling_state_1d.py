@@ -54,6 +54,10 @@ class FakeSeedState:
     active: list[bool]
     seeds: list[int | None]
 
+    @property
+    def request_seeds(self):
+        return self.seeds
+
 
 class FakeSeedManager:
     def __init__(self, config, events):
@@ -84,6 +88,11 @@ class FakeSeedManager:
     def synchronize(self, state, seeds, active_slots, *, reset_batch):
         active_slots = tuple(active_slots)
         self.events.append(("seed.synchronize", active_slots, reset_batch))
+        changed = [slot for slot in active_slots if not state.active[slot] or state.seeds[slot] != seeds[slot]]
+        if changed and not reset_batch:
+            raise RuntimeError(
+                "new or changed active seed slots require reset_batch=True or an explicit admit() call: " f"{changed}"
+            )
         active = set(active_slots)
         for slot in range(state.capacity):
             state.active[slot] = slot in active
@@ -456,6 +465,134 @@ def test_no_penalty_prefill_keeps_history_valid_for_gap_decode_without_reset():
     assert state.penalty_history_valid is True
     assert controller.synchronize_decode(state, decode_prepared, reset_batch=False) is decode_prepared
     assert state.active_slots == (3,)
+
+
+def test_decode_identity_remap_admits_new_slot_without_reset_and_preserves_survivor():
+    controller, _, _, events = _make_controller()
+    state = controller.create_state()
+    initial = replace(
+        _prepared(penalties=False),
+        active_mask=(True, False, False, False),
+        active_rows=1,
+        row_paths=("topk", "inactive", "inactive", "inactive"),
+        seeds=(11, None, None, None),
+    )
+    controller.admit(state, initial)
+    events.clear()
+    expanded = _prepared(
+        penalties=False,
+        seeds=(11, 22, None, None),
+        slot_remap=(0, 1, 2, 3),
+    )
+
+    consumed = controller.synchronize_decode(state, expanded, reset_batch=False)
+
+    assert consumed.slot_remap is None
+    assert state.seed_state.active == [True, True, False, False]
+    assert state.seed_state.seeds == [11, 22, None, None]
+    assert _event_names(events)[:3] == ["seed.remap", "seed.admit", "seed.synchronize"]
+    assert events[1] == ("seed.admit", (22,), (1,))
+    assert events[2] == ("seed.synchronize", (0, 1), False)
+
+
+def test_decode_new_slot_without_remap_remains_strict_and_does_not_leak():
+    controller, _, _, events = _make_controller()
+    state = controller.create_state()
+    initial = replace(
+        _prepared(penalties=False),
+        active_mask=(True, False, False, False),
+        active_rows=1,
+        row_paths=("topk", "inactive", "inactive", "inactive"),
+        seeds=(11, None, None, None),
+    )
+    controller.admit(state, initial)
+    before = (tuple(state.seed_state.active), tuple(state.seed_state.seeds))
+    events.clear()
+    expanded = _prepared(penalties=False, seeds=(11, 22, None, None))
+
+    with pytest.raises(RuntimeError, match="reset_batch=True"):
+        controller.synchronize_decode(state, expanded, reset_batch=False)
+
+    assert (tuple(state.seed_state.active), tuple(state.seed_state.seeds)) == before
+    assert events == [("seed.synchronize", (0, 1), False)]
+
+
+def test_decode_nonidentity_remap_changed_survivor_rejects_before_mutation():
+    controller, _, _, events = _make_controller()
+    state = controller.create_state()
+    initial = replace(
+        _prepared(penalties=False),
+        active_mask=(True, False, False, False),
+        active_rows=1,
+        row_paths=("topk", "inactive", "inactive", "inactive"),
+        seeds=(11, None, None, None),
+    )
+    controller.admit(state, initial)
+    before = (tuple(state.seed_state.active), tuple(state.seed_state.seeds))
+    events.clear()
+    changed = _prepared(
+        penalties=False,
+        seeds=(22, 99, None, None),
+        slot_remap=(1, 0, 2, 3),
+    )
+
+    with pytest.raises(RuntimeError, match="changed active seed slots"):
+        controller.synchronize_decode(state, changed, reset_batch=False)
+
+    assert (tuple(state.seed_state.active), tuple(state.seed_state.seeds)) == before
+    assert events == []
+
+
+def test_decode_remap_validates_new_penalty_history_before_mutation():
+    controller, _, _, events = _make_controller()
+    state = controller.create_state()
+    initial = replace(
+        _prepared(penalties=False),
+        active_mask=(True, False, False, False),
+        active_rows=1,
+        row_paths=("topk", "inactive", "inactive", "inactive"),
+        seeds=(11, None, None, None),
+    )
+    controller.admit(state, initial)
+    before = (tuple(state.seed_state.active), tuple(state.seed_state.seeds))
+    events.clear()
+    incomplete = replace(
+        _prepared(seeds=(22, 11, None, None), slot_remap=(1, 0, 2, 3)),
+        prompt_tokens=None,
+    )
+
+    with pytest.raises(ValueError, match="prompt_tokens are required"):
+        controller.synchronize_decode(state, incomplete, reset_batch=False)
+
+    assert (tuple(state.seed_state.active), tuple(state.seed_state.seeds)) == before
+    assert events == []
+
+
+def test_decode_slot_remap_moves_survivor_then_admits_new_slot():
+    controller, _, _, events = _make_controller()
+    state = controller.create_state()
+    initial = replace(
+        _prepared(penalties=False),
+        active_mask=(True, False, False, False),
+        active_rows=1,
+        row_paths=("topk", "inactive", "inactive", "inactive"),
+        seeds=(11, None, None, None),
+    )
+    controller.admit(state, initial)
+    events.clear()
+    remapped = _prepared(
+        penalties=False,
+        seeds=(22, 11, None, None),
+        slot_remap=(1, 0, 2, 3),
+    )
+
+    consumed = controller.synchronize_decode(state, remapped, reset_batch=False)
+
+    assert consumed.slot_remap is None
+    assert state.seed_state.active == [True, True, False, False]
+    assert state.seed_state.seeds == [22, 11, None, None]
+    assert _event_names(events)[:3] == ["seed.remap", "seed.admit", "seed.synchronize"]
+    assert events[1] == ("seed.admit", (22,), (0,))
 
 
 def test_penalized_prefill_gap_decode_rebuilds_history_on_batch_reset():
