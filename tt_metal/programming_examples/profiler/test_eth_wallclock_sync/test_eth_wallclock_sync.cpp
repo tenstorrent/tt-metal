@@ -11,6 +11,7 @@
 #include <chrono>
 #include <vector>
 #include <cmath>
+#include <map>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -66,6 +67,19 @@ int main(int argc, char** argv) {
     // the same number of cycles. An MMIO read costs ~1.5 us here, so the loop samples every ~3 us, enough
     // to land ~10 samples inside a 30 us event and see whether the counter FLATLINES or merely slows.
     uint32_t catchstep = 0;
+    // --dvfs N: find FREQUENCY PLATEAUS rather than pauses. If the chip drops 1.35 -> 1.0 GHz, a counter
+    // read as if it were still 1.35 advances at ratio 1.0/1.35 = 0.741 of host time -- a plateau, not a
+    // stop. --catchstep looked for ratio < 0.5 and therefore could not see this at all; it is the reason
+    // that mode found only one event. Here a RUN of consecutive intervals sharing a depressed ratio is the
+    // signature, and its mean ratio x 1.35 GHz recovers the frequency the chip was actually running at.
+    // Host preemption cannot fake it: that is a single interval, paired with a long one, never a plateau.
+    uint32_t dvfs = 0;
+    // --aiclkwatch N: poll the ARC's own aiclk telemetry for every device, N times, and report the
+    // distribution. The clock-derived tests infer frequency from how fast a counter advances; this asks the
+    // firmware directly. If aiclk never leaves its nominal value here, then either DVFS is not happening in
+    // this state, or the wall-clock counter does not track aiclk -- and those need separating before any
+    // clock-derived frequency claim means anything.
+    uint32_t aiclkwatch = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -87,6 +101,10 @@ int main(int argc, char** argv) {
             same_chip = true;
         } else if (std::strcmp(argv[i], "--catchstep") == 0 && i + 1 < argc) {
             catchstep = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--dvfs") == 0 && i + 1 < argc) {
+            dvfs = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--aiclkwatch") == 0 && i + 1 < argc) {
+            aiclkwatch = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         }
     }
 
@@ -124,6 +142,95 @@ int main(int argc, char** argv) {
         if (!all_links && !edges.empty()) { break; }
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
+
+    if (aiclkwatch != 0) {
+        printf("\n[ethsync] AICLK WATCH: %u polls across %zu device(s)\n", aiclkwatch, devices.size());
+        std::map<int, std::map<uint32_t, uint32_t>> hist;  // device -> aiclk MHz -> count
+        std::map<int, uint32_t> lo, hi;
+        for (uint32_t i = 0; i < aiclkwatch; i++) {
+            for (IDevice* d : devices) {
+                const uint32_t v = (uint32_t)cluster.get_device_aiclk(d->id());
+                hist[d->id()][v]++;
+                if (lo.find(d->id()) == lo.end() || v < lo[d->id()]) { lo[d->id()] = v; }
+                if (hi.find(d->id()) == hi.end() || v > hi[d->id()]) { hi[d->id()] = v; }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        for (const auto& [dev, h] : hist) {
+            printf("  device %d: min %u MHz, max %u MHz, %zu distinct value(s)\n", dev, lo[dev], hi[dev],
+                   h.size());
+            for (const auto& [mhz, n] : h) {
+                printf("      %5u MHz  x%-7u (%.1f%%)\n", mhz, n, 100.0 * n / (double)aiclkwatch);
+            }
+        }
+        mesh_device->close();
+        return 0;
+    }
+
+    if (dvfs != 0 && !edges.empty()) {
+        const auto& e = edges.front();
+        constexpr uint64_t kWallL = 0xFFB121F0ULL;
+        constexpr uint64_t kWallH = 0xFFB121F8ULL;
+        const CoreCoord av = e.a->virtual_core_from_logical_core(e.ac, CoreType::ETH);
+        const tt_cxy_pair ta(e.a->id(), av);
+        struct Smp { double h; uint64_t d; };
+        std::vector<Smp> smp;
+        smp.reserve(dvfs);
+        printf("\n[ethsync] DVFS WATCH: dev %d eth(%zu,%zu), %u samples, nominal %.4f GHz\n",
+               e.a->id(), e.ac.x, e.ac.y, dvfs, ghz);
+        for (uint32_t i = 0; i < dvfs; i++) {
+            uint32_t lo = 0, hi = 0;
+            const double h0 = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch()).count();
+            cluster.read_reg(&lo, ta, kWallL);
+            cluster.read_reg(&hi, ta, kWallH);
+            smp.push_back(Smp{h0, ((uint64_t)hi << 32) | lo});
+        }
+        // Per-interval ratio, then group consecutive depressed intervals into plateaus.
+        std::vector<double> ratio(smp.size(), 1.0);
+        for (size_t i = 1; i < smp.size(); i++) {
+            const double dh = smp[i].h - smp[i - 1].h;
+            const double dd = (double)(smp[i].d - smp[i - 1].d) / ghz;
+            ratio[i] = (dh > 0.0 && dd > -1000.0 && dd < 1e6) ? dd / dh : 1.0;
+        }
+        printf("%9s %11s %10s %12s %12s %10s\n", "start_s", "duration_us", "samples", "mean_ratio",
+               "implied_GHz", "lost_us");
+        uint32_t plateaus = 0;
+        double total_lost = 0.0;
+        for (size_t i = 1; i < smp.size(); i++) {
+            if (ratio[i] >= 0.92 || ratio[i] <= 0.05) {
+                continue;  // healthy, or the single-interval spike of a preemption pair
+            }
+            size_t j = i;
+            double sum = 0.0;
+            while (j < smp.size() && ratio[j] < 0.92 && ratio[j] > 0.05) {
+                sum += ratio[j];
+                j++;
+            }
+            const size_t n = j - i;
+            // A plateau is >= 2 consecutive depressed intervals. One alone is a preemption artefact.
+            if (n >= 2) {
+                const double mean_ratio = sum / (double)n;
+                const double dur_us = (smp[j - 1].h - smp[i - 1].h) / 1000.0;
+                const double lost_us = dur_us * (1.0 - mean_ratio);
+                plateaus++;
+                total_lost += lost_us;
+                if (plateaus <= 25) {
+                    printf("%9.3f %11.2f %10zu %12.3f %12.4f %10.2f\n",
+                           (smp[i - 1].h - smp[0].h) / 1e9, dur_us, n, mean_ratio, mean_ratio * ghz,
+                           lost_us);
+                }
+            }
+            i = j;
+        }
+        const double span_s = (smp.back().h - smp.front().h) / 1e9;
+        printf("\n[ethsync] %u plateau(s) over %.2f s (%.2f/s), total lost %.1f us\n", plateaus, span_s,
+               plateaus / span_s, total_lost);
+        printf("[ethsync] mean_ratio x nominal = the frequency the chip actually ran at; 0.741 would be "
+               "1.0 GHz against a 1.35 GHz nominal\n");
+        mesh_device->close();
+        return 0;
+    }
 
     if (catchstep != 0 && !edges.empty()) {
         const auto& e = edges.front();
