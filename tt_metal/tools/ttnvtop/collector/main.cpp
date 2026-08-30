@@ -187,6 +187,7 @@ struct CliOptions {
     bool show_help = false;
     bool journal_probe = false;  // Phase 2.2 M1: scan for aggregator journals and exit
     std::string launch_go;       // Phase 2.2 7.4: descriptor of a staged aggregator to start
+    bool journal_transport = false;  // Phase 2.2 5k: emulate the host-pull journal transport
 };
 
 void print_help(const char* argv0) {
@@ -272,6 +273,8 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
             out.device_filter.insert(d);
         } else if (a == "--journal-probe") {
             out.journal_probe = true;
+        } else if (a == "--journal-transport") {
+            out.journal_transport = true;
         } else if (a == "--launch-go") {
             const char* v = need_arg("--launch-go");
             if (v == nullptr) {
@@ -950,6 +953,13 @@ int main(int argc, char* argv[]) {
         auto next = std::chrono::steady_clock::now();
         while (!g_stop.load(std::memory_order_relaxed)) {
             for (auto& chip : chips) {
+                // 5k transport emulation: the host-pull design does NO per-core remote
+                // traffic at all — the on-chip aggregator sweeps locally and the host
+                // reads one journal. Skipping this loop for remote chips reproduces
+                // that load profile without needing an aggregator running.
+                if (cli.journal_transport && chip.is_remote) {
+                    continue;
+                }
                 for (auto& c : chip.cores) {
                     uint8_t now_bit = 0;
                     bool have_dispatch = false;
@@ -1229,6 +1239,24 @@ int main(int argc, char* argv[]) {
             for (auto& chip : chips) {
                 std::lock_guard<std::mutex> lk(*chip.ring_mx);
                 ++chip.drain_ticks;
+
+                // 5k transport emulation. Two remote reads per tick — a 64 B journal
+                // header and one bulk entry read — instead of num_cores KiB-sized
+                // per-core reads. That is the transport profile the aggregator design
+                // imposes: ~20 remote transactions/s against ~12,800 today.
+                if (cli.journal_transport && chip.is_remote && !chip.cores.empty()) {
+                    auto* dev = chip.cores.front().device;
+                    const auto core = chip.cores.front().translated;
+                    std::vector<uint8_t> jbuf(8192);
+                    try {
+                        dev->read_from_device(jbuf.data(), core, ttnvtop_agg::kLandingBase, 64);
+                        dev->read_from_device(jbuf.data(), core, ttnvtop_agg::kLandingBase + 64, 8192);
+                        chip.journal_entries_seen += 2;
+                    } catch (...) {
+                        ++chip.journal_stale_ticks;
+                    }
+                    continue;
+                }
 
                 int probe_good = 0, probe_bad = 0;
                 for (auto& c : chip.cores) {
