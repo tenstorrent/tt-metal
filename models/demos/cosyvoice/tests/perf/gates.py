@@ -136,17 +136,24 @@ BLACKHOLE = {
 # it will trip the band below rather than silently inherit n300's verdict, which is
 # the intended behaviour -- see the module docstring.
 WORMHOLE = {
-    # End-to-end traced decode: 131.2 tok/s default. The in-place KV cache is already
-    # the default here (`kv_inplace_default` reads the architecture), so the explicit
-    # row measures the same thing and lands within noise of it.
+    # End-to-end traced decode: 127.3 tok/s default, 130.6 with COSYVOICE_FF2_GRID,
+    # 128.0 with the in-place KV cache made explicit. That last row measures the same
+    # thing as the default -- `kv_inplace_default` reads the architecture and turns the
+    # in-place cache on for Wormhole -- and lands within noise of it, as it should.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.539-0.564 across the certification run's three configurations and its repeats.
-    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part** -- it lands within noise of
-    # the default (0.552 against 0.553), and an earlier vintage had it winning clearly
+    # 0.553 / 0.552 / 0.564 across the certification run's three configurations
+    # (PERF.md Part I ~S3.2). The full-suite run twenty minutes earlier, at a tree
+    # differing only in this file, measured 0.539 / 0.554 / 0.542 -- so **the same board
+    # moves ~2.6 % between runs**, which is the flow decoder's documented run-to-run
+    # variation and is precisely why the band is +/-20 % rather than tight. The centre
+    # sits between the two runs rather than on either.
+    #
+    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part.** It lands within noise of
+    # the default (0.552 against 0.553), where an earlier vintage had it winning clearly
     # (0.577 -> 0.550). The flag stays opt-in and Blackhole-favoured for exactly this
     # reason: its best shape is not portable, and on n300 its benefit is not even
-    # reliably positive. Centre chosen to sit in the middle of the observed spread.
+    # reliably positive.
     "rtf": Misses(
         0.55,
         0.20,
