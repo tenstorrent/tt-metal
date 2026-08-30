@@ -244,7 +244,7 @@ class CosyVoiceTTNN:
         return ttnn.from_torch(v.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
     # ----------------------------------------------------------------------
-    def text_to_tokens(self, ctx: PromptContext, *, sampler="ras", max_tokens=None, seed=None) -> list[int]:
+    def text_to_tokens(self, ctx: PromptContext, **kw) -> list[int]:
         """Stage 1: the LLM. Returns the generated semantic tokens only -- the
         prompt's tokens are prefix, not output.
 
@@ -255,14 +255,17 @@ class CosyVoiceTTNN:
         spk = self.llm.speaker_embedding(self._dev(ctx.llm_embedding)) if ctx.llm_embedding is not None else None
         has_llm_prompt = ctx.llm_prompt_speech_tokens is not None and ctx.llm_prompt_speech_tokens.shape[1] > 0
         prompt = self._ids(ctx.llm_prompt_speech_tokens) if has_llm_prompt else None
+        # `**kw` rather than a copy of `generate`'s signature: `sampler`, `max_tokens`,
+        # `seed`, `use_trace` and `on_token` all belong to the decode loop, and
+        # restating them here is how `on_token` came to be silently unsupported --
+        # `synthesize_streaming` passed it, this method did not accept it, and nothing
+        # noticed until a test drove the public API rather than its parts.
         tokens = self.llm.generate(
             self._ids(ctx.text_tokens),
             spk_emb=spk,
             prompt_speech_tokens=prompt,
             text_len=ctx.n_text,
-            sampler=sampler,
-            max_tokens=max_tokens,
-            seed=seed,
+            **kw,
         )
         if prompt is not None:
             ttnn.deallocate(prompt)

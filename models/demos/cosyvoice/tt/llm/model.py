@@ -257,11 +257,26 @@ class TtTransformerLM:
         max_tokens: int | None = None,
         seed: int | None = None,
         use_trace: bool = True,
+        on_token=None,
     ) -> list[int]:
         """Text token IDs -> semantic speech token IDs.
 
         `sampler='greedy'` makes the stream deterministic, which is what the device
         tests use; `'ras'` reproduces the reference's stochastic policy.
+
+        **`on_token(token, index)` is called as each token is sampled**, before the
+        next decode step is issued. It is what makes the pipeline streamable: a caller
+        can run the flow decoder and the vocoder on a completed chunk while this loop
+        is still decoding later tokens, instead of waiting for the return value.
+        `CosyVoiceTTNN.synthesize_streaming` is the caller that does so; see
+        `tt/streaming.py`'s `StreamSession` for why that inversion is the whole
+        difference between chunked vocoding and streaming.
+
+        The callback runs on the host between two device steps, so whatever it does is
+        charged to this loop -- it is not a background thread and there is no overlap
+        of compute. It must not free anything this method owns, and it allocates while
+        this method's trace is live, which is a constraint `synthesize_streaming`
+        documents and warms for.
         """
         if seed is not None:
             torch.manual_seed(seed)
@@ -344,6 +359,8 @@ class TtTransformerLM:
             if token == self.eos_token:
                 break
             out.append(token)
+            if on_token is not None:
+                on_token(token, len(out) - 1)
 
             # Logits are read in the SAME iteration that produces them, rather than
             # carried to the next. The traced path writes into one persistent output
