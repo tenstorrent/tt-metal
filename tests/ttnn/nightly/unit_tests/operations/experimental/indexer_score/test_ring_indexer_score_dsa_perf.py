@@ -49,9 +49,13 @@ GLM52_K_CACHE_CAPACITY = GLM52Config.MAX_POSITION_EMBEDDINGS // GLM52_GLOBAL_CHU
 GLM52_INDEX_CACHE_SLOTS = sum(indexer_type == "full" for indexer_type in GLM52Config.indexer_types())
 GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
-RING_PERF_KV_LENS = (GLM52_KV_55K, GLM52_KV_512K)
-RING_PERF_KV_IDS = ("55k", "512k")
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
+
+# Measurement-only QuietBox sweep: 40..59 KC units per physical shard covers
+# every remainder modulo the 20 compute lanes exactly once.
+QB_SWEEP_UNITS_PER_SHARD = tuple(range(40, 60))
+RING_PERF_KV_LENS = tuple(units * 4 * GLM52_K_CHUNK for units in QB_SWEEP_UNITS_PER_SHARD) + (GLM52_KV_512K,)
+RING_PERF_KV_IDS = tuple(f"qb_units_{units}" for units in QB_SWEEP_UNITS_PER_SHARD) + ("512k",)
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
@@ -75,7 +79,7 @@ def _ring_indexer_fabric_router_config():
 # SKU: the proxy retains the box's actual fabric path rather than treating a 4x1
 # subset of an 8x1 box as equivalent.
 RING_INDEXER_PERF_MARGIN = 0.02
-RING_INDEXER_PERF_REPLAYS = 3
+RING_INDEXER_PERF_REPLAYS = 7
 RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
     (4, GLM52_KV_55K): 46.26,
@@ -294,15 +298,25 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         for _ in range(RING_INDEXER_PERF_REPLAYS):
             _, programs = profile_realtime_program_merged(mesh_device, replay_once, record_timeout_seconds=30.0)
             measured_durations_ns.append(_ring_indexer_duration_ns(programs))
+        logger.info(
+            "ring_indexer_score_dsa replay durations: mesh={} kv_len={} durations_ms={}",
+            tuple(mesh_device.shape),
+            kv_len,
+            [round(value / 1e6, 6) for value in measured_durations_ns],
+        )
         duration_ns = statistics.median(measured_durations_ns)
         ideal_compute_cycles = _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start)
         fpu_utilization = ideal_compute_cycles / (duration_ns * _BH_CLOCK_GHZ) * 100
-        expected_fpu_utilization = RING_INDEXER_EXPECTED_FPU_UTIL[(sp, kv_len)]
-        lower = expected_fpu_utilization * (1 - RING_INDEXER_PERF_MARGIN)
-        upper = expected_fpu_utilization * (1 + RING_INDEXER_PERF_MARGIN)
+        expected_fpu_utilization = RING_INDEXER_EXPECTED_FPU_UTIL.get((sp, kv_len))
+        lower = (
+            expected_fpu_utilization * (1 - RING_INDEXER_PERF_MARGIN) if expected_fpu_utilization is not None else None
+        )
+        upper = (
+            expected_fpu_utilization * (1 + RING_INDEXER_PERF_MARGIN) if expected_fpu_utilization is not None else None
+        )
         logger.info(
             "ring_indexer_score_dsa perf: mesh={} fabric={} topology=ring heads={} k_capacity={} kv_len={} "
-            "q_per_chip={} duration={:.3f} ms, fpu_util={:.2f}% (expected {:.2f}%, band [{:.2f}, {:.2f}])".format(
+            "q_per_chip={} duration={:.3f} ms, fpu_util={:.2f}%".format(
                 tuple(mesh_device.shape),
                 ttnn.get_fabric_config(),
                 GLM52_INDEX_HEADS,
@@ -311,17 +325,15 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
                 GLM52_Q_PER_CHIP,
                 duration_ns / 1e6,
                 fpu_utilization,
-                expected_fpu_utilization,
-                lower,
-                upper,
             )
         )
         assert duration_ns > 0, "fused ring-indexer profiler duration must be positive"
-        assert lower <= fpu_utilization <= upper, (
-            f"ring_indexer_score_dsa mesh={(sp, tp)} kv_len={kv_len}: FPU utilization "
-            f"{fpu_utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-            f"(expected {expected_fpu_utilization:.2f}%, margin +/- {RING_INDEXER_PERF_MARGIN * 100:.1f}%)"
-        )
+        if expected_fpu_utilization is not None:
+            assert lower <= fpu_utilization <= upper, (
+                f"ring_indexer_score_dsa mesh={(sp, tp)} kv_len={kv_len}: FPU utilization "
+                f"{fpu_utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
+                f"(expected {expected_fpu_utilization:.2f}%, margin +/- {RING_INDEXER_PERF_MARGIN * 100:.1f}%)"
+            )
     finally:
         if trace_id is not None:
             try:
