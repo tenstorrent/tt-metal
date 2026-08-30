@@ -1270,6 +1270,56 @@ characterising before M2 is scoped.
 - T3K remote chip at a 20 ms sweep: **passing**
 - T3K remote chip at a 1 ms sweep: **fails** -- read cost and tearing, per finding 2
 
+## 5l. Llama-3.3-70B on the T3K: monitoring impact is UNDETECTABLE -- 2026-08-30
+
+Ran `models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"`
+against Llama-3.3-70B on the T3K, three arms, one run each:
+
+| arm | remote txns/s | avg speed | throughput | NON_MMIO lock waits |
+|---|---|---|---|---|
+| baseline, no monitoring | 0 | 96.63 ms | 10.35 tok/s | -- |
+| collector at DEFAULTS | ~12,800 | 96.71 ms | 10.34 tok/s | 1 |
+| `--journal-transport` (2 reads/tick) | ~20 | 97.11 ms | 10.30 tok/s | 0 |
+
+Total spread 0.5%, and **the ordering is backwards** -- the arm with 640x less remote
+traffic came out marginally slower. That is noise dominating, not signal.
+
+### What this does and does not say
+
+It does NOT say host-pull is safe. It says **this experiment cannot distinguish the
+designs**, because no monitoring load produced a measurable effect. 5c's stall does not
+reproduce on this workload.
+
+The likely reason is in the log: `Done Capturing Decode Trace`. This demo runs TRACED
+decode, so the steady-state loop replays a captured trace with minimal host involvement
+and there is little for the collector's tunnel traffic to collide with. That makes 5c's
+stall **workload-shape dependent** rather than a property of the tunnel -- a materially
+different conclusion from the one this plan carried, and the one that motivated the
+whole push design.
+
+### The one real datum
+
+In `--journal-transport` mode the collector's own drain ran at **0.5 Hz**: ~2 s per tick
+for ~8 remote reads across 4 remote chips, i.e. **~250 ms per remote read while Llama
+runs**. Remote reads under fabric load are slow. They simply do not hurt THIS workload.
+
+That number matters for the aggregator's readout budget, and it compounds with the 5k
+finding (our own sweep pushing a 64 B read to 2512 ms). Reading a journal is cheap in
+transaction COUNT but each transaction is expensive in LATENCY, which bounds drain rate
+and therefore how much on-chip buffering is required.
+
+### What to do instead
+
+Chasing transport tuning against an undetectable effect is not worth more runs. The
+useful questions now:
+
+1. **Find the execution shape that actually stalled in 5c.** Prefill? Non-traced
+   dispatch? Multi-CQ? The push-vs-pull argument was built on that measurement, and it
+   needs to be reproduced before it justifies anything.
+2. **Characterise remote-read latency** (~250 ms observed) against sweep rate and
+   workload, since that -- not transaction count -- is what bounds the design.
+3. Repeats. One run per arm; 0.5% spread is well inside uncharacterised variance.
+
 ## 6. Risks
 
 | Risk | Mitigation |
