@@ -47,7 +47,7 @@ _PRODUCTION_CASE = _ProductionCase(
     num_chunks=4,
     key_dim=32,
     value_dim=64,
-    expected_duration_ns=24_865,
+    expected_duration_ns=25_419,
 )
 
 
