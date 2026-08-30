@@ -16,6 +16,8 @@ import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.llm_runtime.prefill.signatures import PrefillProgramSignature
+from models.common.llm_runtime.program_compiler import ProgramKey
 from models.common.models import executor as shared_model_executor
 from models.common.models import llama3_executor as llama3_family_executor
 from models.common.models import qwen2_executor as qwen2_family_executor
@@ -89,9 +91,15 @@ EXECUTOR_BINDINGS = {
         make_model=lambda **kwargs: _make_llama32_model(**kwargs),
         make_runtime_config=lambda: _make_llama32_runtime_config(),
         make_executor_config=lambda mode="none": _make_llama32_executor_config(mode, module=llama33_70b_executor),
-        make_recording_target=lambda **kwargs: _RecordingTarget(_make_llama32_model(), **kwargs),
+        make_recording_target=lambda **kwargs: _RecordingTarget(
+            _make_llama32_model(),
+            request_state_fields=llama33_70b_executor.Llama33_70BExecutor.request_state_fields,
+            **kwargs,
+        ),
         make_product=lambda mesh_device, max_batch_size: _make_llama32_product(mesh_device, max_batch_size),
-        make_lane=lambda llm, config: _FakeLane(llm, config),
+        make_lane=lambda llm, config: _FakeLane(
+            llm, config, request_state_fields=llama33_70b_executor.Llama33_70BExecutor.request_state_fields
+        ),
         hf_model="meta-llama/Llama-3.3-70B-Instruct",
     ),
     "qwen2_7b": SimpleNamespace(
@@ -176,9 +184,15 @@ EXECUTOR_BINDINGS = {
         make_model=lambda **kwargs: _make_qwen3_32b_model(**kwargs),
         make_runtime_config=lambda: _make_qwen3_32b_runtime_config(),
         make_executor_config=lambda mode="none": _make_qwen2_executor_config(mode, module=qwen3_32b_executor),
-        make_recording_target=lambda **kwargs: _RecordingTarget(_make_qwen3_32b_model(), **kwargs),
+        make_recording_target=lambda **kwargs: _RecordingTarget(
+            _make_qwen3_32b_model(),
+            request_state_fields=qwen3_32b_executor.Qwen3_32BExecutor.request_state_fields,
+            **kwargs,
+        ),
         make_product=lambda mesh_device, max_batch_size: _make_qwen3_32b_product(mesh_device, max_batch_size),
-        make_lane=lambda llm, config: _FakeLane(llm, config),
+        make_lane=lambda llm, config: _FakeLane(
+            llm, config, request_state_fields=qwen3_32b_executor.Qwen3_32BExecutor.request_state_fields
+        ),
         hf_model="Qwen/Qwen3-32B",
     ),
     "deepseek_r1_distill_qwen_14b": SimpleNamespace(
@@ -811,6 +825,94 @@ def test_llama32_1b_warms_every_q128_topk_tile_start_once_per_execution_mode():
 
 
 @pytest.mark.parametrize(
+    ("enable_trace", "expected_order"),
+    [
+        (False, ("default", 96, 0, 32, 64)),
+        (True, (0, 32, 64, "default", 96)),
+    ],
+    ids=("eager", "traced"),
+)
+def test_qwen3_lane4_warms_every_runtime_q128_topk_signature_before_activation(enable_trace, expected_order):
+    executor = SimpleNamespace(
+        _q128_topk_tile_ends_warmed=set(),
+        eager_executor=object(),
+        traced_executor=object(),
+        page_table_layout=SimpleNamespace(block_size=32),
+        prefill_runtime=SimpleNamespace(config=SimpleNamespace(static_q128_topk_supported=True)),
+        warmup=SimpleNamespace(
+            config=SimpleNamespace(
+                prefill_sequence_lengths=(128, 1024),
+                prime_q128_tile_ends=False,
+            )
+        ),
+    )
+    compiled = []
+    order = []
+    activation = []
+
+    def record_signature(prompt_length):
+        assert not activation
+        order.append(((prompt_length - 1) // 32) * 32)
+        compiled.append(
+            PrefillProgramSignature(
+                operation_variant="regular-single",
+                padded_batch_size=1,
+                invocation_sequence_length=128,
+                page_table_width=64,
+                chunk_page_table_width=None,
+                sampling_path="topk",
+                penalties_enabled=False,
+                logprobs_enabled=False,
+                last_token_tile_start=((prompt_length - 1) // 32) * 32,
+            )
+        )
+
+    def compile_prefill(**kwargs):
+        expected_execution = executor.traced_executor if enable_trace else executor.eager_executor
+        assert kwargs["execution"] is expected_execution
+        assert kwargs["kv_cache"] == "cache"
+        assert kwargs["sampling_params"].top_k.tolist() == [32]
+        record_signature(int(kwargs["prompt_lens"][0]))
+
+    executor.compile_prefill = compile_prefill
+
+    default_warmed = False
+
+    def default_warmup():
+        nonlocal default_warmed
+        if default_warmed:
+            return
+        default_warmed = True
+        order.append("default")
+        # The coordinator's ordinary Q128 top-k case covers the final tile.
+        record_signature(128)
+
+    for _ in range(2):
+        qwen3_32b_executor._warmup_q128_around_prefill(
+            executor,
+            default_warmup,
+            kv_cache="cache",
+            can_sample_on_device=True,
+            enable_trace=enable_trace,
+        )
+    activation.append(True)
+
+    assert tuple(order) == expected_order
+    assert {signature.last_token_tile_start for signature in compiled} == {0, 32, 64, 96}
+    compiled_keys = {ProgramKey.from_signature(signature) for signature in compiled}
+    runtime_signatures = {replace(compiled[0], last_token_tile_start=tile_start) for tile_start in (0, 32, 64, 96)}
+    assert {ProgramKey.from_signature(signature) for signature in runtime_signatures} == compiled_keys
+    assert executor._q128_topk_tile_ends_warmed == {enable_trace}
+
+
+def test_qwen3_lane4_executor_installs_model_owned_q128_warmup(monkeypatch):
+    executor = _device_sampling_executor(EXECUTOR_BINDINGS["qwen3_32b"], monkeypatch, runtime_disable=False)
+
+    assert executor._prefill_warmup is qwen3_32b_executor._warmup_q128_around_prefill
+    assert executor._q128_topk_tile_ends_warmed == set()
+
+
+@pytest.mark.parametrize(
     "method,positional,keyword_only",
     [
         (
@@ -971,9 +1073,10 @@ class _RecordingTarget:
     traced_prefill_execution = object()
     traced_decode_execution = object()
 
-    def __init__(self, model, traceable=True):
+    def __init__(self, model, traceable=True, request_state_fields=()):
         self.model = model
         self.traceable = traceable
+        self._request_state_fields = tuple(request_state_fields)
         self.calls = []
 
     def can_trace_prefill(self, **kwargs):
@@ -1382,12 +1485,13 @@ def test_vllm_generator_path_and_construction_defaults(model_id, generator_path)
 class _FakeLane:
     requires_prefill_trace_warmup = True
 
-    def __init__(self, llm, config):
+    def __init__(self, llm, config, request_state_fields=()):
         self.model = llm.model
         self.model_args = llm.runtime_config
         self.mesh_device = llm.model.config.mesh_device
         self.cache_path = llm.runtime_config.model_cache_path
         self.config = config
+        self._request_state_fields = tuple(request_state_fields)
         self.paged_kv_cache_config = config.paged_kv_cache
         self.already_warmed_up_prefill = False
         self.eager_execution = object()

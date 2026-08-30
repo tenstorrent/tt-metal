@@ -25,6 +25,7 @@ from models.common.models.qwen3_32b.hf_adaptor import Qwen3_32BForCausalLM
 from models.common.models.qwen3_32b.model import _slice_last_token_tile
 from models.common.modules.sampling.sampling_1d import Sampling1D
 from models.common.modules.sampling.sampling_state_1d import SamplingState1D
+from models.common.sampling.sampling_params import SamplingParams
 
 
 @dataclass(frozen=True)
@@ -170,7 +171,9 @@ class Qwen3_32BExecutor:
             sampling_state=sampling_state,
             sampling_type=Sampling1D,
             request_state_fields=self.request_state_fields,
+            prefill_warmup=_warmup_q128_around_prefill,
         )
+        self._model_executor._q128_topk_tile_ends_warmed = set()
 
 
 def _create_sampling_state(model: Any, enabled: bool) -> tuple[Any, Any]:
@@ -184,6 +187,73 @@ def _create_sampling_state(model: Any, enabled: bool) -> tuple[Any, Any]:
         raise ValueError("model.sampling must have a resolved Sampling1DConfig")
     controller = SamplingState1D(sampling)
     return controller, controller.create_state()
+
+
+def _warmup_q128_around_prefill(
+    executor: ModelExecutor,
+    default_warmup: Callable[[], None],
+    *,
+    kv_cache: Any,
+    can_sample_on_device: bool,
+    enable_trace: bool,
+) -> None:
+    """Prime lane-independent Q128 top-k programs before trace activation."""
+
+    if enable_trace:
+        _warmup_q128_topk_tile_ends(
+            executor,
+            kv_cache=kv_cache,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=True,
+        )
+    default_warmup()
+    if not enable_trace:
+        _warmup_q128_topk_tile_ends(
+            executor,
+            kv_cache=kv_cache,
+            can_sample_on_device=can_sample_on_device,
+            enable_trace=False,
+        )
+
+
+def _warmup_q128_topk_tile_ends(
+    executor: ModelExecutor,
+    *,
+    kv_cache: Any,
+    can_sample_on_device: bool,
+    enable_trace: bool,
+) -> None:
+    """Prime Q128 top-k slice programs when sampler capacity exceeds lane capacity."""
+
+    if (
+        enable_trace in executor._q128_topk_tile_ends_warmed
+        or not can_sample_on_device
+        or (enable_trace and executor.traced_executor is None)
+        or 128 not in executor.warmup.config.prefill_sequence_lengths
+        or not executor.prefill_runtime.config.static_q128_topk_supported
+        or executor.warmup.config.prime_q128_tile_ends
+    ):
+        return
+    sampling = SamplingParams(
+        temperature=torch.ones(1),
+        top_k=torch.full((1,), 32, dtype=torch.int32),
+        top_p=torch.full((1,), 0.08),
+    )
+    execution = executor.traced_executor if enable_trace else executor.eager_executor
+    for sequence_length in (32, 64, 96):
+        page_table_width = (
+            sequence_length + executor.page_table_layout.block_size - 1
+        ) // executor.page_table_layout.block_size
+        executor.compile_prefill(
+            tokens=torch.zeros((1, sequence_length), dtype=torch.long),
+            page_table=torch.zeros((1, page_table_width), dtype=torch.int32),
+            prompt_lens=torch.full((1,), sequence_length, dtype=torch.long),
+            empty_slots=[0],
+            kv_cache=kv_cache,
+            sampling_params=sampling,
+            execution=execution,
+        )
+    executor._q128_topk_tile_ends_warmed.add(enable_trace)
 
 
 def build_qwen3_32b_executor(llm: Qwen3_32BForCausalLM, config: Qwen3_32BExecutorConfig) -> Qwen3_32BExecutor:
