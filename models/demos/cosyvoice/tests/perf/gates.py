@@ -31,10 +31,13 @@ line.
 
 ## What is recorded, and from where
 
-Every value in `EXPECTATIONS` comes from the three-board re-verification described in
-`../../PERF.md` (*Environment*), re-run in full on Blackhole `p150a`, Blackhole
-`p150b` and Wormhole n300 at one commit, on one day. Two boards is not a matrix; the
-figures below are what makes it one.
+Every value in `EXPECTATIONS` comes from the certification run described in
+`../../PERF.md` Part I -- one commit, one day, Blackhole `p150a`, Blackhole `p150b`
+and Wormhole n300, five configurations each. Two boards is not a matrix; the third is
+what makes it one.
+
+**PERF.md and this table must agree**, and the `Misses` bands are what keeps them
+agreeing: a figure published there that has drifted here fails the run.
 
 Bands are wide on purpose. The flow decoder varies by about 5 % run to run, the two
 Blackhole boards differ by another ~5 % through cooling alone, and a host under load
@@ -111,11 +114,11 @@ class Misses:
 # `p150a`/`p150b` pair -- the two differ by ~5 % through cooling, so the bands below
 # are the union of both rather than one board's.
 BLACKHOLE = {
-    # End-to-end traced decode: 175.6 tok/s default on p150a, 171.3 on p150b, 201.0
-    # with the in-place KV cache. The standalone traced decode step measures 163.6.
+    # End-to-end traced decode: 174.5 tok/s default on p150a, 171.5 on p150b, 200.6 with
+    # the in-place KV cache. The standalone traced decode step measures 174 on p150a.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.378 default on p150a, 0.396 on p150b, 0.342 best (p150a, everything on).
+    # 0.380 default on p150a, 0.393 on p150b, 0.342 best (p150a, in-place KV cache).
     "rtf": Meets(),
     # Reaching 0.2 needs the LLM decode step under 1.5 ms on its own; the step is
     # 4.98 ms at its best measured and is bandwidth-bound on the AR decoder's weights.
@@ -129,17 +132,22 @@ BLACKHOLE = {
 # it will trip the band below rather than silently inherit n300's verdict, which is
 # the intended behaviour -- see the module docstring.
 WORMHOLE = {
-    # End-to-end traced decode: 123.4 tok/s default, 127.5 with the in-place KV cache
-    # made explicit. The standalone traced decode step measures 93.4.
+    # End-to-end traced decode: 131.2 tok/s default. The in-place KV cache is already
+    # the default here (`kv_inplace_default` reads the architecture), so the explicit
+    # row measures the same thing and lands within noise of it.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.577 default, 0.550 with COSYVOICE_FF2_GRID=8x2. Missed, and stated as missed.
+    # 0.539 default. **`COSYVOICE_FF2_GRID=8x2` does not help on this part** -- it
+    # measures 0.554, slightly *worse*, where an earlier vintage had it winning. The
+    # flag stays opt-in and Blackhole-favoured for exactly this reason: its best shape
+    # is not portable, and on n300 its benefit is not even reliably positive.
     "rtf": Misses(
-        0.565,
+        0.539,
         0.20,
-        "COSYVOICE_FF2_GRID=8x2 reaches 0.550; closing the rest needs the 64-core grid's decode step under 3.2 ms",
+        "no flag closes this on n300; it needs the 64-core grid's decode step under "
+        "3.2 ms against a measured 10.9, so it is the compute grid rather than tuning",
     ),
-    "rtf_stretch": Misses(0.565, 0.20, "same lever as the 0.5 gate, and further from it"),
+    "rtf_stretch": Misses(0.539, 0.20, "same lever as the 0.5 gate, and further from it"),
 }
 
 EXPECTATIONS = {"blackhole": BLACKHOLE, "wormhole": WORMHOLE}
