@@ -124,7 +124,7 @@ host interface and the board's power envelope, not the grid the kernels run on.
 | Efficient KV-cache for long sequences | ✅ | `test_device_fixed_shape_cache_matches_the_growing_one` | *Fixed-width KV cache* |
 | Flash attention or equivalent | ✅ both stages | `test_device_fused_attention_matches_explicit` | *Fused decode attention*, *Flash attention* |
 | Minimize token generation latency | ✅ | `test_device_traced_throughput`, `test_device_inplace_throughput` | *The LLM decode step* |
-| **Batch processing for multiple utterances** | ✅ | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, gated) | *Batched decode* |
+| **Batch processing for multiple utterances** | ✅ decode batched and gated; end-to-end batched synthesis blocked by a pre-existing device defect (below) | `test_device_batched_decode_matches_single` (correctness, ragged prefixes), `test_device_batched_decode_throughput` (the sweep, gated) | *Batched decode* |
 | Efficient sampling strategies | ✅ top-k / top-p / RAS, host-side **by measurement** | `test_nucleus_filter_*`, `test_ras_*`, `scripts/profile_token_tail.py` | *The LLM decode step* |
 | **Pipeline semantic generation with acoustic modeling** | ✅ mechanism verified; one wrapper has an open audio defect (below) | `test_device_streaming_first_audio_latency` (both schedules, all three stages real) | *Streaming* |
 | Optimize flow decoder computation | ✅ | `test_device_solve_euler_matches_golden`; trace-cache timing | *The flow decoder* |
@@ -181,6 +181,29 @@ The lever that *was* available at the same place in the pipeline — reducing th
 per-token cost rather than the number of sequential steps — was taken instead: trace
 capture, the fused decode attention, the fixed-width and in-place KV caches, and now
 batching. `PERF.md` *The LLM decode step* carries what each was worth.
+
+### End-to-end batched synthesis — blocked by the L1 growth, not by batching
+
+`TtTransformerLM.generate_batch` is verified and gated: batched rows match single-row
+decode at ragged prompt lengths, and the `B = 1..8` sweep fails if batching amortises
+nothing. That is where the win is — the LLM runs once per *token* and is the large
+majority of an utterance, while the flow decoder and the vocoder run once per
+utterance each.
+
+`CosyVoiceTTNN.synthesize_batch` composes that with per-utterance flow and vocoder
+work on one open device, and **that composition hangs**: synthesising two utterances
+of different lengths on one device wedges it, needing a board reset. The cause is
+known, pre-dates all of this, and is unrelated to batching — something in the
+vocoder's `conv_transpose2d`/halo path accumulates per-geometry device state that
+`release_caches()` does not free. It is why `demo/demo.py` opens a fresh device per
+utterance.
+
+`test_device_batched_synthesis_agrees_with_one_at_a_time` is therefore **skipped with
+that reason attached** rather than deleted: the moment the L1 growth is root-caused,
+it is the test that says whether `synthesize_batch` was right all along. Anyone
+building a real multi-utterance serving path needs that defect closed first, and
+should batch the decode while keeping a device per utterance for the other two stages
+until then.
 
 ### `synthesize_streaming`'s audio — an open defect, stated rather than hidden
 
