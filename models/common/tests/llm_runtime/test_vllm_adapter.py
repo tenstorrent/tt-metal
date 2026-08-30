@@ -19,6 +19,10 @@ from models.common.llm_runtime.vllm_adapter import (
 )
 from models.common.models.llama3_8b.executor import Llama3Executor
 from models.common.models.llama3_8b.generator import Llama3Generator
+from models.common.models.qwen25_72b.generator import Qwen25_72BGenerator
+from models.common.models.qwen25_7b.generator import Qwen25Generator
+from models.common.models.qwen25_coder_32b.generator import Qwen25Coder32BGenerator
+from models.common.models.qwen2_7b.generator import Qwen2Generator
 
 
 def _adapter(*, trace=None, paged_config=None, model_dtype=ttnn.bfloat8_b):
@@ -192,7 +196,7 @@ def test_normalizer_signatures_are_explicit(method_name, expected):
     assert [(name, parameter.kind, parameter.default) for name, parameter in parameters.items()] == expected
 
 
-def test_normalized_typed_dicts_have_stable_required_key_order():
+def test_normalized_typed_dicts_have_stable_key_order_and_optional_request_state():
     assert tuple(NormalizedPrefillKwargs.__annotations__) == (
         "tokens",
         "page_table",
@@ -205,19 +209,25 @@ def test_normalized_typed_dicts_have_stable_required_key_order():
         "output_tokens",
         "slot_remap",
     )
-    assert NormalizedPrefillKwargs.__required_keys__ == frozenset(NormalizedPrefillKwargs.__annotations__)
+    assert NormalizedPrefillKwargs.__required_keys__ == frozenset(
+        {"tokens", "page_table", "prompt_lens", "start_pos", "empty_slots", "kv_cache", "sampling_params"}
+    )
+    assert NormalizedPrefillKwargs.__optional_keys__ == frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
     assert tuple(NormalizedDecodeKwargs.__annotations__) == (
         "tokens",
         "start_pos",
         "page_table",
         "kv_cache",
         "sampling_params",
+        "reset_batch",
         "prompt_tokens",
         "output_tokens",
         "slot_remap",
-        "reset_batch",
     )
-    assert NormalizedDecodeKwargs.__required_keys__ == frozenset(NormalizedDecodeKwargs.__annotations__)
+    assert NormalizedDecodeKwargs.__required_keys__ == frozenset(
+        {"tokens", "start_pos", "page_table", "kv_cache", "sampling_params", "reset_batch"}
+    )
+    assert NormalizedDecodeKwargs.__optional_keys__ == frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
 
 
 def test_normalize_prefill_positional_call_without_mutating_caller_kwargs():
@@ -272,18 +282,132 @@ def test_normalize_decode_converts_existing_tensors_and_flattens_column_tokens()
         compatibility_kwargs={"slot_remap": [0, 1]},
     )
 
-    assert tuple(normalized) == tuple(NormalizedDecodeKwargs.__annotations__)
+    assert tuple(normalized) == (
+        "tokens",
+        "start_pos",
+        "page_table",
+        "kv_cache",
+        "sampling_params",
+        "reset_batch",
+        "slot_remap",
+    )
     assert normalized["tokens"].shape == (2,)
     assert normalized["tokens"].dtype == torch.long
     assert normalized["start_pos"].dtype == torch.long
     assert normalized["page_table"].dtype == torch.int32
     assert normalized["kv_cache"] is None
     assert normalized["sampling_params"] is None
-    assert normalized["prompt_tokens"] is None
-    assert normalized["output_tokens"] is None
+    assert "prompt_tokens" not in normalized
+    assert "output_tokens" not in normalized
     assert normalized["slot_remap"] == [0, 1]
     assert normalized["reset_batch"] is False
     assert enable_trace is True
+
+
+@pytest.mark.parametrize("method_name", ["normalize_prefill", "normalize_decode"])
+@pytest.mark.parametrize(
+    "compatibility_kwargs",
+    (None, {"prompt_tokens": None, "output_tokens": None, "slot_remap": None}),
+)
+def test_normalize_omits_unsupplied_or_none_request_state(method_name, compatibility_kwargs):
+    adapter = _adapter(trace=TraceConfig(mode="all"))
+    args = (
+        (torch.zeros((1, 1)), torch.zeros((1, 1)))
+        if method_name == "normalize_prefill"
+        else (torch.zeros(1), torch.zeros(1), torch.zeros((1, 1)))
+    )
+
+    normalized, _ = getattr(adapter, method_name)(
+        *args,
+        enable_trace=True,
+        compatibility_kwargs=compatibility_kwargs,
+    )
+
+    assert not ({"prompt_tokens", "output_tokens", "slot_remap"} & normalized.keys())
+
+
+class _NarrowQwenRequestTarget:
+    def __init__(self):
+        self.calls = []
+
+    def prefill_forward(
+        self,
+        tokens,
+        page_table,
+        *,
+        prompt_lens=None,
+        start_pos=None,
+        empty_slots=None,
+        kv_cache=None,
+        sampling_params=None,
+        execution=None,
+    ):
+        self.calls.append(
+            (
+                "prefill",
+                {
+                    "tokens": tokens,
+                    "page_table": page_table,
+                    "prompt_lens": prompt_lens,
+                    "start_pos": start_pos,
+                    "empty_slots": empty_slots,
+                    "kv_cache": kv_cache,
+                    "sampling_params": sampling_params,
+                    "execution": execution,
+                },
+            )
+        )
+        return "prefill"
+
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table,
+        *,
+        kv_cache=None,
+        sampling_params=None,
+        reset_batch=False,
+        read_from_device=True,
+        execution=None,
+    ):
+        self.calls.append(
+            (
+                "decode",
+                {
+                    "tokens": tokens,
+                    "start_pos": start_pos,
+                    "page_table": page_table,
+                    "kv_cache": kv_cache,
+                    "sampling_params": sampling_params,
+                    "reset_batch": reset_batch,
+                    "read_from_device": read_from_device,
+                    "execution": execution,
+                },
+            )
+        )
+        return "decode"
+
+
+@pytest.mark.parametrize(
+    "generator_class",
+    (Qwen2Generator, Qwen25Generator, Qwen25_72BGenerator, Qwen25Coder32BGenerator),
+)
+def test_qwen_generator_dispatch_omits_absent_state_for_narrow_request_surface(generator_class):
+    generator = object.__new__(generator_class)
+    generator._adapter = _adapter()
+    generator.target = _NarrowQwenRequestTarget()
+    prefill_execution = object()
+    decode_execution = object()
+    generator._select_prefill_execution = lambda normalized, requested: prefill_execution
+    generator._select_execution = lambda operation, requested: decode_execution
+
+    assert generator.prefill_forward([[1]], [[0]], enable_trace=False) == "prefill"
+    assert generator.decode_forward([1], [0], [[0]], enable_trace=False) == "decode"
+
+    assert [name for name, _ in generator.target.calls] == ["prefill", "decode"]
+    assert generator.target.calls[0][1]["execution"] is prefill_execution
+    assert generator.target.calls[1][1]["execution"] is decode_execution
 
 
 @pytest.mark.parametrize(

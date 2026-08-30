@@ -28,7 +28,7 @@ _IGNORED_VLLM_KWARGS = frozenset(
 _SAMPLING_STATE_VLLM_KWARGS = frozenset({"prompt_tokens", "output_tokens", "slot_remap"})
 
 
-class NormalizedPrefillKwargs(TypedDict):
+class _NormalizedPrefillRequiredKwargs(TypedDict):
     tokens: torch.Tensor  # ↓ Core request
     page_table: torch.Tensor
     prompt_lens: torch.Tensor | None  # ↓ Sequence metadata
@@ -36,21 +36,27 @@ class NormalizedPrefillKwargs(TypedDict):
     empty_slots: Sequence[int] | None  # ↓ Lane routing
     kv_cache: Any  # ↓ Borrowed resources
     sampling_params: Any  # ↓ Sampling
+
+
+class NormalizedPrefillKwargs(_NormalizedPrefillRequiredKwargs, total=False):
     prompt_tokens: Any  # ↓ Request-owned sampling state
     output_tokens: Any
     slot_remap: Any
 
 
-class NormalizedDecodeKwargs(TypedDict):
+class _NormalizedDecodeRequiredKwargs(TypedDict):
     tokens: torch.Tensor  # ↓ Core request
     start_pos: torch.Tensor
     page_table: torch.Tensor
     kv_cache: Any  # ↓ Borrowed resources
     sampling_params: Any  # ↓ Sampling
+    reset_batch: bool  # ↓ State transition
+
+
+class NormalizedDecodeKwargs(_NormalizedDecodeRequiredKwargs, total=False):
     prompt_tokens: Any  # ↓ Request-owned sampling state
     output_tokens: Any
     slot_remap: Any
-    reset_batch: bool  # ↓ State transition
 
 
 @dataclass(frozen=True)
@@ -150,10 +156,8 @@ class VLLMAdapter:
             "empty_slots": empty_slots,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
-            "prompt_tokens": _compatibility_value(compatibility_kwargs, "prompt_tokens"),
-            "output_tokens": _compatibility_value(compatibility_kwargs, "output_tokens"),
-            "slot_remap": _compatibility_value(compatibility_kwargs, "slot_remap"),
         }
+        _copy_supplied_sampling_state(normalized, compatibility_kwargs)
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
         _normalize_tensor(normalized, "prompt_lens", torch.long)
@@ -182,11 +186,9 @@ class VLLMAdapter:
             "page_table": page_table,
             "kv_cache": kv_cache,
             "sampling_params": sampling_params,
-            "prompt_tokens": _compatibility_value(compatibility_kwargs, "prompt_tokens"),
-            "output_tokens": _compatibility_value(compatibility_kwargs, "output_tokens"),
-            "slot_remap": _compatibility_value(compatibility_kwargs, "slot_remap"),
             "reset_batch": reset_batch,
         }
+        _copy_supplied_sampling_state(normalized, compatibility_kwargs)
         _normalize_tensor(normalized, "tokens", torch.long)
         _normalize_tensor(normalized, "start_pos", torch.long)
         _normalize_tensor(normalized, "page_table", torch.int32)
@@ -335,10 +337,18 @@ def _require_resolved_positive_int(name: str, value: Any) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
-def _compatibility_value(compatibility_kwargs: Mapping[str, Any] | None, name: str) -> Any:
+def _copy_supplied_sampling_state(
+    normalized: NormalizedPrefillKwargs | NormalizedDecodeKwargs,
+    compatibility_kwargs: Mapping[str, Any] | None,
+) -> None:
+    """Forward only request state that the external caller actually supplied."""
+
     if compatibility_kwargs is None:
-        return None
-    return compatibility_kwargs.get(name)
+        return
+    for name in ("prompt_tokens", "output_tokens", "slot_remap"):
+        value = compatibility_kwargs.get(name)
+        if value is not None:
+            normalized[name] = value
 
 
 def _normalize_tensor(kwargs: dict[str, Any], name: str, dtype: torch.dtype) -> None:
