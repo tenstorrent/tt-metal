@@ -10,6 +10,23 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
+
+template <typename Accessor, typename Endpoint>
+FORCE_INLINE void async_read_accessor_page(
+    const Noc& noc, const Accessor& accessor, const Endpoint& dst, uint32_t page_bytes, uint32_t page_id) {
+    noc.async_read(accessor, dst, page_bytes, {.page_id = page_id}, {});
+}
+
+template <typename ReaderType, typename Endpoint>
+FORCE_INLINE void async_read_accessor_page(
+    const Noc& noc,
+    const PagedKVAccessor<ReaderType>& accessor,
+    const Endpoint& dst,
+    uint32_t page_bytes,
+    uint32_t page_id) {
+    accessor.async_read_page(noc, dst, page_id, page_bytes);
+}
 
 // Batch packetized DRAM reads into a CB while keeping multiple packets in flight.  The caller
 // provides the source page mapping; this supports both the dense reader's contiguous two-page
@@ -45,12 +62,8 @@ FORCE_INLINE void prefetch_batch_read_tiles(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
-                noc.async_read(
-                    accessor,
-                    CoreLocalMem<uint8_t>(l1_write_addr),
-                    input_page_size,
-                    {.page_id = next_page_id(tiles_read)},
-                    {});
+                async_read_accessor_page(
+                    noc, accessor, CoreLocalMem<uint8_t>(l1_write_addr), input_page_size, next_page_id(tiles_read));
                 l1_write_addr += payload_size_bytes;
                 tiles_read += contig_pages_advanced;
             }

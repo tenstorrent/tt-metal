@@ -116,7 +116,6 @@ void kernel_main() {
         invalidate_l1_cache();
         page_bundle_cb.push_back(1);
     }
-    volatile tt_l1_ptr uint16_t* page_bundle_ids = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_bundle_l1);
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
@@ -213,7 +212,7 @@ void kernel_main() {
                         rows,
                         packed_row_bytes,
                         kv_batch_page_offset,
-                        page_bundle_ids);
+                        page_bundle_l1);
                     // Expand the scale rows from the reader's gathered half while the writer handles its
                     // own half. The two RISCs write disjoint rows of the same FP32 broadcast tiles.
                     sparse_sdpa::scatter_packed_scales<scale_blocks>(
@@ -274,7 +273,7 @@ void kernel_main() {
                     valid,
                     k_row_bytes,
                     kv_batch_page_offset,
-                    page_bundle_ids);
+                    page_bundle_l1);
                 kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
                 kack_cb.pop_front(1);
                 // Zero-fill the sentinel suffix: masked-key scores become a defined 0 (compute adds -inf).

@@ -83,7 +83,6 @@ void kernel_main() {
         page_bundle_l1 = page_bundle_cb.get_read_ptr();
         invalidate_l1_cache();
     }
-    volatile tt_l1_ptr uint16_t* page_bundle_ids = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_bundle_l1);
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
     // Reduce identity scaler (value 1.0; the softmax scale is applied in compute's exp).
@@ -141,7 +140,7 @@ void kernel_main() {
                     kv_cache_num_layers,
                     kv_cache_layer_idx,
                     sparse_sdpa::SCALED_K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset, page_bundle_ids);
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset, page_bundle_l1);
                 sparse_sdpa::scatter_packed_scales<scale_blocks>(
                     dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
             } else {
@@ -156,7 +155,7 @@ void kernel_main() {
                     kv_cache_num_layers,
                     kv_cache_layer_idx,
                     sparse_sdpa::K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset, page_bundle_ids);
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset, page_bundle_l1);
             }
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);

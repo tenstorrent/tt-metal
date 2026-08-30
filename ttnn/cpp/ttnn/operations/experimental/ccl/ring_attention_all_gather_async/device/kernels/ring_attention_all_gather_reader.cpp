@@ -200,48 +200,35 @@ void kernel_main() {
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             uint32_t page_bundle_col = 0;
-            PagedKVBundleCursor bundle_cursor;
-            uint32_t bundle_stride = 0;
-            uint32_t head_offset = 0;
-            uint32_t physical_bundle_offset = 0;
+            auto input_reader = input_tensor_addrgens[input_idx];
+            const PagedKVAccessor<decltype(input_reader)> paged_kv{
+                input_reader,
+                page_bundle_scratch,
+                page_bundle_size_tiles,
+                page_bundle_num_layers,
+                input_batch_head_count[input_idx],
+                page_bundle_layer_idx};
+            typename PagedKVAccessor<decltype(input_reader)>::Cursor bundle_cursor;
             if constexpr (has_page_bundles) {
                 page_bundle_col = tiles_read % input_tensor_Wt[input_idx];
                 const uint32_t first_logical_row = tiles_read / input_tensor_Wt[input_idx];
-                bundle_cursor.reset(page_bundle_scratch, first_logical_row, page_bundle_size_tiles);
-                bundle_stride = page_bundle_num_layers * input_batch_head_count[input_idx] * page_bundle_size_tiles *
-                                input_tensor_Wt[input_idx];
-                head_offset = (page_bundle_layer_idx * input_batch_head_count[input_idx] + bh_idx) *
-                              page_bundle_size_tiles * input_tensor_Wt[input_idx];
-                physical_bundle_offset = bundle_cursor.physical_bundle() * bundle_stride;
+                bundle_cursor = paged_kv.cursor(first_logical_row, bh_idx);
             }
             prefetch_batch_read_tiles<
                 input_tensor_page_size,
                 packet_size_in_pages,
                 PREFETCH_PACKETS,
                 contig_pages_advanced>(
-                noc_obj,
-                cb_output,
-                tiles_read,
-                tiles_to_read,
-                cb_fifo_limit,
-                cb_fifo_size,
-                input_tensor_addrgens[input_idx],
-                [&](uint32_t tr) {
+                noc_obj, cb_output, tiles_read, tiles_to_read, cb_fifo_limit, cb_fifo_size, paged_kv, [&](uint32_t tr) {
                     if constexpr (!has_page_bundles) {
                         return output_tile_id_start + tr;
                     } else {
                         [[maybe_unused]] const uint32_t page_id =
-                            physical_bundle_offset + head_offset +
-                            bundle_cursor.row_in_bundle * input_tensor_Wt[input_idx] + page_bundle_col;
+                            bundle_cursor.physical_row() * input_tensor_Wt[input_idx] + page_bundle_col;
                         page_bundle_col += contig_pages_advanced;
                         while (page_bundle_col >= input_tensor_Wt[input_idx]) {
                             page_bundle_col -= input_tensor_Wt[input_idx];
-                            if (bundle_cursor.advance_row()) {
-                                // Avoid loading one entry beyond the table after the final transfer.
-                                if (tr + contig_pages_advanced < tiles_to_read) {
-                                    physical_bundle_offset = bundle_cursor.physical_bundle() * bundle_stride;
-                                }
-                            }
+                            bundle_cursor.advance_row(tr + contig_pages_advanced < tiles_to_read);
                         }
                         return page_id;
                     }

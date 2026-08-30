@@ -12,6 +12,7 @@
 #include "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 
 #include "block_cyclic_remap.hpp"  // tt::block_cyclic::logical_to_physical_page (invP remap, rows)
+#include "paged_kv_utils.hpp"
 
 namespace sparse_sdpa {
 
@@ -82,10 +83,11 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t hi,
     uint32_t k_row_bytes,
     uint32_t page_offset,
-    volatile tt_l1_ptr uint16_t* page_bundle_ids) {
+    uint32_t page_bundle_l1) {
     constexpr uint32_t D = RingDepth;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
+    const PagedKVAccessor<Accessor> paged_kv{kv, page_bundle_l1, PageSize, NumLayers, 1, LayerIdx};
     for (uint32_t i = 0; i < cnt; ++i) {
         const uint32_t p = lo + i;
         const uint32_t trid = (i % D) + 1;
@@ -97,10 +99,11 @@ FORCE_INLINE void trid_ring_gather(
             tt::block_cyclic::logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(
                 idx_ptr[base + p]);
         if constexpr (PagedKV) {
-            const uint32_t physical_bundle = page_bundle_ids[page / PageSize];
-            page = (physical_bundle * NumLayers + LayerIdx) * PageSize + (page % PageSize);
+            paged_kv.async_read_row(noc, local_l1, page, 0, k_row_bytes, dst_l1 + p * k_row_bytes);
+        } else {
+            noc.async_read(
+                kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
         }
-        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {
