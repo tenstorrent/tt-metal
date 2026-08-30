@@ -51,8 +51,9 @@ GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 
-RING_PERF_KV_LENS = (GLM52_KV_55K, GLM52_KV_512K)
-RING_PERF_KV_IDS = ("55k", "512k")
+# Measurement-only repeat for the sweep point within 1% of the no-regression boundary.
+RING_PERF_KV_LENS = (51_200,)
+RING_PERF_KV_IDS = ("qb_units_40_repeat",)
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
@@ -89,7 +90,7 @@ _FABRIC_2D_TORUS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
     "fabric_tensix_config": ttnn.FabricTensixConfig.DISABLED,
-    # Measurement-only guard: omit fabric_router_config to use the runtime default.
+    "fabric_router_config": _ring_indexer_fabric_router_config(),
     "require_exact_physical_num_devices": True,
 }
 
