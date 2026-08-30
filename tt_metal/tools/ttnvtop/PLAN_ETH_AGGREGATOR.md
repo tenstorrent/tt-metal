@@ -1642,6 +1642,107 @@ fixed the kernel does not freeze; it simply never starts from the artifact.
    device init, by design -- so "survives" has to be a property of the system, not of
    the kernel.
 
+## 5r. Artifact replay DIAGNOSED -- the artifact was never the problem -- 2026-08-30
+
+The byte-for-byte diff 5q asked for, run on Blackhole (desktop-0, p150a, 120 cores) where
+a wedged eth core costs nothing. Two processes, the SAME eth core, because
+`stop_aggregator` asserts the RISC reset and leaves the core with no firmware until the
+next device init -- so a same-process second launch could not start whatever the bytes
+said.
+
+    run 1  TTNVTOP_DUMP_DIR=<d> --gtest_filter=*EthAggregatorGoldDump*    emit + LaunchProgram
+    run 2  TTNVTOP_DUMP_DIR=<d> --gtest_filter=*EthAggregatorReplayDiff*  replay the artifact
+
+Both dump the kernel-config region and the whole mailbox block (MAILBOX up to
+kernel_config_base: the launch ring, both go-message arrays, `launch_msg_rd_ptr` and the
+go index -- every field `idle_erisc.cc` consults before it jumps).
+
+### The diff
+
+```
+gold:   marker=0xa66e0000 sweeps=2494 head=318647
+replay: marker=0xa66e0000 sweeps=2495 head=318649
+diff kernel-config: 0 of 23056 bytes differ
+  mailbox differs at +0x40 (L1 0x140) len 1: gold word 0x00000001 replay 0x00000000
+diff mailbox: 1 of 64560 bytes differ
+REPLAY VERDICT: running=yes cfg_diff=0 mbox_diff=1
+```
+
+**The replay started the kernel, and 23056 of 23056 kernel-config bytes were identical.**
+The single differing byte is `launch[0].kernel_config.mode` at `launch_addr + 0x30`: gold
+`DISPATCH_MODE_HOST` (1), replay `DISPATCH_MODE_DEV` (0). `llrt::write_launch_msg_to_core`
+sets that field at write time, and the emitter snapshots `kg->launch_msg` before ever
+calling it. It is harmless: `idle_erisc.cc` reads `kernel_config.mode` only in the
+post-kernel block, and this kernel never returns.
+
+So the artifact content is correct. **The defect was never in emit or replay.**
+
+### What it actually was
+
+`idle_erisc.cc`'s wait loop is the ONLY thing anywhere that polls
+`go_messages[0].signal` for `RUN_MSG_GO`. That firmware gets onto an inactive ethernet
+core from exactly one place: a tt-metal device init
+(`risc_firmware_initializer.cpp` writes the IDLE_ETH launch message and a `RUN_MSG_INIT`
+go word). A bare board runs the base eth firmware, which knows nothing about launch
+messages.
+
+A/B on the same board and the same core, toggling only whether a tt-metal process holds
+the device open (`TestEthAggregatorHoldDevice`, which opens the devices and sleeps):
+
+    tt-metal process holding the device   RUNNING     (sweeps 624 -> 1232, magic republished)
+    no tt-metal process                   NOT RUNNING (magic 0x0, sweeps 0 -> 0)
+
+The four writes land in both arms. In arm B nothing executes them, because nothing is
+polling.
+
+### Consequence: the operating model inverts, and it is FINE
+
+5q had it backwards. The artifact launcher was built to run BEFORE the workload, and that
+is the one thing it structurally cannot do -- not for want of a missing write, but because
+before the workload there is no firmware on the core to receive the go signal. The
+sequence that works is the other order:
+
+    workload starts -> its tt-metal device init loads idle-erisc firmware on every
+    inactive eth core -> the UMD-only collector replays the artifact -> kernel starts
+
+which is exactly what a monitor wants, and what 5q already measured as free (attach
+during Llama-3.3-70B: 10.34 vs a 10.35 control). Two tt-metal processes cannot share a
+device, but a UMD-only collector and a tt-metal workload can -- that is the whole point of
+the artifact.
+
+The residual limitation is narrow and worth stating plainly: **the aggregator cannot be
+pre-staged on an idle board, and any subsequent device init kills it** (measured -- arm
+A's aggregator was gone once the holding process closed the device). Liveness is a
+supervisor's job, not the kernel's, exactly as 5q's item 2 said.
+
+### Two reporting bugs fixed on the way
+
+1. **`--launch-aggregator` reported success it had not checked.** Four writes returning
+   meant "launched". That is what let this defect stand for a day across all 8 chips. It
+   now reads the journal header twice and reports `RUNNING (sweeps a -> b)` or
+   `NOT RUNNING`, and exits non-zero if nothing started.
+2. **The stale-journal trap bit again, and then a second, opposite way.** A journal from
+   an earlier aggregator keeps a valid magic and a valid header checksum forever with its
+   count simply frozen -- the first version of the verify above read `2512 -> 2512` and
+   correctly said NOT RUNNING. But a RESTARTED aggregator counts from ZERO, so the
+   working arm read `2512 -> 624` and was reported NOT RUNNING too. "Did the count go up"
+   is wrong in BOTH directions unless the baseline is known. The launcher now zeroes the
+   journal header before the go word, which is the only baseline that cannot lie.
+
+### Also found, not fixed
+
+- **`send_reset_go_signal` is a no-op on IDLE_ETH.** 5p added it as "a real gap". It is
+  not one: `idle_erisc.cc` has no `RUN_MSG_RESET_READ_PTR_FROM_HOST` branch at all --
+  unlike `brisc.cc`, `active_erisc.cc` and `dm.cc`, which all handle it. Its wait loop
+  tests only `signal != RUN_MSG_GO`. Kept in the artifact because LaunchProgram sends it
+  and byte-identity is the point, but it never reset any read pointer.
+- **`LaunchProgram` passes an address where `write_launch_msg_to_core` takes a `bool`.**
+  `tt_metal.cpp:1010` passes `hal.get_dev_addr(programmable_core_type, LAUNCH)` as the
+  5th argument, whose parameter is `bool send_go = true`. It is always nonzero so it
+  always means `true`, which is the intended behaviour -- but the function derives the
+  launch address itself and ignores what was passed. Latent, upstream, unrelated to this
+  defect.
+
 ## 6. Risks
 
 | Risk | Mitigation |

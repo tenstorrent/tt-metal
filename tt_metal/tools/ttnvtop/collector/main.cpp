@@ -768,7 +768,14 @@ int main(int argc, char* argv[]) {
         }
         TTDevice* dev = dev_up.get();
         const tt::ARCH arch = dev->get_arch();
-        if (arch != tt::ARCH::WORMHOLE_B0) {
+        // Monitoring is Wormhole-only for Phase 1 -- the per-core sampler and publisher
+        // are built against WH's grid and heartbeat. The ARTIFACT LAUNCHER is not: the
+        // launch contract is arch-independent L1 writes and the kernel is known to run on
+        // Blackhole (120 cores). Admitting BH here is what makes the launcher debuggable
+        // on a board where a wedged eth core costs nothing, instead of only on the T3K
+        // where it costs a board reset (tt-eth-idle-core-firmware-contracts).
+        const bool launcher_only = !cli.launch_artifact.empty();
+        if (arch != tt::ARCH::WORMHOLE_B0 && !(launcher_only && arch == tt::ARCH::BLACKHOLE)) {
             std::cerr << "ttnvtop-collector: skipping chip " << chip_id << " arch " << arch_name(arch)
                       << " (Wormhole-only for Phase 1).\n";
             continue;
@@ -922,7 +929,8 @@ int main(int argc, char* argv[]) {
     if (!cli.launch_artifact.empty()) {
         const std::string dir = cli.launch_artifact;
         uint32_t cfg_base = 0, image_bytes = 0, rta_off = 0, launch_addr = 0, go_addr = 0, eth_l1 = 0;
-        std::vector<uint8_t> launch_bytes, go_bytes;
+        uint32_t go_index_addr = 0;
+        std::vector<uint8_t> launch_bytes, go_bytes, reset_go_bytes;
         {
             std::ifstream f(dir + "/aggregator.desc");
             if (!f.good()) {
@@ -941,9 +949,11 @@ int main(int argc, char* argv[]) {
                     f >> launch_addr;
                 } else if (k == "go_addr") {
                     f >> go_addr;
+                } else if (k == "go_msg_index_addr") {
+                    f >> go_index_addr;
                 } else if (k == "eth_l1_unreserved") {
                     f >> eth_l1;
-                } else if (k == "launch_bytes" || k == "go_bytes") {
+                } else if (k == "launch_bytes" || k == "go_bytes" || k == "reset_go_bytes") {
                     size_t n = 0;
                     f >> n;
                     std::vector<uint8_t> v(n);
@@ -952,7 +962,13 @@ int main(int argc, char* argv[]) {
                         f >> b;
                         v[i] = static_cast<uint8_t>(b);
                     }
-                    (k == "launch_bytes" ? launch_bytes : go_bytes) = std::move(v);
+                    if (k == "launch_bytes") {
+                        launch_bytes = std::move(v);
+                    } else if (k == "go_bytes") {
+                        go_bytes = std::move(v);
+                    } else {
+                        reset_go_bytes = std::move(v);
+                    }
                 } else {
                     std::string skip;
                     std::getline(f, skip);
@@ -1050,21 +1066,84 @@ int main(int argc, char* argv[]) {
                 16u,
                 chip.arch == tt::ARCH::WORMHOLE_B0 ? ttnvtop::kWormholeEthHeartbeatAddr : 0u);
             try {
+                // Reset the go signal FIRST, exactly as LaunchProgram does via
+                // send_reset_go_signal(). Omitting this was why the replay never started
+                // the kernel: the firmware reads mailboxes->launch[launch_msg_rd_ptr],
+                // and without RUN_MSG_RESET_READ_PTR_FROM_HOST plus a zeroed
+                // GO_MSG_INDEX it can keep a stale read pointer and consume a different
+                // launch slot than the one we write.
+                if (!reset_go_bytes.empty()) {
+                    dev->write_to_device(reset_go_bytes.data(), target, go_addr, reset_go_bytes.size());
+                }
+                if (go_index_addr != 0) {
+                    const uint32_t zero = 0;
+                    dev->write_to_device(&zero, target, go_index_addr, sizeof(zero));
+                }
                 dev->write_to_device(image.data(), target, cfg_base, image_bytes);
                 dev->write_to_device(rt.data(), target, cfg_base + rta_off, rt.size() * 4);
+
+                // Zero the journal header before the go word.
+                //
+                // A journal left by an earlier aggregator keeps a valid magic and a valid
+                // header checksum indefinitely, and its sweep_count simply stops. Verify
+                // against that and a dead core reads as a healthy one -- it has already
+                // produced two near-false-positives. Worse, a RESTARTED aggregator
+                // counts from zero, so "did the count go up" is wrong in both
+                // directions unless the baseline is known. Zeroing it makes the baseline
+                // zero, which is the only baseline that cannot lie.
+                const std::vector<uint8_t> hdr_zero(sizeof(util_agg_msg_t), 0);
+                dev->write_to_device(hdr_zero.data(), target, l1.journal, hdr_zero.size());
+
                 dev->write_to_device(launch_bytes.data(), target, launch_addr, launch_bytes.size());
                 dev->write_to_device(go_bytes.data(), target, go_addr, go_bytes.size());
             } catch (const std::exception& e) {
                 std::cerr << "  chip " << chip.chip_id << ": launch failed: " << e.what() << "\n";
                 continue;
             }
-            ++launched;
             std::cout << "  chip " << chip.chip_id << (chip.is_remote ? " (remote)" : " (mmio)") << " eth (" << target.x
                       << "," << target.y << ") " << grid.xs.size() << "x" << grid.ys.size() << " = " << grid.num_cores()
-                      << " cores, journal 0x" << std::hex << l1.journal << std::dec << "\n";
+                      << " cores, journal 0x" << std::hex << l1.journal << std::dec;
+
+            // VERIFY, do not assume. The four writes succeeding says only that L1
+            // accepted them; it says nothing about whether anything on the core is
+            // polling go_messages[0]. This launcher spent a day reporting success on all
+            // eight chips while starting nothing, because "the writes returned" was
+            // treated as "the kernel is running".
+            //
+            // Liveness is an ADVANCING sweep_count from a ZEROED baseline, never a valid
+            // magic. The header was zeroed above, so a live kernel republishes the magic
+            // and counts up from zero, and anything that does not is not running.
+            bool running = false;
+            uint32_t s0 = 0, s1 = 0;
+            uint32_t magic = 0;
+            try {
+                std::vector<uint8_t> buf(sizeof(util_agg_msg_t), 0);
+                util_agg_hdr_view_t h{};
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                dev->read_from_device(buf.data(), target, l1.journal, sizeof(util_agg_hdr_view_t));
+                std::memcpy(&h, buf.data(), sizeof(h));
+                s0 = h.sweep_count;
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                dev->read_from_device(buf.data(), target, l1.journal, sizeof(util_agg_hdr_view_t));
+                std::memcpy(&h, buf.data(), sizeof(h));
+                s1 = h.sweep_count;
+                magic = h.magic;
+                running = magic == UTIL_AGG_MAGIC && s1 > s0;
+            } catch (const std::exception& e) {
+                std::cout << " — verify read failed: " << e.what() << "\n";
+                continue;
+            }
+            if (running) {
+                ++launched;
+                std::cout << " — RUNNING (sweeps " << s0 << " -> " << s1 << ")\n";
+            } else {
+                std::cout << " — NOT RUNNING (magic 0x" << std::hex << magic << std::dec << ", sweeps " << s0 << " -> "
+                          << s1 << "). Nothing on an idle eth core polls go_messages[0] unless tt-metal's\n"
+                          << "    idle-erisc firmware is resident, and only a tt-metal device init puts it there.\n";
+            }
         }
         std::cout << "launched " << launched << " aggregator(s) — no tt-metal, no dispatch, no fabric.\n";
-        return 0;
+        return launched > 0 ? 0 : 1;
     }
 
     // Remote-read latency vs transfer size.

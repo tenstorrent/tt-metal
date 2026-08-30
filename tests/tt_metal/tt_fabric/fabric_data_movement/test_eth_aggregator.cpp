@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <set>
+#include <span>
 #include <sstream>
 #include <thread>
 #include <unordered_set>
@@ -453,20 +454,13 @@ TEST_F(Fabric1DFixture, TestEthAggregatorRemoteChip) {
 // have to duplicate and keep in lockstep.
 //
 // The artifact is produced ONCE, offline, by a process that has tt-metal. Monitoring
-// then needs only UMD. Run with TTNVTOP_EMIT_ARTIFACT=<dir>.
-TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
-    const char* outdir = std::getenv("TTNVTOP_EMIT_ARTIFACT");
-    if (outdir == nullptr) {
-        GTEST_SKIP() << "set TTNVTOP_EMIT_ARTIFACT=<dir> to emit the launch artifact";
-    }
-    const auto& devices = this->get_devices();
-    ASSERT_GE(devices.size(), 1u);
-    auto* dev = devices[0]->get_devices()[0];
-    const auto pick = ttnvtop::select_aggregator_eth_core(dev);
-    if (!pick.ok) {
-        GTEST_SKIP() << pick.reason;
-    }
-
+// then needs only UMD.
+//
+// `also_launch` additionally launches the program the artifact was cut from, so one run
+// can produce both the artifact and the DEVICE STATE a working launch leaves behind —
+// the gold side of the replay diff below.
+static void emit_artifact(
+    tt::tt_metal::IDevice* dev, const tt::tt_metal::CoreCoord& core, const std::string& dir, bool also_launch) {
     const uint32_t num_cores = num_cores_of(dev);
     ASSERT_GT(num_cores, 0u);
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -479,17 +473,20 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
     TensixGrid grid;
     ASSERT_TRUE(translated_tensix_grid(soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED), grid));
 
+    std::vector<uint32_t> zero(4, 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(dev, core, l1.dbg, zero, CoreType::ETH);
+
     auto program = tt::tt_metal::CreateProgram();
     auto kernel = tt::tt_metal::CreateKernel(
         program,
         "tt_metal/tools/ttnvtop/kernels/eth_aggregator.cpp",
-        pick.core,
+        core,
         tt::tt_metal::EthernetConfig{
             .eth_mode = tt::tt_metal::Eth::IDLE, .processor = tt::tt_metal::DataMovementProcessor::RISCV_0});
     tt::tt_metal::SetRuntimeArgs(
         program,
         kernel,
-        pick.core,
+        core,
         build_rt_args(
             grid, l1, num_cores, static_cast<uint32_t>(dev->id()), kSweepIntervalCycles, kPublishEverySweeps));
 
@@ -502,7 +499,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
     tt::tt_metal::detail::WriteRuntimeArgsToDevice(dev, program, /*force_slow_dispatch=*/true);
 
     const uint32_t idle_idx = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
-    auto* kg = program.impl().kernels_on_core(pick.core, idle_idx);
+    auto* kg = program.impl().kernels_on_core(core, idle_idx);
     ASSERT_NE(kg, nullptr);
     auto lm = kg->launch_msg.view();
     const uint32_t cfg_base = lm.kernel_config().kernel_config_base()[idle_idx];
@@ -533,9 +530,8 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
     }
 
     std::vector<uint32_t> image(image_bytes / 4, 0u);
-    tt::tt_metal::detail::ReadFromDeviceL1(dev, pick.core, cfg_base, image_bytes, image, CoreType::ETH);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, core, cfg_base, image_bytes, image, CoreType::ETH);
 
-    const std::string dir(outdir);
     {
         std::ofstream f(dir + "/aggregator.image", std::ios::binary);
         ASSERT_TRUE(f.good()) << "cannot write to " << dir;
@@ -551,10 +547,39 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
         f << "launch_addr "
           << hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::LAUNCH)
           << "\n";
+        f << "go_msg_index_addr "
+          << hal.get_dev_addr(
+                 tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::GO_MSG_INDEX)
+          << "\n";
+        // The RESET go message. LaunchProgram sends this before the launch message
+        // (send_reset_go_signal), so the replay reproduces the sequence. Note that on
+        // IDLE_ETH it is a NO-OP: idle_erisc.cc's wait loop tests only
+        // `go_messages[0].signal != RUN_MSG_GO` and has no RESET_READ_PTR_FROM_HOST
+        // branch at all, unlike brisc.cc and active_erisc.cc. Kept because LaunchProgram
+        // sends it and the point of the artifact is to be byte-identical, but it is not
+        // the missing step it was taken for.
+        {
+            auto reset_msg = hal.get_dev_msgs_factory(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH)
+                                 .create<tt::tt_metal::dev_msgs::go_msg_t>();
+            reset_msg.view().signal() = tt::tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
+            const auto* rp = reinterpret_cast<const uint8_t*>(reset_msg.view().data());
+            f << "reset_go_bytes " << reset_msg.view().size();
+            for (size_t i = 0; i < reset_msg.view().size(); i++) {
+                f << " " << static_cast<unsigned>(rp[i]);
+            }
+            f << "\n";
+        }
         f << "go_addr "
           << hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::GO_MSG)
           << "\n";
         f << "eth_l1_unreserved " << eth_l1 << "\n";
+
+        // The launch message, captured HERE — before write_launch_msg_to_core gets to
+        // mutate it. That function sets kernel_config.mode = DISPATCH_MODE_HOST and
+        // LaunchProgram sets host_assigned_id, neither of which the emit path applies,
+        // so these bytes are NOT what a working launch puts on the device. Both fields
+        // are read by idle_erisc.cc only AFTER the kernel returns, and this kernel never
+        // returns — but the replay diff is the place that settles that, not this comment.
         const auto* lp = reinterpret_cast<const uint8_t*>(lm.data());
         f << "launch_bytes " << lm.size();
         for (size_t i = 0; i < lm.size(); i++) {
@@ -576,6 +601,360 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
         text_off,
         rta_off,
         dir);
+
+    if (also_launch) {
+        // Launch the very program the artifact was cut from. ConfigureDeviceWithProgram
+        // and WriteRuntimeArgsToDevice have already run, so LaunchProgram redoes them and
+        // then writes the launch message and go word — the steps the replay imitates.
+        tt::tt_metal::detail::LaunchProgram(
+            dev, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    }
+}
+
+TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
+    const char* outdir = std::getenv("TTNVTOP_EMIT_ARTIFACT");
+    if (outdir == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_EMIT_ARTIFACT=<dir> to emit the launch artifact";
+    }
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    auto* dev = devices[0]->get_devices()[0];
+    const auto pick = ttnvtop::select_aggregator_eth_core(dev);
+    if (!pick.ok) {
+        GTEST_SKIP() << pick.reason;
+    }
+    emit_artifact(dev, pick.core, std::string(outdir), /*also_launch=*/false);
+}
+
+// ---------------------------------------------------------------------------
+// Artifact replay, byte for byte against a working LaunchProgram.
+//
+// The defect: `--launch-aggregator` reports success and never starts the kernel, while
+// the same kernel via LaunchProgram on the same board starts immediately. Every
+// hypothesis so far was reasoned rather than measured and two were wrong, so these
+// tests capture DEVICE STATE instead of an argument. One run launches properly and
+// dumps the kernel-config region plus the whole mailbox block; a second run replays the
+// artifact onto the SAME core and dumps the same two regions. Anything that differs
+// shows up as a byte offset.
+//
+//   run 1:  TTNVTOP_DUMP_DIR=<d> --gtest_filter=*EthAggregatorGoldDump*
+//   run 2:  TTNVTOP_DUMP_DIR=<d> --gtest_filter=*EthAggregatorReplayDiff*
+//
+// Two processes, not two phases of one: stop_aggregator asserts the RISC reset and
+// leaves the core with no firmware until the next device init (agg_core_select.hpp), so
+// a same-process second launch could not start whatever the bytes said.
+
+// The two regions that decide whether a kernel starts: the kernel-config region the
+// firmware jumps into, and the mailbox block it reads to decide where and whether to
+// jump. Everything above eth_l1_unreserved is the running kernel's own scratch and
+// changes every sweep, so it is deliberately excluded.
+struct DumpRegions {
+    uint32_t cfg_base = 0;
+    uint32_t cfg_bytes = 0;
+    uint32_t mbox_base = 0;
+    uint32_t mbox_bytes = 0;
+};
+
+static DumpRegions dump_regions(uint32_t cfg_base, uint32_t cfg_bytes) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    DumpRegions r;
+    r.cfg_base = cfg_base;
+    r.cfg_bytes = cfg_bytes;
+    r.mbox_base =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::MAILBOX);
+    // MAILBOX up to the start of the kernel-config region: that span holds the
+    // launch-message ring, the go-message array, launch_msg_rd_ptr and the go index —
+    // every field idle_erisc.cc consults before jumping.
+    r.mbox_bytes = cfg_base > r.mbox_base ? cfg_base - r.mbox_base : 4096u;
+    return r;
+}
+
+static void write_region(
+    tt::tt_metal::IDevice* dev,
+    const tt::tt_metal::CoreCoord& core,
+    const std::string& path,
+    uint32_t addr,
+    uint32_t bytes) {
+    std::vector<uint32_t> buf(bytes / 4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, core, addr, bytes, buf, CoreType::ETH);
+    std::ofstream f(path, std::ios::binary);
+    f.write(reinterpret_cast<const char*>(buf.data()), bytes);
+}
+
+static void dump_state(
+    tt::tt_metal::IDevice* dev,
+    const tt::tt_metal::CoreCoord& core,
+    const std::string& dir,
+    const std::string& tag,
+    const DumpRegions& r) {
+    write_region(dev, core, dir + "/" + tag + "_cfg.bin", r.cfg_base, r.cfg_bytes);
+    write_region(dev, core, dir + "/" + tag + "_mbox.bin", r.mbox_base, r.mbox_bytes);
+    std::ofstream f(dir + "/" + tag + "_regions.txt");
+    f << "cfg_base " << r.cfg_base << "\ncfg_bytes " << r.cfg_bytes << "\nmbox_base " << r.mbox_base << "\nmbox_bytes "
+      << r.mbox_bytes << "\neth_core " << core.x << " " << core.y << "\n";
+    log_info(
+        tt::LogTest,
+        "{}: cfg 0x{:x}+{} mbox 0x{:x}+{} on eth {}",
+        tag,
+        r.cfg_base,
+        r.cfg_bytes,
+        r.mbox_base,
+        r.mbox_bytes,
+        core.str());
+}
+
+// Report every differing byte, grouped into runs so a one-word difference does not
+// scroll past a 64 KB dump.
+static uint32_t diff_region(const std::string& a_path, const std::string& b_path, uint32_t base, const char* what) {
+    std::ifstream fa(a_path, std::ios::binary), fb(b_path, std::ios::binary);
+    if (!fa.good() || !fb.good()) {
+        log_info(tt::LogTest, "diff {}: MISSING ({} / {})", what, a_path, b_path);
+        return 0xFFFFFFFFu;
+    }
+    const std::vector<char> a((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
+    const std::vector<char> b((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
+    if (a.size() != b.size()) {
+        log_info(tt::LogTest, "diff {}: SIZE MISMATCH {} vs {}", what, a.size(), b.size());
+        return 0xFFFFFFFFu;
+    }
+    uint32_t differing = 0;
+    size_t i = 0;
+    int runs_printed = 0;
+    while (i < a.size()) {
+        if (a[i] == b[i]) {
+            i++;
+            continue;
+        }
+        const size_t start = i;
+        while (i < a.size() && a[i] != b[i]) {
+            i++;
+        }
+        differing += static_cast<uint32_t>(i - start);
+        if (runs_printed < 40) {
+            uint32_t wa = 0, wb = 0;
+            const size_t w = start & ~size_t(3);
+            std::memcpy(&wa, a.data() + w, 4);
+            std::memcpy(&wb, b.data() + w, 4);
+            log_info(
+                tt::LogTest,
+                "  {} differs at +0x{:x} (L1 0x{:x}) len {}: gold word 0x{:08x} replay 0x{:08x}",
+                what,
+                start,
+                base + start,
+                i - start,
+                wa,
+                wb);
+            runs_printed++;
+        }
+    }
+    log_info(tt::LogTest, "diff {}: {} of {} bytes differ", what, differing, a.size());
+    return differing;
+}
+
+// Run 1: emit the artifact, launch it the working way, confirm it is running, dump.
+TEST_F(Fabric1DFixture, TestEthAggregatorGoldDump) {
+    const char* dumpdir = std::getenv("TTNVTOP_DUMP_DIR");
+    if (dumpdir == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_DUMP_DIR=<dir>";
+    }
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    auto* dev = devices[0]->get_devices()[0];
+    const auto pick = ttnvtop::select_aggregator_eth_core(dev);
+    if (!pick.ok) {
+        GTEST_SKIP() << pick.reason;
+    }
+    const std::string dir(dumpdir);
+    emit_artifact(dev, pick.core, dir, /*also_launch=*/true);
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t eth_l1 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const uint32_t num_cores = num_cores_of(dev);
+    const SenderL1 l1 = layout_sender_l1(eth_l1, num_cores, num_cores);
+
+    // Confirm the gold launch actually ran before its state is used as a reference.
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::vector<uint32_t> dbg(4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, pick.core, l1.dbg, 16, dbg, CoreType::ETH);
+    const auto h = read_journal_header(dev, pick.core, l1.journal);
+    log_info(
+        tt::LogTest, "gold: marker=0x{:08x} sweeps={} head={} | hdr sweeps={}", dbg[0], dbg[1], dbg[2], h.sweep_count);
+    EXPECT_GT(dbg[1], 0u) << "the gold launch itself did not start — nothing to compare against";
+
+    // The dbg block and the journal live above eth_l1_unreserved, outside both dumped
+    // regions, so a running kernel cannot make the dump differ from a stopped one.
+    uint32_t cfg_base = 0, image_bytes = 0;
+    {
+        std::ifstream f(dir + "/aggregator.desc");
+        std::string k;
+        while (f >> k) {
+            if (k == "kernel_config_base") {
+                f >> cfg_base;
+            } else if (k == "image_bytes") {
+                f >> image_bytes;
+            } else {
+                std::string skip;
+                std::getline(f, skip);
+            }
+        }
+    }
+    ASSERT_GT(cfg_base, 0u);
+    dump_state(dev, pick.core, dir, "gold", dump_regions(cfg_base, image_bytes));
+    ttnvtop::stop_aggregator(dev, pick.core);
+}
+
+// Run 2: replay the artifact onto the same core, dump, diff.
+//
+// The writes are the collector's four, in the collector's order, but issued through
+// tt-metal rather than raw UMD. That is deliberate: it holds the CONTENT of the replay
+// under test while removing the transport and the firmware-residency question. If the
+// kernel starts here but not under the collector, the content is right and the defect is
+// environmental; if it does not start here either, the diff says which bytes are wrong.
+TEST_F(Fabric1DFixture, TestEthAggregatorReplayDiff) {
+    const char* dumpdir = std::getenv("TTNVTOP_DUMP_DIR");
+    if (dumpdir == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_DUMP_DIR=<dir> (run TestEthAggregatorGoldDump there first)";
+    }
+    const std::string dir(dumpdir);
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    auto* dev = devices[0]->get_devices()[0];
+    const auto pick = ttnvtop::select_aggregator_eth_core(dev);
+    if (!pick.ok) {
+        GTEST_SKIP() << pick.reason;
+    }
+
+    // Parse the artifact exactly as collector/main.cpp does.
+    uint32_t cfg_base = 0, image_bytes = 0, rta_off = 0, launch_addr = 0, go_addr = 0, go_index_addr = 0, eth_l1 = 0;
+    std::vector<uint8_t> launch_bytes, go_bytes, reset_go_bytes;
+    {
+        std::ifstream f(dir + "/aggregator.desc");
+        ASSERT_TRUE(f.good()) << "no artifact in " << dir;
+        std::string k;
+        while (f >> k) {
+            if (k == "kernel_config_base") {
+                f >> cfg_base;
+            } else if (k == "image_bytes") {
+                f >> image_bytes;
+            } else if (k == "rta_offset") {
+                f >> rta_off;
+            } else if (k == "launch_addr") {
+                f >> launch_addr;
+            } else if (k == "go_addr") {
+                f >> go_addr;
+            } else if (k == "go_msg_index_addr") {
+                f >> go_index_addr;
+            } else if (k == "eth_l1_unreserved") {
+                f >> eth_l1;
+            } else if (k == "launch_bytes" || k == "go_bytes" || k == "reset_go_bytes") {
+                size_t n = 0;
+                f >> n;
+                std::vector<uint8_t> v(n);
+                for (size_t i = 0; i < n; i++) {
+                    unsigned b = 0;
+                    f >> b;
+                    v[i] = static_cast<uint8_t>(b);
+                }
+                if (k == "launch_bytes") {
+                    launch_bytes = std::move(v);
+                } else if (k == "go_bytes") {
+                    go_bytes = std::move(v);
+                } else {
+                    reset_go_bytes = std::move(v);
+                }
+            } else {
+                std::string skip;
+                std::getline(f, skip);
+            }
+        }
+    }
+    ASSERT_GT(cfg_base, 0u);
+    ASSERT_GT(image_bytes, 0u);
+    ASSERT_FALSE(launch_bytes.empty());
+    ASSERT_FALSE(go_bytes.empty());
+
+    std::vector<uint32_t> image(image_bytes / 4, 0u);
+    {
+        std::ifstream f(dir + "/aggregator.image", std::ios::binary);
+        ASSERT_TRUE(f.good());
+        ASSERT_TRUE(f.read(reinterpret_cast<char*>(image.data()), image_bytes));
+    }
+
+    const uint32_t num_cores = num_cores_of(dev);
+    ASSERT_GT(num_cores, 0u);
+    const SenderL1 l1 = layout_sender_l1(eth_l1, num_cores, num_cores);
+    TensixGrid grid;
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    ASSERT_TRUE(translated_tensix_grid(
+        cluster.get_soc_desc(dev->id()).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED), grid));
+    auto rt_args =
+        build_rt_args(grid, l1, num_cores, static_cast<uint32_t>(dev->id()), kSweepIntervalCycles, kPublishEverySweeps);
+
+    // Zero the markers so "is it running" cannot be answered by a stale value.
+    std::vector<uint32_t> zero(4, 0u);
+    tt::tt_metal::detail::WriteToDeviceL1(dev, pick.core, l1.dbg, zero, CoreType::ETH);
+
+    // The collector's sequence, in the collector's order. The messages go out through
+    // the byte-span overload so they land at exactly the size and offset the emitter
+    // recorded, with no word rounding of our own.
+    if (!reset_go_bytes.empty()) {
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev, pick.core, go_addr, std::span<const uint8_t>(reset_go_bytes), CoreType::ETH);
+    }
+    if (go_index_addr != 0) {
+        std::vector<uint32_t> one_zero(1, 0u);
+        tt::tt_metal::detail::WriteToDeviceL1(dev, pick.core, go_index_addr, one_zero, CoreType::ETH);
+    }
+    tt::tt_metal::detail::WriteToDeviceL1(dev, pick.core, cfg_base, image, CoreType::ETH);
+    tt::tt_metal::detail::WriteToDeviceL1(dev, pick.core, cfg_base + rta_off, rt_args, CoreType::ETH);
+    tt::tt_metal::detail::WriteToDeviceL1(
+        dev, pick.core, launch_addr, std::span<const uint8_t>(launch_bytes), CoreType::ETH);
+    tt::tt_metal::detail::WriteToDeviceL1(dev, pick.core, go_addr, std::span<const uint8_t>(go_bytes), CoreType::ETH);
+
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    std::vector<uint32_t> dbg(4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, pick.core, l1.dbg, 16, dbg, CoreType::ETH);
+    log_info(tt::LogTest, "replay: marker=0x{:08x} sweeps={} head={}", dbg[0], dbg[1], dbg[2]);
+
+    const auto r = dump_regions(cfg_base, image_bytes);
+    dump_state(dev, pick.core, dir, "replay", r);
+
+    const uint32_t cfg_diff = diff_region(dir + "/gold_cfg.bin", dir + "/replay_cfg.bin", r.cfg_base, "kernel-config");
+    const uint32_t mbox_diff = diff_region(dir + "/gold_mbox.bin", dir + "/replay_mbox.bin", r.mbox_base, "mailbox");
+    log_info(
+        tt::LogTest,
+        "REPLAY VERDICT: running={} cfg_diff={} mbox_diff={}",
+        dbg[1] > 0 ? "yes" : "NO",
+        cfg_diff,
+        mbox_diff);
+
+    if (dbg[1] > 0) {
+        ttnvtop::stop_aggregator(dev, pick.core);
+    }
+    EXPECT_GT(dbg[1], 0u) << "artifact replay did not start the kernel";
+}
+
+// Hold the devices open and do nothing else.
+//
+// One variable, isolated: whether a tt-metal-initialised device is present while the
+// UMD-only launcher replays. Device init is what loads tt-metal's idle-erisc firmware
+// onto inactive ethernet cores (risc_firmware_initializer.cpp writes their launch
+// message and a RUN_MSG_INIT go word), and that firmware's wait loop is the ONLY thing
+// that ever polls go_messages[0].signal for RUN_MSG_GO. Nothing else on the core reads
+// it. So the replay's go word can only start a kernel if that firmware is resident.
+//
+// Run this in one process and `ttnvtop-collector --launch-aggregator` in another to
+// settle it, then run the collector alone against the same board for the contrast.
+TEST_F(Fabric1DFixture, TestEthAggregatorHoldDevice) {
+    const char* secs_env = std::getenv("TTNVTOP_HOLD_SECONDS");
+    if (secs_env == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_HOLD_SECONDS=<n>";
+    }
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    log_info(tt::LogTest, "holding {} device(s) open for {} s, doing nothing", devices.size(), secs_env);
+    std::this_thread::sleep_for(std::chrono::seconds(std::atoi(secs_env)));
 }
 
 // Soak: does the aggregator survive sustained running?
