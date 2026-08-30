@@ -7,6 +7,7 @@
 #include "tools/profiler/perf_debug_profiler.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -971,6 +972,115 @@ void PerfDebugProfiler::host_reanchor_after_boot(const std::shared_ptr<distribut
 // Scores the anchors THEMSELVES, with no eth and no composition: refit each device now, and ask how far the
 // anchor still being used to render it has drifted from that fresh fit. This is the quantity that misplaces a
 // zone, and unlike the eth close-check it stays measurable when fabric owns the eth cores.
+// ISOLATED TEST OF THE TWO PATHS AGAINST EACH OTHER.
+//
+// The eth link measures (eth_B - eth_A). Host fits of a DRISC core on each chip give (drisc_B - drisc_A).
+// Those are different clock DOMAINS, so their difference carries a constant intra-chip gap G -- comparing
+// them once tells you nothing (an earlier version of the cross-check did exactly that against worker cores
+// and reported 75-238 ms of "error" that was really G).
+//
+// Measuring the pair REPEATEDLY cancels G: it is constant, so any TREND in the difference is one path
+// drifting against the other, and the spread is the combined noise of both. That is the isolated question
+// -- how well does a freshly-taken host anchor track the eth measurement -- with no staleness confound,
+// because both sides are re-measured every round.
+//
+// Host fits use spacing 0 (back-to-back, ~360 us baseline) so they are taken as close in time to the eth
+// measurement as possible, and at the highest rate the read path allows.
+void PerfDebugProfiler::cross_path_tracking_test() {
+    const char* on = std::getenv("TT_METAL_PERF_DEBUG_TRACK_TEST");
+    if (on == nullptr || *on == '\0' || *on == '0' || link_syncs_.empty()) {
+        return;
+    }
+    const uint32_t rounds = static_cast<uint32_t>(std::strtoul(on, nullptr, 10));
+    auto& cluster = MetalContext::instance().get_cluster();
+    eth_sync::LinkSyncConfig cfg;
+    cfg.n_samples = eth_sync_samples();
+    cfg.gap_us = eth_sync_gap_us();
+#ifdef TRACY_ENABLE
+    const double npt_raw = TracyGetTimerMul();
+#else
+    const double npt_raw = 1.0;
+#endif
+    const double npt = npt_raw > 0.0 ? npt_raw : 1.0;
+
+    for (const auto& e : link_syncs_) {
+        if (!e.valid || e.snd_dev == nullptr || e.rcv_dev == nullptr) {
+            continue;
+        }
+        // DRISC core on each end. Deliberately a DRAM core: it is where our drainers live, its coords are
+        // virtual (so read_reg resolves them, unlike the LOGICAL eth coords that aborted an earlier attempt),
+        // and it is the domain our drainer zones are timestamped in.
+        const DeviceCtx* a = nullptr;
+        const DeviceCtx* b = nullptr;
+        for (const auto& d : devices_) {
+            if (d.chip_id == e.sender_chip) { a = &d; }
+            if (d.chip_id == e.receiver_chip) { b = &d; }
+        }
+        if (a == nullptr || b == nullptr || a->n_drisc == 0 || b->n_drisc == 0) {
+            continue;
+        }
+        std::vector<double> deltas;
+        std::vector<double> secs;
+        int64_t t_first = 0;
+        for (uint32_t r = 0; r < rounds; r++) {
+            const auto lr = eth_sync::measure_link(e.snd_dev, e.snd_eth, e.rcv_dev, e.rcv_eth, cfg);
+            if (!lr.solution.valid || lr.solution.residual_rms > 20.0) {
+                continue;
+            }
+            const PerfDebugSync ha = sync_device_clock(cluster, a->chip_id, a->drisc_virtual[0], 0);
+            const PerfDebugSync hb = sync_device_clock(cluster, b->chip_id, b->drisc_virtual[0], 0);
+            if (!ha.valid || !hb.valid) {
+                continue;
+            }
+            // Host-derived offset, evaluated at the midpoint of the two fits so neither is extrapolated far.
+            const double t_mid = 0.5 * (static_cast<double>(ha.host_anchor) + static_cast<double>(hb.host_anchor));
+            const double devA = static_cast<double>(ha.device_at_anchor) +
+                                (t_mid - static_cast<double>(ha.host_anchor)) * npt * ha.frequency;
+            const double devB = static_cast<double>(hb.device_at_anchor) +
+                                (t_mid - static_cast<double>(hb.host_anchor)) * npt * hb.frequency;
+            const double host_offset = devB - devA;
+            const double delta = static_cast<double>(lr.solution.offset) - host_offset;
+            if (t_first == 0) {
+                t_first = ha.host_anchor;
+            }
+            deltas.push_back(delta);
+            secs.push_back(static_cast<double>(ha.host_anchor - t_first) * npt / 1e9);
+        }
+        if (deltas.size() < 2) {
+            continue;
+        }
+        // Spread and trend. The MEAN is meaningless (it is the domain gap G); the spread is the combined
+        // noise of the two paths and the trend is their relative drift.
+        double mn = deltas[0], mx = deltas[0], sum = 0.0;
+        for (double d : deltas) {
+            mn = std::min(mn, d);
+            mx = std::max(mx, d);
+            sum += d;
+        }
+        const double mean = sum / static_cast<double>(deltas.size());
+        double num = 0.0, den = 0.0;
+        const double smean = std::accumulate(secs.begin(), secs.end(), 0.0) / static_cast<double>(secs.size());
+        for (size_t i = 0; i < deltas.size(); i++) {
+            num += (secs[i] - smean) * (deltas[i] - mean);
+            den += (secs[i] - smean) * (secs[i] - smean);
+        }
+        const double slope_cyc_per_s = den > 0.0 ? num / den : 0.0;
+        const double f = root_freq_ghz_ > 0.0 ? root_freq_ghz_ : 1.35;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] PATH TRACKING {} -> {}: {} rounds over {:.1f} s | spread {:.3f} us "
+            "(min-max, = combined noise of BOTH paths) | drift {:+.3f} us/s (= relative divergence) | "
+            "mean {:+.0f} cycles is the constant eth-vs-DRISC domain gap and carries no information",
+            e.sender_chip,
+            e.receiver_chip,
+            deltas.size(),
+            secs.back(),
+            (mx - mn) / f / 1000.0,
+            slope_cyc_per_s / f / 1000.0,
+            mean);
+    }
+}
+
 void PerfDebugProfiler::check_anchor_staleness_at_close() {
     if (!eth_sync_close_check() || devices_.empty()) {
         return;
@@ -4320,6 +4430,7 @@ void PerfDebugProfiler::stop() {
             zm.foreign_sections);
     }
     // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
+    cross_path_tracking_test();
     check_sync_drift_at_close();
     check_anchor_staleness_at_close();
     if (!forced_aiclk_chips_.empty()) {

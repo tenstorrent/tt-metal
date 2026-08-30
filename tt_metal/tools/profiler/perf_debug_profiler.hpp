@@ -269,6 +269,9 @@ private:
     void host_reanchor_after_boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     // Measures each device anchor's staleness against a fresh fit. No eth, no composition.
     void check_anchor_staleness_at_close();
+    // Repeatedly measures the eth-derived and host-derived inter-device offset and reports whether their
+    // DIFFERENCE holds constant. The constant intra-chip domain gap cancels, so a trend is real divergence.
+    void cross_path_tracking_test();
 
     // Chips whose AI clock this profiler pinned, so stop() can release exactly those.
     std::vector<int> forced_aiclk_chips_;
