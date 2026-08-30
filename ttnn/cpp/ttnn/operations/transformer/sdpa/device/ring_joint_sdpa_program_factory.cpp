@@ -2612,6 +2612,23 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         const char* value = std::getenv("RING_MLA_DISABLE_ROTATED_Q_SPLIT");
         return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
     }();
+    // Generality, measured 2026-08-30 on bh-lb-33 ring-8 by sweeping RING_MLA_SDPA_GRID_OVERRIDE
+    // (num_cores is what sets base/floats/rows_needed, so it is the only knob that moves this
+    // schedule without new hardware). PCC passed on every one of:
+    //   base 1 (q128, 70 cores, floats 50, rows_needed 8)   base 5 (q32, 90,  floats 30, rn 4)
+    //   base 2 (q64,  90 cores, floats 60, rn 7)            base 6 (q32, 70,  floats 60, rn 9)
+    //   base 3 (q64,  70 cores, floats 30, rn 5)            base 9 (q32, 50,  floats 30, rn 6)
+    //   base 4 (q32, 100 cores, floats 80, rn 8)
+    // plus two DECLINE cases (floats == 0 at 60 cores, q32 and q64) confirming the static fallback
+    // is still correct. That covers rows_needed 1..9 and floats 10..80. Untested: ring_size != 8
+    // (this box is sp=8 only), galaxy sp=8/tp=4, and rows_needed == grid_size.y, which no
+    // model/grid combination here can reach.
+    //
+    // Each term below is load-bearing for a DIFFERENT reason and none is implied by another -- in
+    // particular build_kv_chains is not redundant with k_mcast_enabled, because k_mcast_enabled's
+    // own guard tests enable_kv_chains rather than build_kv_chains, so it can be true at B > 1.
+    // Relaxing any of the scope terms (separate-V, B > 1, balanced/zigzag, kv-pad) is real feature
+    // work on the schedule, not the removal of a redundant predicate.
     const bool use_rotated_q_split =
         !rotated_q_split_disabled &&
         // Path scope: latent-V (V packed into K) on the streaming compute path, with K streamed
@@ -2813,9 +2830,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Define value = chunk-list length per iteration; each kernel adds its own header words
         // to get its runtime-arg stride (see chunked_prefill_utils.hpp).
         defines["ROTATED_Q_SPLIT"] = std::to_string(rot_base_chunks + 1);
-        log_debug(
+        // log_info, matching the decline branch below: one line per program compile (programs are
+        // cached), and it is the only way a user can confirm the rotation is actually active for a
+        // given shape and core count.
+        log_info(
             tt::LogOp,
-            "Rotated Q split: base={} floats={} rows_needed={} ring_size={} (ideal slots {} vs flat {})",
+            "Rotated Q split ACTIVE: base={} floats={} rows_needed={} ring_size={} (ideal slots {} vs flat {})",
             rot_base_chunks,
             rot_float_chunks,
             rows_needed,

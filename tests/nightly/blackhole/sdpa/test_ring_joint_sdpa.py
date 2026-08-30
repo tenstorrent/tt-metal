@@ -583,6 +583,28 @@ class RingJointSDPARuntime:
     compute_kernel_config: object
 
 
+def _sdpa_compute_grid_for(mesh_config):
+    """SDPA compute grid, honoring the RING_MLA_SDPA_GRID_OVERRIDE debug escape hatch.
+
+    Shrinking the grid changes num_cores, which is what sets the rotated-Q-split work division
+    (rot_base_chunks = total_q_chunks // num_cores, rot_float_chunks = the remainder, and the number
+    of grid rows that host floats). It is therefore the only knob that sweeps this feature's actual
+    schedule without new hardware, so accuracy runs honor it too, not just the perf check.
+    """
+    grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
+    override = os.environ.get("RING_MLA_SDPA_GRID_OVERRIDE")
+    if not override:
+        return grid
+    cols, rows = parse_grid_spec(override, "RING_MLA_SDPA_GRID_OVERRIDE")
+    # Only shrinking is meaningful: a grid wider than the chip has builds a program on cores that do
+    # not exist, which hangs rather than raising.
+    assert cols <= mesh_config.sdpa_cols and rows <= mesh_config.grid_rows, (
+        f"RING_MLA_SDPA_GRID_OVERRIDE={override} must fit within " f"{mesh_config.sdpa_cols}x{mesh_config.grid_rows}"
+    )
+    logger.info(f"RING_MLA_SDPA_GRID_OVERRIDE={override}: SDPA grid {grid} -> {(cols, rows)}")
+    return (cols, rows)
+
+
 def open_ring_joint_sdpa_runtime(
     mesh_config,
     *,
@@ -653,7 +675,7 @@ def open_ring_joint_sdpa_runtime(
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             num_links=2,
-            sdpa_compute_grid=(mesh_config.sdpa_cols, mesh_config.grid_rows),
+            sdpa_compute_grid=_sdpa_compute_grid_for(mesh_config),
             ccl_column=mesh_config.ccl_column,
             worker_sub_device_id=worker_sub_device_id,
             ccl_semaphore_handles=create_global_semaphores(mesh_device, ccl_sub_device_crs, 0),
