@@ -784,6 +784,15 @@ uint32_t eth_sync_samples() {
 // Re-run the sync at close and price the session's drift. On by default: it costs one link measurement per
 // tree edge (~65 ms) against a device close already measured in seconds, and without it a capture cannot say
 // how stale its own alignment became. 0 disables.
+// Re-anchor after bring-up rather than living with init-time transforms. 0 disables, restoring the old
+// behaviour for comparison.
+bool eth_sync_late() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_LATE");
+        return (s == nullptr || *s == '\0') ? true : (*s != '0');
+    }();
+    return v;
+}
 bool eth_sync_close_check() {
     static const bool v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_CLOSE");
@@ -1017,6 +1026,98 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
             "quality) bounds cross-device alignment over a long capture",
             "");
     }
+}
+
+void PerfDebugProfiler::reanchor_after_boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (!eth_sync_late() || !eth_sync_enabled() || devices_.empty() || tracy_ == nullptr) {
+        return;
+    }
+    const auto context_id = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id).get_cluster();
+
+    // Discard the init-time transforms wholesale rather than blending them: they are the stale thing being
+    // replaced, and a half-updated tree would relate devices through a mix of old and new offsets.
+    link_syncs_.clear();
+    eth_sync_parent_edge_.clear();
+    eth_sync_traces_.clear();
+    eth_sync_closure_valid_ = false;
+    const bool had_root = root_sync_valid_;
+    root_sync_valid_ = false;
+
+    sync_devices_over_eth(mesh_device);
+
+    // Root first: every other device hangs off its fit.
+    for (auto& ctx : devices_) {
+        if (ctx.chip_id != eth_sync_root_chip_ || ctx.core_virt.empty()) {
+            continue;
+        }
+        const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
+        const PerfDebugSync s = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/500);
+        if (!s.valid) {
+            break;
+        }
+        root_sync_valid_ = true;
+        root_host_anchor_ = s.host_anchor;
+        root_dev_at_anchor_ = s.device_at_anchor;
+        root_freq_ghz_ = s.frequency;
+        ctx.freq_ghz = s.frequency;
+        tracy_->AddDevice(ctx.chip_id, s.host_anchor, static_cast<double>(s.device_at_anchor), s.frequency);
+    }
+    if (!root_sync_valid_) {
+        // Keep whatever init produced. A stale anchor still renders; a missing one does not.
+        root_sync_valid_ = had_root;
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] eth sync LATE re-anchor: root host fit failed; keeping the init-time "
+            "anchors (zones stay {} s stale)",
+            "~bring-up");
+        return;
+    }
+
+    uint32_t rechipped = 0, recored = 0;
+    for (auto& ctx : devices_) {
+        double chip_freq = ctx.freq_ghz;
+        if (ctx.chip_id != eth_sync_root_chip_) {
+            uint64_t derived_clock = 0;
+            double derived_rate = 1.0;
+            if (!eth_sync_anchor_for(ctx.chip_id, root_dev_at_anchor_, derived_clock, derived_rate)) {
+                continue;  // no route to the root; this device keeps its init anchor
+            }
+            chip_freq = root_freq_ghz_ * derived_rate;
+            ctx.freq_ghz = chip_freq;
+            tracy_->AddDevice(
+                ctx.chip_id, root_host_anchor_, static_cast<double>(derived_clock), chip_freq);
+        }
+        ++rechipped;
+        // The DRAM-core origins go stale exactly like the chip ones, and for the same reason.
+        for (uint32_t d = 0; d < ctx.n_drisc; d++) {
+            const auto nit = ctx.virt_to_noc0.find(
+                (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
+                static_cast<uint64_t>(ctx.drisc_virtual[d].y));
+            if (nit == ctx.virt_to_noc0.end()) {
+                continue;
+            }
+            const PerfDebugSync ds = sync_device_clock(cluster, ctx.chip_id, ctx.drisc_virtual[d]);
+            if (!ds.valid) {
+                continue;
+            }
+            tracy_->AddCore(
+                ctx.chip_id,
+                nit->second.first,
+                nit->second.second,
+                ds.host_anchor,
+                static_cast<double>(ds.device_at_anchor),
+                chip_freq);
+            ++recored;
+        }
+    }
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] eth sync LATE re-anchor: {} device(s) and {} DRISC core(s) re-fitted AFTER "
+        "bring-up, so zones are placed by transforms measured ~now instead of before the boot [the init "
+        "fit is stale by the whole bring-up, which measured 26.3 s]",
+        rechipped,
+        recored);
 }
 
 void PerfDebugProfiler::emit_eth_sync_lanes() {
@@ -1788,6 +1889,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         perf_debug::attach_registered_consumers(*receiver_);
         receiver_->start();
     }
+    // Bring-up is over, so the init-time transforms are as stale as they will ever be and no Tracy context
+    // has been created yet. This is the last moment a fresh fit can still reach every zone.
+    reanchor_after_boot(mesh_device);
     // After every device has its anchor: the eth samples are rendered through those anchors, so drawing
     // them any earlier would map them with an anchor that does not exist yet.
     emit_eth_sync_lanes();

@@ -241,6 +241,14 @@ private:
     // Draw the stored traces onto eth lanes. Called once, after every device has its anchor.
     void emit_eth_sync_lanes();
 
+    // Re-measure every transform AFTER bring-up, replacing the ones taken at init. Bring-up is the whole
+    // problem: booting drainers on 4 devices took 26.3 s in a measured run, and the anchors were fitted
+    // BEFORE it while the first zone is timestamped AFTER it. At ~5.4 us/s of accumulated clock stepping
+    // that bakes ~140 us of misalignment into a capture before it starts. Re-anchoring here shrinks the
+    // gap from 26 s to ~0.1 s. It works because Tracy contexts are created LAZILY on each core's first
+    // zone, so anchors replaced at the end of start() are the ones every context bakes in.
+    void reanchor_after_boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+
     // Re-measure every tree link at CLOSE and compare against what the init fit predicted for that instant.
     // The init sync says how well the clocks agreed WHEN MEASURED; this says how far the session had drifted
     // by the time it ended, which is the number that actually bounds a zone's placement late in a capture.
