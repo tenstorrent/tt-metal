@@ -60,6 +60,7 @@ PERF_CASES = [
     (640, 0),
     (1024, 0),
     (640, 4),  # steady state: 5th chunk of a 5120-token-per-chunk prefill, 20480 already cached
+    (1024, 4),  # same prefix depth at the larger chunk, to check the per-token win survives it
 ]
 
 
