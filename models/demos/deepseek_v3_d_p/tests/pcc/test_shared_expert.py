@@ -9,6 +9,8 @@ Compares TorchExpert (reference) against TtSharedExpert (multi-chip TTNN)
 to verify correctness of multi-chip sharding and CCL operations.
 """
 
+from contextlib import contextmanager
+
 import pytest
 import torch
 from loguru import logger
@@ -16,6 +18,8 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -25,28 +29,68 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, ACTIVATION_SITU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+@contextmanager
+def shared_expert_sub_device(mesh_device):
+    """Split the Tensix grid the way TtMoe does: dispatch takes the first row, the expert the rest.
+
+    The shared expert only ever runs confined like this -- tt_moe.py carves the grid so the two can
+    overlap on chip -- so exercising it on the full grid would test matmul program configs that
+    nothing outside this file ever builds.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    dispatch = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
+    shared = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    manager = mesh_device.create_sub_device_manager([ttnn.SubDevice([dispatch]), ttnn.SubDevice([shared])], 0)
+    mesh_device.load_sub_device_manager(manager)
+    try:
+        yield ttnn.SubDeviceId(1), shared
+    finally:
+        mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.remove_sub_device_manager(manager)
 
 
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, activation",
     [
-        # 640 is the per-chip prefill chunk: 5120 tokens over sp_factor 8. Every case here runs that
-        # depth, which pins the matmul program configs to per_core_M=1 -- the blocking prefill uses.
-        (640, 7 * 1024, 2 * 1024, ACTIVATION_SILU),
+        # Every case runs the one prefill ISL, so the matmul program configs come out shaped the
+        # way prefill builds them.
+        (PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, ACTIVATION_SILU),
         # Kimi-K3: one shared-expert MLP at moe_intermediate_size * num_shared_experts = 3072 * 2.
         # Worth its own case because every prior model has num_shared_experts == 1, so hidden_dim and
         # the shared intermediate coincided and 6144 was never exercised here.
-        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SILU),
-        # ...and the same shape on the activation the K3 checkpoint actually uses. This builds
-        # TtSharedExpert without a sub-device, so ttnn.situ_glu runs here on the full grid; its
-        # sub_core_grids form is only reachable through the MoE (test_ttnn_moe).
-        (640, KimiK3Config.EMB_SIZE, KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        (
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            KimiK3Config.EMB_SIZE,
+            KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
+            ACTIVATION_SILU,
+        ),
+        # ...and the same shape on the activation the K3 checkpoint actually uses. The sub-device
+        # below confines the expert the way TtMoe does, so this exercises ttnn.situ_glu in its
+        # sub_core_grids form -- the only form the model ever builds.
+        (
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            KimiK3Config.EMB_SIZE,
+            KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
+            ACTIVATION_SITU,
+        ),
+        # DeepSeek-V4-Pro is the only model whose down projection is 24 K-tiles rather than 16 or 48,
+        # so it is the only one where the matmul K block resolves to 12. No MoE test carries a
+        # v4_pro variant, which leaves this the only cover for that branch.
+        (
+            PREFILL_CHUNK_TOKENS_PER_CHIP,
+            DeepSeekV4ProConfig.EMB_SIZE,
+            DeepSeekV4ProConfig.MOE_INTERMEDIATE_SIZE,
+            ACTIVATION_SILU,
+        ),
     ],
-    # Ids label seq_len_per_chip first, then what differs from the case above it (the 6144 shared
-    # intermediate, the activation).
-    ids=["640", "640-k3-6144", "640-k3-6144-situ"],
+    # Ids name what differs from the case above (the 6144 shared intermediate, the activation, the
+    # v4_pro shape).
+    ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -135,72 +179,75 @@ def test_shared_expert_pcc(
         "down_proj": torch_model.down_proj.data,
     }
 
-    # ========================================
-    # Step 2: Create TTNN model with same weights
-    # ========================================
-    logger.debug("Creating TtSharedExpert with same weights")
-    tt_model = TtSharedExpert(
-        mesh_device=mesh_device,
-        emb_dim=emb_dim,
-        hidden_dim=hidden_dim,
-        torch_weights=torch_weights,
-        num_links=num_links,
-        topology=topology,
-        activations_dtype=activations_dtype,
-        weights_dtype=weights_dtype,
-        activation=activation,
-        **situ_betas,
-    )
+    with shared_expert_sub_device(mesh_device) as (subdevice_id, subdevice_cores):
+        # ========================================
+        # Step 2: Create TTNN model with same weights
+        # ========================================
+        logger.debug("Creating TtSharedExpert with same weights")
+        tt_model = TtSharedExpert(
+            mesh_device=mesh_device,
+            emb_dim=emb_dim,
+            hidden_dim=hidden_dim,
+            torch_weights=torch_weights,
+            num_links=num_links,
+            topology=topology,
+            activations_dtype=activations_dtype,
+            weights_dtype=weights_dtype,
+            activation=activation,
+            subdevice_id=subdevice_id,
+            subdevice_cores=subdevice_cores,
+            **situ_betas,
+        )
 
-    # ========================================
-    # Step 3: Create input tensor
-    # ========================================
-    # 3D input matching test_ttnn_moe.py convention (post all-gather):
-    #   shape = [dispatch_group_size, seq_len_per_chip, emb_dim]
-    # Sharded along dim 0 across mesh rows (DP), replicated across mesh cols (TP).
-    dispatch_group_size = mesh_shape[0]
-    torch_input = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
-    logger.debug(f"Created torch input: {torch_input.shape}")
+        # ========================================
+        # Step 3: Create input tensor
+        # ========================================
+        # 3D input matching test_ttnn_moe.py convention (post all-gather):
+        #   shape = [dispatch_group_size, seq_len_per_chip, emb_dim]
+        # Sharded along dim 0 across mesh rows (DP), replicated across mesh cols (TP).
+        dispatch_group_size = mesh_shape[0]
+        torch_input = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.float32)
+        logger.debug(f"Created torch input: {torch_input.shape}")
 
-    tt_input = ttnn.from_torch(
-        torch_input,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        dtype=activations_dtype,
-    )
-    logger.debug(f"Created ttnn input (SP-sharded, TP-replicated): {tt_input.shape}")
+        tt_input = ttnn.from_torch(
+            torch_input,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None)),
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=activations_dtype,
+        )
+        logger.debug(f"Created ttnn input (SP-sharded, TP-replicated): {tt_input.shape}")
 
-    # ========================================
-    # Step 4: Run forward passes
-    # ========================================
-    logger.debug("Running torch forward pass")
-    torch_output = torch_model(torch_input)
-    logger.debug(f"Torch output shape: {torch_output.shape}")
+        # ========================================
+        # Step 4: Run forward passes
+        # ========================================
+        logger.debug("Running torch forward pass")
+        torch_output = torch_model(torch_input)
+        logger.debug(f"Torch output shape: {torch_output.shape}")
 
-    logger.debug("Running ttnn forward pass")
-    tt_output = tt_model(tt_input)
-    logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
+        logger.debug("Running ttnn forward pass")
+        tt_output = tt_model(tt_input)
+        logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
-    # ========================================
-    # Step 5: Convert TTNN output back to torch and compare
-    # ========================================
-    logger.debug("Converting TTNN output to torch for comparison")
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
-    )
-    logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
+        # ========================================
+        # Step 5: Convert TTNN output back to torch and compare
+        # ========================================
+        logger.debug("Converting TTNN output to torch for comparison")
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+        )
+        logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
-    # Compare with PCC
-    logger.debug("Comparing outputs with PCC")
-    pcc_passed, pcc_message = assert_with_pcc(
-        torch_output.to(torch.float32),
-        tt_output_torch.to(torch.float32),
-        pcc=0.999,
-    )
+        # Compare with PCC
+        logger.debug("Comparing outputs with PCC")
+        pcc_passed, pcc_message = assert_with_pcc(
+            torch_output.to(torch.float32),
+            tt_output_torch.to(torch.float32),
+            pcc=0.999,
+        )
 
-    logger.debug(f"PCC comparison: {pcc_message}")
-    assert pcc_passed, f"PCC test failed: {pcc_message}"
+        logger.debug(f"PCC comparison: {pcc_message}")
+        assert pcc_passed, f"PCC test failed: {pcc_message}"
 
-    logger.debug("PCC test passed!")
+        logger.debug("PCC test passed!")

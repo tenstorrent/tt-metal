@@ -370,7 +370,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::optional<Tensor> kv_actual_isl,
     uint32_t chunk_local_tiles,
     uint32_t kv_cache_num_layers,
-    uint32_t kv_cache_layer_idx) {
+    uint32_t kv_cache_layer_idx,
+    bool split_forwarding_enabled) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -519,6 +520,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // Tensor Info
     const uint32_t num_inputs = input_tensor.size();
+    // Even-ring split-forwarding: the caller owns the protocol decision (a fused consumer must implement
+    // the split second-half wait); the legacy topology gate stays so standalone callers keep prior behavior.
+    const bool effective_split_forwarding =
+        split_forwarding_enabled && topology == ttnn::ccl::Topology::Ring && ring_size % 2 == 0 && ring_size > 2;
     constexpr const char* exchange_writer_kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
         "ring_attention_all_gather_writer.cpp";
@@ -549,6 +554,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -593,6 +599,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -630,6 +637,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_reader_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
@@ -674,6 +682,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         static_cast<uint32_t>(has_metadata),
         meta_cb_index,
         num_links,
+        static_cast<uint32_t>(effective_split_forwarding),
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel.compile_time_args.push_back(op_config.get_page_size());
