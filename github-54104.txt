@@ -1,0 +1,179 @@
+// tt-metal/ttnn/cpp/ttnn/operations/experimental/cosyvoice2.cpp
+#include <tt-metalium/ttnn.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <complex>
+#include <vector>
+
+namespace ttnn::operations::experimental {
+
+namespace cosyvoice2 {
+
+// HiFT vocoder: high-fidelity waveform generation via iterative refinement
+Tensor hift_vocoder(
+    const Tensor& mel_spectrogram,
+    const Tensor& hift_weights,
+    const Tensor& hift_biases,
+    const uint32_t n_iter = 10,
+    const float sigma = 0.8f,
+    const Device& device = tt::tt_metal::CreateDevice(0))
+{
+    // mel_spectrogram: [B, F, T] (batch, freq, time)
+    // hift_weights: [F, K] (freq, kernel_size)
+    // hift_biases: [F]
+    
+    const auto& [batch, freq, time] = mel_spectrogram.get_shape().value;
+    const auto kernel_size = hift_weights.get_shape().value[1];
+    
+    // Initialize waveform buffer (time-domain)
+    std::vector<float> init_waveform(batch * time, 0.0f);
+    Tensor waveform = tt::tt_metal::Tensor::from_data(
+        init_waveform.data(),
+        {batch, 1, time},
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        device);
+    
+    // Precompute mel filterbank (fixed per model)
+    Tensor mel_filter = tt::tt_metal::Tensor::from_data(
+        hift_weights.data(), {freq, kernel_size}, DataType::BFLOAT16, Layout::ROW_MAJOR, device);
+    Tensor bias_tensor = tt::tt_metal::Tensor::from_data(
+        hift_biases.data(), {freq}, DataType::BFLOAT16, Layout::ROW_MAJOR, device);
+    
+    // Iterative refinement loop
+    for (uint32_t i = 0; i < n_iter; ++i) {
+        // 1. Forward STFT of current waveform → complex spectrogram
+        auto stft_out = ttnn::fft(waveform, /*n_fft=*/1024, /*hop_length=*/256, /*win_length=*/1024, /*window=*/nullptr, /*onesided=*/true);
+        
+        // 2. Apply HiFT filter in frequency domain
+        // Complex multiplication: stft_out * mel_filter (broadcast over batch/time)
+        auto filtered = ttnn::complex_mul(stft_out, mel_filter);
+        
+        // 3. Inverse STFT → time-domain reconstruction
+        auto recon = ttnn::ifft(filtered);
+        
+        // 4. Residual update: waveform += sigma * (recon - waveform)
+        auto diff = ttnn::sub(recon, waveform);
+        auto scaled_diff = ttnn::mul(diff, sigma);
+        waveform = ttnn::add(waveform, scaled_diff);
+    }
+    
+    tt::tt_metal::CloseDevice(device);
+    return waveform;
+}
+
+// iSTFT layer: inverse short-time Fourier transform with overlap-add
+Tensor istft(
+    const Tensor& stft_output,
+    const uint32_t n_fft,
+    const uint32_t hop_length,
+    const uint32_t win_length,
+    const std::optional<Tensor>& window = std::nullopt)
+{
+    // stft_output: [B, F, T, 2] (batch, freq, time, real/imag)
+    // Returns: [B, 1, L] (batch, channel, samples)
+    
+    // Convert to complex tensor
+    auto complex_stft = ttnn::view_as_complex(stft_output);
+    
+    // Apply window if provided
+    Tensor windowed;
+    if (window.has_value()) {
+        windowed = ttnn::mul(complex_stft, window.value());
+    } else {
+        windowed = complex_stft;
+    }
+    
+    // Inverse FFT per frame
+    auto ifft_out = ttnn::ifft(windowed);
+    
+    // Overlap-add reconstruction
+    // Extract real part and reshape for overlap-add
+    auto real_part = ttnn::real(ifft_out);
+    
+    // Perform overlap-add (manual implementation using scatter/gather)
+    // This is simplified; production code would use optimized overlap-add kernel
+    const auto& shape = real_part.get_shape().value;
+    const uint32_t batch = shape[0], freq = shape[1], time = shape[2];
+    const uint32_t samples = (time - 1) * hop_length + std::min(win_length, n_fft);
+    
+    std::vector<float> output_data(batch * samples, 0.0f);
+    std::vector<float> norm_data(batch * samples, 0.0f);
+    
+    // Overlap-add loop (CPU fallback for simplicity; GPU kernel in production)
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t t = 0; t < time; ++t) {
+            int start = t * hop_length;
+            for (uint32_t n = 0; n < std::min(win_length, n_fft); ++n) {
+                if (start + n < samples) {
+                    output_data[b * samples + start + n] += real_part.at({b, freq-1, t, n}); // Use last freq bin for reconstruction
+                    norm_data[b * samples + start + n] += 1.0f;
+                }
+            }
+        }
+    }
+    
+    // Normalize by overlap count
+    for (size_t i = 0; i < output_data.size(); ++i) {
+        if (norm_data[i] > 0.0f) output_data[i] /= norm_data[i];
+    }
+    
+    return Tensor::from_data(
+        output_data.data(),
+        {batch, 1, samples},
+        DataType::BFLOAT16,
+        Layout::ROW_MAJOR,
+        real_part.device());
+}
+
+// Streaming pipeline: process audio in chunks to handle long sequences
+std::vector<Tensor> streaming_inference(
+    const Tensor& input_mel,
+    const std::vector<Tensor>& hift_weights,
+    const std::vector<Tensor>& hift_biases,
+    const uint32_t chunk_size = 100,
+    const uint32_t overlap = 20)
+{
+    const auto& shape = input_mel.get_shape().value;
+    const uint32_t time_steps = shape[2];
+    
+    std::vector<Tensor> output_chunks;
+    Tensor prev_context;
+    
+    for (uint32_t start = 0; start < time_steps; start += chunk_size - overlap) {
+        uint32_t end = std::min(start + chunk_size, time_steps);
+        uint32_t actual_chunk = end - start;
+        
+        // Extract chunk [B, F, chunk_len]
+        Tensor chunk = ttnn::slice(input_mel, {0, 0, start}, {shape[0], shape[1], end});
+        
+        // Concatenate context from previous chunk if available
+        Tensor input_chunk = chunk;
+        if (prev_context.valid()) {
+            input_chunk = ttnn::concat({prev_context, chunk}, 2);
+        }
+        
+        // Run HiFT vocoder on chunk
+        Tensor waveform_chunk = hift_vocoder(input_chunk, hift_weights[0], hift_biases[0]);
+        
+        // Trim overlap region (keep only new samples)
+        if (start > 0) {
+            uint32_t trim_start = prev_context.get_shape().value[2];
+            waveform_chunk = ttnn::slice(waveform_chunk, {0, 0, trim_start}, {shape[0], 1, waveform_chunk.get_shape().value[2]});
+        }
+        
+        output_chunks.push_back(waveform_chunk);
+        
+        // Store context for next iteration
+        if (end < time_steps) {
+            prev_context = ttnn::slice(chunk, {0, 0, actual_chunk - overlap}, {shape[0], shape[1], actual_chunk});
+        } else {
+            prev_context = Tensor{};
+        }
+    }
+    
+    return output_chunks;
+}
+
+} // namespace cosyvoice2
+
+} // namespace ttnn::operations::experimental
