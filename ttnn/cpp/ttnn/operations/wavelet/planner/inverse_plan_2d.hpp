@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -294,6 +295,14 @@ inline void append_axis_routes(
     return chunks;
 }
 
+[[nodiscard]] inline plan_2d_detail::AxisConeSignature make_inverse_axis_signature(
+    const LiftingInversePlan& plan, const IndexInterval output, const size_t tile_extent) {
+    const size_t pad = plan.forward_trace.preprocess_layout.pad_config.left;
+    const AxisConePlan cone = build_axis_cone(
+        plan, reconstructed_parity_interval(output, pad, true), reconstructed_parity_interval(output, pad, false));
+    return plan_2d_detail::make_axis_cone_signature(output, cone, nullptr, tile_extent);
+}
+
 }  // namespace inverse_2d_detail
 
 [[nodiscard]] inline Ilwt2DExecutionPlan make_ilwt_2d_execution_plan(
@@ -315,41 +324,47 @@ inline void append_axis_routes(
         plan_2d_detail::checked_u32(ceil_div(y_plan.original_length, kTileHeight2D), "2D ILWT output tile rows");
     const uint32_t output_tiles_x =
         plan_2d_detail::checked_u32(ceil_div(x_plan.original_length, kTileWidth2D), "2D ILWT output tile columns");
+    const uint64_t maximum_tile_area = plan_2d_detail::maximum_candidate_tile_area(l1_budget_bytes);
+    const uint32_t maximum_tiles_y = static_cast<uint32_t>(std::min<uint64_t>(output_tiles_y, maximum_tile_area));
+    const uint32_t maximum_tiles_x = static_cast<uint32_t>(std::min<uint64_t>(output_tiles_x, maximum_tile_area));
+    const auto y_candidate_classes = plan_2d_detail::make_axis_candidate_classes(
+        y_plan.original_length, maximum_tiles_y, kTileHeight2D, [&](const IndexInterval output) {
+            return inverse_2d_detail::make_inverse_axis_signature(y_plan, output, kTileHeight2D);
+        });
+    const auto x_candidate_classes = plan_2d_detail::make_axis_candidate_classes(
+        x_plan.original_length, maximum_tiles_x, kTileWidth2D, [&](const IndexInterval output) {
+            return inverse_2d_detail::make_inverse_axis_signature(x_plan, output, kTileWidth2D);
+        });
     plan_2d_detail::Candidate best{};
     bool found = false;
-    for (uint32_t tiles_y = 1; tiles_y <= output_tiles_y; ++tiles_y) {
-        for (uint32_t tiles_x = 1; tiles_x <= output_tiles_x; ++tiles_x) {
-            std::vector<Lwt2DChunkPlan> chunks = inverse_2d_detail::build_chunks(y_plan, x_plan, tiles_y, tiles_x);
-            double max_overhead = 0.0;
-            bool fits = true;
-            for (const Lwt2DChunkPlan& chunk : chunks) {
-                max_overhead = std::max(max_overhead, chunk.dependency_overhead);
-                fits = fits && chunk.resources.total_l1_bytes <= l1_budget_bytes;
-            }
-            if (!fits) {
+    for (uint32_t tiles_y = 1; tiles_y <= maximum_tiles_y; ++tiles_y) {
+        const uint32_t candidate_tiles_x = static_cast<uint32_t>(
+            std::min<uint64_t>(maximum_tiles_x, maximum_tile_area / static_cast<uint64_t>(tiles_y)));
+        for (uint32_t tiles_x = 1; tiles_x <= candidate_tiles_x; ++tiles_x) {
+            std::optional<plan_2d_detail::Candidate> candidate = plan_2d_detail::evaluate_candidate(
+                y_candidate_classes[tiles_y],
+                x_candidate_classes[tiles_x],
+                tiles_y,
+                tiles_x,
+                core_limit,
+                l1_budget_bytes,
+                [&](const IndexRectangle output) { return inverse_2d_detail::build_chunk(y_plan, x_plan, output); },
+                [&](const Lwt2DChunkPlan& chunk) {
+                    return plan_2d_detail::estimate_chunk_latency_cycles(
+                        chunk, y_plan.forward_trace, x_plan.forward_trace, true);
+                },
+                inverse_coordination_penalty_cycles_per_core);
+            if (!candidate.has_value()) {
                 continue;
             }
-            plan_2d_detail::Candidate candidate{
-                .chunk_tiles_y = tiles_y,
-                .chunk_tiles_x = tiles_x,
-                .active_core_count = static_cast<uint32_t>(std::min(chunks.size(), static_cast<size_t>(core_limit))),
-                .max_dependency_overhead = max_overhead,
-                .estimated_latency_cycles = plan_2d_detail::estimate_candidate_latency_cycles(
-                    chunks,
-                    static_cast<uint32_t>(std::min(chunks.size(), static_cast<size_t>(core_limit))),
-                    y_plan.forward_trace,
-                    x_plan.forward_trace,
-                    true,
-                    inverse_coordination_penalty_cycles_per_core),
-                .chunks = std::move(chunks),
-            };
-            if (!found || plan_2d_detail::is_better_candidate(candidate, best, true)) {
-                best = std::move(candidate);
+            if (!found || plan_2d_detail::is_better_candidate(*candidate, best, true)) {
+                best = std::move(*candidate);
                 found = true;
             }
         }
     }
     TT_FATAL(found, "No 2D ILWT chunk fits the {}-byte L1 budget", l1_budget_bytes);
+    best.chunks = inverse_2d_detail::build_chunks(y_plan, x_plan, best.chunk_tiles_y, best.chunk_tiles_x);
 
     std::array<uint32_t, 5> heights{};
     std::array<uint32_t, 5> widths{};
