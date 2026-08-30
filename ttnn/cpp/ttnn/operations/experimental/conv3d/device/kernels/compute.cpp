@@ -145,16 +145,13 @@ void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
     }
 }
 
-// fp32-exact reduction of worker partials. The FPU `add_tiles` form unpacks both operands
-// through SrcA/SrcB, which round fp32 to ~TF32 -- so each of the (C_in blocks - 1) reduction
-// adds re-rounds the running partial even though the CBs store fp32. Here the running partial
-// lives in `acc_cb` between worker iterations and remote partials arrive in `remote_cb`; both
-// are `UnpackToDestFp32` (their only unpacker is this loop), so `copy_tile` + `add_binary_tile`
-// keep the sum exact end to end. `local_cb` stays on the default unpack path because bias-add
-// and untilize also consume it -- its single read rounds ONE partial (~1/n of the sum) once,
-// which is negligible. The last worker iteration packs back into `local_cb`, where the
-// bias/untilize tail expects the result. DST usage: 2 tiles; dest remap is toggled off for the
-// SFPU/datacopy section (same as rgb_to_yuv's typecast_and_pack) and restored after.
+// fp32-exact reduction of worker partials. The FPU `add_tiles` form re-rounds the running
+// partial to ~TF32 through SrcA/SrcB on every add, even though the CBs store fp32. Here the
+// running partial lives in `acc_cb` between iterations, remote partials arrive in `remote_cb`,
+// and all three CBs (local/remote/acc) are `UnpackToDestFp32`, so `copy_tile` +
+// `add_binary_tile` keep the sum exact end to end. The last iteration packs back into
+// `local_cb` for the bias/untilize tail. DST: 2 tiles; dest remap toggled off around the
+// SFPU/datacopy section (as in rgb_to_yuv's typecast_and_pack) and restored after.
 template <uint32_t num_tiles>
 void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_cb, uint32_t num_workers) {
     CircularBuffer local_cb_obj(local_cb);

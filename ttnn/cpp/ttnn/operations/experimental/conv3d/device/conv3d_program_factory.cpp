@@ -271,10 +271,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
-    // fp32 running-partial accumulator for the exact reduction (see reduce_block_fp32_sfpu in the
-    // compute kernel). It, and cb_reduction_tiled, are the only CBs delivered UnpackToDestFp32 --
-    // their sole unpacker is the reduction loop -- so the bias/untilize consumers of the interm CB
-    // stay on the default unpack path.
+    // fp32 running-partial accumulator for the exact reduction (see reduce_block_fp32_sfpu in
+    // the compute kernel); avoids round-tripping the running partial through the interm CB.
     uint32_t cb_reduction_acc_tiled_id = 32;
     if (use_fp32_partials && use_fp32_exact) {
         cb_reduction_acc_tiled_id = next_cb_index++;
@@ -854,13 +852,12 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         (uint32_t)(enable_streaming_output ? 1 : 0),
         cb_reduction_acc_tiled_id};
 
-    // Deliver the fp32 partial CBs UnpackToDestFp32: without it the unpacker rounds their tiles to
-    // TF32 on the way into DST, re-truncating the values the fp32 CBs exist to protect -- the
-    // reduction loop's running partial (acc/reduction CBs) and the finished output the untilize
-    // reads back (interm CB). Every consumer of these CBs on this path is flag-compatible: the
-    // reduction and bias adds are copy_tile/SFPU-based (add_bias_inplace_sfpu exists because the
-    // FPU bcast add cannot read a flagged CB), and untilize honors the flag. Empty (default) when
-    // partials are not fp32.
+    // Deliver the fp32 tail CBs UnpackToDestFp32 -- interm (untilize/bias read-back) and, with
+    // multiple C_in blocks, reduction + acc (the reduction loop's operands). Without it the
+    // unpacker rounds their fp32 tiles to TF32 on the way into DST. Every consumer on this path
+    // is flag-compatible: the reduction and bias adds are copy_tile/SFPU-based (the FPU bcast add
+    // cannot read a flagged CB, hence add_bias_inplace_sfpu) and untilize honors the flag.
+    // Empty (default) when use_fp32_exact is off.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
     if (use_fp32_exact) {
         unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);

@@ -799,3 +799,92 @@ def test_conv3d_halo_buffer_rejects_unsupported(device, expect_error, padding_mo
             config=config,
             halo_buffer=halo_buffer,
         )
+
+
+def test_conv3d_fp32_exact_tail(device):
+    """Gate for the fp32-exact tail (use_fp32_exact): SFPU reduction/bias + UnpackToDestFp32.
+
+    True fp32 end to end, HiFi4, bias on, scored against a float64 golden. Two assertions,
+    each catching a return of the tail's TF32 roundings:
+      1. rel RMSE <= 1.35e-3 per blocking. Measured post-fix: 1.155e-3 at both blockings
+         (the matmul's own Src-truncation floor). Measured pre-fix: 1.507e-3 single-block,
+         1.638e-3 at C_in_block=32.
+      2. Blocking invariance: error at C_in_block=32 (multi-block, reduction branch) within
+         5% of full-C (single block, bias/untilize only). Measured spread: 0.0% post-fix,
+         8.7% pre-fix (the per-block partial reload).
+    """
+    torch.manual_seed(42)
+    input_shape = (1, 128, 4, 6, 6)
+    out_channels = 32
+    kernel_size = (3, 3, 3)
+    padding = (0, 1, 1)
+    N, C, D, H, W = input_shape
+
+    input_tensor = torch.randn(input_shape, dtype=torch.float32)
+    conv3d_module = nn.Conv3d(C, out_channels, kernel_size=kernel_size, padding=padding, bias=True)
+    with torch.no_grad():
+        golden = (
+            torch.nn.functional.conv3d(
+                input_tensor.double(),
+                conv3d_module.weight.data.double(),
+                conv3d_module.bias.data.double(),
+                padding=padding,
+            )
+        ).float()
+    D_out = _out_size(D, padding[0], 1, kernel_size[0], 1)
+    H_out = _out_size(H, padding[1], 1, kernel_size[1], 1)
+    W_out = _out_size(W, padding[2], 1, kernel_size[2], 1)
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    tt_input = prepare_input_tensor(input_tensor, C, device, dtype=ttnn.DataType.FLOAT32)
+
+    errors = {}
+    grid_size = device.compute_with_storage_grid_size()
+    for c_in_block in (C, 32):  # full-C: single block (bias/untilize); 32: 4 blocks (reduction too)
+        config = create_conv3d_config(
+            C_in_block=c_in_block, weights_dtype=ttnn.DataType.FLOAT32, compute_with_storage_grid_size=grid_size
+        )
+        tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.DataType.FLOAT32, pad_value=0)
+        tt_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=1, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+        )
+        tt_bias = ttnn.from_torch(
+            conv3d_module.bias.data.reshape(1, -1),
+            device=device,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.TILE_LAYOUT,
+            pad_value=0,
+        )
+        tt_output = ttnn.experimental.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            device=device,
+            bias_tensor=tt_bias,
+            dtype=ttnn.DataType.FLOAT32,
+            output_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=(1, 1, 1),
+            groups=1,
+            padding=padding,
+            padding_mode="zeros",
+            config=config,
+            compute_kernel_config=kernel_config,
+        )
+        out = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+        rel = ((out.double() - golden.double()).pow(2).mean().sqrt() / golden.double().std()).item()
+        errors[c_in_block] = rel
+        logger.info(f"conv3d fp32-exact tail, C_in_block={c_in_block}: rel RMSE vs float64 = {rel:.3e}")
+
+    for c_in_block, rel in errors.items():
+        assert rel <= 1.35e-3, f"C_in_block={c_in_block}: rel RMSE {rel:.3e} > 1.35e-3 vs float64 golden"
+    spread = abs(errors[32] - errors[C]) / max(errors[C], 1e-12)
+    assert spread <= 0.05, (
+        f"error depends on C_in blocking (full-C {errors[C]:.3e} vs 32 {errors[32]:.3e}, spread {spread:.1%}): "
+        "the reduction path is re-rounding partials"
+    )
