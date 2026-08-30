@@ -1121,3 +1121,12 @@ def test_conv3d_preprepared_large_kernel_no_config(device):
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"Compare conv3d (pre-prepared large kernel, no config) torch vs ttnn: {pcc_message}")
     assert pcc_passed, pcc_message
+
+
+def test_conv3d_fp32_exact_tail(device):
+    """Nightly copy of the fp32-exact tail gate (see the unit test for the full rationale):
+    true fp32 + HiFi4 + bias vs a float64 golden, bounding rel RMSE and blocking invariance
+    across single- and multi-C_in-block runs. Fails without the SFPU/UnpackToDestFp32 tail."""
+    from tests.ttnn.unit_tests.operations.conv.test_conv3d import test_conv3d_fp32_exact_tail as gate
+
+    gate(device)
