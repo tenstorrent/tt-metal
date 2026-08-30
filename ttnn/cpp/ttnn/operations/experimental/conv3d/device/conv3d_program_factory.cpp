@@ -847,10 +847,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         out_subblock_h,
         out_subblock_w,
         semaphore_id,
-        (uint32_t)use_fp32_exact,
+        (uint32_t)use_fp32_partials,
         // Stream final output rows only for many small output writes when there is a writer tail to overlap.
         (uint32_t)(enable_streaming_output ? 1 : 0),
-        cb_reduction_acc_tiled_id};
+        cb_reduction_acc_tiled_id,
+        (uint32_t)use_fp32_exact};
 
     // Deliver the fp32 tail CBs UnpackToDestFp32 -- interm (untilize/bias read-back) and, with
     // multiple C_in blocks, reduction + acc (the reduction loop's operands). Without it the

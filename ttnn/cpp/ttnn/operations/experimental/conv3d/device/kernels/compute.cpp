@@ -236,11 +236,11 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     // Deliberately no bias pop: the caller pops it once per C_out block, matching add_bias_inplace.
 }
 
-template <uint32_t rows, uint32_t cols, bool use_fp32_exact, uint32_t in_cb, uint32_t out_cb>
+template <uint32_t rows, uint32_t cols, bool fp32_interm, uint32_t in_cb, uint32_t out_cb>
 void untilize_block() {
     constexpr auto untilize_reconfig_mode =
-        use_fp32_exact ? compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
-                       : compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
+        fp32_interm ? compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
+                    : compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
     compute_kernel_lib::untilize<
         cols,
         in_cb,
@@ -254,6 +254,7 @@ void untilize_block() {
 template <
     uint32_t rows,
     uint32_t cols,
+    bool use_fp32_partials,
     bool use_fp32_exact,
     bool use_bias,
     uint32_t inout_cb,
@@ -268,13 +269,23 @@ void bias_untilize_fullblock_math() {
             reconfig_data_format(inout_cb, bias_cb);
             add_bias_inplace_sfpu<rows, cols>(inout_cb, bias_cb);
         } else {
+            if constexpr (use_fp32_partials) {
+                reconfig_data_format(inout_cb, bias_cb);
+            }
             add_bias_inplace<rows, cols, compute_kernel_lib::DEST_AUTO_LIMIT>(inout_cb, bias_cb);
         }
     }
-    untilize_block<rows, cols, use_fp32_exact, inout_cb, out_cb>();
+    untilize_block<rows, cols, use_fp32_partials || use_fp32_exact, inout_cb, out_cb>();
 }
 
-template <uint32_t rows, uint32_t cols, bool use_fp32_exact, uint32_t local_cb, uint32_t remote_cb, uint32_t acc_cb>
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool use_fp32_partials,
+    bool use_fp32_exact,
+    uint32_t local_cb,
+    uint32_t remote_cb,
+    uint32_t acc_cb>
 void reduce_fullblock_inplace_math(uint32_t num_workers) {
     constexpr uint32_t num_tiles = rows * cols;
 
@@ -288,6 +299,12 @@ void reduce_fullblock_inplace_math(uint32_t num_workers) {
         pack_reconfig_data_format(local_cb);
         reduce_block_fp32_sfpu<num_tiles>(local_cb, remote_cb, acc_cb, num_workers);
     } else {
+        if constexpr (use_fp32_partials) {
+            // fp32-FORMAT partial CBs under a non-fp32 output: the FPU adds are fine (the CBs are
+            // not UnpackToDestFp32 here) but unpack/pack must be reconfigured for the wider format.
+            reconfig_data_format(local_cb, remote_cb);
+            pack_reconfig_data_format(local_cb);
+        }
         for (uint32_t i = 0; i < num_workers; i++) {
             remote_cb_obj.wait_front(num_tiles);
             add_block_inplace_math<num_tiles, compute_kernel_lib::DEST_AUTO_LIMIT>(local_cb, remote_cb);
@@ -298,6 +315,7 @@ void reduce_fullblock_inplace_math(uint32_t num_workers) {
 template <
     uint32_t rows,
     uint32_t cols,
+    bool use_fp32_partials,
     bool use_fp32_exact,
     bool use_bias,
     uint32_t local_cb,
@@ -307,9 +325,10 @@ template <
     uint32_t acc_cb>
 void reduce_bias_untilize_fullblock(uint32_t num_workers) {
     if (num_workers > 0) {
-        reduce_fullblock_inplace_math<rows, cols, use_fp32_exact, local_cb, remote_cb, acc_cb>(num_workers);
+        reduce_fullblock_inplace_math<rows, cols, use_fp32_partials, use_fp32_exact, local_cb, remote_cb, acc_cb>(
+            num_workers);
     }
-    bias_untilize_fullblock_math<rows, cols, use_fp32_exact, use_bias, local_cb, bias_cb, out_cb>();
+    bias_untilize_fullblock_math<rows, cols, use_fp32_partials, use_fp32_exact, use_bias, local_cb, bias_cb, out_cb>();
 }
 
 void kernel_main() {
@@ -345,12 +364,15 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
-    // fp32-exact output path: SFPU reduction/bias + UnpackToDestFp32 CB reads (fp32 dtype + fp32 dest).
-    constexpr bool use_fp32_exact = get_compile_time_arg_val(27) == 1;
+    // fp32-FORMAT partial CBs (multi-C_in-block with fp32 dest): format reconfigs required around
+    // the interm reads even when the data dtype is bf16.
+    constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
     // Stream final single-tile C_out rows through bias/untilize when the writer can overlap the compute tail.
     constexpr bool enable_streaming_output = get_compile_time_arg_val(28) == 1;
     // fp32 running-partial accumulator for the exact reduction; 32 (invalid) when unused.
     constexpr uint32_t cb_reduction_acc_tiled = get_compile_time_arg_val(29);
+    // fp32-exact output path: SFPU reduction/bias + UnpackToDestFp32 CB reads (fp32 dtype + fp32 dest).
+    constexpr bool use_fp32_exact = get_compile_time_arg_val(30) == 1;
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -414,7 +436,7 @@ void kernel_main() {
                                         const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
                                                                               ? tt::constants::TILE_HEIGHT
                                                                               : patches_left;
-                                        if constexpr (use_fp32_exact) {
+                                        if constexpr (use_fp32_partials || use_fp32_exact) {
                                             pack_reconfig_data_format(cb_vol2col_tiled);
                                             reconfig_data_format_srca(cb_vol2col_rm);
                                         }
@@ -432,7 +454,7 @@ void kernel_main() {
                                         patches_left -= patches_this_row;
                                     }
 
-                                    if constexpr (use_fp32_exact) {
+                                    if constexpr (use_fp32_partials || use_fp32_exact) {
                                         pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     }
 
@@ -467,6 +489,9 @@ void kernel_main() {
                                                 add_bias_inplace_sfpu<subblock_h, matmul_N_t>(
                                                     cb_matmul_interm_tiled, cb_bias_tiled);
                                             } else {
+                                                if constexpr (use_fp32_partials) {
+                                                    reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
+                                                }
                                                 add_bias_inplace<
                                                     subblock_h,
                                                     matmul_N_t,
@@ -516,6 +541,7 @@ void kernel_main() {
                                     reduce_bias_untilize_fullblock<
                                         matmul_M_t,
                                         matmul_N_t,
+                                        use_fp32_partials,
                                         use_fp32_exact,
                                         use_bias,
                                         cb_matmul_interm_tiled,
