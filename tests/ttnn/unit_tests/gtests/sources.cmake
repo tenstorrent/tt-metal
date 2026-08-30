@@ -33,6 +33,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_normalization.cpp
     test_reduction.cpp
     test_relational_int.cpp
+    test_ring_indexer_score_schedule.cpp
     test_rsub_int.cpp
     test_sub_int.cpp
     test_gelu_fw_ulp.cpp

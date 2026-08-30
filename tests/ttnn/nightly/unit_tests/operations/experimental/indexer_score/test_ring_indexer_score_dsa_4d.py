@@ -45,13 +45,13 @@ pytestmark = [
 ]
 
 
-def _open_ccl(mesh_shape):
+def _open_ccl(mesh_shape, *, fabric_config=ttnn.FabricConfig.FABRIC_1D):
     """Open `mesh_shape` directly (no parent carve), load a worker sub-device, make 2 ccl semaphores (the two
     ring directions). Mirrors ring_indexer_score_test_utils._open_ring4_ccl without the (2,4)->(1,4) submesh
     step, so it
     runs on a 4-chip box. Returns (mesh, ccl_semaphores, worker_sub_device_id, stall_group)."""
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        fabric_config,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -139,6 +139,187 @@ def test_indexer_score_ring4_fused_4d(case_id, heads, block_cyclic):
         assert_indexer_match(out_t, ref, CHUNK4, T4, check_neg=True)
         layout = "block_cyclic" if block_cyclic else "contiguous"
         logger.info(f"4d ring4 fused {layout} (heads={heads}): matched reference")
+    finally:
+        _close_ccl(mesh)
+
+
+@pytest.mark.requires_host_iommu
+def test_indexer_score_ring4_true_ring_bfp8_bank_owned_reference_cache_hit():
+    """Reference-check the production BFP8 bank-owned path on a true QuietBox Ring.
+
+    The capacity makes forwarded payload exceed the bank-owned schedule threshold even at one byte per BFP8
+    element. Two runtime prefixes exercise distinct midpoint/completion locations through one cached program.
+    Sampled boundary rows on every rank cover both ring directions without constructing a capacity-sized CPU
+    score tensor.
+    """
+    sp = 4
+    sp_axis = 0
+    heads = 4
+    q_per_rank = 32
+    chunk_global = sp * q_per_rank
+    k_capacity = 256 * 1024
+    kv_lens = (56320, 112640)
+    dim = 128
+    forwarded_capacity_bytes = k_capacity // sp * dim * (sp - 1)
+    assert forwarded_capacity_bytes > 20 * 1024 * 1024, "test capacity must activate bank-owned partial readiness"
+
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
+        (sp, 1), fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    )
+    try:
+        q_g, k_nat, w_g = _global_inputs(heads, chunk_global, k_capacity, seed=4343)
+        k_bc = _to_slab(k_nat, sp, chunk_global)
+        sp_shard = ttnn.ShardTensor2dMesh(mesh, mesh_shape=(sp, 1), dims=(2, None))
+        q_dev = ttnn.from_torch(q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard)
+        w_dev = ttnn.from_torch(w_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard)
+        k_local = ttnn.from_torch(
+            k_bc,
+            device=mesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=sp_shard,
+        )
+        k_gathered = ttnn.from_torch(
+            torch.zeros_like(k_nat),
+            device=mesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        program_config = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=320, head_group_size=0)
+
+        def _score(kv_len):
+            chunk_start = kv_len - chunk_global
+            out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=sp_axis,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                kv_len=kv_len,
+                block_cyclic_sp_axis=sp_axis,
+                block_cyclic_chunk_local=q_per_rank,
+                program_config=program_config,
+            )
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+            ttnn.deallocate(out)
+            return out_t, chunk_start
+
+        entries_before = mesh.num_program_cache_entries()
+        for dispatch, kv_len in enumerate(kv_lens):
+            out_t, chunk_start = _score(kv_len)
+            if dispatch == 0:
+                entries_after_compile = mesh.num_program_cache_entries()
+                assert entries_after_compile > entries_before
+            else:
+                assert (
+                    mesh.num_program_cache_entries() == entries_after_compile
+                ), "changing kv_len/midpoint recompiled instead of patching the cached Ring program"
+
+            for rank in range(sp):
+                for local_row in (0, q_per_rank - 1):
+                    global_row = rank * q_per_rank + local_row
+                    row = slice(global_row, global_row + 1)
+                    ref = indexer_score_dsa_ref(
+                        q_g[:, :, row, :],
+                        k_nat[:, :, :kv_len, :],
+                        w_g[:, :, row, :],
+                        chunk_start + global_row,
+                    )
+                    assert_indexer_match(out_t[:, :, row, :kv_len], ref, sq=1, t=kv_len, check_neg=False)
+        logger.info("True Ring-4 BFP8 bank-owned partial readiness matched sampled reference across a cache hit")
+    finally:
+        _close_ccl(mesh)
+
+
+@pytest.mark.requires_host_iommu
+def test_indexer_score_ring4_small_capacity_has_no_empty_lane_deadlock():
+    """Keep every multicast participant productive when one shard has fewer KC units than the full grid.
+
+    Eleven query groups force multiple phases while eighteen KC units per shard are too few for the old
+    ring-wide lane sizing. An empty compute lane would return while its reader blocks on the next single-buffered
+    q/w multicast phase, hanging the row. The sampled reference checks that the reduced nonempty lane geometry
+    also preserves semantics.
+    """
+    sp = 4
+    sp_axis = 0
+    heads = 4
+    q_per_rank = 352  # 11 tiles; prime group count exceeds the 10-row QuietBox grid.
+    chunk_global = sp * q_per_rank
+    k_capacity = 22_528  # 5,632 tokens/rank = 18 KC units, below the physical lane count.
+    assert (k_capacity // sp + 10 * 32 - 1) // (10 * 32) == 18
+
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl(
+        (sp, 1), fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    )
+    try:
+        q_g, k_nat, w_g = _global_inputs(heads, chunk_global, k_capacity, seed=4444)
+        k_bc = _to_slab(k_nat, sp, chunk_global)
+        sp_shard = ttnn.ShardTensor2dMesh(mesh, mesh_shape=(sp, 1), dims=(2, None))
+        q_dev = ttnn.from_torch(q_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard)
+        w_dev = ttnn.from_torch(w_g, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard)
+        k_local = ttnn.from_torch(
+            k_bc,
+            device=mesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=sp_shard,
+        )
+        k_gathered = ttnn.from_torch(
+            torch.zeros_like(k_nat),
+            device=mesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        out = ttnn.experimental.ring_indexer_score_dsa(
+            q_dev,
+            k_gathered,
+            w_dev,
+            k_local,
+            ccl_semaphores,
+            cluster_axis=sp_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=2,
+            ag_sub_device_id=subdevice_id,
+            chunk_start_idx=0,
+            kv_len=k_capacity,
+            block_cyclic_sp_axis=sp_axis,
+            block_cyclic_chunk_local=q_per_rank,
+            program_config=ttnn.IndexerScoreProgramConfig(
+                q_chunk_size=32,
+                k_chunk_size=320,
+                head_group_size=0,
+            ),
+        )
+        ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+        out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+
+        for rank in range(sp):
+            # Start at the end of the first query tile: row zero has only one visible causal score, for which
+            # correlation is undefined. This still samples both ends of every rank while keeping the PCC check
+            # meaningful.
+            for local_row in (31, q_per_rank - 1):
+                global_row = rank * q_per_rank + local_row
+                row = slice(global_row, global_row + 1)
+                ref = indexer_score_dsa_ref(
+                    q_g[:, :, row, :],
+                    k_nat,
+                    w_g[:, :, row, :],
+                    global_row,
+                )
+                assert_indexer_match(out_t[:, :, row, :], ref, sq=1, t=k_capacity, check_neg=True)
+        logger.info("True Ring-4 small-capacity multi-phase schedule matched sampled reference without a hang")
     finally:
         _close_ccl(mesh)
 
