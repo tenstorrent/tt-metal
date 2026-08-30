@@ -26,6 +26,8 @@
 #include "umd/device/cluster.hpp"
 #include "umd/device/chip/chip.hpp"
 #include "umd/device/types/cluster_types.hpp"
+#include "umd/device/arc/arc_telemetry_reader.hpp"
+#include "umd/device/tt_device/tt_device.hpp"
 #include "tools/profiler/sync/eth_wallclock_sync_host.hpp"
 
 using namespace tt;
@@ -124,6 +126,20 @@ int main(int argc, char** argv) {
     // there is no headroom for a governor to reclaim, so if the drift persists here, throttling is
     // excluded as its cause -- not just as the cause of the tight-loop steps.
     bool force_low = false;
+    // --power: print the ARC's own power/clock telemetry beside the drift, so the LIMITER can be named
+    // rather than guessed. The CMFW arbitrates aiclk against several limits and exposes them: tdp against
+    // tdp_limit says power, therm_trip says thermal, aiclk itself says the arbiter moved the clock. The
+    // drift being clock-state dependent says SOMETHING here is acting; this shows which.
+    bool show_power = false;
+    // --arb: read the ARC's CLOCK ARBITRATION telemetry directly (tags 63-68, 56). FirmwareInfoProvider has
+    // no getters for these, but ArcTelemetryReader::read_entry(tag) takes any tag. AICLK_ARB_MIN/MAX are
+    // what the arbiter currently permits and ENABLED_MIN/MAX_ARB are bitmasks of which arbitrators are
+    // active -- i.e. they NAME the limiter instead of leaving it to inference.
+    bool show_arb = false;
+    // --forceaiclk MHZ: send ARC FORCE_AICLK (0x33) to pin the clock, then release with 0 afterwards. The
+    // message is implemented in CMFW but wrapped by nothing in UMD, so the argument format is a GUESS:
+    // arg0 = frequency in MHz, 0 = release. Verified against reported aiclk before trusting it.
+    uint32_t force_aiclk_mhz = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -161,6 +177,12 @@ int main(int argc, char** argv) {
             busy_wait = true;
         } else if (std::strcmp(argv[i], "--low") == 0) {
             force_low = true;
+        } else if (std::strcmp(argv[i], "--power") == 0) {
+            show_power = true;
+        } else if (std::strcmp(argv[i], "--arb") == 0) {
+            show_arb = true;
+        } else if (std::strcmp(argv[i], "--forceaiclk") == 0 && i + 1 < argc) {
+            force_aiclk_mhz = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         }
     }
 
@@ -260,6 +282,37 @@ int main(int argc, char** argv) {
         }
         printf("\n[ethsync] DRIFTCHECK: chip %d vs chip %d, host-only, %u s%s%s\n", da->id(), db->id(),
                driftcheck, force_low ? ", AT 800 MHz" : "", busy_wait ? ", busy-wait gaps" : ", sleeping gaps");
+        auto arc_tel = [&](IDevice* d) {
+            return cluster.get_driver()->get_chip(d->id())->get_tt_device()->get_arc_telemetry_reader();
+        };
+        auto tel = [&](IDevice* d, uint8_t tag) -> long {
+            auto* r = arc_tel(d);
+            if (r == nullptr || !r->is_entry_available(tag)) { return -1; }
+            return (long)r->read_entry(tag);
+        };
+        if (show_arb) {
+            // 63 AICLK_LIMIT_MAX, 64 TDP_LIMIT_MAX, 65 AICLK_ARB_MIN, 66 AICLK_ARB_MAX,
+            // 67 ENABLED_MIN_ARB, 68 ENABLED_MAX_ARB, 56 THM_LIMIT_THROTTLE
+            for (IDevice* d : {da, db}) {
+                printf("  chip %d arb: AICLK_LIMIT_MAX %ld | ARB_MIN %ld ARB_MAX %ld | ENABLED_MIN 0x%lx "
+                       "ENABLED_MAX 0x%lx | TDP_LIMIT_MAX %ld | THM_THROTTLE %ld\n",
+                       d->id(), tel(d, 63), tel(d, 65), tel(d, 66), tel(d, 67), tel(d, 68), tel(d, 64),
+                       tel(d, 56));
+            }
+        }
+        if (force_aiclk_mhz != 0) {
+            for (IDevice* d : devices) {
+                try {
+                    cluster.get_driver()->get_chip(d->id())->arc_msg(0x33, true, {force_aiclk_mhz});
+                } catch (const std::exception& e) {
+                    printf("  FORCE_AICLK on chip %d threw: %s\n", d->id(), e.what());
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("  FORCE_AICLK %u -> chip %d aiclk %u MHz | chip %d aiclk %u MHz\n", force_aiclk_mhz,
+                   da->id(), (unsigned)cluster.get_device_aiclk(da->id()), db->id(),
+                   (unsigned)cluster.get_device_aiclk(db->id()));
+        }
         std::vector<std::pair<double, double>> fitw;  // first 51 ms: (host_ns, offset_cyc)
         double t0 = 0, o0 = sample_offset(t0);
         fitw.push_back({t0, o0});
@@ -299,12 +352,43 @@ int main(int argc, char** argv) {
             const double o = sample_offset(t);
             const double predicted = my + slope * ((t - t0) - mx);
             const double err_cyc = o - predicted;
-            printf("  t=%6.1f s   measured %14.0f   predicted %14.0f   error %+10.0f cyc (%+8.2f us)\n",
+            printf("  t=%6.1f s   measured %14.0f   predicted %14.0f   error %+10.0f cyc (%+8.2f us)",
                    (t - t0) / 1e9, o, predicted, err_cyc, err_cyc / ghz / 1000.0);
+            if (show_power) {
+                auto fw = [&](IDevice* d) {
+                    return cluster.get_driver()->get_chip(d->id())->get_tt_device()->get_firmware_info_provider();
+                };
+                auto val = [](std::optional<uint32_t> v) { return v.has_value() ? (int)*v : -1; };
+                printf("  | A aiclk %4d tdp %3d/%3d W vcore %4d trip %d | B aiclk %4d tdp %3d/%3d W",
+                       val(fw(da)->get_aiclk()), val(fw(da)->get_tdp()), val(fw(da)->get_tdp_limit()),
+                       val(fw(da)->get_vcore()), val(fw(da)->get_therm_trip_count()),
+                       val(fw(db)->get_aiclk()), val(fw(db)->get_tdp()), val(fw(db)->get_tdp_limit()));
+            }
+            printf("\n");
             if (t >= deadline) { break; }
         }
         printf("[ethsync] if this reproduces the eth path's ~5 us/s, the drift is REAL; if it stays near "
                "zero, the eth measurement is manufacturing it\n");
+        if (force_aiclk_mhz != 0) {
+            // Release the force whatever happened above; a pinned clock must not outlive this process.
+            for (IDevice* d : devices) {
+                try {
+                    cluster.get_driver()->get_chip(d->id())->arc_msg(0x33, true, {0});
+                } catch (const std::exception& e) {
+                    printf("  FORCE_AICLK release on chip %d threw: %s\n", d->id(), e.what());
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("  FORCE_AICLK released -> chip %d aiclk %u MHz | chip %d aiclk %u MHz\n", da->id(),
+                   (unsigned)cluster.get_device_aiclk(da->id()), db->id(),
+                   (unsigned)cluster.get_device_aiclk(db->id()));
+        }
+        if (show_arb) {
+            for (IDevice* d : {da, db}) {
+                printf("  chip %d arb AFTER: ARB_MIN %ld ARB_MAX %ld | ENABLED_MIN 0x%lx ENABLED_MAX 0x%lx\n",
+                       d->id(), tel(d, 65), tel(d, 66), tel(d, 67), tel(d, 68));
+            }
+        }
         if (force_low) {
             for (IDevice* d : devices) {
                 cluster.get_driver()->get_chip(d->id())->set_clock_state(tt::umd::DevicePowerState::BUSY);
