@@ -20,12 +20,48 @@ gate and up are stored FUSED as one ``[hidden, 2*I_local]`` weight so the two co
 matmuls become one; the halves are split on device before the activation.
 """
 
+import math
+
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.mistral_medium_d_p.config import MeshConfig
 from models.demos.mistral_medium_d_p.utils.general_utils import get_cache_file_name
 from models.demos.mistral_medium_d_p.utils.substate import substate
+
+# (in0_block_w, out_subblock_h, out_subblock_w) per exact per-chip (M, K, N), from
+# tests/perf/sweep_mlp_matmul_tune.py; unswept shapes fall back to ttnn's auto config.
+_SWEPT_PROGRAM_CONFIGS = {
+    (640, 12288, 14336): (12, 2, 2),  # w13 (fused gate|up), TP=4
+    (640, 7168, 12288): (16, 1, 8),  # w2 (down), TP=4
+}
+
+
+def _swept_program_config(mesh_device, m, k, n):
+    """The swept 2D-mcast program config for this exact per-chip matmul shape, or None (auto)."""
+    swept = _SWEPT_PROGRAM_CONFIGS.get((m, k, n))
+    if swept is None:
+        return None
+    in0_block_w, sub_h, sub_w = swept
+    grid = mesh_device.compute_with_storage_grid_size()
+    per_core_m = math.ceil(m / ttnn.TILE_SIZE / grid.y)
+    per_core_n = math.ceil(n / ttnn.TILE_SIZE / grid.x)
+    # A different worker grid than the swept 12x10 changes the per-core blocks; only apply the
+    # tuned subblocks where they still tile them exactly.
+    if per_core_m % sub_h or per_core_n % sub_w:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
 
 
 class MLP:
@@ -101,6 +137,17 @@ class MLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.local_intermediate = self.intermediate_size // self.mesh_config.tp
+        # The fidelity the swept program configs were measured with; None (auto) off-BH.
+        self.mm_compute_kernel_config = (
+            ttnn.types.BlackholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            if is_blackhole()
+            else None
+        )
 
     def __call__(self, x):
         """Forward.
@@ -116,7 +163,14 @@ class MLP:
         activation_dtype = ttnn.bfloat8_b if x.shape[-2] > 32 * 1024 else ttnn.bfloat16
         i_local = self.local_intermediate
 
-        w13_out = ttnn.linear(x, self.w13, dtype=activation_dtype)  # [1, 1, S, 2*I_local]
+        s_local = x.shape[-2]
+        w13_out = ttnn.linear(
+            x,
+            self.w13,
+            dtype=activation_dtype,
+            program_config=_swept_program_config(self.mesh_device, s_local, self.hidden_size, 2 * i_local),
+            compute_kernel_config=self.mm_compute_kernel_config,
+        )  # [1, 1, S, 2*I_local]
         b, c, s = w13_out.shape[0], w13_out.shape[1], w13_out.shape[2]
         gate = ttnn.slice(w13_out, [0, 0, 0, 0], [b, c, s, i_local], [1, 1, 1, 1])
         up = ttnn.slice(w13_out, [0, 0, 0, i_local], [b, c, s, 2 * i_local], [1, 1, 1, 1])
@@ -128,7 +182,13 @@ class MLP:
         gate.deallocate(True)
         up.deallocate(True)
 
-        out = ttnn.linear(gated, self.w2, dtype=activation_dtype)  # partial sum over hidden
+        out = ttnn.linear(
+            gated,
+            self.w2,
+            dtype=activation_dtype,
+            program_config=_swept_program_config(self.mesh_device, s_local, i_local, self.hidden_size),
+            compute_kernel_config=self.mm_compute_kernel_config,
+        )  # partial sum over hidden
         gated.deallocate(True)
 
         if self.mesh_config.tp > 1:

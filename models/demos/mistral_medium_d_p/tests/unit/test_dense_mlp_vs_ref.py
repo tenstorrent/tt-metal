@@ -77,9 +77,7 @@ def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         mesh_mapper=mesh_config.shard_mapper(mesh_device, mesh_dims=(2, None)),
     )
 
-    # Signposts bound the perf-measured region (tests/perf/test_mlp_perf.py runs this test under
-    # tracy and sums device kernel time between them): the single forward, excluding weight
-    # load/tilize at construction and the host->device input write.
+    # Signposts bound the region tests/perf/test_mlp_perf.py measures: the single forward.
     signpost(header="MLP_START")
     out_tt = mlp(x_tt)
     signpost(header="MLP_END")

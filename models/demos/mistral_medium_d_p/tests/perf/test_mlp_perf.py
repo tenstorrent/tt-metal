@@ -22,9 +22,8 @@ from models.demos.mistral_medium_d_p.utils.perf_utils import (
 
 _TEST_PATH = "models/demos/mistral_medium_d_p/tests/unit/test_dense_mlp_vs_ref.py::test_dense_mlp_vs_ref"
 
-# Keep the -k pinned to exactly one parametrization: the signpost filter keeps EVERY
-# MLP_START/MLP_END region in the profile, so a selector matching two cases would sum two forwards
-# (see deepseek_v3_d_p/tests/perf/test_mla_perf.py for the incident that rule comes from).
+# The -k must select exactly one parametrization: every MLP_START/MLP_END region in the profile
+# is summed, so a selector matching two cases counts two forwards.
 _CMD_8X4 = f"pytest {_TEST_PATH} -k '8x4 and s5k'"
 
 
@@ -40,11 +39,7 @@ def test_mistral_medium_mlp_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        # s=5k global SP-sharded across the 8 rows -> 640 tokens/chip (the worker previously
-        # replicated all 5k tokens to every chip; the old baseline at that shape was 14_155_903).
-        # Measured 2026-08-27 on this 8x4 BH Galaxy (FABRIC_1D linear). Breakdown at capture:
-        # Matmul 1,569us / ReduceScatter 315us / Slice 105us / silu-mul 76us.
-        expected_device_perf_ns_per_iteration=2_065_560,
+        expected_device_perf_ns_per_iteration=1_766_518,
         subdir="mistral_medium_mlp",
         model_name="mistral_medium_mlp_glx_8x4",
         num_iterations=1,
