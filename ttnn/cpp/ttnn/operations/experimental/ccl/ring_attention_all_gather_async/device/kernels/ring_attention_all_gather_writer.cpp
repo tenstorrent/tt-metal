@@ -107,14 +107,13 @@ FORCE_INLINE void discard_bank_owned_slices(
     uint32_t valid_pages,
     uint32_t first_bank,
     uint32_t bank_stride) {
-    for (uint32_t bank = first_bank; bank < num_dram_banks; bank += bank_stride) {
-        const uint32_t page_count =
-            ring_attention_all_gather::get_bank_owned_slice(output_page_base, valid_pages, bank, num_dram_banks)
-                .page_count;
-        for (uint32_t pages_discarded = 0; pages_discarded < page_count; pages_discarded += packet_size_in_pages) {
-            cb_output.wait_front(packet_size_in_pages);
-            cb_output.pop_front(packet_size_in_pages);
-        }
+    ring_attention_all_gather::BankOwnedPacketSchedule<num_dram_banks> schedule(
+        output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
+    uint32_t first_page_offset = 0;
+    uint32_t pages_to_discard = 0;
+    while (schedule.next_packet(first_page_offset, pages_to_discard)) {
+        cb_output.wait_front(packet_size_in_pages);
+        cb_output.pop_front(packet_size_in_pages);
     }
 }
 

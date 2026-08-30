@@ -467,7 +467,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
-    using tt::tt_metal::DataMovementConfigDescriptor;
     using tt::tt_metal::KernelDescriptor;
     using tt::tt_metal::ReaderConfigDescriptor;
     using tt::tt_metal::SemaphoreDescriptor;
@@ -577,6 +576,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreRangeSet sender_backward_core_ranges = placements_to_core_ranges(backward_workers);
 
     const uint32_t max_pages_per_packet = max_payload_size_bytes / l1_scratch_cb_page_size_bytes;
+    TT_FATAL(
+        max_pages_per_packet > 0,
+        "Ring attention all-gather page size {} exceeds the Fabric payload limit {}",
+        l1_scratch_cb_page_size_bytes,
+        max_payload_size_bytes);
     const uint32_t num_pages_per_packet =
         output_bank_owned_schedule ? max_pages_per_packet : std::min(max_pages_per_packet, kMaxScatterPagesPerPacket);
     // Must be >= kDoubleBufferingFactor * prefetch_packets * num_pages_per_packet for deadlock-free buffering
@@ -633,6 +637,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     // The host value is a structural placeholder for the indexed gather. On the
     // trace-safe path the reader derives the actual cache slot from slot_id.
+    TT_FATAL(
+        slot_id.has_value() == kv_actual_isl.has_value(),
+        "Ring attention metadata requires slot_id and kv_actual_isl tensors together");
     const bool has_metadata = slot_id.has_value();
     const uint32_t meta_cb_index = tt::CB::c_in3;
     if (has_metadata) {

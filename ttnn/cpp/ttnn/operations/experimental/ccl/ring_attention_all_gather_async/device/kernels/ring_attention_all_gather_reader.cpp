@@ -84,7 +84,7 @@ FORCE_INLINE void prefetch_bank_owned_slices(
         output_page_base, valid_pages, first_bank, bank_stride, packet_size_in_pages);
     const auto next_packet = [&](uint32_t& pages_to_read) {
         uint32_t first_page_offset = 0;
-        schedule.next_packet(first_page_offset, pages_to_read);
+        ASSERT(schedule.next_packet(first_page_offset, pages_to_read));
         return accessor_page_base + first_page_offset;
     };
     if constexpr (physically_contiguous) {
