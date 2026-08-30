@@ -848,6 +848,16 @@ uint32_t force_aiclk_mhz() {
 // init_perf_debug_profiler(), and with fabric up the routers own the eth cores, so a post-bring-up
 // sync has no core to run on. The pre-fabric sync is therefore the only one that generalises, and
 // PINNING THE CLOCK is what makes its staleness survivable (+1.6 us across 33 s instead of -144 us).
+// Host-only late re-anchor: refit every device's host<->device anchor AFTER bring-up. Unlike the eth
+// re-anchor this needs no eth core and launches nothing, so it is legal with fabric up -- which is the
+// case that matters, since metal brings fabric up before this profiler starts.
+bool host_reanchor() {
+    static const bool v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_HOST_REANCHOR");
+        return (s == nullptr || *s == '\0') ? true : (*s != '0');
+    }();
+    return v;
+}
 bool eth_sync_late() {
     static const bool v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_LATE");
@@ -904,6 +914,123 @@ uint32_t eth_sync_gap_us() {
 //
 // Deliberately re-measures the SAME eth cores in the SAME direction. Physical links differ at the
 // nanosecond level, so a different link would show up as drift that never happened.
+// WHY THIS EXISTS. The anchor a device's zones are rendered with is fitted at profiler init, but no zone is
+// timestamped until bring-up finishes -- ~26-33 s later on a 4-device mesh, against workloads of tens of ms.
+// The offset decays at ~5.4 us/s while the clock is governed, so the capture inherits ~140 us of error that
+// has nothing to do with how well the sync was measured. Re-fitting each device here collapses the elapsed
+// term to the ~0.1 s between this call and the first zone.
+//
+// HOST-ONLY, deliberately. The eth re-anchor (reanchor_after_boot) measures better but cannot run once fabric
+// owns the eth cores, and fabric comes up before this profiler starts. A host fit needs no core and launches
+// nothing, so it is the only re-anchor that generalises to a real multi-device run.
+//
+// Each device is refitted INDEPENDENTLY rather than derived from the root through the eth tree: those link
+// transforms were measured at init and are exactly as stale as the anchors being replaced.
+void PerfDebugProfiler::host_reanchor_after_boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (!host_reanchor() || devices_.empty() || tracy_ == nullptr) {
+        return;
+    }
+    const auto context_id = mesh_device->impl().get_context_id();
+    auto& cluster = MetalContext::instance(context_id).get_cluster();
+    uint32_t done = 0;
+    for (auto& ctx : devices_) {
+        if (ctx.core_virt.empty()) {
+            continue;
+        }
+        const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
+        const PerfDebugSync s = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/500);
+        if (!s.valid) {
+            // Keep the init anchor: stale placement still renders, a missing one does not.
+            log_warning(
+                tt::LogMetal,
+                "[perf-debug profiler] HOST RE-ANCHOR: device {} refit failed; keeping its init-time anchor",
+                ctx.chip_id);
+            continue;
+        }
+        ctx.clock_synced = true;
+        ctx.freq_ghz = s.frequency;
+        tracy_->AddDevice(ctx.chip_id, s.host_anchor, static_cast<double>(s.device_at_anchor), s.frequency);
+        ctx.anchor_host = s.host_anchor;
+        ctx.anchor_dev = s.device_at_anchor;
+        ctx.anchor_valid = true;
+        if (ctx.chip_id == eth_sync_root_chip_) {
+            root_sync_valid_ = true;
+            root_host_anchor_ = s.host_anchor;
+            root_dev_at_anchor_ = s.device_at_anchor;
+            root_freq_ghz_ = s.frequency;
+        }
+        ++done;
+    }
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] HOST RE-ANCHOR: refitted {} device anchor(s) after bring-up (host MMIO only, "
+        "no eth core, no program launch -- legal with fabric up)",
+        done);
+}
+
+// Scores the anchors THEMSELVES, with no eth and no composition: refit each device now, and ask how far the
+// anchor still being used to render it has drifted from that fresh fit. This is the quantity that misplaces a
+// zone, and unlike the eth close-check it stays measurable when fabric owns the eth cores.
+void PerfDebugProfiler::check_anchor_staleness_at_close() {
+    if (!eth_sync_close_check() || devices_.empty()) {
+        return;
+    }
+    auto& cluster = MetalContext::instance().get_cluster();
+    double worst_us = 0.0;
+    uint32_t worst_chip = 0;
+    uint32_t checked = 0;
+    for (auto& ctx : devices_) {
+        if (!ctx.anchor_valid || ctx.core_virt.empty() || ctx.freq_ghz <= 0.0) {
+            continue;
+        }
+        const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
+        const PerfDebugSync s = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/0);
+        if (!s.valid) {
+            continue;
+        }
+        // Where the rendering anchor says this device's clock should be at the instant of the fresh fit.
+        // Composed as a difference so the precision stays in the answer rather than in the epoch.
+        //
+        // UNITS TRAP, and it cost a run: sync_device_clock() returns host_anchor in host TICKS (raw
+        // Profiler::GetTime()) but frequency in cycles per NANOSECOND -- it divides the fitted slope by
+        // TracyGetTimerMul() before storing it. Multiplying a tick delta by a per-ns rate overstates the
+        // predicted advance by the TSC rate (~2.3x here), which showed up as a bogus 43% clock deficit that
+        // scaled with elapsed time in both A/B arms identically -- the signature of a scale error, not drift.
+#ifdef TRACY_ENABLE
+        const double ns_per_tick = TracyGetTimerMul();
+#else
+        const double ns_per_tick = 1.0;
+#endif
+        const double dt_ns = static_cast<double>(s.host_anchor - ctx.anchor_host) *
+                             (ns_per_tick > 0.0 ? ns_per_tick : 1.0);
+        const double predicted = static_cast<double>(ctx.anchor_dev) + dt_ns * ctx.freq_ghz;
+        const double err_cycles = static_cast<double>(s.device_at_anchor) - predicted;
+        const double err_us = err_cycles / ctx.freq_ghz / 1000.0;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] ANCHOR STALENESS device {}: {:+.3f} us after {:.1f} s ({:+.0f} cycles) -- "
+            "how far the anchor rendering this device's zones has drifted from a fresh fit",
+            ctx.chip_id,
+            err_us,
+            dt_ns / 1e9,
+            err_cycles);
+        if (std::abs(err_us) > std::abs(worst_us)) {
+            worst_us = err_us;
+            worst_chip = ctx.chip_id;
+        }
+        ++checked;
+    }
+    if (checked != 0) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] ANCHOR STALENESS: worst {:+.3f} us on device {} over {} device(s) -- this "
+            "bounds where a zone near the END of the capture is placed against the host timeline",
+            worst_us,
+            worst_chip,
+            checked);
+    }
+}
+
 void PerfDebugProfiler::check_sync_drift_at_close() {
     if (!eth_sync_close_check() || link_syncs_.empty()) {
         return;
@@ -1124,6 +1251,9 @@ void PerfDebugProfiler::reanchor_after_boot(const std::shared_ptr<distributed::M
         root_freq_ghz_ = s.frequency;
         ctx.freq_ghz = s.frequency;
         tracy_->AddDevice(ctx.chip_id, s.host_anchor, static_cast<double>(s.device_at_anchor), s.frequency);
+        ctx.anchor_host = s.host_anchor;
+        ctx.anchor_dev = s.device_at_anchor;
+        ctx.anchor_valid = true;
     }
     if (!root_sync_valid_) {
         // Keep whatever init produced. A stale anchor still renders; a missing one does not.
@@ -1149,6 +1279,9 @@ void PerfDebugProfiler::reanchor_after_boot(const std::shared_ptr<distributed::M
             ctx.freq_ghz = chip_freq;
             tracy_->AddDevice(
                 ctx.chip_id, root_host_anchor_, static_cast<double>(derived_clock), chip_freq);
+            ctx.anchor_host = root_host_anchor_;
+            ctx.anchor_dev = derived_clock;
+            ctx.anchor_valid = true;
         }
         ++rechipped;
         // The DRAM-core origins go stale exactly like the chip ones, and for the same reason.
@@ -1728,6 +1861,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             ctx.freq_ghz = root_freq_ghz_ * derived_rate;
             tracy_->AddDevice(
                 ctx.chip_id, root_host_anchor_, static_cast<double>(derived_clock), ctx.freq_ghz);
+            ctx.anchor_host = root_host_anchor_;
+            ctx.anchor_dev = derived_clock;
+            ctx.anchor_valid = true;
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} anchored via eth to root {}: device clock {} at the root's "
@@ -1761,6 +1897,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
             }
             tracy_->AddDevice(
                 ctx.chip_id, sync.host_anchor, static_cast<double>(sync.device_at_anchor), sync.frequency);
+            ctx.anchor_host = sync.host_anchor;
+            ctx.anchor_dev = sync.device_at_anchor;
+            ctx.anchor_valid = true;
             log_info(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {} clock sync: frequency={:.6f} GHz (aiclk reports {:.6f}), "
@@ -1983,6 +2122,9 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     // Bring-up is over, so the init-time transforms are as stale as they will ever be and no Tracy context
     // has been created yet. This is the last moment a fresh fit can still reach every zone.
     reanchor_after_boot(mesh_device);
+    // Runs after the eth re-anchor and is skipped by it when that one succeeded (it sets the same anchors).
+    // Independent of it: this one is the path that survives fabric.
+    host_reanchor_after_boot(mesh_device);
     // After every device has its anchor: the eth samples are rendered through those anchors, so drawing
     // them any earlier would map them with an anchor that does not exist yet.
     emit_eth_sync_lanes();
@@ -4113,6 +4255,7 @@ void PerfDebugProfiler::stop() {
     }
     // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
     check_sync_drift_at_close();
+    check_anchor_staleness_at_close();
     if (!forced_aiclk_chips_.empty()) {
         auto& cl = MetalContext::instance().get_cluster();
         for (const int cid : forced_aiclk_chips_) {

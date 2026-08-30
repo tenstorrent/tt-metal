@@ -155,6 +155,12 @@ private:
         bool active = false;
         bool clock_synced = false;
         double freq_ghz = 0.0;  // measured sync frequency (cycles/ns); aiclk fallback
+        // The anchor this device's zones are actually placed with, mirrored from the last AddDevice(). Kept
+        // so the close-check can ask the only question that matters for placement: how far has this device's
+        // clock moved away from the anchor still being used to render it?
+        int64_t anchor_host = 0;
+        uint64_t anchor_dev = 0;
+        bool anchor_valid = false;
 
         DeviceCtx();
         ~DeviceCtx();
@@ -253,6 +259,11 @@ private:
     // The init sync says how well the clocks agreed WHEN MEASURED; this says how far the session had drifted
     // by the time it ended, which is the number that actually bounds a zone's placement late in a capture.
     void check_sync_drift_at_close();
+    // Host-only late re-anchor: a fresh host<->device fit per device after bring-up. Needs no eth core and
+    // launches nothing, so unlike the eth re-anchor it is legal with fabric up.
+    void host_reanchor_after_boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    // Measures each device anchor's staleness against a fresh fit. No eth, no composition.
+    void check_anchor_staleness_at_close();
 
     // Chips whose AI clock this profiler pinned, so stop() can release exactly those.
     std::vector<int> forced_aiclk_chips_;
