@@ -34,6 +34,7 @@
 #include <cstring>
 #include <deque>
 #include <fstream>
+#include <sstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -185,6 +186,7 @@ struct CliOptions {
     std::string log_file;         // non-empty = redirect stderr there
     bool show_help = false;
     bool journal_probe = false;  // Phase 2.2 M1: scan for aggregator journals and exit
+    std::string launch_go;       // Phase 2.2 7.4: descriptor of a staged aggregator to start
 };
 
 void print_help(const char* argv0) {
@@ -270,6 +272,12 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
             out.device_filter.insert(d);
         } else if (a == "--journal-probe") {
             out.journal_probe = true;
+        } else if (a == "--launch-go") {
+            const char* v = need_arg("--launch-go");
+            if (v == nullptr) {
+                return false;
+            }
+            out.launch_go = v;
         } else if (a == "--log-file") {
             const char* v = need_arg("--log-file");
             if (v == nullptr) {
@@ -825,6 +833,70 @@ int main(int argc, char* argv[]) {
     if (chips.empty()) {
         std::cerr << "ttnvtop-collector: no supported chips to monitor.\n";
         return 1;
+    }
+
+    // Phase 2.2, open question 7.4. Start an aggregator that ANOTHER PROCESS staged.
+    //
+    // That process wrote the kernel binary, its runtime args (including the fabric
+    // connection spec) and the launch message, but deliberately withheld the go word.
+    // All that is left is one L1 write, done here over raw UMD with no tt-metal in the
+    // picture -- which is the point: the device-side launch contract is plain L1 writes
+    // (3.5), and the only reason the aggregator currently needs tt-metal is JIT-building
+    // the ELF and computing the fabric connection args, neither of which is a device
+    // requirement.
+    if (!cli.launch_go.empty()) {
+        std::ifstream f(cli.launch_go);
+        if (!f.good()) {
+            std::cerr << "ttnvtop-collector: cannot read " << cli.launch_go << "\n";
+            return 1;
+        }
+        int chip = -1, ex = -1, ey = -1;
+        uint64_t go_addr = 0;
+        std::vector<uint8_t> go_bytes;
+        std::string key;
+        while (f >> key) {
+            if (key == "chip") {
+                f >> chip;
+            } else if (key == "eth_translated") {
+                f >> ex >> ey;
+            } else if (key == "go_addr") {
+                f >> go_addr;
+            } else if (key == "go_bytes") {
+                std::string rest;
+                std::getline(f, rest);
+                std::istringstream is(rest);
+                unsigned b = 0;
+                while (is >> b) {
+                    go_bytes.push_back(static_cast<uint8_t>(b));
+                }
+            }
+        }
+        if (chip < 0 || ex < 0 || ey < 0 || go_addr == 0 || go_bytes.empty()) {
+            std::cerr << "ttnvtop-collector: malformed descriptor " << cli.launch_go << "\n";
+            return 1;
+        }
+        ChipState* target = nullptr;
+        for (auto& c : chips) {
+            if (static_cast<int>(c.chip_id) == chip) {
+                target = &c;
+            }
+        }
+        if (target == nullptr || target->cores.empty()) {
+            std::cerr << "ttnvtop-collector: chip " << chip << " not present\n";
+            return 1;
+        }
+        const tt::umd::CoreCoord eth(
+            static_cast<size_t>(ex), static_cast<size_t>(ey), CoreType::ETH, CoordSystem::TRANSLATED);
+        std::cout << "launch-go: chip " << chip << " eth (" << ex << "," << ey << ") addr 0x" << std::hex << go_addr
+                  << std::dec << " " << go_bytes.size() << " bytes\n";
+        try {
+            target->cores.front().device->write_to_device(go_bytes.data(), eth, go_addr, go_bytes.size());
+        } catch (const std::exception& e) {
+            std::cerr << "launch-go: write failed: " << e.what() << "\n";
+            return 1;
+        }
+        std::cout << "launch-go: go word written — the staged aggregator should now be running.\n";
+        return 0;
     }
 
     // Phase 2.2 M1 diagnostic. Scans every chip's ethernet cores for a landed

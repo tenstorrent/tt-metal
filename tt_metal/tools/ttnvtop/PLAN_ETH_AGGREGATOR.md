@@ -1136,6 +1136,74 @@ path -- demux `core_id` to the source chip's `CoreState` using the same live-x/l
 ordering the kernel walks, track `last_head` and `lost`, and fall back to the per-core
 tunnel drain when no journal is present or `sweep_count` stops advancing.
 
+## 5j. 7.4 answered -- a separate PID CAN start the aggregator and join a live EDM -- 2026-08-29
+
+The requirement is an aggregator independent of the workload: separate PID, started
+before or during the run. Two tt-metal processes cannot share a device (CHIP_IN_USE),
+so the second process must be UMD-only. Tested by splitting the launch.
+
+Process A (tt-metal): initialises fabric, compiles the kernel, writes the binary, the
+runtime args and the launch message -- then deliberately withholds the go word
+(`llrt::write_launch_msg_to_core(..., send_go=false)`) -- and holds the device.
+
+Process B (`ttnvtop-collector --launch-go`, **UMD only, no tt-metal**): writes the go
+word. Four bytes.
+
+```
+launch-go: chip 0 eth (19,16) addr 0x2490 4 bytes
+launch-go: go word written
+journal probe:  chip 1 eth (19,16)  src_chip=0 cores=64 head=540608 sweeps=8219
+after hold:     markers state=0x09e00000 sweeps=26666 head=1754176 cores=64
+```
+
+`0x09E00000` is the fabric-connection-opened marker. So a kernel started by a DIFFERENT
+process opened a connection on an EDM this process owns, swept 64 Tensix cores, and
+pushed its journal -- which B then read back over PCIe.
+
+### Why tt-metal is not the blocker
+
+The device-side launch contract is four plain L1 writes (3.5). Nothing in it needs
+tt-metal. Two practical dependencies remain, and neither is a device requirement:
+
+1. **The kernel ELF is JIT-compiled.** Fix: emit it as a fixed build artifact and write
+   its spans over UMD. `llrt::get_risc_binary()` is a pure ELF parse with no cluster
+   dependency, and `launch_msg_t` is a generated header, not a library.
+2. **The fabric connection args.** These are **DERIVED, not allocated** --
+   `fabric.cpp` builds the whole `SenderWorkerAdapterSpec` from static `edm_config`
+   addresses plus the control plane, and for ETH clients the sender channel is
+   hardcoded:
+
+   ```cpp
+   // Sender channel 0 is always for local worker in the new design
+   const auto sender_channel = 0;
+   ```
+
+   There is no per-process allocator to contend on, so a second process can compute
+   identical args without coordination. That is engineering, not an unknown.
+
+### The real remaining constraint is CONTENTION, not permission
+
+`sender_channel = 0` is the ONLY local-worker channel per EDM, and the EDM's
+`worker_location_info` holds one worker's location. So **one connected worker at a time
+per (router channel, link_idx)**. That is exactly the 5f measurement -- a second client
+on a link whose slot was still held ran at 5 sweeps vs 73,284.
+
+Consequence for running alongside a real workload: the aggregator needs a `link_idx`
+the workload is not using. On a T3K internal trace `num_links = 2`. If the workload's
+own fabric clients occupy both, there is no slot for telemetry.
+
+**This is the question for the fabric owners, and it is now specific:** can a low-rate
+telemetry client share an EDM sender channel, or can one be reserved? It is a design
+constraint, not a bug, and it is what gates 7.4-for-real-workloads even though the
+mechanism itself is proven.
+
+### Not yet covered
+
+The staged handoff proves the EDM join and the cross-process start. It does NOT yet
+prove B can compute the connection args itself (derived, so expected to work) or write
+the binary itself (needs the ELF artifact). And the test staged only ONE aggregator, so
+coexistence with an ACTIVE competing client on the same EDM is still untested.
+
 ## 6. Risks
 
 | Risk | Mitigation |
@@ -1171,8 +1239,13 @@ tunnel drain when no journal is present or `sweep_count` stops advancing.
    to its remote chip took remote launch from 1/6 to 14/14. It applies to every
    remote-chip operation on a T3K, not just this feature, and is very likely a
    contributor to 5c. Recommend tt-metal call it at device init.
-4. **Can a separate PID join an EDM whose flow-control state another process owns —
-   and can a client ever safely LEAVE one?** Sharpened by 5f finding 3: a client that
+4. **PARTLY ANSWERED 2026-08-29 (5j): a separate PID CAN start the aggregator and join
+   a live EDM** -- demonstrated with a UMD-only process writing a 4-byte go word. The
+   connection args are derived, not allocated, so no coordination is needed. What
+   remains is CONTENTION: `sender_channel = 0` is the only local-worker channel per EDM
+   and holds one worker at a time, so the aggregator needs a `link_idx` the workload is
+   not using. **For the fabric owners: can a low-rate telemetry client share an EDM
+   sender channel, or can one be reserved?** The leave-cleanly half is unchanged -- Sharpened by 5f finding 3: a client that
    dies without `sender.close()` does not release its connection, and the next client
    on that `link_idx` starves (measured 5 sweeps vs 73,284). Since the aggregator's
    kernel never returns, it can never call `close()` -- so this is its normal exit

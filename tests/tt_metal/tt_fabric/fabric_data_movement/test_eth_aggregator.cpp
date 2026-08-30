@@ -29,6 +29,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
+#include <llrt/llrt.hpp>
+#include <fstream>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "fabric_fixture.hpp"
@@ -941,6 +944,194 @@ TEST_F(Fabric1DFixture, TestEthAggregatorMultiCoreAndWrap) {
         << "only " << seen.size() << " of " << num_cores << " cores appear -- the sweep is not covering the grid";
 
     ttnvtop::stop_aggregator(dev, core);
+}
+
+// CROSS-PROCESS LAUNCH (open question 7.4, empirically).
+//
+// The requirement is an aggregator that runs INDEPENDENTLY of the workload: separate
+// PID, started before or during the run. Two tt-metal processes cannot share a device
+// (CHIP_IN_USE), so the second process must be UMD-only -- which is the whole reason
+// the collector never calls start_device().
+//
+// The device-side launch contract is four plain L1 writes (3.5): binary, runtime args,
+// launch_msg, then RUN_MSG_GO. Nothing in it needs tt-metal. What still ties us to
+// tt-metal today is (a) JIT-compiling the kernel ELF and (b) computing the fabric
+// connection args. This test isolates the part that is actually UNKNOWN -- whether a
+// kernel started by a DIFFERENT process can join an EDM this process owns -- by
+// staging (a) and (b) here and leaving only the GO word to the other process.
+//
+// It deliberately also runs a FIRST aggregator on link 0, so the staged one has to
+// join an EDM while another client is already connected. That is the situation a real
+// workload creates.
+//
+// Run with TTNVTOP_STAGE_DESCRIPTOR=/path and TTNVTOP_HOLD_SECONDS=N; the other process
+// is `ttnvtop-collector --launch-go /path`.
+TEST_F(Fabric1DFixture, TestEthAggregatorCrossProcessStage) {
+    const char* desc_path = std::getenv("TTNVTOP_STAGE_DESCRIPTOR");
+    if (desc_path == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_STAGE_DESCRIPTOR to run the cross-process handoff";
+    }
+    const auto& devices = this->get_devices();
+    if (devices.size() < 2u) {
+        GTEST_SKIP() << "need two devices";
+    }
+    auto* dev = devices[0]->get_devices()[0];
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    const auto ranked = ttnvtop::rank_aggregator_eth_cores(dev);
+    if (ranked.size() < 2) {
+        GTEST_SKIP() << "need two idle eth cores on the sender";
+    }
+    const tt::tt_metal::CoreCoord stage_core = ranked[1];
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t eth_l1 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    const auto& soc = cluster.get_soc_desc(dev->id());
+    const auto tensix = soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED);
+    TensixGrid grid;
+    ASSERT_TRUE(translated_tensix_grid(tensix, grid));
+    const uint32_t num_cores = static_cast<uint32_t>(grid.xs.size() * grid.ys.size());
+    const uint32_t stage_entries_max = 8;
+    const SenderL1 l1 = layout_sender_l1(eth_l1, num_cores, stage_entries_max);
+
+    // Land on a peer's idle eth core.
+    tt::tt_metal::IDevice* landing_dev = nullptr;
+    tt::tt_metal::CoreCoord landing_core;
+    uint64_t dest = 0;
+    for (const auto& d : devices) {
+        auto* peer = d->get_devices()[0];
+        if (peer->id() == dev->id()) {
+            continue;
+        }
+        const auto peer_pick = ttnvtop::select_aggregator_eth_core(peer, /*rank=*/1);
+        if (!peer_pick.ok) {
+            continue;
+        }
+        const auto& psoc = cluster.get_soc_desc(peer->id());
+        const auto pt = psoc.translate_coord_to(
+            tt::umd::CoreCoord(peer_pick.core.x, peer_pick.core.y, CoreType::ETH, CoordSystem::LOGICAL),
+            CoordSystem::TRANSLATED);
+        landing_dev = peer;
+        landing_core = peer_pick.core;
+        dest = noc_addr_translated(pt.x, pt.y, eth_l1);
+        break;
+    }
+    if (landing_dev == nullptr) {
+        GTEST_SKIP() << "no peer with a free idle eth core";
+    }
+
+    auto program = tt::tt_metal::CreateProgram();
+    auto kernel = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/tools/ttnvtop/kernels/eth_aggregator.cpp",
+        stage_core,
+        tt::tt_metal::EthernetConfig{
+            .eth_mode = tt::tt_metal::Eth::IDLE, .processor = tt::tt_metal::DataMovementProcessor::RISCV_0});
+
+    std::vector<uint32_t> rt_args = {
+        num_cores,
+        static_cast<uint32_t>(grid.xs.size()),
+        static_cast<uint32_t>(grid.ys.size()),
+        l1.last_head,
+        l1.head_scratch,
+        l1.stage,
+        stage_entries_max,
+        l1.hdr_stage,
+        static_cast<uint32_t>(dest & 0xFFFFFFFFull),
+        static_cast<uint32_t>(dest >> 32),
+        UTIL_AGG_CAPACITY,
+        static_cast<uint32_t>(dev->id()),
+        1000000u,
+        1u,
+        l1.seq_scratch,
+        l1.dbg};
+    insert_grid_coords(rt_args, grid);
+
+    bool linked = false;
+    for (const auto& d : devices) {
+        auto* peer = d->get_devices()[0];
+        if (peer->id() == dev->id()) {
+            continue;
+        }
+        std::vector<uint32_t> attempt = rt_args;
+        try {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                cp.get_fabric_node_id_from_physical_chip_id(dev->id()),
+                cp.get_fabric_node_id_from_physical_chip_id(peer->id()),
+                /*link_idx=*/0,
+                program,
+                stage_core,
+                attempt,
+                CoreType::ETH);
+        } catch (const std::exception&) {
+            continue;
+        }
+        rt_args = std::move(attempt);
+        linked = true;
+        break;
+    }
+    if (!linked) {
+        GTEST_SKIP() << "no adjacent peer to resolve a fabric connection";
+    }
+    tt::tt_metal::SetRuntimeArgs(program, kernel, stage_core, rt_args);
+
+    // Everything LaunchProgram does, except the go signal.
+    tt::tt_metal::detail::CompileProgram(dev, program, /*force_slow_dispatch=*/true);
+    program.impl().finalize_dataflow_buffer_configs();
+    if (!program.impl().is_finalized()) {
+        program.impl().finalize_offsets(dev);
+    }
+    tt::tt_metal::detail::ConfigureDeviceWithProgram(dev, program, /*force_slow_dispatch=*/true);
+    tt::tt_metal::detail::WriteRuntimeArgsToDevice(dev, program, /*force_slow_dispatch=*/true);
+
+    const uint32_t idle_eth_idx = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+    auto* kg = program.impl().kernels_on_core(stage_core, idle_eth_idx);
+    ASSERT_NE(kg, nullptr);
+    const auto physical_core = dev->virtual_core_from_logical_core(stage_core, CoreType::ETH);
+
+    // send_go = false: the launch message lands, the kernel does NOT start. The other
+    // process supplies the go word.
+    tt::llrt::write_launch_msg_to_core(
+        dev->id(), physical_core, kg->launch_msg.view(), kg->go_msg.view(), /*send_go=*/false);
+
+    const uint64_t go_addr =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::GO_MSG);
+
+    {
+        std::ofstream f(desc_path);
+        ASSERT_TRUE(f.good()) << "cannot write " << desc_path;
+        f << "chip " << dev->id() << "\n";
+        f << "eth_translated " << physical_core.x << " " << physical_core.y << "\n";
+        f << "go_addr " << go_addr << "\n";
+        f << "go_bytes";
+        const auto* p = reinterpret_cast<const uint8_t*>(kg->go_msg.view().data());
+        for (size_t i = 0; i < kg->go_msg.view().size(); i++) {
+            f << " " << static_cast<unsigned>(p[i]);
+        }
+        f << "\n";
+    }
+    log_info(
+        tt::LogTest,
+        "staged aggregator on chip {} eth {} (physical {},{}); go_addr=0x{:x}; descriptor {}",
+        dev->id(),
+        stage_core.str(),
+        physical_core.x,
+        physical_core.y,
+        go_addr,
+        desc_path);
+    log_info(tt::LogTest, "landing chip {} eth {}", landing_dev->id(), landing_core.str());
+
+    const int hold = std::getenv("TTNVTOP_HOLD_SECONDS") ? std::atoi(std::getenv("TTNVTOP_HOLD_SECONDS")) : 60;
+    std::this_thread::sleep_for(std::chrono::seconds(hold));
+
+    // Did the other process start it?
+    std::vector<uint32_t> dbg(4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, stage_core, l1.dbg, 16, dbg, CoreType::ETH);
+    log_info(
+        tt::LogTest, "after hold: markers state=0x{:08x} sweeps={} head={} cores={}", dbg[0], dbg[1], dbg[2], dbg[3]);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
