@@ -1265,7 +1265,8 @@ static void sdpa_inner_loop_step(
     const bool apply_sliding_window = false,
     const uint32_t mask_straddle_col = 0,
     const uint32_t mask_straddle_jump = 0,
-    const KVPadRotationContext& kv_pad_rotation = {}) {
+    const KVPadRotationContext& kv_pad_rotation = {},
+    const bool dbg_ref = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1290,14 +1291,26 @@ static void sdpa_inner_loop_step(
         CircularBuffer(save_max_cb).reserve_back(Sq_chunk_t);
     }
 
+    if (dbg_ref) {
+        DPRINT("Senter\n");
+    }
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
     CircularBuffer(cb_kt_in).wait_front(DHt * KT_stride);
+    if (dbg_ref) {
+        DPRINT("SktOK\n");
+    }
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+        if (dbg_ref) {
+            DPRINT("SqW qsb{} wt{}\n", q_subblock, q_wait_tiles);
+        }
         CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
+        if (dbg_ref) {
+            DPRINT("SqOK qsb{}\n", q_subblock);
+        }
         kt_index_offset = 0;
 
         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
@@ -1530,7 +1543,13 @@ static void sdpa_inner_loop_step(
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
+        if (dbg_ref) {
+            DPRINT("SoutR\n");
+        }
         CircularBuffer(out_cb).reserve_back(qktv_output_num_tiles);
+        if (dbg_ref) {
+            DPRINT("SoutOK\n");
+        }
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
@@ -1562,7 +1581,13 @@ static void sdpa_inner_loop_step(
                     }
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
+                        if (dbg_ref) {
+                            DPRINT("SqktimOK\n");
+                        }
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                        if (dbg_ref) {
+                            DPRINT("SvOK\n");
+                        }
                     }
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
@@ -2595,15 +2620,22 @@ void sdpa_ring_v2(
             }
             if constexpr (sparse_frames_enabled) {
                 // Pre-scan: skip k_chunks this q_frame doesn't attend when counting valid KV.
-                // The reference frame is attended by every query, so the peeled mask (whose
-                // reference column is zeroed) must not gate it.
-                if (!is_joint && !force_ref_k_frame) {
-                    const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
-                    const uint32_t k_frame = k_global / tiles_per_frame;
-                    const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
-                    const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
-                    if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
-                        continue;
+                if (!is_joint) {
+                    if (force_ref_k_frame) {
+                        // Reference frame is attended by every real query; the peeled mask can't gate it
+                        // (reference column zeroed). Mirror the host bitmap so normalize/last-iter timing
+                        // agrees: a q_chunk attends the reference iff its reference bit is set.
+                        if (((q_work_bitmap[q_chunk] >> ring_iter) & 1u) == 0u) {
+                            continue;
+                        }
+                    } else {
+                        const uint32_t k_global = local_padded_Nt * ring_id + k * Sk_chunk_t;
+                        const uint32_t k_frame = k_global / tiles_per_frame;
+                        const uint32_t bit_idx = q_frame_for_this_chunk * num_frames_padded_compile + k_frame;
+                        const uint32_t word = sparse_frame_mask_words[bit_idx >> 5];
+                        if (((word >> (bit_idx & 31u)) & 1u) == 0u) {
+                            continue;
+                        }
                     }
                 }
             }
@@ -2629,11 +2661,12 @@ void sdpa_ring_v2(
                     if (try_skip_oob_kv(ring_id, k, is_joint_)) {
                         continue;
                     }
-                    if (!is_joint_) {
-                        // Reader pushed only if some q_frame in shard attends.
+                    // On the reference iter the reader pushes every reference k chunk unconditionally
+                    // (its per-q aggregate skip is bypassed), so always drain here. Otherwise the reader
+                    // pushed only if some q_frame in the shard attends this k_frame — mirror that.
+                    if (!is_joint_ && !force_ref_k_frame) {
                         const uint32_t k_global_start_tile = local_padded_Nt * ring_id + k * Sk_chunk_t;
-                        const uint32_t k_frame =
-                            force_ref_k_frame ? forced_k_frame : (k_global_start_tile / tiles_per_frame);
+                        const uint32_t k_frame = k_global_start_tile / tiles_per_frame;
                         bool aggregate_allowed = false;
                         for (uint32_t qf = q_frame_lo; qf <= q_frame_hi; ++qf) {
                             const uint32_t bit_idx = qf * num_frames_padded_compile + k_frame;
@@ -2666,6 +2699,14 @@ void sdpa_ring_v2(
                 // below at "Pop Q"). A zero-total-work Q chunk on a single-Q core means the whole
                 // core is zero-work; the last-iter pop suffices.
                 if (q_per_core > 1 || is_last_ring_iter) {
+                    if (sparse_frames_enabled) {
+                        DPRINT(
+                            "Qpop-zero q{} ri{} last{} ref{}\n",
+                            q,
+                            ring_iter,
+                            (uint32_t)is_last_ring_iter,
+                            (uint32_t)force_ref_k_frame);
+                    }
                     sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
                 }
                 continue;
@@ -2693,6 +2734,16 @@ void sdpa_ring_v2(
         } else {
             is_this_first_work_iter_for_q = is_first_kv_for_this_q;
             is_this_last_work_iter_for_q = is_last_ring_iter;
+        }
+
+        if (sparse_frames_enabled) {
+            DPRINT(
+                "WORK q{} ri{} first{} pqv{} bmp{}\n",
+                q,
+                ring_iter,
+                (uint32_t)is_this_first_work_iter_for_q,
+                per_q_valid_kv,
+                q_work_bitmap[q_chunk]);
         }
 
         // Multi Q-chunk restore: K0 reads prev accumulators directly from staging buffers
@@ -2973,7 +3024,8 @@ void sdpa_ring_v2(
                 has_sliding_window,
                 step_straddle_col,
                 step_straddle_jump,
-                step_kv_pad_rotation);
+                step_kv_pad_rotation,
+                force_ref_k_frame);
 
             if (force_ref_k_frame) {
                 DPRINT("CQKd q{} k{}\n", q, k_chunk);
@@ -3002,6 +3054,14 @@ void sdpa_ring_v2(
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
         if (q_per_core > 1 || is_last_ring_iter) {
+            if (sparse_frames_enabled) {
+                DPRINT(
+                    "Qpop-main q{} ri{} last{} ref{}\n",
+                    q,
+                    ring_iter,
+                    (uint32_t)is_last_ring_iter,
+                    (uint32_t)force_ref_k_frame);
+            }
             sdpa_cb_pop_front_out_of_line(cb_q_in, Sq_chunk_t * DHt);
         }
 

@@ -912,6 +912,9 @@ void kernel_main() {
                 read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                     is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                 q_pushed = true;
+                if (has_reference) {
+                    DPRINT("Qpush ri{} qi{}\n", ring_iter, q_iter);
+                }
             };
 
             ring_joint::SlidingQWorkPlan sliding_q_plan;

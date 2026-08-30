@@ -424,7 +424,7 @@ std::vector<uint32_t> compute_q_work_bitmap(
     uint32_t sparse_num_frames_padded,
     const std::vector<uint32_t>& sparse_frame_mask,
     bool has_reference,
-    uint32_t reference_frame_idx) {
+    [[maybe_unused]] uint32_t reference_frame_idx) {
     std::vector<uint32_t> bitmap(num_q_chunks, 0);
     if (!sparse_frames_enabled) {
         // Dense fallback: every mask-active iter is a work iter for every q_chunk.
@@ -495,17 +495,15 @@ std::vector<uint32_t> compute_q_work_bitmap(
         }
     }
     // Reference-frame pass: the extra iteration at index num_ring_iters attends frame reference_frame_idx.
-    // Mirror the spatial branch above but with k_frame fixed to reference_frame_idx, so a spatial q_chunk
-    // gets the reference bit iff mask[q_frame][reference_frame_idx] == 1. Joint q_chunks never attend it.
+    // Every real query attends the reference frame, so the gate cannot use the peeled sparse_frame_mask
+    // (whose reference column is zeroed to keep the windowed ring gather from re-attending it). A real
+    // spatial q_chunk is exactly one that already does windowed work above (bitmap != 0); padding q_chunks
+    // do no work and must not attend the reference. Joint q_chunks never reach here.
     if (has_reference) {
         const uint32_t ref_iter =
             std::min<uint32_t>(ring_size, 1u + backward_writes_expected + forward_writes_expected);
-        const uint32_t q_shard_start_tile = device_index * q_local_padded_Nt;
         for (uint32_t q_chunk = 0; q_chunk < num_local_q_chunks; ++q_chunk) {
-            const uint32_t q_frame = (q_shard_start_tile + q_chunk * Sq_chunk_t) / tiles_per_frame;
-            const uint32_t bit_idx = q_frame * sparse_num_frames_padded + reference_frame_idx;
-            const uint32_t word_idx = bit_idx >> 5;
-            if (word_idx < sparse_frame_mask.size() && ((sparse_frame_mask[word_idx] >> (bit_idx & 31u)) & 1u)) {
+            if (bitmap[q_chunk] != 0u) {
                 bitmap[q_chunk] |= (1u << ref_iter);
             }
         }
