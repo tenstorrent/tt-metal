@@ -195,6 +195,7 @@ struct CliOptions {
     std::string launch_artifact;      // Phase 2.2: dir holding aggregator.image/.desc
     int fidelity_probe_s = 0;         // Phase 2.2: drain the aggregator journal for N s and report loss
     bool stop_aggregator = false;     // Phase 2.2: ask every running aggregator to return
+    bool pin_tunnel = false;          // Narrow each remote chip's tunnel to its real link channels
 };
 
 void print_help(const char* argv0) {
@@ -286,6 +287,8 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
                 return false;
             }
             out.launch_artifact = v;
+        } else if (a == "--pin-tunnel") {
+            out.pin_tunnel = true;
         } else if (a == "--stop-aggregator") {
             out.stop_aggregator = true;
         } else if (a == "--fidelity-probe") {
@@ -534,6 +537,12 @@ struct ChipState {
     // meaningless, since the tick baseline came from whichever chip logged last.
     uint64_t last_debug_us = 0;
     uint64_t last_debug_ticks = 0;
+    // Also per-chip, and for the same reason: the drain runs ONE THREAD PER CHIP, so a
+    // `static` local in that lambda is shared by every thread and the first chip to pass
+    // the interval gate silently suppresses the rest. As `static` locals these two meant
+    // only one chip of eight ever had its sampler period reasserted or probed.
+    uint64_t last_period_assert_us = 0;
+    uint64_t last_period_probe_us = 0;
     uint64_t drain_lost_samples = 0;  // count of entries dropped because head moved more than ring capacity (debug)
     uint64_t drain_entries_seen = 0;  // total ring entries ingested across all cores (debug)
 
@@ -958,6 +967,70 @@ int main(int argc, char* argv[]) {
         }
 
         chips.push_back(std::move(chip));
+    }
+
+    // PIN THE TUNNEL to the channels that actually reach each remote chip.
+    //
+    // UMD defaults remote transfers to EVERY active eth channel on the MMIO chip -- six
+    // on a T3K, of which only the internal pair reaches that chip's own remote ASIC; the
+    // rest go to a QSFP cage or the Warp bridge, i.e. other boards. It round-robins
+    // across the whole set and `wait_for_non_mmio_flush` waits for all of them (5h).
+    //
+    // It was recorded as impossible for this process to fix, because
+    // `Cluster::configure_active_ethernet_cores_for_mmio_device` is a `umd::Cluster`
+    // method and a monitoring process never builds a Cluster (that is how it avoids
+    // CHIP_IN_USE). That was wrong: the Cluster method is only a wrapper, and everything
+    // it wraps is public and reachable from a bare TTDevice --
+    // `TTDevice::get_remote_communication()` plus
+    // `RemoteCommunication::set_remote_transfer_ethernet_cores()`.
+    //
+    // Derived, never hardcoded: the channel pair comes from the cluster descriptor.
+    if (cli.pin_tunnel) {
+        int pinned_chips = 0;
+        for (auto& chip : chips) {
+            if (!chip.is_remote || chip.cores.empty()) {
+                continue;
+            }
+            try {
+                const tt::ChipId mmio_id = cluster_desc->get_closest_mmio_capable_chip(chip.chip_id);
+                std::set<uint32_t> local_channels;
+                for (const auto& [local_ch, remote_ch] :
+                     cluster_desc->get_directly_connected_ethernet_channels_between_chips(mmio_id, chip.chip_id)) {
+                    local_channels.insert(static_cast<uint32_t>(local_ch));
+                }
+                if (local_channels.empty()) {
+                    continue;
+                }
+                // The xy pairs are on the MMIO chip -- that is where the transfer is
+                // issued from -- so they must come from the MMIO chip's descriptor.
+                TTDevice* mmio_dev = nullptr;
+                for (auto& c : chips) {
+                    if (c.chip_id == mmio_id && !c.cores.empty()) {
+                        mmio_dev = c.cores.front().device;
+                    }
+                }
+                if (mmio_dev == nullptr) {
+                    continue;
+                }
+                SocDescriptor mmio_soc(
+                    std::make_shared<SocArchDescriptor>(tt::ARCH::WORMHOLE_B0), mmio_dev->get_chip_info());
+                const auto xy = mmio_soc.get_eth_xy_pairs_for_channels(local_channels, CoordSystem::TRANSLATED);
+                auto* rc = chip.cores.front().device->get_remote_communication();
+                if (rc == nullptr) {
+                    continue;
+                }
+                rc->set_remote_transfer_ethernet_cores(xy);
+                ++pinned_chips;
+                std::cout << "pinned chip " << chip.chip_id << " (via mmio " << mmio_id << ") to channels";
+                for (uint32_t ch : local_channels) {
+                    std::cout << " " << ch;
+                }
+                std::cout << "\n";
+            } catch (const std::exception& e) {
+                std::cerr << "  chip " << chip.chip_id << ": pin failed: " << e.what() << "\n";
+            }
+        }
+        std::cout << "tunnel pinned on " << pinned_chips << " remote chip(s).\n";
     }
 
     if (chips.empty()) {
@@ -1412,7 +1485,17 @@ int main(int argc, char* argv[]) {
             // First and last observation, so every number below is a DELTA over the
             // window and nothing carries in from before the probe started.
             bool primed = false;
+            // `head` is the RAW count of ring entries folded (`head += behind` in the
+            // kernel), which is the ONLY quantity comparable to the host drain's
+            // `drain_entries_seen`. The per-core `samples` field is NOT: it counts
+            // ACCEPTED deltas, so every entry whose FPU counter went backwards lands in
+            // `resets` instead, and an implausible wall delta is dropped silently.
+            // Comparing `samples` against the host's raw entry count made the aggregator
+            // look like it was folding 1.7x fewer samples at lost=0 -- an apples-to-
+            // oranges comparison that invalidated the 5s cross-arm agreement claim.
+            uint64_t first_head = 0, last_head = 0;
             uint64_t first_samples = 0, last_samples = 0;
+            uint64_t first_resets = 0, last_resets = 0;
             uint32_t first_lost = 0, last_lost = 0;
             uint32_t first_sweeps = 0, last_sweeps = 0;
             uint32_t cores_advancing = 0;
@@ -1477,24 +1560,29 @@ int main(int argc, char* argv[]) {
                     ++t.torn_reads;
                     continue;
                 }
-                uint64_t samples = 0;
+                uint64_t samples = 0, resets = 0;
                 uint32_t advancing = 0;
                 for (uint32_t i = 0; i < t.num_cores; ++i) {
                     util_agg_core_state_t st{};
                     std::memcpy(
                         &st, buf.data() + sizeof(util_agg_msg_t) + i * sizeof(util_agg_core_state_t), sizeof(st));
                     samples += st.samples;
+                    resets += st.resets;
                     if (st.seq != 0) {
                         ++advancing;
                     }
                 }
                 if (!t.primed) {
+                    t.first_head = hdr.head;
                     t.first_samples = samples;
+                    t.first_resets = resets;
                     t.first_lost = hdr.lost;
                     t.first_sweeps = hdr.sweep_count;
                     t.primed = true;
                 }
+                t.last_head = hdr.head;
                 t.last_samples = samples;
+                t.last_resets = resets;
                 t.last_lost = hdr.lost;
                 t.last_sweeps = hdr.sweep_count;
                 t.cores_advancing = advancing;
@@ -1505,7 +1593,7 @@ int main(int argc, char* argv[]) {
         const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
         std::cout << "\n=== AGGREGATOR ARM — " << std::fixed << std::setprecision(1) << secs << " s ===\n";
-        std::cout << "chip  loc     cores  sweeps      folded      lost   loss%   samples/s   torn  fail\n";
+        std::cout << "chip  loc     cores  sweeps     entries      lost   loss%    accepted     resets  entries/s\n";
         uint64_t tot_folded = 0, tot_lost = 0;
         for (const auto& t : tracked) {
             if (!t.primed) {
@@ -1513,20 +1601,23 @@ int main(int argc, char* argv[]) {
                           << t.failed_reads << ")\n";
                 continue;
             }
-            const uint64_t folded = t.last_samples - t.first_samples;
+            // ENTRIES, not accepted samples -- see the note on `first_head` above.
+            const uint64_t folded = t.last_head - t.first_head;
+            const uint64_t accepted = t.last_samples - t.first_samples;
+            const uint64_t resets = t.last_resets - t.first_resets;
             const uint32_t lost = t.last_lost - t.first_lost;
             const uint64_t produced = folded + lost;
             tot_folded += folded;
             tot_lost += lost;
             std::cout << std::setw(4) << t.chip_id << "  " << (t.is_remote ? "remote" : "mmio  ") << std::setw(7)
-                      << t.cores_advancing << std::setw(10) << (t.last_sweeps - t.first_sweeps) << std::setw(12)
+                      << t.cores_advancing << std::setw(9) << (t.last_sweeps - t.first_sweeps) << std::setw(12)
                       << folded << std::setw(10) << lost << std::setw(8) << std::setprecision(2)
                       << (produced ? 100.0 * static_cast<double>(lost) / static_cast<double>(produced) : 0.0)
-                      << std::setw(12) << std::setprecision(0) << (secs > 0 ? folded / secs : 0.0) << std::setw(7)
-                      << t.torn_reads << std::setw(6) << t.failed_reads << "\n";
+                      << std::setw(12) << accepted << std::setw(11) << resets << std::setw(11) << std::setprecision(0)
+                      << (secs > 0 ? folded / secs : 0.0) << "\n";
         }
         const uint64_t tot_produced = tot_folded + tot_lost;
-        std::cout << std::setprecision(2) << "TOTAL folded=" << tot_folded << " lost=" << tot_lost << " loss="
+        std::cout << std::setprecision(2) << "TOTAL entries=" << tot_folded << " lost=" << tot_lost << " loss="
                   << (tot_produced ? 100.0 * static_cast<double>(tot_lost) / static_cast<double>(tot_produced) : 0.0)
                   << "%  aggregate " << std::setprecision(0) << (secs > 0 ? tot_folded / secs : 0.0) << " samples/s\n";
         std::cout << "\nCompare against the host arm's `[ring-drain] entries=/lost=` over the same window.\n";
@@ -1811,12 +1902,30 @@ int main(int argc, char* argv[]) {
 
     RegistryWriter registry_writer;
     registry_writer.open_or_attach();  // best-effort; re-tried inside the loop if the file isn't there yet.
+    // Shared across the per-chip drain threads below.
+    std::mutex registry_mx;
 
-    auto ring_drain = [&]() {
+    // ONE DRAIN THREAD PER CHIP.
+    //
+    // This was a single thread doing `for (auto& chip : chips)` with 64 serial 1 KiB
+    // reads inside each -- 512 sequential reads per pass on a T3K. It asked for
+    // kRingDrainHz (200) and achieved 17.1, missing its own target by 12x, and the
+    // shortfall was read by me as a structural ceiling of the host-pull design. It is
+    // not. Restricting the SAME single-threaded drain to one chip took sample loss from
+    // 50.8% to 0.00% on an unchanged workload (measured 2026-08-30, 5t) -- the ring, the
+    // tunnel and the sample rate were never the binding constraint; serialising eight
+    // chips onto one thread was.
+    //
+    // Per-chip is the natural split: `chip.kernel_cycles` is already guarded by the
+    // per-chip `chip.ring_mx`, and the only genuinely shared sink is the registry writer,
+    // which takes `registry_mx` below. Remote chips may still serialise against each
+    // other inside UMD's NON_MMIO mutex -- that is what the measurement is for.
+    auto ring_drain = [&](size_t chip_idx) {
         const auto period = std::chrono::microseconds(1'000'000ull / kRingDrainHz);
         auto next = std::chrono::steady_clock::now();
         std::vector<uint8_t> buf(kSamplerSize);
         uint64_t reattach_throttle_us = 0;
+        auto& chip = chips[chip_idx];
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto loop_t0 = std::chrono::steady_clock::now();
             const uint64_t now_us =
@@ -1826,6 +1935,7 @@ int main(int argc, char* argv[]) {
             // yet at collector launch. Probe at most once per 2 s to avoid
             // syscall churn.
             if (!registry_writer.enabled && now_us > reattach_throttle_us) {
+                std::lock_guard<std::mutex> rg(registry_mx);
                 registry_writer.open_or_attach();
                 reattach_throttle_us = now_us + 2'000'000;
             }
@@ -1851,22 +1961,21 @@ int main(int argc, char* argv[]) {
             // UMD writes/tick — pushing drain rate below 50 Hz observed.
             // brisc init() runs only on device open, so 1 Hz is enough to
             // re-cover that race window.
-            static uint64_t last_period_assert_us = 0;
-            const bool reassert_period = (now_us - last_period_assert_us) > 1'000'000;
+            const bool reassert_period = (now_us - chip.last_period_assert_us) > 1'000'000;
             if (reassert_period) {
-                last_period_assert_us = now_us;
+                chip.last_period_assert_us = now_us;
             }
             // Phase 2.1.c.i diagnostic: every 5 s, read back period_cycles
             // from one core after writing it, to verify the override is
             // sticking. If the read-back value != override, something else
             // (firmware re-init, kernel-side write) is racing us.
-            static uint64_t last_period_probe_us = 0;
-            const bool probe_period = (now_us - last_period_probe_us) > 5'000'000;
+
+            const bool probe_period = (now_us - chip.last_period_probe_us) > 5'000'000;
             if (probe_period) {
-                last_period_probe_us = now_us;
+                chip.last_period_probe_us = now_us;
             }
 
-            for (auto& chip : chips) {
+            {
                 std::lock_guard<std::mutex> lk(*chip.ring_mx);
                 ++chip.drain_ticks;
 
@@ -2105,7 +2214,10 @@ int main(int argc, char* argv[]) {
                     auto tit = chip.kernel_cycles_total.find(rid);
                     const uint64_t cyc_window = (wit != chip.kernel_cycles.end()) ? wit->second.total : 0ull;
                     const uint64_t cyc_total = (tit != chip.kernel_cycles_total.end()) ? tit->second : 0ull;
-                    registry_writer.update_kernel_cycles(rid, cyc_window, cyc_total);
+                    {
+                        std::lock_guard<std::mutex> rg(registry_mx);
+                        registry_writer.update_kernel_cycles(rid, cyc_window, cyc_total);
+                    }
                 }
 
                 // Periodic debug log: once per 5 s, dump tick + lost +
@@ -2143,7 +2255,11 @@ int main(int argc, char* argv[]) {
             }
         }
     };
-    std::thread ring_drain_thread(ring_drain);
+    std::vector<std::thread> ring_drain_threads;
+    ring_drain_threads.reserve(chips.size());
+    for (size_t i = 0; i < chips.size(); ++i) {
+        ring_drain_threads.emplace_back(ring_drain, i);
+    }
 
     // Publisher: copy rolling stats into SHM at the configured rate.
     const auto publish_period = std::chrono::milliseconds(1000 / cli.publish_hz);
@@ -2200,7 +2316,9 @@ int main(int argc, char* argv[]) {
     }
 
     sampler_thread.join();
-    ring_drain_thread.join();
+    for (auto& t : ring_drain_threads) {
+        t.join();
+    }
     std::cout << "\nttnvtop-collector: exiting.\n";
     return 0;
 }

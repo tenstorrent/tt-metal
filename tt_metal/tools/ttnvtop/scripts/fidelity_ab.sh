@@ -46,6 +46,7 @@ SIZE="${SIZE:-2048}"
 SAMPLE_HZ="${SAMPLE_HZ:-300}"
 CHIPS="${CHIPS:-}"
 HOST_ARM=1
+PIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --size)     SIZE="$2"; shift 2 ;;
     --chips)    CHIPS="$2"; shift 2 ;;
     --no-host-arm) HOST_ARM=0; shift ;;
+    --pin-tunnel)  PIN="--pin-tunnel"; shift ;;
     -h|--help)  sed -n '2,35p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -81,6 +83,7 @@ echo "out      : ${OUT}"
 echo "workload : ${MESH_ROWS}x${MESH_COLS} mesh, ${SIZE}^2 matmul"
 echo "window   : ${SECS} s, both arms concurrent"
 echo "chips    : ${CHIPS:-all}"
+echo "pin      : ${PIN:-no}"
 echo
 
 WL_PID=""; HOST_PID=""
@@ -130,7 +133,7 @@ kill -0 "$WL_PID" 2>/dev/null || { echo "FATAL: workload died before the window"
 echo "    workload up (pid $WL_PID)"
 
 echo "--- launching the aggregator into it ---"
-"$COLLECTOR" --launch-aggregator "$ARTIFACT" "${DEV_ARGS[@]}" > "$OUT/launch.log" 2>&1
+"$COLLECTOR" --launch-aggregator "$ARTIFACT" $PIN "${DEV_ARGS[@]}" > "$OUT/launch.log" 2>&1
 grep -E "RUNNING|NOT RUNNING|launched" "$OUT/launch.log" | sed 's/^/    /'
 # "NOT RUNNING (sweeps" contains "RUNNING (sweeps", so match the em-dash prefix the
 # launcher prints only on success. Getting this wrong makes the guard always pass.
@@ -141,7 +144,7 @@ echo "    aggregators started: ${STARTED}, failed: ${NOTSTARTED}"
 
 if [[ $HOST_ARM -eq 1 ]]; then
   echo "--- starting the host per-core drain arm ---"
-  "$COLLECTOR" "${DEV_ARGS[@]}" --sample-hz "$SAMPLE_HZ" > "$OUT/host_arm.log" 2>&1 &
+  "$COLLECTOR" "${DEV_ARGS[@]}" $PIN --sample-hz "$SAMPLE_HZ" > "$OUT/host_arm.log" 2>&1 &
   HOST_PID=$!
   sleep 8
   if ! kill -0 "$HOST_PID" 2>/dev/null; then
