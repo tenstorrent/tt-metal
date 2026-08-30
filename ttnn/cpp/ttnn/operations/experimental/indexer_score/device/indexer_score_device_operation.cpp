@@ -185,8 +185,8 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         chunk_local);
 }
 
-// Semaphore addresses are hashed, but different mesh devices can allocate the same L1 addresses. Re-check
-// ownership on both misses and hits so foreign fused inputs cannot cache-hit and access unrelated device memory.
+// Semaphore identity is hash-excluded and rebound on cache hits. Different mesh devices can also allocate the
+// same L1 addresses, so re-check ownership on both misses and hits before accepting fused runtime inputs.
 void validate_fused_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
     if (!attrs.fused_ring.has_value()) {
         return;

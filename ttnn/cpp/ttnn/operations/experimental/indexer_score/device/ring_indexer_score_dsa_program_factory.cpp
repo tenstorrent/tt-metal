@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <numeric>
 #include <string>
 #include <vector>
 
@@ -20,14 +19,14 @@
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"                // RingSDPAFusedOpSignaler
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
-#include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"  // RingSDPAFusedOpSignaler
+#include "ttnn/operations/ccl/ccl_common.hpp"                       // linearized index / neighbor / fwd-bwd config
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"                    // AllGatherFusedOpSignaler
 // the fused AG helper (the only Linear+fuse-capable all-gather):
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
 #include "indexer_score_host_common.hpp"  // shared causal geometry / device index / persistent-cache args
+#include "ring_indexer_score_schedule.hpp"
 #include "kernels/indexer_score_cb.hpp"
 #include "kernels/indexer_score_work_split.hpp"
 
@@ -76,9 +75,17 @@ constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width; 
 constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 37
 constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 38
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
-constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
+constexpr uint32_t compute_kv_len_tiles = 6;
+constexpr uint32_t compute_chunk_start_tiles = compute_kv_len_tiles + 1;
+constexpr uint32_t compute_straddle_q_tile = compute_chunk_start_tiles + 1;
+constexpr uint32_t compute_straddle_jump_tiles = compute_straddle_q_tile + 1;
+constexpr uint32_t compute_band_perm_base = compute_straddle_jump_tiles + 1;  // 10
 // Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
-constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
+constexpr uint32_t writer_kv_len_tiles = 1 + 6;
+constexpr uint32_t writer_chunk_start_tiles = writer_kv_len_tiles + 1;
+constexpr uint32_t writer_straddle_q_tile = writer_chunk_start_tiles + 1;
+constexpr uint32_t writer_straddle_jump_tiles = writer_straddle_q_tile + 1;
+constexpr uint32_t writer_band_perm_base = writer_straddle_jump_tiles + 1;  // 11
 // Lock the derived offsets to the values the kernels hardcode (reader receiver reads the fused block at 27;
 // compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
 static_assert(
@@ -88,28 +95,11 @@ static_assert(
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
-// forward/backward all-gather writes expected for this device on the given topology (mirrors ring_joint's
-// build_ring_write_plan: Linear swaps num_targets_{fwd,bwd} into the plan).
-struct RingWrites {
-    uint32_t forward_writes_expected;
-    uint32_t backward_writes_expected;
-};
-RingWrites ring_writes_for(uint32_t ring_size, uint32_t ring_index, ttnn::ccl::Topology topology) {
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
-    (void)dynamic_alternate;
-    if (topology == ttnn::ccl::Topology::Ring && (ring_index % 2 == 0)) {
-        std::swap(num_targets_forward, num_targets_backward);
-    }
-    if (topology == ttnn::ccl::Topology::Linear) {
-        return {static_cast<uint32_t>(num_targets_backward), static_cast<uint32_t>(num_targets_forward)};
-    }
-    return {static_cast<uint32_t>(num_targets_forward), static_cast<uint32_t>(num_targets_backward)};
-}
-
 // Block-cyclic caches are slab-major on every SP rank. A global valid prefix can end partway through a
 // global slab, whose valid row count differs by rank, so gather complete touched slabs. This is the smallest
-// uniform per-rank prefix that preserves the fixed-size ring protocol and contains every valid key.
+// uniform per-rank prefix that preserves the fixed-size ring protocol and contains every valid key. KEEP IN
+// SYNC with compute_gather_valid_Ht() in the AG metadata helper and the gathered_shard_tiles calculation in
+// reader_indexer_score.cpp; all three define the producer/consumer midpoint boundary.
 std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& args, const Tensor& k_local) {
     if (!args.kv_len.has_value() || !args.block_cyclic.has_value()) {
         return std::nullopt;
@@ -195,7 +185,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // grid_y*compute_cols_x cores.
     const uint32_t grid_y = phys_grid.y;  // full compute-grid height (all rows kept for compute)
     TT_FATAL(fused.num_links >= 1, "indexer_score fused: num_links must be >= 1 (got {})", fused.num_links);
-    const uint32_t ag_worker_cores = fused.num_links * 2u;                   // AG uses 2 workers (fwd/bwd) per link
+    const uint32_t ag_worker_cores = fused.num_links * ag_rt::kRingDirectionCount;
     const uint32_t reserved_cols = (ag_worker_cores + grid_y - 1) / grid_y;  // columns needed to hold the workers
     TT_FATAL(phys_grid.x > reserved_cols, "indexer_score fused: grid too small to reserve {} AG cols", reserved_cols);
     // Compute columns after reserving the AG worker column(s); NOTE this differs from the classic factory's
@@ -204,7 +194,8 @@ ProgramDescriptor build_ring_program_descriptor(
     const CoreCoord ccl_core_grid_offset{compute_cols_x, 0};  // AG workers start in the first reserved column
 
     const uint32_t ring_size = ring_size_for(args, q);  // shared with validate/signaler (same ring extent)
-    const uint32_t sll_t = Tt / ring_size;              // physical tiles per SP shard in gathered K
+    TT_FATAL(ring_size <= 32, "indexer_score fused: Ring size {} exceeds the consumer gate capacity 32", ring_size);
+    const uint32_t sll_t = Tt / ring_size;  // physical tiles per SP shard in gathered K
     // The two-marker protocol requires both ring directions to carry slices. Linear topologies and a two-chip
     // ring leave one direction with no targets, whose writer intentionally discards its local packet stream.
     const bool partial_readiness_enabled =
@@ -214,52 +205,38 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t work_unit_count = ring_size * units_per_shard;
     const uint32_t group_count = Sqt / QC;                             // q-groups (banded schedule rows)
     const uint32_t group_rows = rows_for_groups(group_count, grid_y);  // grid rows per group (k-mcast)
-    const uint32_t cols_used = cols_for_bands(work_unit_count, compute_cols_x);
-    const uint32_t num_blocks =
-        band_row_blocks(group_count, work_unit_count, compute_cols_x, grid_y);  // row-block reps
-    const uint32_t rows_used = group_rows * num_blocks;                         // grid rows used by compute
     const uint32_t num_groups = group_count / group_rows;  // phase-stack count (groups per row, round-robin)
+    // A zero-band core is harmless for a single group phase, and retaining the ring-wide basis preserves the
+    // measured production and partial-readiness receiver grids. With multiple phases, however, its compute
+    // kernel returns while its reader can block on the next single-buffered q/w multicast. Size that geometry
+    // from one shard so every participating lane has work in every arrival schedule.
+    const uint32_t lane_sizing_units = num_groups > 1 ? units_per_shard : work_unit_count;
+    const uint32_t cols_used = cols_for_bands(lane_sizing_units, compute_cols_x);
+    const uint32_t num_blocks =
+        band_row_blocks(group_count, lane_sizing_units, compute_cols_x, grid_y);  // row-block reps
+    const uint32_t rows_used = group_rows * num_blocks;                           // grid rows used by compute
 
     // Group physical SP shards by their ring-arrival wave (the local shard is wave 0). Work units never cross a
     // shard boundary, so each has exactly one readiness dependency. RingIdSequencer already emits each wave in
     // the desired paired-direction order; preserve it directly rather than reconstructing and sorting it later.
-    const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
-    const uint32_t max_wave = ring_size / 2;
-    std::vector<std::vector<uint32_t>> shards_by_wave(max_wave + 1);
-    {
-        RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
-        for (uint32_t i = 0; i < ring_size; ++i) {
-            const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
-            shards_by_wave[(i + 1) / 2].push_back(rid);
-        }
-    }
-    // Deal each shard's physical KC units across row-blocks and columns. This gives every compute column an even
-    // share of the local shard before it encounters a Fabric gate, while retaining KC-sized math units. The last
-    // unit of a shard is padded rather than crossing into the next shard.
-    std::vector<std::vector<std::vector<uint32_t>>> work_list(
-        num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
+    const auto rw = ring_schedule::ring_writes_for(ring_size, device_index, fused.topology);
+    const auto shards_by_wave = ring_schedule::arrival_waves(ring_size, device_index, rw);
+    // Deal each shard's physical KC units over the block-column lane space. A true bidirectional Ring rotates
+    // paired forward/backward waves within both row blocks. Singleton waves, Linear, and Ring-2 retain the prior
+    // mapping; paired shards keep matching offsets, adjacent row blocks retain their DRAM access pairing, and the
+    // last unit stays padded within its source shard.
+    auto work_list = ring_schedule::make_work_list(
+        shards_by_wave,
+        units_per_shard,
+        sll_t,
+        KC,
+        num_blocks,
+        cols_used,
+        ring_schedule::rotation_enabled(fused.topology, ring_size));
     uint32_t max_bands = 0;
-    {
-        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            for (uint32_t wave = 0; wave <= max_wave; ++wave) {
-                // Give each column matching offsets from both directions. Its visit order becomes
-                // A0,B0,A1,B1,..., so a core that reaches shard A's completion gate can consume the
-                // simultaneously arriving midpoint of shard B instead of idling.
-                for (uint32_t col = 0; col < cols_used; ++col) {
-                    for (uint32_t unit_slot = col;; unit_slot += cols_used) {
-                        const uint32_t unit_in_shard = blk + unit_slot * num_blocks;
-                        if (unit_in_shard >= units_per_shard) {
-                            break;
-                        }
-                        for (uint32_t shard : shards_by_wave[wave]) {
-                            work_list[blk][col].push_back(shard * sll_t + unit_in_shard * KC);
-                        }
-                    }
-                }
-            }
-            for (uint32_t col = 0; col < cols_used; ++col) {
-                max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(work_list[blk][col].size()));
-            }
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        for (uint32_t col = 0; col < cols_used; ++col) {
+            max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(work_list[blk][col].size()));
         }
     }
 
@@ -609,7 +586,7 @@ ProgramDescriptor build_ring_program_descriptor(
 
     log_debug(
         tt::LogOp,
-        "indexer_score FUSED coord=({}) ring_size={} ring_index={} fwd_exp={} bwd_exp={} grid={}x{}(+{} ag) "
+        "indexer_score FUSED device_index={} ring_size={} ring_index={} fwd_exp={} bwd_exp={} grid={}x{}(+{} ag) "
         "rows_used={} cols_used={} work_unit_count={} k_mcast={} q_mcast={}",
         device_index,
         ring_size,
@@ -711,16 +688,18 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         patch_field(kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_kv_len_tiles, pcache.kv_len_tiles);
         patch_field(
             kReaderKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::reader_k_local_batch_offset, k_local_batch_page_offset);
-        // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
-        patch_field(kComputeKernelIndex, 6u, pcache.kv_len_tiles);
-        patch_field(kComputeKernelIndex, 7u, geom.chunk_start_tiles);
-        patch_field(kComputeKernelIndex, 8u, geom.straddle_q_tile);
-        patch_field(kComputeKernelIndex, 9u, geom.straddle_jump_tiles);
-        // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
-        patch_field(kWriterKernelIndex, 7u, pcache.kv_len_tiles);
-        patch_field(kWriterKernelIndex, 8u, geom.chunk_start_tiles);
-        patch_field(kWriterKernelIndex, 9u, geom.straddle_q_tile);
-        patch_field(kWriterKernelIndex, 10u, geom.straddle_jump_tiles);
+        patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_kv_len_tiles, pcache.kv_len_tiles);
+        patch_field(
+            kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_chunk_start_tiles, geom.chunk_start_tiles);
+        patch_field(kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_straddle_q_tile, geom.straddle_q_tile);
+        patch_field(
+            kComputeKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::compute_straddle_jump_tiles, geom.straddle_jump_tiles);
+        patch_field(kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_kv_len_tiles, pcache.kv_len_tiles);
+        patch_field(
+            kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_chunk_start_tiles, geom.chunk_start_tiles);
+        patch_field(kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_straddle_q_tile, geom.straddle_q_tile);
+        patch_field(
+            kWriterKernelIndex, CMAKE_UNIQUE_NAMESPACE::rt_arg::writer_straddle_jump_tiles, geom.straddle_jump_tiles);
 
         // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
         // workers. cache_batch_idx and the exact kv_len are hash-excluded (only the structural schedule class is

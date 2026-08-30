@@ -154,31 +154,3 @@ FORCE_INLINE void prefetch_batch_read_packets(
         }
     }
 }
-
-// Read a bank-owned logical page sequence as physically contiguous packet-sized NOC transactions.
-// In an interleaved DRAM buffer, logical pages separated by the DRAM-bank count are adjacent within
-// one bank. The caller is responsible for supplying exactly that mapping.
-template <
-    uint32_t input_page_size,
-    uint32_t packet_size_in_pages,
-    uint32_t prefetch_packets,
-    typename Accessor,
-    typename PageIdFn>
-FORCE_INLINE void prefetch_batch_read_physically_contiguous_tiles(
-    const Noc& noc,
-    CircularBuffer& cb_output,
-    uint32_t& tiles_read,
-    uint32_t tiles_to_read,
-    uint32_t cb_fifo_limit,
-    uint32_t cb_fifo_size,
-    const Accessor& accessor,
-    PageIdFn&& next_page_id) {
-    const uint32_t total_packets = (tiles_to_read - tiles_read + packet_size_in_pages - 1) / packet_size_in_pages;
-    prefetch_batch_read_physically_contiguous_packets<input_page_size, packet_size_in_pages, prefetch_packets>(
-        noc, cb_output, total_packets, cb_fifo_limit, cb_fifo_size, accessor, [&](uint32_t& pages_to_read) {
-            pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-            const uint32_t first_page_id = next_page_id(tiles_read);
-            tiles_read += pages_to_read;
-            return first_page_id;
-        });
-}

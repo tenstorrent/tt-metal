@@ -40,7 +40,7 @@ constexpr bool apply_relu = get_compile_time_arg_val(num_common_ct_args + 3) != 
 constexpr bool fuse_single = get_compile_time_arg_val(num_common_ct_args + 4) != 0;
 // Fused + no mcast: stream k (waited incrementally in the matmul). Fused + mcast: k is one block, waited whole.
 constexpr bool fused_stream_k = get_compile_time_arg_val(num_common_ct_args + 5) != 0;
-// Fused ring visits bands in the arrival-order permutation supplied in runtime args.
+// Fused ring visits physical K starts in the arrival-order permutation supplied in runtime args.
 constexpr bool fused_ring_enabled = get_compile_time_arg_val(num_common_ct_args + 6) != 0;
 constexpr bool shard_block_cyclic = get_compile_time_arg_val(num_common_ct_args + 7) != 0;
 constexpr uint32_t shard_chunk_local = get_compile_time_arg_val(num_common_ct_args + 8);
@@ -665,7 +665,8 @@ void kernel_main() {
 
             k.pop_front(k_chunk_tiles);
         }
-        // group's bands done: release its resident q/w (one block per group).
+        // Group's units are done: release its resident q/w block. When every unit is kv-empty, no compute path
+        // dereferences q/w; pop_front intentionally returns the matching CB credit without an extra wait.
         CircularBuffer(cb_w).pop_front(w_group_tiles);  // gates waited in the mul/scale phase
         if constexpr (!stream_heads) {
             q.pop_front(q_group_tiles);

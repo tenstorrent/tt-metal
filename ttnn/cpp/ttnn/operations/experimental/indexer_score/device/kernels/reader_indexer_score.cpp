@@ -537,6 +537,8 @@ void kernel_main() {
                         const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
                         gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
                     }
+                    // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
+                    // gather_valid_height_tiles(). Units crossing this boundary wait for completion.
                     const uint32_t midpoint_tiles = (gathered_shard_tiles + 1) / 2;
                     gate->read_k(
                         noc, k_acc, physical_start, shard_span.k_tiles(), midpoint_tiles, k_dir, k_batch_page_offset);

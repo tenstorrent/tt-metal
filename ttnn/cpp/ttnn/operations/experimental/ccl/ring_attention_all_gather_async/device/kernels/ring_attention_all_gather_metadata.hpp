@@ -6,11 +6,11 @@
 // Both kernels must clamp the gather to the SAME slab prefix or the cb_output producer/consumer page
 // counts drift apart, so the formula lives here in one place instead of being duplicated per kernel.
 //
-// KEEP IN SYNC with the host reference, `compute_gather_valid_Ht`
-// (ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp): on the scalar
-// path the host computes the extent and passes it as a runtime arg, on the metadata path these kernels
-// recompute it on-device from kv_actual_isl. The metadata==scalar bit-exact tests only guard the points
-// they exercise, so a change to one side that is not mirrored in the other diverges silently elsewhere.
+// KEEP IN SYNC with the host references in ring_joint_sdpa_program_factory.cpp and
+// indexer_score/device/ring_indexer_score_dsa_program_factory.cpp. On the scalar path the host computes the
+// extent and passes it as a runtime arg; on the metadata path these kernels recompute it on-device from
+// kv_actual_isl. The fused Indexer reader also derives the same gathered-shard extent before applying
+// midpoint readiness. Tests only guard the points they exercise, so drift elsewhere would be silent.
 
 #pragma once
 

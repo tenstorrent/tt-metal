@@ -42,9 +42,10 @@ using ttnn::prim::BlockCyclicLayout;
 // is batch-1 scratch; only cache_batch_idx is gathered. The fused program factory co-schedules the all-gather
 // (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
 // semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
-// tensor_args). All fields and semaphore addresses are hashed because the descriptor embeds them in AG worker
-// allocation/routing/runtime arguments and the cache-hit override only rebuilds consumer kernels. ring_size /
-// ring_index are DERIVED from the mesh + coordinate (cluster_axis), not stored.
+// tensor_args). Routing fields are hashed because they shape AG worker allocation and topology. Semaphore
+// addresses and other dispatch-time values are deliberately hash-excluded; the cache-hit override re-patches
+// the four AG worker kernels and the consumer kernels. ring_size / ring_index are DERIVED from the mesh +
+// coordinate (cluster_axis), not stored.
 struct FusedRingConfig {
     uint32_t num_links{1};  // fabric links for the gather
     ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};

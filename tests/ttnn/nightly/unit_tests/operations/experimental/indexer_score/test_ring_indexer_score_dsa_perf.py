@@ -78,7 +78,7 @@ RING_INDEXER_PERF_MARGIN = 0.02
 RING_INDEXER_PERF_REPLAYS = 3
 RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
-    (4, GLM52_KV_55K): 46.26,
+    (4, GLM52_KV_55K): 52.22,
     (4, GLM52_KV_512K): 62.99,
     (8, GLM52_KV_55K): 58.07,
     (8, GLM52_KV_512K): 60.15,
@@ -134,10 +134,10 @@ def _largest_divisor_leq(value, cap):
 def _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start):
     """Mirror the fused op's Blackhole ideal-compute-cycle performance model.
 
-    This is intentionally test-local until op-performance-model fields are
-    directly exposed to the realtime-profiler API. The calculation is
-    fusion-aware: two links reserve four all-gather worker cores, so score
-    math is credited only to the remaining compute rectangle.
+    This is intentionally test-local until the op-performance-model fields
+    are directly exposed to Python. The calculation is fusion-aware: two
+    links reserve four all-gather worker cores, so score math is credited
+    only to the remaining compute rectangle.
     """
     q_tiles = GLM52_Q_PER_CHIP // 32
     k_tiles = GLM52_K_CACHE_CAPACITY // 32
@@ -145,7 +145,7 @@ def _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start):
     chunk_start_tiles = chunk_start // 32
     valid_tiles = sum(min(kv_tiles, chunk_start_tiles + row + 1) for row in range(q_tiles))
 
-    # IndexerScoreProgramConfig(q_chunk=32, k_chunk=224) maps q groups by
+    # IndexerScoreProgramConfig(q_chunk=32, k_chunk=GLM52_K_CHUNK) maps q groups by
     # grid rows and K bands by columns. This is the same banded_core_count()
     # arithmetic as the C++ program factory/perf model.
     q_groups = q_tiles
