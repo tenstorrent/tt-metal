@@ -157,12 +157,17 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     # missed threshold: an unasserted number drifts silently, and this one has to be
     # visible until it is fixed. **Closing the defect means replacing this with
     # `< 1.5`**, not widening the band.
+    # **The magnitude differs by architecture, which is itself a clue.** Blackhole
+    # measures ~72, Wormhole ~8, on the same prompt and the same tokens -- roughly a
+    # factor of nine apart. A scale error that varies by part points at the arithmetic
+    # rather than at the schedule, and narrows where to look when this is picked up.
+    lo, hi = (4.0, 16.0) if "WORMHOLE" in str(device.arch()).upper() else (40.0, 120.0)
     peak = float(streamed.abs().max())
-    assert 40.0 < peak < 120.0, (
-        f"streamed peak {peak:.1f} is outside the recorded defect band (40, 120). "
-        "If it is now near 1.0 the amplitude defect is fixed -- replace this assertion "
-        "with `peak < 1.5` and drop the note in docs/VALIDATION.md. If it moved "
-        "elsewhere, something new is wrong."
+    assert lo < peak < hi, (
+        f"streamed peak {peak:.1f} is outside this architecture's recorded defect band "
+        f"({lo}, {hi}). If it is now near 1.0 the amplitude defect is fixed -- replace "
+        "this assertion with `peak < 1.5` and drop the note in docs/VALIDATION.md. If it "
+        "moved elsewhere, something new is wrong."
     )
     assert float(n_batch.abs().max()) < 1.5, (
         f"the *batch* path clips at {float(n_batch.abs().max()):.1f} -- that path is "
