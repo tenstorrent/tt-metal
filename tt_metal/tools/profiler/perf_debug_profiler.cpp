@@ -801,10 +801,28 @@ uint32_t force_aiclk_mhz() {
     }();
     return v;
 }
+// WHEN the sync is taken dominates HOW WELL it is taken, by orders of magnitude. Measured on bh-31
+// (4x p150b, 2x2 mesh), worst-link error reported by the close-check:
+//
+//   governed clock, sync 26.5 s before the workload  ->  -144.301 us
+//   pinned clock,   sync 32.9 s before the workload  ->    +1.618 us
+//   pinned clock,   sync  ~0.5 s before the workload  ->   -0.077 us
+//
+// Two independent effects, and they multiply. (1) The offset decays at ~5.4 us/s while the clock is
+// GOVERNED and ~0.05 us/s while it is PINNED (TT_METAL_PERF_DEBUG_FORCE_AICLK) -- see the FORCE_AICLK
+// knob for the evidence that this is governance, not any power/thermal limit. (2) Whatever the decay
+// rate, it is multiplied by the gap between the sync and the first zone, and on a 4-device mesh that
+// gap is the ~26-33 s of drainer bring-up, against a workload of tens of ms.
+//
+// DEFAULT FALSE ON THIS BRANCH. Re-anchoring after bring-up is measurably better, but it is only
+// reachable because fabric is disabled here: metal runs initialize_fabric_and_dispatch_fw() before
+// init_perf_debug_profiler(), and with fabric up the routers own the eth cores, so a post-bring-up
+// sync has no core to run on. The pre-fabric sync is therefore the only one that generalises, and
+// PINNING THE CLOCK is what makes its staleness survivable (+1.6 us across 33 s instead of -144 us).
 bool eth_sync_late() {
     static const bool v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_LATE");
-        return (s == nullptr || *s == '\0') ? true : (*s != '0');
+        return (s == nullptr || *s == '\0') ? false : (*s != '0');
     }();
     return v;
 }
