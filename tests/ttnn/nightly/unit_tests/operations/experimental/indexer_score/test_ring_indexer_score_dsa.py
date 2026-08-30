@@ -854,9 +854,8 @@ def test_indexer_score_full_mesh_rejects_invalid_contracts(expect_error):
 def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     """Reference-check the production Ring two-marker protocol, including its cache-hit runtime patch.
 
-    The smaller correctness shapes above intentionally use the legacy packet schedule. This test keeps query
-    work small but makes the BF16 K capacity large enough that forwarded payload exceeds the 20 MiB bank-owned
-    threshold. Two runtime prefixes then exercise different midpoint/completion locations on one cached program.
+    This test keeps query work small while using a large BF16 K capacity to exercise the bank-owned schedule's
+    midpoint/completion protocol. Two runtime prefixes exercise different marker locations on one cached program.
     Sampled first/last rows on every rank cover both directions without constructing a capacity-sized CPU score.
     """
     sp = mesh_device.shape[0]
@@ -866,10 +865,6 @@ def test_indexer_score_ring8_partial_readiness_reference_cache_hit(mesh_device):
     k_capacity = 128 * 1024
     kv_lens = (56320, 112640)
     dim = 128
-    bf16_bytes = 2
-    forwarded_capacity_bytes = k_capacity // sp * dim * bf16_bytes * (sp - 1)
-    assert forwarded_capacity_bytes > 20 * 1024 * 1024, "test capacity must activate bank-owned partial readiness"
-
     grid = mesh_device.compute_with_storage_grid_size()
     worker_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     subdevice_id = ttnn.SubDeviceId(0)

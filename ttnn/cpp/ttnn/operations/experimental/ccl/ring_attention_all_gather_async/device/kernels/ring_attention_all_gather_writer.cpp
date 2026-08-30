@@ -84,6 +84,14 @@ constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialRead
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 
+static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
+static_assert(
+    !partial_readiness_enabled || !split_forwarding_enabled,
+    "partial readiness and split forwarding are mutually exclusive");
+static_assert(
+    !partial_readiness_enabled || (num_targets_forward_direction > 0 && num_targets_backward_direction > 0),
+    "partial readiness requires both ring directions");
+
 template <typename AddrGenType, typename FabricSender>
 FORCE_INLINE void write_bank_owned_slices(
     CircularBuffer& cb_output,
@@ -137,6 +145,9 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    // KEEP IN SYNC with kWriterRuntimeArgHeaderCount/kTensorDescriptorFieldCount and field offsets in
+    // ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp. Fused consumers patch
+    // selected fields through that shared host-side layout.
     uint32_t arg_idx = 0;
     uint32_t gather_dim = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
@@ -338,8 +349,7 @@ void kernel_main() {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                     cb_output.wait_front(packet_size_in_pages);
-                    const size_t l1_read_addr_base = cb_output.get_read_ptr();
-                    size_t l1_read_addr = l1_read_addr_base;
+                    size_t l1_read_addr = cb_output.get_read_ptr();
 
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
 
