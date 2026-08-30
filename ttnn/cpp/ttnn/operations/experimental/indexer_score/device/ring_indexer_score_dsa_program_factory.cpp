@@ -60,20 +60,21 @@ constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
 constexpr uint32_t fused_rt_width = 9;
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
-constexpr uint32_t reader_fused_rt_base = reader_kv_len_tiles + 1;                                           // 27
-constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 36
-constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 37
-constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 38
+constexpr uint32_t reader_page_bundle_addr = reader_kv_len_tiles + 1;                                        // 27
+constexpr uint32_t reader_fused_rt_base = reader_page_bundle_addr + 1;                                       // 28
+constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 37
+constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 38
+constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 39
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
 // Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
 constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
-// Lock the derived offsets to the values the kernels hardcode (reader receiver reads the fused block at 27;
+// Lock the derived offsets to the values the kernels hardcode (reader receiver reads the fused block at 28;
 // compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
 static_assert(
-    reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
-        reader_k_local_addr == 36 && reader_k_local_batch_offset == 37 && reader_band_perm_base == 38 &&
-        compute_band_perm_base == 10 && writer_band_perm_base == 11,
+    reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_page_bundle_addr == 27 &&
+        reader_fused_rt_base == 28 && reader_k_local_addr == 37 && reader_k_local_batch_offset == 38 &&
+        reader_band_perm_base == 39 && compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
@@ -99,7 +100,7 @@ RingWrites ring_writes_for(uint32_t ring_size, uint32_t ring_index, ttnn::ccl::T
 // Block-cyclic caches are slab-major on every SP rank. A global valid prefix can end partway through a
 // global slab, whose valid row count differs by rank, so gather complete touched slabs. This is the smallest
 // uniform per-rank prefix that preserves the fixed-size ring protocol and contains every valid key.
-std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& args, const Tensor& k_local) {
+std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& args, const tensor_args_t& tensors) {
     if (!args.kv_len.has_value() || !args.block_cyclic.has_value()) {
         return std::nullopt;
     }
@@ -107,10 +108,10 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     const uint32_t chunk_global = args.block_cyclic->sp * chunk_local;
     const uint32_t valid_slabs = (*args.kv_len + chunk_global - 1) / chunk_global;
     const uint32_t valid_local_rows = valid_slabs * chunk_local;
-    return std::min<uint32_t>(valid_local_rows, k_local.logical_shape()[2]) / tt::constants::TILE_HEIGHT;
+    return std::min<uint32_t>(valid_local_rows, logical_local_k_length(args, tensors)) / tt::constants::TILE_HEIGHT;
 }
 
-// One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
+// One device's fused program: indexer compute (DSA or MSA) + co-scheduled ring_attention all-gather.
 ProgramDescriptor build_ring_program_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
@@ -132,12 +133,6 @@ ProgramDescriptor build_ring_program_descriptor(
     const auto& fused = *args.fused_ring;
     TT_FATAL(tensors.k_local.has_value(), "indexer_score fused: k_local (all-gather input) is required");
     const auto& k_local = *tensors.k_local;
-
-    // Fused path is DSA-only: relu, single head-summed plane, no block-pool, learned weights (no synth gate).
-    TT_FATAL(args.apply_relu, "indexer_score fused: DSA path only (apply_relu=true)");
-    TT_FATAL(args.num_groups == 1, "indexer_score fused: num_groups must be 1 (DSA)");
-    TT_FATAL(args.block_size == 0, "indexer_score fused: block-max-pool not supported on the fused path");
-    TT_FATAL(!args.synthesize_gate, "indexer_score fused: synthesize_gate (MSA) not supported on the fused path");
 
     const uint32_t Hi = q.logical_shape()[1];
     const uint32_t Sq = q.logical_shape()[2];
@@ -168,8 +163,13 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t QC = cfg.q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t KC = cfg.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t HB = resolve_head_group(cfg, Hi);
-    const uint32_t G = 1;
-    const uint32_t subblock_basis = HB;
+    const uint32_t G = args.num_groups;
+    const uint32_t plane_heads = Hi / G;
+    const uint32_t subblock_basis = (G > 1) ? plane_heads : HB;
+    const uint32_t block_tiles = args.block_size ? args.block_size / tt::constants::TILE_WIDTH : 0;
+    const bool block_pool = block_tiles != 0;
+    const uint32_t blocks_per_unit = block_pool ? (KC / block_tiles) : KC;
+    const uint32_t nblocks = block_pool ? (Tt / block_tiles) : 0;
     // Step-E band reorder assumes no head streaming (all heads resident): stream_heads pads the band loop with
     // phantom q-mcast bands that the reorder would perturb. HB == Hi means head_group_size was 0 or Hi.
     TT_FATAL(HB == Hi, "indexer_score fused: head_group_size must be 0 or Hi (no head streaming) on the fused path");
@@ -332,7 +332,7 @@ ProgramDescriptor build_ring_program_descriptor(
     // Provably false under the HB==Hi guard above; kept so the CB sizing below mirrors the classic factory.
     const bool stream_heads = HB < Hi;
 
-    // CB allocation (DSA: no fuse_single, no block-pool). Slot order == CbArg; index continuous from c_0.
+    // CB allocation. Slot order == CbArg; index continuous from c_0.
     std::array<uint32_t, num_cb_args> cb_id{};
     uint32_t next_cb_index = tt::CBIndex::c_0;
     auto make_cb = [&](uint32_t slot, uint32_t ntiles, tt::DataFormat fmt, uint32_t tile_bytes) {
@@ -344,21 +344,35 @@ ProgramDescriptor build_ring_program_descriptor(
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = tile_bytes}}}});
     };
-    // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
-    // hoisting the matmul<->eltwise reinit out of the per-head loop (shared with the classic factory).
     const auto [qk_batch_heads, qk_col_batch] = dsa_qk_batching(subblock_basis, QC, KC, stream_heads);
 
     make_cb(cb_q_arg, (stream_heads ? 2 : 1) * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
     make_cb(cb_mask_arg, num_mask_tiles, tt::DataFormat::Float16_b, bf16_tile);
-    // cb_qk stages the batched relu(q.kT) strip for the gate-mul phase.
     make_cb(cb_qk_arg, qk_col_batch * qk_batch_heads, acc_fmt, acc_tile);
-    // cb_out_strip holds the untilized output, double-buffered (2*KC; no block-pool on the DSA path).
-    make_cb(cb_out_strip_arg, 2 * KC, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_out_strip_arg, 2 * (block_pool ? blocks_per_unit : KC), tt::DataFormat::Float16_b, bf16_tile);
+    if (block_pool) {
+        make_cb(cb_scaler_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+        make_cb(cb_pool_scratch_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+    }
     // cb_acc_strip accumulates a whole unit's QC*KC strip, then untilizes under ONE pack_untilize bracket.
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
     make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
+    if (tensors.has_paged_kv_cache()) {
+        const uint32_t table_bytes =
+            static_cast<uint32_t>(tensors.page_bundle_indices->logical_volume() * sizeof(uint16_t));
+        const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
+        const uint32_t idx = next_cb_index++;
+        cb_id[cb_page_table_arg] = idx;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = aligned_table_bytes,
+            .core_ranges = core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = tt::DataFormat::RawUInt16,
+                .page_size = aligned_table_bytes}}}});
+    }
 
     // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
     // are computed above (hoisted for the readiness-balanced band assignment).
@@ -394,7 +408,7 @@ ProgramDescriptor build_ring_program_descriptor(
     sdpa_sig.initialized_fused_op = true;
 
     // Compile-time args (common dims + CB indices).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, /*block_tiles=*/0u};
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     std::vector<uint32_t> reader_ct = common_ct;
@@ -403,6 +417,9 @@ ProgramDescriptor build_ring_program_descriptor(
     tt::tt_metal::TensorAccessorArgs(*k.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*w.buffer()).append_to(reader_ct);
     tt::tt_metal::TensorAccessorArgs(*k_local.buffer()).append_to(reader_ct);  // fused: local SP shard (AG input)
+    tt::tt_metal::TensorAccessorArgs(
+        tensors.has_paged_kv_cache() ? tensors.page_bundle_indices->buffer() : k_local.buffer())
+        .append_to(reader_ct);
     reader_ct.push_back(k_mcast_on);
     reader_ct.push_back(q_mcast_on);
     reader_ct.push_back(k_send_sem);
@@ -413,8 +430,10 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(q_valid_sem);
     reader_ct.push_back(0u);  // fuse_single off (DSA)
     reader_ct.push_back(0u);  // fused_stream_k off
-    reader_ct.push_back(0u);  // synthesize_gate off (reads real weights)
-    reader_ct.push_back(0u);  // gate_scale_bits (unused)
+    reader_ct.push_back(args.synthesize_gate ? 1u : 0u);
+    const uint16_t gate_scale_bf16 = static_cast<uint16_t>(__builtin_bit_cast(uint32_t, args.gate_scale) >> 16);
+    const uint32_t gate_scale_bits = (static_cast<uint32_t>(gate_scale_bf16) << 16) | gate_scale_bf16;
+    reader_ct.push_back(gate_scale_bits);
     // Block-cyclic (per-SP-shard) K layout, passed as 5 compile-time-constexpr args to match the non-fused
     // reader's logical_to_physical_page<> template: {block_cyclic, chunk_local_tiles, sp, shard_stride_gap,
     // slab_stride_gap}. Default {0,1,1,0,0} (identity) when not block-cyclic. Gaps match the regular factory:
@@ -438,18 +457,25 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(static_cast<uint32_t>(rank_mapping.orientation));
     reader_ct.push_back(rank_mapping.mesh_rows);
     reader_ct.push_back(rank_mapping.mesh_cols);
+    reader_ct.push_back(tensors.has_paged_kv_cache() ? 1u : 0u);
+    reader_ct.push_back(args.kv_cache_page_size / tt::constants::TILE_HEIGHT);
+    reader_ct.push_back(args.kv_cache_num_layers);
+    reader_ct.push_back(args.kv_cache_layer_idx);
+    reader_ct.push_back(
+        tensors.has_paged_kv_cache() ? static_cast<uint32_t>(tensors.page_bundle_indices->logical_volume()) : 0u);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
     const uint32_t out_elem_bytes = out.element_size();
-    writer_ct.push_back(T * out_elem_bytes);  // row-major page = one output row (no pooling)
+    const uint32_t out_row_elems = block_pool ? nblocks : T;
+    writer_ct.push_back(out_row_elems * out_elem_bytes);
     tt::tt_metal::TensorAccessorArgs(*out.buffer()).append_to(writer_ct);
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
     compute_ct.push_back(qk_batch_heads);
     compute_ct.push_back(qk_col_batch);
-    compute_ct.push_back(1u);  // apply_relu (DSA)
+    compute_ct.push_back(args.apply_relu ? 1u : 0u);
     compute_ct.push_back(0u);  // fuse_single off
     compute_ct.push_back(0u);  // fused_stream_k off
     compute_ct.push_back(1u);  // fused_ring on
@@ -485,7 +511,7 @@ ProgramDescriptor build_ring_program_descriptor(
             rt.push_back(v);
         }
     };
-    const auto pcache = persistent_cache_args(args, k);  // kv_len derivation shared with the classic factory
+    const auto pcache = persistent_cache_args(args, tensors);  // kv_len derivation shared with the classic factory
     // Indexed fused mode gathers the selected cache slot into slot 0 of batch-1 k. Keep the gathered and
     // local offsets independent: remote reads start at zero, own-shard reads select the original k_local slot.
     const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
@@ -567,12 +593,17 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_sender,
                 cols_used - 1);
             // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
-            reader_rt.push_back(k_batch_page_offset);        // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(kv_len_tiles);               // rt_arg::reader_kv_len_tiles (26)
-            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
-            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (36): local SP shard address
+            reader_rt.push_back(k_batch_page_offset);  // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(kv_len_tiles);         // rt_arg::reader_kv_len_tiles (26)
+            if (tensors.has_paged_kv_cache()) {
+                reader_rt.push_back(tensors.page_bundle_indices->buffer());  // reader_page_bundle_addr (27)
+            } else {
+                reader_rt.push_back(0u);
+            }
+            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (28..36): ring/dir/sems/split
+            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (37): local SP shard address
             reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
-            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (38..): band-visit perm
+            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (39..): band-visit perm
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
@@ -661,15 +692,17 @@ ProgramDescriptor build_ring_program_descriptor(
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
             ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
             args.cache_batch_idx,
-            gather_valid_height_tiles(args, k_local),
+            gather_valid_height_tiles(args, tensors),
             /*slot_id=*/std::nullopt,
             /*kv_actual_isl=*/std::nullopt,
             /*chunk_local_tiles=*/0,
-            /*kv_cache_num_layers=*/1,
-            /*kv_cache_layer_idx=*/0,
+            args.kv_cache_num_layers,
+            args.kv_cache_layer_idx,
             // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
             /*split_forwarding_enabled=*/false,
-            rank_mapping);
+            rank_mapping,
+            tensors.page_bundle_indices,
+            args.kv_cache_page_size);
     }
 
     log_debug(
@@ -739,9 +772,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     using tt::tt_metal::GetRuntimeArgs;
 
     const auto& q = tensors.q;
-    const auto& k = tensors.k;
     const auto& k_local = *tensors.k_local;
-    const auto pcache = persistent_cache_args(args, k);
+    const auto pcache = persistent_cache_args(args, tensors);
     const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
     const auto& k_local_shape = k_local.logical_shape();
     const uint32_t local_slot_pages =
@@ -775,11 +807,11 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
         // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
         // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert
-        // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
-        // 9-wide fused block at 27..35 and k_local_addr at 36).
+        // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=38 — past the page
+        // bundle address at 27, 9-wide fused block at 28..36, and k_local_addr at 37).
         patch_field(0, 25u, k_batch_page_offset);
         patch_field(0, 26u, pcache.kv_len_tiles);
-        patch_field(0, 37u, k_local_batch_page_offset);
+        patch_field(0, 38u, k_local_batch_page_offset);
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
         patch_field(2, 6u, pcache.kv_len_tiles);
         patch_field(2, 7u, geom.chunk_start_tiles);
@@ -795,11 +827,15 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
         // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
         const auto& shape = k_local.padded_shape();
-        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+        const uint32_t Ht = tensors.has_paged_kv_cache()
+                                ? logical_local_k_length(args, tensors) / tt::constants::TILE_HEIGHT
+                                : shape[2] / tt::constants::TILE_HEIGHT;
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
         const uint32_t input_batch_base =
-            ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
-        const auto valid_Ht = gather_valid_height_tiles(args, k_local);
+            tensors.has_paged_kv_cache()
+                ? 0u
+                : ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
+        const auto valid_Ht = gather_valid_height_tiles(args, tensors);
         const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
 
         const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {

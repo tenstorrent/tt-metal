@@ -24,9 +24,15 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import (
+    assert_grouped_match,
     assert_indexer_match,
+    assert_pooled_match,
     glx_config,
     indexer_score_dsa_ref,
+    indexer_score_msa_ref,
+    _make_paged_k,
+    _msa_scale_w,
+    _nd_sharded_dram_config,
     _global_inputs,
     _per_sp_ref,
     _to_slab,
@@ -105,6 +111,197 @@ def test_indexer_score_full_mesh_2x2_accuracy_placement_and_cache_reuse(block_cy
     if ttnn.get_num_devices() != 4:
         pytest.skip("2x2 full-mesh indexer coverage requires an exact four-device physical mesh")
     _run_full_mesh_accuracy_case((2, 2), block_cyclic=block_cyclic)
+
+
+def _small_ring_inputs(mesh, heads, *, paged, page_size=64, seed=73):
+    """Small ring-4 tensors; paged mode gives every rank the same table permutation over its own page pool."""
+    sq, local_t, dim = 64, 256, QB_DIM
+    chunk, total_t = RING4 * sq, RING4 * local_t
+    gen = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, heads, chunk, dim, generator=gen, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, total_t, dim, generator=gen, dtype=torch.bfloat16)
+    w = torch.randn(1, heads, chunk, 1, generator=gen, dtype=torch.bfloat16)
+    seq_shard = ttnn.ShardTensorToMesh(mesh, dim=2)
+    q_dev = ttnn.from_torch(q, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_shard)
+    w_dev = ttnn.from_torch(w, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_shard)
+    k_gathered = ttnn.from_torch(
+        torch.zeros_like(k),
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    if not paged:
+        k_local = ttnn.from_torch(k, device=mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_shard)
+        return q, k, w, q_dev, w_dev, k_local, k_gathered, {}
+
+    num_layers, layer_idx = 3, 2
+    pools = []
+    table = None
+    for rank in range(RING4):
+        local = k[:, :, rank * local_t : (rank + 1) * local_t]
+        pool, rank_table = _make_paged_k(local, page_size, num_layers=num_layers, layer_idx=layer_idx, seed=seed + 100)
+        pools.append(pool)
+        table = rank_table if table is None else table
+        assert torch.equal(table, rank_table)
+    physical_pool = torch.cat(pools, dim=0)
+    pool_mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=(1, RING4), dims=(None, 0))
+    k_local = ttnn.from_torch(
+        physical_pool,
+        device=mesh,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=_nd_sharded_dram_config(mesh, rows_per_shard=page_size),
+        mesh_mapper=pool_mapper,
+    )
+    table_dev = ttnn.from_torch(
+        table,
+        device=mesh,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+    )
+    paged_kwargs = dict(
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
+        page_bundle_indices=table_dev,
+        kv_cache_page_size=page_size,
+    )
+    return q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs
+
+
+def _small_ring_dsa_ref(q, k, w):
+    sq = q.shape[2] // RING4
+    history = k.shape[2] - q.shape[2]
+    return torch.cat(
+        [
+            indexer_score_dsa_ref(
+                q[:, :, rank * sq : (rank + 1) * sq],
+                k,
+                w[:, :, rank * sq : (rank + 1) * sq],
+                history + rank * sq,
+            )
+            for rank in range(RING4)
+        ],
+        dim=2,
+    )
+
+
+def _small_ring_msa_ref(q, k, num_groups, block_size):
+    sq = q.shape[2] // RING4
+    history = k.shape[2] - q.shape[2]
+    scale = q.shape[-1] ** -0.5
+    return torch.cat(
+        [
+            indexer_score_msa_ref(
+                q[:, :, rank * sq : (rank + 1) * sq],
+                k,
+                _msa_scale_w(q.shape[1], sq, scale),
+                history + rank * sq,
+                num_groups=num_groups,
+                block_size=block_size,
+            )
+            for rank in range(RING4)
+        ],
+        dim=2,
+    )
+
+
+def test_indexer_score_ring4_fused_paged_dsa_4d():
+    """Ring DSA gathers logical local shards from permuted multi-layer page pools."""
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
+    try:
+        q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs = _small_ring_inputs(mesh, 8, paged=True)
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+        out = ttnn.experimental.ring_indexer_score_dsa(
+            q_dev,
+            k_gathered,
+            w_dev,
+            k_local,
+            ccl_semaphores,
+            cluster_axis=SP4_AXIS,
+            topology=ttnn.Topology.Linear,
+            ag_sub_device_id=subdevice_id,
+            program_config=cfg,
+            **paged_kwargs,
+        )
+        ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+        out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+        assert_indexer_match(out_t, _small_ring_dsa_ref(q, k, w), q.shape[2], k.shape[2], check_neg=True)
+    finally:
+        _close_ccl(mesh)
+
+
+def test_indexer_score_ring4_fused_paged_cache_hit_4d():
+    """Ring cache hits repatch both the physical local pool and page-table addresses."""
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
+    try:
+        mesh.clear_program_cache()
+        keep_alive = []
+        entries = None
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+        for seed in (103, 107):
+            inputs = _small_ring_inputs(mesh, 8, paged=True, seed=seed)
+            keep_alive.append(inputs)
+            q, k, w, q_dev, w_dev, k_local, k_gathered, paged_kwargs = inputs
+            out = ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP4_AXIS,
+                topology=ttnn.Topology.Linear,
+                ag_sub_device_id=subdevice_id,
+                program_config=cfg,
+                **paged_kwargs,
+            )
+            ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+            out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+            assert_indexer_match(out_t, _small_ring_dsa_ref(q, k, w), q.shape[2], k.shape[2], check_neg=True)
+            if entries is None:
+                entries = mesh.num_program_cache_entries()
+            else:
+                assert mesh.num_program_cache_entries() == entries, "paged ring K/table address change recompiled"
+    finally:
+        _close_ccl(mesh)
+
+
+@pytest.mark.parametrize("paged", [False, True], ids=["contiguous", "paged"])
+@pytest.mark.parametrize("num_groups,block_size", [(1, 0), (4, 0), (4, 128)], ids=["g1_fused", "g4", "g4_block_pool"])
+def test_indexer_score_ring4_fused_msa_4d(paged, num_groups, block_size):
+    """Ring MSA equivalence for fused-head, grouped, and pooled modes, with and without paging."""
+    mesh, ccl_semaphores, subdevice_id, stall_group = _open_ccl((1, RING4))
+    try:
+        q, k, _, q_dev, _, k_local, k_gathered, paged_kwargs = _small_ring_inputs(
+            mesh, num_groups, paged=paged, seed=83 + num_groups + block_size
+        )
+        k_chunk = 1024 if block_size else 64
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=k_chunk, head_group_size=0)
+        out = ttnn.experimental.ring_indexer_score_msa(
+            q_dev,
+            k_gathered,
+            k_local,
+            ccl_semaphores,
+            cluster_axis=SP4_AXIS,
+            topology=ttnn.Topology.Linear,
+            num_groups=num_groups,
+            ag_sub_device_id=subdevice_id,
+            scale=QB_DIM**-0.5,
+            block_size=block_size,
+            program_config=cfg,
+            **paged_kwargs,
+        )
+        ttnn.synchronize_device(mesh, sub_device_ids=stall_group)
+        out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=2))
+        ref = _small_ring_msa_ref(q, k, num_groups, block_size)
+        if block_size:
+            assert_pooled_match(out_t, ref, num_groups, q.shape[2], k.shape[2] // block_size, pcc_floor=0.995)
+        else:
+            assert_grouped_match(out_t, ref, num_groups, q.shape[2], k.shape[2])
+    finally:
+        _close_ccl(mesh)
 
 
 @pytest.mark.parametrize("block_cyclic", [False, True], ids=["contiguous", "block_cyclic"])

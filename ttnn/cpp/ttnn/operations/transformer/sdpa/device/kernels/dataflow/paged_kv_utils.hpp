@@ -161,4 +161,8 @@ public:
     uint64_t get_shard_row_noc_addr(const Cursor& position, uint32_t byte_offset) const {
         return reader_.get_shard_noc_addr(position.physical_page(), byte_offset);
     }
+
+    uint64_t get_physical_page_noc_addr(uint32_t physical_tensor_page, uint32_t byte_offset = 0) const {
+        return reader_.get_noc_addr(physical_tensor_page, byte_offset);
+    }
 };

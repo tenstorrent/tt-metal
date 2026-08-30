@@ -92,6 +92,12 @@ void bind_indexer_score(nb::module_& mod) {
                 linearization over all devices (linear-approximate under a mid-slab
                 start); seq_shard_axes=[sp, tp] names both axes, giving the rotation-exact
                 2D geometry (see seq_shard_axes above).
+            kv_cache_num_layers / kv_cache_layer_idx / kv_cache_page_size / page_bundle_indices:
+                optional paged-cache geometry. When page_bundle_indices is supplied, k is the physical tiled
+                pool [physical_bundles*num_layers,1,page_size,D], ND-sharded with one
+                [1,1,page_size,D] bundle/layer page per DRAM shard. The uint16 row-major DRAM table has shape
+                [1,1,1,logical_bundles] and maps logical bundle to physical bundle. cache_batch_idx is then
+                unavailable; kv_len remains a logical-prefix length.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -107,7 +113,11 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("kv_cache_num_layers") = std::nullopt,
+        nb::arg("kv_cache_layer_idx") = std::nullopt,
+        nb::arg("page_bundle_indices").noconvert() = std::nullopt,
+        nb::arg("kv_cache_page_size") = 32);
 
     ttnn::bind_function<"indexer_score_msa", "ttnn.experimental.">(
         mod,
@@ -170,6 +180,8 @@ void bind_indexer_score(nb::module_& mod) {
                 reads the permuted cache back in natural token order so the per-group
                 scores (and the block-max-pool, which pools token-contiguous blocks)
                 come out correct. Unset = contiguous K.
+            kv_cache_num_layers / kv_cache_layer_idx / kv_cache_page_size / page_bundle_indices:
+                optional paged-cache geometry; same physical-pool/table contract as indexer_score_dsa.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -188,7 +200,11 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("kv_cache_num_layers") = std::nullopt,
+        nb::arg("kv_cache_layer_idx") = std::nullopt,
+        nb::arg("page_bundle_indices").noconvert() = std::nullopt,
+        nb::arg("kv_cache_page_size") = 32);
 
     ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
         mod,
@@ -202,7 +218,7 @@ void bind_indexer_score(nb::module_& mod) {
         and the complete block-cyclic slabs touched by ``kv_len`` are gathered. One program
         co-schedules the ring_attention all-gather with the indexer compute so fabric transport overlaps
         scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
-        arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
+        arrived shards while farther slabs are still in flight.
 
         Args:
             q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
@@ -237,10 +253,13 @@ void bind_indexer_score(nb::module_& mod) {
                 See indexer_score_dsa.
             block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
                 see indexer_score_dsa. Must be unset in complete-mesh mode because all devices are SP ranks.
-            block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
+                block_cyclic_chunk_local: optional int, per-shard chunk length. Axis mode requires it together with
                 block_cyclic_sp_axis. In complete-mesh mode pass this argument alone; SP is the complete mesh
                 size and the value must equal q's local sequence length Sq. Leaving it unset selects contiguous
                 K placement.
+            kv_cache_num_layers / kv_cache_layer_idx / kv_cache_page_size / page_bundle_indices:
+                optional paged local-cache geometry. k_local becomes the physical ND-sharded page pool while
+                k remains the batch-1 contiguous gathered scratch. cache_batch_idx is unavailable in this mode.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -262,7 +281,51 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = nb::none(),
         nb::arg("seq_subshard_axis") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("kv_cache_num_layers") = nb::none(),
+        nb::arg("kv_cache_layer_idx") = nb::none(),
+        nb::arg("page_bundle_indices").noconvert() = nb::none(),
+        nb::arg("kv_cache_page_size") = 32);
+
+    ttnn::bind_function<"ring_indexer_score_msa", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Ring-fused MiniMax-M3 MSA lightning-indexer scorer.
+
+        This is the fused-all-gather equivalent of ``indexer_score_msa``: raw q.k scores, a synthesized
+        constant scale, per-group output planes, and optional block-max pooling. ``k_local`` is the local SP
+        shard and ``k`` is the contiguous gathered scratch. A paged local cache is enabled by supplying
+        ``page_bundle_indices`` together with its layer/page geometry.
+
+        Arguments have the same ring transport, paged-cache, kv_len, and block-cyclic contracts as
+        ``ring_indexer_score_dsa``. ``num_groups``, ``scale``, and ``block_size`` have the same semantics as
+        ``indexer_score_msa``; cache_batch_idx and TP sequence sub-sharding are intentionally unavailable.
+
+        Returns: score [B, num_groups, Sq, T_out] bf16 row-major, where T_out is T or T/block_size.
+        )doc",
+        &ttnn::experimental::ring_indexer_score_msa,
+        nb::arg("q"),
+        nb::arg("k"),
+        nb::arg("k_local"),
+        nb::arg("ag_multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("cluster_axis"),
+        nb::arg("topology"),
+        nb::arg("num_groups"),
+        nb::arg("num_links") = 1,
+        nb::arg("ag_sub_device_id") = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("scale") = 1.0f,
+        nb::arg("block_size") = 0,
+        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("kv_len") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("kv_cache_num_layers") = nb::none(),
+        nb::arg("kv_cache_layer_idx") = nb::none(),
+        nb::arg("page_bundle_indices").noconvert() = nb::none(),
+        nb::arg("kv_cache_page_size") = 32);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

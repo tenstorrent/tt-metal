@@ -214,6 +214,7 @@ void kernel_main() {
                 const uint32_t first_logical_row = tiles_read / input_tensor_Wt[input_idx];
                 bundle_cursor = paged_kv.cursor(first_logical_row, bh_idx);
             }
+            uint64_t page_bundle_row_noc_addr = 0;
             prefetch_batch_read_tiles<
                 input_tensor_page_size,
                 packet_size_in_pages,
@@ -223,14 +224,18 @@ void kernel_main() {
                     if constexpr (!has_page_bundles) {
                         return output_tile_id_start + tr;
                     } else {
-                        [[maybe_unused]] const uint32_t page_id =
-                            bundle_cursor.physical_row() * input_tensor_Wt[input_idx] + page_bundle_col;
+                        if (page_bundle_col == 0 || page_bundle_row_noc_addr == 0) {
+                            page_bundle_row_noc_addr = paged_kv.get_physical_page_noc_addr(
+                                bundle_cursor.physical_row() * input_tensor_Wt[input_idx]);
+                        }
+                        const uint64_t tile_noc_addr =
+                            page_bundle_row_noc_addr + page_bundle_col * input_tensor_page_size;
                         page_bundle_col += contig_pages_advanced;
                         while (page_bundle_col >= input_tensor_Wt[input_idx]) {
                             page_bundle_col -= input_tensor_Wt[input_idx];
                             bundle_cursor.advance_row(tr + contig_pages_advanced < tiles_to_read);
                         }
-                        return page_id;
+                        return ShardNocReadAddress{tile_noc_addr};
                     }
                 });
             tiles_read = input_tile_id_start[input_idx];

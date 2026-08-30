@@ -59,7 +59,11 @@ struct IndexerScoreDeviceOperation {
         std::optional<uint32_t> cache_batch_idx,
         std::optional<uint32_t> kv_len,
         std::vector<uint32_t> seq_shard_axes,
-        std::optional<BlockCyclicLayout> block_cyclic);
+        std::optional<BlockCyclicLayout> block_cyclic,
+        uint32_t kv_cache_num_layers,
+        uint32_t kv_cache_layer_idx,
+        uint32_t kv_cache_page_size,
+        const std::optional<Tensor>& page_bundle_indices);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -101,7 +105,11 @@ ttnn::Tensor indexer_score_dsa(
     std::optional<uint32_t> kv_len = std::nullopt,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 // MiniMax-M3 MSA (ttnn.experimental.indexer_score_msa):
 //   score[b, g, s, t] = sum_{h in group g} (q[b,h,s,:] . k[b,t,:]) * scale
@@ -127,7 +135,11 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_len = std::nullopt,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
@@ -159,6 +171,35 @@ ttnn::Tensor ring_indexer_score_dsa(
     std::optional<uint32_t> kv_len = std::nullopt,
     std::optional<uint32_t> seq_subshard_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
+
+// Fused MiniMax-M3 MSA variant. It shares the ring transport and paged-cache contract with the DSA frontend,
+// while retaining MSA's raw dot, constant scale, grouped output, and optional block-max pooling semantics.
+ttnn::Tensor ring_indexer_score_msa(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& k_local,
+    const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
+    uint32_t cluster_axis,
+    ttnn::ccl::Topology topology,
+    uint32_t num_groups,
+    uint32_t num_links = 1,
+    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
+    std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    float scale = 1.0f,
+    uint32_t block_size = 0,
+    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    std::optional<uint32_t> kv_len = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::experimental

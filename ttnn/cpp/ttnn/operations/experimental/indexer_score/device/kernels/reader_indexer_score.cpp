@@ -17,6 +17,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/block_cyclic_remap.hpp"  // shared invP remap
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"  // block-max-pool: calculate_and_prepare_reduce_scaler
 
@@ -42,7 +43,8 @@ constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset(
 // Fused ring: the SP-sharded LOCAL K shard (the all-gather input) is read directly for this device's own slab
 // (the all-gather does NOT write the local band into the gathered buffer). Its accessor args sit after w's.
 constexpr auto kl_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
-constexpr uint32_t mc_ct_base = kl_args.next_compile_time_args_offset();
+constexpr auto page_bundle_args = TensorAccessorArgs<kl_args.next_compile_time_args_offset()>();
+constexpr uint32_t mc_ct_base = page_bundle_args.next_compile_time_args_offset();
 constexpr uint32_t k_mcast_on = get_compile_time_arg_val(mc_ct_base + 0);
 constexpr uint32_t q_mcast_on = get_compile_time_arg_val(mc_ct_base + 1);  // covers q and w (shared row mcast)
 constexpr uint32_t k_send_sem = get_compile_time_arg_val(mc_ct_base + 2);
@@ -69,6 +71,13 @@ constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
 constexpr uint32_t rank_mapping_mesh_cols = get_compile_time_arg_val(bc_ct_base + 8);
+
+constexpr uint32_t paged_ct_base = bc_ct_base + 9;
+constexpr bool has_page_bundles = get_compile_time_arg_val(paged_ct_base) != 0;
+constexpr uint32_t page_bundle_size_tiles = get_compile_time_arg_val(paged_ct_base + 1);
+constexpr uint32_t page_bundle_num_layers = get_compile_time_arg_val(paged_ct_base + 2);
+constexpr uint32_t page_bundle_layer_idx = get_compile_time_arg_val(paged_ct_base + 3);
+constexpr uint32_t page_bundle_count = get_compile_time_arg_val(paged_ct_base + 4);
 
 FORCE_INLINE constexpr uint32_t tensor_rank_from_transport_rank(uint32_t transport_rank) {
     return ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -271,6 +280,29 @@ inline void read_ktile_dims(Noc noc, const Acc& acc, uint32_t& ptr, uint32_t bas
     }
 }
 
+template <typename ReaderType>
+inline void read_ktile_dims(Noc, const PagedKVAccessor<ReaderType>& acc, uint32_t& ptr, uint32_t logical_row) {
+    // One physical bundle/layer page is exactly one ND shard. Resolve its row address once, then walk the
+    // head-dimension tiles linearly; invoking the generic TensorAccessor mapping for all four D=128 tiles
+    // is visible on MSA's short fused-single-head path.
+    const auto cursor = acc.cursor(logical_row);
+    const uint64_t row_noc_addr =
+        acc.get_shard_row_noc_addr(cursor, cursor.row_in_bundle * head_dim_tiles * k_tile_bytes);
+    for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+        noc_async_read(row_noc_addr + dim_tile * k_tile_bytes, ptr, k_tile_bytes);
+        ptr += k_tile_bytes;
+    }
+}
+
+template <typename ReaderType>
+inline void read_physical_ktile_dims(
+    Noc noc, const PagedKVAccessor<ReaderType>& acc, uint32_t& ptr, uint32_t base_page) {
+    for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+        acc.async_read_page(noc, CoreLocalMem<uint32_t>(ptr), base_page + dim_tile, k_tile_bytes);
+        ptr += k_tile_bytes;
+    }
+}
+
 /** k chunk [k_tiles_in_unit][head_dim_tiles], role-aware (k col mcast). ONE chunk / ONE mcast handshake. */
 template <typename KAcc>
 inline void read_k_chunk(
@@ -289,7 +321,11 @@ inline void read_k_chunk(
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
                 // bc_ktile: identity for contiguous K; invP(logical seq tile) for the per-SP-shard block-cyclic layout.
                 const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
-                read_ktile_dims(noc, k_acc, ptr, k_batch_page_offset + seq_tile * head_dim_tiles);
+                if constexpr (has_page_bundles) {
+                    read_ktile_dims(noc, k_acc, ptr, seq_tile);
+                } else {
+                    read_ktile_dims(noc, k_acc, ptr, k_batch_page_offset + seq_tile * head_dim_tiles);
+                }
             }
         });
 }
@@ -321,9 +357,14 @@ inline void read_k_chunk_fused(
                 const uint32_t seq_tile = bc_ktile(k_tile_start + k_col);
                 const uint32_t shard = seq_tile / tiles_per_shard;
                 if (shard == ring_index) {
-                    const uint32_t local_base =
-                        local_batch_page_offset + (seq_tile - ring_index * tiles_per_shard) * head_dim_tiles;
-                    read_ktile_dims(noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
+                    const uint32_t local_seq_tile = seq_tile - ring_index * tiles_per_shard;
+                    if constexpr (has_page_bundles) {
+                        read_ktile_dims(noc, k_local_acc, ptr, local_seq_tile);
+                    } else {
+                        const uint32_t local_base = local_batch_page_offset + local_seq_tile * head_dim_tiles;
+                        read_physical_ktile_dims(
+                            noc, k_local_acc, ptr, local_base);  // OWN shard from the SP-local cache
+                    }
                 } else {
                     read_ktile_dims(
                         noc, k_acc, ptr, gathered_batch_page_offset + seq_tile * head_dim_tiles);  // remote slab
@@ -348,22 +389,28 @@ struct FusedRingGate {
 
     uint32_t ring_index;
     uint32_t ring_size;
-    uint32_t tiles_per_shard;           // tiles per SP shard in the gathered buffer
-    uint32_t sem_id[2];                 // the two direction semaphore ids
-    KLocalAcc k_local_acc;              // local SP shard cache (the all-gather INPUT; AG omits it from gathered)
-    uint32_t local_batch_page_offset;   // selected slot in k_local; gathered k may be batch-1
-    uint32_t perm_base;                 // rt slot of the band-visit permutation (one entry per band)
-    uint32_t shard_dir[max_ring_size];  // shard -> direction semaphore index
-    uint32_t shard_val[max_ring_size];  // shard -> wait threshold
+    uint32_t tiles_per_shard;                // tiles per SP shard in the gathered buffer
+    uint32_t sem_id[2];                      // the two direction semaphore ids
+    PagedKVAccessor<KLocalAcc> k_local_acc;  // local SP shard cache (paged wrapper is identity-unused when disabled)
+    uint32_t local_batch_page_offset;        // selected slot in k_local; gathered k may be batch-1
+    uint32_t perm_base;                      // rt slot of the band-visit permutation (one entry per band)
+    uint32_t shard_dir[max_ring_size];       // shard -> direction semaphore index
+    uint32_t shard_val[max_ring_size];       // shard -> wait threshold
 
     // recv has already consumed the fused block (waiting for the op signal) and advanced argidx; take the
     // k_local addr from the next slot and leave argidx at the band-perm base.
-    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx) :
+    FusedRingGate(const RingSDPAOpReceiver& recv, uint32_t& argidx, uint32_t page_bundle_l1) :
         ring_index(tensor_rank_from_transport_rank(recv.seq.ring_index)),
         ring_size(recv.seq.ring_size),
         tiles_per_shard(k_len_tiles / recv.seq.ring_size),
         sem_id{recv.signal_op_semaphore_ids[0], recv.signal_op_semaphore_ids[1]},
-        k_local_acc(TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes)),
+        k_local_acc(
+            TensorAccessor(kl_args, get_arg_val<uint32_t>(argidx++), k_tile_bytes),
+            page_bundle_l1,
+            page_bundle_size_tiles,
+            page_bundle_num_layers,
+            1,
+            page_bundle_layer_idx),
         local_batch_page_offset(get_arg_val<uint32_t>(argidx++)),
         perm_base(argidx),
         shard_dir{},
@@ -450,14 +497,18 @@ inline void read_k_chunk_streaming(
                     bc_sp,
                     bc_shard_stride_gap,
                     bc_slab_stride_gap>(k_tile_start + c);
-                for (uint32_t d = 0; d < head_dim_tiles; ++d) {
-                    noc.async_read(
-                        k_acc,
-                        CoreLocalMem<uint32_t>(ptr),
-                        k_tile_bytes,
-                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + d},
-                        {});
-                    ptr += k_tile_bytes;
+                if constexpr (has_page_bundles) {
+                    read_ktile_dims(noc, k_acc, ptr, seq_tile);
+                } else {
+                    for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+                        noc.async_read(
+                            k_acc,
+                            CoreLocalMem<uint32_t>(ptr),
+                            k_tile_bytes,
+                            {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + d},
+                            {});
+                        ptr += k_tile_bytes;
+                    }
                 }
             }
         }
@@ -482,14 +533,51 @@ void kernel_main() {
     // Persistent-cache args (hash-excluded, re-applied each dispatch), after the mcast tuples.
     const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache page offset; 0 when not indexed
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);         // valid KV length in tiles (full when unset)
+    const uint32_t page_bundle_indices_addr = get_arg_val<uint32_t>(27);
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, bf16_tile_bytes);
+    const auto page_bundle_reader = TensorAccessor(page_bundle_args, page_bundle_indices_addr);
 
     Noc noc;
-    // The fused path is DSA-only. Keep the invariant compile-time checked without preprocessor-specialized
-    // binaries; the regular path may still use head streaming or the single-head fuse.
+    uint32_t page_bundle_l1 = 0;
+    bool page_bundle_read_pending = false;
+    if constexpr (has_page_bundles) {
+        // Only K readers need the mapping table. K-mcast receivers consume the sender's L1 copy and avoid
+        // redundantly fetching the table from DRAM on every core.
+        if (k_mcast_on == 0 || k_dir.role != iscore::mcast_role_receiver) {
+            CircularBuffer cb(cb_page_table);
+            page_bundle_l1 = cb.get_write_ptr();
+            uint32_t first_bundle = 0;
+            uint32_t bundles_to_read = page_bundle_count;
+            if constexpr (!block_cyclic && !fused_ring_enabled) {
+                // A regular scheduler cell owns a contiguous run of K bands, so it only needs that run's
+                // table entries. Align the uint16 slice to one 32-byte NOC quantum while retaining its
+                // global index in L1; production MSA reads ~320 B/core instead of the full ~3.5 KiB table.
+                constexpr uint32_t bundle_align = 16;
+                const uint32_t first_tile = band0 * k_tiles_per_unit;
+                const uint32_t end_tile = std::min(k_len_tiles, (band0 + num_bands) * k_tiles_per_unit);
+                const uint32_t raw_first = first_tile / page_bundle_size_tiles;
+                const uint32_t raw_end = (end_tile + page_bundle_size_tiles - 1) / page_bundle_size_tiles;
+                first_bundle = (raw_first / bundle_align) * bundle_align;
+                const uint32_t aligned_end =
+                    std::min(page_bundle_count, ((raw_end + bundle_align - 1) / bundle_align) * bundle_align);
+                bundles_to_read = aligned_end - first_bundle;
+            }
+            noc.async_read(
+                page_bundle_reader,
+                CoreLocalMem<uint16_t>(page_bundle_l1 + first_bundle * sizeof(uint16_t)),
+                bundles_to_read * sizeof(uint16_t),
+                {.page_id = 0, .offset_bytes = first_bundle * sizeof(uint16_t)},
+                {});
+            page_bundle_read_pending = true;
+        }
+    }
+    const PagedKVAccessor<decltype(k_acc)> paged_k{
+        k_acc, page_bundle_l1, page_bundle_size_tiles, page_bundle_num_layers, 1, page_bundle_layer_idx};
+    // Ring fusion requires resident heads and uses the regular grouped/pooled compute path; the classic path
+    // may still use head streaming or the standalone single-head fuse.
     static_assert(!fused_ring_enabled || !stream_heads, "fused ring requires all heads resident");
     static_assert(!fused_ring_enabled || fuse_single == 0, "fused ring is incompatible with fuse_single");
 
@@ -502,6 +590,14 @@ void kernel_main() {
                 cb_scaler,
                 ckernel::PoolType::MAX,
                 ckernel::ReduceDim::REDUCE_ROW>();
+        }
+        // The table read was issued before mask/scaler preparation so its DRAM latency is overlapped with
+        // that setup. Complete it before the first CoreLocalMem<uint16_t> bundle lookup.
+        if constexpr (has_page_bundles) {
+            if (page_bundle_read_pending) {
+                noc.async_read_barrier();
+                invalidate_l1_cache();
+            }
         }
 
         WorkUnitSpan span;
@@ -549,11 +645,21 @@ void kernel_main() {
                         // compute kernel drains them before moving to the next band.
                         if (span.k_tiles() != 0) {
                             if constexpr (fuse_single && fused_stream_k) {
-                                read_k_chunk_streaming(
-                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                                if constexpr (has_page_bundles) {
+                                    read_k_chunk_streaming(
+                                        noc, paged_k, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                                } else {
+                                    read_k_chunk_streaming(
+                                        noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);
+                                }
                             } else {
-                                read_k_chunk(
-                                    noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                                if constexpr (has_page_bundles) {
+                                    read_k_chunk(
+                                        noc, paged_k, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                                } else {
+                                    read_k_chunk(
+                                        noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+                                }
                             }
                         }
                     }
@@ -570,12 +676,12 @@ void kernel_main() {
     };
 
     if constexpr (fused_ring_enabled) {
-        // The receiver consumes the fused-arg block at slot 27 (ring/dir/sems plus the split-forwarding
+        // The receiver consumes the fused-arg block at slot 28 (ring/dir/sems plus the split-forwarding
         // triple — this op runs with split forwarding disabled) and waits for the producer signal. The
         // gate then consumes k_local and records the following band-permutation base.
-        uint32_t fused_argidx = 27;
+        uint32_t fused_argidx = 28;
         RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
-        const FusedRingGate gate(fused_recv, fused_argidx);
+        const FusedRingGate gate(fused_recv, fused_argidx, page_bundle_l1);
         run(&gate);
     } else {
         run(nullptr);

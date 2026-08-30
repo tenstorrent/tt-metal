@@ -103,6 +103,12 @@ struct operation_attributes_t {
     // cache_batch_idx * Tt * Dt). NOT hashed, re-applied each dispatch, so switching slots does NOT recompile.
     std::optional<uint32_t> cache_batch_idx{std::nullopt};
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Paged K cache: page_bundle_indices maps logical kv_cache_page_size-token pages to physical bundles.
+    // Each bundle contains one page per layer, flattened [bundle][layer] in physical dim 0. These values shape
+    // the reader binary and are therefore hashed; the table contents and buffer address remain runtime data.
+    uint32_t kv_cache_num_layers{1};
+    uint32_t kv_cache_layer_idx{0};
+    uint32_t kv_cache_page_size{32};
     // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
@@ -125,6 +131,10 @@ struct tensor_args_t {
     const Tensor& weights;
     // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
     std::optional<Tensor> k_local{std::nullopt};
+    // Paged cache bundle table. Classic: maps the logical full K sequence. Fused ring: maps this device's
+    // logical local K shard; the gathered `k` tensor remains the contiguous scratch/output of the all-gather.
+    std::optional<Tensor> page_bundle_indices{std::nullopt};
+    bool has_paged_kv_cache() const { return page_bundle_indices.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

@@ -373,6 +373,173 @@ def _nd_sharded_dram_config(device, rows_per_shard):
     return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
 
 
+def _make_paged_k(k, page_size, num_layers=3, layer_idx=1, extra_bundles=2, seed=91):
+    """Scatter logical [1,1,T,D] K rows into permuted physical [bundle,layer] pages."""
+    assert k.shape[:2] == (1, 1) and k.shape[2] % page_size == 0
+    logical_bundles = k.shape[2] // page_size
+    physical_bundles = logical_bundles + extra_bundles
+    gen = torch.Generator().manual_seed(seed)
+    pool = torch.randn(physical_bundles * num_layers, 1, page_size, k.shape[3], generator=gen, dtype=k.dtype)
+    order = torch.randperm(physical_bundles, generator=gen)[:logical_bundles].tolist()
+    for logical_bundle, physical_bundle in enumerate(order):
+        lo = logical_bundle * page_size
+        pool[physical_bundle * num_layers + layer_idx, 0] = k[0, 0, lo : lo + page_size]
+    table = torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, logical_bundles)
+    return pool, table
+
+
+def _upload_paged_k(device, pool, table, page_size, dtype=ttnn.bfloat16):
+    k_mem = _nd_sharded_dram_config(device, rows_per_shard=page_size)
+    k_dev = ttnn.from_torch(pool, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device, memory_config=k_mem)
+    table_dev = ttnn.from_torch(
+        table,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return k_dev, table_dev
+
+
+def _paged_kwargs(table_dev, page_size, num_layers=3, layer_idx=1):
+    return dict(
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
+        page_bundle_indices=table_dev,
+        kv_cache_page_size=page_size,
+    )
+
+
+@pytest.mark.parametrize("page_size", [32, 64])
+def test_indexer_score_dsa_paged_k(device, page_size):
+    """DSA scores logical K order through a permuted, multi-layer physical page pool."""
+    heads, dim, sq, t, chunk_start = 8, 128, 64, 256, 128
+    num_layers, layer_idx = 3, 1
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, w = make_inputs(heads, dim, sq, t, seed=page_size)
+    pool, table = _make_paged_k(k, page_size, num_layers, layer_idx, seed=page_size + 100)
+    k_dev, table_dev = _upload_paged_k(device, pool, table, page_size)
+    out = ttnn.to_torch(
+        ttnn.experimental.indexer_score_dsa(
+            to_device(q, device),
+            k_dev,
+            to_device(w, device),
+            chunk_start_idx=chunk_start,
+            program_config=cfg,
+            **_paged_kwargs(table_dev, page_size, num_layers, layer_idx),
+        )
+    )
+    assert_indexer_match(out, indexer_score_dsa_ref(q, k, w, chunk_start), sq, t, check_neg=True)
+
+
+@pytest.mark.parametrize(
+    "num_groups,block_size",
+    [(1, 0), (4, 0), (4, 128)],
+    ids=["g1_fused", "g4", "g4_block_pool"],
+)
+def test_indexer_score_msa_paged_k(device, num_groups, block_size):
+    """Paged MSA covers fused-single-head, grouped planes, and fused block-max pooling."""
+    heads, dim, sq, t, chunk_start = num_groups, 128, 64, 1024 if block_size else 512, 128
+    page_size, num_layers, layer_idx = 64, 3, 2
+    scale = dim**-0.5
+    k_chunk = 1024 if block_size else 64
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=k_chunk, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t, seed=41 + num_groups + block_size)
+    pool, table = _make_paged_k(k, page_size, num_layers, layer_idx, seed=211 + block_size)
+    k_dev, table_dev = _upload_paged_k(device, pool, table, page_size)
+    out = ttnn.to_torch(
+        ttnn.experimental.indexer_score_msa(
+            to_device(q, device),
+            k_dev,
+            chunk_start_idx=chunk_start,
+            scale=scale,
+            num_groups=num_groups,
+            block_size=block_size,
+            program_config=cfg,
+            **_paged_kwargs(table_dev, page_size, num_layers, layer_idx),
+        )
+    )
+    ref = indexer_score_msa_ref(
+        q, k, _msa_scale_w(heads, sq, scale), chunk_start, num_groups=num_groups, block_size=block_size
+    )
+    if block_size:
+        assert_pooled_match(out, ref, num_groups, sq, t // block_size, pcc_floor=0.995)
+    else:
+        assert_grouped_match(out, ref, num_groups, sq, t)
+
+
+@pytest.mark.parametrize("mode", ["dsa", "msa"], ids=["dsa", "msa_fused"])
+def test_indexer_score_paged_cache_hit_repatches_addresses(device, mode):
+    """Fresh K-pool/table addresses with identical geometry reuse one program without stale pointers."""
+    heads, dim, sq, t, chunk_start = (8 if mode == "dsa" else 1), 128, 64, 256, 128
+    page_size, num_layers, layer_idx = 64, 3, 2
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    scale = dim**-0.5
+    device.clear_program_cache()
+    keep_alive = []
+    entries = None
+    for seed in (301, 302):
+        q, k, w = make_inputs(heads, dim, sq, t, seed=seed)
+        pool, table = _make_paged_k(k, page_size, num_layers, layer_idx, seed=seed + 20)
+        k_dev, table_dev = _upload_paged_k(device, pool, table, page_size)
+        q_dev, w_dev = to_device(q, device), to_device(w, device)
+        keep_alive += [q_dev, w_dev, k_dev, table_dev]
+        paging = _paged_kwargs(table_dev, page_size, num_layers, layer_idx)
+        if mode == "dsa":
+            out = ttnn.to_torch(
+                ttnn.experimental.indexer_score_dsa(
+                    q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg, **paging
+                )
+            )
+            assert_indexer_match(out, indexer_score_dsa_ref(q, k, w, chunk_start), sq, t, check_neg=True)
+        else:
+            out = ttnn.to_torch(
+                ttnn.experimental.indexer_score_msa(
+                    q_dev,
+                    k_dev,
+                    chunk_start_idx=chunk_start,
+                    scale=scale,
+                    num_groups=1,
+                    program_config=cfg,
+                    **paging,
+                )
+            )
+            ref = indexer_score_msa_ref(q, k, _msa_scale_w(heads, sq, scale), chunk_start)
+            assert_grouped_match(out, ref, 1, sq, t)
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "paged K/table address change recompiled"
+
+
+def test_indexer_score_paged_validation(device, expect_error):
+    """Reject incompatible indexed mode and malformed page-table/cache geometry."""
+    heads, dim, sq, t, chunk_start = 8, 128, 64, 256, 128
+    page_size, num_layers, layer_idx = 64, 3, 2
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    q, k, w = make_inputs(heads, dim, sq, t)
+    pool, table = _make_paged_k(k, page_size, num_layers, layer_idx)
+    k_dev, table_dev = _upload_paged_k(device, pool, table, page_size)
+    q_dev, w_dev = to_device(q, device), to_device(w, device)
+    base = dict(
+        chunk_start_idx=chunk_start,
+        program_config=cfg,
+        **_paged_kwargs(table_dev, page_size, num_layers, layer_idx),
+    )
+    with expect_error(RuntimeError, "incompatible with cache_batch_idx"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cache_batch_idx=0, **base)
+    with expect_error(RuntimeError, "must be smaller"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **{**base, "kv_cache_layer_idx": num_layers})
+    with expect_error(RuntimeError, "shape"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **{**base, "kv_cache_page_size": page_size * 2})
+    bad_table = to_device(table.to(torch.int32), device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    with expect_error(RuntimeError, "uint16"):
+        ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, **{**base, "page_bundle_indices": bad_table})
+    interleaved_pool = to_device(pool, device)
+    with expect_error(RuntimeError, "ND-sharded"):
+        ttnn.experimental.indexer_score_dsa(q_dev, interleaved_pool, w_dev, **base)
+
+
 def test_indexer_score_indexed_cache(device):
     """cache_batch_idx selects a slot of a shared [B,1,T,D] cache; every slot scores correctly AND
     switching slots on the same cache tensor does not recompile (the slot is excluded from the hash)."""
@@ -1341,6 +1508,79 @@ def test_indexer_score_math_util(device, case_id, run_fn, mm_flops_thunk, expect
         f"{case_id} math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {INDEXER_PERF_MARGIN * 100:.1f}%)"
     )
+
+
+@pytest.mark.parametrize("mode", ["dsa", "msa"], ids=["dsa", "msa_block_pool"])
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_indexer_score_paged_perf_matches_contiguous(device, mode):
+    """Paged standalone DSA/MSA must preserve their production contiguous-cache device throughput."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for indexer_score perf checks (needs IOMMU)")
+
+    if mode == "dsa":
+        heads, sq, t, chunk_start = 8, GLX_SQ, GLX_T, SP7_CHUNK_START
+        q_dtype, block_size, scale, cfg = ttnn.bfloat8_b, 0, 1.0, glx_config(heads)
+    else:
+        heads, sq, t, chunk_start = 1, M3_SQ, M3_T, M3_CHUNK_START
+        q_dtype, block_size, scale = ttnn.bfloat16, 128, M3_DIM**-0.5
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+
+    page_size = 32
+    q, k, w = make_inputs(heads, GLX_DIM, sq, t)
+    q_dev = to_device(q, device, dtype=q_dtype)
+    w_dev = to_device(w, device)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    paged_k_dev = ttnn.from_torch(
+        k.reshape(t // page_size, 1, page_size, GLX_DIM),
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=_nd_sharded_dram_config(device, rows_per_shard=page_size),
+    )
+    table_dev = ttnn.from_torch(
+        torch.arange(t // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    paged_args = _paged_kwargs(table_dev, page_size, num_layers=1, layer_idx=0)
+
+    def invoke(k_tensor, **paging):
+        if mode == "dsa":
+            return ttnn.experimental.indexer_score_dsa(
+                q_dev, k_tensor, w_dev, chunk_start_idx=chunk_start, program_config=cfg, **paging
+            )
+        return ttnn.experimental.indexer_score_msa(
+            q_dev,
+            k_tensor,
+            chunk_start_idx=chunk_start,
+            scale=scale,
+            num_groups=1,
+            block_size=block_size,
+            program_config=cfg,
+            **paging,
+        )
+
+    invoke(k_dev)
+    invoke(paged_k_dev, **paged_args)
+    ttnn.synchronize_device(device)
+    contiguous_ns, paged_ns = [], []
+    for _ in range(5):
+        _, contiguous_record = profile_realtime_program(device, lambda: invoke(k_dev))
+        _, paged_record = profile_realtime_program(device, lambda: invoke(paged_k_dev, **paged_args))
+        contiguous_ns.append(contiguous_record["duration_ns"])
+        paged_ns.append(paged_record["duration_ns"])
+    contiguous_ms = sorted(contiguous_ns)[len(contiguous_ns) // 2] / 1e6
+    paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
+    ratio = paged_ms / contiguous_ms
+    logger.info(
+        f"indexer_score {mode} paged perf: contiguous={contiguous_ms:.3f} ms, "
+        f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+    )
+    assert ratio <= 1.03, f"paged indexer_score_{mode} regressed device time by {(ratio - 1) * 100:.2f}%"
 
 
 # ---------------------------------------------------------------------------

@@ -313,3 +313,158 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len):
         if trace_out is not None:
             ttnn.deallocate(trace_out)
         _clear_ccl_context(mesh_device)
+
+
+@run_for_blackhole("ring indexer paged perf requires Blackhole fabric")
+@pytest.mark.requires_host_iommu
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+@pytest.mark.parametrize("mesh_device", RING_PERF_MESHES, ids=RING_PERF_MESH_IDS, indirect=True)
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mode", ["dsa", "msa"], ids=["dsa", "msa_block_pool"])
+@pytest.mark.timeout(0)
+def test_ring_indexer_score_paged_perf_matches_contiguous(mesh_device, mode):
+    """Paged ring DSA/MSA must stay within 5% of the equivalent contiguous-cache fused program.
+
+    The fused path has two additional page-table consumers (score reader and all-gather reader), so its
+    fixed setup cost is slightly higher than the standalone test's 3% ceiling at this 0.25--0.35 ms shape.
+    """
+    require_realtime_profiler("ring indexer paged perf checks")
+    sp, tp = mesh_device.shape
+    assert (sp, tp) in RING_PERF_MESHES and tp == 1
+    kv_len = GLM52_KV_55K
+    page_size = 32
+    q_per_chip = GLM52_Q_PER_CHIP
+    q_rows = sp * q_per_chip
+    local_t = kv_len // sp
+    assert kv_len % sp == 0 and local_t % page_size == 0
+    heads = GLM52_INDEX_HEADS if mode == "dsa" else 1
+    chunk_start = kv_len - q_rows
+
+    q_host = torch.randn((1, heads, q_rows, GLM52_INDEX_DIM), dtype=torch.bfloat16)
+    w_host = torch.randn((1, heads, q_rows, 1), dtype=torch.bfloat16)
+    k_host = torch.randn((1, 1, kv_len, GLM52_INDEX_DIM), dtype=torch.bfloat16)
+    sp_shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None))
+    q_dev = ttnn.from_torch(
+        q_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b if mode == "dsa" else ttnn.bfloat16,
+        mesh_mapper=sp_shard,
+    )
+    w_dev = ttnn.from_torch(
+        w_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=sp_shard
+    )
+    k_local = ttnn.from_torch(
+        k_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        mesh_mapper=sp_shard,
+    )
+
+    dram_banks = mesh_device.dram_grid_size().x
+    dram_cores = [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(dram_banks)]
+    page_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, page_size, GLM52_INDEX_DIM],
+        grid=ttnn.CoreRangeSet(dram_cores),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    page_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=page_spec)
+    pool_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(0, None))
+    paged_k_local = ttnn.from_torch(
+        k_host.reshape(kv_len // page_size, 1, page_size, GLM52_INDEX_DIM),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=page_mem,
+        mesh_mapper=pool_mapper,
+    )
+    page_table = ttnn.from_torch(
+        torch.arange(local_t // page_size, dtype=torch.int64).reshape(1, 1, 1, -1),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    scratch_host = torch.zeros((1, 1, kv_len, GLM52_INDEX_DIM), dtype=torch.bfloat16)
+    gathered_contiguous = ttnn.from_torch(
+        scratch_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    gathered_paged = ttnn.from_torch(
+        scratch_host,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    paged_args = dict(
+        kv_cache_num_layers=1,
+        kv_cache_layer_idx=0,
+        page_bundle_indices=page_table,
+        kv_cache_page_size=page_size,
+    )
+    cfg = (
+        _ring_perf_config()
+        if mode == "dsa"
+        else ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=1024, head_group_size=0)
+    )
+    semaphores, subdevice_id = _make_ccl_context(mesh_device)
+    try:
+
+        def invoke(local_k, gathered_k, **paging):
+            common = dict(
+                cluster_axis=0,
+                topology=ttnn.Topology.Ring,
+                num_links=2,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                program_config=cfg,
+                **paging,
+            )
+            if mode == "dsa":
+                return ttnn.experimental.ring_indexer_score_dsa(q_dev, gathered_k, w_dev, local_k, semaphores, **common)
+            return ttnn.experimental.ring_indexer_score_msa(
+                q_dev,
+                gathered_k,
+                local_k,
+                semaphores,
+                num_groups=1,
+                scale=GLM52_INDEX_DIM**-0.5,
+                block_size=128,
+                **common,
+            )
+
+        invoke(k_local, gathered_contiguous)
+        invoke(paged_k_local, gathered_paged, **paged_args)
+        ttnn.synchronize_device(mesh_device, sub_device_ids=[subdevice_id])
+        contiguous_ns, paged_ns = [], []
+        for _ in range(5):
+            _, contiguous_programs = profile_realtime_program_merged(
+                mesh_device, lambda: invoke(k_local, gathered_contiguous), record_timeout_seconds=30.0
+            )
+            _, paged_programs = profile_realtime_program_merged(
+                mesh_device,
+                lambda: invoke(paged_k_local, gathered_paged, **paged_args),
+                record_timeout_seconds=30.0,
+            )
+            contiguous_ns.append(_ring_indexer_duration_ns(contiguous_programs))
+            paged_ns.append(_ring_indexer_duration_ns(paged_programs))
+        contiguous_ms = sorted(contiguous_ns)[len(contiguous_ns) // 2] / 1e6
+        paged_ms = sorted(paged_ns)[len(paged_ns) // 2] / 1e6
+        ratio = paged_ms / contiguous_ms
+        logger.info(
+            f"ring_indexer_score {mode} paged perf mesh={(sp, tp)}: contiguous={contiguous_ms:.3f} ms, "
+            f"paged={paged_ms:.3f} ms, ratio={ratio:.4f}"
+        )
+        assert ratio <= 1.05, f"paged ring_indexer_score_{mode} regressed device time by {(ratio - 1) * 100:.2f}%"
+    finally:
+        _clear_ccl_context(mesh_device)

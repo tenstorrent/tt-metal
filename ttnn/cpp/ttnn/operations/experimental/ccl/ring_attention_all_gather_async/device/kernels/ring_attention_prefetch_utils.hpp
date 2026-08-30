@@ -12,6 +12,10 @@
 #include "api/dataflow/noc.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 
+struct ShardNocReadAddress {
+    uint64_t value;
+};
+
 template <typename Accessor, typename Endpoint>
 FORCE_INLINE void async_read_accessor_page(
     const Noc& noc, const Accessor& accessor, const Endpoint& dst, uint32_t page_bytes, uint32_t page_id) {
@@ -26,6 +30,12 @@ FORCE_INLINE void async_read_accessor_page(
     uint32_t page_bytes,
     uint32_t page_id) {
     accessor.async_read_page(noc, dst, page_id, page_bytes);
+}
+
+template <typename Accessor, typename Endpoint>
+FORCE_INLINE void async_read_accessor_page(
+    const Noc&, const Accessor&, const Endpoint& dst, uint32_t page_bytes, ShardNocReadAddress src) {
+    noc_async_read(src.value, dst.get_address(), page_bytes);
 }
 
 // Batch packetized DRAM reads into a CB while keeping multiple packets in flight.  The caller
