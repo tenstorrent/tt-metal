@@ -217,7 +217,7 @@ ProgramDescriptor build_ring_program_descriptor(
         KC,
         num_blocks,
         cols_used,
-        ring_schedule::rotation_enabled(fused.topology, ring_size));
+        false);  // Measurement-only A/B branch: preserve the unrotated lane assignment.
     uint32_t max_bands = 0;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         for (uint32_t col = 0; col < cols_used; ++col) {
