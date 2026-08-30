@@ -1526,6 +1526,35 @@ class MultichipDecoder(OptimizedDecoder):
         output_rm.deallocate(True)
         return output
 
+    def _chunked_row_norm(self, norm, x):
+        """Run a row-independent norm over fixed-size row windows.
+
+        Full-length interleaved norms hand ttnn a fresh program shape for
+        every distinct prompt length; a first-of-its-shape norm compiled late
+        in a session (after decode traces and the persistent CCL pool have
+        claimed high L1 addresses) can end up with a static circular-buffer
+        region that collides with a resident L1 buffer -- a TT_THROW that
+        kills the engine (tt-agentic-bringup-qb2#30, first observed on a
+        29,475-token prefill ~6 h into serving). Fixed windows keep the norm's
+        program shapes bounded and compiled early.
+        """
+        seq_len, hidden = x.shape[-2], x.shape[-1]
+        output = ttnn.allocate_tensor_on_device(
+            shape=(1, 1, seq_len, hidden),
+            dtype=x.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for start in range(0, seq_len, MLP_CHUNK):
+            end = min(start + MLP_CHUNK, seq_len)
+            chunk = ttnn.slice(x, [0, 0, start, 0], [1, 1, end, hidden])
+            normed = norm.forward(chunk)
+            chunk.deallocate(True)
+            ttnn.experimental.slice_write(normed, output, [0, 0, start, 0], [1, 1, end, hidden], [1, 1, 1, 1])
+            normed.deallocate(True)
+        return output
+
     def _chunked_mlp_residual(self, residual):
         """Stream the complete long-prefill MLP residual branch by row chunks."""
         seq_len, hidden = residual.shape[-2], residual.shape[-1]
@@ -1610,7 +1639,10 @@ class MultichipDecoder(OptimizedDecoder):
         """Host-free replicated-residual composition for both layer kinds."""
         self.layer.shared_mlp.is_decode = is_decode
         residual = hidden_states
-        normed = self.layer.input_layernorm.forward(hidden_states)
+        if not is_decode and batch_size == 1 and hidden_states.shape[-2] > MLP_CHUNK:
+            normed = self._chunked_row_norm(self.layer.input_layernorm, hidden_states)
+        else:
+            normed = self.layer.input_layernorm.forward(hidden_states)
         attn_input = normed
         if not is_decode and batch_size > 1:
             attn_input = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
@@ -1642,7 +1674,12 @@ class MultichipDecoder(OptimizedDecoder):
             residual.deallocate(True)
             hidden_states = attn_output
         else:
-            attn_output = self.layer.post_attention_layernorm.forward(attn_output)
+            if not is_decode and batch_size == 1 and attn_output.shape[-2] > MLP_CHUNK:
+                normed_attn = self._chunked_row_norm(self.layer.post_attention_layernorm, attn_output)
+                attn_output.deallocate(True)
+                attn_output = normed_attn
+            else:
+                attn_output = self.layer.post_attention_layernorm.forward(attn_output)
             if not is_decode and batch_size > 1:
                 residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3], -1])
             hidden_states = ttnn.add(residual, attn_output)
