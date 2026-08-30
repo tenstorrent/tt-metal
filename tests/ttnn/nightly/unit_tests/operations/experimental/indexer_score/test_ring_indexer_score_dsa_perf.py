@@ -51,11 +51,8 @@ GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 
-# Measurement-only QuietBox sweep: 40..59 KC units per physical shard covers
-# every remainder modulo the 20 compute lanes exactly once.
-QB_SWEEP_UNITS_PER_SHARD = tuple(range(40, 60))
-RING_PERF_KV_LENS = tuple(units * 4 * GLM52_K_CHUNK for units in QB_SWEEP_UNITS_PER_SHARD) + (GLM52_KV_512K,)
-RING_PERF_KV_IDS = tuple(f"qb_units_{units}" for units in QB_SWEEP_UNITS_PER_SHARD) + ("512k",)
+RING_PERF_KV_LENS = (GLM52_KV_55K, GLM52_KV_512K)
+RING_PERF_KV_IDS = ("55k", "512k")
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
@@ -92,7 +89,7 @@ _FABRIC_2D_TORUS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
     "fabric_tensix_config": ttnn.FabricTensixConfig.DISABLED,
-    "fabric_router_config": _ring_indexer_fabric_router_config(),
+    # Measurement-only guard: omit fabric_router_config to use the runtime default.
     "require_exact_physical_num_devices": True,
 }
 
