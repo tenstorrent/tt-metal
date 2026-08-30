@@ -254,6 +254,9 @@ private:
     // by the time it ended, which is the number that actually bounds a zone's placement late in a capture.
     void check_sync_drift_at_close();
 
+    // Chips whose AI clock this profiler pinned, so stop() can release exactly those.
+    std::vector<int> forced_aiclk_chips_;
+
     int64_t eth_sync_worst_closure_ = 0;
     bool eth_sync_closure_valid_ = false;
 

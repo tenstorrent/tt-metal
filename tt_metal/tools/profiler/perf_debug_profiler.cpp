@@ -786,6 +786,21 @@ uint32_t eth_sync_samples() {
 // how stale its own alignment became. 0 disables.
 // Re-anchor after bring-up rather than living with init-time transforms. 0 disables, restoring the old
 // behaviour for comparison.
+// TT_METAL_PERF_DEBUG_FORCE_AICLK=<MHz>: pin the AI clock for the whole capture via ARC FORCE_AICLK
+// (0x33, arg0 = MHz, 0 releases), released at stop(). MEASURED: while the clock is GOVERNED the inter-chip
+// offset decays ~5.4 us/s even though every limit is idle -- aiclk reports a flat 1350, the arbiter permits
+// the full clock, TDP sits at 61/150 W. Pinned at the SAME 1350 the decay is 0.017 us/s and saturates. So
+// this makes the sync's staleness nearly free, which matters because the sync has to run before fabric
+// init while the first zone is not timestamped until 20-30 s of bring-up later.
+// CAUTION: pinning likely bypasses the arbiter, so thermal and power protection may not apply. Off by
+// default, and released unconditionally at stop().
+uint32_t force_aiclk_mhz() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_FORCE_AICLK");
+        return (s != nullptr && *s != '\0') ? (uint32_t)std::strtoul(s, nullptr, 10) : 0u;
+    }();
+    return v;
+}
 bool eth_sync_late() {
     static const bool v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ETH_SYNC_LATE");
@@ -1586,6 +1601,35 @@ bool PerfDebugProfiler::eth_sync_anchor_for(
 }
 
 void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    if (force_aiclk_mhz() != 0) {
+        auto& cl = MetalContext::instance(mesh_device->impl().get_context_id()).get_cluster();
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (!mesh_device->is_local(coord)) {
+                continue;
+            }
+            const int cid = mesh_device->get_device(coord)->id();
+            try {
+                cl.get_driver()->get_chip(cid)->arc_msg(0x33, true, {force_aiclk_mhz()});
+                forced_aiclk_chips_.push_back(cid);
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal, "[perf-debug profiler] FORCE_AICLK on chip {} failed: {}", cid, e.what());
+            }
+        }
+        if (!forced_aiclk_chips_.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] AICLK FORCED to {} MHz on {} chip(s) (chip 0 now reports {} MHz) -- "
+                "the clock is pinned for this capture, so the sync's staleness costs ~0.017 us/s instead of "
+                "~5.4 us/s [released at close]",
+                force_aiclk_mhz(),
+                forced_aiclk_chips_.size(),
+                (unsigned)MetalContext::instance(mesh_device->impl().get_context_id())
+                    .get_cluster()
+                    .get_device_aiclk(forced_aiclk_chips_.front()));
+        }
+    }
     const auto context_id = mesh_device->impl().get_context_id();
     auto& cluster = MetalContext::instance(context_id).get_cluster();
 
@@ -4022,6 +4066,26 @@ void PerfDebugProfiler::stop() {
     }
     // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
     check_sync_drift_at_close();
+    if (!forced_aiclk_chips_.empty()) {
+        auto& cl = MetalContext::instance().get_cluster();
+        for (const int cid : forced_aiclk_chips_) {
+            try {
+                cl.get_driver()->get_chip(cid)->arc_msg(0x33, true, {0});
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal, "[perf-debug profiler] FORCE_AICLK release on chip {} failed: {}", cid,
+                    e.what());
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] AICLK force RELEASED on {} chip(s); chip {} back to {} MHz",
+            forced_aiclk_chips_.size(),
+            forced_aiclk_chips_.front(),
+            (unsigned)cl.get_device_aiclk(forced_aiclk_chips_.front()));
+        forced_aiclk_chips_.clear();
+    }
     receiver_.reset();
     tracy_consumer_.reset();
     tracy_.reset();
