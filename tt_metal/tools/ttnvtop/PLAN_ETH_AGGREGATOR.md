@@ -1877,6 +1877,136 @@ aggregator and would happen to any hard-killed fabric workload. `ab_workload.py`
 `fidelity_ab.sh`'s teardown now waits 60 s for a clean exit and **refuses to escalate to
 SIGKILL**, reporting instead.
 
+## 5t. The 50.7% was a SINGLE-THREADED DRAIN. Scope collapses to remote chips -- 2026-08-30
+
+This section RETRACTS the central claim of 5s. 5s reported a "structural ceiling ... no
+amount of drain tuning closes a 2x gap that is set by ring capacity". That was a
+measurement of one implementation, not a property of host-pull.
+
+### What was actually wrong
+
+`ring_drain` was a SINGLE thread running `for (auto& chip : chips)` with 64 serial 1 KiB
+reads inside each -- 512 sequential reads per pass on a T3K. It asks for
+`kRingDrainHz` = 200 and achieved 17.1. The disproving experiment needed no code change
+and I should have run it first: restrict the same single-threaded drain to ONE chip.
+
+    host drain, 8 chips, 1 thread    50.8% loss
+    host drain, 1 chip,  1 thread     0.00% loss      <- unchanged binary, unchanged workload
+
+### One drain thread per chip
+
+Measured twice on the T3K, 2x4 mesh, 2048^2 matmul, 60 s and 45 s windows:
+
+    MMIO chips 0-3      0.00% loss, both runs
+    remote chips 4-7    10.0 / 16.6 / 16.7 / 18.7 / 19.3 / 20.7 / 30.9 / 33.2%
+    overall             9.7% and 11.3%   (was 50.7%)
+
+**On MMIO chips host-pull is sufficient and the on-chip aggregator earns nothing.** The
+feature's scope, if it ships at all, is remote chips on multi-chip Wormhole systems.
+
+### Why remote still loses -- measured, not inferred
+
+A probe that times the drain's exact shape (1 KiB from each of 64 different Tensix cores),
+on a remote chip, idle:
+
+    drain pattern (64 cores x 1KiB): 4.94 ms/pass -> 202.6 passes/s
+    same-core x64: 4.98 ms  |  one 64KiB call: 4.45 ms  |  per-call overhead: 8.47 us
+
+Three results, two of which killed hypotheses that were about to become work:
+
+- **Per-call overhead is 8.47 us** -- 0.53 ms of a 4.94 ms pass. UMD's own comment on the
+  interprocess NON_MMIO mutex warns that fine-granularity locking "would be more
+  detrimental to performance than acquiring it for a large block", and the drain does
+  exactly that 64 times per pass. Batching under one acquisition would buy ~10%. Not it.
+- **Target switching is free**: 64 different cores costs the same as 64 reads of one core.
+- **A remote chip sustains 202 passes/s idle and needs only 52** -- 4x headroom. Under load
+  it collapses to 34.7-46.7. So remote loss is neither bandwidth, nor per-call cost, nor
+  the mutex in isolation: it is **contention with the workload's own tunnel traffic**,
+  since on a T3K dispatch to the remote chips is itself tunneled.
+
+That is [[tt-coremon-n300-remote-contention]] read the other way round. The plan was built
+on "monitoring stalls workloads", which did not reproduce (5l). The real effect is
+**workloads stall monitoring** -- and an on-chip sweep is immune to it because it never
+crosses ethernet. That is the honest justification for the feature, and it is narrower and
+better founded than anything claimed before it.
+
+### The cheap alternative, and why it is BLOCKED
+
+With 4x idle headroom the drain is contention-bound, so ring capacity trades directly
+against the shortfall (earlier arithmetic had dismissed this on a bandwidth-bound
+assumption):
+
+    ring   needed passes/s   margin vs worst remote chip (34.7)
+      62            51.9     0.67x   <- current, lossy
+     126            25.5     1.36x
+     254            12.7     2.74x
+
+126 slots (`MEM_UTIL_SAMPLER_SIZE` 1024 -> 2048) should make the host drain lossless on
+remote chips and remove the need for an aggregator entirely. It does not work:
+
+**Raising `MEM_UTIL_SAMPLER_SIZE` to 2048 builds cleanly and then HANGS Tensix firmware
+init, reproducibly.** Every core times out in `waiting for physical cores to finish` ->
+`Device 0 init: failed to initialize FW`. Established by bisection against a stashed tree:
+
+    ring 62,  precompiled fw   PASS
+    ring 62,  JIT fw           PASS
+    ring 126, precompiled fw   PASS   (stale fw -- host/device disagree, not a valid test)
+    ring 126, JIT fw           FAIL   (twice, second failing 12 s after the first)
+
+Not a compile-time timeout (the second attempt is immediate), not a link or size error
+(the build is silent). `MEM_MAP_END` is derived from this reservation and is the Tensix
+**KERNEL_CONFIG base**, so growing it shifts that base and every
+`*_INIT_LOCAL_L1_BASE_SCRATCH` above it. Which of those movements breaks init is NOT
+diagnosed and needs firmware-layout knowledge. Reverted; the constant now carries a
+warning comment. **This is the highest-value open item: fixing it likely removes the whole
+feature.**
+
+Note also that the precompiled-firmware `build_key` is derived from build options, NOT from
+header contents, so changing a layout header silently reuses stale firmware. Any future
+layout experiment must force `TT_METAL_DISABLE_PRECOMPILED_FW=1` or regenerate the bundle.
+
+### Corrections to earlier sections
+
+- **5s's cross-arm agreement claim is withdrawn.** It compared the aggregator's per-core
+  `samples` against the host's raw entry count. Those differ: `samples` counts ACCEPTED
+  deltas, so a re-armed FPU counter lands in `resets` and an implausible wall delta is
+  dropped silently. The journal header's `head` (`head += behind`) is the raw count and the
+  only comparable quantity; the probe now reports entries/accepted/resets separately.
+  Resets turn out to be negligible (1,280 against 5.5M), so the residual cross-arm gap is
+  **window misalignment** -- the host arm's window comes from `[ring-drain]` lines
+  quantised to 5 s, making a nominal 45 s window 45 +/- 10 s. Per-arm loss percentages are
+  sound; absolute cross-arm counts must not be quoted until the windows are timestamped.
+- **[[tt-umd-tunnel-channel-pinning]]'s "the collector cannot do this itself" is wrong.**
+  `Cluster::configure_active_ethernet_cores_for_mmio_device` is only a wrapper;
+  `TTDevice::get_remote_communication()` and
+  `RemoteCommunication::set_remote_transfer_ethernet_cores()` are public and reachable from
+  a bare TTDevice, and the call site matches `RemoteChip`'s line for line. Implemented as
+  `--pin-tunnel`. Measured effect is MIXED -- it zeroed one chip's drain and cost one
+  chip's aggregator launch, overall 12.9% vs 11.3% unpinned -- so it is off by default. The
+  Cluster also sets the MMIO chip's OWN RemoteCommunication, which this does not; that is
+  the likely gap.
+- **Two more shared-state defects of the same family as the log throttle**: `static` locals
+  `last_period_assert_us` and `last_period_probe_us` inside the drain lambda became shared
+  once it ran per-chip, so one chip of eight would have had its sampler period reasserted.
+  Moved into `ChipState`.
+
+### Unrelated finding worth keeping
+
+UMD logs `Large transfer to remote chip without system memory setup` for anything above
+`256 * 4` bytes when `SysmemManager` is null, and caps `MAX_BLOCK_SIZE` at 1024 B instead
+of `ETH_ROUTING_BLOCK_SIZE` (32 KiB). The drain reads exactly 1024 B so it is unaffected,
+but any bulk remote read from a monitoring process is 32x under-blocked.
+
+### Where this leaves the feature
+
+1. MMIO chips: **not justified**. Host-pull with a parallel drain is lossless.
+2. Remote chips: justified *only* by contention immunity, at 10-33% host loss.
+3. If the `MEM_UTIL_SAMPLER_SIZE` init hang is fixed, 126 slots very likely removes (2) as
+   well, and with it the entire feature.
+
+So the ordering is: fix the firmware init hang FIRST. Everything device-side is downstream
+of that answer.
+
 ## 6. Risks
 
 | Risk | Mitigation |

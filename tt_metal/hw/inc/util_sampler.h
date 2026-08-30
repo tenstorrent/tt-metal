@@ -115,7 +115,7 @@ struct util_sampler_msg_t {
     volatile util_sampler_entry_t ring[UTIL_SAMPLER_RING_SIZE];
 };
 static_assert(sizeof(util_sampler_msg_t) == 32 + UTIL_SAMPLER_RING_SIZE * sizeof(util_sampler_entry_t));
-static_assert(sizeof(util_sampler_msg_t) == 1024, "v2 must keep size at 1024 to match MEM_UTIL_SAMPLER_SIZE");
+static_assert(sizeof(util_sampler_msg_t) == 1024, "must match MEM_UTIL_SAMPLER_SIZE");
 static_assert(sizeof(util_sampler_msg_t) == MEM_UTIL_SAMPLER_SIZE, "util_sampler_msg_t size must equal reservation");
 
 namespace ttnvtop_sampler {
@@ -139,14 +139,23 @@ inline volatile util_sampler_msg_t* ring() {
 }
 
 inline void init() {
-    // Tight u32-store loop over the entire 1024 B reservation (256 u32s).
-    // Compiler emits ~6 RV32 instructions; the previously-explicit per-field
-    // ring loop unrolled enough to push brisc.elf over its 0x1800 region
-    // budget. Host-side reader gates on `head`, so untouched ring slots are
-    // safely ignored regardless of contents — but a clean zero is still the
-    // least surprising starting state for the magic/version/period header.
+    // Zero the 32 B HEADER ONLY, not the whole reservation.
+    //
+    // This used to store zero over all of MEM_UTIL_SAMPLER_SIZE. brisc.elf has a hard
+    // 0x1800 region budget and this file already carries a scar from it: an earlier
+    // per-field ring loop "unrolled enough to push brisc.elf over its 0x1800 region
+    // budget". Growing the reservation from 1 KiB to 2 KiB doubled this loop's trip
+    // count, and JIT-built firmware then failed device init outright -- every Tensix core
+    // timing out in `waiting for physical cores to finish`, i.e. "Device 0 init: failed
+    // to initialize FW". A region-sized zeroing loop is a latent size hazard that scales
+    // with a constant somebody else is free to change.
+    //
+    // It is also unnecessary: the host reader gates entirely on `head`, so ring slots
+    // beyond it are never interpreted whatever they contain. Only the header needs a
+    // defined starting state, and every field of it is assigned below.
     volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(static_cast<uintptr_t>(MEM_UTIL_SAMPLER_BASE));
-    for (uint32_t i = 0; i < (MEM_UTIL_SAMPLER_SIZE / 4u); ++i) {
+    for (uint32_t i = 0; i < (sizeof(util_sampler_msg_t) - UTIL_SAMPLER_RING_SIZE * sizeof(util_sampler_entry_t)) / 4u;
+         ++i) {
         p[i] = 0u;
     }
     auto* s = ring();

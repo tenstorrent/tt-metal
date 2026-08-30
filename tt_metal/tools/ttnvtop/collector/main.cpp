@@ -1969,7 +1969,7 @@ int main(int argc, char* argv[]) {
     constexpr uint64_t kRingWindowUs = 1'000'000;  // 1 s rolling window for cycle attribution.
     constexpr uint64_t kSamplerBase = static_cast<uint64_t>(MEM_UTIL_SAMPLER_BASE);
     constexpr size_t kSamplerSize = static_cast<size_t>(MEM_UTIL_SAMPLER_SIZE);
-    static_assert(kSamplerSize == 1024, "ring drain assumes 1 KiB per-core ring");
+    static_assert(kSamplerSize == 1024, "ring drain assumes a 1 KiB per-core ring");
     static_assert(
         sizeof(ttnvtop_ring::Header) + ttnvtop_ring::kRingSize * sizeof(ttnvtop_ring::Entry) == kSamplerSize,
         "ring layout mismatch with util_sampler.h");
