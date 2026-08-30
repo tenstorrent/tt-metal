@@ -14,7 +14,6 @@
 #include "metadata_scalar_read.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
-#include "api/debug/dprint.h"
 #include "ring_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
@@ -912,9 +911,6 @@ void kernel_main() {
                 read_q_from_source<has_joint_q, joint_tensor_args_offset>(
                     is_joint_q, joint_q_addr, q_generator, joint_q_input_tile_logical, read_q);
                 q_pushed = true;
-                if (has_reference) {
-                    DPRINT("Qpush ri{} qi{}\n", ring_iter, q_iter);
-                }
             };
 
             ring_joint::SlidingQWorkPlan sliding_q_plan;
@@ -1165,9 +1161,6 @@ void kernel_main() {
                 }
 
                 // Make K available to compute.
-                if (is_reference_iter) {
-                    DPRINT("RKpush ri{} qi{} kc{} nkv{}\n", ring_iter, q_iter, k_chunk, num_kv_chunks);
-                }
                 cb_k.push_back(k_chunk_tiles);
                 KV_chunks_processed_in_iter++;
 
@@ -1214,9 +1207,6 @@ void kernel_main() {
                     } else {
                         materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
                             noc, cb_k_start_address, v_rows_to_materialize);
-                    }
-                    if (is_reference_iter) {
-                        DPRINT("RVpush qi{} kc{} shared\n", q_iter, k_chunk);
                     }
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
@@ -1274,9 +1264,6 @@ void kernel_main() {
                     }
 
                     // Make V available to compute.
-                    if (is_reference_iter) {
-                        DPRINT("RVpush qi{} kc{} sep\n", q_iter, k_chunk);
-                    }
                     cb_v.push_back(v_cb_entry_tiles);
                 }
             }
