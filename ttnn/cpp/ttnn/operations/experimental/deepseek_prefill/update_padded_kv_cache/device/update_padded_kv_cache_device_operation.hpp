@@ -46,6 +46,7 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
         // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
         std::optional<uint32_t> tp_axis;
+        uint32_t kv_cache_page_size;
     };
 
     struct tensor_args_t {
@@ -60,6 +61,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> kv_actual_global;
         // Optional, METADATA path only: 1-element uint32 valid_global (= actual_end). Same clamp.
         std::optional<Tensor> valid_global;
+        // Optional HMA bundle table. It maps this request's logical local cache pages to physical
+        // bundles; layer_idx selects the layer page within each bundle.
+        std::optional<Tensor> page_bundle_indices;
+        bool has_paged_cache() const { return page_bundle_indices.has_value(); }
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -134,6 +139,8 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::Tensor>& valid_global_tensor = std::nullopt,
     std::optional<uint32_t> valid_global = std::nullopt,
-    std::optional<uint32_t> tp_axis = std::nullopt);
+    std::optional<uint32_t> tp_axis = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::prim
