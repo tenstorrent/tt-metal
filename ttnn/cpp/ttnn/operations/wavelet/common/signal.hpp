@@ -29,15 +29,6 @@ struct SignalBuffer {
     }
 
     [[nodiscard]] constexpr uint32_t stick_bytes() const noexcept { return stick_width * element_size_bytes; }
-
-    [[nodiscard]] constexpr uint32_t aligned_stick_bytes(
-        const uint32_t alignment = kStorageAlignmentBytes) const noexcept {
-        return static_cast<uint32_t>(round_up(static_cast<size_t>(stick_bytes()), alignment));
-    }
-
-    [[nodiscard]] constexpr size_t physical_nbytes(const uint32_t alignment = kStorageAlignmentBytes) const noexcept {
-        return stick_count() * static_cast<size_t>(aligned_stick_bytes(alignment));
-    }
 };
 
 // Even and odd streams produced by splitting a 1D signal.
