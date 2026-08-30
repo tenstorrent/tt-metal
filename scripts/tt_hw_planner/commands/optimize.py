@@ -743,7 +743,13 @@ def cmd_optimize(args) -> int:
             # The run directory does not exist until the engine creates it, so the collector
             # RE-RESOLVES it on every poll; state-dir env exported later (--persist) is likewise
             # read per poll. A dashboard failure must never fail the run.
-            from ..optimize_dashboard import collect_state, find_run_dir, serve_in_thread, state_dir_candidates
+            from ..optimize_dashboard import (
+                collect_state,
+                find_run_dir,
+                post_hitl_decision,
+                serve_in_thread,
+                state_dir_candidates,
+            )
 
             _dash_slug = run_demo.name
 
@@ -753,9 +759,18 @@ def cmd_optimize(args) -> int:
                     return {"run": {"id": None, "live": False}, "model": {"slug": _dash_slug}}
                 return collect_state(rd, state_dir_candidates(run_root, _dash_slug), _dash_slug)
 
+            def _dash_decision(action):
+                rd = find_run_dir(run_root, slug=_dash_slug)
+                if rd is None:
+                    return False, "no run yet"
+                return post_hitl_decision(rd, action)
+
             try:
                 _srv, _t, dash_url = serve_in_thread(
-                    getattr(args, "dashboard_host", "127.0.0.1"), getattr(args, "dashboard_port", 8798), _dash_collect
+                    getattr(args, "dashboard_host", "127.0.0.1"),
+                    getattr(args, "dashboard_port", 8798),
+                    _dash_collect,
+                    decision_fn=_dash_decision,
                 )
                 print(f"  [optimize/cc] dashboard: {dash_url} (levers shown live as they land)")
             except Exception as exc:  # noqa: BLE001

@@ -12,6 +12,7 @@ from __future__ import annotations
 from ..optimize_dashboard import (
     collect_state,
     find_run_dir,
+    post_hitl_decision,
     repo_root_for_run,
     run_slug,
     serve,
@@ -43,4 +44,5 @@ def cmd_optimize_dashboard(args) -> int:
         args.host,
         args.port,
         lambda: collect_state(run_dir, state_dir_candidates(state_root, slug), slug),
+        decision_fn=lambda action: post_hitl_decision(run_dir, action),
     )

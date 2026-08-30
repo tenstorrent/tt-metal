@@ -5,9 +5,11 @@ import urllib.request
 
 from scripts.tt_hw_planner.optimize_dashboard import (
     _attempt_status,
+    _serving_metrics,
     collect_state,
     find_run_dir,
     make_server,
+    post_hitl_decision,
     repo_root_for_run,
     run_slug,
     state_dir_candidates,
@@ -24,7 +26,13 @@ def _make_run(tmp_path, slug="some_model_x"):
     render what the model reported, never a stage set baked into the code."""
     repo = tmp_path / "repo"
     run_dir = repo / "models/experimental/perf_automation/runs" / ("2026-08-30T10-00-00-" + slug)
-    _write(run_dir / "manifest.json", {"config": {"model_root": "/x/" + slug, "metric": "device_ms", "devices": "0"}})
+    _write(
+        run_dir / "manifest.json",
+        {
+            "config": {"model_root": "/x/" + slug, "metric": "device_ms", "devices": "0"},
+            "env": {"arch": "testarch", "dram_bw_gbps": 512.0, "worker_cores": 130},
+        },
+    )
     _write(
         run_dir / "state.json",
         {
@@ -76,7 +84,16 @@ def _make_run(tmp_path, slug="some_model_x"):
                     "pct": 75.0,
                     "count": 10,
                     "tags": {"bound": "compute"},
-                    "top_ops": [{"op_code": "WeirdOpDeviceOperation 4 x 4"}],
+                    "top_ops": [
+                        {"op_code": "WeirdOpDeviceOperation 4 x 4"},
+                        {
+                            "op_code": "ContractionOp 2 x 3 x 4",
+                            "shape": "2x3 @ 3x4",
+                            "device_ms": 2.0,
+                            "bytes": 48.0,
+                            "count": 5,
+                        },
+                    ],
                 }
             ]
         },
@@ -100,6 +117,7 @@ def _make_run(tmp_path, slug="some_model_x"):
             [
                 json.dumps({"kind": "fullpipe_e2e", "phase": "before", "value_ms": 30.0}),
                 json.dumps({"kind": "fullpipe_e2e", "phase": "after", "value_ms": 25.0}),
+                json.dumps({"kind": "peak_flops", "phase": "before", "value_ms": 175.5e12}),
             ]
         ),
     )
@@ -233,10 +251,56 @@ def test_server_serves_html_and_state(tmp_path):
     try:
         port = srv.server_address[1]
         html = urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=5).read().decode()
-        assert "Optimization Opportunities" in html
+        assert "Optimization History" in html and "Recommendations" in html and "Performance Metrics" in html
         payload = json.loads(urllib.request.urlopen("http://127.0.0.1:%d/api/state" % port, timeout=5).read())
         assert payload["model"]["slug"] == slug
         assert [st["name"] for st in payload["stages"]] == ["lm_head", "audio_encode"]
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_serving_metrics_are_derived_from_values_not_names(tmp_path):
+    """TTFT/TPOT/E2EL must come out of the numbers: the per-token stage is the one matching the
+    banked per-token pipeline time, the first-token stage is the dominant one-shot — no stage NAME
+    is ever consulted (the fixture's names are deliberately not prefill/decode)."""
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    s = collect_state(run_dir, [state], slug)
+    sv = s["serving"]
+    assert sv["per_token"]["stage"] == "lm_head" and sv["per_token"]["ms"] == 30.0
+    assert sv["first_token"]["stage"] == "audio_encode" and sv["first_token"]["ms"] == 12.0
+    assert sv["e2e_latency"]["ms"] == 42.0
+    assert abs(sv["throughput"]["per_s"] - (1000.0 / 30.0)) < 1e-6
+    # headroom: ledger modeled_floor (none in this fixture) -> absent, never fabricated
+    assert s["headroom"] is None
+
+
+def test_roofline_points_and_roofs_from_run_anchors(tmp_path):
+    """Chart points come from contraction shapes in the profile (2*M*K*N is definitional); the roofs
+    come from the run's own anchors (manifest env bandwidth, ledger peak) — nothing restated."""
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    s = collect_state(run_dir, [state], slug)
+    rf = s["roofline"]
+    assert rf["bw_gbps"] == 512.0
+    assert abs(rf["peak_tflops"] - 175.5) < 1e-9
+    assert len(rf["points"]) == 1  # the op without a contraction shape is not plotted
+    p = rf["points"][0]
+    flops = 2 * 2 * 3 * 4 * 5  # M*K*N per call, x count
+    assert abs(p["intensity"] - flops / 48.0) < 1e-9
+    assert abs(p["tflops"] - flops / 0.002 / 1e12) < 1e-6
+    assert s["env"]["dram_bw_gbps"] == 512.0
+
+
+def test_hitl_decision_requires_a_pending_proposal(tmp_path):
+    repo, run_dir, state, slug = _make_run(tmp_path)
+    ok, msg = post_hitl_decision(run_dir, "commit")
+    assert not ok and "no proposal" in msg
+    assert not (run_dir / "hitl_decision.json").is_file()
+    _write(run_dir / "hitl_proposal.json", {"tried": {"lever": "dtype", "op": "WeirdOp"}})
+    ok, _ = post_hitl_decision(run_dir, "revert")
+    assert ok
+    dec = json.loads((run_dir / "hitl_decision.json").read_text())
+    assert dec["action"] == "revert"
+    assert (run_dir / "hitl_proposal.json").is_file(), "answering must not consume the proposal"
+    ok, _ = post_hitl_decision(run_dir, "bogus")
+    assert not ok
