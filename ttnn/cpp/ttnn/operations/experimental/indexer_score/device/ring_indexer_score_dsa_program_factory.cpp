@@ -20,14 +20,14 @@
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"                // RingSDPAFusedOpSignaler
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
-#include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
-#include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"  // RingSDPAFusedOpSignaler
+#include "ttnn/operations/ccl/ccl_common.hpp"                       // linearized index / neighbor / fwd-bwd config
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"                    // AllGatherFusedOpSignaler
 // the fused AG helper (the only Linear+fuse-capable all-gather):
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
 #include "indexer_score_host_common.hpp"  // shared causal geometry / device index / persistent-cache args
+#include "ring_indexer_score_schedule.hpp"
 #include "kernels/indexer_score_cb.hpp"
 #include "kernels/indexer_score_work_split.hpp"
 
@@ -87,25 +87,6 @@ static_assert(
         compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
-
-// forward/backward all-gather writes expected for this device on the given topology (mirrors ring_joint's
-// build_ring_write_plan: Linear swaps num_targets_{fwd,bwd} into the plan).
-struct RingWrites {
-    uint32_t forward_writes_expected;
-    uint32_t backward_writes_expected;
-};
-RingWrites ring_writes_for(uint32_t ring_size, uint32_t ring_index, ttnn::ccl::Topology topology) {
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
-    (void)dynamic_alternate;
-    if (topology == ttnn::ccl::Topology::Ring && (ring_index % 2 == 0)) {
-        std::swap(num_targets_forward, num_targets_backward);
-    }
-    if (topology == ttnn::ccl::Topology::Linear) {
-        return {static_cast<uint32_t>(num_targets_backward), static_cast<uint32_t>(num_targets_forward)};
-    }
-    return {static_cast<uint32_t>(num_targets_forward), static_cast<uint32_t>(num_targets_backward)};
-}
 
 // Block-cyclic caches are slab-major on every SP rank. A global valid prefix can end partway through a
 // global slab, whose valid row count differs by rank, so gather complete touched slabs. This is the smallest
@@ -223,43 +204,24 @@ ProgramDescriptor build_ring_program_descriptor(
     // Group physical SP shards by their ring-arrival wave (the local shard is wave 0). Work units never cross a
     // shard boundary, so each has exactly one readiness dependency. RingIdSequencer already emits each wave in
     // the desired paired-direction order; preserve it directly rather than reconstructing and sorting it later.
-    const auto rw = ring_writes_for(ring_size, device_index, fused.topology);
-    const uint32_t max_wave = ring_size / 2;
-    std::vector<std::vector<uint32_t>> shards_by_wave(max_wave + 1);
-    {
-        RingIdSequencer seq(device_index, ring_size, rw.backward_writes_expected, rw.forward_writes_expected);
-        for (uint32_t i = 0; i < ring_size; ++i) {
-            const uint32_t rid = seq.get_next_ring_id([](uint32_t, uint32_t) {});
-            shards_by_wave[(i + 1) / 2].push_back(rid);
-        }
-    }
-    // Deal each shard's physical KC units across row-blocks and columns. This gives every compute column an even
-    // share of the local shard before it encounters a Fabric gate, while retaining KC-sized math units. The last
-    // unit of a shard is padded rather than crossing into the next shard.
-    std::vector<std::vector<std::vector<uint32_t>>> work_list(
-        num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
+    const auto rw = ring_schedule::ring_writes_for(ring_size, device_index, fused.topology);
+    const auto shards_by_wave = ring_schedule::arrival_waves(ring_size, device_index, rw);
+    // Deal each shard's physical KC units over the block-column lane space. A true bidirectional Ring rotates each
+    // arrival wave's column residues within both row blocks; Linear and Ring-2 retain the prior mapping. The local
+    // wave's formulaic shift is zero, paired shards keep matching offsets, adjacent row blocks retain their DRAM
+    // access pairing, and the last unit stays padded within its source shard.
+    auto work_list = ring_schedule::make_work_list(
+        shards_by_wave,
+        units_per_shard,
+        sll_t,
+        KC,
+        num_blocks,
+        cols_used,
+        ring_schedule::rotation_enabled(fused.topology, ring_size));
     uint32_t max_bands = 0;
-    {
-        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            for (uint32_t wave = 0; wave <= max_wave; ++wave) {
-                // Give each column matching offsets from both directions. Its visit order becomes
-                // A0,B0,A1,B1,..., so a core that reaches shard A's completion gate can consume the
-                // simultaneously arriving midpoint of shard B instead of idling.
-                for (uint32_t col = 0; col < cols_used; ++col) {
-                    for (uint32_t unit_slot = col;; unit_slot += cols_used) {
-                        const uint32_t unit_in_shard = blk + unit_slot * num_blocks;
-                        if (unit_in_shard >= units_per_shard) {
-                            break;
-                        }
-                        for (uint32_t shard : shards_by_wave[wave]) {
-                            work_list[blk][col].push_back(shard * sll_t + unit_in_shard * KC);
-                        }
-                    }
-                }
-            }
-            for (uint32_t col = 0; col < cols_used; ++col) {
-                max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(work_list[blk][col].size()));
-            }
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        for (uint32_t col = 0; col < cols_used; ++col) {
+            max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(work_list[blk][col].size()));
         }
     }
 
