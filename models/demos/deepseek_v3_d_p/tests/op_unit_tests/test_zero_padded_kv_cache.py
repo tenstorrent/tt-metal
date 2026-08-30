@@ -168,10 +168,10 @@ def _assert_cache_windows(
     "mesh_device,device_params",
     [
         pytest.param(
-            (2, 4),
+            (2, 2),
             fabric2d_device_params(),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-2x4",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
         )
     ],
     indirect=True,
@@ -401,6 +401,190 @@ def _make_scalar_tensor(mesh_device, value):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+
+
+def _paged_pool_memory_config(device, page_size, head_dim):
+    num_banks = device.dram_grid_size().x
+    cores = [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(num_banks)]
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, page_size, head_dim],
+            grid=ttnn.CoreRangeSet(cores),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+def _make_paged_pool(mesh_device, physical_bundles, num_layers, page_size, head_dim, layout):
+    return ttnn.from_torch(
+        torch.ones(physical_bundles * num_layers, 1, page_size, head_dim, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=layout,
+        device=mesh_device,
+        memory_config=_paged_pool_memory_config(mesh_device, page_size, head_dim),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+def _make_page_bundle_table(mesh_device, order):
+    return ttnn.from_torch(
+        torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, len(order)),
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.parametrize(
+    "layout,use_metadata",
+    [(ttnn.TILE_LAYOUT, False), (ttnn.TILE_LAYOUT, True), (ttnn.ROW_MAJOR_LAYOUT, False)],
+    ids=["tile_scalar", "tile_metadata", "row_major_scalar"],
+)
+@pytest.mark.parametrize("page_size", [32, 64])
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_paged_bundle_pool(mesh_device, layout, use_metadata, page_size):
+    """Zero a logical window through non-monotonic bundle tables and repatch table/pool addresses."""
+    head_dim = 128
+    num_layers, layer_idx = 3, 1
+    physical_bundles = 7
+    logical_bundles = 128 // page_size
+    orders = ([5, 1, 6, 2][:logical_bundles], [4, 0, 3, 6][:logical_bundles])
+    valid_global, pad_align = 45, 128
+
+    mesh_device.enable_program_cache()
+    entries_after_first = None
+    for order in orders:
+        pool = _make_paged_pool(mesh_device, physical_bundles, num_layers, page_size, head_dim, layout)
+        table = _make_page_bundle_table(mesh_device, order)
+        if use_metadata:
+            slot_t = _make_scalar_tensor(mesh_device, 19)  # ignored: the table selects the request
+            valid_t = _make_scalar_tensor(mesh_device, valid_global)
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                pool,
+                slot_t,
+                valid_t,
+                layer_idx,
+                num_layers,
+                128,
+                0,
+                pad_align,
+                page_bundle_indices=table,
+                kv_cache_page_size=page_size,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                pool,
+                0,
+                layer_idx,
+                num_layers,
+                valid_global,
+                128,
+                0,
+                pad_align,
+                page_bundle_indices=table,
+                kv_cache_page_size=page_size,
+            )
+        ttnn.synchronize_device(mesh_device)
+
+        host = ttnn.to_torch(pool, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).reshape(
+            physical_bundles * num_layers, 1, page_size, head_dim
+        )
+        expected = torch.ones_like(host)
+        for logical_row in range(valid_global, pad_align):
+            logical_bundle, row_in_bundle = divmod(logical_row, page_size)
+            physical_page = order[logical_bundle] * num_layers + layer_idx
+            expected[physical_page, 0, row_in_bundle] = 0
+        assert torch.equal(host, expected)
+
+        if entries_after_first is None:
+            entries_after_first = mesh_device.num_program_cache_entries()
+        else:
+            assert mesh_device.num_program_cache_entries() == entries_after_first
+
+        if use_metadata:
+            ttnn.deallocate(slot_t)
+            ttnn.deallocate(valid_t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_paged_rejects_nonzero_scalar_slot(mesh_device, expect_error):
+    page_size, head_dim = 32, 128
+    pool = _make_paged_pool(mesh_device, 2, 1, page_size, head_dim, ttnn.TILE_LAYOUT)
+    table = _make_page_bundle_table(mesh_device, [0, 1])
+    with expect_error(RuntimeError, "slot_idx must be 0"):
+        ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+            pool,
+            1,
+            0,
+            1,
+            45,
+            64,
+            0,
+            64,
+            page_bundle_indices=table,
+            kv_cache_page_size=page_size,
+        )
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (2, 2),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_paged_sp_boundary_straddle(mesh_device):
+    """A global pad window crossing the SP boundary must map each chip's logical rows independently."""
+    sp_axis, sp, tp = 0, 2, 2
+    chunk_size_global = 384
+    local_tokens = chunk_size_global // sp
+    page_size, head_dim = 32, 128
+    num_layers, layer_idx = 2, 1
+    logical_bundles = local_tokens // page_size
+    physical_bundles = logical_bundles + 3
+    order = [7, 1, 5, 0, 6, 3]
+    valid_global, pad_end = 180, 256
+
+    pool = _make_paged_pool(mesh_device, physical_bundles, num_layers, page_size, head_dim, ttnn.TILE_LAYOUT)
+    table = _make_page_bundle_table(mesh_device, order)
+    ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+        pool,
+        0,
+        layer_idx,
+        num_layers,
+        valid_global,
+        chunk_size_global,
+        sp_axis,
+        128,
+        page_bundle_indices=table,
+        kv_cache_page_size=page_size,
+    )
+    ttnn.synchronize_device(mesh_device)
+
+    for device_idx, device_pool in enumerate(ttnn.get_device_tensors(pool)):
+        sp_coord = device_idx // tp
+        host = ttnn.to_torch(device_pool).reshape(physical_bundles * num_layers, 1, page_size, head_dim)
+        expected = torch.ones_like(host)
+        chip_begin, chip_end = sp_coord * local_tokens, (sp_coord + 1) * local_tokens
+        begin, end = max(valid_global, chip_begin), min(pad_end, chip_end)
+        for global_row in range(begin, end):
+            local_row = global_row - chip_begin
+            logical_bundle, row_in_bundle = divmod(local_row, page_size)
+            physical_page = order[logical_bundle] * num_layers + layer_idx
+            expected[physical_page, 0, row_in_bundle] = 0
+        assert torch.equal(host, expected), f"device {device_idx} (SP coordinate {sp_coord}) cache mismatch"
 
 
 @pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
