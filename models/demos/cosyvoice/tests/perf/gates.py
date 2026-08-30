@@ -36,8 +36,12 @@ Every value in `EXPECTATIONS` comes from the certification run described in
 and Wormhole n300, five configurations each. Two boards is not a matrix; the third is
 what makes it one.
 
-**PERF.md and this table must agree**, and the `Misses` bands are what keeps them
-agreeing: a figure published there that has drifted here fails the run.
+**A `recorded` value is the centre of a band, not the last run's figure.** PERF.md
+publishes what a given run measured; this table holds the reference those measurements
+have to stay near. Re-centring it after every run would defeat the point — the band
+exists because the same board measures a few per cent apart from day to day. What must
+hold is that PERF.md's published figures lie inside these bands; when one stops doing
+so, the run fails and both are updated together.
 
 Bands are wide on purpose. The flow decoder varies by about 5 % run to run, the two
 Blackhole boards differ by another ~5 % through cooling alone, and a host under load
@@ -114,11 +118,11 @@ class Misses:
 # `p150a`/`p150b` pair -- the two differ by ~5 % through cooling, so the bands below
 # are the union of both rather than one board's.
 BLACKHOLE = {
-    # End-to-end traced decode: 174.5 tok/s default on p150a, 171.5 on p150b, 200.6 with
-    # the in-place KV cache. The standalone traced decode step measures 174 on p150a.
+    # End-to-end traced decode: 174.8 tok/s default on p150a, 168.5 on p150b, 201.3 with
+    # the in-place KV cache. Every configuration clears both gates by a wide margin.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.380 default on p150a, 0.393 on p150b, 0.342 best (p150a, in-place KV cache).
+    # 0.379 default on p150a, 0.402 on p150b, 0.342 best (p150a, in-place KV cache).
     "rtf": Meets(),
     # Reaching 0.2 needs the LLM decode step under 1.5 ms on its own; the step is
     # 4.98 ms at its best measured and is bandwidth-bound on the AR decoder's weights.
@@ -137,17 +141,19 @@ WORMHOLE = {
     # row measures the same thing and lands within noise of it.
     "tok_s": Meets(),
     "tok_s_stretch": Meets(),
-    # 0.539 default. **`COSYVOICE_FF2_GRID=8x2` does not help on this part** -- it
-    # measures 0.554, slightly *worse*, where an earlier vintage had it winning. The
-    # flag stays opt-in and Blackhole-favoured for exactly this reason: its best shape
-    # is not portable, and on n300 its benefit is not even reliably positive.
+    # 0.539-0.564 across the certification run's three configurations and its repeats.
+    # **`COSYVOICE_FF2_GRID=8x2` does not help on this part** -- it lands within noise of
+    # the default (0.552 against 0.553), and an earlier vintage had it winning clearly
+    # (0.577 -> 0.550). The flag stays opt-in and Blackhole-favoured for exactly this
+    # reason: its best shape is not portable, and on n300 its benefit is not even
+    # reliably positive. Centre chosen to sit in the middle of the observed spread.
     "rtf": Misses(
-        0.539,
+        0.55,
         0.20,
         "no flag closes this on n300; it needs the 64-core grid's decode step under "
         "3.2 ms against a measured 10.9, so it is the compute grid rather than tuning",
     ),
-    "rtf_stretch": Misses(0.539, 0.20, "same lever as the 0.5 gate, and further from it"),
+    "rtf_stretch": Misses(0.55, 0.20, "same lever as the 0.5 gate, and further from it"),
 }
 
 EXPECTATIONS = {"blackhole": BLACKHOLE, "wormhole": WORMHOLE}
