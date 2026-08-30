@@ -23,6 +23,9 @@
 #include <tt-metalium/system_mesh.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "umd/device/cluster.hpp"
+#include "umd/device/chip/chip.hpp"
+#include "umd/device/types/cluster_types.hpp"
 #include "tools/profiler/sync/eth_wallclock_sync_host.hpp"
 
 using namespace tt;
@@ -93,6 +96,15 @@ int main(int argc, char** argv) {
     // The pair (--unit-mesh --probe-chip N) is the actual experiment: hold one chip open so the cluster is
     // mapped, and watch a DIFFERENT chip that nothing has opened.
     bool unit_mesh = false;
+    // --lowclock N: force the chip to its LOW clock state (ARC_GO_LONG_IDLE -> 800 MHz) and sample there,
+    // then restore BUSY. This is the throttling test: if the sporadic clock losses are the ARC pulling the
+    // clock back under a power or thermal limit, then running at the LOWEST state removes the headroom
+    // being reclaimed and the losses should stop. If they persist at 800 MHz, throttling is not the
+    // mechanism. Also makes the low state observable at all, which a normal run cannot do -- opening a
+    // device boosts it, so the counter can only ever be read at 1350.
+    // NOTE: if this process dies before restoring, the chip stays downclocked until the next device open
+    // or a tt-smi reset.
+    uint32_t lowclock = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -122,6 +134,8 @@ int main(int argc, char** argv) {
             probe_chip = (int)std::strtol(argv[++i], nullptr, 10);
         } else if (std::strcmp(argv[i], "--unit-mesh") == 0) {
             unit_mesh = true;
+        } else if (std::strcmp(argv[i], "--lowclock") == 0 && i + 1 < argc) {
+            lowclock = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         }
     }
 
@@ -164,6 +178,106 @@ int main(int argc, char** argv) {
         if (!all_links && !edges.empty()) { break; }
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
+
+    if (lowclock != 0 && !devices.empty()) {
+        IDevice* d0 = devices.front();
+        const int chip = d0->id();
+        const auto eth_cores = d0->get_active_ethernet_cores(true);
+        if (eth_cores.empty()) {
+            printf("[ethsync] no active eth core\n");
+            mesh_device->close();
+            return 1;
+        }
+        constexpr uint64_t kWallL = 0xFFB121F0ULL;
+        constexpr uint64_t kWallH = 0xFFB121F8ULL;
+        const CoreCoord av = d0->virtual_core_from_logical_core(*eth_cores.begin(), CoreType::ETH);
+        const tt_cxy_pair ta(chip, av);
+        auto read_clk = [&](const tt_cxy_pair& t) {
+            uint32_t lo = 0, hi = 0;
+            cluster.read_reg(&lo, t, kWallL);
+            cluster.read_reg(&hi, t, kWallH);
+            return ((uint64_t)hi << 32) | lo;
+        };
+        auto host_ns = [] {
+            return (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch()).count();
+        };
+        auto sample_run = [&](const char* label, uint32_t n) {
+            std::vector<std::pair<double, uint64_t>> smp;
+            smp.reserve(n);
+            for (uint32_t i = 0; i < n; i++) {
+                const double h0 = host_ns();
+                const uint64_t d = read_clk(ta);
+                const double h1 = host_ns();
+                smp.push_back({(h0 + h1) * 0.5, d});
+            }
+            std::vector<double> ratios;
+            ratios.reserve(smp.size());
+            for (size_t i = 1; i < smp.size(); i++) {
+                const double dh = smp[i].first - smp[i - 1].first;
+                const double dd = (double)(smp[i].second - smp[i - 1].second) / ghz;
+                if (dh > 0 && dd > -1e6 && dd < 1e7) { ratios.push_back(dd / dh); }
+            }
+            std::vector<double> sorted = ratios;
+            std::sort(sorted.begin(), sorted.end());
+            const double med = sorted.empty() ? 0.0 : sorted[sorted.size() / 2];
+            // Counting "intervals that lost time" does NOT compare across clock states. Host preemption of
+            // duration P registers as an excess of median*P/2 -- 0.5*P at 1350, 0.296*P at 800 -- so the SAME
+            // host jitter clears a fixed threshold 1.7x less often at the low clock. A raw count would show a
+            // drop that is pure arithmetic. So classify instead, exactly as --catchstep does: a preemption is
+            // PAIRED (the previous interval ran long) and repays itself; a real clock loss is PERSISTENT.
+            uint32_t steps = 0, paired = 0;
+            double lost = 0.0, span = smp.empty() ? 0.0 : (smp.back().first - smp.front().first) / 1e9;
+            for (size_t i = 1; i < smp.size(); i++) {
+                const double dh = smp[i].first - smp[i - 1].first;
+                const double dd = (double)(smp[i].second - smp[i - 1].second) / ghz;
+                const double excess = med * dh - dd;
+                if (!(dh > 0 && dh < 1e5 && excess > 4000.0)) {
+                    continue;
+                }
+                double prev_excess = 0.0;
+                if (i >= 2) {
+                    const double ph = smp[i - 1].first - smp[i - 2].first;
+                    const double pd = (double)(smp[i - 1].second - smp[i - 2].second) / ghz;
+                    prev_excess = med * ph - pd;
+                }
+                // Repaid across the next 8 samples? Compare device advance against what this state's own
+                // median predicts for that window.
+                double wh = 0, wd = 0;
+                for (size_t k = i; k < i + 8 && k < smp.size(); k++) {
+                    wh += smp[k].first - smp[k - 1].first;
+                    wd += (double)(smp[k].second - smp[k - 1].second) / ghz;
+                }
+                const double window_deficit = med * wh - wd;
+                if (prev_excess < -2000.0) {
+                    paired++;
+                } else if (window_deficit > 1000.0) {
+                    steps++;
+                    lost += window_deficit;
+                }
+            }
+            printf("  %-14s median %.4f => %.4f GHz | PERSISTENT %u (%.2f/s, %.1f us) | paired/host %u "
+                   "| %.2f s\n", label, med, med * ghz, steps, span > 0 ? steps / span : 0.0, lost / 1000.0,
+                   paired, span);
+        };
+
+        printf("\n[ethsync] LOWCLOCK TEST on chip %d eth(%zu,%zu)\n", chip, eth_cores.begin()->x,
+               eth_cores.begin()->y);
+        printf("[ethsync] if the losses are ARC throttling, the LOW state should show none\n");
+        printf("  aiclk before: %u MHz\n", (unsigned)cluster.get_device_aiclk(chip));
+        sample_run("BUSY(1350)", lowclock);
+
+        cluster.get_driver()->get_chip(chip)->set_clock_state(tt::umd::DevicePowerState::LONG_IDLE);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        printf("  aiclk after LONG_IDLE: %u MHz\n", (unsigned)cluster.get_device_aiclk(chip));
+        sample_run("LONG_IDLE", lowclock);
+
+        cluster.get_driver()->get_chip(chip)->set_clock_state(tt::umd::DevicePowerState::BUSY);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        printf("  aiclk restored: %u MHz\n", (unsigned)cluster.get_device_aiclk(chip));
+        mesh_device->close();
+        return 0;
+    }
 
     if (aiclkwatch != 0) {
         printf("\n[ethsync] AICLK WATCH: %u polls across %zu device(s)\n", aiclkwatch, devices.size());
