@@ -187,8 +187,22 @@ class MeshConfig:
 
     @classmethod
     def detect(cls) -> "MeshConfig":
-        """Detect hardware and create config with all values resolved."""
+        """Detect hardware and create config with all values resolved.
+
+        RING_MLA_RING_SIZE_OVERRIDE=<n> opens an n-device sub-mesh instead of the whole box, so a
+        ring length other than the local device count can be exercised (e.g. ring-4 on an 8-chip
+        host). Ring length is otherwise fixed by the hardware, and it is a dimension the ring-MLA
+        work-split schedule depends on, so it needs to be reachable in a test.
+        """
         num_devices = _detect_devices_without_opening()
+        ring_override = os.environ.get("RING_MLA_RING_SIZE_OVERRIDE")
+        if ring_override:
+            if not ring_override.isdigit() or not (2 <= int(ring_override) <= num_devices):
+                raise ValueError(
+                    f'RING_MLA_RING_SIZE_OVERRIDE="{ring_override}" must be an integer in '
+                    f"[2, {num_devices}] (the detected device count)"
+                )
+            num_devices = int(ring_override)
         is_galaxy = num_devices == cls.GALAXY_DEVICE_COUNT
         # Galaxy keeps its constant: every committed galaxy baseline was measured against a 12x10
         # grid, and detection there would have to reason about its 32-chip topology rather than the

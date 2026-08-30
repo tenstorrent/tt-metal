@@ -2619,10 +2619,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //   base 2 (q64,  90 cores, floats 60, rn 7)            base 6 (q32, 70,  floats 60, rn 9)
     //   base 3 (q64,  70 cores, floats 30, rn 5)            base 9 (q32, 50,  floats 30, rn 6)
     //   base 4 (q32, 100 cores, floats 80, rn 8)
-    // plus two DECLINE cases (floats == 0 at 60 cores, q32 and q64) confirming the static fallback
-    // is still correct. That covers rows_needed 1..9 and floats 10..80. Untested: ring_size != 8
-    // (this box is sp=8 only), galaxy sp=8/tp=4, and rows_needed == grid_size.y, which no
-    // model/grid combination here can reach.
+    // plus three DECLINE cases, all PCC-passing on the static fallback: floats == 0 (60 cores, q32
+    // and q64), and rows_needed == grid_size.y (11x2 grid, q64: base 10, floats 20, rows_needed 2
+    // of 2 rows). That covers rows_needed 1..9 and floats 10..80.
+    //
+    // GALAXY (sp=8, tp=4, 110 SDPA cores) is not reachable from this box, but needs no separate
+    // validation for kimi_k3 q32: 24 heads x 20 chunks over 110 cores is base 4 / floats 40 /
+    // rows_needed 4 -- bit-identical to the default local config exercised on every run here. tp=4
+    // is 4 independent rings and does not enter this schedule. Note galaxy kimi50k q32 DECLINES
+    // (16 heads -> 320 units, floats 100, rows_needed 10 == grid_size.y) and kimi50k q128 declines
+    // on base 0; both are correct, the first because rotation there cannot move ownership at all.
+    //
+    // RING_SIZE != 8 is not constructible on this hardware: RING_MLA_RING_SIZE_OVERRIDE opens the
+    // sub-mesh, but a 4- or 2-device sub-mesh of this 8-chip box dies in MeshDeviceImpl::create
+    // with a fabric router / ethernet handshake timeout, before any SDPA kernel runs. It is covered
+    // wherever these tests run on a natively 4-device host, since the accuracy test is not
+    // ring-gated (only the perf check is).
     //
     // Each term below is load-bearing for a DIFFERENT reason and none is implied by another -- in
     // particular build_kv_chains is not redundant with k_mcast_enabled, because k_mcast_enabled's
