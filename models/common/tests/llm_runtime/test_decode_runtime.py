@@ -909,6 +909,65 @@ def test_sampling_params_are_prepared_once_and_reused_for_kpt(monkeypatch):
     assert len(calls) == 1
 
 
+def test_tile_padded_sampler_preserves_one_semantic_lane_and_neutralizes_inactive_rows(monkeypatch):
+    mesh = FakeMesh()
+    model = FakeModel()
+    model.config.max_batch_size = 1
+    model.sampling.config.max_batch_size = 32
+    runtime = DecodeRuntime(
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(mesh),
+            lane_capacity=1,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+            force_greedy_top_k=True,
+        )
+    )
+    prepared = runtime.prepare(
+        torch.tensor([11]),
+        torch.tensor([0]),
+        torch.tensor([[3, 4, 5]], dtype=torch.int32),
+        sampling_params=SamplingParams(
+            temperature=0.7,
+            top_k=32,
+            top_p=0.08,
+            presence_penalty=0.25,
+            frequency_penalty=0.5,
+            repetition_penalty=1.2,
+            seed=17,
+            enable_log_probs=True,
+            num_logprobs=1,
+        ),
+    )
+    sampling = prepared.prepared_sampling
+
+    assert runtime.config.lane_capacity == 1
+    assert runtime.config.sampling_batch_size == 32
+    assert sampling.batch_size == 32
+    assert sampling.active_rows == 1
+    assert sampling.active_mask == (True,) + (False,) * 31
+    assert sampling.top_k == (32,) + (1,) * 31
+    assert sampling.top_p == pytest.approx((0.08,) + (0.0,) * 31)
+    assert sampling.temperature == pytest.approx((1.0 / 0.7,) + (1.0,) * 31)
+    assert sampling.seeds == (17,) + (None,) * 31
+    assert sampling.presence_penalty == pytest.approx((0.25,) + (0.0,) * 31)
+    assert sampling.frequency_penalty == pytest.approx((0.5,) + (0.0,) * 31)
+    assert sampling.repetition_penalty == pytest.approx((1.2,) + (1.0,) * 31)
+    assert sampling.enable_log_probs == (True,) + (False,) * 31
+    assert sampling.num_logprobs == (1,) + (0,) * 31
+    assert sampling.logprob_modes[1:] == ("none",) * 31
+
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda mesh_device: "mapper")
+    monkeypatch.setattr(ttnn, "from_torch", lambda value, **kwargs: value)
+    k, p, temperature = runtime._make_host_kpt(prepared)
+
+    assert tuple(k.shape) == tuple(p.shape) == tuple(temperature.shape) == (32,)
+    assert k.tolist() == [32] + [1] * 31
+    assert p.tolist() == pytest.approx([0.08] + [0.0] * 31)
+    assert temperature.tolist() == pytest.approx([1.0 / 0.7] + [1.0] * 31)
+
+
 def test_normalization_preserves_feedback_lookahead_and_inactive_convention():
     runtime = make_runtime()
     page_table = torch.tensor([[10, 11, 99], [20, 21, 98]], dtype=torch.int64)

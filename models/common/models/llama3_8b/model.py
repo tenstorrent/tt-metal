@@ -1827,7 +1827,7 @@ def build_llama3_transformer_1d_config(
             valid_vocab_size=vocab_size,
             mesh_device=mesh_device,
             tt_ccl=tt_ccl_inst,
-            max_batch_size=max_batch_size,
+            max_batch_size=tile_padded_batch_rows,
             pad_to_power_of_2=pad_logits_to_power_of_2,
             # Decode uses force-argmax for greedy rows; prefill can still force
             # the top-k path at the executor call site when a platform needs it.

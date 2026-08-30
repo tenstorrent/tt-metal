@@ -265,6 +265,12 @@ def test_builder_reads_mesh_architecture_once():
     assert source.count("ttnn.cluster.get_cluster_type()") == 1
 
 
+def test_sampling_uses_the_same_tile_padded_rows_as_decode_logits():
+    source = inspect.getsource(build_llama3_transformer_1d_config)
+
+    assert "max_batch_size=tile_padded_batch_rows" in source
+
+
 def test_transformer_block_consumes_only_common_configs(monkeypatch):
     common = {
         "attention_norm": object(),
