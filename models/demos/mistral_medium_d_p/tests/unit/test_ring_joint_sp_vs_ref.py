@@ -1,31 +1,29 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""DEVICE (8 chips, BH LoudBox): the ring-joint SDPA over the block-cyclic SP KV cache, vs torch.
+"""DEVICE (32 chips, BH Galaxy): the ring-joint SDPA over the block-cyclic SP KV cache, vs torch.
 
 The core of attention, isolated. This drives ``tt/attention/dense_sp.py::dense_sp_attention`` with Q,
 K and V placed directly, so a failure here is the ring op or the cache layout — never the
 projections. The column/row-parallel QKV and o_proj paths, and the TP CCLs that close them, get
 their own tests later.
 
-**Why (2,4) rather than the (8,4) target.** TP stays at its production width of 4, so the head split,
-the cache head count and every per-chip shape are exactly Galaxy's. Only the ring is shortened,
-SP 8 -> 2. Because ``chunk_global = sp * chunk_local``, that shortens the *global* sequence with it,
-which leaves per-chip load **identical**: 128 Q rows and a 256-token cache shard per chip either way.
-Holding TP and per-chip load fixed while moving only the ring length is what makes a failure here
-attributable — the alternative (shrinking TP to fit a smaller box) changes the head grouping too,
-and then a PCC drop has two possible causes.
+Runs at the production shape and only there: **(8,4), SP=8 x TP=4**, 24 Q / 2 KV heads per chip,
+seq 1024 global / 128 local. No scaled-down rung stands in for it — a (2,4) LoudBox mesh cannot be
+carved out of a Galaxy (the fabric router handshake times out for any submesh, ring or linear), so
+the choice on this hardware is the real shape or nothing.
 
 The grouping is the point. 2 KV / 24 Q heads per chip puts the op in its grouped-GQA mode
 (``NKH == NVH < NQH && NQH % NKH == 0`` — see ``ring_joint_sdpa_device_operation.cpp:759-765``).
 Every other model in the repo drives this op with either 1 KV head per chip or MLA's single latent,
-so this ratio is new — which is exactly why it needs a rung of its own before Galaxy time.
+so this ratio is new — which is exactly why it gets a test of its own ahead of the full block.
 
 The ring gathers KV across the SP axis internally via online softmax — there is no explicit
 AllGather of K/V — so the reference is a plain full-sequence causal SDPA and the test checks that
-each chip's Q shard sees the whole prefix.
+each chip's Q shard sees the whole prefix: each chip's 128 Q rows must see all 1024 positions, i.e.
+every one of the 8 ring hops.
 
-Run:  pytest models/demos/mistral_medium_d_p/tests/unit/test_ring_joint_sp_vs_ref.py -k 2x4
+Run:  pytest models/demos/mistral_medium_d_p/tests/unit/test_ring_joint_sp_vs_ref.py -k 8x4
 """
 
 import pytest
@@ -53,10 +51,15 @@ def _torch_causal_gqa(q, k, v, n_q, n_kv):
     return torch.softmax(scores, dim=-1) @ v
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
 @pytest.mark.parametrize("chunk_local", [128], ids=["c128"])
 def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_seeds):
-    """One cache-backed ring-joint SDPA call, 2 KV / 24 Q heads per chip, vs torch."""
+    """One cache-backed ring-joint SDPA call at SP=8 x TP=4, 2 KV / 24 Q heads per chip, vs torch.
+
+    Nothing below is shape-specific — the global sequence, the block-cyclic chip order and the cache
+    capacity all follow from ``sp = mesh_device.shape[sp_axis]``, so this body would drive a shorter
+    ring unchanged if a mesh that can host one ever becomes available.
+    """
     rows, cols = tuple(mesh_device.shape)
     mesh_config, ccl = mesh_setup(mesh_device)
     sp, tp, sp_axis, tp_axis = mesh_config.sp, mesh_config.tp, mesh_config.sp_axis, mesh_config.tp_axis
@@ -172,9 +175,13 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
     assert passing, f"ring-joint SDPA PCC fail: {pcc}"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
 def test_ring_requires_bf8_cache(mesh_device, device_params, reset_seeds, expect_error):
-    """The sliding/cache-backed ring path and its gather buffers are bf8; a bf16 cache must fail loud."""
+    """The sliding/cache-backed ring path and its gather buffers are bf8; a bf16 cache must fail loud.
+
+    Host-side guard — it raises before a single op is dispatched, so the mesh it opens is incidental;
+    it rides on (8,4) only because that is the one shape this box can allocate.
+    """
     mesh_config, ccl = mesh_setup(mesh_device)
     kv_cache = allocate_kv_cache(
         mesh_device,

@@ -25,18 +25,20 @@ from ..utils.general_utils import get_default_num_links
 
 _CONFIG_JSON = os.path.join(os.path.dirname(__file__), "..", "configs", "Mistral-Medium-3.5-128B", "config.json")
 
-# Mesh shapes this model is tested on. (8,4) is the hardware target (SP=8 x TP=4).
+# Mesh shapes this model is tested on: the (8,4) Blackhole Galaxy target, SP=8 x TP=4, and nothing
+# else. Shapes are added back one at a time as hardware becomes reachable, so a green run always
+# means something was really tested rather than skipped.
 #
-# Only the LoudBox rung is wired up today - the ladder is being rebuilt one rung at a time as
-# hardware becomes reachable, so shapes are added back deliberately rather than kept on spec:
-#   (2,4)  8 chips  - production TP=4 (24 Q + 2 KV heads/chip, real head split) with the ring
-#                     shortened to SP=2. Since chunk_global = sp * chunk_local, the global
-#                     sequence shortens with it and per-chip load is IDENTICAL to SP=8 - so the
-#                     ring length is the only variable that moves.                        <- LoudBox
-#   (8,4)  32 chips - the full SP=8 x TP=4 target.                                        <- Galaxy
+# The (2,4) LoudBox rung was tried and REMOVED: no proper SUBMESH of a Galaxy can bring up the fabric.
+# (2,4) opens fine with FabricConfig::DISABLED, but both FABRIC_1D_RING and FABRIC_1D die in the
+# ethernet router handshake ("Fabric Router Sync: Timeout ... Master chan=3 got 0xa0b0c0d0"), because
+# carving chips out of the 32-chip fabric leaves their ethernet partners outside the submesh with no
+# router kernel running. Not ring-specific, and not specific to (2,4) - test_mlp_vs_ref's (1,4) rung
+# fails identically on this box. Only the full (8,4) allocates. Not fixable from here; a smaller rung
+# needs a real smaller machine. Device-count filtering alone cannot see this, hence no (2,4) entry.
 #
 # Not yet re-added: the column/row-parallel QKV + o_proj tests, and the (1,1) block-math rung.
-MESH_SHAPES = [(2, 4)]
+MESH_SHAPES = [(8, 4)]
 
 
 def mistral_config_dims() -> dict:
@@ -50,11 +52,15 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
 
     Generates a paired ``(mesh_device, device_params)`` parametrize. Each case opens a mesh of the
     requested shape directly (no submesh carving in test bodies) and configures the fabric for that
-    shape. Ids are ``1x1`` / ``1x4`` / ``2x4`` / ``8x4`` so ``pytest -k 1x4`` filters cleanly.
+    shape. Ids are ``1x1`` / ``1x4`` / ``2x4`` / ``8x4`` so ``pytest -k 8x4`` filters cleanly.
 
-    Auto-filters to the shapes that fit on the current system, so a test declaring ``[(2,4),(8,4)]``
-    simply skips on a 4-chip box rather than failing. Under ``CI=true`` only the largest fitting
-    shape runs, letting one yaml entry target several SKUs.
+    Auto-filters by DEVICE COUNT to the shapes that fit on the current system, so a test declaring
+    ``[(8,4)]`` simply skips on a smaller box rather than failing. Under ``CI=true`` only the largest
+    fitting shape runs, letting one yaml entry target several SKUs.
+
+    Note the filter is device-count only: it cannot tell that a shape which *fits* is nonetheless
+    unallocatable as a submesh of this machine's fabric (see the (2,4)-on-Galaxy note above), so
+    shapes must still be declared against real SKUs, not just chip budgets.
 
     Fabric: ``(1,1)`` disables it (nothing to ring around). Multi-device uses ``FABRIC_1D_RING``,
     matching the ring topology the CCLManager and every collective here use; pass

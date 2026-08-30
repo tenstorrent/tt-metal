@@ -68,7 +68,7 @@ Every other GQA model in the repo lands on exactly one KV head per chip (minimax
 8/8), and `deepseek_v3_d_p/utils/kv_cache_utils.py::init_kvpe_cache` hardcodes that `1`. Two is
 legal — `update_padded_kv_cache` only requires `cache_shape[1] == input_shape[1]`, and ring-joint
 SDPA supports grouped GQA (`NKH == NVH < NQH && NQH % NKH == 0`, ours is 2/2/24) — but unexercised.
-`tests/unit/test_ring_joint_sp_vs_ref.py` pins it, **on 4 chips**, before any Galaxy time is spent.
+`tests/unit/test_ring_joint_sp_vs_ref.py` pins it on the **32-chip Galaxy**, at the production shape.
 
 ## The block contract
 
@@ -104,28 +104,43 @@ test feeds a full-emb activation in and checks the reduce-scattered output.
 | tier | devices | what it retires |
 |---|---|---|
 | host | **0** | YaRN tables vs HF bit-for-bit, fp8 dequant + Meta-RoPE swizzle, torch ref vs `Ministral3DecoderLayer` |
-| `2x4` | **8** | **ring-joint SDPA at production TP=4** (24 Q / 2 KV heads per chip) with the ring shortened to SP=2 — BH LoudBox |
-| `8x4` | **32** | the SP=8 × TP=4 target — Blackhole Galaxy |
+| `8x4` | **32** | **ring-joint SDPA at the SP=8 × TP=4 target** (24 Q / 2 KV heads per chip) — Blackhole Galaxy |
 
-The ladder is deliberately short. Only the rung that runs on hardware we can actually get is wired
-up; the rest are added back one at a time as boxes become reachable, so a green run always means
-something was really tested rather than skipped. Currently parked, in the order they should return:
+The ladder is deliberately short: the host tier, and the real shape. Rungs are added back one at a
+time as hardware becomes reachable, so a green run always means something was really tested rather
+than skipped. Currently parked, in the order they should return:
 
 | rung | what it needs | what it would retire |
 |---|---|---|
-| QKV + o_proj on `2x4` | the LoudBox we already target | column/row-parallel splits and the TP reduce-scatter close |
-| full block on `8x4` | Galaxy | SP=8 × TP=4 together, the only shape that tests both axes at once |
+| QKV + o_proj on `8x4` | the Galaxy we already target | column/row-parallel splits and the TP reduce-scatter close |
+| full block on `8x4` | Galaxy | the two axes composed — SP ring + TP reduce-scatter in one call |
 
-### Why the smaller rung shrinks SP, not TP
+### There is no scaled-down rung, and there cannot be one on a Galaxy
 
-`2x4` holds TP at its production width of 4, so the head split, the cache head count and every
-per-chip shape are exactly Galaxy's. Only the ring is shortened, SP 8 → 2 — and because
-`chunk_global = sp * chunk_local`, the *global* sequence shortens with it, leaving per-chip load
-**identical**: 128 Q rows and a 256-token cache shard per chip on either shape.
+A `2x4` LoudBox rung was tried and removed. The idea was sound — hold TP at its production width of 4
+so the head split and every per-chip shape stay Galaxy's, and shorten only the ring, SP 8 → 2; since
+`chunk_global = sp * chunk_local` the global sequence shortens with it and per-chip load is
+*identical* (128 Q rows, a 256-token cache shard). Ring length would have been the only variable.
 
-That is the whole point. Ring length is the only variable that moves between `2x4` and `8x4`, so a
-PCC drop on Galaxy has exactly one candidate cause. Shrinking TP instead to fit a 4-chip box would
-change the GQA head grouping at the same time, and a failure would then be ambiguous.
+It does not run on a Galaxy. A `2x4` submesh opens fine with the fabric disabled, but **both**
+`FABRIC_1D_RING` and `FABRIC_1D` die in the ethernet router handshake:
+
+```
+Fabric Router Sync: Timeout after 10000 ms on Device 0: expected status 0xa2b2c2d2.
+Master chan=3 got 0xa0b0c0d0. furthest-behind stage: STARTED
+```
+
+Carving 8 chips out of the 32-chip fabric leaves their ethernet partners outside the submesh with no
+router kernel running, so the handshake never completes. It is not ring-specific, and not specific to
+`2x4` — the MLP block's `1x4` rung (`test_mlp_vs_ref`) fails with the identical timeout on this box.
+**Only the full `8x4` allocates.** Not fixable from this package: a smaller rung needs a smaller
+machine. Note `parametrize_mesh_with_fabric` filters by **device count only**, so it cannot detect
+this — a shape that fits may still be unallocatable, which is why `MESH_SHAPES` is declared against
+real SKUs rather than chip budgets.
+
+So on this hardware the choice is the production shape or nothing, and `8x4` is what runs. That is
+also the shape where the correctness claim has teeth: each chip's 128 Q rows must see all 1024
+positions, i.e. every one of the 8 ring hops.
 
 The host tier is the trust anchor: it pins the YaRN tables to HF at 0 ULP out to 262144 positions,
 proves the fp8-dequant + Meta-swizzle round-trip, and pins `reference/torch_reference.py` to the real
@@ -140,12 +155,12 @@ pytest models/demos/mistral_medium_d_p/tests/unit/test_rope_vs_hf.py \
        models/demos/mistral_medium_d_p/tests/unit/test_checkpoint_ingest.py \
        models/demos/mistral_medium_d_p/tests/unit/test_reference_model.py --noconftest
 
-pytest models/demos/mistral_medium_d_p/tests/unit -k 2x4   #  8 chips — BH LoudBox
+pytest models/demos/mistral_medium_d_p/tests/unit -k 8x4   # 32 chips — BH Galaxy (the target)
 ```
 
 Every device test declares its mesh shapes through `tests/test_factory.py::parametrize_mesh_with_fabric`,
-which auto-filters to what fits on the current system — a test declaring `[(2,4),(8,4)]` skips the
-Galaxy case cleanly on an 8-chip box rather than failing.
+which auto-filters by device count to what fits on the current system, so the Galaxy tests skip
+cleanly on a smaller box rather than failing.
 
 ## Layout
 
