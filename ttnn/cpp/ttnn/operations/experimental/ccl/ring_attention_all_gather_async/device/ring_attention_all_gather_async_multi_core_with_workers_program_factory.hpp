@@ -130,7 +130,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // cache slot as slot * kv_cache_num_layers + kv_cache_layer_idx (slot = slot_id[0]), matching
     // update_padded_kv_cache. Defaults (1, 0) reduce to slot, so single-layer callers are unaffected.
     uint32_t kv_cache_num_layers = 1,
-    uint32_t kv_cache_layer_idx = 0);
+    uint32_t kv_cache_layer_idx = 0,
+    // Even-ring split-forwarding gate. The parent fused op owns this protocol decision: a fused
+    // consumer must implement the split-shard second-half wait (RingSDPAOpReceiver) to enable it.
+    // The helper still applies the legacy even-ring topology/size gate on top, so standalone
+    // callers retain their prior behavior with the default.
+    bool split_forwarding_enabled = true);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
