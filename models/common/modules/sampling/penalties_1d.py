@@ -453,8 +453,9 @@ class Penalties1D(LightweightModule):
         start_1d[0::2] = 0
         start_1d[1::2] = d * vocab_per_dev
 
+        padded_batch_size = ((cfg.max_batch_size + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         end_1d = torch.empty(2 * self._num_devices, dtype=torch.int32)
-        end_1d[0::2] = cfg.max_batch_size
+        end_1d[0::2] = padded_batch_size
         end_1d[1::2] = (d + 1) * vocab_per_dev
 
         slice_start = None
@@ -515,15 +516,54 @@ class Penalties1D(LightweightModule):
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **op)
         else:
             counts = counts_new
-        counts_sliced = ttnn.slice(
-            counts,
-            self._slice_start,
-            self._slice_end,
-            output_tensor=counts_sliced,
-            slice_dim=1,
-            num_devices=self._num_devices,
-            **op,
-        )
+
+        if counts.shape[-2] % ttnn.TILE_SIZE:
+            # Dynamic tiled slice requires tile-aligned logical input/output
+            # heights. Pure padded views share the original buffers, so the
+            # caller-owned logical-B state remains authoritative.
+            counts_padded = ttnn.reshape(
+                counts,
+                counts.padded_shape,
+                counts.padded_shape,
+                skip_padding_fill=True,
+            )
+            counts_sliced_padded = None
+            if counts_sliced is not None:
+                counts_sliced_padded = ttnn.reshape(
+                    counts_sliced,
+                    counts_sliced.padded_shape,
+                    counts_sliced.padded_shape,
+                    skip_padding_fill=True,
+                )
+            sliced = ttnn.slice(
+                counts_padded,
+                self._slice_start,
+                self._slice_end,
+                output_tensor=counts_sliced_padded,
+                slice_dim=1,
+                num_devices=self._num_devices,
+                **op,
+            )
+            if counts_sliced is None:
+                logical_shape = list(sliced.padded_shape)
+                logical_shape[-2] = self.config.max_batch_size
+                counts_sliced = ttnn.reshape(
+                    sliced,
+                    logical_shape,
+                    sliced.padded_shape,
+                    skip_padding_fill=True,
+                )
+        else:
+            # Preserve the established batch-32 slice exactly.
+            counts_sliced = ttnn.slice(
+                counts,
+                self._slice_start,
+                self._slice_end,
+                output_tensor=counts_sliced,
+                slice_dim=1,
+                num_devices=self._num_devices,
+                **op,
+            )
 
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **op)
         return counts, mask

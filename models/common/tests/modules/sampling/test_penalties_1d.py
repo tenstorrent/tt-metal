@@ -838,6 +838,92 @@ def test_histogram_tilize_preserves_batch32_path_and_pads_smaller_batches(
         ]
 
 
+def test_non_tile_histogram_slices_padded_views_and_preserves_logical_output(monkeypatch):
+    """Batch-1 vocab slicing uses padded aliases of caller-owned state."""
+
+    events = []
+    counts_new_rm = SimpleNamespace(name="counts-new-rm")
+    counts_new_tiled = SimpleNamespace(name="counts-new-tiled")
+    counts = SimpleNamespace(name="counts", shape=(1, 1024), padded_shape=(32, 1024))
+    counts_padded = SimpleNamespace(name="counts-padded")
+    counts_sliced = SimpleNamespace(name="counts-sliced", shape=(1, 128), padded_shape=(32, 128))
+    counts_sliced_padded = SimpleNamespace(name="counts-sliced-padded")
+    mask = object()
+    new_tokens = SimpleNamespace(deallocate=lambda: events.append("deallocate-tokens"))
+
+    pen = object.__new__(Penalties1D)
+    pen.config = SimpleNamespace(max_batch_size=1)
+    pen._zeros = object()
+    pen._op_kwargs = {}
+    pen._slice_start = object()
+    pen._slice_end = object()
+    pen._num_devices = 8
+    pen._tilize_counts = lambda tensor: events.append(("tilize", tensor)) or counts_new_tiled
+
+    monkeypatch.setattr(
+        ttnn,
+        "scatter_add",
+        lambda *args, **kwargs: events.append(("scatter", args, kwargs)) or counts_new_rm,
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "add",
+        lambda lhs, rhs, *, output_tensor, **kwargs: events.append(("add", lhs, rhs, output_tensor, kwargs))
+        or output_tensor,
+    )
+
+    def reshape(tensor, logical_shape, padded_shape, *, skip_padding_fill):
+        events.append(("reshape", tensor, logical_shape, padded_shape, skip_padding_fill))
+        if tensor is counts:
+            return counts_padded
+        assert tensor is counts_sliced
+        return counts_sliced_padded
+
+    monkeypatch.setattr(ttnn, "reshape", reshape)
+
+    def slice_tensor(tensor, start, end, *, output_tensor, slice_dim, num_devices, **kwargs):
+        events.append(("slice", tensor, start, end, output_tensor, slice_dim, num_devices, kwargs))
+        assert tensor is counts_padded
+        assert end is pen._slice_end
+        assert output_tensor is counts_sliced_padded
+        return output_tensor
+
+    monkeypatch.setattr(ttnn, "slice", slice_tensor)
+    monkeypatch.setattr(
+        ttnn,
+        "gt",
+        lambda tensor, threshold, *, output_tensor, **kwargs: events.append(
+            ("gt", tensor, threshold, output_tensor, kwargs)
+        )
+        or output_tensor,
+    )
+
+    returned_counts, returned_mask = pen._token_bin_counts_and_mask(
+        new_tokens,
+        object(),
+        counts=counts,
+        mask=mask,
+        counts_sliced=counts_sliced,
+    )
+
+    assert returned_counts is counts
+    assert returned_mask is mask
+    assert events[-1] == ("gt", counts_sliced, 0, mask, {})
+    slices = [event for event in events if isinstance(event, tuple) and event[0] == "slice"]
+    assert slices == [
+        (
+            "slice",
+            counts_padded,
+            pen._slice_start,
+            pen._slice_end,
+            counts_sliced_padded,
+            1,
+            8,
+            {},
+        )
+    ]
+
+
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 class TestPenalties1DDeviceExtra:
     """Coverage for methods not exercised by the reference tests."""
