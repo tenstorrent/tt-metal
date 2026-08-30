@@ -5282,17 +5282,17 @@ if os.environ.get("RING_MLA_K_SWEEP"):
     # exercise the small-rot_base_chunks paths: q64 -> 240 units/110 cores = base 2, q128 -> 120
     # units = base 1 (both were unsupported or broken before; see the predicate in
     # ring_joint_sdpa_program_factory.cpp). q128's k is capped by L1.
-    # NOTE q64 (Sq_chunk_t == 2) is BROKEN independently of the rotated split: k320 and k448 both
-    # give PCC ~0.12 with RMSE ~100 and inf on later chunks, and they fail identically with
-    # RING_MLA_DISABLE_ROTATED_Q_SPLIT=1. q32 (Sq_chunk_t 1) and q128 (Sq_chunk_t 4) are fine, so
-    # this is specific to Sq_chunk_t == 2 -- and the committed q64/k448 perf baseline below is
-    # therefore measuring a shape that produces garbage.
+    # q64 (Sq_chunk_t == 2) used to fail at k320 and k448 with PCC ~0.12 / RMSE ~100, independently
+    # of the rotated split -- a missing PACK->UNPACK barrier in compute_streaming.hpp Phase 2, fixed
+    # there. The k values are kept spread across Skt % 4 == 0 (k128/k256/k384, which always worked)
+    # and Skt % 4 == 2 (k320/k448, which did not) so a regression in that gate is caught.
     RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, 448))
     RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q64-k448")
     RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 128, 256))
     RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q128-k256")
-    RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, 320))
-    RING_MLA_CHUNKED_CONFIG_IDS.append("kimi_k3-q64-k320")
+    for _k in (128, 256, 320, 384):
+        RING_MLA_CHUNKED_CONFIGS.append(("kimi_k3", 64, _k))
+        RING_MLA_CHUNKED_CONFIG_IDS.append(f"kimi_k3-q64-k{_k}")
 MINIMAX3_GQA_CHUNKED_CONFIGS, MINIMAX3_GQA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(
     MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS
 )
@@ -6208,22 +6208,31 @@ RING_MLA_RING8_BASELINES_APPLY = (
 if RING_MLA_RING8_BASELINES_APPLY:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS += [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-        # Shipped q32/k640 shape: 8.683 ms.
+        # Shipped q32/k640 shape: 8.67 ms. Unaffected by the Sq_chunk_t == 2 barrier fix below
+        # (Sq_chunk_t is 1 here), and the fastest shape that is also numerically correct.
         ("kimi_k3", 32, 640, 8, 68.05),
-        # Best shape found by the k sweep below: 8.288 ms. Not the shipped shape -- q64 doubles
-        # Sq_chunk_t, which the galaxy baselines have not been re-measured against.
-        ("kimi_k3", 64, 448, 8, 71.28),
+        # q64/k448: 8.68 ms, measured over 3 runs (68.05-68.09%) with the PACK->UNPACK barrier in
+        # compute_streaming.hpp Phase 2 present and its two halves split around the unpack-side
+        # setup. The previous 71.28 / 8.288 ms was recorded while that barrier was absent, i.e. it
+        # timed a kernel that skipped a required synchronization and produced garbage (PCC ~0.12) --
+        # so it was never a real 4% win over q32/k640; the two shapes are within noise of each other.
+        # Every q64 figure in the sweep note below predates the fix and is optimistic for the same
+        # reason.
+        ("kimi_k3", 64, 448, 8, 68.07),
     ]
 
 # Local k-chunk exploration, off by default so it costs no collected ids: RING_MLA_K_SWEEP=1.
 # expected_util is None for these, meaning "measure and report, gate nothing" -- the committed
 # baselines do not apply to shapes they were not measured on.
 #
-# Why these k values: q64 is compute-bound and ranks by how well Sk_chunk_t factorizes, since a
-# prime Skt collapses determine_largest_subblock_size and find_valid_granularity to their minimums;
-# q32 instead prefers the largest k that fits L1, because at Sq_chunk_t=1 the kt_inplace_v path is
-# data-movement bound and chunk count dominates. The sweep stops at 480 because k512 and up
-# overflow L1 at q64. No q128 entries: rot_base_chunks would be 1, which the rotated split must
+# Why these k values: q32 prefers the largest k that fits L1, because at Sq_chunk_t=1 the
+# kt_inplace_v path is data-movement bound and chunk count dominates. The sweep stops at 480 because
+# k512 and up overflow L1 at q64.
+# CAUTION: the q64 ranking this sweep originally produced (k448 > k320, attributed to Sk_chunk_t
+# factorization) was measured before the Sq_chunk_t == 2 barrier fix, and the shapes it favoured are
+# exactly the ones the missing barrier made fast and wrong -- Skt not divisible by 4 forces the QK
+# subblock to height 1, which is the case that skipped the barrier. Re-run before trusting any q64
+# ordering. No q128 entries: rot_base_chunks would be 1, which the rotated split must
 # refuse (it hangs -- see the diagnosis in the program factory), and L1 caps k there anyway.
 # The per-device K prefix at the final chunk is 7040 rows, so k in (128, 160, 320, 352, 640)
 # divides it exactly and the rest straddle.

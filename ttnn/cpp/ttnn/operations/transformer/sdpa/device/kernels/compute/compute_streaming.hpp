@@ -1533,6 +1533,27 @@ static void sdpa_inner_loop_step(
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
         constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h;  // full subblocks only
+        // The in-place sub_exp below rewrites the LAST QK row group (index q_num_subblocks - 1,
+        // height qkt_subblock_h) with PACK writes, and the first V matmul then UNPACK-reads rows
+        // [0, qktv_h). When those overlap, the pack writes must be made visible to that unpack or it
+        // reads stale L1 -- the same failure the barrier after this q_sub=0 block guards against.
+        //
+        // q_num_subblocks == 1 is only the SPECIAL CASE of this where the two granularities agree.
+        // They diverge when the host QK subblock solver falls back to subblock_h == 1 (Sk_chunk_t not
+        // divisible by 4) while streaming_qktv_h widens Phase 2 to 2: e.g. Sq_chunk_t 2 with
+        // Sk_chunk_t 10 or 14, where the last row group starts at row 1 but the V matmul consumes
+        // rows 0-1 in one go. That silently produced garbage (PCC ~0.12, RMSE ~100 on the first
+        // chunk, inf afterwards) for ring-MLA q64/k320 and q64/k448, independent of the work split.
+        //
+        // Blast radius is exactly Sq_chunk_t == 2, and nothing else. Every streaming caller caps the
+        // OUT-matmul subblock height at 2 (max_subblock_h = use_streaming_compute ? 2 : UINT32_MAX,
+        // see sdpa_program_factory.cpp and ring_joint_sdpa_program_factory.cpp), so qktv_h <= 2 on
+        // this path. Then (q_num_subblocks - 1) * qkt_subblock_h < qktv_h can only newly hold when
+        // q_num_subblocks == 2 && qkt_subblock_h == 1 && qktv_h == 2, i.e. Sq_chunk_t == 2:
+        // q_num_subblocks == 1 already took the old gate, and >= 3 groups (or qkt_subblock_h >= 2)
+        // give >= 2, which cannot be < qktv_h. So no Sq_chunk_t != 2 shape changes behaviour here --
+        // plain and exp-ring SDPA included -- and Sq_chunk_t == 2 is the case measured to need it.
+        constexpr bool qktv_first_group_reads_inplace_row = (q_num_subblocks - 1) * qkt_subblock_h < qktv_h;
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
@@ -1572,10 +1593,14 @@ static void sdpa_inner_loop_step(
                         kt_sub * actual_sbw,
                         qkt_subblock_h,
                         actual_sbw);
-                    if constexpr (q_num_subblocks == 1) {
+                    if constexpr (qktv_first_group_reads_inplace_row) {
+                        // PACK half posts here, right after the in-place writes. The UNPACK half is
+                        // deliberately NOT here: SEMGET head-of-line-blocks the whole unpack thread,
+                        // so waiting here would serialize the unpack-side setup below (wait_front,
+                        // data-format reconfig, matmul re-init, pack-width config) after the pack
+                        // tail instead of overlapping it. None of that setup reads cb_qkt_im tile
+                        // data, so the wait is safe to defer to just before the matmul.
                         PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-                        UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                     }
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
@@ -1595,6 +1620,13 @@ static void sdpa_inner_loop_step(
                         // still limits how many V rows are multiplied.
                         mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
+                        if constexpr (qktv_first_group_reads_inplace_row) {
+                            // UNPACK half of the pack->unpack rendezvous posted above: the in-place
+                            // softmax writes to the last row group must be visible before the matmul
+                            // unpacks rows [0, qktv_h), which include that group.
+                            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                        }
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                             const uint32_t qktv_in1_index = kt_sub * matmul_inner * vDHt + v_index_offset;
                             blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1635,7 +1667,7 @@ static void sdpa_inner_loop_step(
                         qkt_subblock_h,
                         actual_sbw);
                 }
-                if constexpr (q_num_subblocks == 1) {
+                if constexpr (qktv_first_group_reads_inplace_row) {
                     PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
                     UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
