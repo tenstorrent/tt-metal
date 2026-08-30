@@ -10,6 +10,7 @@
 #include <thread>
 #include <chrono>
 #include <vector>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -46,6 +47,18 @@ int main(int argc, char** argv) {
     // of magnitude finer than the steps. Steps still present => the device clocks really do step relative
     // to each other. Steps gone => the eth measurement path is manufacturing them.
     uint32_t clockwatch = 0;
+    // --whichclock N: the pair offset says the two clocks stepped relative to each other but CANNOT say
+    // which one moved. Bringing in the host clock as a third reference does: each device is compared
+    // against host time separately, so a step that appears in exactly one column is that chip's clock.
+    // If a step appears in BOTH columns simultaneously and equally, the host reference moved instead.
+    uint32_t whichclock = 0;
+    uint32_t period_ms = 200;
+    // --same-chip: point --whichclock at an ETH tile and a TENSIX WORKER tile on the SAME chip, instead of
+    // one tile on each of two chips. This asks whether a step is chip-wide or tile-local, which separates
+    // the two surviving explanations: a PLL relock under DVFS governance stops every tile on the chip at
+    // once (steps appear in BOTH columns, same sample, same size), while per-tile clock gating moves only
+    // the tile it gates (steps appear in one column). Both would look identical in a two-chip comparison.
+    bool same_chip = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -59,6 +72,12 @@ int main(int argc, char** argv) {
             interval_s = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (std::strcmp(argv[i], "--clockwatch") == 0 && i + 1 < argc) {
             clockwatch = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--whichclock") == 0 && i + 1 < argc) {
+            whichclock = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--period-ms") == 0 && i + 1 < argc) {
+            period_ms = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--same-chip") == 0) {
+            same_chip = true;
         }
     }
 
@@ -96,6 +115,82 @@ int main(int argc, char** argv) {
         if (!all_links && !edges.empty()) { break; }
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
+
+    if (whichclock != 0 && !edges.empty()) {
+        const auto& e = edges.front();
+        constexpr uint64_t kWallL = 0xFFB121F0ULL;
+        constexpr uint64_t kWallH = 0xFFB121F8ULL;
+        const CoreCoord av = e.a->virtual_core_from_logical_core(e.ac, CoreType::ETH);
+        const CoreCoord bv = same_chip
+                                 ? e.a->virtual_core_from_logical_core(CoreCoord{0, 0}, CoreType::WORKER)
+                                 : e.b->virtual_core_from_logical_core(e.bc, CoreType::ETH);
+        const tt_cxy_pair ta(e.a->id(), av);
+        const tt_cxy_pair tb(same_chip ? e.a->id() : e.b->id(), bv);
+        auto read_clk = [&](const tt_cxy_pair& t) {
+            uint32_t lo = 0, hi = 0;
+            cluster.read_reg(&lo, t, kWallL);
+            cluster.read_reg(&hi, t, kWallH);
+            return ((uint64_t)hi << 32) | lo;
+        };
+        auto host_ns = [] {
+            return (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        };
+        if (same_chip) {
+            printf("\n[ethsync] WHICHCLOCK same-chip: dev %d ETH(%zu,%zu) vs dev %d WORKER(0,0) vs HOST, "
+                   "%u samples %u ms apart\n",
+                   e.a->id(), e.ac.x, e.ac.y, e.a->id(), whichclock, period_ms);
+            printf("[ethsync] steps in BOTH columns together => chip-wide (PLL/DVFS); one column only => "
+                   "tile-local gating\n");
+        } else {
+            printf("\n[ethsync] WHICHCLOCK: dev %d vs dev %d vs HOST, %u samples %u ms apart\n",
+                   e.a->id(), e.b->id(), whichclock, period_ms);
+        }
+        printf("%5s %10s %14s %14s %14s %10s\n", "i", "elapsed_s", "dA_vs_host", "dB_vs_host", "d(B-A)",
+               "brk_ns");
+        printf("%5s %10s %14s %14s %14s %10s\n", "", "", "us", "us", "us", "");
+        constexpr uint32_t kTriples = 8;
+        double ra_prev = 0, rb_prev = 0, first_host = 0;
+        bool have_prev = false;
+        uint32_t steps_a = 0, steps_b = 0, steps_both = 0;
+        for (uint32_t i = 0; i < whichclock; i++) {
+            if (i != 0) { std::this_thread::sleep_for(std::chrono::milliseconds(period_ms)); }
+            double best_span = 1e18, ra = 0, rb = 0, hmid = 0;
+            for (uint32_t k = 0; k < kTriples; k++) {
+                const double h0 = host_ns();
+                const uint64_t a = read_clk(ta);
+                const double h1 = host_ns();
+                const uint64_t b = read_clk(tb);
+                const double h2 = host_ns();
+                const double span = h2 - h0;
+                if (span < best_span) {
+                    best_span = span;
+                    // Each device compared against the host instant its own read was centred on.
+                    ra = (double)a / ghz - (h0 + h1) * 0.5;
+                    rb = (double)b / ghz - (h1 + h2) * 0.5;
+                    hmid = (h0 + h2) * 0.5;
+                }
+            }
+            if (!have_prev) {
+                ra_prev = ra; rb_prev = rb; first_host = hmid; have_prev = true;
+            }
+            const double dA = (ra - ra_prev) / 1000.0;   // us
+            const double dB = (rb - rb_prev) / 1000.0;
+            printf("%5u %10.2f %14.3f %14.3f %14.3f %10.0f\n", i, (hmid - first_host) / 1e9, dA, dB,
+                   dB - dA, best_span);
+            // A step is anything well beyond the ~1-2 us MMIO noise floor on this box.
+            const bool sa = std::fabs(dA) > 4.0, sb = std::fabs(dB) > 4.0;
+            if (sa && sb) { steps_both++; } else if (sa) { steps_a++; } else if (sb) { steps_b++; }
+            ra_prev = ra; rb_prev = rb;
+        }
+        printf("\n[ethsync] steps >4 us: dev %d only = %u | dev %d only = %u | BOTH together = %u\n",
+               e.a->id(), steps_a, e.b->id(), steps_b, steps_both);
+        printf("[ethsync] one-sided steps mean that chip's own clock moved; simultaneous ones would mean "
+               "the HOST reference moved instead\n");
+        mesh_device->close();
+        return 0;
+    }
 
     if (clockwatch != 0 && !edges.empty()) {
         const auto& e = edges.front();
