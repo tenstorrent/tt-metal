@@ -32,7 +32,9 @@ Coverage:
     all-gather bootstrap (``cache_global == chunk_global``), which is the branch a request that
     exactly fills its cache takes;
   * two-chunk sequential prefill, i.e. ``cached_len > 0``, which is the only path that exercises
-    the on-device cache rotation and a Q slab sitting at a nonzero global offset;
+    the on-device cache rotation and a Q slab sitting at a nonzero global offset. Checked
+    device-to-device against a single-shot run of the same length, because the bf8 cache's error
+    grows with prefix length and would otherwise be charged to chunking;
   * the fused-QKV per-device interleave, and the config/bias guards.
 
 Run:  pytest models/demos/mistral_medium_d_p/tests/unit/test_attention_vs_ref.py -k 8x4
@@ -212,63 +214,98 @@ def test_attention_prefill_sp_vs_ref(mesh_device, device_params, cache_mult, res
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])
-def test_attention_prefill_chunked_vs_ref(mesh_device, device_params, reset_seeds):
-    """Two sequential chunks through one module + one cache, vs a single full-sequence reference.
+def test_attention_prefill_chunked_matches_single(mesh_device, device_params, reset_seeds):
+    """Two chunks must reproduce what ONE chunk of the same total length produces.
 
-    This is the only test that drives ``cached_len > 0``. Chunk 1's Q sits at global offset
-    ``chunk_global`` while K/V span the whole prefix, so it exercises the on-device cache rotation,
-    the indexed RoPE's per-chip start-row derivation, and the ring reading a prefix longer than the
-    current chunk. Chunk 0 alone cannot catch a rotation or offset bug — every position is its own
-    prefix there.
+    This is the only test that drives ``cached_len > 0``, so it is what exercises the on-device cache
+    rotation, the indexed RoPE's per-chip start-row derivation, and a Q slab at a nonzero global
+    offset.
+
+    **Why device-to-device rather than against the float reference.** The bf8 KV cache's error grows
+    with the length of the attended prefix — measured here on a SINGLE unchunked call, where no
+    rotation or chunk seam exists at all:
+
+        global tokens    1024      2048      4096
+        overall PCC      0.99854   0.99763   0.99119
+        tail-block PCC   0.99185   0.98379   0.93517
+
+    K is read from a bf8 cache into the scores, and YaRN's ``attention_factor`` (1.4159 on both cos
+    and sin) makes those scores run ~2x hot, so softmax amplifies the quantisation noise; the longer
+    the prefix, the more terms compete. Random test activations are the worst case for this, since
+    unstructured scores give a near-uniform softmax that reshuffles under small perturbations.
+
+    Comparing chunk 1 against a float reference would therefore conflate two unrelated errors —
+    chunking, and prefix-length numerics — and chunk 1 holds precisely the longest-prefix rows, so it
+    absorbs the worst of the second while being blamed for the first. An earlier version of this test
+    did exactly that and failed at 0.9874 for reasons that had nothing to do with chunking.
+
+    Comparing the chunked run against a single-shot run of the same length puts identical cache
+    numerics on both sides, so the only thing that can differ is the chunking itself.
     """
     torch.manual_seed(0)
     mesh_config, ccl = mesh_setup(mesh_device)
     sp, tp = mesh_config.sp, mesh_config.tp
-    chunk_global = sp * CHUNK_LOCAL
     n_chunks = 2
-    cache_global = n_chunks * chunk_global
+    total_global = n_chunks * sp * CHUNK_LOCAL  # 2048
+    cache_global = total_global
 
     w = _random_attn_weights(seed=3)
-    x = torch.randn(1, cache_global, HIDDEN) * 0.1
-    ref = _reference(x, w, cache_global)
+    x = torch.randn(1, total_global, HIDDEN) * 0.1
+    ref = _reference(x, w, total_global)
 
-    attn = _build_attention(mesh_device, mesh_config, ccl, w, cache_global)
-    kv_cache = allocate_kv_cache(
-        mesh_device,
-        num_layers=1,
-        max_seq_len=cache_global,
-        sp_axis=mesh_config.sp_axis,
-        num_users=1,
-        head_dim=HEAD_DIM,
-        n_kv_local=per_chip(tp)["n_kv"],
-    )
-    rope_mats = build_indexed_rope(
-        mesh_device,
-        head_dim=HEAD_DIM,
-        max_seq_len=cache_global,
-        chunk_size=chunk_global,
-        sp_axis=mesh_config.sp_axis,
-        **YARN,
-    )
-
-    for c in range(n_chunks):
-        cached_len = c * chunk_global
-        idx, inv = _chunk_order(cached_len, sp, CHUNK_LOCAL)
-        x_chunk = x[:, cached_len : cached_len + chunk_global, :].reshape(1, 1, chunk_global, HIDDEN)
-
-        out_tt = attn(
-            _place_sp(x_chunk, mesh_device, mesh_config, idx),
-            rope_mats=rope_mats,
-            kv_cache=kv_cache,
-            cached_len=cached_len,
-            indexed_rope=True,
+    def _run(chunk_local, chunks):
+        """Drive the whole sequence in `chunks` calls of `chunk_local` rows/chip; return [1, S, H]."""
+        attn = _build_attention(mesh_device, mesh_config, ccl, w, cache_global)
+        kv_cache = allocate_kv_cache(
+            mesh_device,
+            num_layers=1,
+            max_seq_len=cache_global,
+            sp_axis=mesh_config.sp_axis,
+            num_users=1,
+            head_dim=HEAD_DIM,
+            n_kv_local=per_chip(tp)["n_kv"],
         )
-        got = _gather_sp_tp(out_tt, mesh_device, mesh_config, inv).reshape(1, chunk_global, HIDDEN)
-        ref_chunk = ref[:, cached_len : cached_len + chunk_global, :]
+        chunk_global = sp * chunk_local
+        rope_mats = build_indexed_rope(
+            mesh_device,
+            head_dim=HEAD_DIM,
+            max_seq_len=cache_global,
+            chunk_size=chunk_global,
+            sp_axis=mesh_config.sp_axis,
+            **YARN,
+        )
+        pieces = []
+        for c in range(chunks):
+            cached_len = c * chunk_global
+            idx, inv = _chunk_order(cached_len, sp, chunk_local)
+            xc = x[:, cached_len : cached_len + chunk_global, :].reshape(1, 1, chunk_global, HIDDEN)
+            out_tt = attn(
+                _place_sp(xc, mesh_device, mesh_config, idx),
+                rope_mats=rope_mats,
+                kv_cache=kv_cache,
+                cached_len=cached_len,
+                indexed_rope=True,
+            )
+            pieces.append(_gather_sp_tp(out_tt, mesh_device, mesh_config, inv).reshape(1, chunk_global, HIDDEN))
+        return torch.cat(pieces, dim=1)
 
-        passing, pcc = comp_pcc(ref_chunk, got, 0.99)
-        logger.info(f"attention chunked SP={sp} TP={tp} chunk {c} (cached_len={cached_len}): {pcc}")
-        assert passing, f"attention chunked PCC fail on chunk {c} (cached_len={cached_len}): {pcc}"
+    got_chunked = _run(CHUNK_LOCAL, n_chunks)  # 2 x 1024
+    got_single = _run(CHUNK_LOCAL * n_chunks, 1)  # 1 x 2048
+
+    # The claim under test: chunking changes nothing.
+    passing, pcc = comp_pcc(got_single, got_chunked, 0.999)
+    logger.info(f"chunked({n_chunks}x{sp * CHUNK_LOCAL}) vs single({total_global}) on device: {pcc}")
+    assert passing, (
+        f"chunked prefill does not reproduce the single-shot run: {pcc}. Cache numerics are identical "
+        f"on both sides, so this is a chunking bug — rotation, RoPE start row, or Q global offset."
+    )
+
+    # Sanity floor against the torch reference, over the FULL sequence. Loose by design: see the
+    # prefix-length table above for why a tight bound here would be measuring bf8, not correctness.
+    for name, got in (("chunked", got_chunked), ("single", got_single)):
+        passing, pcc = comp_pcc(ref, got, 0.995)
+        logger.info(f"{name} vs torch reference (full {total_global} seq): {pcc}")
+        assert passing, f"{name} vs reference PCC fail over {total_global} tokens: {pcc}"
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)])

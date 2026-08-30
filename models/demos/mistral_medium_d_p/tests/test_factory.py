@@ -47,7 +47,25 @@ def mistral_config_dims() -> dict:
         return json.load(f)
 
 
-def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
+def _linear_fabric_default() -> bool:
+    """Whether to drive the fabric as a plain mesh rather than a ring.
+
+    Defaults to the RING, which is production and what a healthy Galaxy provides. Set
+    ``MISTRAL_LINEAR_FABRIC=1`` on a **plain-mesh Galaxy** — one whose wrap-around ethernet links
+    are missing or untrained, so a torus cannot be embedded. Such a box reports a grid degree
+    histogram (``mesh0 {2:4, 3:16, 4:12}`` for 8x4: 4 corners, 16 perimeter, 12 interior) where a
+    torus needs ``{4:32}``, and FABRIC_1D_RING dies in topology_mapper with::
+
+        Graph specified in MGD could not fit in the discovered physical topology ... STRICT
+
+    Correctness is topology-independent, so PCC tests are valid either way. PERFORMANCE IS NOT: the
+    ring-joint SDPA gathers KV along the SP axis, so its cost is exactly what changes between a ring
+    and a linear fabric. Never compare perf numbers taken under this flag against ring-fabric ones.
+    """
+    return os.getenv("MISTRAL_LINEAR_FABRIC", "").lower() in ("1", "true", "yes")
+
+
+def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=None):
     """Mesh + fabric parametrization for mistral_medium_d_p tests.
 
     Generates a paired ``(mesh_device, device_params)`` parametrize. Each case opens a mesh of the
@@ -68,6 +86,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
     ``ttnn.Topology.Linear`` in the CCLManager to match).
     """
     num_devices = ttnn.get_num_devices()
+    linear_fabric = _linear_fabric_default() if linear_fabric is None else linear_fabric
     mesh_shapes = MESH_SHAPES if mesh_shapes is None else mesh_shapes
     mesh_shapes = [s for s in mesh_shapes if s[0] * s[1] <= num_devices]
 
@@ -103,7 +122,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
     return decorator
 
 
-def mesh_setup(mesh_device, linear_fabric=False):
+def mesh_setup(mesh_device, linear_fabric=None):
     """Build the ``(MeshConfig, CCLManager)`` pair for this mesh.
 
     TP is always the full col axis (``mesh_shape[1]``), so a (2,4) mesh is TP=4/SP=2 and an (8,4)
@@ -113,6 +132,7 @@ def mesh_setup(mesh_device, linear_fabric=False):
     ``ccl_manager`` is None at TP=1 and SP=1, where no collective ever runs.
     """
     rows, cols = tuple(mesh_device.shape)
+    linear_fabric = _linear_fabric_default() if linear_fabric is None else linear_fabric
     mesh_config = MeshConfig((rows, cols), tp=cols)
     needs_ccl = cols > 1 or rows > 1
     ccl_manager = (
