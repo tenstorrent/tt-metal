@@ -2650,6 +2650,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // !has_sliding_window, enable_kv_chains, k_uses_batch_chain and B == 1, and v_shares_k_buffer
         // subsumes !use_attention_sink (the op rejects that pair outright).
         k_mcast_enabled && build_kv_chains && v_shares_k_buffer &&
+        // !kv_pad_rotation_enabled is MEASURED load-bearing, not assumed. Removing it does make the
+        // rotation engage on the kv-pad path (kv_actual_isl ring MLA, chunk_size_local 256 on a 3x2
+        // grid: base 5, floats 2, active_iters 5 of 8) -- and the device HANGS there ("potential hang
+        // detected, unrecoverable", cores 15-3/15-2 stuck). That was with the rotation cycle already
+        // rebuilt over the ORDINAL sequence of active iterations (kv-pad makes the active mask
+        // partial, 5 of 8 here, and a skipped iteration otherwise breaks the donor->receiver chain),
+        // so the ordinal fix alone is not sufficient: the kv-pad path couples to the per-iteration
+        // KV geometry somewhere beyond Q ownership. test_ring_mla_chunked_kv_actual_isl_rotated_
+        // q_split_accuracy exists to re-attempt this -- the default kv-pad configs have
+        // total_q_chunks == 4, too small for the rotation to engage at any grid.
+        //
         // Schedules this rotation cannot model. Balanced/zigzag SKIPS whole Q chunks per device, so
         // the equal-cost-per-chunk counting the rotation is built on stops holding -- a causal mask
         // wants enable_zigzag_balancing instead, which is the right tool for that job. The kv-pad
@@ -2847,11 +2858,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // given shape and core count.
         log_info(
             tt::LogOp,
-            "Rotated Q split ACTIVE: base={} floats={} rows_needed={} ring_size={} (ideal slots {} vs flat {})",
+            "Rotated Q split ACTIVE: base={} floats={} rows_needed={} ring_size={} active_iters={} "
+            "kv_pad_rotation={} (ideal slots {} vs flat {})",
             rot_base_chunks,
             rot_float_chunks,
             rows_needed,
             ring_size,
+            std::popcount(active_ring_iter_mask),
+            kv_pad_rotation_enabled,
             total_q_chunks * ring_size / num_cores,
             ring_size * (rot_base_chunks + 1));
     } else if (v_shares_k_buffer && kernel_chunked) {

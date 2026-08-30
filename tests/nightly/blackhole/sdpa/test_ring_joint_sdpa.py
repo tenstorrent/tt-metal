@@ -3629,6 +3629,25 @@ def test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determini
     )
 
 
+@pytest.mark.skipif(
+    not os.environ.get("RING_MLA_K_SWEEP"), reason="Local coverage for the rotated Q split on the kv-pad path"
+)
+def test_ring_mla_chunked_kv_actual_isl_rotated_q_split_accuracy():
+    """Same kv-pad (kv_actual_isl) path, sized so the rotated Q split can actually engage.
+
+    The default case is chunk_size_local=32 with q_chunk_size=32, i.e. ONE Q chunk per head and
+    total_q_chunks = 4 -- far below any real core count, so rot_base_chunks is 0 and the rotation
+    always declines. Widening the local chunk to 256 gives 8 chunks per head (total 32), which
+    reaches rot_base_chunks >= 1 under a shrunken grid (RING_MLA_SDPA_GRID_OVERRIDE=3x2 -> 6 cores
+    -> base 5, floats 2). Without this the kv-pad path has no configuration in which the rotation
+    is exercised at all, so its predicate term could not be validated either way.
+    """
+    run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+        MESH_CONFIG,
+        chunk_size_local=256,
+    )
+
+
 def test_ring_mla_chunked_nd_sharded_indexed_kv_cache_accuracy_and_determinism():
     """Validate ring_mla chunked prefill with indexed ND-sharded shared K/V cache."""
     mesh_config = MESH_CONFIG
