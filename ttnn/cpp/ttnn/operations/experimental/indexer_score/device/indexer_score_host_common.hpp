@@ -23,6 +23,25 @@
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
+// Logical sequence capacity is not encoded in the physical K shape for paged caches. The classic path's
+// table maps the complete logical sequence; the fused ring path's table maps one local SP shard while `k`
+// remains the contiguous gathered scratch and therefore continues to carry the global logical length.
+inline uint32_t logical_k_length(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+    if (tensors.has_paged_kv_cache() && !attrs.has_fused_ring()) {
+        return static_cast<uint32_t>(
+            tensors.page_bundle_indices->logical_volume() * static_cast<uint64_t>(attrs.kv_cache_page_size));
+    }
+    return tensors.k.logical_shape()[2];
+}
+
+inline uint32_t logical_local_k_length(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+    if (tensors.has_paged_kv_cache()) {
+        return static_cast<uint32_t>(
+            tensors.page_bundle_indices->logical_volume() * static_cast<uint64_t>(attrs.kv_cache_page_size));
+    }
+    return tensors.k_local->logical_shape()[2];
+}
+
 // This device's SP-ring size: the mesh extent along seq_shard_axes[0], or the whole mesh when the SP axis is
 // unset (both-axes block-cyclic). Shared by the fused factory (schedule/AG) and the op's validate so they
 // cannot disagree on the ring extent.
@@ -205,13 +224,14 @@ struct PersistentCacheArgs {
     uint32_t k_batch_page_offset;  // cache_batch_idx * Tt * Dt; 0 when not indexed
     uint32_t kv_len_tiles;         // valid key prefix in tiles; full Tt when kv_len unset
 };
-inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const Tensor& k) {
-    const auto& shape = k.logical_shape();
-    const uint32_t Tt = shape[2] / tt::constants::TILE_WIDTH;
+inline PersistentCacheArgs persistent_cache_args(const operation_attributes_t& attrs, const tensor_args_t& tensors) {
+    const auto& shape = tensors.k.logical_shape();
+    const uint32_t T = logical_k_length(attrs, tensors);
+    const uint32_t Tt = T / tt::constants::TILE_WIDTH;
     const uint32_t Dt = shape[3] / tt::constants::TILE_WIDTH;
     return {
         .k_batch_page_offset = attrs.cache_batch_idx.value_or(0) * Tt * Dt,
-        .kv_len_tiles = attrs.kv_len.value_or(shape[2]) / tt::constants::TILE_WIDTH};
+        .kv_len_tiles = attrs.kv_len.value_or(T) / tt::constants::TILE_WIDTH};
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::program

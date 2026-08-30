@@ -19,8 +19,8 @@ namespace ttnn::operations::experimental::indexer_score::program {
 // the ring_attention all-gather (the only Linear+fuse-capable AG) into ONE program, with a producer->consumer
 // semaphore handshake. The reader gates each K band on ONLY the SP shards that band's tiles land in (fine-
 // grained per-band overlap; NOT a coarse whole-gather barrier), so already-arrived shards score while farther
-// slabs are still in flight. DSA-only (relu, num_groups == 1, no block-pool): the fused path serves the
-// lightning indexer's all-gather-then-score flow.
+// slabs are still in flight. The historical Dsa type/file name is retained for source stability, but this
+// factory serves both DSA and MSA (grouped planes and optional block pooling).
 namespace detail {
 struct RingIndexerScoreDsaDescriptorAdapterOperation {
     using operation_attributes_t = indexer_score::operation_attributes_t;
