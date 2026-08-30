@@ -75,6 +75,13 @@ PREFETCHER_NOC1_GRID = [
     (2, 9),
 ]
 
+# Blackhole galaxy prefetcher ring: 24 matmul cores = 8 DRAM readers x 3 receivers.
+# BH has a 12x10 tensix grid (x:0-11, y:0-9) and 8 DRAM banks (vs WH's 7x10 grid / 12 banks),
+# so RING_SIZE stays 24 (keeping all weight-sharding math) by widening receivers-per-reader
+# from 2 to 3. Senders live in column 0; the 24 receiver/ring cores occupy columns 1-3.
+# First-pass functional placement for bring-up; NoC1-congestion tuning is a follow-up (Step 6).
+PREFETCHER_NOC1_GRID_BH = [(x, y) for y in range(8) for x in (1, 2, 3)]
+
 LM_HEAD_16_GRID = [
     (1, 0),
     (1, 1),
@@ -128,6 +135,14 @@ LM_HEAD_32_GRID = [
     (5, 0),
     (5, 1),
 ]
+
+# Blackhole galaxy prefetcher path: the lm_head all_reduce persistent buffer lives on
+# sub_core_grids, which is capped to rows 0-7 on BH (sub_core_max_y = 7 to match the
+# 24-core ring geometry). The default LM_HEAD_32_GRID spans rows 0-9 in cols 1-3, so its
+# rows 8-9 fall outside the buffer and all_reduce_async's "output must be a subset of the
+# buffer cores" check fails. Use a 32-core layout confined to rows 0-7: cols 1-3 (24 cores)
+# plus col 5 (8 cores), all inside sub_core_grids.
+LM_HEAD_32_GRID_BH = [(x, y) for x in (1, 2, 3) for y in range(8)] + [(5, y) for y in range(8)]
 
 LM_HEAD_INPUT_GRID = [
     (6, 6),
@@ -184,10 +199,76 @@ LM_HEAD_OUTPUT_GRID = [
 ]
 
 
-def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test):
+def _get_core_ranges_blackhole(num_reader_cores, num_global_cb_receivers):
+    """
+    Blackhole galaxy prefetcher core placement (first-pass functional bring-up).
+
+    Topology (measured): 12x10 tensix grid (x:0-11, y:0-9), 8 DRAM banks.
+    Layout:
+      - DRAM readers: banks 0..num_reader_cores-1.
+      - Senders: one tensix per reader in column 0 (rows 0..num_reader_cores-1);
+        remaining column-0 rows are dummy senders so the global-CB mapping stays balanced.
+      - Receivers / matmul ring: num_global_cb_receivers cores per reader in columns
+        1..num_global_cb_receivers, one reader per row. With 8 readers x 3 receivers this
+        is the 24-core ring (RING_SIZE=24), matching PREFETCHER_NOC1_GRID_BH.
+      - Workers: columns 1..11 (everything except the sender column), which includes the
+        receiver/ring cores.
+    NoC1 congestion tuning of the ring order is deferred (Step 6).
+    """
+    assert num_reader_cores <= 8, f"Blackhole galaxy has 8 DRAM banks, got num_reader_cores={num_reader_cores}"
+    grid_h = 10  # y rows
+    max_recv_col = num_global_cb_receivers  # receivers occupy columns 1..num_global_cb_receivers
+
+    all_dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(8)]
+    dram_cores = all_dram_cores[:num_reader_cores]
+
+    # Senders in column 0: active first, then dummies filling the rest of the column.
+    active_sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores)]
+    dummy_sender_cores = [ttnn.CoreCoord(0, y) for y in range(num_reader_cores, grid_h)]
+    sender_cores = list(active_sender_cores) + list(dummy_sender_cores)
+
+    # Receiver core list (flat), row-major per reader: reader y -> (1,y),(2,y),...,(recv,y).
+    active_receiver_cores_list = [(x, y) for y in range(num_reader_cores) for x in range(1, max_recv_col + 1)]
+
+    def _recv_range_set(y):
+        return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, y), ttnn.CoreCoord(max_recv_col, y))])
+
+    all_receiver_cores = [_recv_range_set(y) for y in range(num_reader_cores)]
+    # Dummy receiver ranges paired with the dummy senders.
+    all_receiver_cores += [_recv_range_set(y) for y in range(num_reader_cores, grid_h)]
+
+    # Workers: columns 1..10 (col 0 = prefetcher senders; col 11 excluded). Empirically, folding col 11
+    # into the worker sub-device (the LB/QB `full_grid - senders` shape) regresses prefill warmup, so on
+    # this COL-dispatch galaxy col 11 is not a plain worker. cols 1..10 (100 cores) is the furthest-
+    # working decode config.
+    worker_cores_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(10, grid_h - 1))])
+
+    mm_optimised_ring_cores = PREFETCHER_NOC1_GRID_BH
+    # Hop core for the 1D ring matmul. It must (a) NOT overlap the ring/input-A shard grid
+    # (cols 1-3, rows 0..num_reader_cores-1) and (b) be a member of the global CB's cores
+    # (senders in col 0 or receivers in cols 1-3). The dummy-receiver rows (>= num_reader_cores)
+    # satisfy both, mirroring Wormhole where the hop sits on a dummy receiver.
+    hop_grid = [(max_recv_col, grid_h - 2)]  # e.g. (3, 8): a dummy-receiver core outside the ring
+
+    return (
+        active_sender_cores,
+        dram_cores,
+        sender_cores,
+        active_receiver_cores_list,
+        all_receiver_cores,
+        worker_cores_range_set,
+        mm_optimised_ring_cores,
+        hop_grid,
+    )
+
+
+def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_test, is_blackhole=False):
     """
     Helper function to get all the relevant core ranges for dram prefetcher + matmul configuration
     """
+
+    if is_blackhole:
+        return _get_core_ranges_blackhole(num_reader_cores, num_global_cb_receivers)
 
     all_dram_cores = [ttnn.CoreCoord(idx, 0) for idx in range(12)]  # 12 DRAM banks
 
@@ -427,6 +508,21 @@ class CheckpointType(Enum):
 
 
 class TtModelArgs:
+    # Keep concurrent slots that share a request seed on salt 0 (see
+    # SeedManager.salt_duplicate_seeds). #53077 salts them apart to separate n>1
+    # completions of one prompt, but these models are served through vLLM v1, whose
+    # ParentRequest._get_child_sampling_params already hands child i `seed + i`
+    # (vllm/v1/engine/parallel_sampling.py) -- so n>1 children never arrive here
+    # sharing a seed. Every duplicate seed that does arrive is independent requests
+    # that must reproduce identically, which the vLLM TT sampling suite asserts
+    # (test_uniform_seed_deterministic and friends: 32 same-seed requests -> 32
+    # identical outputs, observed as 32 DIFFERENT outputs with salting on).
+    #
+    # CLASS attribute, not set in _set_params_from_dict: TtQwenModelArgs overrides that
+    # method without calling super(), so an instance assignment there reaches Llama only
+    # and Qwen3-32B silently keeps the salting default.
+    salt_duplicate_seeds = False
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -511,8 +607,11 @@ class TtModelArgs:
             # assume Wormhole's 12 DRAM banks / wider tensix grid). Wormhole galaxy is unchanged.
             self.use_prefetcher = not self.is_blackhole
 
-        # Set up prefetcher stuff
-        _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
+        # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
+        if self.is_blackhole:
+            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(8, 3, False, is_blackhole=True)
+        else:
+            _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
@@ -1363,6 +1462,18 @@ class TtModelArgs:
                 12288 // 8,  # Use padded N
                 RING_SIZE,
                 untilize_out=True,
+            )
+            # Non-untilized (TILE) variant for the Blackhole unfused-CCL bring-up: bf8 output requires TILE
+            # layout, and the unfused create-head path wants a bf8 TILE input to the column all-reduce
+            # (matching the no-prefetcher path). The fused path keeps the untilized (ROW_MAJOR) config for
+            # llama_rs_create_heads.
+            self.model_config["XQKV_DECODE_RING_PROGCFG_TILE"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                8192 // 4,
+                12288 // 8,  # Use padded N
+                RING_SIZE,
+                untilize_out=False,
             )
             RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
                 [

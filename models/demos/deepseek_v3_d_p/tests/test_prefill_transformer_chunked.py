@@ -56,6 +56,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
@@ -69,7 +70,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
-CHUNK = 5 * 1024  # 5120 tokens per chunk
+CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Larger KV cache for the no-PCC perf sweep only (up to 100k ISL = 20 chunks). Kept separate from
 # SEQ_CACHE so the PCC tests and the _PADDED_FULL_55K split (which assert against 55*1024) are untouched.
@@ -145,47 +146,48 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
 # are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.09 s/chunk, host-dispatch bound so the op2op
+# attends to KV[0:c*CHUNK]) while untraced is a flat ~1.04 s/chunk, host-dispatch bound so the op2op
 # gap swamps the depth ramp entirely.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
-    # (55k / code_debug), measured after the Fabric2D TorusXY routing fixes. Each entry is the median
-    # across the per-run medians from run 31944546064/job 95160035844 and run 31951045807/job
-    # 95176102903. With two runs, that is the midpoint of the two observations rather than either
-    # run's one-sided value.
+    # (55k / code_debug). Re-centered 2026-08-29: 2D matmul program configs on the shared expert and
+    # the latent projections took 2-5% off every chunk and 7/11 fell out the bottom of the old band --
+    # the baseline was stale, not the margin too tight. The saving is device-side, so it lands here and
+    # nowhere else: the untraced twin is host-dispatch bound at ~1.04 s/chunk and did not move, passing
+    # its own gate in the same run.
+    #
+    # Per-chunk medians of run 33251442925/job 99098593625 verbatim. ONE run, where the superseded
+    # value carried a second run agreeing to <=0.010 s -- traced replay has the device as its only
+    # noise source and per-chunk stddev here is 0.000-0.003 s, but cross-check the next green run.
     (61, 11, 10): [
-        0.5660,
-        0.5695,
-        0.6120,
-        0.6615,
-        0.6925,
-        0.7205,
-        0.7455,
-        0.7785,
-        0.8200,
-        0.8585,
-        0.8935,
+        0.519,
+        0.521,
+        0.569,
+        0.597,
+        0.631,
+        0.665,
+        0.683,
+        0.725,
+        0.777,
+        0.816,
+        0.855,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # (55k / code_debug). Per chunk, the MEDIAN OVER 10 CI RUNS of that run's own per-chunk median --
-    # a single run is not a usable baseline here the way it is for the traced twin. The 10 (all green,
-    # 2026-08-15, `main`, bh_sc1_high_power): 31868565025 31868547288 31868532277 31868515545
-    # 31868482938 31868467067 31868452031 31868433473 31867986909 31866023124.
+    # (55k / code_debug), 2026-08-21 on an 8x4 galaxy, with the routed experts folded into one program
+    # on a Fabric2D mesh. One run's per-chunk medians -- unlike the traced twin, a single run is thin
+    # evidence here, so re-cut this from a set of green runs the first time it disagrees.
     #
     # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
     # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
-    # 9 post-warmup iterations is not: across those 10 runs no chunk median lands further than 2.9% from
-    # the values below, and widening the sample to all 32 runs with a table from 2026-08-11 to 08-15
-    # (many branches) only reaches 3.2%. So the gate is on the median, with UNTRACED_PERF_MARGIN rather
-    # than the traced 3%.
+    # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
+    # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
+    # UNTRACED_PERF_MARGIN rather than the traced 3%.
     #
-    # If this does go flaky, re-center before widening: these are the median over the 10 runs, and
-    # centering each chunk on the midrange of all 32 instead pulls the worst deviation to 2.7% (the
-    # 3.2% is one-sided). Widening to 10% is the fallback after that -- every observed run fits inside
-    # a 6.2% total spread, so a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [1.095, 1.094, 1.091, 1.098, 1.093, 1.089, 1.092, 1.089, 1.094, 1.089, 1.090],
+    # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
+    # the fallback after that -- a band that needs more than 10% is a regression, not noise.
+    (61, 11, 10): [1.043, 1.036, 1.037, 1.047, 1.044, 1.034, 1.034, 1.034, 1.046, 1.041, 1.044],
 }
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and
@@ -1011,7 +1013,7 @@ _PADDED_MODES = ["notrace", "traced"]
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked_padded(
@@ -1755,7 +1757,7 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.skipif(
     not is_high_power(),
@@ -1847,7 +1849,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer_chunked(

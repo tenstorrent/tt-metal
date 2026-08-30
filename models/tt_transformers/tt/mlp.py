@@ -187,14 +187,22 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
+        use_tg_decode_no_prefetch = TG and mode == Mode.DECODE and self.prefetcher is None
+        if use_tg_decode_no_prefetch:
+            x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
         w1_out = ttnn.linear(
             x,
             self.w1,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+            program_config=None if use_tg_decode_no_prefetch else pc_1,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG
+                if use_tg_decode_no_prefetch
+                else self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
+            ),
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
             if self.prefetcher is not None and mode == Mode.DECODE
@@ -206,8 +214,12 @@ class MLP(LightweightModule):
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+            program_config=None if use_tg_decode_no_prefetch else pc_3,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG
+                if use_tg_decode_no_prefetch
+                else self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
+            ),
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
             sub_device_id=self.prefetcher.worker_sub_device_id
             if self.prefetcher is not None and mode == Mode.DECODE
@@ -263,9 +275,15 @@ class MLP(LightweightModule):
                     self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
-                    sharded=True if mode == Mode.DECODE else False,
+                    sharded=mode == Mode.DECODE and not use_tg_decode_no_prefetch,
                     topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
+                    memory_config=(
+                        ttnn.DRAM_MEMORY_CONFIG
+                        if use_tg_decode_no_prefetch
+                        else self.model_config["FF1_OUT_GATHERED_MEMCFG"]
+                        if mode == Mode.DECODE
+                        else None
+                    ),
                 )
                 w3_out = tt_all_reduce(
                     w3_out,
@@ -273,9 +291,15 @@ class MLP(LightweightModule):
                     self.tt_ccl,
                     cluster_axis=1,
                     num_all_gather_links=2,
-                    sharded=True if mode == Mode.DECODE else False,
+                    sharded=mode == Mode.DECODE and not use_tg_decode_no_prefetch,
                     topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == Mode.DECODE else None,
+                    memory_config=(
+                        ttnn.DRAM_MEMORY_CONFIG
+                        if use_tg_decode_no_prefetch
+                        else self.model_config["FF1_OUT_GATHERED_MEMCFG"]
+                        if mode == Mode.DECODE
+                        else None
+                    ),
                 )
 
         w2_in = ttnn.mul(
@@ -330,8 +354,12 @@ class MLP(LightweightModule):
                 self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                program_config=pc_2,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
+                program_config=None if use_tg_decode_no_prefetch else pc_2,
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG
+                    if use_tg_decode_no_prefetch
+                    else self.args.get_mlp_ff2_mem_config(mode, self.prefetcher)
+                ),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id
@@ -346,8 +374,12 @@ class MLP(LightweightModule):
             self.tt_ccl,
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
-            sharded=(mode == Mode.DECODE),
-            memory_config=self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
+            sharded=mode == Mode.DECODE and not use_tg_decode_no_prefetch,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG
+                if use_tg_decode_no_prefetch
+                else self.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out)
+            ),
             rs_memory_config=self.model_config["MLP_RS_CONFIG"]["rs_memory_config"]
             if mode == Mode.DECODE
             else ttnn.DRAM_MEMORY_CONFIG,

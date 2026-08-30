@@ -56,7 +56,6 @@ void run_single_core_pack_rows_program(
     Program program = tt::tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -65,19 +64,16 @@ void run_single_core_pack_rows_program(
     // Output: num_rows * 16 datums * 2 bytes each
     uint32_t output_size = test_config.num_rows * 16 * 2;
 
-    tt_metal::InterleavedBufferConfig input_dram_config{
-        .device = device,
-        .size = input_single_tile_size,
-        .page_size = input_single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    tt_metal::InterleavedBufferConfig output_dram_config{
-        .device = device, .size = output_size, .page_size = output_size, .buffer_type = tt_metal::BufferType::DRAM};
-
-    std::shared_ptr<tt_metal::Buffer> src0_dram_buffer = CreateBuffer(input_dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = input_single_tile_size},
+        {.page_size = input_single_tile_size, .buffer_type = tt_metal::BufferType::DRAM},
+        mesh_device.get());
     uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
-    std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(output_dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = output_size},
+        {.page_size = output_size, .buffer_type = tt_metal::BufferType::DRAM},
+        mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -126,7 +122,7 @@ void run_single_core_pack_rows_program(
         bfloat16 val2(static_cast<float>((i * 2) + 1));
         src0_vec.push_back(pack_two_bfloat16_into_uint32({val1, val2}));
     }
-    tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/true);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -145,7 +141,7 @@ void run_single_core_pack_rows_program(
     distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
     ::unit_tests::compute::PackRowsConfig golden_config = {
         .num_rows = static_cast<int>(test_config.num_rows),

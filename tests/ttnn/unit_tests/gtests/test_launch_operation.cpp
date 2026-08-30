@@ -12,6 +12,7 @@
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
+#include "ttnn/operations/reduction/prod/device/prod_all_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -109,18 +110,17 @@ static_assert(ttnn::device_operation::ProgramFactoryConcept<NewInfraProgramFacto
 // ---------------------------------------------------------------------------
 // ProgramSpecFactoryConcept (Metal 2.0 op-porting stepping stone)
 //
-// No real op uses create_program_artifacts yet, so the adapter's templated
-// method bodies — including the op-owned tensor enumeration and parking added
-// for this concept — are never instantiated by a normal build. The checks below
-// (a) pin the concept's classification (it recognizes a create_program_artifacts
-// factory and is mutually exclusive with the other factory concepts, per
-// all_factories_valid), and (b) force-instantiate the adapter so its bodies are
-// actually compiled.
+// Real ops already use create_program_artifacts (typecast, prod_all, …). The
+// checks below still (a) pin the concept's classification (it recognizes a
+// create_program_artifacts factory and is mutually exclusive with the other
+// factory concepts, per all_factories_valid), and (b) force-instantiate the
+// adapter so its bodies are compiled even when a particular TU does not
+// instantiate them through a real op.
 //
-// NOTE: runtime behavior (cache miss -> hit TensorArg patching, op-owned device
-// allocation liveness across dispatches) is NOT exercised here — that requires a
-// real op dispatched through the launch path, i.e. the first op port. Until then
-// this is compile-coverage only.
+// NOTE: runtime occupancy mapping (programs only on tensor_coords) is covered
+// by ProgramSpecAdapterProgramsOnUniformTensorCoords and
+// ProgramSpecAdapterProgramsOnlyOnUnevenTensorCoords below. Hit-path TensorArg
+// patching / op-owned liveness remain covered by op-level program-cache tests.
 // ---------------------------------------------------------------------------
 struct ProgramSpecFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
@@ -347,6 +347,79 @@ TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
 
     auto sum3 = ttnn::add(uneven_tensor, uneven_tensor);
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+}
+
+TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterProgramsOnUniformTensorCoords) {
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    using Adapter = device_operation::MeshDeviceOperationAdapter<Op>::ProgramSpecMeshWorkloadFactoryAdapter<
+        Op::ProdAllProgramFactory>;
+
+    auto input = make_tensor_with_num_shards(8, mesh_device_.get());
+    EXPECT_TRUE(all_tensors_have_uniform_storage(input));
+
+    Op::operation_attributes_t attrs{.output_mem_config = MemoryConfig{}};
+    Op::tensor_args_t tensor_args{.input = input};
+    auto output = Op::create_output_tensors(attrs, tensor_args);
+
+    // Fast path in launch: one range covering the entire mesh.
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+
+    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, tensor_args, output);
+
+    const ttnn::MeshCoordinateRange full_mesh(mesh_device_->shape());
+    EXPECT_EQ(cached.workload.get_programs().size(), 1u);
+    EXPECT_EQ(cached.shared_variables.size(), 1u);
+    EXPECT_TRUE(cached.workload.get_programs().contains(full_mesh));
+    EXPECT_TRUE(cached.shared_variables.contains(full_mesh));
+}
+
+TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterProgramsOnlyOnUnevenTensorCoords) {
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    using Adapter = device_operation::MeshDeviceOperationAdapter<Op>::ProgramSpecMeshWorkloadFactoryAdapter<
+        Op::ProdAllProgramFactory>;
+
+    auto input = make_tensor_with_num_shards(2, mesh_device_.get());
+    EXPECT_FALSE(all_tensors_have_uniform_storage(input));
+    EXPECT_THAT(
+        extract_tensor_coordinates(input),
+        ElementsAre(
+            ttnn::MeshCoordinate{0, 0},  //
+            ttnn::MeshCoordinate{0, 1}));
+
+    Op::operation_attributes_t attrs{.output_mem_config = MemoryConfig{}};
+    Op::tensor_args_t tensor_args{.input = input};
+    auto output = Op::create_output_tensors(attrs, tensor_args);
+
+    // Slow path in launch: merge occupied coordinates one by one.
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    for (const auto& coord : extract_tensor_coordinates(input, mesh_device_.get())) {
+        tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
+    }
+
+    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, tensor_args, output);
+
+    EXPECT_EQ(cached.workload.get_programs().size(), tensor_coords.ranges().size());
+    EXPECT_EQ(cached.shared_variables.size(), tensor_coords.ranges().size());
+    for (const auto& range : tensor_coords.ranges()) {
+        EXPECT_TRUE(cached.workload.get_programs().contains(range));
+        EXPECT_TRUE(cached.shared_variables.contains(range));
+    }
+
+    // Unpopulated mesh coordinates must not have a program associated with them.
+    for (const auto& coord : {
+             ttnn::MeshCoordinate{0, 2},
+             ttnn::MeshCoordinate{0, 3},
+             ttnn::MeshCoordinate{1, 0},
+             ttnn::MeshCoordinate{1, 1},
+             ttnn::MeshCoordinate{1, 2},
+             ttnn::MeshCoordinate{1, 3},
+         }) {
+        for (const auto& [program_range, _] : cached.workload.get_programs()) {
+            EXPECT_FALSE(program_range.contains(coord))
+                << "unexpected program covering unpopulated mesh coordinate " << coord;
+        }
+    }
 }
 
 TEST_F(LaunchOperation2x4Test, OutputTensorTopology) {

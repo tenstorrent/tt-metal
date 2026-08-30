@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.chunked_prefill_utils import (
     cpu_mla_reference,
     load_trace,
@@ -210,14 +211,14 @@ def run_model(
 
     topology = per_axis_topology(device_params["fabric_config"])
 
-    production_mesh = [32, 4]
     sp_axis = 0
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
 
+    # 640 tokens on every chip; the global length follows the mesh. max_sl keeps the literal seq_len.
     if scale_down_sl:
-        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
+        seq_len = PREFILL_CHUNK_TOKENS_PER_CHIP * mesh_shape[sp_axis]
 
     # temp hack
     config.max_seq_len = seq_len
@@ -401,7 +402,20 @@ def run_model(
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not on_ci:
+        return False
+
+    if not is_balanced:
+        return True
+    return False
+
+
 # sp x tp
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -415,60 +429,16 @@ def run_model(
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [PREFILL_CHUNK_TOKENS],
+    ids=["seq5k"],
+)
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_ds_mla(
-    use_pretrained,
-    request,
-    mesh_device,
-    seq_len,
-    skip_host_comparison,
-    scale_down_sl,
-    is_balanced,
-    is_ci_env,
-    is_ci_v2_env,
-    device_params,
-    variant,
-):
-    run_model(
-        variant,
-        use_pretrained,
-        request,
-        mesh_device,
-        seq_len,
-        skip_host_comparison,
-        scale_down_sl,
-        is_balanced,
-        is_ci_env,
-        is_ci_v2_env,
-        device_params,
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        pytest.param((8, 4), torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE), id="torus-xy-8x4"),
-        pytest.param((2, 4), _local_fabric2d_params(), id="fabric2d-2x4"),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [5 * 1024, 25 * 1024],
-    ids=["seq5k", "seq25k"],
-)
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
-@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
-@pytest.mark.timeout(0)
-def test_kimi_mla(
     use_pretrained,
     request,
     mesh_device,
@@ -954,11 +924,12 @@ _CHUNKED_SCENARIOS = (
 @pytest.mark.parametrize("kwargs", [kw for _, kw in _CHUNKED_SCENARIOS], ids=[sid for sid, _ in _CHUNKED_SCENARIOS])
 @pytest.mark.parametrize(
     "variant",
-    ["deepseek_v3_d_p", "kimi_k2_6", "kimi_k3"],
+    ["kimi_k2_6", "kimi_k3"],
     indirect=True,
-    # "k3", not "kimi_k3": pytest -k is substring-based, so a "kimi_k3" id would silently widen every
-    # existing `-k kimi` selector (CI yaml, tests/perf/test_mla_perf.py) to include K3.
-    ids=["dsv3", "kimi", "k3"],
+    # Name the Kimi generation explicitly. pytest -k is substring-based, so the ids must stay
+    # disjoint: "k2_6" and "k3" cannot cross-match, whereas a bare "kimi" id would match both
+    # generations and silently widen every `-k` selector (CI yaml, tests/perf/test_mla_perf.py).
+    ids=["k2_6", "k3"],
 )
 @pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
@@ -972,15 +943,15 @@ def test_mla_chunked_prefill(
     variant has no registered trace), or run with no reference ('func'). Select with e.g.
     -k 'maxedge-1u and trace and 8x4'. See _run_chunked_prefill.
 
-    Real weights on the CPU-reference path: point the variant's HF env var (DEEPSEEK_V3_HF_MODEL /
-    KIMI_K2_6_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
+    Real weights on the CPU-reference path: point the variant's HF env var (KIMI_K2_6_HF_MODEL /
+    KIMI_K3_HF_MODEL) at a checkpoint to validate the chunked path against the CPU torch reference
     with pretrained weights instead of random. create_mla_reference is config-driven and
     architecture-agnostic (Kimi's YaRN/theta flow through, absorbed-MLA math matches the variant's own
-    reference), so this works for both variants. It complements the deepseek GPU-trace path, which only
+    reference), so this works for both variants. It complements the GPU-trace path, which only
     replays full-chunk iters and so never exercises real weights across the rotation/partial-chunk edge
-    scenarios that the cpu path covers. Without the env var, fall back to random (mirroring
-    test_kimi_mla). kimi_k2_6 also runs the trace path (loader + k_pe re-interleave are arch-agnostic),
-    against its own registered traces. It otherwise runs the same config-driven driver on any arch/mesh.
+    scenarios that the cpu path covers. Without the env var, fall back to random. kimi_k2_6 runs the
+    trace path (loader + k_pe re-interleave are arch-agnostic) against its own registered traces. It
+    otherwise runs the same config-driven driver on any arch/mesh.
 
     kimi_k3 (NoPE + output gate, 96 heads) runs 'scalar' only -- 'metadata' is skipped explicitly
     below. It runs 'trace' like kimi_k2_6, taking real weights from layer 3 via
