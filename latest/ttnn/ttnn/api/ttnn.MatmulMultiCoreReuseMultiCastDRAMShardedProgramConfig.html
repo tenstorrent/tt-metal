@@ -375,19 +375,6 @@ strategy and optimize memory bandwidth utilization for both tensors.</p>
 </dl>
 
 <dl class="py property">
-<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.num_workers_per_dram_bank">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">num_workers_per_dram_bank</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.num_workers_per_dram_bank" title="Permalink to this definition"></a>
-</dt>
-<dd>
-<p>Number of Tensix reader/compute workers assigned to each DRAM bank.</p>
-<p>The default of 1 preserves the established cross-architecture path. Values of 2 or 3
-split each bank’s width shard evenly across multiple workers on Blackhole. All readers
-for one bank use NOC0 and the same allocator-selected DRAM endpoint. The per-bank shard
-width in tiles must equal this value times the reader width.</p>
-</dd>
-</dl>
-
-<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.per_core_M">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">per_core_M</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.per_core_M" title="Permalink to this definition"></a>
 </dt>

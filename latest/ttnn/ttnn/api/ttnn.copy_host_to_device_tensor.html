@@ -350,6 +350,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">copy_host_to_device_tensor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">host_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cq_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.QueueId</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.copy_host_to_device_tensor" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p>copy_host_to_device_tensor(host_tensor: ttnn._ttnn.tensor.Tensor, device_tensor: ttnn._ttnn.tensor.Tensor, cq_id: ttnn._ttnn.types.QueueId | None = None) -&gt; None</p>
 <p>Copies a tensor from host to device.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
@@ -414,7 +415,7 @@
 <span class="n">device_tensor_copy</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">allocate_tensor_on_device</span><span class="p">(</span><span class="n">host_tensor</span><span class="o">.</span><span class="n">spec</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
 <span class="n">ttnn</span><span class="o">.</span><span class="n">copy_host_to_device_tensor</span><span class="p">(</span><span class="n">host_tensor</span><span class="p">,</span> <span class="n">device_tensor_copy</span><span class="p">)</span>
 
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"TT-NN tensor shape after copying to device: </span><span class="si">{</span><span class="n">device_tensor_copy</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"TT-NN tensor shape after copying to device"</span><span class="p">,</span> <span class="n">device_tensor_copy</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
