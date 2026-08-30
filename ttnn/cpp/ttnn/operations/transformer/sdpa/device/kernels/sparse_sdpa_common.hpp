@@ -82,6 +82,12 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     CB_KREQ,
     CB_KACK,
+    PAGED_KV,
+    KV_CACHE_PAGE_SIZE,
+    KV_CACHE_NUM_LAYERS,
+    KV_CACHE_LAYER_IDX,
+    CB_PAGE_BUNDLE,
+    PAGE_BUNDLE_COUNT,
     END,
 };
 }  // namespace reader_ct_arg
@@ -108,6 +114,11 @@ enum : uint32_t {
     CB_KREQ,
     CB_KACK,
     PACKED_ROW_BYTES,
+    PAGED_KV,
+    KV_CACHE_PAGE_SIZE,
+    KV_CACHE_NUM_LAYERS,
+    KV_CACHE_LAYER_IDX,
+    CB_PAGE_BUNDLE,
     END,
 };
 }  // namespace writer_ct_arg

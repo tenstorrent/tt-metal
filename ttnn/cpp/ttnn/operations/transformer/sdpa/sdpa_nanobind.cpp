@@ -371,8 +371,8 @@ void bind_sdpa(nb::module_& mod) {
         R"doc(
         Sparse MLA prefill (DeepSeek DSA), Blackhole single-chip. softmax(Q@Kᵀ·scale masked)@V over the
         top-k selected latents per query token; V = kv[..., :v_dim]. Masking is baked into `indices`
-        (0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM-interleaved.
-        K_DIM (the q/kv head dim) is taken from the tensors.
+        (0xFFFFFFFF = masked; sentinels are a contiguous tail). Inputs are ROW-MAJOR DRAM; q/indices are
+        interleaved, while a paged kv cache is ND-sharded. K_DIM (the q/kv head dim) is taken from the tensors.
 
         Args:
             q (ttnn.Tensor):       [1, H, S, K_DIM] bf16 or fp8_e4m3 (H a multiple of 32)
@@ -399,6 +399,13 @@ void bind_sdpa(nb::module_& mod) {
             block_cyclic_chunk_local (int, optional): the per-shard chunk length (chunk_size_global / sp).
                 Required iff block_cyclic_sp_axis is set. Cross-checked against q's per-chip seq length: must be
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
+            kv_cache_num_layers (int, optional): number of layers packed into every physical paged-cache bundle.
+                Defaults to 1.
+            kv_cache_layer_idx (int, optional): layer selected within every physical bundle. Defaults to 0.
+            page_bundle_indices (ttnn.Tensor, optional): ROW_MAJOR uint16 [1,1,1,num_logical_bundles] table
+                mapping logical kv_cache_page_size-token pages to physical bundles. When present, kv must be
+                [num_bundles*num_layers,1,kv_cache_page_size,row_width], ND-sharded one physical page per shard.
+            kv_cache_page_size (int): tokens per physical page; a positive multiple of 32. Defaults to 32.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -414,7 +421,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("block_cyclic_sp_axis") = nb::none(),
-        nb::arg("block_cyclic_chunk_local") = nb::none());
+        nb::arg("block_cyclic_chunk_local") = nb::none(),
+        nb::arg("kv_cache_num_layers") = nb::none(),
+        nb::arg("kv_cache_layer_idx") = nb::none(),
+        nb::arg("page_bundle_indices").noconvert() = nb::none(),
+        nb::arg("kv_cache_page_size") = 32);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

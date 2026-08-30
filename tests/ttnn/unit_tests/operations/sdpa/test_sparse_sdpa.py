@@ -443,6 +443,191 @@ def _nd_sharded_dram_config(device, rows_per_shard, width=K_DIM):
     return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
 
 
+def _make_paged_kv(kv, page_size, num_layers=2, layer_idx=1, extra_bundles=2, seed=91):
+    """Scatter natural [1,1,T,W] rows into non-contiguous physical bundle/layer pages."""
+    assert kv.shape[2] % page_size == 0
+    logical_bundles = kv.shape[2] // page_size
+    physical_bundles = logical_bundles + extra_bundles
+    gen = torch.Generator().manual_seed(seed)
+    pool = torch.randn(physical_bundles * num_layers, 1, page_size, kv.shape[3], generator=gen, dtype=kv.dtype)
+    # Non-monotonic and non-zero-based when spare bundles permit it, so identity addressing cannot pass.
+    order = torch.randperm(physical_bundles, generator=gen)[:logical_bundles].tolist()
+    for logical_bundle, physical_bundle in enumerate(order):
+        src = kv[0, 0, logical_bundle * page_size : (logical_bundle + 1) * page_size]
+        pool[physical_bundle * num_layers + layer_idx, 0] = src
+    table = torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, logical_bundles)
+    return pool, table
+
+
+def _upload_paged_kv(device, pool, table, page_size, dtype):
+    nd_config = _nd_sharded_dram_config(device, page_size, pool.shape[-1])
+    if dtype == ttnn.fp8_e4m3:
+        # FP8 host import does not directly support an ND-sharded destination; quantize interleaved first.
+        tt_pool = ttnn.to_memory_config(to_dev(pool.float(), device, dtype), nd_config)
+    else:
+        tt_pool = ttnn.from_torch(
+            pool,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=nd_config,
+        )
+    return tt_pool, _upload_page_table(device, table)
+
+
+def _upload_page_table(device, table):
+    return ttnn.from_torch(
+        table,
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("page_size", [32, 64])
+@pytest.mark.parametrize("kv_dtype,kv_format", [(ttnn.bfloat16, BF16_KV), (ttnn.fp8_e4m3, FP8_KV)], ids=["bf16", "fp8"])
+def test_sparse_sdpa_paged_kv(device, page_size, kv_dtype, kv_format):
+    """Logical sparse indices select rows through a non-contiguous, multi-layer physical page pool."""
+    H, S, T, TOPK, kc = 32, 64, page_size * 4, 64, 32
+    num_layers, layer_idx = 2, 1
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 7) % TOPK, seed=page_size)
+    pool, table = _make_paged_kv(kv, page_size, num_layers, layer_idx, seed=page_size + 100)
+    tt_pool, tt_table = _upload_paged_kv(device, pool, table, page_size, kv_dtype)
+    out = ttnn.transformer.sparse_sdpa(
+        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_pool,
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        V_DIM,
+        kv_format=kv_format,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
+        page_bundle_indices=tt_table,
+        kv_cache_page_size=page_size,
+    )
+    kv_ref = kv.to(torch.float8_e4m3fn).float() if kv_dtype == ttnn.fp8_e4m3 else kv
+    score = pcc(ttnn.to_torch(out), golden(q, kv_ref, indices, K_DIM**-0.5, V_DIM))
+    assert score >= 0.99, f"paged sparse SDPA PCC {score:.5f} ({kv_format.name}, page_size={page_size})"
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_paged_scaled_fp8_kv(device):
+    """Packed scaled-FP8 pages preserve per-row scales and BF16 RoPE through paged dual-NoC gathers."""
+    H, S, page_size, logical_bundles, TOPK, kc = 64, 64, 32, 4, 64, 32
+    T, num_layers, layer_idx = page_size * logical_bundles, 2, 1
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 5) % TOPK, seed=301)
+    pool, table = _make_paged_kv(kv, page_size, num_layers, layer_idx, seed=302)
+
+    tt_latent_bf16 = to_dev(pool[..., :V_DIM].to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_latent_fp8, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        tt_latent_bf16, round_scale_to_power_of_two=True
+    )
+    rope_bf16 = pool[..., V_DIM:].to(torch.bfloat16)
+    tt_packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(
+        tt_latent_fp8, tt_scales, to_dev(rope_bf16, device, ttnn.bfloat16)
+    )
+    tt_packed = ttnn.to_memory_config(tt_packed, _nd_sharded_dram_config(device, page_size, tt_packed.shape[-1]))
+    tt_table = _upload_page_table(device, table)
+
+    tt_reconstructed = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        tt_latent_fp8, tt_scales, output_dtype=ttnn.bfloat16
+    )
+    reconstructed_pool = torch.cat([ttnn.to_torch(tt_reconstructed).float(), rope_bf16.float()], dim=-1)
+    reconstructed = torch.empty_like(kv)
+    for logical_bundle, physical_bundle in enumerate(table.flatten().tolist()):
+        reconstructed[0, 0, logical_bundle * page_size : (logical_bundle + 1) * page_size] = reconstructed_pool[
+            physical_bundle * num_layers + layer_idx, 0
+        ]
+
+    out = ttnn.transformer.sparse_sdpa(
+        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_packed,
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        V_DIM,
+        kv_format=SCALED_FP8_KV,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+        kv_cache_num_layers=num_layers,
+        kv_cache_layer_idx=layer_idx,
+        page_bundle_indices=tt_table,
+        kv_cache_page_size=page_size,
+    )
+    score = pcc(ttnn.to_torch(out), golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM))
+    assert score >= 0.99, f"paged scaled-FP8 sparse SDPA PCC {score:.5f}"
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_paged_cache_hit_repatches_addresses(device):
+    """Fresh cache/table addresses with identical geometry reuse one program and never retain stale pointers."""
+    H, S, T, TOPK, kc, page_size = 32, 64, 256, 64, 32, 64
+    num_layers, layer_idx = 3, 2
+    device.clear_program_cache()
+    keep_alive = []
+    for seed in (201, 202):
+        q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=seed)
+        pool, table = _make_paged_kv(kv, page_size, num_layers, layer_idx, seed=seed + 10)
+        tt_pool, tt_table = _upload_paged_kv(device, pool, table, page_size, ttnn.bfloat16)
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        keep_alive += [tt_q, tt_pool, tt_idx, tt_table]
+        out = ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_pool,
+            tt_idx,
+            V_DIM,
+            kv_format=BF16_KV,
+            scale=K_DIM**-0.5,
+            k_chunk_size=kc,
+            kv_cache_num_layers=num_layers,
+            kv_cache_layer_idx=layer_idx,
+            page_bundle_indices=tt_table,
+            kv_cache_page_size=page_size,
+        )
+        score = pcc(ttnn.to_torch(out), golden(q, kv, indices, K_DIM**-0.5, V_DIM))
+        assert score >= 0.99, f"paged cache-hit PCC {score:.5f} (seed={seed})"
+    assert device.num_program_cache_entries() == 1, "paged cache/table address changes must reuse one program"
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_paged_validation(device, expect_error):
+    H, S, T, TOPK, kc, page_size = 32, 64, 128, 64, 32, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=401)
+    pool, table = _make_paged_kv(kv, page_size, num_layers=2, layer_idx=1, seed=402)
+    tt_pool, tt_table = _upload_paged_kv(device, pool, table, page_size, ttnn.bfloat16)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    base = dict(
+        kv_format=BF16_KV,
+        k_chunk_size=kc,
+        kv_cache_num_layers=2,
+        kv_cache_layer_idx=1,
+        page_bundle_indices=tt_table,
+        kv_cache_page_size=page_size,
+    )
+    with expect_error(RuntimeError, "incompatible with cache_batch_idx"):
+        ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, cache_batch_idx=0, **base)
+    with expect_error(RuntimeError, "incompatible with block-cyclic"):
+        ttnn.transformer.sparse_sdpa(
+            tt_q,
+            tt_pool,
+            tt_idx,
+            V_DIM,
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=S,
+            **base,
+        )
+    with expect_error(RuntimeError, "page height"):
+        ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, **{**base, "kv_cache_page_size": 64})
+    with expect_error(RuntimeError, "must be smaller"):
+        ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, **{**base, "kv_cache_layer_idx": 2})
+    bad_table = to_dev(table.to(torch.int32), device, ttnn.uint32)
+    with expect_error(RuntimeError, "uint16"):
+        ttnn.transformer.sparse_sdpa(tt_q, tt_pool, tt_idx, V_DIM, **{**base, "page_bundle_indices": bad_table})
+
+
 @run_for_blackhole()
 def test_sparse_sdpa_indexed_nd_sharded_kv(device):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 2

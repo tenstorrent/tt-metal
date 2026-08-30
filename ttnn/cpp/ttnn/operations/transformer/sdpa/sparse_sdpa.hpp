@@ -44,8 +44,14 @@ enum class SparseKVFormat : uint8_t {
 //                             against q's per-chip seq length: must equal q_isl or tp*q_isl (tp = mesh/sp),
 //                             the only two values it can legally take (post-reshard q is sliced by tp).
 //
+// page_bundle_indices: enables a paged KV cache. `indices` remain logical token positions. The physical cache
+// is [num_bundles * num_layers, 1, kv_cache_page_size, row_width], ND-sharded with exactly one physical page
+// per shard, and flat_page = bundle * num_layers + layer. The uint16 table has shape
+// [1, 1, 1, num_logical_bundles] and maps each logical page to a physical bundle. Paged mode is incompatible
+// with cache_batch_idx and block-cyclic remapping.
+//
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
-// valid key, and all non-sentinel indices are < T.
+// valid key, all non-sentinel indices are < logical T, and every page-bundle id is in the physical pool.
 //
 // Scaled FP8 cache: pass SparseKVFormat::SCALED_FP8 and one byte-addressed fp8_e4m3 tensor with each token row packed
 // as [v_dim FP8 latent bytes | v_dim/128 FP32 scales | K_DIM-v_dim BF16 RoPE values]. For the DSA 512+64 geometry this
@@ -62,6 +68,10 @@ ttnn::Tensor sparse_sdpa(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::transformer

@@ -27,6 +27,9 @@ struct SparseSDPAParams {
     // The remap configuration is compile-time; T is part of the program hash for this path.
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
+    uint32_t kv_cache_page_size = 32;
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
 };
 
@@ -34,6 +37,9 @@ struct SparseSDPAInputs {
     Tensor q;        // [1, H, S, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
     Tensor kv;       // Plain [B,1,T,K_DIM] or packed scaled-FP8 rows; format is explicit in SparseSDPAParams
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
+    std::optional<Tensor> page_bundle_indices;
+
+    bool has_paged_kv_cache() const { return page_bundle_indices.has_value(); }
 };
 
 }  // namespace ttnn::prim
