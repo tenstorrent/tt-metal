@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <numeric>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -210,6 +212,12 @@ ProgramDescriptor build_ring_program_descriptor(
     // arrival wave's column residues within both row blocks; Linear and Ring-2 retain the prior mapping. The local
     // wave's formulaic shift is zero, paired shards keep matching offsets, adjacent row blocks retain their DRAM
     // access pairing, and the last unit stays padded within its source shard.
+    // Measurement-only A/B control: all three modes execute from one binary on one physical runner.
+    const std::string_view measurement_mode = std::getenv("TT_RING_INDEXER_ROTATION_MODE") == nullptr
+                                                  ? "paired"
+                                                  : std::getenv("TT_RING_INDEXER_ROTATION_MODE");
+    const bool rotate_waves = measurement_mode != "unrotated";
+    const bool rotate_final_wave = measurement_mode == "all_wave";
     auto work_list = ring_schedule::make_work_list(
         shards_by_wave,
         units_per_shard,
@@ -217,7 +225,8 @@ ProgramDescriptor build_ring_program_descriptor(
         KC,
         num_blocks,
         cols_used,
-        ring_schedule::rotation_enabled(fused.topology, ring_size));
+        rotate_waves && ring_schedule::rotation_enabled(fused.topology, ring_size),
+        rotate_final_wave);
     uint32_t max_bands = 0;
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         for (uint32_t col = 0; col < cols_used; ++col) {

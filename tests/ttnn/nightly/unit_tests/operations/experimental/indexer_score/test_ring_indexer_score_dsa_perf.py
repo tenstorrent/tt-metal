@@ -51,9 +51,9 @@ GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 
-# Measurement-only repeat for the sweep point within 1% of the no-regression boundary.
-RING_PERF_KV_LENS = (51_200,)
-RING_PERF_KV_IDS = ("qb_units_40_repeat",)
+# Measurement-only same-runner A/B at the boundary and production 55K point.
+RING_PERF_KV_LENS = (51_200, GLM52_KV_55K)
+RING_PERF_KV_IDS = ("qb_units_40_repeat", "55k")
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
@@ -78,13 +78,7 @@ def _ring_indexer_fabric_router_config():
 # subset of an 8x1 box as equivalent.
 RING_INDEXER_PERF_MARGIN = 0.02
 RING_INDEXER_PERF_REPLAYS = 7
-RING_INDEXER_EXPECTED_FPU_UTIL = {
-    # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
-    (4, GLM52_KV_55K): 46.26,
-    (4, GLM52_KV_512K): 62.99,
-    (8, GLM52_KV_55K): 58.07,
-    (8, GLM52_KV_512K): 60.15,
-}
+RING_INDEXER_EXPECTED_FPU_UTIL = {}  # Measurement-only: record both points without applying production gates.
 
 _FABRIC_2D_TORUS_DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,

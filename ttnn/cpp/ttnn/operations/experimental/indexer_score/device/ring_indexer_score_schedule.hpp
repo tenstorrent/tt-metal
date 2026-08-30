@@ -56,8 +56,9 @@ inline bool rotation_enabled(ttnn::ccl::Topology topology, uint32_t ring_size) {
     return topology == ttnn::ccl::Topology::Ring && ring_size > 2;
 }
 
-inline uint32_t wave_column_shift(uint32_t wave, uint32_t wave_count, uint32_t column_count) {
-    if (wave == 0 || wave + 1 == wave_count) {
+inline uint32_t wave_column_shift(
+    uint32_t wave, uint32_t wave_count, uint32_t column_count, bool rotate_final_wave = true) {
+    if (wave == 0 || (!rotate_final_wave && wave + 1 == wave_count)) {
         return 0;
     }
     // One virtual wave keeps the remote-wave span below a full column circle when waves fit, limiting disruption
@@ -77,14 +78,16 @@ inline WorkList make_work_list(
     uint32_t k_tiles_per_unit,
     uint32_t num_blocks,
     uint32_t cols_used,
-    bool rotate_waves) {
+    bool rotate_waves,
+    bool rotate_final_wave = true) {
     WorkList work_list(num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
     const uint32_t lane_count = num_blocks * cols_used;
     const uint32_t wave_count = static_cast<uint32_t>(waves.size());
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         for (uint32_t wave = 0; wave < wave_count; ++wave) {
-            const uint32_t column_shift = rotate_waves ? wave_column_shift(wave, wave_count, cols_used) : 0;
+            const uint32_t column_shift =
+                rotate_waves ? wave_column_shift(wave, wave_count, cols_used, rotate_final_wave) : 0;
             for (uint32_t col = 0; col < cols_used; ++col) {
                 const uint32_t source_col = (col + cols_used - column_shift) % cols_used;
                 const uint32_t source_lane = block + source_col * num_blocks;
