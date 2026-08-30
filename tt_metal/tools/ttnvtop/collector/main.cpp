@@ -1281,7 +1281,7 @@ int main(int argc, char* argv[]) {
     // latency is FIXED OVERHEAD -- in which case shrinking the payload buys nothing --
     // or SIZE-PROPORTIONAL, in which case a 2 KB state table drains comfortably.
     if (cli.read_latency_probe) {
-        static const size_t kSizes[] = {64, 256, 1024, 2048, 4096, 8192};
+        static const size_t kSizes[] = {64, 256, 1024, 2048, 4096, 8192, 16384, 32768, 65536};
         std::vector<uint8_t> buf(131072);
         std::cout << "remote-read latency probe (read-only), base 0x" << std::hex
                   << ttnvtop_agg::landing_base(chips.front().arch) << std::dec << "\n";
@@ -1316,6 +1316,80 @@ int main(int argc, char* argv[]) {
                 std::cout << "  " << sz << "B=" << std::fixed << std::setprecision(1) << ms[1] << "ms" << std::flush;
             }
             std::cout << "\n";
+
+            // THE DRAIN'S ACTUAL ACCESS PATTERN, timed.
+            //
+            // The size sweep above reads one core repeatedly, which is not what the drain
+            // does. The drain reads 1 KiB from EACH of 64 different Tensix cores per pass
+            // -- 64 separate `read_non_mmio` calls, each acquiring the interprocess
+            // NON_MMIO mutex and each issuing its own eth command. This times that exact
+            // shape so the per-pass cost is measured rather than inferred from a
+            // per-transfer number (a mistake made twice already in this work: never
+            // divide a loop time by a transaction count, and never multiply a
+            // single-transfer time up to a loop).
+            //
+            // Compared against the same 64 KiB pulled from ONE core in a single call,
+            // which UMD chunks into 64 x MAX_BLOCK_SIZE(1024 B) blocks under ONE mutex
+            // acquisition. Same bytes, same block count; the delta is per-call overhead.
+            {
+                const uint32_t kNCores = 64, kChunk = 1024;
+                // chip.cores already holds every Tensix core in translated coords -- the
+                // same list and the same order the drain walks.
+                std::vector<tt_xy_pair> tensix;
+                for (const auto& c : chip.cores) {
+                    tensix.push_back(c.translated);
+                    if (tensix.size() >= kNCores) {
+                        break;
+                    }
+                }
+                double spread = 1e9, same = 1e9, single = 1e9;
+                bool ok = !tensix.empty();
+                for (int r = 0; r < 3 && ok; r++) {
+                    auto t0 = std::chrono::steady_clock::now();
+                    for (const auto& tc : tensix) {
+                        try {
+                            dev->read_from_device(buf.data(), tc, static_cast<uint64_t>(MEM_UTIL_SAMPLER_BASE), kChunk);
+                        } catch (...) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    spread = std::min(
+                        spread,
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                }
+                for (int r = 0; r < 3 && ok; r++) {
+                    auto t0 = std::chrono::steady_clock::now();
+                    for (uint32_t i = 0; i < kNCores; i++) {
+                        try {
+                            dev->read_from_device(buf.data(), core, ttnvtop_agg::landing_base(chip.arch), kChunk);
+                        } catch (...) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    same = std::min(
+                        same, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                }
+                for (int r = 0; r < 3 && ok; r++) {
+                    auto t0 = std::chrono::steady_clock::now();
+                    try {
+                        dev->read_from_device(buf.data(), core, ttnvtop_agg::landing_base(chip.arch), kChunk * kNCores);
+                    } catch (...) {
+                        ok = false;
+                        break;
+                    }
+                    single = std::min(
+                        single,
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+                }
+                if (ok) {
+                    std::cout << std::setprecision(2) << "  drain pattern (" << tensix.size()
+                              << " cores x 1KiB): " << spread << " ms/pass -> " << (spread > 0 ? 1000.0 / spread : 0.0)
+                              << " passes/s   |  same-core x64: " << same << " ms  |  one 64KiB call: " << single
+                              << " ms  |  per-call overhead: " << ((same - single) / (kNCores - 1) * 1000.0) << " us\n";
+                }
+            }
         }
         return 0;
     }
