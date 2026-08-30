@@ -1085,6 +1085,55 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
         const double dt_cycles = static_cast<double>(static_cast<int64_t>(r.solution.mid_ref - e.ref_mid));
         const int64_t predicted = e.offset + static_cast<int64_t>(std::llround(dt_cycles * (e.rate - 1.0)));
         const int64_t err_cycles = r.solution.offset - predicted;
+
+        // ---- INDEPENDENT CROSS-CHECK: host MMIO vs the eth link, on the SAME two cores ----------------
+        //
+        // Every other number here grades one estimator with itself, so a shared systematic error cancels.
+        // This one does not: it fits each of the two ETH cores against the host over PCIe MMIO, composes
+        // those two fits into a predicted inter-device offset, and compares against what the eth link just
+        // measured directly. No shared transport (PCIe vs an eth link) and no shared estimator (a host
+        // least-squares vs a min-RTT Cristian solve), so a disagreement is real information.
+        //
+        // MUST be the eth cores, not the chip/worker anchors. A first version of this compared the link
+        // against the WORKER-domain chip anchors and reported 75-238 ms of disagreement -- which was not a
+        // finding, it was the eth-vs-Tensix clock-origin gap (measured elsewhere at up to ~56 minutes within
+        // one chip) leaking in as an apparent error. Same-core is what makes the comparison mean anything.
+        {
+            // Uses the eth cores' OWN host anchors, captured at sync time by the same pass that measured
+            // this link. No new device reads: an earlier version fitted e.snd_eth directly and aborted with
+            // "No core type found for TRANSLATED (0,11)" -- those are LOGICAL eth coords, not the virtual
+            // ones read_reg resolves.
+            const LinkSync* tr = e.host_anchors_valid ? &e : nullptr;
+            if (tr != nullptr && root_freq_ghz_ > 0.0) {
+#ifdef TRACY_ENABLE
+                const double ns_per_tick = TracyGetTimerMul();
+#else
+                const double ns_per_tick = 1.0;
+#endif
+                const double npt = ns_per_tick > 0.0 ? ns_per_tick : 1.0;
+                const double f = root_freq_ghz_;  // one shared slope; each core keeps its own ORIGIN
+                // Sender clock instant -> host tick (sender eth core's own anchor) -> receiver clock at that
+                // same host tick (receiver eth core's anchor). Differences only, so the epoch never enters.
+                const double t_ticks =
+                    static_cast<double>(tr->snd_host_anchor) +
+                    (static_cast<double>(r.solution.mid_ref) - static_cast<double>(tr->snd_dev_at_anchor)) /
+                        (npt * f);
+                const double dev_rcv = static_cast<double>(tr->rcv_dev_at_anchor) +
+                                       (t_ticks - static_cast<double>(tr->rcv_host_anchor)) * npt * f;
+                const double predicted_offset = dev_rcv - static_cast<double>(r.solution.mid_ref);
+                const double disagree_cycles = static_cast<double>(r.solution.offset) - predicted_offset;
+                const double disagree_us = disagree_cycles / f / 1000.0;
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] eth sync CROSS-CHECK {} -> {}: the two eth cores' HOST anchors "
+                    "predict this link's offset {:+.3f} us ({:+.0f} cycles) from what the link just measured "
+                    "[INDEPENDENT: PCIe MMIO + host least-squares vs an eth link + min-RTT solve]",
+                    e.sender_chip,
+                    e.receiver_chip,
+                    disagree_us,
+                    disagree_cycles);
+            }
+        }
         const double err_ns = static_cast<double>(err_cycles) / freq;
         const double elapsed_s = dt_cycles / (freq * 1e9);
         const double rate_delta_ppm = (r.solution.rate - e.rate) * 1e6;
@@ -1431,6 +1480,23 @@ void PerfDebugProfiler::emit_eth_sync_lanes() {
         n_zones,
         n_marks,
         eth_sync_traces_.size());
+    // Carry the eth cores' host anchors over to the LinkSync entries, which outlive the traces. This is the
+    // only place both are in scope, and the close-check's independent cross-check needs them.
+    for (const auto& t : eth_sync_traces_) {
+        if (!t.snd_anchor_valid || !t.rcv_anchor_valid) {
+            continue;
+        }
+        for (auto& ls : link_syncs_) {
+            if (ls.sender_chip == t.sender_chip && ls.receiver_chip == t.receiver_chip) {
+                ls.snd_host_anchor = t.snd_host_anchor;
+                ls.snd_dev_at_anchor = t.snd_dev_at_anchor;
+                ls.rcv_host_anchor = t.rcv_host_anchor;
+                ls.rcv_dev_at_anchor = t.rcv_dev_at_anchor;
+                ls.host_anchors_valid = true;
+                break;
+            }
+        }
+    }
     eth_sync_traces_.clear();
 }
 

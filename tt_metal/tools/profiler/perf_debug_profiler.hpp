@@ -210,6 +210,11 @@ private:
         IDevice* rcv_dev = nullptr;
         CoreCoord snd_eth{};
         CoreCoord rcv_eth{};
+        // The two eth cores' own host<->device anchors, copied off the trace before it is discarded. Kept so
+        // the close-check can compare an INDEPENDENT path (host MMIO) against this link's own measurement.
+        int64_t snd_host_anchor = 0, rcv_host_anchor = 0;
+        uint64_t snd_dev_at_anchor = 0, rcv_dev_at_anchor = 0;
+        bool host_anchors_valid = false;
     };
     std::vector<LinkSync> link_syncs_;
     void sync_devices_over_eth(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
