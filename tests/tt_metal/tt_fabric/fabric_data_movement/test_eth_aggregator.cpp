@@ -578,4 +578,59 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
         dir);
 }
 
+// Soak: does the aggregator survive sustained running?
+//
+// On the T3K the heartbeat froze at 0xabcd5904 — our signature, counter 22788 sweeps
+// ~= 23 s — meaning the kernel maintained it and then STOPPED. That is the single
+// blocker for launching before a workload: if the kernel is alive when the workload
+// opens the device, discovery passes, and the reset that follows is survivable because
+// a supervisor can relaunch. If it dies first, the workload cannot start at all.
+//
+// This samples the liveness markers over minutes on whatever board is present, so the
+// failure can be characterised where a wedge costs nothing.
+TEST_F(Fabric1DFixture, TestEthAggregatorSoak) {
+    const char* secs_env = std::getenv("TTNVTOP_SOAK_SECONDS");
+    if (secs_env == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_SOAK_SECONDS=<n> to soak the aggregator";
+    }
+    const int secs = std::atoi(secs_env);
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    auto* dev = devices[0]->get_devices()[0];
+    const auto pick = ttnvtop::select_aggregator_eth_core(dev);
+    if (!pick.ok) {
+        GTEST_SKIP() << pick.reason;
+    }
+
+    TensixGrid grid;
+    const uint32_t n = num_cores_of(dev);
+    const SenderL1 l1 = launch_aggregator(dev, pick.core, n, kSweepIntervalCycles, kPublishEverySweeps, grid);
+    log_info(tt::LogTest, "soak: {} cores on chip {} eth {}, {} s", n, dev->id(), pick.core.str(), secs);
+
+    uint32_t last_sweeps = 0, stalled_at = 0;
+    for (int t = 0; t < secs; t += 5) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::vector<uint32_t> dbg(4, 0u);
+        tt::tt_metal::detail::ReadFromDeviceL1(dev, pick.core, l1.dbg, 16, dbg, CoreType::ETH);
+        const auto h = read_journal_header(dev, pick.core, l1.journal);
+        log_info(
+            tt::LogTest,
+            "soak t+{}s: marker=0x{:08x} sweeps={} head={} | hdr sweeps={} head={} lost={}",
+            t + 5,
+            dbg[0],
+            dbg[1],
+            dbg[2],
+            h.sweep_count,
+            h.head,
+            h.lost);
+        if (dbg[1] == last_sweeps && stalled_at == 0 && t > 0) {
+            stalled_at = t + 5;
+            log_info(tt::LogTest, "soak: STALLED at t+{}s (sweeps stuck at {})", stalled_at, dbg[1]);
+        }
+        last_sweeps = dbg[1];
+    }
+    ttnvtop::stop_aggregator(dev, pick.core);
+    EXPECT_EQ(stalled_at, 0u) << "aggregator stopped advancing at t+" << stalled_at << "s";
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

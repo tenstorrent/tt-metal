@@ -1579,6 +1579,69 @@ minutes to see whether the kernel is alive. If the kernel is dying, the heartbea
 the bug -- it is the symptom, and the aggregator has a stability problem that matters far
 more.
 
+## 5q. Requirement: survive BOTH before and during a workload -- NOT MET -- 2026-08-30
+
+### What works
+
+**Attach DURING a workload: yes.** Aggregators attached while Llama-3.3-70B was decoding
+left it at 96.72 ms / 10.34 tok/s against a 10.35 control -- indistinguishable.
+
+**The kernel is stable.** A 90 s soak on Blackhole: 112,039 sweeps, perfectly linear,
+`lost=0`, no stall. The "dies at 23 s" theory is WRONG -- there is no inherent instability.
+
+**The tt-metal launch path works on the T3K**: 64 cores, head advancing, `lost=0`.
+
+### What does not work
+
+**The ARTIFACT REPLAY path does not start the kernel.** All 8 chips "launch" without
+error and with a correctly-bounded image, but no journal ever gets its magic:
+
+```
+launched 8 aggregator(s) — no tt-metal, no dispatch, no fabric.
+t+10s: 0 chips reporting
+t+30s: 0 chips reporting
+t+60s: 0 chips reporting
+```
+
+The same kernel launched through tt-metal on the same board works immediately. So the
+defect is in emit/replay, not in the kernel, and not in the four-write launch contract
+(5j proved the go-word handoff works when tt-metal staged the binary on that core).
+
+The difference is that the artifact snapshots one core's kernel-config region and
+replays it onto a DIFFERENT core, possibly on a different chip. Something in that is
+insufficient -- state outside the snapshotted range, or a field in the launch message
+that is core-specific. NOT diagnosed.
+
+### Why this blocks the requirement
+
+Launching BEFORE a workload needs the aggregator resident and its heartbeat advancing
+when the workload opens the device, so discovery passes. The chain then works:
+discovery passes -> firmware init resets our core -> `initialize_firmware(IDLE_ETH)`
+reloads the eth firmware so the heartbeat resumes -> a supervisor relaunches us.
+
+But the only launcher that can run without tt-metal is the artifact path, and it does not
+start the kernel. The tt-metal path cannot be used before a workload because two tt-metal
+processes cannot share a device (CHIP_IN_USE).
+
+So: **during = works, before = blocked on the artifact replay defect.**
+
+### The 23-second freeze, revisited
+
+`0xabcd5904` on the T3K was NOT the kernel dying of its own accord -- the soak disproves
+that. During that run the artifact image was overlapping the journal and scratch (5p bug
+2) and active eth cores had been clobbered (5p bug 1). Either explains it. With both
+fixed the kernel does not freeze; it simply never starts from the artifact.
+
+### Next
+
+1. **Diagnose the artifact replay.** Compare, byte for byte, the kernel-config region
+   after a working tt-metal launch against the same region after an artifact replay on
+   the same core. The diff is the answer, and it is a cheap experiment.
+2. Then the supervisor: watch `sweep_count` per chip and relaunch when it stops.
+   `assert_inactive_ethernet_cores()` means NO kernel on an idle eth core survives a
+   device init, by design -- so "survives" has to be a property of the system, not of
+   the kernel.
+
 ## 6. Risks
 
 | Risk | Mitigation |
