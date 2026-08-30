@@ -12,7 +12,7 @@
 namespace ttnn::operations::wavelet {
 
 [[nodiscard]] constexpr size_t ceil_div(const size_t numerator, const size_t denominator) noexcept {
-    return denominator == 0 ? 0 : (numerator + denominator - 1) / denominator;
+    return denominator == 0 ? 0 : numerator / denominator + static_cast<size_t>(numerator % denominator != 0);
 }
 
 [[nodiscard]] constexpr size_t round_up(const std::size_t value, const std::size_t alignment) noexcept {

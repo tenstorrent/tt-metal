@@ -304,6 +304,12 @@ inline void append_axis_routes(
     const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
     TT_FATAL(core_limit > 0, "2D ILWT requires at least one worker core");
     TT_FATAL(y_plan.original_length > 0 && x_plan.original_length > 0, "2D ILWT output shape must be positive");
+    TT_FATAL(
+        y_plan.original_length <= kMax2DLogicalExtent && x_plan.original_length <= kMax2DLogicalExtent,
+        "2D ILWT output dimensions {}x{} exceed the signed device-coordinate limit {}",
+        y_plan.original_length,
+        x_plan.original_length,
+        kMax2DLogicalExtent);
 
     const uint32_t output_tiles_y =
         plan_2d_detail::checked_u32(ceil_div(y_plan.original_length, kTileHeight2D), "2D ILWT output tile rows");
@@ -392,6 +398,13 @@ template <typename Scheme>
     const uint64_t l1_budget_bytes,
     const BoundaryMode boundary_mode = BoundaryMode::kSymmetric,
     const uint64_t inverse_coordination_penalty_cycles_per_core = 0) {
+    TT_FATAL(output_height > 0 && output_width > 0, "2D ILWT output dimensions must be positive");
+    TT_FATAL(
+        output_height <= kMax2DLogicalExtent && output_width <= kMax2DLogicalExtent,
+        "2D ILWT output dimensions {}x{} exceed the signed device-coordinate limit {}",
+        output_height,
+        output_width,
+        kMax2DLogicalExtent);
     const SignalBuffer y_signal{
         .length = output_height, .stick_width = kStickWidth, .element_size_bytes = sizeof(float)};
     const SignalBuffer x_signal{

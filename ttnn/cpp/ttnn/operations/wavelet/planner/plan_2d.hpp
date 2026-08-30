@@ -768,6 +768,13 @@ enum class AlignmentCostClass : uint8_t {
     TT_FATAL(y_plan.preprocess_layout.input.length > 0, "2D LWT input height must be positive");
     TT_FATAL(x_plan.preprocess_layout.input.length > 0, "2D LWT input width must be positive");
     TT_FATAL(
+        y_plan.preprocess_layout.input.length <= kMax2DLogicalExtent &&
+            x_plan.preprocess_layout.input.length <= kMax2DLogicalExtent,
+        "2D LWT input dimensions {}x{} exceed the signed device-coordinate limit {}",
+        y_plan.preprocess_layout.input.length,
+        x_plan.preprocess_layout.input.length,
+        kMax2DLogicalExtent);
+    TT_FATAL(
         y_plan.preprocess_layout.pad_config.mode == x_plan.preprocess_layout.pad_config.mode &&
             is_supported_lwt_boundary_mode(y_plan.preprocess_layout.pad_config.mode),
         "2D LWT requires one supported extension mode shared by both axes");
@@ -897,6 +904,12 @@ template <typename Scheme>
     const bool latency_oriented_planner = false,
     const Lwt2DRouteDomainPolicy route_domain = Lwt2DRouteDomainPolicy::kExact) {
     TT_FATAL(input_height > 0 && input_width > 0, "2D LWT input dimensions must be positive");
+    TT_FATAL(
+        input_height <= kMax2DLogicalExtent && input_width <= kMax2DLogicalExtent,
+        "2D LWT input dimensions {}x{} exceed the signed device-coordinate limit {}",
+        input_height,
+        input_width,
+        kMax2DLogicalExtent);
     const SignalBuffer y_input{
         .length = input_height,
         .stick_width = kStickWidth,
