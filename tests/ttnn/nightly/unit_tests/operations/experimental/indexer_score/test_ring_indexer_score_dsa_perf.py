@@ -51,9 +51,9 @@ GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 
-# Measurement-only same-runner A/B at the boundary and production 55K point.
-RING_PERF_KV_LENS = (51_200, GLM52_KV_55K)
-RING_PERF_KV_IDS = ("qb_units_40_repeat", "55k")
+# Measurement-only same-runner A/B across every 20-lane remainder plus production 512K.
+RING_PERF_KV_LENS = tuple(units_per_shard * GLM52_K_CHUNK * 4 for units_per_shard in range(40, 60)) + (GLM52_KV_512K,)
+RING_PERF_KV_IDS = tuple(f"qb_units_{units_per_shard}" for units_per_shard in range(40, 60)) + ("512k",)
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
