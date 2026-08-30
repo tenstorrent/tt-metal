@@ -51,7 +51,7 @@ def make_identifier(name: str) -> str:
     return identifier
 
 
-def parse_coefficient(raw: int | float | dict[str, int | float]) -> float:
+def parse_coefficient(raw: float | dict[str, float]) -> float:
     if isinstance(raw, (int, float)):
         return float(raw)
     return float(raw["numerator"]) / float(raw["denominator"])
