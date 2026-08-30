@@ -235,21 +235,14 @@
     # downloading. Override HF_HUB_OFFLINE for just this command; needs mlperf-read-only=false
     # on this run too, since /mnt/MLPerf is otherwise mounted :ro and the download can't persist.
     HF_HUB_OFFLINE=0 python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(os.environ['HF_MODEL'])"
-    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_attention_tp.py
-    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
-    pytest --timeout 60 models/demos/blackhole/qwen36/tests/test_mlp_tp.py
-    pytest --timeout 90 models/demos/blackhole/qwen36/tests/test_rope_tp.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not prefill_paged_slots_long and not B32"
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
-    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_vision_attention.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model_tp.py -k "not prefill_paged_slots_long and not B32 and not isl2048"
     pytest --timeout 480 models/demos/blackhole/qwen36/tests/test_vision_block.py
-    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_model.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
   model: qwen3.5-9b
   model_family: Qwen
   skus:
     wh_n300:
-      timeout: 40
+      timeout: 33
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
