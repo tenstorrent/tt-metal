@@ -59,6 +59,13 @@ int main(int argc, char** argv) {
     // once (steps appear in BOTH columns, same sample, same size), while per-tile clock gating moves only
     // the tile it gates (steps appear in one column). Both would look identical in a two-chip comparison.
     bool same_chip = false;
+    // --catchstep N: sample ONE tile's wall clock in a tight loop against host time, no sleeping, and print
+    // the samples around any interval where the device advanced far less than the host did. This separates
+    // the two readings of "the clock pauses": counting alone cannot tell a hard STOP (counter frozen for
+    // ~30 us) from a brief FREQUENCY COLLAPSE (running at a fraction of 1.35 GHz for ~60 us) -- both lose
+    // the same number of cycles. An MMIO read costs ~1.5 us here, so the loop samples every ~3 us, enough
+    // to land ~10 samples inside a 30 us event and see whether the counter FLATLINES or merely slows.
+    uint32_t catchstep = 0;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -78,6 +85,8 @@ int main(int argc, char** argv) {
             period_ms = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         } else if (std::strcmp(argv[i], "--same-chip") == 0) {
             same_chip = true;
+        } else if (std::strcmp(argv[i], "--catchstep") == 0 && i + 1 < argc) {
+            catchstep = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         }
     }
 
@@ -115,6 +124,108 @@ int main(int argc, char** argv) {
         if (!all_links && !edges.empty()) { break; }
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
+
+    if (catchstep != 0 && !edges.empty()) {
+        const auto& e = edges.front();
+        constexpr uint64_t kWallL = 0xFFB121F0ULL;
+        constexpr uint64_t kWallH = 0xFFB121F8ULL;
+        const CoreCoord av = e.a->virtual_core_from_logical_core(e.ac, CoreType::ETH);
+        const tt_cxy_pair ta(e.a->id(), av);
+        struct Smp { double h; uint64_t d; };
+        std::vector<Smp> smp;
+        smp.reserve(catchstep);
+        printf("\n[ethsync] CATCHSTEP: tight-loop sampling dev %d eth(%zu,%zu), %u samples\n",
+               e.a->id(), e.ac.x, e.ac.y, catchstep);
+        for (uint32_t i = 0; i < catchstep; i++) {
+            uint32_t lo = 0, hi = 0;
+            const double h0 = (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch()).count();
+            cluster.read_reg(&lo, ta, kWallL);
+            cluster.read_reg(&hi, ta, kWallH);
+            smp.push_back(Smp{h0, ((uint64_t)hi << 32) | lo});
+        }
+        // Per-interval: how many device ns elapsed vs how many host ns. Ratio ~1 is healthy.
+        //
+        // Two DIFFERENT populations land in this filter and must not be conflated:
+        //
+        //  ARTEFACT  the host thread is preempted between taking h0 and doing the MMIO read, so THIS
+        //            interval reads long on the device side and the NEXT reads short. They pair and cancel,
+        //            and the running deficit returns to where it was. Nothing happened to the clock.
+        //
+        //  REAL      the chip's clock stops. The device simply stops advancing for the duration, so the
+        //            deficit is PERMANENT -- there is no compensating interval afterwards, and every later
+        //            sample carries the loss.
+        //
+        // The discriminator is the preceding interval (ratio > 1.5 means the pair) plus whether the deficit
+        // is repaid within the next few samples. Counting "intervals where the device fell behind" without
+        // separating these is what makes a host hiccup look like a hardware pause.
+        double sum_h = 0, sum_d = 0;
+        uint32_t events = 0, paired = 0, persistent = 0, bad_samples = 0;
+        double persistent_us = 0.0;
+        for (size_t i = 1; i < smp.size(); i++) {
+            const double dh = smp[i].h - smp[i - 1].h;
+            const double dd = (double)(smp[i].d - smp[i - 1].d) / ghz;
+            // One corrupted MMIO read poisons a running total for the rest of the run (observed: a device
+            // total of 1.4e13 ms against a host total of 1.5 s). The classification below is windowed and
+            // survives it; these totals are not, so implausible intervals are excluded from them and
+            // counted instead.
+            if (dd < -1000.0 || dd > 1e6) {
+                bad_samples++;
+            } else {
+                sum_h += dh;
+                sum_d += dd;
+            }
+            if (dh > 200.0 && dd < 0.5 * dh) {
+                events++;
+                // Preceding interval: did the device run LONG just before (the pair), or normally (real)?
+                double prev_ratio = 1.0;
+                if (i >= 2) {
+                    const double ph = smp[i - 1].h - smp[i - 2].h;
+                    const double pd = (double)(smp[i - 1].d - smp[i - 2].d) / ghz;
+                    prev_ratio = ph > 0 ? pd / ph : 1.0;
+                }
+                // Repaid within the next 8 samples? Sum host vs device across the window and see whether
+                // the deficit incurred here comes back.
+                double wh = 0, wd = 0;
+                for (size_t k = i; k < i + 8 && k < smp.size(); k++) {
+                    wh += smp[k].h - smp[k - 1].h;
+                    wd += (double)(smp[k].d - smp[k - 1].d) / ghz;
+                }
+                const double deficit_us = (wh - wd) / 1000.0;
+                if (prev_ratio > 1.5) {
+                    paired++;
+                } else if (deficit_us > 1.0) {
+                    persistent++;
+                    persistent_us += deficit_us;
+                }
+                if (events <= 6) {
+                    printf("\n  EVENT at sample %zu: host %.3f us elapsed, device only %.3f us (ratio %.3f)\n",
+                           i, dh / 1000.0, dd / 1000.0, dd / dh);
+                    // Neighbours, so a flatline (ratio ~0 for several) is distinguishable from a slowdown
+                    // (ratio well between 0 and 1 across the event).
+                    for (size_t j = (i >= 4 ? i - 4 : 0); j < i + 5 && j < smp.size(); j++) {
+                        if (j == 0) { continue; }
+                        const double h2 = smp[j].h - smp[j - 1].h;
+                        const double d2 = (double)(smp[j].d - smp[j - 1].d) / ghz;
+                        printf("      %s j=%zu host %8.3f us  dev %8.3f us  ratio %6.3f\n",
+                               j == i ? "->" : "  ", j, h2 / 1000.0, d2 / 1000.0, h2 > 0 ? d2 / h2 : 0.0);
+                    }
+                }
+            }
+        }
+        printf("\n[ethsync] %u interval(s) where the device advanced < 50%% of host, across %zu samples\n",
+               events, smp.size());
+        printf("[ethsync]   PAIRED (host preemption, self-cancelling): %u\n", paired);
+        printf("[ethsync]   PERSISTENT (deficit not repaid in 8 samples): %u, totalling %.1f us\n",
+               persistent, persistent_us);
+        printf("[ethsync] %u sample(s) excluded from the totals as corrupted reads\n", bad_samples);
+        printf("[ethsync] mean cadence %.3f us | total host %.1f ms vs device %.1f ms (deficit %.1f us)\n",
+               sum_h / (double)(smp.size() - 1) / 1000.0, sum_h / 1e6, sum_d / 1e6, (sum_h - sum_d) / 1000.0);
+        printf("[ethsync] ratio ~0 across consecutive samples = counter STOPPED; ratio steady between 0 and "
+               "1 = frequency COLLAPSED but still counting\n");
+        mesh_device->close();
+        return 0;
+    }
 
     if (whichclock != 0 && !edges.empty()) {
         const auto& e = edges.front();
