@@ -1065,3 +1065,90 @@ def test_conv1d_depthwise_default_route_long_seq(device):
         packer_l1_acc=True,
         pcc=0.999,
     )
+
+
+# ---------------------------------------------------------------------------
+# fp32 depthwise precision gates.
+#
+# The depthwise compute kernel accumulates taps on the SFPU when both operands are
+# genuinely fp32 (compute_depthwise_conv1d.cpp), because the FPU path truncates fp32
+# operands to ~TF32 in SrcA/SrcB (~1.5e-3 rel RMSE against a float64 golden). These
+# gates use TRUE fp32 inputs -- torch.randn in float32, deliberately NOT the
+# bf16-widened values run_conv1d_route generates, which are exact under either path
+# and cannot see an unpack-mode regression.
+# ---------------------------------------------------------------------------
+
+
+def run_conv1d_depthwise_fp32_exact(device, C, kernel_size, input_length, stride=1):
+    """Depthwise fp32 conv1d against a float64 golden, with a bound only the SFPU path meets.
+
+    Measured: the SFPU path lands at ~6-8e-8 rel RMSE; the old FPU path at ~1.5e-3. The 5e-6
+    bound carries >50x margin over the former and fails the latter by ~300x.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(1, C, input_length, dtype=torch.float32)
+    w = torch.randn(C, 1, kernel_size, dtype=torch.float32)
+    golden = torch.nn.functional.conv1d(x.double(), w.double(), stride=stride, padding=0, groups=C)
+
+    input_tt = ttnn.from_torch(x.permute(0, 2, 1), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    weight_tt = ttnn.from_torch(w, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_out, out_length = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=C,
+        out_channels=C,
+        batch_size=1,
+        input_length=input_length,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=0,
+        groups=C,
+        conv_config=ttnn.Conv1dConfig(weights_dtype=ttnn.float32, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        compute_config=ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+        ),
+        dtype=ttnn.float32,
+        return_output_dim=True,
+    )
+    out = ttnn.to_torch(tt_out).reshape(1, out_length, C).permute(0, 2, 1).double()
+    rel_rmse = ((out - golden).pow(2).mean().sqrt() / golden.std()).item()
+    assert rel_rmse <= 5e-6, f"fp32 depthwise conv1d rel RMSE {rel_rmse:.3e} > 5e-6 vs float64 golden"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 16}], indirect=True)
+def test_conv1d_depthwise_fp32_exact_coalesced(device):
+    """Coalesced SFPU layout: C*4*K = 3072 B fits every arch's NoC burst, dilation 1."""
+    run_conv1d_depthwise_fp32_exact(device, C=64, kernel_size=12, input_length=4096)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 16}], indirect=True)
+def test_conv1d_depthwise_fp32_exact_noncoalesced(device):
+    """Non-coalesced SFPU layout, exercising the dest-reuse scratch accumulation across
+    kernel-tap blocks: C*4*K = 24576 B exceeds every arch's NoC burst, so coalescing is off.
+    This is the audio vocoder's s0 anti-alias downsampler shape."""
+    run_conv1d_depthwise_fp32_exact(device, C=512, kernel_size=12, input_length=4096, stride=2)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 16}], indirect=True)
+def test_conv1d_depthwise_bf16_with_fp32_accum_unchanged(device):
+    """bf16 operands with fp32_dest_acc_en must stay on the FPU path: the SFPU dispatch is
+    format-gated, not DST_ACCUM_MODE-gated. Guards the legacy path's numerics and routing."""
+    C = 64
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=C,
+        out_channels=C,
+        input_length=4096,
+        kernel_size=12,
+        stride=1,
+        padding=0,
+        groups=C,
+        weights_dtype=ttnn.bfloat16,
+        activations_dtype=ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16,
+        fp32_accum=True,
+        packer_l1_acc=True,
+        pcc=0.999,
+    )
