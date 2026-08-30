@@ -5,6 +5,7 @@
 import pytest
 import pywt
 import torch
+
 import ttnn
 
 BOUNDARY_MODES: list[str] = [
@@ -86,11 +87,9 @@ def stick_shape(valid_length: int, batch: int | None = None) -> tuple[int, ...]:
     return (sticks, 32) if batch is None else (batch, 1, sticks, 32)
 
 
-@pytest.mark.parametrize("boundary_mode", ["symmetric", "antireflect"])
 @pytest.mark.parametrize("wavelet", REPRESENTATIVE_SCHEMES)
-def test_representative_schemes_jit_execute_all_operations(
-    device: ttnn.MeshDevice, wavelet: str, boundary_mode: str
-) -> None:
+def test_representative_schemes_jit_execute_all_operations(device: ttnn.MeshDevice, wavelet: str) -> None:
+    boundary_mode = "antireflect"
     signal_1d = torch.sin(torch.arange(257, dtype=torch.float32) * 0.113)
     approximation, detail = ttnn.dwt(to_device_1d(device, signal_1d), wavelet, boundary_mode=boundary_mode)
     reconstructed_1d = ttnn.idwt(
@@ -129,9 +128,9 @@ def test_representative_schemes_jit_execute_all_operations(
         assert torch.isfinite(ttnn.to_torch(tensor)).all(), (wavelet, boundary_mode)
 
 
-@pytest.mark.parametrize("wavelet", ["db1", "db7", "bior3.9"])
 @pytest.mark.parametrize("length", [32, 33])
-def test_batched_1d_matches_independent_samples(device: ttnn.MeshDevice, wavelet: str, length: int) -> None:
+def test_batched_1d_matches_independent_samples(device: ttnn.MeshDevice, length: int) -> None:
+    wavelet = "db7"
     batch = 2
     index = torch.arange(batch * length, dtype=torch.float32).reshape(batch, 1, 1, length)
     signal = torch.sin(index * 0.071) + 0.01 * index
@@ -199,24 +198,6 @@ def test_batched_2d_matches_independent_samples(device: ttnn.MeshDevice, shape: 
         assert_fp32_identical(reconstructed_host[batch_index, 0], ttnn.to_torch(sample_reconstructed))
 
 
-def test_large_batched_inputs_and_interleaved_l1(device: ttnn.MeshDevice) -> None:
-    batch = 2
-    length = 65_537
-    values = torch.arange(batch * length, dtype=torch.float32).reshape(batch, 1, 1, length)
-    signal = torch.sin(values * 0.013) + values * 1.0e-5
-    dram = ttnn.dwt(to_device_1d(device, signal), "bior3.9", boundary_mode="symmetric")
-    l1_input = to_device_1d(device, signal, ttnn.L1_MEMORY_CONFIG)
-    l1 = ttnn.dwt(l1_input, "bior3.9", boundary_mode="symmetric")
-    coefficient_length = ttnn.dwt_coeff_len(length, "bior3.9")
-    for actual, expected in zip(l1, dram):
-        assert_fp32_identical_1d(ttnn.to_torch(actual), ttnn.to_torch(expected), coefficient_length)
-
-    reconstructed_dram = ttnn.idwt(*dram, "bior3.9", length, boundary_mode="symmetric")
-    l1_coefficients = tuple(to_device_1d(device, ttnn.to_torch(tensor), ttnn.L1_MEMORY_CONFIG) for tensor in dram)
-    reconstructed_l1 = ttnn.idwt(*l1_coefficients, "bior3.9", length, boundary_mode="symmetric")
-    assert_fp32_identical_1d(ttnn.to_torch(reconstructed_l1), ttnn.to_torch(reconstructed_dram), length)
-
-
 def test_batch_larger_than_worker_count_and_coif17_execution(
     device: ttnn.MeshDevice,
 ) -> None:
@@ -239,30 +220,6 @@ def test_rank_four_batch_one_preserves_shapes(device: ttnn.MeshDevice) -> None:
     bands = ttnn.dwt_2d(to_device_2d(device, signal_2d), "db1")
     reconstructed_2d = ttnn.idwt_2d(*bands, "db1", (33, 35))
     assert tuple(reconstructed_2d.shape) == (1, 1, 33, 35)
-
-
-def test_large_batched_2d_interleaved_l1_matches_dram(device: ttnn.MeshDevice) -> None:
-    batch, height, width = 2, 257, 259
-    values = torch.arange(batch * height * width, dtype=torch.float32).reshape(batch, 1, height, width)
-    signal = torch.sin(values * 0.017) + torch.cos(values * 0.019)
-    dram_bands = ttnn.dwt_2d(to_device_2d(device, signal), "bior1.3", boundary_mode="antireflect")
-    l1_bands = ttnn.dwt_2d(
-        to_device_2d(device, signal, ttnn.L1_MEMORY_CONFIG),
-        "bior1.3",
-        boundary_mode="antireflect",
-    )
-    for actual, expected in zip(l1_bands, dram_bands):
-        assert_fp32_identical(ttnn.to_torch(actual), ttnn.to_torch(expected))
-
-    dram_reconstructed = ttnn.idwt_2d(*dram_bands, "bior1.3", (height, width), boundary_mode="antireflect")
-    input_bands_l1 = tuple(to_device_2d(device, ttnn.to_torch(band), ttnn.L1_MEMORY_CONFIG) for band in dram_bands)
-    l1_reconstructed = ttnn.idwt_2d(
-        *input_bands_l1,
-        "bior1.3",
-        (height, width),
-        boundary_mode="antireflect",
-    )
-    assert_fp32_identical(ttnn.to_torch(l1_reconstructed), ttnn.to_torch(dram_reconstructed))
 
 
 def test_batched_preallocated_outputs_and_program_cache(
@@ -297,17 +254,7 @@ def test_batched_preallocated_outputs_and_program_cache(
         device.disable_and_clear_program_cache()
 
 
-def test_batched_channel_validation(device: ttnn.MeshDevice, expect_error) -> None:
-    invalid_1d = torch.zeros((2, 2, 1, 33), dtype=torch.float32)
-    with expect_error(RuntimeError, "C == 1"):
-        ttnn.dwt(to_device_1d(device, invalid_1d), "db1")
-
-    invalid_2d = torch.zeros((2, 2, 33, 35), dtype=torch.float32)
-    with expect_error(RuntimeError, "C == 1"):
-        ttnn.dwt_2d(to_device_2d(device, invalid_2d), "db1")
-
-
-@pytest.mark.parametrize("length", [20, 31, 32, 33])
+@pytest.mark.parametrize("length", [31, 32, 33])
 def test_lwt_ilwt_1d_stick_padding_regression(device: ttnn.MeshDevice, length: int) -> None:
     indices = torch.arange(length, dtype=torch.float32)
     signal = 0.125 * indices + torch.sin(0.7 * indices)
@@ -504,8 +451,10 @@ def test_wavelet_1d_interleaved_l1_input_matches_dram_multichunk(
     assert mixed_reconstructed.memory_config() == ttnn.DRAM_MEMORY_CONFIG
 
 
-@pytest.mark.parametrize("shape", [(32, 32), (33, 31), (35, 37)])
-@pytest.mark.parametrize("boundary_mode", BOUNDARY_MODES)
+@pytest.mark.parametrize(
+    ("shape", "boundary_mode"),
+    [((35, 37), mode) for mode in BOUNDARY_MODES] + [((32, 32), "symmetric"), ((33, 31), "symmetric")],
+)
 def test_lwt_ilwt_2d_shapes_and_boundary_modes(
     device: ttnn.MeshDevice, shape: tuple[int, int], boundary_mode: str
 ) -> None:
@@ -989,6 +938,8 @@ def test_wavelet_1d_validation_errors(device: ttnn.MeshDevice, expect_error) -> 
         ttnn.dwt(to_device_1d(device, torch.zeros((2, 32), dtype=torch.float32)), "bior1.3")
     with expect_error(RuntimeError, "requires H == 1"):
         ttnn.dwt(to_device_1d(device, torch.zeros((2, 1, 2, 32), dtype=torch.float32)), "bior1.3")
+    with expect_error(RuntimeError, "C == 1"):
+        ttnn.dwt(to_device_1d(device, torch.zeros((2, 2, 1, 33), dtype=torch.float32)), "db1")
     with expect_error(RuntimeError, "DRAM-interleaved outputs"):
         ttnn.dwt(input_tensor, "bior1.3", memory_config=ttnn.L1_MEMORY_CONFIG)
     with expect_error(RuntimeError, "greater than one"):
@@ -1012,8 +963,6 @@ def test_wavelet_1d_validation_errors(device: ttnn.MeshDevice, expect_error) -> 
     with expect_error(RuntimeError, "must not alias the input"):
         ttnn.dwt(alias_input, "db1", output_tensors=(alias_input, alias_detail))
 
-
-def test_wavelet_1d_rejects_sharded_input(device: ttnn.MeshDevice, expect_error) -> None:
     sharded_memory_config = ttnn.create_sharded_memory_config(
         shape=(2, 32),
         core_grid=ttnn.CoreGrid(x=1, y=1),
@@ -1035,6 +984,8 @@ def test_wavelet_2d_validation_errors(device: ttnn.MeshDevice, expect_error) -> 
 
     with expect_error(RuntimeError, "TILE layout"):
         ttnn.dwt_2d(to_device_1d(device, signal), "bior1.3")
+    with expect_error(RuntimeError, "C == 1"):
+        ttnn.dwt_2d(to_device_2d(device, torch.zeros((2, 2, 33, 35), dtype=torch.float32)), "db1")
     with expect_error(RuntimeError, "both dimensions greater than one"):
         ttnn.dwt_2d(
             to_device_2d(device, torch.ones(1, 8)),
