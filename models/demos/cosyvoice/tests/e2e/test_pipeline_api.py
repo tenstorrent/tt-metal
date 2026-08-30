@@ -99,6 +99,12 @@ def _agreement(a: list[int], b: list[int]) -> tuple[float, int]:
     return sum(same) / n, prefix
 
 
+# Two full syntheses of the same utterance, and the flow decoder and the vocoder
+# JIT-compile per mel length -- so on a machine that has not run this geometry before,
+# the compile bill alone exceeds `pytest.ini`'s 300 s default. It did on p150b, where
+# the same test takes 16 s once the kernels are cached. Same marker, same reason, as
+# `tests/perf/test_streaming_perf.py`.
+@pytest.mark.timeout(1800)
 @needs_weights
 @needs_inputs
 @needs_device
