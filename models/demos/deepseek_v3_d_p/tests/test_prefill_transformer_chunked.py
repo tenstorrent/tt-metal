@@ -70,6 +70,7 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
     gather_cache_tp0,
     interleave_pe,
     read_sharded_rows,
+    token_normalized,
     unrotate_cache_layer,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -133,6 +134,11 @@ assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= CHUNK 
 # Per-chunk per-layer threshold; error accumulates with depth, so this matches the single-shot
 # transformer's device-gate trace bar (TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88). Calibrate + tighten.
 LAYER_PCC_THRESHOLD = 0.88
+# Variants gating hidden states on the RMS-normalised PCC: Mistral's massive activation channels
+# make the raw score a measurement of outliers (see test_prefill_transformer._compare_intermediate_pcc).
+_NPCC_GATED_VARIANTS = {"mistral_small_4"}
+
+
 # Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
 # future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952
 # (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_2's 0-2+every-4th subsample only reaches 0.980).
@@ -1071,11 +1077,9 @@ def test_kimi_prefill_transformer_chunked_padded(
 #     renormalize router. DEVICE_FP32 would apply a sigmoid affinity and produce wrong routing
 #     weights without failing -- no crash, and invisible to a KV-only assertion.
 #   * L1/L36, since the model is 36 layers deep (Kimi is 61).
-#   * No golden trace is baked in: the adapter's prefill_trace_default is None, so this row needs
-#     PREFILL_TRACE_DIR pointing at one. generate_prompt_trace.py builds a host-only golden for an
-#     arbitrary prompt, so this needs no vLLM recording -- but that golden runs the same torch path
-#     the device is compared against, so it gives plumbing and per-layer localisation, NOT
-#     independence from the reference.
+#   * The golden is host-generated (adapter's prefill_trace_default; PREFILL_TRACE_DIR overrides).
+#     It runs the same torch path the device is compared against, so it localises per layer but is
+#     NOT independent of the reference.
 # It also needs a TTNN weight cache for `num_layers`; the row asserts completeness rather than
 # building one, so stage the cache first (TT_MISTRAL4_PREFILL_TTNN_CACHE).
 @pytest.mark.parametrize("mode", _PADDED_MODES, ids=_PADDED_MODES)
@@ -2358,6 +2362,7 @@ def run_chunked_transformer_padded_trace(
         emb_dim = config.hidden_size
         n_decoder_layers = num_layers - 1
         layer_min_pcc = {i: 1.0 for i in range(n_decoder_layers)}
+        gate_on_npcc = variant.name in _NPCC_GATED_VARIANTS
         for c, ((ks, e), tok) in enumerate(zip(starts, chunk_tok_host)):
             isl = e - ks
             # Same rotated layout _padded_chunk_tok gathered with: recomputed here (cheap, host-side)
@@ -2394,10 +2399,20 @@ def run_chunked_transformer_padded_trace(
                 natural[dst] = out_flat[src]  # un-rotate valid rows -> natural [ks, e)
                 ref = _ref_layer_slice(trace_dir, layout, i, ks, e)
                 _, pcc = comp_pcc(ref, natural)
-                layer_min_pcc[i] = min(layer_min_pcc[i], pcc)
-                logger.info(f"  chunk {c} (kv_actual={ks} isl={isl}) layer {i} decoder PCC: {pcc:.6f}")
-                if pcc < LAYER_PCC_THRESHOLD:
-                    logger.warning(f"  chunk {c} layer {i} decoder PCC {pcc:.6f} below {LAYER_PCC_THRESHOLD}")
+                # Both scores always: the gated one is asserted, the other is context in the log.
+                # Row-subsampled when it is only context -- at full resolution this second comp_pcc
+                # costs ~75 s per row, which the non-gated variants (Kimi/DeepSeek/GLM) would pay for
+                # a number nothing asserts. Stride 8 still correlates 1.6M elements.
+                nstride = 1 if gate_on_npcc else 8
+                _, npcc = comp_pcc(token_normalized(ref[::nstride]), token_normalized(natural[::nstride]))
+                score = npcc if gate_on_npcc else pcc
+                layer_min_pcc[i] = min(layer_min_pcc[i], score)
+                logger.info(
+                    f"  chunk {c} (kv_actual={ks} isl={isl}) layer {i} decoder "
+                    f"PCC: {pcc:.6f} nPCC: {npcc:.6f} ({'npcc' if gate_on_npcc else 'pcc'} gated)"
+                )
+                if score < LAYER_PCC_THRESHOLD:
+                    logger.warning(f"  chunk {c} layer {i} decoder score {score:.6f} below {LAYER_PCC_THRESHOLD}")
         ttnn.synchronize_device(mesh_device)
 
         logger.info("[padded-trace] NOTRACE per-layer min decoder-output PCC across chunks:")
@@ -2464,7 +2479,14 @@ def run_chunked_transformer_padded_trace(
             mesh_mapper=rep_mapper,
         )
 
-    trace_metadata = (_meta1_dev(0), _meta1_dev(starts[0][0]), _meta1_dev(starts[0][1]))
+    # ChunkMetadata, not a bare 3-tuple: the replay reads llama4_scale at a captured address
+    # (mirrors TtPrefillRuntime._setup_trace). None for every non-Mistral variant.
+    trace_metadata = ChunkMetadata(
+        _meta1_dev(0),
+        _meta1_dev(starts[0][0]),
+        _meta1_dev(starts[0][1]),
+        transformer.rope_setup.make_llama4_scale_buffer(CHUNK),
+    )
     tok_host_tt = [
         ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=sp_mapper)
         for t in chunk_tok_host
@@ -2532,7 +2554,8 @@ def run_chunked_transformer_padded_trace(
             _fwd_meta()
         ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(trace_input)
-    for t in trace_metadata:
+    # [:3]: field 3 is the persistent llama4 buffer, not per-chunk state (see ChunkMetadata).
+    for t in trace_metadata[:3]:
         ttnn.deallocate(t)
     logger.info(f"[padded-trace] {mode} metadata path done; recording per-layer KV PCC vs GOLDEN")
     _record_kv_cache_pcc(
