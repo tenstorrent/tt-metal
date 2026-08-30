@@ -57,6 +57,9 @@ inline bool rotation_enabled(ttnn::ccl::Topology topology, uint32_t ring_size) {
 }
 
 inline uint32_t wave_column_shift(uint32_t wave, uint32_t wave_count, uint32_t column_count) {
+    if (wave == 0 || wave + 1 == wave_count) {
+        return 0;
+    }
     // One virtual wave keeps the remote-wave span below a full column circle when waves fit, limiting disruption
     // to long DRAM streams. More waves than columns use the smallest possible nonzero stride and wrap naturally.
     const uint32_t column_stride = std::max(1u, column_count / (wave_count + 1));
