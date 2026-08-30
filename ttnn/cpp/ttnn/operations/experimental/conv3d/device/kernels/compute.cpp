@@ -150,8 +150,8 @@ void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
 // running partial lives in `acc_cb` between iterations, remote partials arrive in `remote_cb`,
 // and all three CBs (local/remote/acc) are `UnpackToDestFp32`, so `copy_tile` +
 // `add_binary_tile` keep the sum exact end to end. The last iteration packs back into
-// `local_cb` for the bias/untilize tail. DST: 2 tiles; dest remap toggled off around the
-// SFPU/datacopy section (as in rgb_to_yuv's typecast_and_pack) and restored after.
+// `local_cb` for the bias/untilize tail. DST: 2 tiles; on Blackhole the dest remap must be
+// off while SFPU/datacopy address DST directly.
 template <uint32_t num_tiles>
 void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_cb, uint32_t num_workers) {
     CircularBuffer local_cb_obj(local_cb);
@@ -197,10 +197,12 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
 #endif
 }
 
-// fp32-exact bias add for the flagged interm CB. `add_tiles_bcast_rows` would unpack the finished
-// output through SrcA/SrcB (rounding it to ~TF32) and cannot read an UnpackToDestFp32 CB at all;
-// here the output tile reaches DST exactly via `copy_tile`, and the bias row is materialized by a
-// ROW-broadcast datacopy (itself unpack-to-dest for fp32 operands, so also exact). DST: 2 tiles.
+// fp32-exact bias add. `add_tiles_bcast_rows` would unpack the finished output through
+// SrcA/SrcB (rounding it to ~TF32) and cannot read an UnpackToDestFp32 CB at all; here the
+// output tile reaches DST exactly via `copy_tile`, and the bias row is materialized by a
+// ROW-broadcast datacopy. Both CBs must be flagged UnpackToDestFp32 by the host -- an unflagged
+// fp32 bias CB would steer `unary_bcast` onto the SrcB/B2D route, which is broken with fp32
+// dest (tt-llk#1338) and returns garbage on Wormhole. DST: 2 tiles.
 template <uint32_t rows, uint32_t cols>
 void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     CircularBuffer inout_cb_obj(inout_cb);

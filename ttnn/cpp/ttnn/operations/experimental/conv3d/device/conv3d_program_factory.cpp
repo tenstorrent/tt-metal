@@ -853,14 +853,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         cb_reduction_acc_tiled_id,
         (uint32_t)use_fp32_exact};
 
-    // Deliver the fp32 tail CBs UnpackToDestFp32 -- interm (untilize/bias read-back), bias, and,
-    // with multiple C_in blocks, reduction + acc (the reduction loop's operands). Without it the
-    // unpacker rounds their fp32 tiles to TF32 on the way into DST. Every consumer on this path
-    // is flag-compatible: the reduction and bias adds are copy_tile/SFPU-based (the FPU bcast add
-    // cannot read a flagged CB, hence add_bias_inplace_sfpu) and untilize honors the flag. The
-    // bias flag also steers unary_bcast<ROW> onto the A2D unpack-to-dest path -- the unflagged
-    // Tf32 route goes through SrcB/B2D, which is broken with fp32 dest (tt-llk#1338) and returns
-    // garbage on Wormhole. Empty (default) when use_fp32_exact is off.
+    // Deliver every CB the fp32 tail reads UnpackToDestFp32 -- interm (untilize/bias read-back),
+    // bias, and, with multiple C_in blocks, reduction + acc. Without the flag the unpacker rounds
+    // their fp32 tiles to TF32 on the way into DST; for the bias specifically, an unflagged CB
+    // also breaks unary_bcast on Wormhole (see add_bias_inplace_sfpu in the compute kernel).
+    // Empty (default) when use_fp32_exact is off.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
     if (use_fp32_exact) {
         unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
