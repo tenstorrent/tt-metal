@@ -25,6 +25,10 @@
 //
 // The invalid coordinates are derived from the device rather than hardcoded, because both grids
 // shrink under harvesting: a core that is out of range on a harvested part is legal on a stock one.
+//
+// The one core that has no bank and is still legal is a claimed service core; that case needs the
+// arch and fast-dispatch gating those fixtures carry, so it lives in
+// tests/tt_metal/tt_metal/dispatch/test_service_core_manager.cpp.
 
 namespace tt::tt_metal {
 namespace {
