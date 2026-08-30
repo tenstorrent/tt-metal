@@ -1,0 +1,67 @@
+// ttnn/operations/experimental/addcdiv.cpp
+#include "ttnn/operations/experimental/addcdiv.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/math.hpp"
+
+namespace ttnn::operations::experimental {
+
+Tensor addcdiv(
+    const Tensor& input,
+    const Tensor& value,
+    const Tensor& divisor,
+    const std::optional<DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    
+    auto input_shape = input.get_shape();
+    auto value_shape = value.get_shape();
+    auto divisor_shape = divisor.get_shape();
+
+    // Broadcast value and divisor to match input shape if needed
+    auto broadcast_value = value;
+    auto broadcast_divisor = divisor;
+    
+    if (value_shape != input_shape) {
+        broadcast_value = math::broadcast(value, input_shape, MathType::BROADCAST);
+    }
+    if (divisor_shape != input_shape) {
+        broadcast_divisor = math::broadcast(divisor, input_shape, MathType::BROADCAST);
+    }
+
+    // Compute value / divisor with overflow handling
+    auto div_result = math::divide(broadcast_value, broadcast_divisor, MathType::DIVIDE);
+
+    // Add input to result: output = input + (value / divisor)
+    auto output = math::add(input, div_result, MathType::ADD);
+
+    if (output_dtype.has_value()) {
+        output = typecast(output, output_dtype.value(), memory_config);
+    }
+
+    return output;
+}
+
+} // namespace ttnn::operations::experimental
+
+// Registration in ttnn/python_bindings.cpp (partial)
+/*
+.def(
+    "addcdiv",
+    &ttnn::operations::experimental::addcdiv,
+    py::arg("input"),
+    py::arg("value"),
+    py::arg("divisor"),
+    py::arg("output_dtype") = std::nullopt,
+    py::arg("memory_config") = std::nullopt,
+    R"doc(
+        Computes `input + (value / divisor)` element-wise with overflow to ±inf for finite results.
+
+        Args:
+            input: Input tensor.
+            value: Value tensor.
+            divisor: Divisor tensor.
+
+        Returns:
+            Tensor: Result of addcdiv operation.
+    )doc")
+*/
