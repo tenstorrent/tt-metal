@@ -12,9 +12,10 @@ import pytest
 import torch
 
 import ttnn
-from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.config import PageTableLayout, PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.llm_runtime.execution import EagerExecutor, TracedExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.llm_runtime.warmup import _build_plan
 from models.common.models import llama3_executor as llama3_family_executor
 from models.common.models.llama3_8b import executor as llama_executor
 from models.common.models.llama3_8b import generator as llama_generator
@@ -792,7 +793,11 @@ class _FakeLane:
         self.cleanup_calls += 1
 
 
-def test_generator_constructs_model_owned_lane_configs(monkeypatch):
+@pytest.mark.parametrize("device_sampling_enabled", (False, True), ids=("sampling-off", "sampling-on"))
+def test_generator_constructs_model_owned_lane_configs_with_exact_decode_coverage(
+    monkeypatch,
+    device_sampling_enabled,
+):
     executor_calls = []
     monkeypatch.setattr(llama_generator, "_create_submeshes", lambda mesh, dp: [_Mesh(), _Mesh()])
 
@@ -827,14 +832,26 @@ def test_generator_constructs_model_owned_lane_configs(monkeypatch):
             n_layers=1,
             tt_data_parallel=2,
             trace_mode="all",
-            device_sampling_enabled=True,
+            device_sampling_enabled=device_sampling_enabled,
         )
     )
 
     assert isinstance(generator.target, LaneGroupExecutor)
     assert len(executor_calls) == 2
     assert all(isinstance(config, llama_executor.Llama3ExecutorConfig) for _, config in executor_calls)
-    assert all(not config.warmup.include_decode_top_k for _, config in executor_calls)
+    assert all(config.warmup.include_decode_top_k is device_sampling_enabled for _, config in executor_calls)
+    for _, executor_config in executor_calls:
+        plan = _build_plan(
+            warmup=executor_config.warmup,
+            layout=PageTableLayout(block_size=32, raw_capacity_width=32, prefill_width=64, decode_width=32),
+            prefill_sequence_lengths=(128,),
+            lane_batch_size=2,
+            allow_force_argmax=True,
+            can_sample_on_device=device_sampling_enabled,
+        )
+        assert [case.sampling_path for case in plan.decode] == (
+            ["logits", "argmax", "topk"] if device_sampling_enabled else ["logits"]
+        )
     assert isinstance(generator._adapter.config, llama_generator.VLLMAdapterConfig)
     assert vars(generator._adapter) == {"config": generator._adapter.config}
     assert generator._adapter.config.trace.mode == "all"
