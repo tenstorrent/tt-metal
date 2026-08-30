@@ -470,6 +470,31 @@ class CosyVoiceTTNN:
         synth = TtStreamingSynthesizer(self.device, self.flow, self.hift, stream_config, self.dtype)
         stream_ctx, rng_for_chunk = self._stream_ctx(ctx, generator)
 
+        # **Warm the chunk geometry before `generate` captures its decode trace.**
+        # This is not an optimisation, it is a correctness requirement, and TTNN says
+        # so: "Allocating device buffers is unsafe due to the existence of an active
+        # trace." The whole point of this method is that the flow decoder and the
+        # vocoder run *from inside* the decode loop -- so they allocate while the trace
+        # is live, for shapes the allocator may never have seen. Doing it in that order
+        # hangs the device outright (log frozen, JIT cache flat, 100 % CPU), reproducibly
+        # and on a freshly reset board.
+        #
+        # One throwaway chunk fixes it: every mid-utterance chunk is exactly
+        # `token_hop_len + token_overlap_len` tokens, so allocating and freeing that
+        # geometry here means the callback later finds shapes the allocator already
+        # knows. The filler tokens are arbitrary -- nothing reads the audio, only the
+        # shapes matter -- and the cost is one chunk's work, once per call.
+        #
+        # The *final* chunk's length still depends on how many tokens get generated and
+        # cannot be warmed in advance. It is also the last thing to run, by which point
+        # the trace has served its purpose; if that turns out to matter, releasing the
+        # trace before the final chunk is the next step.
+        warm_tokens = [int(ctx.text_tokens.flatten()[0])] * synth.cfg.chunk_size()
+        with synth.session(stream_ctx, rng_for_chunk) as warm:
+            for wav, _n in warm.push_all(warm_tokens):
+                ttnn.deallocate(wav)
+            ttnn.deallocate(warm.finish()[0])
+
         chunks: list = []
         first_audio_s: float | None = None
         t0 = time.perf_counter()
