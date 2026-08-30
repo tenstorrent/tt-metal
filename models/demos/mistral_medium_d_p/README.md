@@ -92,7 +92,7 @@ skipped), so the 1-chip tests exercise the same code, not a second branch.
 
 | | files | tests |
 |---|---|---|
-| **Attention** | `tt/attention/*`, `tt/rope.py`, `tt/rope_tables.py` | `test_rope_vs_hf`, `test_ring_joint_sp_vs_ref` |
+| **Attention** | `tt/attention/*`, `tt/rope.py`, `tt/rope_tables.py` | `test_rope_vs_hf`, `test_ring_joint_sp_vs_ref`, `test_attention_vs_ref` |
 | **MLP** | `tt/mlp.py` | `test_swiglu_vs_ref`, `test_mlp_vs_ref` |
 | **Shared — frozen** | `config.py`, `tt/ccl.py`, `utils/`, `configs/`, `reference/`, `tt/checkpoint.py`, `tt/rms_norm.py`, `tt/model_config.py`, `tests/test_factory.py`, `tests/unit/shapes.py`, `conftest.py` | `test_checkpoint_ingest`, `test_reference_model`, `test_rms_norm_vs_ref` |
 
@@ -104,7 +104,7 @@ test feeds a full-emb activation in and checks the reduce-scattered output.
 | tier | devices | what it retires |
 |---|---|---|
 | host | **0** | YaRN tables vs HF bit-for-bit, fp8 dequant + Meta-RoPE swizzle, torch ref vs `Ministral3DecoderLayer` |
-| `8x4` | **32** | **ring-joint SDPA at the SP=8 × TP=4 target** (24 Q / 2 KV heads per chip) — Blackhole Galaxy |
+| `8x4` | **32** | **ring-joint SDPA at the SP=8 × TP=4 target** (24 Q / 2 KV heads per chip), and the **whole attention block** end to end — Blackhole Galaxy |
 
 The ladder is deliberately short: the host tier, and the real shape. Rungs are added back one at a
 time as hardware becomes reachable, so a green run always means something was really tested rather
@@ -112,8 +112,7 @@ than skipped. Currently parked, in the order they should return:
 
 | rung | what it needs | what it would retire |
 |---|---|---|
-| QKV + o_proj on `8x4` | the Galaxy we already target | column/row-parallel splits and the TP reduce-scatter close |
-| full block on `8x4` | Galaxy | the two axes composed — SP ring + TP reduce-scatter in one call |
+| a first green run of `test_attention_vs_ref` | Galaxy time | the whole block — it is written but **unrun** |
 
 ### There is no scaled-down rung, and there cannot be one on a Galaxy
 
