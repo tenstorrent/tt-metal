@@ -1,0 +1,82 @@
+// File: ttnn/operations/math.cpp (or similar location where addcdiv is implemented)
+// This patch corrects the addcdiv operation to follow standard semantics:
+//   out = in1 + value * (in2 / |in2|)   for in2 != 0
+//   out = in1 + sign(in2)*value         for in2 != 0 (equivalently)
+//   out = ±inf (or NaN)                 for in2 == 0 (per IEEE rules)
+
+#include <cmath>
+#include <limits>
+
+namespace ttnn::operations::math {
+
+// Existing signature (adjust namespace/path as needed)
+Tensor addcdiv(
+    const Tensor& input,
+    const Tensor& tensor1,
+    const Tensor& tensor2,
+    const float value,
+    const Tensor& output = Tensor()) {
+    
+    // Validate inputs (omitted for brevity; assume already done upstream)
+
+    // Compute: output = input + value * (tensor1 / tensor2)
+    // BUT: per standard addcdiv semantics (PyTorch, NumPy), it's:
+    //      output = input + value * sign(tensor1) * (|tensor1| / |tensor2|)
+    // However, most implementations simply do: input + value * tensor1 / tensor2
+    // The bug reported implies it was doing: input * value / tensor2 instead
+
+    // Correct implementation:
+    // 1. Compute tensor1 / tensor2 with IEEE-compliant division (handles 0, inf, NaN)
+    // 2. Multiply by value
+    // 3. Add to input
+
+    // Use element-wise operations:
+    auto temp = tensor1 / tensor2;  // IEEE division: finite/0 → ±inf, 0/0 → NaN
+    temp = temp * value;            // Scale by value
+    auto result = input + temp;     // Final addition
+
+    return result;
+}
+
+// Alternative explicit implementation (if operator overloads not available):
+Tensor addcdiv_explicit(
+    const Tensor& input,
+    const Tensor& tensor1,
+    const Tensor& tensor2,
+    const float value,
+    const Tensor& output = Tensor()) {
+    
+    // Get tensor shapes and sizes (assumed available)
+    const auto& shape = input.shape();
+    const size_t numel = input.numel();
+
+    // Allocate output if needed
+    Tensor out_tensor = output.empty() ? Tensor(shape, input.dtype()) : output;
+
+    // Access data pointers (simplified; real code uses device buffers)
+    auto in_data = input.data<float>();
+    auto t1_data = tensor1.data<float>();
+    auto t2_data = tensor2.data<float>();
+    auto out_data = out_tensor.data<float>();
+
+    for (size_t i = 0; i < numel; ++i) {
+        float t2_val = t2_data[i];
+        float div = 0.0f;
+        
+        if (t2_val == 0.0f) {
+            // Handle division by zero per IEEE: sign determines ±inf
+            float t1_val = t1_data[i];
+            if (t1_val > 0.0f) div = std::numeric_limits<float>::infinity();
+            else if (t1_val < 0.0f) div = -std::numeric_limits<float>::infinity();
+            else div = std::numeric_limits<float>::quiet_NaN(); // 0/0 → NaN
+        } else {
+            div = t1_data[i] / t2_val;
+        }
+
+        out_data[i] = in_data[i] + value * div;
+    }
+
+    return out_tensor;
+}
+
+} // namespace ttnn::operations::math
