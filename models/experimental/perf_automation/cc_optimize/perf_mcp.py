@@ -4682,7 +4682,7 @@ def git_head() -> dict:
     return {"sha": gitio.head_sha(repo)}
 
 
-def _record_committed_win(message: str) -> None:
+def _record_committed_win(message: str, sha: str = "") -> None:
     """Log the just-committed lever as a win against the current target.
 
     git_commit IS the bank-a-verified-win action, but the ✓win marks in RUN_REPORT.md come
@@ -4690,7 +4690,8 @@ def _record_committed_win(message: str) -> None:
     re-measurements (which no longer beat the already-lowered floor, so beat_baseline=false) and
     never marks the winning moment, leaving committed wins shown as ·try. Deriving the win mark
     from the commit itself makes the report reflect what was actually banked. Fail-open: never
-    raises, so it can never break the commit."""
+    raises, so it can never break the commit. The sha is recorded with the win so a reader (the
+    live dashboard's history table) can point at the exact commit instead of matching messages."""
     try:
         t = _load_target()
         op = t.get("op")
@@ -4739,6 +4740,7 @@ def _record_committed_win(message: str) -> None:
                 "beat_baseline": True,
                 "wedged": False,
                 "kernel_detected_in_source": True,
+                "commit": sha or None,
                 "note": "committed: " + " ".join((message or "").split())[:140],
             }
         )
@@ -4812,7 +4814,7 @@ def git_commit(message: str) -> dict:
         pathspec = None
     sha = gitio.commit(repo, message, pathspec)
     if sha:
-        _record_committed_win(message)
+        _record_committed_win(message, sha)
         _promote_fullpipe_pending()
         _write_untracked_baseline()
     return {"committed": bool(sha), "sha": sha}

@@ -120,3 +120,31 @@ def test_record_committed_win_noop_without_target(monkeypatch):
     monkeypatch.setattr(perf_mcp, "_LAST_TARGET_PATH", Path("/nonexistent/xyz.target"))
     perf_mcp._record_committed_win("perf: x")
     assert recs == []  # no target -> nothing recorded, never raises
+
+
+def test_record_committed_win_carries_the_commit_sha(monkeypatch):
+    """The win row names the commit that banked it, so the live dashboard's history table can point
+    at the exact sha instead of matching commit-message text after the fact."""
+    recs = _capture_appends(monkeypatch)
+    monkeypatch.setattr(
+        perf_mcp,
+        "_LAST_TARGET",
+        {"op": "MatmulDeviceOperation 64 x 2048 x 4096", "rung": "knob:dtype", "measured_ms": 12.34},
+    )
+    perf_mcp._record_committed_win("perf(attn): bf8_b weights", "a3f9c21deadbeef")
+    assert recs[0]["commit"] == "a3f9c21deadbeef"
+    # legacy call shape (message only) still works and records no sha
+    recs.clear()
+    perf_mcp._record_committed_win("perf(attn): bf8_b weights")
+    assert recs[0]["commit"] is None
+
+
+def test_git_commit_passes_the_sha_into_the_win_record(monkeypatch, tmp_path):
+    recs = _capture_appends(monkeypatch)
+    _gates_ok(monkeypatch, tmp_path)
+    monkeypatch.setattr(perf_mcp, "_LAST_TARGET", {"op": "MatmulDeviceOperation", "rung": "grid", "measured_ms": 12.34})
+    monkeypatch.setattr(perf_mcp.gitio, "commit", lambda *a, **k: "sha1234")
+    monkeypatch.setattr(perf_mcp.gitio, "repo_root", lambda p: perf_mcp._MODEL_ROOT)
+    out = _git_commit("perf: full grid")
+    assert out["committed"] is True
+    assert recs[0]["commit"] == "sha1234"

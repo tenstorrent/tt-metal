@@ -9997,6 +9997,7 @@ from .commands.capture_inputs import cmd_capture_inputs  # noqa: F401
 from .commands.op_synth import cmd_op_synth  # noqa: F401
 from .commands.emit_e2e import cmd_emit_e2e  # noqa: F401
 from .commands.optimize import cmd_optimize  # noqa: F401
+from .commands.optimize_dashboard import cmd_optimize_dashboard  # noqa: F401
 from .commands.auto_onboard import cmd_auto_onboard  # noqa: F401
 
 
@@ -11343,7 +11344,49 @@ def main(argv: Optional[List[str]] = None) -> int:
         "/tmp either way -- they are a disposable sandbox, and everything worth keeping is committed "
         "to the run's branch.",
     )
+    popt.add_argument(
+        "--dashboard",
+        action="store_true",
+        dest="dashboard",
+        help="serve the live optimize dashboard alongside the run: metric cards, per-stage bars, and "
+        "each lever as it is kept/reverted, polling the run's own state files. The URL is printed at "
+        "start; the view keeps serving after the run finishes so the final state stays inspectable.",
+    )
+    popt.add_argument(
+        "--dashboard-host",
+        default="127.0.0.1",
+        dest="dashboard_host",
+        help="interface the --dashboard server binds to (default 127.0.0.1; use 0.0.0.0 to view from "
+        "another host, e.g. over SSH without port-forwarding).",
+    )
+    popt.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8798,
+        dest="dashboard_port",
+        help="port for the --dashboard server (default 8798; falls back to a free port if taken).",
+    )
     popt.set_defaults(func=cmd_optimize)
+
+    pdash = sub.add_parser(
+        "optimize-dashboard",
+        help="Serve the live optimize dashboard for an existing run (newest, or --run / a target's "
+        "newest) WITHOUT starting an optimization. Read-only view of the run's state files.",
+    )
+    pdash.add_argument(
+        "target",
+        nargs="?",
+        help="HF model_id of a planner-emitted demo, OR a demo directory path — show its newest run "
+        "(default: the newest run overall).",
+    )
+    pdash.add_argument("--run", dest="run", help="explicit run id or run directory path to show")
+    pdash.add_argument(
+        "--host", default="127.0.0.1", help="interface to bind (default 127.0.0.1; 0.0.0.0 for remote viewing)"
+    )
+    pdash.add_argument(
+        "--port", type=int, default=8798, help="port to serve on (default 8798; free port chosen if taken)"
+    )
+    pdash.set_defaults(func=cmd_optimize_dashboard)
 
     pao = sub.add_parser(
         "auto-onboard",

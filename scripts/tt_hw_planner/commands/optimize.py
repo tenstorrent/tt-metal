@@ -738,6 +738,28 @@ def cmd_optimize(args) -> int:
                 return 1
             run_root, run_demo = iso["wt"], iso["demo_in_wt"]
             print(f"  [optimize/cc] existing demo -> isolated on branch '{iso['branch']}' (working tree untouched)")
+        dash_url = None
+        if getattr(args, "dashboard", False):
+            # The run directory does not exist until the engine creates it, so the collector
+            # RE-RESOLVES it on every poll; state-dir env exported later (--persist) is likewise
+            # read per poll. A dashboard failure must never fail the run.
+            from ..optimize_dashboard import collect_state, find_run_dir, serve_in_thread, state_dir_candidates
+
+            _dash_slug = run_demo.name
+
+            def _dash_collect():
+                rd = find_run_dir(run_root, slug=_dash_slug)
+                if rd is None:
+                    return {"run": {"id": None, "live": False}, "model": {"slug": _dash_slug}}
+                return collect_state(rd, state_dir_candidates(run_root, _dash_slug), _dash_slug)
+
+            try:
+                _srv, _t, dash_url = serve_in_thread(
+                    getattr(args, "dashboard_host", "127.0.0.1"), getattr(args, "dashboard_port", 8798), _dash_collect
+                )
+                print(f"  [optimize/cc] dashboard: {dash_url} (levers shown live as they land)")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [optimize/cc] dashboard unavailable ({exc}); the run continues without it")
         if getattr(args, "module_level", False):
             from .module_optimize import run_module_level_optimize
 
@@ -838,7 +860,10 @@ def cmd_optimize(args) -> int:
 
                 _mr = _fresh_reset(run_demo)
                 if _mr.get("changed"):
-                    print("  [optimize/cc] --fresh: model %s (baseline and ceiling now describe the same tree)" % _mr["why"])
+                    print(
+                        "  [optimize/cc] --fresh: model %s (baseline and ceiling now describe the same tree)"
+                        % _mr["why"]
+                    )
                 else:
                     print("  [optimize/cc] --fresh: model NOT reset -- %s" % _mr.get("why"))
             except Exception as _fe:  # noqa: BLE001 -- a clear that cannot run must not take the run down
@@ -862,13 +887,24 @@ def cmd_optimize(args) -> int:
         )
         if result is None:
             print("  [optimize/cc] run failed (see messages above)")
-            return 1
-        for r in result.get("results", []):
-            print(f"      pipeline {r['task']}: {r['rounds']} round(s), can_stop={r['can_stop']}")
-        if iso is None:
-            _write_optimize_fallback(
-                demo_dir, args.target or demo_dir.name, args, _latest_summary(repo_root / Path(PERF_DIR))
-            )
-        if iso is not None:
-            _report_isolation(iso, repo_root)
-        return 0
+            rc = 1
+        else:
+            for r in result.get("results", []):
+                print(f"      pipeline {r['task']}: {r['rounds']} round(s), can_stop={r['can_stop']}")
+            if iso is None:
+                _write_optimize_fallback(
+                    demo_dir, args.target or demo_dir.name, args, _latest_summary(repo_root / Path(PERF_DIR))
+                )
+            if iso is not None:
+                _report_isolation(iso, repo_root)
+            rc = 0
+        if dash_url is not None:
+            # The daemon thread dies with the process; hold the process open so the final state —
+            # which levers landed and what they bought — stays inspectable after the run.
+            print(f"  [optimize/cc] run finished — dashboard still serving at {dash_url} (Ctrl+C to exit)")
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                pass
+        return rc
