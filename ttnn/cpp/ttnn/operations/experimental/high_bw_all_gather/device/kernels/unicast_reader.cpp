@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 #include "unicast_common.hpp"
 
 using address_t = uint32_t;
@@ -57,6 +58,15 @@ void kernel_main() {
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(11);
     constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    constexpr auto page_bundle_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
+    constexpr uint32_t paged_ct_base = page_bundle_args.next_compile_time_args_offset();
+    constexpr bool has_paged_input = get_compile_time_arg_val(paged_ct_base) != 0;
+    constexpr uint32_t page_bundle_cb_id = get_compile_time_arg_val(paged_ct_base + 1);
+    constexpr uint32_t page_size_rows = get_compile_time_arg_val(paged_ct_base + 2);
+    constexpr uint32_t page_num_layers = get_compile_time_arg_val(paged_ct_base + 3);
+    constexpr uint32_t page_layer_idx = get_compile_time_arg_val(paged_ct_base + 4);
+    constexpr uint32_t logical_wt = get_compile_time_arg_val(paged_ct_base + 5);
+    constexpr uint32_t page_bundle_count = get_compile_time_arg_val(paged_ct_base + 6);
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
@@ -67,6 +77,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     const address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
+    const address_t page_bundle_indices_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
@@ -83,11 +94,28 @@ void kernel_main() {
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
+    const auto page_bundle_accessor = TensorAccessor(page_bundle_args, page_bundle_indices_address);
 
     Noc noc;
     CircularBuffer cb(cb0_id);
     const DynamicL1Semaphore ready_sem(ready_sem_addr);
     const DynamicL1Semaphore data_valid_sem(data_valid_sem_addr);
+
+    uint32_t page_bundle_l1 = 0;
+    if constexpr (has_paged_input) {
+        CircularBuffer page_bundle_cb(page_bundle_cb_id);
+        page_bundle_l1 = page_bundle_cb.get_write_ptr();
+        noc.async_read(
+            page_bundle_accessor,
+            CoreLocalMem<uint16_t>(page_bundle_l1),
+            page_bundle_count * sizeof(uint16_t),
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
+        invalidate_l1_cache();
+    }
+    const PagedKVAccessor<decltype(input_tensor_accessor)> paged_input{
+        input_tensor_accessor, page_bundle_l1, page_size_rows, page_num_layers, 1, page_layer_idx};
 
     OutputStripeIterator<
         output_chunks_per_page,
@@ -124,13 +152,21 @@ void kernel_main() {
                 cb.reserve_back(1);
                 uint32_t l1_write_addr = cb.get_write_ptr();
                 for (uint32_t i = 0; i < inputs_per_cb_page && page < input_page_id_end; ++i) {
-                    noc.async_read(
-                        input_tensor_accessor,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        input_page_size,
-                        {.page_id = page},
-                        {},
-                        {});
+                    if constexpr (has_paged_input) {
+                        const uint32_t logical_row = page / logical_wt;
+                        const uint32_t col = page % logical_wt;
+                        const uint32_t physical_page = paged_input.physical_row(logical_row) * logical_wt + col;
+                        paged_input.async_read_page(
+                            noc, CoreLocalMem<uint32_t>(l1_write_addr), physical_page, input_page_size);
+                    } else {
+                        noc.async_read(
+                            input_tensor_accessor,
+                            CoreLocalMem<uint32_t>(l1_write_addr),
+                            input_page_size,
+                            {.page_id = page},
+                            {},
+                            {});
+                    }
                     l1_write_addr += input_page_size;
                     page += slice_step;
                 }

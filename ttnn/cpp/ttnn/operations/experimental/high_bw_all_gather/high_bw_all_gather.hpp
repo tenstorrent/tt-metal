@@ -21,7 +21,11 @@ Tensor high_bw_all_gather(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     std::optional<uint32_t> num_links = std::nullopt,
     std::optional<uint32_t> input_batch_index = std::nullopt,
-    std::optional<uint32_t> gathered_dim_size = std::nullopt);
+    std::optional<uint32_t> gathered_dim_size = std::nullopt,
+    const std::optional<Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32,
+    uint32_t kv_cache_num_layers = 1,
+    uint32_t kv_cache_layer_idx = 0);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

@@ -29,6 +29,14 @@ selection.
   uses the line schedule because its ordinary and wrap neighbors coincide;
 - semaphores use L1-small when the device reserves it, otherwise L1 with a
   warning.
+- optional paged-KV input for sparse-MLA cache gathers. In this mode the input
+  is a shared ND-sharded pool shaped
+  `[physical_bundles * num_layers, 1, page_size, D]`, and a uint16 row-major
+  interleaved-DRAM table maps logical pages to physical bundles. The operation
+  gathers the selected layer as a logical `[1, 1, table_length * page_size, D]`
+  tensor without first materializing a contiguous cache. Paged input supports
+  an active `gathered_dim_size` prefix, but is incompatible with
+  `input_batch_index` because the page table already selects the request;
 - worker and mux cores must be exclusive to this program for its duration. On
   the qualified two-link Blackhole ring, the large-message path uses 32
   reader/writer workers plus four mux cores. Each active mux owns its
@@ -229,3 +237,13 @@ this test. The test requires the standalone unicast kernel in profiler records,
 compares every gathered replica exactly (including opaque FP8 payload bytes and
 decoded BFP8_B tiles), and enforces a 90 GB/s regression floor for Fabric1D
 Ring and active-axis Fabric2D Torus, and a 45 GB/s floor for line schedules.
+
+Run the paged-KV coverage, including non-monotonic mappings, layer selection,
+program-cache address repatching, active prefixes, all supported formats, and
+the paged-versus-contiguous performance gate:
+
+```bash
+scripts/run_safe_pytest.sh --run-all \
+  tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py \
+  -k 'paged_kv'
+```
