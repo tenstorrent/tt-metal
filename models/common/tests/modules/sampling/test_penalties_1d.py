@@ -789,6 +789,55 @@ class TestConfigUnitMore:
 # ==============================================================================
 
 
+@pytest.mark.parametrize(
+    ("batch_height", "expected_operation"),
+    [(1, "to_layout"), (32, "tilize")],
+)
+def test_histogram_tilize_preserves_batch32_path_and_pads_smaller_batches(
+    monkeypatch,
+    batch_height,
+    expected_operation,
+):
+    """Only non-tile batch heights use the padding-aware layout conversion."""
+
+    calls = []
+    counts = SimpleNamespace(padded_shape=(batch_height, 1024))
+    result = object()
+    pen = object.__new__(Penalties1D)
+    pen._op_kwargs = {"sub_core_grids": "sub-grid"}
+    pen._use_low_perf_tilize = True
+
+    monkeypatch.setattr(
+        ttnn,
+        "tilize",
+        lambda tensor, **kwargs: calls.append(("tilize", tensor, kwargs)) or result,
+    )
+    monkeypatch.setattr(
+        ttnn,
+        "to_layout",
+        lambda tensor, layout, **kwargs: calls.append(("to_layout", tensor, layout, kwargs)) or result,
+    )
+
+    assert pen._tilize_counts(counts) is result
+    if expected_operation == "tilize":
+        assert calls == [
+            (
+                "tilize",
+                counts,
+                {"sub_core_grids": "sub-grid", "use_low_perf": True},
+            )
+        ]
+    else:
+        assert calls == [
+            (
+                "to_layout",
+                counts,
+                ttnn.TILE_LAYOUT,
+                {"sub_core_grids": "sub-grid"},
+            )
+        ]
+
+
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
 class TestPenalties1DDeviceExtra:
     """Coverage for methods not exercised by the reference tests."""
@@ -851,55 +900,6 @@ class TestPenalties1DDeviceExtra:
 
         prompt_tokens = torch.randint(0, vocab_size, (max_batch_size, 10))
         pen.init_prompt_penalties(params, accum, prompt_tokens)
-
-    @pytest.mark.parametrize(
-        ("batch_height", "expected_operation"),
-        [(1, "to_layout"), (32, "tilize")],
-    )
-    def test_histogram_tilize_preserves_batch32_path_and_pads_smaller_batches(
-        self,
-        monkeypatch,
-        batch_height,
-        expected_operation,
-    ):
-        """Only non-tile batch heights use the padding-aware layout conversion."""
-
-        calls = []
-        counts = SimpleNamespace(padded_shape=(batch_height, 1024))
-        result = object()
-        pen = object.__new__(Penalties1D)
-        pen._op_kwargs = {"sub_core_grids": "sub-grid"}
-        pen._use_low_perf_tilize = True
-
-        monkeypatch.setattr(
-            ttnn,
-            "tilize",
-            lambda tensor, **kwargs: calls.append(("tilize", tensor, kwargs)) or result,
-        )
-        monkeypatch.setattr(
-            ttnn,
-            "to_layout",
-            lambda tensor, layout, **kwargs: calls.append(("to_layout", tensor, layout, kwargs)) or result,
-        )
-
-        assert pen._tilize_counts(counts) is result
-        if expected_operation == "tilize":
-            assert calls == [
-                (
-                    "tilize",
-                    counts,
-                    {"sub_core_grids": "sub-grid", "use_low_perf": True},
-                )
-            ]
-        else:
-            assert calls == [
-                (
-                    "to_layout",
-                    counts,
-                    ttnn.TILE_LAYOUT,
-                    {"sub_core_grids": "sub-grid"},
-                )
-            ]
 
     # ------------------------------------------------------------------
     # forward() prompt init dispatch
