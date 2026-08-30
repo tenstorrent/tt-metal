@@ -151,6 +151,26 @@ inline uint32_t util_agg_hdr_checksum(
 // A host that sees a bad checksum must retry, NOT fall back to the previous
 // head -- the entries are already committed and skipping them loses samples.
 
+// Plain host-side view of the header.
+//
+// util_agg_msg_t's fields are volatile -- they are written by the aggregator and polled
+// by a host that must not have them cached -- which makes the struct non-trivially
+// copyable and therefore not a legal memcpy destination. This is the identical layout
+// without the qualifier, for host code that reads a landed journal into a buffer.
+struct util_agg_hdr_view_t {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t head;
+    uint32_t capacity;
+    uint32_t num_cores;
+    uint32_t sweep_count;
+    uint32_t lost;
+    uint32_t src_chip;
+    uint32_t hdr_checksum;
+    uint32_t reserved[7];
+};
+static_assert(sizeof(util_agg_hdr_view_t) == sizeof(util_agg_msg_t), "host view must match the device header");
+
 // Offset of journal[] from the base of the landing region. The aggregator
 // computes a destination as UTIL_AGG_JOURNAL_OFFSET + (head % capacity) * 32,
 // which is 32 B-aligned for every head -- see the alignment note on

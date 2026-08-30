@@ -305,7 +305,11 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
         static_cast<uint32_t>(dest_base & 0xFFFFFFFFull),
         static_cast<uint32_t>(dest_base >> 32),
         UTIL_AGG_CAPACITY,
-        static_cast<uint32_t>(src_node.chip_id),
+        // PHYSICAL chip id, not src_node.chip_id. The fabric node id is mesh-local
+        // (chip 4 reports 0), which cannot identify the source chip to a collector that
+        // thinks in physical ids and has no mesh map. Observed in the first live probe:
+        // a journal from remote chip 4 announced src_chip=0.
+        static_cast<uint32_t>(sender->id()),
         kSweepIntervalCycles,
         1u,  // unicast_hops: remote chip -> its own MMIO chip is one hop
         l1.seq_scratch,
@@ -350,6 +354,9 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
         return h;
     };
 
+    // TTNVTOP_HOLD_SECONDS keeps the aggregator alive after the assertions so another
+    // process (the collector's --journal-probe) can read the landed journal. The kernel
+    // dies when this process closes the device, so without a hold there is no window.
     std::this_thread::sleep_for(std::chrono::seconds(3));
     auto h1 = read_hdr();
     std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -386,6 +393,12 @@ TEST_F(Fabric1DFixture, TestEthAggregatorJournalLands) {
     // Entries must actually be arriving. A journal that only ever ships headers
     // is a working transport and a broken sweep.
     EXPECT_GT(h2[2], 0u) << "no journal entries were ever written -- sweep found no ring activity";
+
+    if (const char* hold = std::getenv("TTNVTOP_HOLD_SECONDS")) {
+        const int secs = std::atoi(hold);
+        log_info(tt::LogTest, "aggregator: holding {} s so another process can read the journal", secs);
+        std::this_thread::sleep_for(std::chrono::seconds(secs));
+    }
 
     if (h2[2] > 0) {
         const uint32_t n = std::min<uint32_t>(h2[2], 8u);

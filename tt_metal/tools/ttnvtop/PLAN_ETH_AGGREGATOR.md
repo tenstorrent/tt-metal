@@ -1090,6 +1090,52 @@ effect on an idle machine.
 
 Until that lands, the aggregator's launcher applies the pinning itself.
 
+## 5i. Collector-side journal discovery verified -- 2026-08-29
+
+The last M1 piece is the collector reading the landed journal. Discovery and header
+decode are done and verified against a live aggregator on the T3K; entry demux into the
+attribution path is not.
+
+`ttnvtop-collector --journal-probe`, run from a SEPARATE process while the workload
+process held all 8 chips:
+
+```
+journal probe: landing base 0xe200
+  chip 3 eth (24,16)  src_chip=4 cores=64 capacity=6142 head=1249692 sweeps=19072
+```
+
+That confirms, on hardware:
+
+- **The landing-address formula is right.** The collector does not link tt-metal (7.2),
+  so it mirrors `wh_hal_idle_eth.cpp`'s
+  `((MEM_IERISC_MAP_END + 25 KiB - 1) | 31) + 1` -> `0xe200`, matching the launcher's
+  `dest=0x000041800000e200`.
+- **Discovery needs no IPC.** The header is self-describing, so the collector finds the
+  journal by scanning the MMIO chip's 16 ethernet cores for `TTAG` and validating the
+  checksum. In M1 the launcher is the workload process and the collector is a separate
+  one, with no channel between them; this closes that gap without inventing one.
+- **It never touches the tunnel.** The probe skips remote chips outright -- journals
+  land on the MMIO side by design, so this is plain PCIe.
+- **`util_aggregator.h` being dependency-free paid off**: the collector includes it
+  directly, so the journal layout has ONE definition shared with the kernel, unlike the
+  ring layout which is hand-mirrored as `ttnvtop_ring`.
+
+Two bugs the first live run exposed, both fixed:
+
+- **`src_chip` was the fabric node id, not the physical chip id.** A journal from remote
+  chip 4 announced `src_chip=0`, because the fabric node id is mesh-local. The collector
+  thinks in physical chip ids and has no mesh map, so it could not have demuxed. The
+  launcher now stamps the physical id.
+- **`--journal-probe` was not actually read-only.** It armed the perf counters, wrote
+  `period_cycles` on every core, and ran the FPU_OUT_L liveness probe -- all device
+  WRITES, and on a remote chip they cross the tunnel. The flag claimed read-only in its
+  help text while perturbing every chip it looked at. Now genuinely read-only.
+
+**Remaining for M1:** ingest journal entries into the existing per-kernel attribution
+path -- demux `core_id` to the source chip's `CoreState` using the same live-x/live-y
+ordering the kernel walks, track `last_head` and `lost`, and fall back to the per-core
+tunnel drain when no journal is present or `sweep_count` stops advancing.
+
 ## 6. Risks
 
 | Risk | Mitigation |

@@ -45,6 +45,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "umd/device/soc_arch_descriptor.hpp"
 #include "umd/device/soc_descriptor.hpp"
 #include "umd/device/topology/topology_discovery.hpp"
 #include "umd/device/topology/topology_discovery_options.hpp"
@@ -58,6 +59,12 @@
 // only — BH is a Phase 3 task per the plan.
 #define HAL_BUILD ttnvtop_wh_tensix
 #include "dev_mem_map.h"
+
+// Phase 2.2 M1. Unlike util_sampler.h -- which is firmware-only and therefore
+// hand-mirrored below as ttnvtop_ring -- util_aggregator.h is deliberately
+// dependency-free and can be included directly on the host, so the journal layout
+// has exactly one definition shared with the kernel.
+#include "util_aggregator.h"
 #include "hostdev/dev_msgs.h"
 using namespace ttnvtop_wh_tensix;  // NOLINT(google-build-using-namespace)
 
@@ -100,6 +107,7 @@ static_assert(sizeof(Header) == 32);
 using tt::CoordSystem;
 using tt::CoreType;
 using tt::umd::CoreCoord;
+using tt::umd::SocArchDescriptor;
 using tt::umd::SocDescriptor;
 using tt::umd::TopologyDiscovery;
 using tt::umd::TopologyDiscoveryOptions;
@@ -176,6 +184,7 @@ struct CliOptions {
     std::set<int> device_filter;  // empty = all chips
     std::string log_file;         // non-empty = redirect stderr there
     bool show_help = false;
+    bool journal_probe = false;  // Phase 2.2 M1: scan for aggregator journals and exit
 };
 
 void print_help(const char* argv0) {
@@ -198,6 +207,10 @@ void print_help(const char* argv0) {
               << kDefaultPublishHz
               << ").\n"
                  "  --device N              Only monitor chip N. Repeat to select several.\n"
+                 "  --journal-probe        scan every chip's ethernet cores for an\n"
+                 "                         aggregator journal, print what was found, exit\n"
+                 "  --journal-probe         Scan every chip's ethernet cores for a Phase 2.2\n"
+                 "                          aggregator journal, print what was found, and exit.\n"
                  "  --log-file PATH         Redirect collector stderr (incl. UMD logs) to PATH.\n"
                  "\n"
                  "Examples:\n"
@@ -255,6 +268,8 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
                 return false;
             }
             out.device_filter.insert(d);
+        } else if (a == "--journal-probe") {
+            out.journal_probe = true;
         } else if (a == "--log-file") {
             const char* v = need_arg("--log-file");
             if (v == nullptr) {
@@ -344,6 +359,82 @@ struct KernelTimeAccumulator {
     }
 };
 
+// Phase 2.2 M1 journal support.
+//
+// An aggregator kernel on a remote chip's idle eth core pushes its journal over
+// fabric into an idle-eth L1 slot on that chip's MMIO chip. The collector reads the
+// LANDING copy over plain PCIe and never touches the ethernet tunnel -- which is the
+// entire point: a host read of a remote chip takes UMD's NON_MMIO mutex and blocks for
+// tens of seconds under load (PLAN_ETH_AGGREGATOR.md 5c).
+namespace ttnvtop_agg {
+
+// Idle-eth UNRESERVED base, mirroring wh_hal_idle_eth.cpp / bh_hal_idle_eth.cpp:
+//     ((MEM_IERISC_MAP_END + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1
+// The collector deliberately does not link tt-metal (see PLAN 7.2), so the Hal is not
+// available and this is mirrored, like the ring layout above. L1_KERNEL_CONFIG_SIZE is
+// 25 KiB and max_alignment is max(DRAM_ALIGNMENT, L1_ALIGNMENT) = 32 on both arches.
+constexpr uint32_t kL1KernelConfigSize = 25u * 1024u;
+constexpr uint32_t kMaxAlignment = 32u;
+constexpr uint64_t kLandingBase =
+    ((static_cast<uint64_t>(MEM_IERISC_MAP_END) + kL1KernelConfigSize - 1u) | (kMaxAlignment - 1u)) + 1u;
+
+// A journal found on an MMIO chip, describing one remote chip.
+struct Landing {
+    tt::umd::CoreCoord core{};  // idle eth core on the MMIO chip holding the journal
+    uint32_t src_chip = 0;      // fabric node id the aggregator stamped in
+    uint32_t capacity = 0;
+    uint32_t num_cores = 0;
+    uint32_t last_head = 0;
+    uint32_t last_sweep_count = 0;
+    uint64_t last_advance_us = 0;  // for staleness: when sweep_count last moved
+    bool primed = false;
+};
+
+// Scan one chip's ethernet cores for a landed journal.
+//
+// All 16 channels are probed, not just the ones we believe are idle: the collector has
+// no control plane and therefore no get_inactive_ethernet_cores(), and 16 reads of 64 B
+// over PCIe is nothing. A core either has 'TTAG' at kLandingBase or it does not.
+//
+// The header is self-describing -- it carries src_chip, capacity and num_cores -- so
+// discovery needs no coordination with whoever launched the aggregator. That matters
+// because in M1 the launcher is the workload process and the collector is a separate
+// one, with no IPC between them.
+template <typename Dev>
+inline std::vector<Landing> probe_landings(Dev* dev, const tt::umd::SocDescriptor& soc, uint64_t now_us) {
+    std::vector<Landing> found;
+    std::vector<uint8_t> buf(sizeof(util_agg_msg_t));
+    for (const auto& eth : soc.get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
+        try {
+            dev->read_from_device(buf.data(), eth, kLandingBase, buf.size());
+        } catch (...) {
+            continue;  // core not readable (harvested, in reset) -- not an error here
+        }
+        util_agg_hdr_view_t hdr{};
+        std::memcpy(&hdr, buf.data(), sizeof(hdr));
+        if (hdr.magic != UTIL_AGG_MAGIC) {
+            continue;
+        }
+        const uint32_t sum = util_agg_hdr_checksum(
+            hdr.magic, hdr.version, hdr.head, hdr.capacity, hdr.num_cores, hdr.sweep_count, hdr.lost, hdr.src_chip);
+        if (sum != hdr.hdr_checksum) {
+            continue;  // torn read; the next probe will catch it
+        }
+        Landing l;
+        l.core = eth;
+        l.src_chip = hdr.src_chip;
+        l.capacity = hdr.capacity;
+        l.num_cores = hdr.num_cores;
+        l.last_head = hdr.head;
+        l.last_sweep_count = hdr.sweep_count;
+        l.last_advance_us = now_us;
+        found.push_back(l);
+    }
+    return found;
+}
+
+}  // namespace ttnvtop_agg
+
 struct ChipState {
     uint64_t asic_id = 0;
     tt::ChipId chip_id = 0;
@@ -366,6 +457,16 @@ struct ChipState {
     uint64_t drain_ticks = 0;         // total ring-drain ticks completed (debug)
     uint64_t drain_lost_samples = 0;  // count of entries dropped because head moved more than ring capacity (debug)
     uint64_t drain_entries_seen = 0;  // total ring entries ingested across all cores (debug)
+
+    // Phase 2.2 M1. Populated on an MMIO chip for each remote chip whose aggregator
+    // lands its journal here. Empty when no aggregator is running, in which case the
+    // per-core tunnel drain above remains the only path -- the fallback is not a
+    // degraded mode, it is what the collector has always done.
+    std::vector<ttnvtop_agg::Landing> landings;
+    uint64_t journal_entries_seen = 0;
+    uint64_t journal_lost_reported = 0;  // `lost` as counted BY THE AGGREGATOR, on-chip
+    uint64_t journal_torn_headers = 0;   // checksum mismatches: read again, never skip forward
+    uint64_t journal_stale_ticks = 0;
 };
 
 // Phase 2.1.c registry-SHM writer. Opens `/dev/shm/tt_program_registry`
@@ -601,7 +702,13 @@ int main(int argc, char* argv[]) {
         chip.arch = arch;
         chip.is_remote = dev->is_remote();
 
-        SocDescriptor soc(arch, dev->get_chip_info());
+        // UMD moved SocDescriptor's first parameter from tt::ARCH to a
+        // shared_ptr<const SocArchDescriptor>. This mirrors exactly what
+        // TTDevice::construct_soc_descriptor(nullptr) does internally, so the
+        // descriptor is identical to before — and unlike dev->get_soc_descriptor()
+        // it does not require init_tt_device() to have run (which probes ARC and
+        // would undercut this tool's non-perturbing coexistence model).
+        SocDescriptor soc(std::make_shared<SocArchDescriptor>(arch), dev->get_chip_info());
         const auto worker_cores_noc0 = soc.get_cores(CoreType::TENSIX, CoordSystem::NOC0);
         chip.cores.reserve(worker_cores_noc0.size());
         for (const auto& cc_noc0 : worker_cores_noc0) {
@@ -633,6 +740,22 @@ int main(int argc, char* argv[]) {
         // Populate static per-core fields once, and arm the FPU perf counter
         // so it runs continuously. Kernels that call StartPerfCounters will
         // transiently reset it; the sampler's delta guard drops those ticks.
+        //
+        // --journal-probe advertises itself as read-only, so it must be: arming the
+        // perf counters, overriding period_cycles and the FPU_OUT_L liveness probe are
+        // all device WRITES, and on a remote chip they cross the NON_MMIO tunnel.
+        // Publish the static per-core fields, then skip every write below.
+        if (cli.journal_probe) {
+            for (size_t i = 0; i < chip.cores.size(); ++i) {
+                auto& v = chip.publisher.cores()[i];
+                v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
+                v.noc_y = static_cast<uint8_t>(chip.cores[i].noc_y);
+                v.is_remote = chip.is_remote ? 1u : 0u;
+            }
+            chips.push_back(std::move(chip));
+            continue;
+        }
+
         int armed = 0;
         for (size_t i = 0; i < chip.cores.size(); ++i) {
             auto& v = chip.publisher.cores()[i];
@@ -702,6 +825,39 @@ int main(int argc, char* argv[]) {
     if (chips.empty()) {
         std::cerr << "ttnvtop-collector: no supported chips to monitor.\n";
         return 1;
+    }
+
+    // Phase 2.2 M1 diagnostic. Scans every chip's ethernet cores for a landed
+    // aggregator journal and reports what is there, then exits. Read-only, and it
+    // never touches a remote chip -- journals land on MMIO chips by design, so this
+    // is plain PCIe and cannot take the NON_MMIO mutex.
+    if (cli.journal_probe) {
+        const uint64_t now_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        int total = 0;
+        std::cout << "journal probe: landing base 0x" << std::hex << ttnvtop_agg::kLandingBase << std::dec << "\n";
+        for (auto& chip : chips) {
+            // MMIO chips only. Journals land on the MMIO side by design, and probing a
+            // remote chip would read over the NON_MMIO tunnel -- the exact thing this
+            // whole feature exists to keep the collector off.
+            if (chip.is_remote) {
+                continue;
+            }
+            tt::umd::SocDescriptor soc(
+                std::make_shared<tt::umd::SocArchDescriptor>(chip.arch), chip.cores.front().device->get_chip_info());
+            const auto found = ttnvtop_agg::probe_landings(chip.cores.front().device, soc, now_us);
+            for (const auto& l : found) {
+                ++total;
+                std::cout << "  chip " << chip.chip_id << " eth (" << l.core.x << "," << l.core.y << ")"
+                          << "  src_chip=" << l.src_chip << " cores=" << l.num_cores << " capacity=" << l.capacity
+                          << " head=" << l.last_head << " sweeps=" << l.last_sweep_count << "\n";
+            }
+        }
+        if (total == 0) {
+            std::cout << "  none found — no aggregator is running, or it landed elsewhere.\n";
+        }
+        return 0;
     }
 
     std::cout << "ttnvtop-collector: " << chips.size() << " chip(s), "
