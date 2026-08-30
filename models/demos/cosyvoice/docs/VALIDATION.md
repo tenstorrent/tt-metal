@@ -221,8 +221,13 @@ waveform peaks around 72 where speech peaks near 1. Generation is right and the
 schedule is right, so the fault is in how that wrapper builds each chunk's
 conditioning, downstream of everything the review asked about.
 
+**The magnitude differs by architecture**: Blackhole measures a peak around 72,
+Wormhole around 8, on the same prompt and the same tokens. A scale error that varies by
+part points at the arithmetic rather than at the schedule, which narrows where to look.
+
 It is **pinned, not printed**: `test_device_streaming_generates_the_same_tokens_as_batch`
-asserts the peak stays inside a recorded *defect* band, so it cannot drift silently,
+asserts the peak stays inside its architecture's recorded *defect* band, so it cannot
+drift silently,
 and the assertion's own message says that closing the defect means replacing the band
 with `< 1.5` rather than widening it. `demo.py --stream` carries the same warning.
 `synthesize` remains the gated path for audio.

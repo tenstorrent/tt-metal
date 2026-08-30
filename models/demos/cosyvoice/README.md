@@ -105,15 +105,22 @@ constants that cannot be read off a tensor shape. `weight_norm` is folded at exp
 ### PCC tests
 
 ```bash
-# host tier: no device, no silicon, ~40 s. 111 tests.
+# host tier: no device, no silicon, ~90 s. 113 tests.
 pytest models/demos/cosyvoice/tests/ -k "not device"
 
-# device tier: needs /dev/tenstorrent. 35 device tests here, 11 more in perf below;
-# the host tier lives in tests/pcc/ and runs here too, so this collects 146.
+# device tier: needs /dev/tenstorrent. 37 device tests here, 14 more in perf below;
+# the host tier lives in tests/pcc/ and runs here too, so this collects 150.
+# One is skipped with its reason attached -- see docs/VALIDATION.md.
 pytest models/demos/cosyvoice/tests/pcc/ models/demos/cosyvoice/tests/e2e/ -v
 
-# performance -- see PERF.md for what the numbers mean
+# performance -- every numeric threshold is asserted, not printed; see
+# tests/perf/gates.py for how a met gate and a missed one are each enforced,
+# and PERF.md for what the numbers mean.
 pytest models/demos/cosyvoice/tests/perf/ -v -s
+
+# two of those device tests want prompt .npz files from prepare_inputs.py and
+# skip without them; point COSYVOICE_INPUTS at the directory it wrote.
+COSYVOICE_INPUTS=/path/to/inputs pytest models/demos/cosyvoice/tests/e2e/ -v
 ```
 
 ### Demo
