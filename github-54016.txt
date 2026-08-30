@@ -1,0 +1,164 @@
+// File: tt-metal/tt_metal/operations/statistics/welford_two_pass.cpp
+#include "welford_two_pass.hpp"
+#include "tt_metal/common/constants.hpp"
+#include "tt_metal/detail/util.hpp"
+#include "tt_metal/host_api.hpp"
+#include "tt_metal/operation.hpp"
+#include "tt_metal/tensor.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+namespace tt::tt_metal::operations::statistics {
+
+// WelfordTwoPass: Two-pass algorithm for computing mean and variance
+// Pass 1: Compute mean
+// Pass 2: Compute variance using the mean from pass 1
+// This improves numerical stability compared to naive two-pass methods
+
+Tensor WelfordTwoPass::compute(const Tensor& input, bool return_mean, bool return_variance) {
+    const auto& input_shape = input.get_shape();
+    const auto& input_buffer = input.buffer();
+    const auto input_dtype = input.get_dtype();
+    
+    // Determine output shapes
+    Shape mean_shape({1});  // Global mean
+    Shape var_shape({1});   // Global variance
+    
+    // Allocate output buffers
+    auto mean_buffer = input_buffer->allocate(mean_shape, input_dtype);
+    auto var_buffer = input_buffer->allocate(var_shape, input_dtype);
+    
+    Tensor mean_tensor(mean_buffer, mean_shape, mean_shape, 0, input_dtype);
+    Tensor var_tensor(var_buffer, var_shape, var_shape, 0, input_dtype);
+    
+    // Get device and command queue
+    auto device = input_buffer->device();
+    auto cq = device->command_queue();
+    
+    // Get input data
+    auto input_host = input.cpu();
+    const auto* input_data = input_host.buffer()->get_values<float>();
+    const size_t total_elements = input_shape.volume();
+    
+    // PASS 1: Compute mean using Welford's online algorithm
+    float mean = 0.0f;
+    float count = 0.0f;
+    
+    for (size_t i = 0; i < total_elements; ++i) {
+        count += 1.0f;
+        float delta = input_data[i] - mean;
+        mean += delta / count;
+    }
+    
+    // PASS 2: Compute variance using the mean from pass 1
+    float variance = 0.0f;
+    float m2 = 0.0f;
+    
+    for (size_t i = 0; i < total_elements; ++i) {
+        float delta = input_data[i] - mean;
+        m2 += delta * (input_data[i] - mean);
+    }
+    
+    variance = m2 / total_elements;  // Population variance
+    
+    // Store results
+    std::vector<float> mean_data = {mean};
+    std::vector<float> var_data = {variance};
+    
+    mean_buffer->write_values(mean_data);
+    var_buffer->write_values(var_data);
+    
+    // Return requested tensors
+    if (return_mean && return_variance) {
+        return mean_tensor;
+    } else if (return_mean) {
+        return mean_tensor;
+    } else if (return_variance) {
+        return var_tensor;
+    } else {
+        return mean_tensor;  // Default return mean
+    }
+}
+
+// Device-side kernel implementation for hardware acceleration
+void WelfordTwoPass::compute_on_device(
+    const Tensor& input,
+    Tensor& mean_out,
+    Tensor& var_out,
+    const DeviceComputeKernelConfig& compute_kernel_config) {
+    
+    auto device = input.buffer()->device();
+    auto cq = device->command_queue();
+    
+    const auto& input_shape = input.get_shape();
+    const size_t total_elements = input_shape.volume();
+    
+    // Create program
+    Program program;
+    
+    // Define grid size based on total elements
+    const uint32_t workgroup_size = 256;
+    const uint32_t num_workgroups = (total_elements + workgroup_size - 1) / workgroup_size;
+    
+    // Create compute kernel for Welford algorithm
+    std::string kernel_name = "welford_two_pass";
+    
+    // Kernel source - two-pass Welford algorithm
+    std::string kernel_source = R"(
+        #define WORKGROUP_SIZE @WORKGROUP_SIZE@
+        
+        kernel void welford_two_pass(
+            const global float* input,
+            global float* mean_out,
+            global float* var_out,
+            const uint total_elements) {
+            
+            // PASS 1: Compute mean
+            float local_mean = 0.0f;
+            float local_count = 0.0f;
+            
+            for (uint i = get_global_id(0); i < total_elements; i += get_global_size(0)) {
+                local_count += 1.0f;
+                float delta = input[i] - local_mean;
+                local_mean += delta / local_count;
+            }
+            
+            // Store partial results for reduction
+            local_mean = local_mean * local_count;  // Store sum instead of mean
+            
+            // PASS 2: Compute variance using the mean
+            float local_var_sum = 0.0f;
+            for (uint i = get_global_id(0); i < total_elements; i += get_global_size(0)) {
+                float delta = input[i] - (local_mean / local_count);
+                local_var_sum += delta * delta;
+            }
+            
+            // Write results (simplified - full implementation would use reduction)
+            if (get_global_id(0) == 0) {
+                *mean_out = local_mean / local_count;
+                *var_out = local_var_sum / total_elements;
+            }
+        }
+    )";
+    
+    // Replace placeholders
+    kernel_source = std::regex_replace(kernel_source, std::regex("@WORKGROUP_SIZE@"), std::to_string(workgroup_size));
+    
+    // Create kernel
+    auto kernel = CreateKernel(program, device, kernel_name, kernel_source, {}, {});
+    
+    // Set kernel arguments
+    SetKernelArgs(program, kernel, {
+        input.buffer(),
+        mean_out.buffer(),
+        var_out.buffer(),
+        total_elements
+    });
+    
+    // Launch kernel
+    EnqueueCommandBuffer(cq, program, false);
+}
+
+} // namespace tt::tt_metal::operations::statistics
