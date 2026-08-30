@@ -392,7 +392,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.subtract_">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">subtract_</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span> <span class="pre">or</span> <span class="pre">Number</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">activations</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_a_activations</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b_activations</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_device_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.SubDeviceId</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.subtract_" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">subtract_</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fast_and_approximate_mode:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids:</span> <span class="pre">ttnn.CoreRangeSet</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_device_id:</span> <span class="pre">ttnn.SubDeviceId</span> <span class="pre">=</span> <span class="pre">``None``</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.subtract_" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Subtracts <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> from <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> in-place</p>
@@ -404,19 +404,22 @@
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em><em> or </em><em>Number</em>) – the input tensor.</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>activations</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list of activation functions to apply to the output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>input_tensor_a_activations</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list of activation functions to apply to input_a. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>input_tensor_b_activations</strong> (<em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>optional</em>) – list of activation functions to apply to input_b. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sub_core_grids</strong> (<em>CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>sub_device_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>) – Use the fast and approximate mode. Defaults to <cite>True</cite>.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>) – sub core grids for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sub_device_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – sub device ID for core resolution. Mutually exclusive with sub_core_grids. Defaults to <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
 </ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <p>Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.</p>
@@ -445,6 +448,9 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 <p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
 <p>Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.</p>
 </div>
+<p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>True</cite> (default) for bfloat16 datatype, the operation uses the FPU implementation for better performance, with a max error of 1 ULP.
+When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>False</cite> for bfloat16 datatype, the operation uses the SFPU with the result rounded to nearest even (RNE), which matches the golden exactly at a slight perf cost.
+<cite>False</cite> is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass <cite>True</cite>) for those.</p>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
