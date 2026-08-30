@@ -784,6 +784,7 @@ class _FakeLane:
         self.model_args = llm.runtime_config
         self.mesh_device = llm.model.config.mesh_device
         self.cache_path = llm.runtime_config.model_cache_path
+        self._request_state_fields = ("prompt_tokens", "output_tokens", "slot_remap")
         self.config = config
         self.paged_kv_cache_config = config.paged_kv_cache
         self.already_warmed_up_prefill = False
@@ -887,6 +888,7 @@ class _RecordingTarget:
     def __init__(self, *, traceable_prefill=True):
         self.calls = []
         self.traceable_prefill = traceable_prefill
+        self._request_state_fields = ("prompt_tokens", "output_tokens", "slot_remap")
 
     def _record(self, name, arguments):
         arguments = {key: value for key, value in arguments.items() if key != "self"}
