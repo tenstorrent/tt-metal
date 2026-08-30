@@ -126,9 +126,14 @@ def test_device_streaming_first_audio_latency(device):
     prefix_len = prefix.shape[1]
     max_len = ((prefix_len + len(tokens) + 1 + 127) // 128) * 128
 
-    def new_decoder():
-        """A prefilled, captured decode step. Rebuilt per schedule so neither run
-        inherits the other's cache state -- the KV buffers are consumed by stepping."""
+    # **One capture for the whole test, re-seeded per pass.** Each pass needs a fresh
+    # KV cache -- stepping consumes it -- but it does not need a fresh *trace*, and
+    # capturing per pass is what broke this test: four 384 MB captures in one process
+    # (two warm-up passes plus two measured) hung the board reproducibly, with the log
+    # and the JIT cache both frozen. `seed()` exists precisely so a prefill can be
+    # loaded into buffers a trace already points at, so the trace is captured once and
+    # each pass re-prefills into it.
+    def prefill():
         caches = dec.empty_cache(max_len, prefix_len)
         ys, caches = dec.forward_chunk_fixed(
             dev(prefix),
@@ -138,7 +143,11 @@ def test_device_streaming_first_audio_latency(device):
             mask=dev(right_aligned_bias(max_len, prefix_len, prefix_len, causal=True)),
         )
         ttnn.deallocate(ys)
-        step = TracedDecodeStep(dec, max_len).capture()
+        return caches
+
+    def reset_decoder():
+        """Load a fresh prefill into the captured trace's buffers."""
+        caches = prefill()
         step.seed(caches)
         TtARDecoder.free_caches(caches)
         return step
@@ -183,7 +192,7 @@ def test_device_streaming_first_audio_latency(device):
 
     def run_batch(toks):
         """Every token, then all the mel, then all the audio -- `synthesize`'s order."""
-        step = new_decoder()
+        reset_decoder()
         t0 = time.perf_counter()
         decode_all(step, toks)
         llm_s = time.perf_counter() - t0
@@ -194,7 +203,6 @@ def test_device_streaming_first_audio_latency(device):
         )
         ttnn.synchronize_device(device)
         total = time.perf_counter() - t0
-        step.release()
         for t in (mel, whole, src):
             ttnn.deallocate(t)
         # First audio *is* the total here: nothing can be handed out earlier.
@@ -203,7 +211,7 @@ def test_device_streaming_first_audio_latency(device):
     def run_streaming(toks):
         """The same three stages, interleaved -- `synthesize_streaming`'s order."""
         synth = TtStreamingSynthesizer(device, flow, hift, cfg)
-        step = new_decoder()
+        reset_decoder()
         first_s, chunks, n_samples = None, [], 0
         t0 = time.perf_counter()
         with synth.session(ctx, rng) as session:
@@ -223,24 +231,45 @@ def test_device_streaming_first_audio_latency(device):
                 first_s = time.perf_counter() - t0
             chunks.append((wav, n))
         total = time.perf_counter() - t0
-        step.release()
         n_chunks = len(chunks)
         for c, n in chunks:
             n_samples += n
             ttnn.deallocate(c)
         return {"first_s": first_s, "total_s": total, "n_chunks": n_chunks, "audio_s": n_samples / SAMPLE_RATE}
 
-    # **Warm-up is the measured sequence itself, run once and thrown away.** Warming a
-    # hand-listed set of geometries is how the first draft ended up compiling the batch
-    # path's full-utterance flow decoder *inside* the timed region -- first audio read
-    # 65 s for a 3.27 s utterance. Replaying the exact sequence cannot miss a geometry,
-    # because it is the same sequence.
-    run_batch(tokens)
-    run_streaming(tokens)
+    # **Warm the flow decoder and the vocoder BEFORE the decode trace is captured, and
+    # do it without the decoder.** Both orderings were tried on the same board. Warming
+    # first and capturing after is stable; capturing first and warming through the
+    # traced path hangs the device outright -- log frozen, JIT cache flat, 100 % CPU,
+    # reproducible with a cleared cache on a freshly reset board. TTNN says why in the
+    # same log: "Allocating device buffers is unsafe due to the existence of an active
+    # trace." A capture reserves its region, and the flow decoder and vocoder then have
+    # to find room around it for geometries the allocator has never seen.
+    #
+    # So every geometry either schedule will ask for is allocated, used and freed here,
+    # with no trace live -- the batch path's whole-utterance shapes and, via one
+    # throwaway streaming run, the chunk shapes that carry the mel cache and the
+    # overlap trim. Only then is the trace captured.
+    warm_mel, warm_frames = flow_chunk(tokens)
+    wp, wn = rng(warm_frames)
+    w_wav, _, w_src = hift.inference(
+        warm_mel, warm_frames, phase_vec=dev(wp, ttnn.float32), sine_noise_unit=dev(wn, ttnn.float32)
+    )
+    for t in (warm_mel, w_wav, w_src):
+        ttnn.deallocate(t)
+    with TtStreamingSynthesizer(device, flow, hift, cfg).session(ctx, rng) as warm_session:
+        for token in tokens:
+            for wav, _n in warm_session.push(token):
+                ttnn.deallocate(wav)
+        ttnn.deallocate(warm_session.finish()[0])
     ttnn.synchronize_device(device)
+
+    # One capture for the whole test; `reset_decoder` re-prefills into it per pass.
+    step = TracedDecodeStep(dec, max_len).capture()
 
     batch = run_batch(tokens)
     stream = run_streaming(tokens)
+    step.release()
 
     # ------------------------------------------------------------------ report
     chunk_seconds = cfg.chunk_size() / 50.0
