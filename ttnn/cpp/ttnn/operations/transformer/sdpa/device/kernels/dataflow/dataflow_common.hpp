@@ -1113,9 +1113,28 @@ inline void issue_block_reads(
 }
 
 // Zero-fill a (num_rows × cols) tile block in L1. Same dst arithmetic as issue_block_reads.
-// reader is used only to derive the per-tile page size. No periodic barrier: fills source
-// from local L1 (MEM_ZEROS_BASE) and completes fast, so they don't push the NIU outstanding
-// counter the way DRAM reads do. Caller's trailing read barrier handles visibility.
+// No periodic barrier: fills source from local L1 (MEM_ZEROS_BASE) and completes fast, so they
+// don't push the NIU outstanding counter the way DRAM reads do. Caller's trailing read barrier
+// handles visibility. The reader overload below derives the per-tile page size.
+inline void zero_fill_block(
+    uint32_t page_size,
+    uint32_t num_rows,
+    uint32_t cols,
+    uint32_t dst_row_origin,
+    uint32_t dst_cb_id,
+    uint32_t dst_addr,
+    uint32_t outer_stride,
+    uint32_t inner_stride) {
+    Noc noc;
+    for (uint32_t r = 0; r < num_rows; ++r) {
+        uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
+        for (uint32_t col = 0; col < cols; ++col) {
+            fill_zeros_async(noc, dst_cb_id, page_size, dst - dst_addr);
+            dst += inner_stride;
+        }
+    }
+}
+
 template <typename ReaderType>
 inline void zero_fill_block(
     const ReaderType& reader,
@@ -1126,20 +1145,13 @@ inline void zero_fill_block(
     uint32_t dst_addr,
     uint32_t outer_stride,
     uint32_t inner_stride) {
-    Noc noc;
     uint32_t page_size;
     if constexpr (has_get_aligned_page_size_v<ReaderType>) {
         page_size = reader.get_aligned_page_size();
     } else {
         page_size = reader.page_size;
     }
-    for (uint32_t r = 0; r < num_rows; ++r) {
-        uint32_t dst = dst_addr + (dst_row_origin + r) * outer_stride;
-        for (uint32_t col = 0; col < cols; ++col) {
-            fill_zeros_async(noc, dst_cb_id, page_size, dst - dst_addr);
-            dst += inner_stride;
-        }
-    }
+    zero_fill_block(page_size, num_rows, cols, dst_row_origin, dst_cb_id, dst_addr, outer_stride, inner_stride);
 }
 
 // Issue noc.async_write for a (num_rows x cols) tile block. Same tile_id/src arithmetic
@@ -1491,18 +1503,18 @@ struct PagedKVAddrGenerator {
         const uint32_t cols = slice.get_d3_size();
         const uint32_t valid_rows = slice.d2_start >= bound ? 0 : std::min(rows, bound - slice.d2_start);
         uint32_t barrier_count = 0;
-        PagedKVBundleCursor bundle_cursor;
-        bundle_cursor.reset(bundle_ids_l1_addr, slice.d2_start, page_size_tiles);
-        const uint32_t bundle_stride = num_layers * num_heads;
-        const uint32_t layer_head_offset = layer_idx * num_heads + slice.d1;
+        const PagedKVAccessor<ReaderType> paged_kv{
+            reader, bundle_ids_l1_addr, page_size_tiles, num_layers, num_heads, layer_idx};
+        typename PagedKVAccessor<ReaderType>::Cursor bundle_cursor;
+        if (valid_rows > 0) {
+            bundle_cursor = paged_kv.cursor(slice.d2_start, slice.d1);
+        }
         if constexpr (use_shard_addressing) {
-            const uint32_t tile_bytes = reader.get_aligned_page_size();
+            const uint32_t tile_bytes = paged_kv.tensor_page_size();
             Noc noc;
             for (uint32_t row = 0; row < valid_rows; ++row) {
-                const uint32_t bundle_id = bundle_cursor.physical_bundle();
-                const uint32_t flat_page = bundle_id * bundle_stride + layer_head_offset;
-                const uint64_t shard_row_noc_addr = reader.get_shard_noc_addr(
-                    flat_page, (bundle_cursor.row_in_bundle * head_dim_tiles + slice.d3_start) * tile_bytes);
+                const uint64_t shard_row_noc_addr = paged_kv.get_shard_row_noc_addr(
+                    bundle_cursor, (bundle_cursor.row_in_bundle * head_dim_tiles + slice.d3_start) * tile_bytes);
                 uint32_t dst = dst_addr + row * outer_stride;
                 for (uint32_t col = 0; col < cols; ++col) {
                     noc_async_read(shard_row_noc_addr + col * tile_bytes, dst, tile_bytes);
@@ -1512,17 +1524,16 @@ struct PagedKVAddrGenerator {
                         barrier_count = 0;
                     }
                 }
-                bundle_cursor.advance_row();
+                bundle_cursor.advance_row(row + 1 < valid_rows);
             }
         } else {
             // This specialization keeps non-paged programs valid when their interleaved accessor lacks
             // get_shard_noc_addr(). Runtime dispatch never selects it unless paging is enabled.
+            Noc noc;
             for (uint32_t row = 0; row < valid_rows; ++row) {
-                const uint32_t bundle_id = bundle_cursor.physical_bundle();
-                const uint32_t flat_page = bundle_id * bundle_stride + layer_head_offset;
-                issue_block_reads(
-                    reader,
-                    (flat_page * page_size_tiles + bundle_cursor.row_in_bundle) * head_dim_tiles + slice.d3_start,
+                paged_kv.async_read_pages(
+                    noc,
+                    bundle_cursor.physical_row() * head_dim_tiles + slice.d3_start,
                     head_dim_tiles,
                     1,
                     cols,
@@ -1532,10 +1543,18 @@ struct PagedKVAddrGenerator {
                     inner_stride,
                     barrier_threshold,
                     barrier_count);
-                bundle_cursor.advance_row();
+                bundle_cursor.advance_row(row + 1 < valid_rows);
             }
         }
-        zero_fill_block(reader, rows - valid_rows, cols, valid_rows, dst_cb_id, dst_addr, outer_stride, inner_stride);
+        zero_fill_block(
+            paged_kv.tensor_page_size(),
+            rows - valid_rows,
+            cols,
+            valid_rows,
+            dst_cb_id,
+            dst_addr,
+            outer_stride,
+            inner_stride);
     }
 };
 
