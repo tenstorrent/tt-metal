@@ -640,6 +640,16 @@ struct PerfDebugSync {
 // ~1.3 s between the anchor and the workload it displaced each DRISC row by 46-70 us with the sign tracking its
 // own fit error (correlation 0.985). Frequency error is a RATE error: it grows with time since the anchor, which
 // is why it shows up as rows drifting apart rather than as a constant skew.
+// Reads per sample in sync_device_clock(); the narrowest-bracket one wins. 1 = the old single-read
+// behaviour, kept so the effect can be A/B'd on the same box.
+uint32_t sync_reads_per_sample() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_SYNC_READS_PER_SAMPLE");
+        const uint32_t n = (s != nullptr && *s != '\0') ? (uint32_t)std::strtoul(s, nullptr, 10) : 8u;
+        return n == 0 ? 1u : n;
+    }();
+    return v;
+}
 PerfDebugSync sync_device_clock(
     tt::Cluster& cluster, uint32_t chip_id, const CoreCoord& worker, uint32_t spacing_us = 0) {
     // RISCV_DEBUG_REG_WALL_CLOCK_L/H. Reading L atomically LATCHES H, so read L then H (H's own latency is
@@ -666,13 +676,32 @@ PerfDebugSync sync_device_clock(
     std::vector<S> samples;
     samples.reserve(kSamples);
     const tt_cxy_pair target(chip_id, worker);
+    // MIN-OF-N PER SAMPLE. The bracket [t0,t1] contains the host->device read cost, which goes through a UMD
+    // TLB window (Cluster::read_reg -> driver_->read_from_device_reg). A CONSTANT cost cancels at the midpoint;
+    // a VARIABLE one does not -- it lands straight in the fit's jitter, and jitter is what bounds accuracy.
+    // Taking the narrowest of N back-to-back attempts keeps the sample that was least disturbed, on the same
+    // reasoning as the min-RTT filter in the eth solve: contention only ever ADDS delay, and asymmetrically.
+    // The outer 100-sample / spacing_us structure is unchanged -- this only cleans each sample before it enters
+    // the regression. N=1 reproduces the previous behaviour exactly, for A/B.
+    const uint32_t reads_per_sample = sync_reads_per_sample();
     for (uint32_t i = 0; i < kSamples; i++) {
-        uint32_t lo = 0, hi = 0;
-        const int64_t t0 = tracy::Profiler::GetTime();
-        cluster.read_reg(&lo, target, kWallClockL);  // latches H
-        cluster.read_reg(&hi, target, kWallClockH);
-        const int64_t t1 = tracy::Profiler::GetTime();
-        samples.push_back(S{(t0 + t1) / 2, (static_cast<uint64_t>(hi) << 32) | lo, t1 - t0});
+        int64_t best_rt = 0;
+        int64_t best_mid = 0;
+        uint64_t best_dev = 0;
+        for (uint32_t r = 0; r < reads_per_sample; r++) {
+            uint32_t lo = 0, hi = 0;
+            const int64_t t0 = tracy::Profiler::GetTime();
+            cluster.read_reg(&lo, target, kWallClockL);  // latches H
+            cluster.read_reg(&hi, target, kWallClockH);
+            const int64_t t1 = tracy::Profiler::GetTime();
+            const int64_t rt = t1 - t0;
+            if (r == 0 || rt < best_rt) {
+                best_rt = rt;
+                best_mid = (t0 + t1) / 2;
+                best_dev = (static_cast<uint64_t>(hi) << 32) | lo;
+            }
+        }
+        samples.push_back(S{best_mid, best_dev, best_rt});
         if (spacing_us != 0 && i + 1 < kSamples) {
             std::this_thread::sleep_for(std::chrono::microseconds(spacing_us));
         }
