@@ -1377,6 +1377,59 @@ without a board reset. A monitoring daemon that bricks the tunnel when killed is
 defect in its own right: it needs a signal handler that completes the in-flight
 transaction and releases NON_MMIO before exiting.
 
+## 5n. v2: on-chip aggregation -- fixed-size state table -- 2026-08-30
+
+The journal is no longer a ring of raw samples. The aggregator now does the delta
+arithmetic on-chip and publishes a FIXED per-core state table, overwritten in place.
+
+```c
+struct util_agg_core_state_t {   // 32 B
+    uint32_t busy_cycles;  // accumulated FPU/SFPU deltas, monotonic
+    uint32_t wall_cycles;  // accumulated wall-clock deltas over the same interval
+    uint32_t samples; uint32_t kernel_id; uint32_t resets; uint32_t seq;
+    uint8_t counter_sel; uint8_t flags; uint16_t rsvd16; uint32_t rsvd;
+};
+```
+
+64 cores = 2112 B total, and that does not change with the sample rate.
+
+Two properties matter:
+
+- **The payload stops scaling with sampling.** Raw samples at 100 us are ~2 MB per chip
+  per drain tick; at the measured ~7 MB/s under load (5m) that caps the drain near 1 Hz.
+  A 2 KB table reads in 0.2 ms, so 10 Hz has three orders of magnitude of headroom. This
+  is what makes M2's 100 us goal free rather than fatal.
+- **The accumulators are MONOTONIC, so the readout is loss-immune.** A host that misses
+  a read gets a bigger delta next time. There is no ring to lap, no wrap handling on the
+  host side, and `lost` now counts only what the ON-CHIP sweep missed.
+
+The host's job shrinks to: read the table, diff against the previous read with unsigned
+arithmetic, `util = d(busy) / d(wall)`.
+
+### Verified
+
+| | Blackhole | T3K |
+|---|---|---|
+| cores advancing | 120/120 | 64/64 |
+| cores with new samples | 120 | 64 |
+| `lost` | 0 | 0 |
+| remote-chip header read | -- | **59-69 ms** (was 2512 ms in v1) |
+
+The read-cost collapse independently confirms 5m: the old figure was a retry storm
+against a 1 kHz-republishing header, not transfer cost.
+
+### NOT verified: the utilization numbers themselves
+
+`max util 0.000` on both arches, because both were idle -- the FPU counters do not
+advance, so `d(busy)` is legitimately zero. The arithmetic is exercised, the values are
+not.
+
+Validating against a real workload is blocked on the standalone launcher: the aggregator
+is currently launched by a tt-metal gtest, which cannot coexist with Llama (CHIP_IN_USE).
+That makes the ELF-as-build-artifact work (3.5, 5j) the gating item for M1 acceptance,
+not an optimisation. With it, the launch is four plain L1 writes from a UMD-only process
+-- and 5j already proved the last of those works cross-process.
+
 ## 6. Risks
 
 | Risk | Mitigation |

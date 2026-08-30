@@ -59,7 +59,7 @@ static_assert(
 #endif
 
 constexpr uint32_t UTIL_AGG_MAGIC = 0x47415454u;  // 'TTAG' little-endian
-constexpr uint32_t UTIL_AGG_VERSION = 1u;
+constexpr uint32_t UTIL_AGG_VERSION = 2u;         // v2: per-core accumulated state, not a sample ring
 
 // Upper bound on Tensix cores an aggregator sweeps on one chip. Sized from the
 // UNHARVESTED grids, because harvesting is not guaranteed:
@@ -72,29 +72,39 @@ constexpr uint32_t UTIL_AGG_VERSION = 1u;
 // than an unharvested Blackhole part. See PLAN_ETH_AGGREGATOR.md 2.1.
 constexpr uint32_t UTIL_AGG_MAX_CORES = 160u;
 
-// M1 uses a 32-BYTE entry rather than the 20 B the plan sketched.
+// PER-CORE ACCUMULATED STATE -- 32 B.
 //
-// WH L1_ALIGNMENT is 16 B, so a fabric write into the landing journal must
-// start 16 B-aligned. At 20 B per entry every other entry begins at an
-// unaligned offset; at 24 B only even indices align. 32 B makes every entry
-// index trivially aligned and makes the host decode a plain array index.
+// v2 replaces v1's ring of raw samples. The aggregator now does the delta arithmetic
+// on-chip and publishes a FIXED-SIZE table: one entry per Tensix core, overwritten in
+// place. The host diffs two successive reads to get a rate.
 //
-// The cost is 12 B/entry of ethernet traffic that carries nothing. At M1 rates
-// (1 ms sampling, 64 cores => 64k entries/s) that is ~2 MB/s against a 100 Gb/s
-// link -- irrelevant. If M2's 100 us sampling makes it matter, pack to 24 B and
-// constrain writes to even entry indices; do not pack to 20 B.
-// The 16 B sample is FIRST, not after the metadata. The aggregator NOC-reads a
-// ring slot straight into this field, and a NOC read into L1 must be 16 B
-// aligned on WH. With core_id/seq ahead of it the sample would land at
-// entry_base+8 and every such read would be misaligned.
-struct util_agg_entry_t {
-    util_agg_sample_t sample;  // 16 B at offset 0, forwarded VERBATIM from the Tensix ring
-    uint32_t core_id;          // index into the chip's Tensix core list (host-supplied ordering)
-    uint32_t seq;              // per-core monotonic counter; gaps mean the aggregator dropped entries
-    uint32_t reserved[2];      // pad to 32 B, see note above
+// Why this and not a sample ring:
+//
+//   - The payload stops growing with the sample rate. 64 cores is 2 KB whether the
+//     sweep runs at 1 ms or 100 us. A raw-sample ring at 100 us is ~2 MB per chip per
+//     drain tick, which at the measured ~7 MB/s under load caps the drain near 1 Hz
+//     (5m). A 2 KB table reads in 0.2 ms.
+//   - The accumulators are MONOTONIC, so the readout is loss-immune. A host that misses
+//     a read gets a larger delta next time; nothing is dropped and there is no ring to
+//     lap. `lost` below counts only what the ON-CHIP sweep missed, never the host.
+//
+// The counters are 32-bit and wrap. `wall_cycles` advances at the AICLK, so it wraps
+// every ~4.3 s at 1 GHz; the host must diff with unsigned arithmetic (wrap-correct) and
+// read more often than that. Same constraint the raw `wall_clock_l` always had.
+struct util_agg_core_state_t {
+    uint32_t busy_cycles;  // accumulated FPU/SFPU counter deltas. Monotonic, wraps at 2^32
+    uint32_t wall_cycles;  // accumulated wall-clock deltas over the same interval
+    uint32_t samples;      // ring entries folded in. Monotonic
+    uint32_t kernel_id;    // kernel_id of the most recent sample folded in
+    uint32_t resets;       // counter-reset detections (fpu went backwards); deltas dropped
+    uint32_t seq;          // per-core update counter, so the host can spot a dead core
+    uint8_t counter_sel;   // 0 = FPU_INSTRUCTION, 1 = SFPU_INSTRUCTION
+    uint8_t flags;
+    uint16_t rsvd16;
+    uint32_t rsvd;
 };
-static_assert(sizeof(util_agg_entry_t) == 32);
-static_assert(sizeof(util_agg_entry_t) % 16 == 0, "entry must be a multiple of WH L1_ALIGNMENT");
+static_assert(sizeof(util_agg_core_state_t) == 32);
+static_assert(sizeof(util_agg_core_state_t) % 16 == 0, "must be a multiple of WH L1_ALIGNMENT");
 
 // Header is 64 B so journal[] starts 16 B-aligned.
 //
@@ -117,11 +127,11 @@ struct util_agg_msg_t {
     // --- chunk 0: the fast-changing field and its self-check. Nothing else. ---
     volatile uint32_t magic;     // 'TTAG'
     volatile uint32_t version;   // 1
-    volatile uint32_t head;      // monotonic COUNT of entries ever written
+    volatile uint32_t head;      // monotonic COUNT of samples folded in, across all cores
     volatile uint32_t head_xor;  // head ^ UTIL_AGG_HEAD_SALT, written immediately after head
 
     // --- chunk 1: static after init, guarded by hdr_checksum ---
-    volatile uint32_t capacity;      // entries in journal[]; head % capacity is the write slot
+    volatile uint32_t capacity;      // entries in states[]; equals num_cores in v2
     volatile uint32_t num_cores;     // cores this aggregator sweeps. NEVER assume 64 (see 2.1)
     volatile uint32_t src_chip;      // PHYSICAL chip id of the chip this journal describes
     volatile uint32_t hdr_checksum;  // over the static fields only -- a layout sanity check
@@ -131,23 +141,19 @@ struct util_agg_msg_t {
     volatile uint32_t lost;         // entries dropped because a Tensix ring wrapped before we swept it
     volatile uint32_t reserved[6];
 
-    volatile util_agg_entry_t journal[];
+    volatile util_agg_core_state_t states[];
 };
 static_assert(sizeof(util_agg_msg_t) == 64);
-static_assert(sizeof(util_agg_msg_t) % 16 == 0, "journal[] must start 16 B-aligned");
+static_assert(sizeof(util_agg_msg_t) % 16 == 0, "states[] must start 16 B-aligned");
 static_assert(offsetof(util_agg_msg_t, head) < 16, "head must live in the first 16 B chunk");
 static_assert(offsetof(util_agg_msg_t, head_xor) < 16, "head_xor must share head's chunk");
 
-// M1 journal sizing. 192 KiB / 32 B = 6144 entries.
-//
-// At M1's 1 ms sampling (64 cores => ~64k entries/s) that is ~96 ms of
-// buffering, comfortably ahead of a 10 Hz host drain. At M2's 100 us it drops
-// to ~9.6 ms and the host must drain at 50-100 Hz -- which is the drain rate
-// M2 is specified around anyway. The buffer is not the M2 constraint; the
-// drain cadence is.
-constexpr uint32_t UTIL_AGG_JOURNAL_BYTES = 192u * 1024u;
-constexpr uint32_t UTIL_AGG_CAPACITY = (UTIL_AGG_JOURNAL_BYTES - sizeof(util_agg_msg_t)) / sizeof(util_agg_entry_t);
-static_assert(UTIL_AGG_CAPACITY == 6142);
+// v2 sizing: 64 B header + one 32 B state per core. 64 cores is 2112 B; 140 (an
+// unharvested Blackhole) is 4544 B. Fixed -- it does not grow with the sample rate.
+constexpr uint32_t util_agg_bytes_for(uint32_t num_cores) {
+    return sizeof(util_agg_msg_t) + num_cores * sizeof(util_agg_core_state_t);
+}
+static_assert(util_agg_bytes_for(64) == 2112);
 
 // Checksum over the STATIC fields only. Those never change after init, so this is a
 // layout/sanity check across chunks, not a tear detector -- tearing is handled by
@@ -161,17 +167,17 @@ inline uint32_t util_agg_hdr_checksum(
 //
 // Per sweep the aggregator: (1) barriers its NOC reads so every sample is committed to
 // the journal, (2) writes `head`, then `head_xor` immediately after, (3) updates the
-// advisory fields. The static fields and hdr_checksum are written once at init.
+// advisory fields. The per-core states[] entries are updated in place as samples are
+// folded in, BEFORE the header is published. The static fields and hdr_checksum are written once at init.
 //
 // A host reads the header and accepts `head` iff magic is right and
 // head ^ UTIL_AGG_HEAD_SALT == head_xor. On mismatch it re-reads; it must NOT fall back
 // to a previous head, because those entries are committed and skipping them loses
 // samples.
 //
-// Entries below `head` are committed, but the ring still wraps: a host that dawdles
-// between reading the header and reading the entries can have the oldest slots
-// overwritten underneath it. At the default sizing that is ~96 ms of slack; read
-// promptly, and re-read `head` afterwards if you need to prove you were not lapped.
+// states[] has no ring and cannot be lapped. A host may read it at any time; the worst
+// case is that one core's counters are a sweep newer than another's, which perturbs a
+// rate by one sample interval. Diff two reads with unsigned arithmetic to get rates.
 
 // Plain host-side view of the header.
 //
@@ -199,8 +205,7 @@ inline bool util_agg_hdr_ok(const util_agg_hdr_view_t& h) {
 }
 static_assert(sizeof(util_agg_hdr_view_t) == sizeof(util_agg_msg_t), "host view must match the device header");
 
-// Offset of journal[] from the base of the journal region. The aggregator writes entry
-// `head % capacity` at UTIL_AGG_JOURNAL_OFFSET + slot * 32, which is 32 B-aligned for
-// every head -- see the alignment note on util_agg_entry_t.
-constexpr uint32_t UTIL_AGG_JOURNAL_OFFSET = sizeof(util_agg_msg_t);
-static_assert(UTIL_AGG_JOURNAL_OFFSET % 16 == 0);
+// Offset of states[] from the base of the region. Core i's state lives at
+// UTIL_AGG_STATES_OFFSET + i * 32 -- 32 B-aligned for every i.
+constexpr uint32_t UTIL_AGG_STATES_OFFSET = sizeof(util_agg_msg_t);
+static_assert(UTIL_AGG_STATES_OFFSET % 16 == 0);

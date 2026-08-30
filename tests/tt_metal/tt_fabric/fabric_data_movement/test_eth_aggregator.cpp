@@ -62,8 +62,11 @@ struct SenderL1 {
     uint32_t last_head;     // num_cores * 4 B
     uint32_t head_scratch;  // num_cores * 16 B
     uint32_t seq_scratch;   // num_cores * 4 B
+    uint32_t last_wall;     // num_cores * 4 B
+    uint32_t last_fpu;      // num_cores * 4 B
+    uint32_t sample_pad;    // 16 B landing pad for one raw sample
     uint32_t dbg;           // 16 B liveness markers
-    uint32_t journal;       // 64 B header + capacity * 32 B
+    uint32_t journal;       // 64 B header + num_cores * 32 B state table
     uint32_t end;
 };
 
@@ -77,10 +80,16 @@ static SenderL1 layout_sender_l1(uint32_t base, uint32_t num_cores, uint32_t cap
     p = align16(p + num_cores * 16u);
     l.seq_scratch = p;
     p = align16(p + num_cores * 4u);
+    l.last_wall = p;
+    p = align16(p + num_cores * 4u);
+    l.last_fpu = p;
+    p = align16(p + num_cores * 4u);
+    l.sample_pad = p;
+    p = align16(p + 16u);
     l.dbg = p;
     p = align16(p + 16u);
     l.journal = p;
-    p = align16(p + sizeof(util_agg_msg_t) + capacity * sizeof(util_agg_entry_t));
+    p = align16(p + util_agg_bytes_for(capacity));
     l.end = p;
     return l;
 }
@@ -114,6 +123,17 @@ static bool translated_tensix_grid(const std::vector<tt::umd::CoreCoord>& cores,
     return out.xs.size() * out.ys.size() == cores.size() && seen.size() == cores.size();
 }
 
+// v2: capacity == num_cores. Resolve it before laying out L1.
+static uint32_t num_cores_of(tt::tt_metal::IDevice* dev) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& soc = cluster.get_soc_desc(dev->id());
+    TensixGrid g;
+    if (!translated_tensix_grid(soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED), g)) {
+        return 0;
+    }
+    return static_cast<uint32_t>(g.xs.size() * g.ys.size());
+}
+
 // Runtime args in the kernel's order: num_cores, nx, ny, xs..., ys..., then the rest.
 static std::vector<uint32_t> build_rt_args(
     const TensixGrid& g,
@@ -131,11 +151,14 @@ static std::vector<uint32_t> build_rt_args(
     a.push_back(l1.last_head);
     a.push_back(l1.head_scratch);
     a.push_back(l1.seq_scratch);
+    a.push_back(l1.last_wall);
+    a.push_back(l1.last_fpu);
     a.push_back(l1.journal);
     a.push_back(capacity);
     a.push_back(src_chip);
     a.push_back(sweep_cycles);
     a.push_back(publish_every);
+    a.push_back(l1.sample_pad);
     a.push_back(l1.dbg);
     return a;
 }
@@ -269,7 +292,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLocalJournal) {
 
     TensixGrid grid;
     const SenderL1 l1 = launch_aggregator(
-        dev, pick.core, UTIL_AGG_CAPACITY, sweep_cycles_override(kSweepIntervalCycles), publish_every_sweeps(), grid);
+        dev, pick.core, num_cores_of(dev), sweep_cycles_override(kSweepIntervalCycles), publish_every_sweeps(), grid);
     const uint32_t num_cores = static_cast<uint32_t>(grid.xs.size() * grid.ys.size());
     log_info(
         tt::LogTest,
@@ -295,7 +318,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLocalJournal) {
         h2.sweep_count,
         h2.lost);
 
-    expect_header_sane(h2, num_cores, UTIL_AGG_CAPACITY);
+    expect_header_sane(h2, num_cores, num_cores);
     EXPECT_GT(h2.sweep_count, h1.sweep_count) << "sweep loop is not advancing";
     EXPECT_GT(h2.head, 0u) << "no entries were written";
     EXPECT_EQ(h2.src_chip, static_cast<uint32_t>(dev->id()));
@@ -303,88 +326,85 @@ TEST_F(Fabric1DFixture, TestEthAggregatorLocalJournal) {
     ttnvtop::stop_aggregator(dev, pick.core);
 }
 
-// Force the paths a production-sized journal would take minutes to reach: shrink the
-// capacity so the ring wraps repeatedly, sweep the whole grid, and put a poison guard
-// band immediately after the journal that must come back untouched.
-TEST_F(Fabric1DFixture, TestEthAggregatorMultiCoreAndWrap) {
+// Every core in the grid must accumulate, and the accumulated numbers must be
+// physically plausible. v1 tested a ring wrapping; v2 has no ring — the state table is
+// fixed-size and overwritten in place, which is the point.
+TEST_F(Fabric1DFixture, TestEthAggregatorStateTable) {
     const auto& devices = this->get_devices();
     ASSERT_GE(devices.size(), 1u);
     auto* dev = devices[0]->get_devices()[0];
     // Rank 1: the other launching test leaves a persistent kernel on rank 0, and a core
-    // that already holds one cannot be relaunched onto — the launch message is never
-    // consumed and the live kernel is corrupted by the binary write (5f).
+    // that already holds one cannot be relaunched onto (5f).
     const auto pick = ttnvtop::select_aggregator_eth_core(dev, /*rank=*/1);
     if (!pick.ok) {
         GTEST_SKIP() << pick.reason;
     }
+    const uint32_t num_cores = num_cores_of(dev);
+    ASSERT_GT(num_cores, 1u);
 
-    constexpr uint32_t kCapacity = 256;
-    constexpr uint32_t kGuardBytes = 1024;
-    constexpr uint32_t kJournalBytes = sizeof(util_agg_msg_t) + kCapacity * sizeof(util_agg_entry_t);
-
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const uint32_t eth_l1 =
-        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-    const auto& soc = cluster.get_soc_desc(dev->id());
-    TensixGrid probe;
-    ASSERT_TRUE(translated_tensix_grid(soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED), probe));
-    const uint32_t num_cores = static_cast<uint32_t>(probe.xs.size() * probe.ys.size());
-    const SenderL1 pre = layout_sender_l1(eth_l1, num_cores, kCapacity);
-
-    // Poison the journal AND a guard band after it. A slot still reading 0xDEADBEEF was
-    // never written; a guard word that is NOT 0xDEADBEEF is a write that ran off the end.
-    std::vector<uint32_t> poison((kJournalBytes + kGuardBytes) / 4, 0xDEADBEEFu);
-    tt::tt_metal::detail::WriteToDeviceL1(dev, pick.core, pre.journal, poison, CoreType::ETH);
-
-    // 100 us sweep so the small ring wraps hard within the observation window.
     TensixGrid grid;
-    const SenderL1 l1 = launch_aggregator(dev, pick.core, kCapacity, 100000u, 128u, grid);
-    ASSERT_EQ(l1.journal, pre.journal);
-    log_info(
-        tt::LogTest, "wrap: {} cores, capacity={} on chip {} eth {}", num_cores, kCapacity, dev->id(), pick.core.str());
+    // 100 us sweep: with a fixed-size table this costs the readout nothing, which is
+    // exactly what v2 buys.
+    const SenderL1 l1 = launch_aggregator(dev, pick.core, num_cores, 100000u, 8u, grid);
+    log_info(tt::LogTest, "state: {} cores on chip {} eth {}", num_cores, dev->id(), pick.core.str());
 
-    std::this_thread::sleep_for(std::chrono::seconds(6));
-    const auto h = read_journal_header(dev, pick.core, l1.journal);
-    log_info(
-        tt::LogTest,
-        "wrap: head={} sweeps={} lost={} cores={} cap={}",
-        h.head,
-        h.sweep_count,
-        h.lost,
-        h.num_cores,
-        h.capacity);
-    expect_header_sane(h, num_cores, kCapacity);
-    EXPECT_GT(h.head, kCapacity * 2u) << "journal did not wrap twice; the wrap path is untested";
+    auto read_states = [&]() {
+        const uint32_t bytes = num_cores * sizeof(util_agg_core_state_t);
+        std::vector<uint32_t> raw(bytes / 4, 0u);
+        tt::tt_metal::detail::ReadFromDeviceL1(
+            dev, pick.core, l1.journal + UTIL_AGG_STATES_OFFSET, bytes, raw, CoreType::ETH);
+        std::vector<util_agg_core_state_t> out(num_cores);
+        std::memcpy(out.data(), raw.data(), bytes);
+        return out;
+    };
 
-    std::vector<uint32_t> guard(kGuardBytes / 4, 0u);
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        dev, pick.core, l1.journal + kJournalBytes, kGuardBytes, guard, CoreType::ETH);
-    uint32_t clobbered = 0;
-    for (uint32_t v : guard) {
-        clobbered += (v != 0xDEADBEEFu);
-    }
-    EXPECT_EQ(clobbered, 0u) << clobbered << " guard words past the journal were overwritten";
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    const auto s1 = read_states();
+    const auto h1 = read_journal_header(dev, pick.core, l1.journal);
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    const auto s2 = read_states();
+    const auto h2 = read_journal_header(dev, pick.core, l1.journal);
 
-    std::vector<uint32_t> ent(kCapacity * sizeof(util_agg_entry_t) / 4, 0u);
-    tt::tt_metal::detail::ReadFromDeviceL1(
-        dev, pick.core, l1.journal + UTIL_AGG_JOURNAL_OFFSET, kCapacity * sizeof(util_agg_entry_t), ent, CoreType::ETH);
-    std::set<uint32_t> seen;
-    uint32_t unwritten = 0, bad_core = 0;
-    for (uint32_t i = 0; i < kCapacity; i++) {
-        const uint32_t* e = &ent[i * (sizeof(util_agg_entry_t) / 4)];
-        if (e[0] == 0xDEADBEEFu && e[4] == 0xDEADBEEFu) {
-            unwritten++;
-        } else if (e[4] >= num_cores) {
-            bad_core++;
-        } else {
-            seen.insert(e[4]);
+    expect_header_sane(h2, num_cores, num_cores);
+    EXPECT_GT(h2.sweep_count, h1.sweep_count) << "sweep loop is not advancing";
+
+    // Per-core: seq must advance, and busy must never exceed wall over the interval —
+    // that would mean more busy cycles than elapsed time, which is not physical.
+    uint32_t advancing = 0, impossible = 0, with_samples = 0;
+    double max_util = 0.0;
+    for (uint32_t i = 0; i < num_cores; i++) {
+        const uint32_t dseq = s2[i].seq - s1[i].seq;
+        const uint32_t dwall = s2[i].wall_cycles - s1[i].wall_cycles;  // wrap-correct
+        const uint32_t dbusy = s2[i].busy_cycles - s1[i].busy_cycles;
+        if (dseq > 0) {
+            advancing++;
+        }
+        if (s2[i].samples > s1[i].samples) {
+            with_samples++;
+        }
+        if (dwall > 0) {
+            const double util = static_cast<double>(dbusy) / static_cast<double>(dwall);
+            max_util = std::max(max_util, util);
+            if (util > 1.05) {  // 5% slack for counter/clock skew
+                impossible++;
+            }
         }
     }
-    log_info(tt::LogTest, "wrap: {} distinct core_ids, {} unwritten, {} bad", seen.size(), unwritten, bad_core);
-    EXPECT_EQ(bad_core, 0u) << "journal slots hold out-of-range core_ids";
-    EXPECT_EQ(unwritten, 0u) << "journal has unwritten slots after wrapping twice";
-    EXPECT_GT(seen.size(), num_cores / 2) << "the sweep is not covering the grid";
+    log_info(
+        tt::LogTest,
+        "state: {}/{} cores advancing, {} with new samples, max util {:.3f}, head={} lost={}",
+        advancing,
+        num_cores,
+        with_samples,
+        max_util,
+        h2.head,
+        h2.lost);
+
+    EXPECT_EQ(advancing, num_cores) << "not every core's state is being updated";
+    EXPECT_EQ(impossible, 0u) << impossible
+                              << " cores reported busy_cycles > wall_cycles — "
+                                 "the on-chip delta arithmetic is wrong";
+    EXPECT_GT(h2.head, 0u) << "no samples were folded in";
 
     ttnvtop::stop_aggregator(dev, pick.core);
 }
@@ -418,7 +438,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorRemoteChip) {
         l1 = launch_aggregator(
             remote,
             pick.core,
-            UTIL_AGG_CAPACITY,
+            num_cores_of(remote),
             sweep_cycles_override(kSweepIntervalCycles),
             publish_every_sweeps(),
             grid);
@@ -456,7 +476,7 @@ TEST_F(Fabric1DFixture, TestEthAggregatorRemoteChip) {
         h2.sweep_count,
         h2.lost);
 
-    expect_header_sane(h2, num_cores, UTIL_AGG_CAPACITY);
+    expect_header_sane(h2, num_cores, num_cores);
     EXPECT_GT(h2.sweep_count, h1.sweep_count) << "aggregator is not running on the remote chip";
     EXPECT_GT(h2.head, 0u);
     EXPECT_EQ(h2.src_chip, static_cast<uint32_t>(remote->id()));

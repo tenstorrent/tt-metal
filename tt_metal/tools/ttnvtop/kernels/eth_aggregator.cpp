@@ -47,14 +47,17 @@
 //       seq_scratch             L1 addr of num_cores u32s. In L1 and not on the stack:
 //                               MEM_IERISC_STACK_MIN_SIZE is 128 BYTES, so a local
 //                               seq[] array silently smashes the stack.
-//       journal_base            L1 addr of the journal (header + ring) in THIS core's L1
-//       capacity                entries in the journal ring
+//       last_wall_scratch       L1 addr of num_cores u32s: previous wall_clock_l per core
+//       last_fpu_scratch        L1 addr of num_cores u32s: previous fpu_count per core
+//       journal_base            L1 addr of the header + per-core state table in THIS L1
+//       capacity                entries in states[]; equals num_cores
 //       src_chip                PHYSICAL chip id, stamped into the header so the host
 //                               can attribute entries without a mesh map
 //       sweep_interval_cyc      idle cycles between sweeps
 //       publish_every           republish the header every N sweeps. The header must be
 //                               STABLE for longer than a host read takes, or the read
 //                               tears -- see the publish note below.
+//       sample_pad_addr         L1 addr of a 16 B landing pad for one raw sample
 //       dbg_addr                L1 addr of 4 u32 liveness markers
 
 #include <cstdint>
@@ -76,6 +79,12 @@ static constexpr uint32_t kSampleBytes = 16u;                  // util_sampler_e
 // behaviour identical whatever brisc_noc_id the launch message carried.
 static constexpr uint8_t kSweepNoc = 0;
 
+// An interval longer than this means we lost the thread of a core's timeline (a device
+// reset, a very long stall) rather than the core genuinely idling. Accumulating it would
+// swamp the wall-cycle denominator and drive the reported utilization to zero. ~1 s at
+// 1 GHz.
+static constexpr uint32_t kMaxPlausibleWallDelta = 1000000000u;
+
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
@@ -88,18 +97,30 @@ void kernel_main() {
     const uint32_t last_head_scratch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t head_scratch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t seq_scratch = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t last_wall_scratch = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t last_fpu_scratch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t journal_base = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t capacity = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t src_chip = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sweep_interval_cyc = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t publish_every = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sample_pad_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dbg_addr = get_arg_val<uint32_t>(arg_idx++);
 
     volatile tt_l1_ptr uint32_t* last_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(last_head_scratch);
     volatile tt_l1_ptr uint32_t* seq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seq_scratch);
     volatile tt_l1_ptr util_agg_msg_t* hdr = reinterpret_cast<volatile tt_l1_ptr util_agg_msg_t*>(journal_base);
-    volatile tt_l1_ptr util_agg_entry_t* journal =
-        reinterpret_cast<volatile tt_l1_ptr util_agg_entry_t*>(journal_base + UTIL_AGG_JOURNAL_OFFSET);
+    volatile tt_l1_ptr util_agg_core_state_t* states =
+        reinterpret_cast<volatile tt_l1_ptr util_agg_core_state_t*>(journal_base + UTIL_AGG_STATES_OFFSET);
+    volatile tt_l1_ptr uint32_t* last_wall = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(last_wall_scratch);
+    volatile tt_l1_ptr uint32_t* last_fpu = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(last_fpu_scratch);
+
+    // One 16 B landing pad per sweep for the sample we are folding in. A NOC read into
+    // L1 must be 16 B aligned at both ends, and util_agg_core_state_t no longer has a
+    // 16 B sample field to read straight into -- we need the raw sample to compute
+    // deltas from, then we discard it.
+    volatile tt_l1_ptr util_agg_sample_t* pad =
+        reinterpret_cast<volatile tt_l1_ptr util_agg_sample_t*>(sample_pad_addr);
 
     volatile tt_l1_ptr uint32_t* dbg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dbg_addr);
     dbg[0] = 0xA66E0000u;  // reached kernel_main
@@ -134,6 +155,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_cores; i++) {
         last_head[i] = 0;
         seq[i] = 0;
+        last_wall[i] = 0;
+        last_fpu[i] = 0;
+        states[i].busy_cycles = 0;
+        states[i].wall_cycles = 0;
+        states[i].samples = 0;
+        states[i].kernel_id = 0;
+        states[i].resets = 0;
+        states[i].seq = 0;
+        states[i].counter_sel = 0;
+        states[i].flags = 0;
     }
 
     // Static fields and their checksum: written once, never touched again.
@@ -172,10 +203,11 @@ void kernel_main() {
             primed = true;
         }
 
-        // Phase 2: copy what advanced straight into the journal ring. No staging
-        // buffer and no wrap-split: the journal is local memory, so each entry is
-        // written where it belongs and the modulo handles the wrap.
-        const uint32_t head_at_sweep_start = head;
+        // Phase 2: fold what advanced into each core's accumulated state.
+        //
+        // This is the arithmetic the host used to do: wrap-aware wall_clock_l deltas,
+        // FPU counter deltas, and counter-reset detection. Doing it here is what keeps
+        // the published payload fixed-size.
         for (uint32_t i = 0; i < num_cores; i++) {
             const uint32_t h = ring_head(i);
             uint32_t lh = last_head[i];
@@ -186,36 +218,73 @@ void kernel_main() {
             // wraps at 2^32, which at 1 kHz per core is ~50 days.
             uint32_t behind = h - lh;
             if (behind > kRingSize) {
-                // The producer lapped us. Everything but the newest kRingSize entries
-                // is already overwritten; count it and resync.
+                // The producer lapped us. Everything but the newest kRingSize entries is
+                // already overwritten; count it and resync. NOTE this counts what the
+                // ON-CHIP sweep missed. The host cannot lose anything -- the
+                // accumulators below are monotonic.
                 lost += behind - kRingSize;
                 lh = h - kRingSize;
                 behind = kRingSize;
             }
 
             const uint64_t ring_base = ring_base_of(i);
+            uint32_t prev_wall = last_wall[i];
+            uint32_t prev_fpu = last_fpu[i];
+            uint32_t busy_acc = states[i].busy_cycles;
+            uint32_t wall_acc = states[i].wall_cycles;
+            uint32_t nsamples = states[i].samples;
+            uint32_t nresets = states[i].resets;
+            uint32_t kid = states[i].kernel_id;
+            uint32_t csel = states[i].counter_sel;
+
             for (uint32_t k = 0; k < behind; k++) {
                 const uint32_t ring_slot = (lh + k) % kRingSize;
-                const uint32_t slot = head % capacity;
-                // Read the 16 B sample DIRECTLY into the journal entry's first field.
-                // That is why util_agg_entry_t puts `sample` at offset 0: a NOC read
-                // into L1 must be 16 B aligned, and a 32 B entry always is.
                 noc_async_read(
                     ring_base + kRingHeaderBytes + (uint64_t)ring_slot * kSampleBytes,
-                    (uint32_t)&journal[slot].sample,
+                    sample_pad_addr,
                     kSampleBytes,
                     kSweepNoc);
-                journal[slot].core_id = i;
-                journal[slot].seq = seq[i]++;
-                head++;
-            }
-            last_head[i] = h;
-        }
+                noc_async_read_barrier(kSweepNoc);
 
-        // Phase 3: make sure every sample has landed BEFORE publishing the head that
-        // claims it has. The host reads entries below `head` and trusts them.
-        if (head != head_at_sweep_start) {
-            noc_async_read_barrier(kSweepNoc);
+                const uint32_t wall_now = pad->wall_clock_l;
+                const uint32_t fpu_now = pad->fpu_count;
+                kid = pad->kernel_id;
+                csel = pad->counter_sel;
+
+                if (nsamples != 0 || prev_wall != 0) {
+                    // Counter reset: the Tensix perf counter went backwards, which
+                    // happens when a kernel re-arms it. A post-reset absolute is not a
+                    // delta -- drop the interval rather than accumulate garbage.
+                    if (fpu_now < prev_fpu) {
+                        nresets++;
+                    } else {
+                        const uint32_t wall_d = wall_now - prev_wall;  // wrap-correct
+                        // Guard against an implausible interval, which means we lost the
+                        // thread of this core's timeline rather than genuinely idled.
+                        if (wall_d != 0 && wall_d < kMaxPlausibleWallDelta) {
+                            busy_acc += fpu_now - prev_fpu;
+                            wall_acc += wall_d;
+                            nsamples++;
+                        }
+                    }
+                }
+                prev_wall = wall_now;
+                prev_fpu = fpu_now;
+            }
+
+            last_wall[i] = prev_wall;
+            last_fpu[i] = prev_fpu;
+            states[i].busy_cycles = busy_acc;
+            states[i].wall_cycles = wall_acc;
+            states[i].kernel_id = kid;
+            states[i].resets = nresets;
+            states[i].counter_sel = (uint8_t)csel;
+            // samples LAST of the value fields, then seq: a host that sees seq advance
+            // knows this core's block is fully written.
+            states[i].samples = nsamples;
+            states[i].seq = states[i].seq + 1;
+            head += behind;
+            last_head[i] = h;
         }
 
         // Publish. `head` then `head_xor`, adjacent in the first 16 B chunk, so a
