@@ -116,6 +116,9 @@ inline uint32_t input_batch_base_pages(uint32_t batch_idx, uint32_t num_heads, u
     return batch_idx * num_heads * Ht * Wt;
 }
 
+bool uses_output_bank_owned_schedule(
+    const std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, int32_t dim);
+
 }  // namespace ring_attention_all_gather_async_detail
 
 // Append all kernels, CBs, semaphores, and runtime args required by the
@@ -177,6 +180,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // The helper still applies the legacy even-ring topology/size gate on top, so standalone
     // callers retain their prior behavior with the default.
     bool split_forwarding_enabled = true,
+    // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
+    // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
+    bool partial_readiness_enabled = false,
     RingAttentionRankMapping rank_mapping = {});
 
 void ring_attention_neighbor_halo_exchange_helper(

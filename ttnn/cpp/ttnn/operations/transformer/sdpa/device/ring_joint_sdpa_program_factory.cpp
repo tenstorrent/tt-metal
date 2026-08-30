@@ -2928,6 +2928,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // Share the split-forwarding decision derived above so the all-gather only splits when this
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
+            /*partial_readiness_enabled=*/false,
             rank_mapping);
     }
 

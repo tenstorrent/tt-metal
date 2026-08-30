@@ -10,8 +10,8 @@
 
 namespace ttnn::ring_attention_all_gather {
 
-constexpr uint32_t kReaderFixedCompileTimeArgCount = 21;
-constexpr uint32_t kWriterFixedCompileTimeArgCount = 23;
+constexpr uint32_t kReaderFixedCompileTimeArgCount = 22;
+constexpr uint32_t kWriterFixedCompileTimeArgCount = 24;
 
 template <bool FullMesh>
 constexpr uint32_t tensor_rank_from_transport_rank(
