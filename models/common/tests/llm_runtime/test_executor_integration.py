@@ -14,6 +14,7 @@ import torch
 
 import ttnn
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.decode import DecodeTraceSignature
 from models.common.llm_runtime.execution import EagerExecutor
 from models.common.llm_runtime.lane_group import LaneGroupExecutor
 from models.common.llm_runtime.prefill.signatures import PrefillProgramSignature
@@ -910,6 +911,55 @@ def test_qwen3_lane4_executor_installs_model_owned_q128_warmup(monkeypatch):
 
     assert executor._prefill_warmup is qwen3_32b_executor._warmup_q128_around_prefill
     assert executor._q128_topk_tile_ends_warmed == set()
+
+
+@pytest.mark.parametrize("device_sampling_enabled", (False, True), ids=("disabled", "enabled"))
+def test_qwen3_generator_sampling_policy_controls_decode_topk_warmup(monkeypatch, device_sampling_enabled):
+    mesh_device = _Mesh8()
+    product = _make_qwen3_32b_product(mesh_device, max_batch_size=4)
+    executor_configs = []
+
+    monkeypatch.setattr(qwen3_32b_generator, "from_pretrained", lambda **kwargs: product)
+    monkeypatch.setattr(
+        qwen3_32b_generator,
+        "_model_kv_metadata",
+        lambda model: ((ttnn.bfloat8_b,), 1, 8, 64),
+    )
+
+    def build_executor(llm, config):
+        executor_configs.append(config)
+        return _FakeLane(
+            llm,
+            config,
+            request_state_fields=qwen3_32b_executor.Qwen3_32BExecutor.request_state_fields,
+        )
+
+    monkeypatch.setattr(qwen3_32b_generator, "build_qwen3_32b_executor", build_executor)
+    generator = qwen3_32b_generator.build_qwen3_32b_generator(
+        qwen3_32b_generator.Qwen3_32BGeneratorConfig(
+            hf_model="Qwen/Qwen3-32B",
+            mesh_device=mesh_device,
+            max_batch_size=4,
+            max_seq_len=1024,
+            trace_mode="decode_only",
+            device_sampling_enabled=device_sampling_enabled,
+        )
+    )
+
+    assert len(executor_configs) == 1
+    assert executor_configs[0].warmup.include_decode_top_k is device_sampling_enabled
+    if device_sampling_enabled:
+        observed_missing_signature = DecodeTraceSignature(
+            batch_size=4,
+            page_table_width=32,
+            sampling_path="topk",
+            device_feedback=True,
+        )
+        assert (
+            ProgramKey.from_signature(observed_missing_signature).digest
+            == "6f8351f51a0c90eaea5fca6700b3887e380a015dad7ee6f6a9e8be971dfebbd5"
+        )
+    generator.cleanup()
 
 
 @pytest.mark.parametrize(
