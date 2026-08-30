@@ -67,6 +67,7 @@
 // dependency-free and can be included directly on the host, so the journal layout
 // has exactly one definition shared with the kernel.
 #include "util_aggregator.h"
+#include "tools/ttnvtop/host/agg_layout.hpp"
 #include "hostdev/dev_msgs.h"
 using namespace ttnvtop_wh_tensix;  // NOLINT(google-build-using-namespace)
 
@@ -190,6 +191,7 @@ struct CliOptions {
     std::string launch_go;       // Phase 2.2 7.4: descriptor of a staged aggregator to start
     bool journal_transport = false;  // Phase 2.2 5k: emulate the host-pull journal transport
     bool read_latency_probe = false;  // Phase 2.2: remote-read latency vs transfer size
+    std::string launch_artifact;      // Phase 2.2: dir holding aggregator.image/.desc
 };
 
 void print_help(const char* argv0) {
@@ -275,6 +277,12 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
             out.device_filter.insert(d);
         } else if (a == "--journal-probe") {
             out.journal_probe = true;
+        } else if (a == "--launch-aggregator") {
+            const char* v = need_arg("--launch-aggregator");
+            if (v == nullptr) {
+                return false;
+            }
+            out.launch_artifact = v;
         } else if (a == "--read-latency-probe") {
             out.read_latency_probe = true;
         } else if (a == "--journal-transport") {
@@ -588,7 +596,27 @@ struct RegistryWriter {
 
 std::atomic<bool> g_stop{false};
 
-void handle_sigint(int) { g_stop.store(true); }
+// Set once discovery has returned. Until then the process is inside a blocking UMD
+// call that no signal can interrupt.
+std::atomic<bool> g_discovery_done{false};
+
+void handle_sigint(int) {
+    g_stop.store(true);
+    // During topology discovery there is no loop checking g_stop -- we are inside UMD,
+    // which can block for up to its ETH/ARC startup timeouts (ARC_STARTUP_TIMEOUT is
+    // 300 s, compile-time). A SIGTERM there does nothing, which is how an ordinary slow
+    // start became an unkillable process that needed a board reset.
+    //
+    // Exiting here is safe SPECIFICALLY because discovery is read-only: it probes
+    // heartbeats, versions and mailboxes. There is no half-finished write to strand, so
+    // unlike a kill during the sampling loop this cannot leave the tunnel inconsistent.
+    if (!g_discovery_done.load(std::memory_order_relaxed)) {
+        const char msg[] = "ttnvtop-collector: signal during topology discovery — exiting.\n";
+        ssize_t ignored = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        (void)ignored;
+        ::_exit(130);
+    }
+}
 
 const char* arch_name(tt::ARCH a) {
     switch (a) {
@@ -694,7 +722,37 @@ int main(int argc, char* argv[]) {
     opts.eth_fw_heartbeat_failure = TopologyDiscoveryOptions::Action::IGNORE;
     opts.unexpected_routing_firmware_config = TopologyDiscoveryOptions::Action::IGNORE;
 
+    // Bound the startup. UMD's discovery has its own timeouts -- ETH_STARTUP_TIMEOUT
+    // 10 s per core, ARC_STARTUP_TIMEOUT 300 s -- all compile-time, so a degraded chip
+    // can hold the process for minutes with no output. For a monitoring tool that is
+    // indistinguishable from a hang, and it cost several board resets to diagnose.
+    // A watchdog turns it into a bounded, diagnosable failure.
+    {
+        const char* env = std::getenv("TTNVTOP_DISCOVERY_TIMEOUT_S");
+        const int limit_s = env ? std::atoi(env) : 60;
+        if (limit_s > 0) {
+            std::thread([limit_s]() {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(limit_s);
+                while (!g_discovery_done.load(std::memory_order_relaxed)) {
+                    if (std::chrono::steady_clock::now() > deadline) {
+                        std::fprintf(
+                            stderr,
+                            "ttnvtop-collector: topology discovery did not finish within %d s.\n"
+                            "  UMD is still inside its own timeouts (ETH_STARTUP 10 s/core, ARC_STARTUP 300 s).\n"
+                            "  Usual cause: an ethernet core whose firmware heartbeat has stopped - for example a\n"
+                            "  persistent kernel occupying ERISC0, or a process killed mid-transaction.\n"
+                            "  Raise the bound with TTNVTOP_DISCOVERY_TIMEOUT_S if this machine is simply slow.\n",
+                            limit_s);
+                        std::fflush(stderr);
+                        ::_exit(3);
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+            }).detach();
+        }
+    }
     auto [cluster_desc, devices] = TopologyDiscovery::discover(opts);
+    g_discovery_done.store(true, std::memory_order_relaxed);
     if (devices.empty()) {
         std::cerr << "ttnvtop-collector: no Tenstorrent devices discovered.\n";
         return 1;
@@ -763,7 +821,7 @@ int main(int argc, char* argv[]) {
         // perf counters, overriding period_cycles and the FPU_OUT_L liveness probe are
         // all device WRITES, and on a remote chip they cross the NON_MMIO tunnel.
         // Publish the static per-core fields, then skip every write below.
-        if (cli.journal_probe || cli.read_latency_probe) {
+        if (cli.journal_probe || cli.read_latency_probe || !cli.launch_artifact.empty()) {
             for (size_t i = 0; i < chip.cores.size(); ++i) {
                 auto& v = chip.publisher.cores()[i];
                 v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -843,6 +901,143 @@ int main(int argc, char* argv[]) {
     if (chips.empty()) {
         std::cerr << "ttnvtop-collector: no supported chips to monitor.\n";
         return 1;
+    }
+
+    // Launch the aggregator from an emitted artifact. UMD ONLY -- no tt-metal.
+    //
+    // This is the whole point of the artifact: a monitoring process cannot take
+    // CHIP_IN_USE from the workload it is monitoring, so it must not link tt-metal. The
+    // artifact was produced once, offline, by a process that could. Here we replay it:
+    //
+    //   1. write the configured kernel-config image to kernel_config_base
+    //   2. overwrite the runtime args in place, computed for THIS chip
+    //   3. write the launch message
+    //   4. write RUN_MSG_GO
+    //
+    // Four plain L1 writes. The idle-erisc firmware is already polling
+    // go_messages[0].signal, and idle eth is always DISPATCH_MODE_HOST, so no dispatch
+    // is involved (3.5). 5j proved step 4 works cross-process; steps 1-3 are the same
+    // kind of write.
+    if (!cli.launch_artifact.empty()) {
+        const std::string dir = cli.launch_artifact;
+        uint32_t cfg_base = 0, image_bytes = 0, rta_off = 0, launch_addr = 0, go_addr = 0, eth_l1 = 0;
+        std::vector<uint8_t> launch_bytes, go_bytes;
+        {
+            std::ifstream f(dir + "/aggregator.desc");
+            if (!f.good()) {
+                std::cerr << "ttnvtop-collector: cannot read " << dir << "/aggregator.desc\n";
+                return 1;
+            }
+            std::string k;
+            while (f >> k) {
+                if (k == "kernel_config_base") {
+                    f >> cfg_base;
+                } else if (k == "image_bytes") {
+                    f >> image_bytes;
+                } else if (k == "rta_offset") {
+                    f >> rta_off;
+                } else if (k == "launch_addr") {
+                    f >> launch_addr;
+                } else if (k == "go_addr") {
+                    f >> go_addr;
+                } else if (k == "eth_l1_unreserved") {
+                    f >> eth_l1;
+                } else if (k == "launch_bytes" || k == "go_bytes") {
+                    size_t n = 0;
+                    f >> n;
+                    std::vector<uint8_t> v(n);
+                    for (size_t i = 0; i < n; i++) {
+                        unsigned b = 0;
+                        f >> b;
+                        v[i] = static_cast<uint8_t>(b);
+                    }
+                    (k == "launch_bytes" ? launch_bytes : go_bytes) = std::move(v);
+                } else {
+                    std::string skip;
+                    std::getline(f, skip);
+                }
+            }
+        }
+        std::vector<uint8_t> image(image_bytes);
+        {
+            std::ifstream f(dir + "/aggregator.image", std::ios::binary);
+            if (!f.good() || !f.read(reinterpret_cast<char*>(image.data()), image_bytes)) {
+                std::cerr << "ttnvtop-collector: cannot read " << dir << "/aggregator.image\n";
+                return 1;
+            }
+        }
+        if (cfg_base == 0 || image_bytes == 0 || launch_bytes.empty() || go_bytes.empty()) {
+            std::cerr << "ttnvtop-collector: incomplete artifact in " << dir << "\n";
+            return 1;
+        }
+
+        int launched = 0;
+        for (auto& chip : chips) {
+            if (chip.cores.empty()) {
+                continue;
+            }
+            auto* dev = chip.cores.front().device;
+            SocDescriptor soc(std::make_shared<SocArchDescriptor>(chip.arch), dev->get_chip_info());
+
+            // Same cross-product derivation the kernel's addressing assumes.
+            ttnvtop::AggGrid grid;
+            {
+                std::set<uint32_t> xs, ys;
+                for (const auto& c : soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
+                    xs.insert(static_cast<uint32_t>(c.x));
+                    ys.insert(static_cast<uint32_t>(c.y));
+                }
+                grid.xs.assign(xs.begin(), xs.end());
+                grid.ys.assign(ys.begin(), ys.end());
+            }
+            if (grid.num_cores() == 0) {
+                continue;
+            }
+
+            // Pick an idle eth core. No control plane here, so prefer the channels no
+            // shipped WH descriptor ever routes and verify the core answers.
+            tt::umd::CoreCoord target{};
+            bool found = false;
+            for (const auto& eth : soc.get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
+                std::vector<uint8_t> probe(16);
+                try {
+                    dev->read_from_device(probe.data(), eth, eth_l1, 16);
+                } catch (...) {
+                    continue;
+                }
+                target = eth;
+                found = true;
+                break;
+            }
+            if (!found) {
+                std::cerr << "  chip " << chip.chip_id << ": no readable eth core, skipping\n";
+                continue;
+            }
+
+            const auto l1 = ttnvtop::agg_layout(eth_l1, grid.num_cores());
+            const auto rt = ttnvtop::agg_rt_args(
+                grid,
+                l1,
+                static_cast<uint32_t>(chip.chip_id),
+                1000000u,
+                16u,
+                chip.arch == tt::ARCH::WORMHOLE_B0 ? ttnvtop::kWormholeEthHeartbeatAddr : 0u);
+            try {
+                dev->write_to_device(image.data(), target, cfg_base, image_bytes);
+                dev->write_to_device(rt.data(), target, cfg_base + rta_off, rt.size() * 4);
+                dev->write_to_device(launch_bytes.data(), target, launch_addr, launch_bytes.size());
+                dev->write_to_device(go_bytes.data(), target, go_addr, go_bytes.size());
+            } catch (const std::exception& e) {
+                std::cerr << "  chip " << chip.chip_id << ": launch failed: " << e.what() << "\n";
+                continue;
+            }
+            ++launched;
+            std::cout << "  chip " << chip.chip_id << (chip.is_remote ? " (remote)" : " (mmio)") << " eth (" << target.x
+                      << "," << target.y << ") " << grid.xs.size() << "x" << grid.ys.size() << " = " << grid.num_cores()
+                      << " cores, journal 0x" << std::hex << l1.journal << std::dec << "\n";
+        }
+        std::cout << "launched " << launched << " aggregator(s) — no tt-metal, no dispatch, no fabric.\n";
+        return 0;
     }
 
     // Remote-read latency vs transfer size.
@@ -967,12 +1162,13 @@ int main(int argc, char* argv[]) {
         int total = 0;
         std::cout << "journal probe: landing base 0x" << std::hex << ttnvtop_agg::kLandingBase << std::dec << "\n";
         for (auto& chip : chips) {
-            // MMIO chips only. Journals land on the MMIO side by design, and probing a
-            // remote chip would read over the NON_MMIO tunnel -- the exact thing this
-            // whole feature exists to keep the collector off.
-            if (chip.is_remote) {
-                continue;
-            }
+            // ALL chips, including remote ones.
+            //
+            // An earlier revision skipped remote chips, because the push design landed
+            // journals on the MMIO side. v2 removed the push (5k): the journal now lives
+            // in the aggregator's own eth L1, which for a remote chip's aggregator is on
+            // the remote chip. Reading it over the tunnel is the design, and it is two
+            // small reads -- measured at 0.1-1.1 ms even under full Llama load (5m).
             tt::umd::SocDescriptor soc(
                 std::make_shared<tt::umd::SocArchDescriptor>(chip.arch), chip.cores.front().device->get_chip_info());
             const auto found = ttnvtop_agg::probe_landings(chip.cores.front().device, soc, now_us);

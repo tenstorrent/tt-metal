@@ -59,6 +59,7 @@
 //                               tears -- see the publish note below.
 //       sample_pad_addr         L1 addr of a 16 B landing pad for one raw sample
 //       dbg_addr                L1 addr of 4 u32 liveness markers
+//       heartbeat_addr          ETH firmware heartbeat word, or 0 to disable. See below
 
 #include <cstdint>
 
@@ -85,6 +86,10 @@ static constexpr uint8_t kSweepNoc = 0;
 // 1 GHz.
 static constexpr uint32_t kMaxPlausibleWallDelta = 1000000000u;
 
+// Signature UMD's eth_heartbeat_running() requires in the upper 16 bits of the
+// heartbeat word (umd erisc_firmware.hpp: BASE_FW_HEARTBEAT_SIGNATURE).
+static constexpr uint32_t kEthFwHeartbeatSignature = 0xABCDu;
+
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
@@ -106,6 +111,7 @@ void kernel_main() {
     const uint32_t publish_every = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t sample_pad_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dbg_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t heartbeat_addr = get_arg_val<uint32_t>(arg_idx++);
 
     volatile tt_l1_ptr uint32_t* last_head = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(last_head_scratch);
     volatile tt_l1_ptr uint32_t* seq = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(seq_scratch);
@@ -307,6 +313,22 @@ void kernel_main() {
 
         dbg[1] = sweep_count;
         dbg[2] = head;
+
+        // Keep the ethernet firmware's heartbeat alive.
+        //
+        // We occupy ERISC0, so the idle-erisc firmware that normally increments this is
+        // not running. UMD's topology discovery polls it on EVERY eth core
+        // (eth_heartbeat_running) and waits out its timeouts when it does not change --
+        // which stalls every subsequent device open, for any process, not just ours.
+        // Measured before this: discovery hanging for 5-8 minutes and needing a board
+        // reset. Maintaining the word is what makes this kernel a good citizen rather
+        // than a platform-wide hazard.
+        //
+        // Upper 16 bits are the signature UMD checks; the low 16 must simply change.
+        if (heartbeat_addr) {
+            volatile tt_l1_ptr uint32_t* hb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(heartbeat_addr);
+            *hb = (kEthFwHeartbeatSignature << 16) | (sweep_count & 0xFFFFu);
+        }
 
         // IDLE, do not spin. A telemetry loop that keeps the core hot raises AICLK,
         // which changes both the power envelope and the thing being measured.

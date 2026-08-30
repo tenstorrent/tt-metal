@@ -1430,6 +1430,85 @@ That makes the ELF-as-build-artifact work (3.5, 5j) the gating item for M1 accep
 not an optimisation. With it, the launch is four plain L1 writes from a UMD-only process
 -- and 5j already proved the last of those works cross-process.
 
+## 5o. The wedge: a persistent eth kernel breaks UMD topology discovery -- FIXED 2026-08-30
+
+Four times today, and twice needing a board reset, a process opening the device hung for
+5-8 minutes in UMD topology discovery. Root cause found, and it was ours.
+
+### Mechanism
+
+`TopologyDiscovery::eth_heartbeat_running()` polls EVERY ethernet core, waiting for the
+firmware heartbeat word to change. That word is incremented by the idle-erisc FIRMWARE.
+Our aggregator occupies ERISC0 and never returns (3.5), so the firmware never runs and
+the heartbeat freezes permanently. Discovery then waits out its timeouts on every core we
+have claimed -- for EVERY subsequent device open, by ANY process: ours, tt-metal's,
+tt-smi's.
+
+This was not a test artifact. A persistent kernel on an idle eth core degraded the whole
+machine, and it presented as an intermittent unkillable hang.
+
+### Fix: the kernel maintains the heartbeat it displaced
+
+Each sweep the aggregator writes `(0xABCD << 16) | (sweep_count & 0xFFFF)` to
+`ETH_HEARTBEAT_ADDR` (0x1C on WH) -- the signature UMD checks, and a low half that
+changes. Free: the loop already runs at ~1 kHz.
+
+| | discovery time |
+|---|---|
+| clean baseline, nothing resident | 0.474 s |
+| **aggregator resident, heartbeat maintained** | **0.475 s** |
+| aggregator resident, pre-fix | 90 s timeout (5-8 min hangs observed) |
+
+Wormhole only: Blackhole's address differs and its discovery skips the check
+("Temporary - heartbeat check disabled for Blackhole").
+
+### Defence: a discovery watchdog
+
+UMD's own timeouts are compile-time (ETH_STARTUP 10 s/core, ARC_STARTUP 300 s), so a
+degraded chip can hold a process for minutes with no output. The collector now bounds
+discovery (default 60 s, `TTNVTOP_DISCOVERY_TIMEOUT_S`) and exits with a diagnostic
+naming this exact cause. Verified: 20.046 s and a clear message, against an 8-minute
+hang. The SIGTERM handler can also exit during discovery -- safe there specifically
+because discovery is READ-ONLY, so there is no half-finished write to strand.
+
+### RETRACTION
+
+5m recorded "the collector must not be SIGKILLed... pkill -9 mid-transaction left UMD
+wedging in wait_arc_core_start". **That explanation was wrong.** The final wedge involved
+no kill at all -- a fresh process met eth cores whose heartbeats had been frozen since
+the moment the aggregators started. The aggregators were the cause throughout. Clean
+shutdown is still good hygiene, but it was never the mechanism.
+
+### 3.5 CORRECTED
+
+3.5 argued the persistent-kernel approach was safe because "IDLE_ETH appears nowhere in
+impl/program/dispatch.cpp". That reasoning was right about DISPATCH and never considered
+DISCOVERY, which is where the hazard actually lived. The general form:
+
+**Displacing firmware means inheriting its contracts.** The heartbeat is the one we
+tripped over; anything else the idle-erisc firmware maintains for the platform is a
+candidate, and deserves an audit rather than waiting to be bitten.
+
+### Two stale assumptions from the push era, also fixed
+
+Removing the push (5k) left debris in code that looked untouched:
+
+- the journal probe skipped REMOTE chips ("journals land on the MMIO side by design") --
+  exactly backwards once the journal lives in the aggregator's own L1;
+- the journal sat AFTER variable-size scratch, making discovery circular: its size
+  depends on `num_cores`, which is a field inside it. It now sits at `base`, so a
+  UMD-only reader finds it with one 64 B read at a fixed address.
+
+### End to end, cross-process, on a remote chip
+
+```
+chip 4 eth (24,16)  src_chip=4 cores=64 capacity=64 head=415278 sweeps=6208
+real 0m0.520s
+```
+
+An aggregator on remote chip 4, discovered and read by a process that never linked
+tt-metal, in half a second, with discovery unharmed.
+
 ## 6. Risks
 
 | Risk | Mitigation |

@@ -27,9 +27,13 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "fabric_fixture.hpp"
+#include "impl/program/program_impl.hpp"
+#include <llrt/llrt.hpp>
+#include <fstream>
 
 #include "hw/inc/util_aggregator.h"
 #include "tools/ttnvtop/host/agg_core_select.hpp"
+#include "tools/ttnvtop/host/agg_layout.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -56,57 +60,19 @@ static uint32_t publish_every_sweeps() {
     return kPublishEverySweeps;
 }
 
-// L1 layout inside the aggregator eth core's UNRESERVED region. All 16 B aligned:
-// every one of these is a NOC read destination.
-struct SenderL1 {
-    uint32_t last_head;     // num_cores * 4 B
-    uint32_t head_scratch;  // num_cores * 16 B
-    uint32_t seq_scratch;   // num_cores * 4 B
-    uint32_t last_wall;     // num_cores * 4 B
-    uint32_t last_fpu;      // num_cores * 4 B
-    uint32_t sample_pad;    // 16 B landing pad for one raw sample
-    uint32_t dbg;           // 16 B liveness markers
-    uint32_t journal;       // 64 B header + num_cores * 32 B state table
-    uint32_t end;
-};
+// L1 layout, the grid, and the runtime-argument order all live in
+// tools/ttnvtop/host/agg_layout.hpp — ONE definition shared with the UMD-only launcher
+// that replays the emitted artifact. If the two ever disagree the aggregator reads its
+// scratch from the wrong addresses and produces confident nonsense.
+using SenderL1 = ttnvtop::AggL1;
+using TensixGrid = ttnvtop::AggGrid;
 
-static SenderL1 layout_sender_l1(uint32_t base, uint32_t num_cores, uint32_t capacity) {
-    auto align16 = [](uint32_t v) { return (v + 15u) & ~15u; };
-    SenderL1 l{};
-    uint32_t p = align16(base);
-    l.last_head = p;
-    p = align16(p + num_cores * 4u);
-    l.head_scratch = p;
-    p = align16(p + num_cores * 16u);
-    l.seq_scratch = p;
-    p = align16(p + num_cores * 4u);
-    l.last_wall = p;
-    p = align16(p + num_cores * 4u);
-    l.last_fpu = p;
-    p = align16(p + num_cores * 4u);
-    l.sample_pad = p;
-    p = align16(p + 16u);
-    l.dbg = p;
-    p = align16(p + 16u);
-    l.journal = p;
-    p = align16(p + util_agg_bytes_for(capacity));
-    l.end = p;
-    return l;
+static SenderL1 layout_sender_l1(uint32_t base, uint32_t num_cores, uint32_t /*capacity*/) {
+    return ttnvtop::agg_layout(base, num_cores);
 }
 
-// The live Tensix cores as a CROSS PRODUCT of translated x and y coordinates.
-//
-// Harvesting removes whole rows (WH) or whole columns (BH), so the live set is always
-// live_x x live_y: nx+ny numbers describe all nx*ny cores. NOT a contiguous rectangle
-// -- BH takes its translated coords from the NOC0 core list, which skips the non-Tensix
-// columns, so its live x values have gaps.
-//
-// VERIFIED, not assumed: if the translated set is ever not a clean cross product the
-// aggregator would silently sweep the wrong cores, so this returns false instead.
-struct TensixGrid {
-    std::vector<uint32_t> xs, ys;
-};
-
+// Validate that the live Tensix set really is a clean cross product. If it is ever not,
+// the kernel's x-list/y-list addressing would silently sweep the wrong cores.
 static bool translated_tensix_grid(const std::vector<tt::umd::CoreCoord>& cores, TensixGrid& out) {
     if (cores.empty()) {
         return false;
@@ -134,33 +100,17 @@ static uint32_t num_cores_of(tt::tt_metal::IDevice* dev) {
     return static_cast<uint32_t>(g.xs.size() * g.ys.size());
 }
 
-// Runtime args in the kernel's order: num_cores, nx, ny, xs..., ys..., then the rest.
 static std::vector<uint32_t> build_rt_args(
     const TensixGrid& g,
     const SenderL1& l1,
-    uint32_t capacity,
+    uint32_t /*capacity*/,
     uint32_t src_chip,
     uint32_t sweep_cycles,
     uint32_t publish_every) {
-    std::vector<uint32_t> a = {
-        static_cast<uint32_t>(g.xs.size() * g.ys.size()),
-        static_cast<uint32_t>(g.xs.size()),
-        static_cast<uint32_t>(g.ys.size())};
-    a.insert(a.end(), g.xs.begin(), g.xs.end());
-    a.insert(a.end(), g.ys.begin(), g.ys.end());
-    a.push_back(l1.last_head);
-    a.push_back(l1.head_scratch);
-    a.push_back(l1.seq_scratch);
-    a.push_back(l1.last_wall);
-    a.push_back(l1.last_fpu);
-    a.push_back(l1.journal);
-    a.push_back(capacity);
-    a.push_back(src_chip);
-    a.push_back(sweep_cycles);
-    a.push_back(publish_every);
-    a.push_back(l1.sample_pad);
-    a.push_back(l1.dbg);
-    return a;
+    // Wormhole only: BH's heartbeat address differs and its discovery skips the check.
+    const bool is_wh = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    return ttnvtop::agg_rt_args(
+        g, l1, src_chip, sweep_cycles, publish_every, is_wh ? ttnvtop::kWormholeEthHeartbeatAddr : 0u);
 }
 
 // Restrict UMD's remote transfers to the channels that actually reach `remote`.
@@ -486,6 +436,131 @@ TEST_F(Fabric1DFixture, TestEthAggregatorRemoteChip) {
         std::this_thread::sleep_for(std::chrono::seconds(std::atoi(hold)));
     }
     ttnvtop::stop_aggregator(remote, pick.core);
+}
+
+// Emit the aggregator as a BUILD ARTIFACT a UMD-only process can launch.
+//
+// The aggregator must run alongside a workload, from a separate PID. Two tt-metal
+// processes cannot share a device (CHIP_IN_USE), so the launcher must not link
+// tt-metal. 5j proved the last step of the launch — the go word — works cross-process
+// over raw UMD. What was missing is the binary and the runtime args.
+//
+// This snapshots the CONFIGURED L1 IMAGE rather than parsing an ELF. After
+// ConfigureDeviceWithProgram has written the kernel into the kernel-config region, the
+// bytes sitting there are exactly what any chip of this arch needs. Reading them back
+// and replaying them elsewhere sidesteps the JIT build recipe, the linker script, and
+// ELF span handling entirely — all of which are tt-metal internals we would otherwise
+// have to duplicate and keep in lockstep.
+//
+// The artifact is produced ONCE, offline, by a process that has tt-metal. Monitoring
+// then needs only UMD. Run with TTNVTOP_EMIT_ARTIFACT=<dir>.
+TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
+    const char* outdir = std::getenv("TTNVTOP_EMIT_ARTIFACT");
+    if (outdir == nullptr) {
+        GTEST_SKIP() << "set TTNVTOP_EMIT_ARTIFACT=<dir> to emit the launch artifact";
+    }
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 1u);
+    auto* dev = devices[0]->get_devices()[0];
+    const auto pick = ttnvtop::select_aggregator_eth_core(dev);
+    if (!pick.ok) {
+        GTEST_SKIP() << pick.reason;
+    }
+
+    const uint32_t num_cores = num_cores_of(dev);
+    ASSERT_GT(num_cores, 0u);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t eth_l1 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const SenderL1 l1 = layout_sender_l1(eth_l1, num_cores, num_cores);
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& soc = cluster.get_soc_desc(dev->id());
+    TensixGrid grid;
+    ASSERT_TRUE(translated_tensix_grid(soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED), grid));
+
+    auto program = tt::tt_metal::CreateProgram();
+    auto kernel = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/tools/ttnvtop/kernels/eth_aggregator.cpp",
+        pick.core,
+        tt::tt_metal::EthernetConfig{
+            .eth_mode = tt::tt_metal::Eth::IDLE, .processor = tt::tt_metal::DataMovementProcessor::RISCV_0});
+    tt::tt_metal::SetRuntimeArgs(
+        program,
+        kernel,
+        pick.core,
+        build_rt_args(
+            grid, l1, num_cores, static_cast<uint32_t>(dev->id()), kSweepIntervalCycles, kPublishEverySweeps));
+
+    tt::tt_metal::detail::CompileProgram(dev, program, /*force_slow_dispatch=*/true);
+    program.impl().finalize_dataflow_buffer_configs();
+    if (!program.impl().is_finalized()) {
+        program.impl().finalize_offsets(dev);
+    }
+    tt::tt_metal::detail::ConfigureDeviceWithProgram(dev, program, /*force_slow_dispatch=*/true);
+    tt::tt_metal::detail::WriteRuntimeArgsToDevice(dev, program, /*force_slow_dispatch=*/true);
+
+    const uint32_t idle_idx = hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
+    auto* kg = program.impl().kernels_on_core(pick.core, idle_idx);
+    ASSERT_NE(kg, nullptr);
+    auto lm = kg->launch_msg.view();
+    const uint32_t cfg_base = lm.kernel_config().kernel_config_base()[idle_idx];
+    const uint32_t text_off = lm.kernel_config().kernel_text_offset()[0];
+    const uint32_t rta_off = lm.kernel_config().rta_offset()[0].rta_offset();
+
+    // Snapshot enough of the kernel-config region to cover text and runtime args. The
+    // launcher rewrites the args in place for each chip, so their content here does not
+    // matter — only that the region is large enough to hold them.
+    const uint32_t rt_words =
+        static_cast<uint32_t>(build_rt_args(grid, l1, num_cores, 0u, kSweepIntervalCycles, kPublishEverySweeps).size());
+    const uint32_t image_bytes =
+        ((std::max(text_off, rta_off) + std::max(64u * 1024u, rt_words * 4u + 1024u)) + 15u) & ~15u;
+
+    std::vector<uint32_t> image(image_bytes / 4, 0u);
+    tt::tt_metal::detail::ReadFromDeviceL1(dev, pick.core, cfg_base, image_bytes, image, CoreType::ETH);
+
+    const std::string dir(outdir);
+    {
+        std::ofstream f(dir + "/aggregator.image", std::ios::binary);
+        ASSERT_TRUE(f.good()) << "cannot write to " << dir;
+        f.write(reinterpret_cast<const char*>(image.data()), image_bytes);
+    }
+    {
+        std::ofstream f(dir + "/aggregator.desc");
+        f << "arch " << static_cast<int>(cluster.arch()) << "\n";
+        f << "kernel_config_base " << cfg_base << "\n";
+        f << "image_bytes " << image_bytes << "\n";
+        f << "rta_offset " << rta_off << "\n";
+        f << "kernel_text_offset " << text_off << "\n";
+        f << "launch_addr "
+          << hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::LAUNCH)
+          << "\n";
+        f << "go_addr "
+          << hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::GO_MSG)
+          << "\n";
+        f << "eth_l1_unreserved " << eth_l1 << "\n";
+        const auto* lp = reinterpret_cast<const uint8_t*>(lm.data());
+        f << "launch_bytes " << lm.size();
+        for (size_t i = 0; i < lm.size(); i++) {
+            f << " " << static_cast<unsigned>(lp[i]);
+        }
+        f << "\n";
+        const auto* gp = reinterpret_cast<const uint8_t*>(kg->go_msg.view().data());
+        f << "go_bytes " << kg->go_msg.view().size();
+        for (size_t i = 0; i < kg->go_msg.view().size(); i++) {
+            f << " " << static_cast<unsigned>(gp[i]);
+        }
+        f << "\n";
+    }
+    log_info(
+        tt::LogTest,
+        "artifact: {} bytes image, cfg_base=0x{:x} text_off=0x{:x} rta_off=0x{:x} -> {}",
+        image_bytes,
+        cfg_base,
+        text_off,
+        rta_off,
+        dir);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
