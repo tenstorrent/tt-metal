@@ -37,8 +37,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                = params.buffer_A;
 #endif
-    const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * num_tiles * num_faces;
+    const std::uint32_t num_tiles = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
+    // unpack_A posts one DVALID per face. Tilize posts one per tile on Blackhole
+    // (per face on Wormhole); see _llk_unpack_tilize_num_dvalids_wrapper_.
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * (tilize_en ? _llk_unpack_tilize_num_dvalids_wrapper_(num_tiles, num_faces) : num_tiles * num_faces);
 
     {
         START_PERF_MEASURE("INIT")
@@ -68,9 +70,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            if constexpr (!tilize_en && !unpack_to_dest)
+            // Tilize A2D still waits on SrcA (and SrcB when dest is FP32). Leaving
+            // unpack idle here deadlocks MATH_ISOLATE.
+            if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en>(src_handshake_iters);
             }
         }
         else
@@ -121,6 +125,7 @@ const bool is_int_fpu_en = false;
 #endif
 
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -137,7 +142,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
     const int DST_INDEX                    = params.DST_INDEX;
 #endif
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK * num_faces;
+    const std::uint32_t num_tiles           = NUM_BLOCKS * NUM_TILES_IN_BLOCK;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * (tilize_en ? _llk_unpack_tilize_num_dvalids_wrapper_(num_tiles, num_faces) : num_tiles * num_faces);
 
     {
         START_PERF_MEASURE("INIT")
