@@ -15,23 +15,12 @@ namespace ttnn::operations::wavelet {
     return denominator == 0 ? 0 : numerator / denominator + static_cast<size_t>(numerator % denominator != 0);
 }
 
-[[nodiscard]] constexpr size_t round_up(const std::size_t value, const std::size_t alignment) noexcept {
-    return alignment == 0 ? value : ceil_div(value, alignment) * alignment;
-}
-
 struct SignalBuffer {
     size_t length{0};
     uint32_t stick_width{kStickWidth};
     uint32_t element_size_bytes{sizeof(float)};
-
-    [[nodiscard]] constexpr size_t stick_count() const noexcept {
-        return ceil_div(length, static_cast<size_t>(stick_width));
-    }
-
-    [[nodiscard]] constexpr uint32_t stick_bytes() const noexcept { return stick_width * element_size_bytes; }
 };
 
-// Even and odd streams produced by splitting a 1D signal.
 struct Signal {
     SignalBuffer even;
     SignalBuffer odd;
