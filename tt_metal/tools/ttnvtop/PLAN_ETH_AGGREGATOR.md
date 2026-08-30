@@ -1743,6 +1743,140 @@ supervisor's job, not the kernel's, exactly as 5q's item 2 said.
   launch address itself and ignores what was passed. Latent, upstream, unrelated to this
   defect.
 
+## 5s. FIDELITY MEASURED -- the surviving justification HOLDS -- 2026-08-30
+
+The one measurement this feature actually rests on. The original justification --
+"monitoring stalls workloads" -- did not reproduce (5l/5q: three Llama-70B arms spanned
+0.5% with the ordering backwards), so fidelity was the only argument left, and it was
+unmeasured.
+
+homelab-1 T3K, 8 chips, 2x4 mesh, 2048^2 bf16 matmul, 60 s window,
+`scripts/fidelity_ab.sh`. **Both arms run CONCURRENTLY against one workload.** Both read
+the same 62-entry per-core rings and neither consumes, so this removes "were the two arms
+even producing the same samples" as a variable -- which separate runs cannot, since
+production is driven by the workload's kernel-launch rate.
+
+### Aggregator arm
+
+```
+chip  loc     cores  sweeps      folded      lost   loss%   samples/s   torn  fail
+   0  mmio       64     32320     7886899         0    0.00      131434      0     0
+   1  mmio       64     46336     8236042         0    0.00      137253      0     0
+   2  mmio       64     46896     8294957         0    0.00      138234      0     0
+   3  mmio       64     46912     8274535         0    0.00      137894      0     0
+   4  remote     64     47712     8364861         0    0.00      139399      0     0
+   5  remote     64     48416     8401634         0    0.00      140012      0     0
+   6  remote     64     47408     8349721         0    0.00      139147      0     0
+TOTAL folded=57808649 lost=0 loss=0.00%  aggregate 963374 samples/s
+```
+
+### Host per-core drain arm, same window
+
+```
+chip     entries       lost   loss%   entries/s
+   0     4079104    3780578   48.10       65075
+   1     4079104    4169238   50.55       65075
+   2     4079104    4223857   50.87       65075
+   3     4079104    4205280   50.76       65075
+   4     4079104    4287972   51.25       65075
+   5     4079104    4324129   51.46       65075
+   6     4079104    4269851   51.14       65075
+   7     4079104    4281665   51.21       65075
+TOTAL entries=32632832 lost=33542570 loss=50.69%
+```
+
+**Host loses 50.7% of samples. The on-chip sweep loses 0.00%.** Replicated in an earlier
+run the same day (`runs/fidelity-20260830-115656`, 6 chips): host 54.70%, aggregator 0.00%.
+
+### Why these numbers are trustworthy, and not just two tools disagreeing
+
+1. **`entries` is bit-identical across all eight chips: 4,079,104 = 1028 ticks x 64 cores
+   x 62 slots.** Every core on every chip hit the ring-capacity clamp on every single
+   tick. The host drain is not sampling the rings, it is **saturated** -- it only ever
+   gets the most recent 62 entries per core per pass, and everything else is gone. That
+   the number is exactly `ticks x cores x ring_size` is what makes this a structural
+   ceiling rather than a tuning problem.
+
+2. **The two arms independently agree on the PRODUCTION rate to within 0.4%.** Sum what
+   each arm accounts for:
+
+        chip 4   host (4079104 + 4287972)/60 = 139451/s    aggregator 139414/s   0.03% apart
+        chip 0   host (4079104 + 3780578)/60 = 130995/s     aggregator 131448/s   0.35% apart
+
+   Two completely different mechanisms -- 64 PCIe/tunnel reads per tick vs a NOC sweep on
+   an idle eth core -- measuring the same underlying stream and landing on the same total.
+   One keeps 100% of it, the other 49%.
+
+3. **The tunnel is irrelevant to the aggregator.** Remote chips 4-6 folded slightly MORE
+   than the MMIO chips (139k vs 131-138k samples/s) at `lost=0`. The sweep never crosses
+   ethernet, so "remote" costs nothing -- which is the entire architectural claim.
+
+### What the loss actually costs
+
+Not just resolution. The host drain's attribution model is **fires x period**
+(`collector/main.cpp`: each observed ring entry contributes `hdr->period_cycles` to its
+`kernel_id`). A lost sample is therefore a lost *fire*, i.e. lost attributed cycles,
+roughly proportionally. 50.7% sample loss means per-kernel TIME% is under-attributed by
+about half -- not merely coarser. That is the difference between a monitor you can quote
+and one you cannot.
+
+### VERDICT
+
+**Fidelity holds. Build 2.2.b.** The host-pull design has a hard structural ceiling at
+~65k entries/s/chip (1028 drain passes x 62 slots x 64 cores in 60 s) against a ~139k
+samples/s/chip producer, and no amount of drain tuning closes a 2x gap that is set by ring
+capacity. The on-chip sweep runs at ~790 sweeps/s and loses nothing, on local and remote
+chips alike, for a fixed 2 KB read per chip per tick.
+
+Note this does NOT revive 2.2.a (fabric transport): the journal is read where it lies and
+the tunnel is only ever asked for 2 KB.
+
+### Three defects this run exposed
+
+1. **`[ring-drain]`'s 5 s throttle was GLOBAL to the drain thread, not per chip.**
+   `last_debug_us` / `last_debug_ticks` were `static thread_local` locals inside the
+   per-chip loop, so whichever chip the loop reached first after the interval elapsed
+   logged and reset the timer, silently suppressing the other seven. The first T3K run
+   printed 15 lines for chip 0 and one each for chips 4, 5 and 7 over 75 s -- which reads
+   exactly like the drain starving 7 of 8 chips, and is nothing of the kind. It also made
+   `drain_hz` meaningless (tick baseline taken from whichever chip logged last). Moved
+   into `ChipState`. **Without this fix the host arm could only be measured on one chip.**
+
+2. **Remote header writes are UNORDERED, and the launcher's zeroing raced the kernel.**
+   The launcher zeroes the journal header before the go word so a stale journal cannot
+   read as live. On chip 7 the zeroing landed *after* the kernel had already stamped the
+   magic, leaving a live aggregator publishing an advancing `sweep_count` under
+   `magic 0x0` -- invisible to `probe_landings` (which gates on the magic), so the
+   launcher reported `NOT RUNNING (magic 0x0, sweeps 352 -> 736)` (note: sweeps
+   *advancing*, which is the tell) and `--stop-aggregator` could not reach it either. An
+   unstoppable aggregator on a core nobody could see. Fixed by republishing the magic in
+   the publish block instead of once at startup, which makes the journal self-healing
+   against any late or reordered header write.
+
+3. **Remote aggregator launch is still flaky: 2 of 4 remote chips failed in the first run,
+   1 of 4 in the second.** Unchanged cause (5h): the collector cannot pin the tunnel to
+   the channels that reach the target chip, because
+   `configure_active_ethernet_cores_for_mmio_device` is a `umd::Cluster` method and a
+   monitoring process deliberately never constructs a Cluster. Open question 7.3.
+
+### And one operational rule, learned the expensive way
+
+**Never SIGKILL a tt-metal process that has initialised fabric.** It leaves the fabric
+ERISC firmware stopped mid-loop on an ACTIVE ethernet core, whose heartbeat word then
+holds `FABRIC_HEARTBEAT_SIGNATURE` (0xAABB) with a frozen counter. UMD's
+`eth_heartbeat_running` throws on a valid-but-frozen signature (an *invalid* signature
+merely returns false with a warning), so the next tt-metal device open dies outright:
+
+    RuntimeError: Timed out waiting for ETH heartbeat on ... ETH core e8-0 ...
+                  Stuck at 0xaabb2d45
+
+Recovered with `python3 -m tt_smi -r all` (~40 s, discovery back to 0.505 s). Note the
+signature: **0xAABB is fabric's, not ours** -- this failure has nothing to do with the
+aggregator and would happen to any hard-killed fabric workload. `ab_workload.py` gained
+`--seconds` so the workload is time-bounded and exits through its own `finally`, and
+`fidelity_ab.sh`'s teardown now waits 60 s for a clean exit and **refuses to escalate to
+SIGKILL**, reporting instead.
+
 ## 6. Risks
 
 | Risk | Mitigation |

@@ -935,6 +935,46 @@ TEST_F(Fabric1DFixture, TestEthAggregatorReplayDiff) {
     EXPECT_GT(dbg[1], 0u) << "artifact replay did not start the kernel";
 }
 
+// The collector's mirrored landing base must equal the Hal's, for THIS arch.
+//
+// The collector cannot check this itself: it deliberately does not link tt-metal, and
+// CMake puts only the WORMHOLE hw/inc on its include path, so every mirrored constant in
+// it is a Wormhole constant whether or not it is labelled one. It had a single mirrored
+// formula for the idle-eth UNRESERVED base, and the two HALs do not agree on how to
+// derive that -- Wormhole rounds `MEM_IERISC_MAP_END + L1_KERNEL_CONFIG_SIZE`, Blackhole
+// aligns `MEM_AERISC_MAP_END + MEM_ERISC_KERNEL_CONFIG_SIZE`, a different base symbol
+// entirely. So on Blackhole the collector probed 0xe200 for journals that were at
+// 0x15740 and reported "no aggregator is running" about one it had verified as RUNNING
+// two seconds earlier.
+//
+// This test binary DOES have the Hal, so this is the one place the two can be tied
+// together. It needs no ethernet core and no launch.
+TEST_F(Fabric1DFixture, TestEthAggregatorLandingBaseMatchesHal) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t hal_unreserved =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const auto arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+
+    // Mirrors collector/main.cpp's ttnvtop_agg::landing_base(). Kept as literals on
+    // purpose: the point is to catch a divergence between the collector's numbers and
+    // the Hal, which recomputing the Hal's own expression here would hide.
+    uint32_t collector_base = 0;
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: collector_base = 0xe200u; break;
+        case tt::ARCH::BLACKHOLE: collector_base = 0x15740u; break;
+        default: GTEST_SKIP() << "no collector landing base for arch " << static_cast<int>(arch);
+    }
+    log_info(
+        tt::LogTest,
+        "landing base: hal 0x{:x}  collector 0x{:x}  (arch {})",
+        hal_unreserved,
+        collector_base,
+        static_cast<int>(arch));
+    EXPECT_EQ(hal_unreserved, collector_base)
+        << "ttnvtop_agg::landing_base() in collector/main.cpp has drifted from the Hal for this arch. "
+        << "The collector will probe the wrong address and report that no aggregator is running.";
+}
+
 // Hold the devices open and do nothing else.
 //
 // One variable, isolated: whether a tt-metal-initialised device is present while the

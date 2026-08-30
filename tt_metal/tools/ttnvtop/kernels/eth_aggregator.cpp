@@ -90,6 +90,25 @@ static constexpr uint32_t kMaxPlausibleWallDelta = 1000000000u;
 // heartbeat word (umd erisc_firmware.hpp: BASE_FW_HEARTBEAT_SIGNATURE).
 static constexpr uint32_t kEthFwHeartbeatSignature = 0xABCDu;
 
+// COOPERATIVE STOP. The host writes this to dbg[3] and the kernel RETURNS.
+//
+// Returning is a materially better exit than the reset `stop_aggregator()` asserts. When
+// this kernel returns, idle_erisc.cc regains its wait loop -- which sets RUN_MSG_DONE and
+// then posts its OWN heartbeat (0xAABB) while waiting for the next RUN_MSG_GO. So the
+// core is left discoverable and relaunchable.
+//
+// A reset leaves it neither. Worse, it leaves our 0xABCD heartbeat word FROZEN with a
+// valid signature, which tt-metal turns into a hard error on the next device open
+// ("Timed out waiting for ETH heartbeat ... Stuck at 0xabcd....") -- a board reset to
+// clear. That is the standing open risk in
+// [[tt-eth-idle-core-firmware-contracts]], and this is the fix for it.
+//
+// It rides in dbg[3] rather than a new runtime argument because the argument budget is
+// genuinely full: the args must fit between rta_offset and kernel_text_offset, and on a
+// 120-core Blackhole that is 39 words against a 160 B gap -- 4 bytes spare. dbg[3]
+// otherwise holds num_cores, which the journal header already carries.
+static constexpr uint32_t kStopRequest = 0x504F5453u;  // 'STOP' little-endian
+
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
@@ -305,6 +324,20 @@ void kernel_main() {
         // often keeps the host's view stable for longer and costs nothing.
         sweep_count++;
         if (publish_every == 0 || (sweep_count % publish_every) == 0) {
+            // Republish the magic, not just set it once at startup.
+            //
+            // The launcher zeroes this header before writing the go word so a stale
+            // journal cannot be read as live. On a REMOTE chip those two writes are not
+            // ordered against each other: measured 2026-08-30 on T3K chip 7, the zeroing
+            // landed AFTER the kernel had already stamped the magic, leaving a live
+            // aggregator publishing an advancing sweep_count under magic 0x0. That is
+            // invisible to `probe_landings` (which gates on the magic), so the launcher
+            // called it NOT RUNNING and `--stop-aggregator` could not reach it either --
+            // an unstoppable aggregator on a core nobody could see.
+            //
+            // Writing it here costs one store per publish_every sweeps and makes the
+            // journal self-healing against any late or reordered header write.
+            hdr->magic = UTIL_AGG_MAGIC;
             hdr->head = head;
             hdr->head_xor = head ^ UTIL_AGG_HEAD_SALT;
             hdr->sweep_count = sweep_count;
@@ -313,6 +346,19 @@ void kernel_main() {
 
         dbg[1] = sweep_count;
         dbg[2] = head;
+
+        // Cooperative stop, checked once per sweep.
+        //
+        // The journal's magic is cleared on the way out. A journal left behind keeps a
+        // valid magic and a valid header checksum forever with its sweep_count simply
+        // frozen, and every reader that trusted the magic read a dead aggregator as a
+        // live one -- twice. Clearing it means a later probe finds nothing, which is the
+        // truth.
+        if (dbg[3] == kStopRequest) {
+            hdr->magic = 0u;
+            dbg[0] = 0xA66E0001u;  // exited on request
+            return;
+        }
 
         // Keep the ethernet firmware's heartbeat alive.
         //

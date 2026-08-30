@@ -193,6 +193,8 @@ struct CliOptions {
     bool journal_transport = false;  // Phase 2.2 5k: emulate the host-pull journal transport
     bool read_latency_probe = false;  // Phase 2.2: remote-read latency vs transfer size
     std::string launch_artifact;      // Phase 2.2: dir holding aggregator.image/.desc
+    int fidelity_probe_s = 0;         // Phase 2.2: drain the aggregator journal for N s and report loss
+    bool stop_aggregator = false;     // Phase 2.2: ask every running aggregator to return
 };
 
 void print_help(const char* argv0) {
@@ -284,6 +286,18 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
                 return false;
             }
             out.launch_artifact = v;
+        } else if (a == "--stop-aggregator") {
+            out.stop_aggregator = true;
+        } else if (a == "--fidelity-probe") {
+            const char* v = need_arg("--fidelity-probe");
+            if (v == nullptr) {
+                return false;
+            }
+            out.fidelity_probe_s = std::atoi(v);
+            if (out.fidelity_probe_s <= 0) {
+                std::cerr << "ttnvtop-collector: --fidelity-probe expects a positive number of seconds\n";
+                return false;
+            }
         } else if (a == "--read-latency-probe") {
             out.read_latency_probe = true;
         } else if (a == "--journal-transport") {
@@ -392,15 +406,39 @@ struct KernelTimeAccumulator {
 // tens of seconds under load (PLAN_ETH_AGGREGATOR.md 5c).
 namespace ttnvtop_agg {
 
-// Idle-eth UNRESERVED base, mirroring wh_hal_idle_eth.cpp / bh_hal_idle_eth.cpp:
-//     ((MEM_IERISC_MAP_END + L1_KERNEL_CONFIG_SIZE - 1) | (max_alignment - 1)) + 1
-// The collector deliberately does not link tt-metal (see PLAN 7.2), so the Hal is not
-// available and this is mirrored, like the ring layout above. L1_KERNEL_CONFIG_SIZE is
-// 25 KiB and max_alignment is max(DRAM_ALIGNMENT, L1_ALIGNMENT) = 32 on both arches.
-constexpr uint32_t kL1KernelConfigSize = 25u * 1024u;
-constexpr uint32_t kMaxAlignment = 32u;
-constexpr uint64_t kLandingBase =
-    ((static_cast<uint64_t>(MEM_IERISC_MAP_END) + kL1KernelConfigSize - 1u) | (kMaxAlignment - 1u)) + 1u;
+// Idle-eth UNRESERVED base -- the well-known address the journal lives at (5k).
+//
+// PER ARCH, and NOT one formula. This was a single mirrored expression, and it was
+// silently wrong on Blackhole: the two HALs do not agree on how to derive this.
+//
+//   wh_hal_idle_eth.cpp:  ((MEM_IERISC_MAP_END + L1_KERNEL_CONFIG_SIZE - 1) | (align-1)) + 1
+//   bh_hal_idle_eth.cpp:  tt::align(MEM_AERISC_MAP_END + MEM_ERISC_KERNEL_CONFIG_SIZE, align)
+//
+// Different base symbol (AERISC vs IERISC) and a different rounding. With the WH
+// expression the collector looked for Blackhole journals at 0xe200 while they were at
+// 0x15740, found nothing, and reported "no aggregator is running" about an aggregator it
+// had just verified as RUNNING two seconds earlier.
+//
+// The collector deliberately does not link tt-metal (PLAN 7.2), so it cannot call the
+// Hal, and CMake puts only the WORMHOLE hw/inc on its include path -- so every mirrored
+// constant here is a Wormhole constant whether or not it is labelled one. These two
+// numbers are therefore spelled out, with their derivation above, and
+// TestEthAggregatorLandingBaseMatchesHal asserts the value for the running arch against
+// `hal.get_dev_addr(IDLE_ETH, UNRESERVED)` -- in the test binary, which does have the
+// Hal. That is where drift gets caught; it cannot be caught here.
+//
+//   Wormhole   MEM_IERISC_MAP_END 0x7df0 + 25 KiB, rounded to 32  -> 0xe200  (57856)
+//   Blackhole  MEM_AERISC_MAP_END 0xf330 + 25 KiB, aligned to 32  -> 0x15740 (87872)
+constexpr uint64_t kLandingBaseWormhole = 0xe200ull;
+constexpr uint64_t kLandingBaseBlackhole = 0x15740ull;
+
+inline uint64_t landing_base(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return kLandingBaseWormhole;
+        case tt::ARCH::BLACKHOLE: return kLandingBaseBlackhole;
+        default: return 0;  // unknown arch -- probe finds nothing rather than reading garbage
+    }
+}
 
 // A journal found on an MMIO chip, describing one remote chip.
 struct Landing {
@@ -418,19 +456,24 @@ struct Landing {
 //
 // All 16 channels are probed, not just the ones we believe are idle: the collector has
 // no control plane and therefore no get_inactive_ethernet_cores(), and 16 reads of 64 B
-// over PCIe is nothing. A core either has 'TTAG' at kLandingBase or it does not.
+// over PCIe is nothing. A core either has 'TTAG' at the arch's landing base or it does not.
 //
 // The header is self-describing -- it carries src_chip, capacity and num_cores -- so
 // discovery needs no coordination with whoever launched the aggregator. That matters
 // because in M1 the launcher is the workload process and the collector is a separate
 // one, with no IPC between them.
 template <typename Dev>
-inline std::vector<Landing> probe_landings(Dev* dev, const tt::umd::SocDescriptor& soc, uint64_t now_us) {
+inline std::vector<Landing> probe_landings(
+    Dev* dev, const tt::umd::SocDescriptor& soc, uint64_t now_us, tt::ARCH arch) {
     std::vector<Landing> found;
+    const uint64_t base = landing_base(arch);
+    if (base == 0) {
+        return found;
+    }
     std::vector<uint8_t> buf(sizeof(util_agg_msg_t));
     for (const auto& eth : soc.get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
         try {
-            dev->read_from_device(buf.data(), eth, kLandingBase, buf.size());
+            dev->read_from_device(buf.data(), eth, base, buf.size());
         } catch (...) {
             continue;  // core not readable (harvested, in reset) -- not an error here
         }
@@ -482,6 +525,15 @@ struct ChipState {
     // kernel_cycles still retain their cumulative total for compare.py.
     std::unordered_map<uint32_t, uint64_t> kernel_cycles_total;
     uint64_t drain_ticks = 0;         // total ring-drain ticks completed (debug)
+    // PER-CHIP debug-log throttle. These were `static thread_local` locals inside the
+    // per-chip loop, which made the 5 s gate GLOBAL TO THE DRAIN THREAD: whichever chip
+    // the loop reached first after the interval elapsed logged and reset the timer, and
+    // the other seven were silently skipped. On a T3K that printed 15 lines for chip 0
+    // and one each for chips 4, 5 and 7 over 75 s -- which reads exactly like the drain
+    // starving the other chips, and is nothing of the kind. It also made drain_hz
+    // meaningless, since the tick baseline came from whichever chip logged last.
+    uint64_t last_debug_us = 0;
+    uint64_t last_debug_ticks = 0;
     uint64_t drain_lost_samples = 0;  // count of entries dropped because head moved more than ring capacity (debug)
     uint64_t drain_entries_seen = 0;  // total ring entries ingested across all cores (debug)
 
@@ -768,14 +820,16 @@ int main(int argc, char* argv[]) {
         }
         TTDevice* dev = dev_up.get();
         const tt::ARCH arch = dev->get_arch();
-        // Monitoring is Wormhole-only for Phase 1 -- the per-core sampler and publisher
-        // are built against WH's grid and heartbeat. The ARTIFACT LAUNCHER is not: the
-        // launch contract is arch-independent L1 writes and the kernel is known to run on
-        // Blackhole (120 cores). Admitting BH here is what makes the launcher debuggable
-        // on a board where a wedged eth core costs nothing, instead of only on the T3K
-        // where it costs a board reset (tt-eth-idle-core-firmware-contracts).
-        const bool launcher_only = !cli.launch_artifact.empty();
-        if (arch != tt::ARCH::WORMHOLE_B0 && !(launcher_only && arch == tt::ARCH::BLACKHOLE)) {
+        // MONITORING is Wormhole-only for Phase 1 -- the per-core sampler drain and the
+        // shm publisher are built against WH's grid and heartbeat. The LAUNCHER and the
+        // journal-side DIAGNOSTICS are not: the launch contract is arch-independent L1
+        // writes, the journal header is self-describing, and the kernel is known to run
+        // on Blackhole (120 cores). Admitting BH for those is what makes this work
+        // debuggable on a board where a wedged eth core costs nothing, instead of only on
+        // the T3K where it costs a board reset (tt-eth-idle-core-firmware-contracts).
+        const bool arch_agnostic_mode = !cli.launch_artifact.empty() || cli.journal_probe || cli.fidelity_probe_s > 0 ||
+                                        cli.read_latency_probe || cli.stop_aggregator;
+        if (arch != tt::ARCH::WORMHOLE_B0 && !(arch_agnostic_mode && arch == tt::ARCH::BLACKHOLE)) {
             std::cerr << "ttnvtop-collector: skipping chip " << chip_id << " arch " << arch_name(arch)
                       << " (Wormhole-only for Phase 1).\n";
             continue;
@@ -829,7 +883,7 @@ int main(int argc, char* argv[]) {
         // perf counters, overriding period_cycles and the FPU_OUT_L liveness probe are
         // all device WRITES, and on a remote chip they cross the NON_MMIO tunnel.
         // Publish the static per-core fields, then skip every write below.
-        if (cli.journal_probe || cli.read_latency_probe || !cli.launch_artifact.empty()) {
+        if (cli.journal_probe || cli.read_latency_probe || cli.fidelity_probe_s > 0 || !cli.launch_artifact.empty()) {
             for (size_t i = 0; i < chip.cores.size(); ++i) {
                 auto& v = chip.publisher.cores()[i];
                 v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -1156,8 +1210,8 @@ int main(int argc, char* argv[]) {
     if (cli.read_latency_probe) {
         static const size_t kSizes[] = {64, 256, 1024, 2048, 4096, 8192};
         std::vector<uint8_t> buf(131072);
-        std::cout << "remote-read latency probe (read-only), base 0x" << std::hex << ttnvtop_agg::kLandingBase
-                  << std::dec << "\n";
+        std::cout << "remote-read latency probe (read-only), base 0x" << std::hex
+                  << ttnvtop_agg::landing_base(chips.front().arch) << std::dec << "\n";
         int probed = 0;
         for (auto& chip : chips) {
             if (!chip.is_remote || chip.cores.empty() || probed >= 1) {
@@ -1174,7 +1228,7 @@ int main(int argc, char* argv[]) {
                 for (int r = 0; r < 3 && ok; r++) {
                     const auto t0 = std::chrono::steady_clock::now();
                     try {
-                        dev->read_from_device(buf.data(), core, ttnvtop_agg::kLandingBase, sz);
+                        dev->read_from_device(buf.data(), core, ttnvtop_agg::landing_base(chip.arch), sz);
                     } catch (...) {
                         ok = false;
                         break;
@@ -1257,6 +1311,228 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    // Ask every running aggregator to RETURN, and confirm it did.
+    //
+    // This exists so an experiment on a Wormhole T3K is reversible. The aggregator's
+    // other exit -- the RISC reset `stop_aggregator()` asserts -- leaves the core with no
+    // firmware AND leaves our 0xABCD heartbeat word frozen with a valid signature, which
+    // tt-metal turns into a hard error on the next device open ("Stuck at 0xabcd....")
+    // and a board reset to clear. Returning instead hands the core back to
+    // idle_erisc.cc, which resumes its own heartbeat while it waits for the next
+    // RUN_MSG_GO, so the core stays discoverable and relaunchable.
+    //
+    // MUST be called while the tt-metal process that started the aggregator still holds
+    // the device. Once it closes, the aggregator is already gone and the word is already
+    // frozen.
+    if (cli.stop_aggregator) {
+        const uint64_t now_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        int asked = 0, confirmed = 0;
+        for (auto& chip : chips) {
+            if (chip.cores.empty()) {
+                continue;
+            }
+            auto* dev = chip.cores.front().device;
+            SocDescriptor soc(std::make_shared<SocArchDescriptor>(chip.arch), dev->get_chip_info());
+            for (const auto& l : ttnvtop_agg::probe_landings(dev, soc, now_us, chip.arch)) {
+                const auto l1 =
+                    ttnvtop::agg_layout(static_cast<uint32_t>(ttnvtop_agg::landing_base(chip.arch)), l.num_cores);
+                std::cout << "  chip " << chip.chip_id << " eth (" << l.core.x << "," << l.core.y
+                          << ") sweeps=" << l.last_sweep_count << std::flush;
+                try {
+                    // dbg[3]. See kStopRequest in eth_aggregator.cpp for why the request
+                    // rides here and not in a runtime argument.
+                    const uint32_t req = 0x504F5453u;  // 'STOP'
+                    dev->write_to_device(&req, l.core, l1.dbg + 12u, sizeof(req));
+                } catch (const std::exception& e) {
+                    std::cout << " — write failed: " << e.what() << "\n";
+                    continue;
+                }
+                ++asked;
+                // The kernel clears the journal magic on its way out, so "did it stop" is
+                // answered by the magic going away -- not by the sweep count freezing,
+                // which is exactly what a wedged kernel looks like too.
+                bool gone = false;
+                for (int attempt = 0; attempt < 20 && !gone; ++attempt) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    try {
+                        std::vector<uint8_t> buf(sizeof(util_agg_msg_t), 0);
+                        dev->read_from_device(buf.data(), l.core, ttnvtop_agg::landing_base(chip.arch), buf.size());
+                        util_agg_hdr_view_t h{};
+                        std::memcpy(&h, buf.data(), sizeof(h));
+                        gone = h.magic != UTIL_AGG_MAGIC;
+                    } catch (const std::exception&) {
+                        break;
+                    }
+                }
+                if (gone) {
+                    ++confirmed;
+                    std::cout << " — STOPPED (journal magic cleared)\n";
+                } else {
+                    std::cout << " — DID NOT STOP; the core will need a reset\n";
+                }
+            }
+        }
+        if (asked == 0) {
+            std::cout << "no running aggregator found — nothing to stop.\n";
+            return 0;
+        }
+        std::cout << "stopped " << confirmed << " of " << asked << " aggregator(s).\n";
+        return confirmed == asked ? 0 : 1;
+    }
+
+    // FIDELITY PROBE -- the aggregator arm of the comparison this whole feature rests on.
+    //
+    // The original justification for on-chip aggregation was that host monitoring stalls
+    // workloads. It did not reproduce: three Llama-70B arms spanned 0.5% with the
+    // ordering backwards (5l/5q). The ONLY surviving justification is FIDELITY -- that a
+    // host draining 62-entry per-core rings over PCIe and, worse, over the NON_MMIO
+    // tunnel cannot keep up with the producers, while a sweep running on-chip can.
+    //
+    // Both consumers read the same rings and neither consumes, so they can run at the
+    // same time against ONE workload. That matters: it removes "were the two arms even
+    // producing the same samples" as a variable, which separate runs cannot.
+    //
+    // This is the aggregator arm: drain the journal at 10 Hz for N seconds and report
+    // what the ON-CHIP sweep folded and what it missed. The host arm is the normal
+    // collector's own `[ring-drain] entries=/lost=` line over the same window.
+    //
+    // Read-only. Two small reads per chip per tick -- 0.2 ms for a 2 KB table even over
+    // the tunnel (5m).
+    if (cli.fidelity_probe_s > 0) {
+        struct Tracked {
+            tt::ChipId chip_id = 0;
+            bool is_remote = false;
+            tt::umd::CoreCoord core{};
+            uint32_t num_cores = 0;
+            uint32_t src_chip = 0;
+            TTDevice* dev = nullptr;
+            uint32_t journal = 0;
+            // First and last observation, so every number below is a DELTA over the
+            // window and nothing carries in from before the probe started.
+            bool primed = false;
+            uint64_t first_samples = 0, last_samples = 0;
+            uint32_t first_lost = 0, last_lost = 0;
+            uint32_t first_sweeps = 0, last_sweeps = 0;
+            uint32_t cores_advancing = 0;
+            uint32_t torn_reads = 0, failed_reads = 0, ticks = 0;
+        };
+
+        const uint64_t t_now_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        std::vector<Tracked> tracked;
+        for (auto& chip : chips) {
+            if (chip.cores.empty()) {
+                continue;
+            }
+            auto* dev = chip.cores.front().device;
+            SocDescriptor soc(std::make_shared<SocArchDescriptor>(chip.arch), dev->get_chip_info());
+            for (const auto& l : ttnvtop_agg::probe_landings(dev, soc, t_now_us, chip.arch)) {
+                Tracked t;
+                t.chip_id = chip.chip_id;
+                t.is_remote = chip.is_remote;
+                t.core = l.core;
+                t.num_cores = l.num_cores;
+                t.src_chip = l.src_chip;
+                t.dev = dev;
+                // The journal IS at the landing base by construction (5k): its size is
+                // not known until its own header is read, so it has to sit at a
+                // well-known address.
+                t.journal = static_cast<uint32_t>(ttnvtop_agg::landing_base(chip.arch));
+                tracked.push_back(t);
+            }
+        }
+        if (tracked.empty()) {
+            std::cerr << "ttnvtop-collector: no aggregator journal found — nothing to measure.\n"
+                      << "  An aggregator can only be STARTED while a tt-metal process holds the device:\n"
+                      << "  idle_erisc.cc's wait loop is the only thing that polls go_messages[0], and only\n"
+                      << "  a tt-metal device init puts that firmware on an inactive eth core (5r).\n";
+            return 1;
+        }
+        std::cout << "fidelity probe: " << tracked.size() << " journal(s), " << cli.fidelity_probe_s
+                  << " s at 10 Hz, read-only\n";
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto t_end = t0 + std::chrono::seconds(cli.fidelity_probe_s);
+        std::vector<uint8_t> buf;
+        std::vector<uint32_t> prev_seq;
+        while (std::chrono::steady_clock::now() < t_end && !g_stop.load(std::memory_order_relaxed)) {
+            for (auto& t : tracked) {
+                const uint32_t table_bytes = util_agg_bytes_for(t.num_cores);
+                buf.assign(table_bytes, 0);
+                try {
+                    t.dev->read_from_device(buf.data(), t.core, t.journal, table_bytes);
+                } catch (const std::exception&) {
+                    ++t.failed_reads;
+                    continue;
+                }
+                util_agg_hdr_view_t hdr{};
+                std::memcpy(&hdr, buf.data(), sizeof(hdr));
+                // A remote read arrives in 16 B chunks from different moments, so the
+                // header's self-check is not optional -- 5n measured head and the
+                // checksum coming from different publishes EVERY time.
+                if (hdr.magic != UTIL_AGG_MAGIC || !util_agg_hdr_ok(hdr)) {
+                    ++t.torn_reads;
+                    continue;
+                }
+                uint64_t samples = 0;
+                uint32_t advancing = 0;
+                for (uint32_t i = 0; i < t.num_cores; ++i) {
+                    util_agg_core_state_t st{};
+                    std::memcpy(
+                        &st, buf.data() + sizeof(util_agg_msg_t) + i * sizeof(util_agg_core_state_t), sizeof(st));
+                    samples += st.samples;
+                    if (st.seq != 0) {
+                        ++advancing;
+                    }
+                }
+                if (!t.primed) {
+                    t.first_samples = samples;
+                    t.first_lost = hdr.lost;
+                    t.first_sweeps = hdr.sweep_count;
+                    t.primed = true;
+                }
+                t.last_samples = samples;
+                t.last_lost = hdr.lost;
+                t.last_sweeps = hdr.sweep_count;
+                t.cores_advancing = advancing;
+                ++t.ticks;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+        std::cout << "\n=== AGGREGATOR ARM — " << std::fixed << std::setprecision(1) << secs << " s ===\n";
+        std::cout << "chip  loc     cores  sweeps      folded      lost   loss%   samples/s   torn  fail\n";
+        uint64_t tot_folded = 0, tot_lost = 0;
+        for (const auto& t : tracked) {
+            if (!t.primed) {
+                std::cout << "  " << t.chip_id << "  NEVER READ CLEANLY (torn " << t.torn_reads << ", fail "
+                          << t.failed_reads << ")\n";
+                continue;
+            }
+            const uint64_t folded = t.last_samples - t.first_samples;
+            const uint32_t lost = t.last_lost - t.first_lost;
+            const uint64_t produced = folded + lost;
+            tot_folded += folded;
+            tot_lost += lost;
+            std::cout << std::setw(4) << t.chip_id << "  " << (t.is_remote ? "remote" : "mmio  ") << std::setw(7)
+                      << t.cores_advancing << std::setw(10) << (t.last_sweeps - t.first_sweeps) << std::setw(12)
+                      << folded << std::setw(10) << lost << std::setw(8) << std::setprecision(2)
+                      << (produced ? 100.0 * static_cast<double>(lost) / static_cast<double>(produced) : 0.0)
+                      << std::setw(12) << std::setprecision(0) << (secs > 0 ? folded / secs : 0.0) << std::setw(7)
+                      << t.torn_reads << std::setw(6) << t.failed_reads << "\n";
+        }
+        const uint64_t tot_produced = tot_folded + tot_lost;
+        std::cout << std::setprecision(2) << "TOTAL folded=" << tot_folded << " lost=" << tot_lost << " loss="
+                  << (tot_produced ? 100.0 * static_cast<double>(tot_lost) / static_cast<double>(tot_produced) : 0.0)
+                  << "%  aggregate " << std::setprecision(0) << (secs > 0 ? tot_folded / secs : 0.0) << " samples/s\n";
+        std::cout << "\nCompare against the host arm's `[ring-drain] entries=/lost=` over the same window.\n";
+        return 0;
+    }
+
     // Phase 2.2 M1 diagnostic. Scans every chip's ethernet cores for a landed
     // aggregator journal and reports what is there, then exits. Read-only, and it
     // never touches a remote chip -- journals land on MMIO chips by design, so this
@@ -1266,7 +1542,8 @@ int main(int argc, char* argv[]) {
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
                 .count());
         int total = 0;
-        std::cout << "journal probe: landing base 0x" << std::hex << ttnvtop_agg::kLandingBase << std::dec << "\n";
+        std::cout << "journal probe: landing base 0x" << std::hex << ttnvtop_agg::landing_base(chips.front().arch)
+                  << std::dec << " (" << arch_name(chips.front().arch) << ")\n";
         for (auto& chip : chips) {
             // ALL chips, including remote ones.
             //
@@ -1277,7 +1554,7 @@ int main(int argc, char* argv[]) {
             // small reads -- measured at 0.1-1.1 ms even under full Llama load (5m).
             tt::umd::SocDescriptor soc(
                 std::make_shared<tt::umd::SocArchDescriptor>(chip.arch), chip.cores.front().device->get_chip_info());
-            const auto found = ttnvtop_agg::probe_landings(chip.cores.front().device, soc, now_us);
+            const auto found = ttnvtop_agg::probe_landings(chip.cores.front().device, soc, now_us, chip.arch);
             for (const auto& l : found) {
                 ++total;
                 std::cout << "  chip " << chip.chip_id << " eth (" << l.core.x << "," << l.core.y << ")"
@@ -1602,8 +1879,8 @@ int main(int argc, char* argv[]) {
                     const auto core = chip.cores.front().translated;
                     std::vector<uint8_t> jbuf(8192);
                     try {
-                        dev->read_from_device(jbuf.data(), core, ttnvtop_agg::kLandingBase, 64);
-                        dev->read_from_device(jbuf.data(), core, ttnvtop_agg::kLandingBase + 64, 8192);
+                        dev->read_from_device(jbuf.data(), core, ttnvtop_agg::landing_base(chip.arch), 64);
+                        dev->read_from_device(jbuf.data(), core, ttnvtop_agg::landing_base(chip.arch) + 64, 8192);
                         chip.journal_entries_seen += 2;
                     } catch (...) {
                         ++chip.journal_stale_ticks;
@@ -1834,14 +2111,12 @@ int main(int argc, char* argv[]) {
                 // Periodic debug log: once per 5 s, dump tick + lost +
                 // entries + map size per chip. Cheap, useful when triaging
                 // "TIME% is stuck at 0".
-                static thread_local uint64_t last_debug_us = 0;
-                static thread_local uint64_t last_debug_ticks = 0;
-                if (now_us - last_debug_us > 5'000'000) {
-                    const uint64_t dt_us = (last_debug_us == 0) ? 1 : (now_us - last_debug_us);
+                if (now_us - chip.last_debug_us > 5'000'000) {
+                    const uint64_t dt_us = (chip.last_debug_us == 0) ? 1 : (now_us - chip.last_debug_us);
                     const double drain_hz =
-                        static_cast<double>(chip.drain_ticks - last_debug_ticks) * 1'000'000.0 / dt_us;
-                    last_debug_us = now_us;
-                    last_debug_ticks = chip.drain_ticks;
+                        static_cast<double>(chip.drain_ticks - chip.last_debug_ticks) * 1'000'000.0 / dt_us;
+                    chip.last_debug_us = now_us;
+                    chip.last_debug_ticks = chip.drain_ticks;
                     std::fprintf(
                         stderr,
                         "[ring-drain] chip=%u ticks=%lu drain_hz=%.1f entries=%lu lost=%lu kernels=%zu chip_cycles=%lu "
