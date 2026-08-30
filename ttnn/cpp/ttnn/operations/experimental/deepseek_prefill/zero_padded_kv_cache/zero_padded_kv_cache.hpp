@@ -25,6 +25,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache
 // unpack/compute engine.
 //
 // Cache slot is addressed users-outer, layers-inner: batch_idx = slot_idx * num_layers + layer_idx.
+// With page_bundle_indices, cache is instead a shared ND-sharded pool shaped
+// [physical_bundles*num_layers,1,kv_cache_page_size,D]. The uint16 table selects the request and maps
+// logical local pages to physical bundles; scalar slot_idx must be zero.
 // valid_global and slot_idx stay out of the program hash, so successive chunks reuse one cached
 // program. In-place: returns a handle to `cache`. Two call forms (identical results):
 
@@ -38,7 +41,9 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t valid_global,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align = 128);
+    uint32_t pad_align = 128,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 // (2) Tensor form (traceable): the reader/writer read slot_idx and valid_global (= actual_end)
 //     on-device, each from its own 1-element uint32 DRAM tensor (replicated across the mesh). These are
@@ -53,7 +58,9 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t num_layers,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align = 128);
+    uint32_t pad_align = 128,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache
 

@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "zero_padded_kv_cache.hpp"
@@ -24,7 +25,7 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
 
             Both the single-shot fill and chunked update_padded_kv_cache write full 32-row
             tiles, so the tokens between the last real token (valid_global) and the next
-            pad_align boundary hold stale data; this op clears them so the decode side reads
+                pad_align boundary hold stale data; this op clears them so the decode side reads
             clean zeros. The window is up to pad_align-1 tokens (1-4 tiles) and may straddle a
             chip boundary -- each device zeroes its own share, derived from valid_global,
             chunk_size_global and its coordinate along cluster_axis. TILE layout uses the
@@ -36,6 +37,11 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             Cache slot is linearized users-outer, layers-inner: batch_idx = slot_idx*num_layers
             + layer_idx. ``valid_global`` and ``slot_idx`` stay out of the program hash, so
             successive chunks reuse one cached program.
+
+            ``page_bundle_indices`` enables a shared paged cache. It is a uint16 ROW_MAJOR DRAM
+            table mapping this request's logical local pages to physical bundles in a pool shaped
+            ``[physical_bundles*num_layers, 1, kv_cache_page_size, D]``. In this mode the table
+            selects the request, so scalar ``slot_idx`` must be zero.
 
             Two call forms (identical results):
               - scalar: ``(cache, slot_idx, layer_idx, num_layers, valid_global, chunk_size_global,
@@ -61,14 +67,25 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
                 chunk_size_global (int): block-cyclic chunk size (= sp_factor * chunk_local).
                 cluster_axis (int): Cluster axis along which the cache is sharded (0 or 1).
                 pad_align (int): migration read alignment; window ends at ceil_pad_align (default 128).
+                page_bundle_indices (ttnn.Tensor, optional): Logical-page to physical-bundle table.
+                kv_cache_page_size (int): Token rows in each physical bundle page (default 32).
 
             Returns:
                 ttnn.Tensor: handle to `cache`, pad window zeroed in place.
         )doc",
         // Scalar form (original signature preserved).
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>(
-                &zero_padded_kv_cache),
+            nb::overload_cast<
+                const Tensor&,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                uint32_t,
+                const std::optional<Tensor>&,
+                uint32_t>(&zero_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("slot_idx"),
             nb::arg("layer_idx"),
@@ -76,7 +93,9 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             nb::arg("valid_global"),
             nb::arg("chunk_size_global"),
             nb::arg("cluster_axis"),
-            nb::arg("pad_align") = 128),
+            nb::arg("pad_align") = 128,
+            nb::arg("page_bundle_indices").noconvert() = nb::none(),
+            nb::arg("kv_cache_page_size") = 32),
         // Tensor form (traceable): slot_idx + valid_global as 1-element uint32 tensors.
         ttnn::overload_t(
             nb::overload_cast<
@@ -87,6 +106,8 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
                 uint32_t,
                 uint32_t,
                 uint32_t,
+                uint32_t,
+                const std::optional<Tensor>&,
                 uint32_t>(&zero_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("slot_idx").noconvert(),
@@ -95,7 +116,9 @@ void bind_zero_padded_kv_cache(nb::module_& mod) {
             nb::arg("num_layers"),
             nb::arg("chunk_size_global"),
             nb::arg("cluster_axis"),
-            nb::arg("pad_align") = 128));
+            nb::arg("pad_align") = 128,
+            nb::arg("page_bundle_indices").noconvert() = nb::none(),
+            nb::arg("kv_cache_page_size") = 32));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::zero_padded_kv_cache::detail

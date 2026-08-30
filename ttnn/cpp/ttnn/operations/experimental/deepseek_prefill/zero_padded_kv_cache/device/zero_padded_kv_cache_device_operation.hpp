@@ -32,13 +32,14 @@ struct ZeroPaddedKvCacheDeviceOperation {
         // `metadata` tensor is supplied): common runtime args patched on cache hits, out of the program
         // hash. On the METADATA path they are unused (0); the reader/writer read slot_idx (= metadata
         // index 0) and valid_global (= actual_end = metadata index 2) on-device.
-        uint32_t slot_idx;           // scalar path only
-        uint32_t valid_global;       // scalar path only: # real tokens; window starts here
-        uint32_t chunk_size_global;  // structural: block-cyclic chunk size (= sp_factor * chunk_local)
-        uint32_t pad_align;          // structural: migration read alignment (128); window end = ceil
-        uint32_t layer_idx;          // hashed (structural)
-        uint32_t num_layers;         // hashed (structural)
-        uint32_t cluster_axis;       // hashed (structural): which mesh dim is sequence-parallel
+        uint32_t slot_idx;            // scalar path only
+        uint32_t valid_global;        // scalar path only: # real tokens; window starts here
+        uint32_t chunk_size_global;   // structural: block-cyclic chunk size (= sp_factor * chunk_local)
+        uint32_t pad_align;           // structural: migration read alignment (128); window end = ceil
+        uint32_t layer_idx;           // hashed (structural)
+        uint32_t num_layers;          // hashed (structural)
+        uint32_t cluster_axis;        // hashed (structural): which mesh dim is sequence-parallel
+        uint32_t kv_cache_page_size;  // structural: token rows in each shared physical bundle page
     };
 
     struct tensor_args_t {
@@ -53,6 +54,11 @@ struct ZeroPaddedKvCacheDeviceOperation {
         // attributes. Both are set together or both empty.
         std::optional<Tensor> slot_idx;
         std::optional<Tensor> valid_global;
+        // Optional uint16 logical-page -> physical-bundle table. When present, cache is the shared
+        // pool [physical_bundles*num_layers,1,kv_cache_page_size,D]; the table selects the request.
+        std::optional<Tensor> page_bundle_indices;
+
+        bool has_paged_cache() const { return page_bundle_indices.has_value(); }
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -122,6 +128,8 @@ ttnn::Tensor zero_padded_kv_cache(
     uint32_t valid_global,
     uint32_t chunk_size_global,
     uint32_t cluster_axis,
-    uint32_t pad_align);
+    uint32_t pad_align,
+    const std::optional<ttnn::Tensor>& page_bundle_indices = std::nullopt,
+    uint32_t kv_cache_page_size = 32);
 
 }  // namespace ttnn::prim
