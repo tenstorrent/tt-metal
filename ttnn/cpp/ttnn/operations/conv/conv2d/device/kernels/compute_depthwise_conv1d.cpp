@@ -98,7 +98,7 @@ inline void mul_and_accumulate_block(
 // `add_binary_tile` keep everything in DST instead, avoiding that truncation on both the multiply
 // and the partial reload. Needs `unpack_to_dest_mode = UnpackToDestFp32` on ACT/ACT_TILIZED/WEIGHTS/
 // scratch (set in build_program_descriptor_sharded) or the tiles are already truncated before this
-// runs. DST usage: 3 tiles, same as the FPU form.
+// runs. DST usage: 2 tiles (running value + staged operand).
 inline void mul_and_accumulate_block_sfpu(
     DataflowBuffer in0_dfb,
     DataflowBuffer in1_dfb,
@@ -274,9 +274,13 @@ void kernel_main() {
     // SFPU tap accumulation only when both operands are genuinely fp32 -- derived purely from the
     // per-CB unpack format, no new compile-time arg or host flag. Gating on format (not just
     // DST_ACCUM_MODE) keeps every bf16/bf8 caller, LTX included, bit-exact and on the faster FPU path.
+    // The scratch check is structurally redundant today (ACT_TILIZED and the dest-reuse scratch both
+    // take the output data format in the CB table), but keeps this gate correct if that ever diverges:
+    // the SFPU path reads the scratch through `copy_tile` and needs it delivered UnpackToDestFp32.
     constexpr bool fp32_operands = DST_ACCUM_MODE &&
                                    unpack_src_format[tilized_in0_cb_id] == static_cast<uint8_t>(DataFormat::Float32) &&
-                                   unpack_src_format[in1_cb_id] == static_cast<uint8_t>(DataFormat::Float32);
+                                   unpack_src_format[in1_cb_id] == static_cast<uint8_t>(DataFormat::Float32) &&
+                                   unpack_src_format[partials_cb_id] == static_cast<uint8_t>(DataFormat::Float32);
 
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_in1(in1_cb_id);
