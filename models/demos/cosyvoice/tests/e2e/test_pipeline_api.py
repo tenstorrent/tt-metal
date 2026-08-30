@@ -120,6 +120,13 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
 
+    # Same device limit as `tests/perf/test_streaming_perf.py`: the interleaved
+    # schedule runs the flow decoder and the vocoder against a live decode trace, and
+    # that hangs Wormhole n300 while both Blackhole boards are fine with it. See
+    # PERF.md, *Known limitations*.
+    if "WORMHOLE" in str(device.arch()).upper():
+        pytest.skip("the interleaved schedule hangs Wormhole n300; see PERF.md, Known limitations")
+
     ctx, meta = PromptContext.from_npz(_cases(1)[0])
     model = _model(device)
 

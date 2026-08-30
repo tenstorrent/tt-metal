@@ -44,10 +44,16 @@ FLOW_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "flow_")
 LLM_WEIGHTS = HIFT_WEIGHTS.replace("hift_", "llm_")
 SAMPLE_RATE = 22050
 
-# All three stages plus a decode trace, so this is the same device geometry
-# `test_device_end_to_end_rtf` asks for.
+# All three stages plus **one** decode trace. The 384 MB region the rest of the perf
+# suite asks for is sized for `TracedDecodeStepInPlace`, which captures 65 traces; this
+# test captures a single moving-cache trace and 64 MB covers it comfortably.
+#
+# The difference is not cosmetic on a 12 GB part. This test runs the flow decoder and
+# the vocoder alongside a live trace, so every megabyte the trace region reserves is a
+# megabyte they cannot have — and asking for 384 MB hung n300 outright while both 32 GB
+# Blackhole boards were fine with it. Reserve what is used.
 needs_l1_small = pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 131072, "trace_region_size": 402653184}], indirect=True
+    "device_params", [{"l1_small_size": 131072, "trace_region_size": 67108864}], indirect=True
 )
 needs_weights = pytest.mark.skipif(
     not all(os.path.exists(p) for p in (HIFT_WEIGHTS, FLOW_WEIGHTS, LLM_WEIGHTS)),
@@ -74,6 +80,26 @@ needs_golden = pytest.mark.skipif(
 def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
+
+    # **Wormhole cannot run this schedule, and the limit is the device rather than the
+    # code.** Running the flow decoder and the vocoder while the AR decode trace is
+    # live -- which is what interleaving *is* -- hangs n300 outright: log frozen, JIT
+    # cache flat, 100 % CPU, board needing a reset. Both 32 GB Blackhole boards run the
+    # identical code and identical geometries without complaint, and shrinking this
+    # test's trace region from 384 MB to 64 MB (it captures one trace, not 65) did not
+    # change it, so it is not simply the reserved region.
+    #
+    # Skipped rather than left to hang, because a test that wedges the board costs
+    # every later test in the run as well. `PERF.md` records it as a known limitation,
+    # and the streaming *content* gate --
+    # `tests/e2e/test_device_streamed_matches_non_streamed` -- does run on n300 and
+    # passes there: what is unavailable on Wormhole is the interleaved *schedule*, not
+    # chunked synthesis.
+    if "WORMHOLE" in str(device.arch()).upper():
+        pytest.skip(
+            "the interleaved schedule hangs Wormhole n300 -- flow/vocoder allocation "
+            "against a live decode trace; see PERF.md, Known limitations"
+        )
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
     from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TtARDecoder, right_aligned_bias
