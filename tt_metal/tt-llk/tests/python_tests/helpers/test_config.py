@@ -672,6 +672,21 @@ class TestConfig:
                 resolved.append(Path(root).expanduser().resolve())
         return resolved
 
+    @staticmethod
+    def _extra_header_include_flag_lists(already: list) -> tuple[list, list]:
+        """Registered header extras that ``already`` does not contain.
+
+        The header-side counterpart of ``_extra_src_include_flag_lists``, kept
+        in one place so the two filters cannot drift. Only
+        ``generate_variant_hash`` needs it: after ``setup_build`` these extras
+        are folded into ``INCLUDES``, but a variant hashed before that would
+        otherwise not see them at all.
+        """
+        return (
+            [flag for flag in TestConfig.EXTRA_INCLUDE_PREPEND if flag not in already],
+            [flag for flag in TestConfig.EXTRA_INCLUDE_APPEND if flag not in already],
+        )
+
     def _extra_src_include_flag_lists(self) -> tuple[list, list]:
         """Instance + process extras split for before/after in-tree ``helpers/src``."""
         instance = TestConfig._as_include_flags(self.src_include_dirs)
@@ -1272,16 +1287,9 @@ class TestConfig:
         # opposite precedence against the in-tree ``helpers/src``. Labels cannot
         # be confused with flags, which all start with ``-I``.
         header_tokens = self._header_include_tokens()
-        header_prepend = [
-            flag
-            for flag in TestConfig.EXTRA_INCLUDE_PREPEND
-            if flag not in header_tokens
-        ]
-        header_append = [
-            flag
-            for flag in TestConfig.EXTRA_INCLUDE_APPEND
-            if flag not in header_tokens
-        ]
+        header_prepend, header_append = TestConfig._extra_header_include_flag_lists(
+            header_tokens
+        )
         src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
         search_dirs = [
             "<<headers>>",

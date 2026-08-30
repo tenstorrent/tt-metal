@@ -28,7 +28,13 @@ import tempfile
 from pathlib import Path
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "out_of_tree"
-TIMEOUT_SECONDS = 600
+# Deliberately below the ambient pytest-timeout budget CI passes (--timeout=60
+# in setup-and-test.yml and collect-test-durations.yml). A larger value would be
+# unreachable: pytest-timeout kills the test first and reports a bare timeout,
+# losing the child's output. Firing our own timeout first turns that into a
+# TimeoutExpired carrying the child's stdout. Measured cost of the child in CI:
+# 7.1s on wormhole, so the headroom is ample.
+TIMEOUT_SECONDS = 50
 
 # Tests the child must actually have run. Without this the wrapper passes on any
 # green child — including one that collected the wrong module and ran a single
