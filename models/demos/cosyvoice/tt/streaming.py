@@ -323,6 +323,15 @@ class StreamSession:
         self.tokens.extend(tokens)
         yield from self._drain()
 
+    def push_all(self, tokens):
+        """`extend`, spelled for a caller that has the whole list already.
+
+        Kept distinct from `extend` because the intent differs: `extend` feeds a
+        session that is still receiving tokens, this one is for a caller with nothing
+        more to come -- a warm-up pass, or a test replaying a captured stream.
+        """
+        yield from self.extend(tokens)
+
     def _drain(self):
         cfg = self.synth.cfg
         while self.i + self.hop + cfg.token_overlap_len <= len(self.tokens):
