@@ -509,13 +509,28 @@ TEST_F(Fabric1DFixture, TestEthAggregatorEmitArtifact) {
     const uint32_t text_off = lm.kernel_config().kernel_text_offset()[0];
     const uint32_t rta_off = lm.kernel_config().rta_offset()[0].rta_offset();
 
-    // Snapshot enough of the kernel-config region to cover text and runtime args. The
-    // launcher rewrites the args in place for each chip, so their content here does not
-    // matter — only that the region is large enough to hold them.
+    // Snapshot the kernel-config region, bounded by where the aggregator's own L1
+    // begins.
+    //
+    // An earlier revision sized this as max(64 KB, ...) — a number invented with no
+    // reference to anything. On Wormhole that spans 0x7df0..0x17e70 while the journal
+    // sits at 0xe200, so replaying the image wrote 65 KB straight through the journal
+    // and every scratch array. Bound it at eth_l1_unreserved: the kernel-config region
+    // ends where UNRESERVED begins, by construction.
+    ASSERT_GT(eth_l1, cfg_base) << "kernel config must sit below the UNRESERVED region";
+    const uint32_t image_bytes = eth_l1 - cfg_base;
+
+    // The runtime args live at cfg_base + rta_offset, and the kernel text at
+    // cfg_base + kernel_text_offset. Nothing checks that the args fit in the gap, so
+    // one extra argument would silently overwrite the kernel. Here: 31 words = 124 B
+    // against a 128 B gap.
     const uint32_t rt_words =
         static_cast<uint32_t>(build_rt_args(grid, l1, num_cores, 0u, kSweepIntervalCycles, kPublishEverySweeps).size());
-    const uint32_t image_bytes =
-        ((std::max(text_off, rta_off) + std::max(64u * 1024u, rt_words * 4u + 1024u)) + 15u) & ~15u;
+    if (text_off > rta_off) {
+        ASSERT_LE(rt_words * 4u, text_off - rta_off)
+            << "runtime args (" << rt_words * 4u << " B) do not fit between rta_offset and "
+            << "kernel_text_offset (" << (text_off - rta_off) << " B) — they would overwrite the kernel";
+    }
 
     std::vector<uint32_t> image(image_bytes / 4, 0u);
     tt::tt_metal::detail::ReadFromDeviceL1(dev, pick.core, cfg_base, image_bytes, image, CoreType::ETH);

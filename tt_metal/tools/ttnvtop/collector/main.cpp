@@ -68,6 +68,7 @@
 // has exactly one definition shared with the kernel.
 #include "util_aggregator.h"
 #include "tools/ttnvtop/host/agg_layout.hpp"
+#include "tools/ttnvtop/host/agg_core_select.hpp"
 #include "hostdev/dev_msgs.h"
 using namespace ttnvtop_wh_tensix;  // NOLINT(google-build-using-namespace)
 
@@ -971,6 +972,18 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
+        // NOTE: remote-chip launches are UNRELIABLE here, and knowingly so.
+        //
+        // The launch writes ~65 KB to the target chip. On a remote chip that crosses the
+        // NON_MMIO tunnel, which needs its channels pinned to the ones that actually
+        // reach that chip or it times out (5h: 1/6 -> 14/14 with pinning). But
+        // configure_active_ethernet_cores_for_mmio_device is a umd::Cluster method, and
+        // this process deliberately never constructs a Cluster -- that is how it avoids
+        // taking CHIP_IN_USE from the workload it is monitoring.
+        //
+        // So remote launches are attempted and may fail with an eth-service timeout.
+        // Resolving it needs either a UMD API to pin without a Cluster, or launching
+        // remote aggregators from the process that owns the device.
         int launched = 0;
         for (auto& chip : chips) {
             if (chip.cores.empty()) {
@@ -994,23 +1007,37 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            // Pick an idle eth core. No control plane here, so prefer the channels no
-            // shipped WH descriptor ever routes and verify the core answers.
+            // Pick an INACTIVE eth core. This must never be an active one.
+            //
+            // An earlier revision took "the first core that reads successfully", which is
+            // every core — so it landed on an ACTIVE link-carrying core on all four MMIO
+            // chips, overwrote ERISC0, killed the eth firmware that services the NON_MMIO
+            // tunnel, and wedged topology discovery machine-wide. Readable is not the
+            // same predicate as unused, and the difference costs a board reset.
+            //
+            // The cluster descriptor knows which channels are active. Exclude them, and
+            // prefer the channels no shipped WH descriptor ever routes (2), so a
+            // recabling cannot turn our core into a live link underneath us.
+            const auto active = cluster_desc->get_active_eth_channels(chip.chip_id);
             tt::umd::CoreCoord target{};
             bool found = false;
+            int best_rank = -1;
             for (const auto& eth : soc.get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
-                std::vector<uint8_t> probe(16);
-                try {
-                    dev->read_from_device(probe.data(), eth, eth_l1, 16);
-                } catch (...) {
-                    continue;
+                const auto logical = soc.translate_coord_to(eth, CoordSystem::LOGICAL);
+                const uint32_t channel = static_cast<uint32_t>(logical.y);
+                if (active.count(channel) != 0) {
+                    continue;  // carries a live link — never ours
                 }
-                target = eth;
-                found = true;
-                break;
+                const int rank = ttnvtop::is_never_routed_channel(channel) ? 2 : 1;
+                if (rank > best_rank) {
+                    best_rank = rank;
+                    target = eth;
+                    found = true;
+                }
             }
             if (!found) {
-                std::cerr << "  chip " << chip.chip_id << ": no readable eth core, skipping\n";
+                std::cerr << "  chip " << chip.chip_id
+                          << ": every ethernet core is active — refusing to displace a live link\n";
                 continue;
             }
 

@@ -1509,6 +1509,76 @@ real 0m0.520s
 An aggregator on remote chip 4, discovered and read by a process that never linked
 tt-metal, in half a second, with discovery unharmed.
 
+## 5p. Artifact launch: works on all 8 chips, but two real bugs and one regression -- 2026-08-30
+
+`--launch-aggregator` starts the aggregator from an emitted artifact with four UMD
+writes and no tt-metal. On the T3K it launched on **all 8 chips**, remote included:
+
+```
+chip 0-3 (mmio)   eth (24,16) 8x8 = 64 cores, journal 0xe200
+chip 4-7 (remote) eth (24,16) 8x8 = 64 cores, journal 0xe200
+launched 8 aggregator(s) — no tt-metal, no dispatch, no fabric.
+```
+
+That is the deployment model working: emit once with tt-metal, launch any time from a
+process that cannot take CHIP_IN_USE.
+
+### Bug 1 -- the launcher displaced an ACTIVE ethernet core (cost a board reset)
+
+Core selection took "the first core that reads successfully". Every core reads
+successfully. So it claimed an ACTIVE link-carrying core on all four MMIO chips,
+overwrote ERISC0, killed the firmware servicing the NON_MMIO tunnel, and wedged
+discovery machine-wide.
+
+**Readable is not the same predicate as unused.** The gtest never hit this because it
+asks the control plane via `get_inactive_ethernet_cores()`; the substitute predicate
+written for the collector was wrong in the most damaging way available. Fixed: exclude
+`cluster_desc->get_active_eth_channels()`, prefer never-routed channels (2), and REFUSE
+to launch rather than displace a live link.
+
+### Bug 2 -- the artifact image overlapped the journal
+
+`image_bytes` was sized `max(64 KB, ...)`, a number invented with no reference to the
+device. Measured on WH:
+
+```
+image spans 0x7df0..0x17e70   journal at 0xe200   -> OVERLAP
+```
+
+So replaying the image wrote 65 KB through the journal and every scratch array. Fixed by
+bounding at `eth_l1_unreserved`: 65664 B -> 23056 B, stopping exactly at the journal.
+
+Adjacent, found by the same arithmetic: **nothing checked that the runtime args fit**
+between `rta_offset` and `kernel_text_offset`. They are 31 words = 124 B against a 128 B
+gap on WH -- one argument from silently overwriting the kernel. Now asserted at emit.
+
+### REGRESSION -- the heartbeat write makes the aggregator hostile to tt-metal startup
+
+With aggregators resident, Llama would not start AT ALL:
+
+```
+RuntimeError: Timed out waiting for ETH heartbeat on device ASIC ID: 14521831458,
+ETH core e8-0 (NOC0) to advance. Stuck at 0xabcd5904
+```
+
+`0xabcd5904` is OUR value -- correct signature, counter 0x5904 = 22788 sweeps ~= 23 s of
+running. So the aggregator maintained the heartbeat for 23 s and then stopped.
+
+This is WORSE than the pre-fix behaviour. A frozen heartbeat with no valid signature made
+discovery slow; a frozen heartbeat WITH a valid signature is a hard error, and tt-metal
+refuses to start.
+
+**Why it stopped at 23 s is NOT established.** Two candidates, undistinguished:
+- the kernel died or hung after sustained running -- nothing in the 5 s tests would catch
+  it, and bugs 1 and 2 above were both live during that run;
+- something reset the core, freezing the last written value.
+
+**Recommendation: do not ship the heartbeat write until this is understood.** It should
+be re-tested on Blackhole (where a wedge is free) with the `dbg` markers sampled over
+minutes to see whether the kernel is alive. If the kernel is dying, the heartbeat is not
+the bug -- it is the symptom, and the aggregator has a stability problem that matters far
+more.
+
 ## 6. Risks
 
 | Risk | Mitigation |
