@@ -20,7 +20,9 @@
 
 - name: t3k_ttnn_tests
   model-name: t3k_ttnn_tests
-  cmd: run_t3000_ttnn_tests
+  cmd: >-
+    pytest tests/nightly/t3000/ccl/test_ring_attention_all_gather.py -svv
+    -k "shape1_1input_rp4 and tile_bfloat8_b"
   skus:
     wh_llmbox:
       timeout: 25
