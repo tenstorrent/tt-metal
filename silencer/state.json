@@ -31,7 +31,9 @@
     32936855493,
     32926101915,
     "33040738562",
-    "33158955938"
+    "33158955938",
+    "33244209984",
+    "33274485285"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -241,20 +243,18 @@
     {
       "branch": "silencer/demote-tilize-shard-spec-warning-33152052210",
       "title": "Demote tilize legacy-sharded-factory log to debug severity",
-      "status": "open-pr-awaiting-validation",
-      "workflow_dispatched": "models-t3-e2e-tests.yaml",
-      "dispatch_ref": "silencer/demote-tilize-shard-spec-warning-33152052210",
-      "source_run_id": "33152052210",
-      "source_job_id": "98790147778",
-      "pattern": "ttnn::tilize log_warning fired on every legacy-sharded-factory call (28x in 5000 log lines)"
+      "status": "resolved",
+      "number": 54818,
+      "note": "PR #54818 fully resolved: validation run 33244209984 (models-t3-e2e-tests) completed/success. Re-grepped job 99079451161 (EfficientDet-D0 e2e tests) for 'Using input shard spec for output tensor because the legacy sharded optimized program factory': 0 occurrences at default verbosity, consistent with log_warning->log_debug demotion. Outcome commented (/codeowners ping) and marked ready for review this run."
     },
     {
       "branch": "silencer/pydantic-optest-model-name-namespace-33265022276",
       "pattern": "Field \"model_name\" in OpTest has conflict with protected namespace \"model_\"",
-      "status": "open-pr-awaiting-validation",
+      "status": "reported-not-yet-ready-for-review",
+      "number": 54851,
       "dispatched_workflow": "perf-device-models.yaml",
-      "note": "PR opened for pydantic protected-namespace warning fix in infra/data_collection/pydantic_models.py (OpTest.model_name). Source: perf-device-models run 33265022276, jobs 99134632540 (P150 BH) + 99134632544 (N300 WH B0 Set 1), 9 occurrences each in last 5000 lines. Dispatched perf-device-models on branch for validation."
+      "note": "Reconciled this run: validation run 33274485285 (perf-device-models) completed, mixed conclusion. N300 WH B0 Set 1 & Set 2 device-perf jobs success; P150 BH device-perf job failed on unrelated panoptic_deeplab test + artifact-upload steps. Re-grepped job 99159752598 (N300 WH B0 Set 2): 0 occurrences of the pydantic protected-namespace warning text confirmed. Outcome commented (/codeowners ping) this run. NOT yet marked ready-for-review (mark_pull_request_as_ready_for_review max:1/run was spent on #54818) -- do this first thing next run."
     }
   ],
-  "backlog_cursor": "perf-device-models.yaml sampled this run (run 33265022276, jobs 99134632540 P150 BH + 99134632544 N300 WH B0 Set 1). Found+fixed pydantic OpTest.model_name protected-namespace warning (PR opened, validation dispatched). Next: continue rotation to a workflow not yet sampled recently, or re-sample perf-device-models.yaml other jobs (Set 2 device perf)."
+  "backlog_cursor": "Phase A this run reconciled #54818 (resolved, ready-for-review done) and #54851 (comment posted, ready-for-review still owed next run due to max:1/run cap). perf-device-models.yaml and models-t3-e2e-tests.yaml both sampled recently via these validations. Next: mark #54851 ready-for-review first, then continue backlog rotation to a workflow not sampled recently."
 }
