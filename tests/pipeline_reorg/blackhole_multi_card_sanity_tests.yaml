@@ -50,12 +50,13 @@
   # requires host IOMMU (there is no hugepage fallback) — see
   # evaluate_realtime_profiler_eligibility in realtime_profiler_manager.cpp.
   cmd: |
+    # Measurement-only branch: collect Ring Indexer before unrelated perf gates.
+    pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
     pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_quietbox_ci_perf -q
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
     pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
     pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k indexer_score_qb -svv
-    pytest tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_ring_indexer_score_dsa_perf.py -svv
   skus:
     bh_quietbox_2:
       timeout: 15
