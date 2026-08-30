@@ -1,6 +1,6 @@
 {
-  "last_run": "2026-08-30T12:33Z",
-  "run_id": "33311694724",
+  "last_run": "2026-08-31T00:00Z",
+  "run_id": "33328034543",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -126,7 +126,9 @@
     "54705:performance monitoring",
     "54724:bug",
     "54725:bug",
-    "54798:bug"
+    "54798:bug",
+    "54883:bug",
+    "54882:bug"
   ],
   "covered_no_duplicate": {
     "52131": "PR #52136 already closes it",
@@ -209,7 +211,9 @@
     "51868": "reviewer kanapitsas (2026-08-22) confirmed Ring Joint SDPA logsigmoid_sub shares same bug; repo-assist replied confirming + asked maintainer to add boundary test (no HW access to verify numerics); PR still open, mergeable_state=behind"
   },
   "sfpu_clamp_family": {
-    "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991."
+    "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
+    "54883": "gelu_bw Mills-ratio tail, confirmed 2026-08-31, no fix PR (needs HW-validated refit)",
+    "54882": "tanh_bw sech2 tail denominator drop, confirmed 2026-08-31, no fix PR (needs HW-validated reciprocal)"
   },
   "no_fix_needed_investigated": {
     "53029": "K3 AttnRes segmented-batch silent correctness bug -- deep hw-specific investigation, root cause unknown, left for owning team (pjosipovic)",
@@ -635,9 +639,16 @@
       "note": "confirmed root cause vs current main; fix has open perf tradeoff, left for maintainer"
     },
     "54045": "2026-08-22: confirmed div_sfpu double-rounding claim against current ckernel_sfpu_binop_with_unary.h:41-43",
-    "54798": "2026-08-29 - matmul silent output-block drop, confirmed bug"
+    "54798": "2026-08-29 - matmul silent output-block drop, confirmed bug",
+    "54883": "2026-08-31: labeled bug, commented confirming gelu_bw Mills-ratio tail FP32 defect",
+    "54882": "2026-08-31: labeled bug, commented confirming tanh_bw sech2 tail denominator FP32 defect"
   },
   "run_history": [
+    {
+      "run_id": "33328034543",
+      "date": "2026-08-31",
+      "summary": "Verified & labeled+commented on #54883 (gelu_bw fp32) and #54882 (tanh_bw fp32), both bug-confirmed against current source, no fix PR (needs HW validation). Re-checked 3 tracked PRs (#54792,#54848,#54858) - unchanged action_required. Updated Monthly Activity issue #51865."
+    },
     {
       "run": "2026-08-29T??Z",
       "run_id": "33284714326",
