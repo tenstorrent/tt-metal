@@ -105,6 +105,25 @@ int main(int argc, char** argv) {
     // NOTE: if this process dies before restoring, the chip stays downclocked until the next device open
     // or a tt-smi reset.
     uint32_t lowclock = 0;
+    // --driftcheck SECONDS: the close-check, reimplemented with NO eth sync anywhere. Samples both chips'
+    // clocks from the host (min-bracket), fits the inter-chip offset over the first 51 ms -- the same window
+    // the eth sync uses -- then extrapolates that fit to the end and reports the error. This exists because
+    // the numbers do not close: the eth path reports ~5.3 us/s of inter-chip drift while direct single-chip
+    // sampling finds only ~0.3 us/s of discrete loss, a 17x gap. If this host-only measurement reproduces
+    // the large drift, the drift is real and the eth sync is innocent. If it does not, our eth measurement
+    // is manufacturing it.
+    uint32_t driftcheck = 0;
+    // --busy-wait: fill the gap between driftcheck samples with continuous clock reads instead of sleeping.
+    // The two measurement styles disagree by ~17x on how much the clock loses, and this is the ONE
+    // systematic difference between them: driftcheck sleeps 2 s between samples, while the tight-loop
+    // detector hammers the chip every 3.9 us. If the loss is much smaller under busy-wait, then the chip
+    // loses time while IDLE and our own polling was suppressing the very effect we were trying to measure.
+    bool busy_wait = false;
+    // --low: force EVERY chip to its floor (800 MHz) for the duration of the drift measurement, then
+    // restore. --lowclock only moved chip 0, which is useless for an inter-chip measurement. At the floor
+    // there is no headroom for a governor to reclaim, so if the drift persists here, throttling is
+    // excluded as its cause -- not just as the cause of the tight-loop steps.
+    bool force_low = false;
     for (int i = 1; i < argc; i++) {
         if (std::strcmp(argv[i], "--samples") == 0 && i + 1 < argc) {
             cfg.n_samples = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
@@ -136,6 +155,12 @@ int main(int argc, char** argv) {
             unit_mesh = true;
         } else if (std::strcmp(argv[i], "--lowclock") == 0 && i + 1 < argc) {
             lowclock = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--driftcheck") == 0 && i + 1 < argc) {
+            driftcheck = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strcmp(argv[i], "--busy-wait") == 0) {
+            busy_wait = true;
+        } else if (std::strcmp(argv[i], "--low") == 0) {
+            force_low = true;
         }
     }
 
@@ -178,6 +203,120 @@ int main(int argc, char** argv) {
         if (!all_links && !edges.empty()) { break; }
     }
     printf("[ethsync] %zu link(s) to measure, %u samples %u us apart\n", edges.size(), cfg.n_samples, cfg.gap_us);
+
+    if (driftcheck != 0 && devices.size() >= 2) {
+        constexpr uint64_t kWallL = 0xFFB121F0ULL;
+        constexpr uint64_t kWallH = 0xFFB121F8ULL;
+        IDevice* da = devices[0];
+        IDevice* db = devices[1];
+        const auto ea = da->get_active_ethernet_cores(true);
+        const auto eb = db->get_active_ethernet_cores(true);
+        if (ea.empty() || eb.empty()) {
+            printf("[ethsync] need an eth core on each chip\n");
+            mesh_device->close();
+            return 1;
+        }
+        const tt_cxy_pair ta(da->id(), da->virtual_core_from_logical_core(*ea.begin(), CoreType::ETH));
+        const tt_cxy_pair tb(db->id(), db->virtual_core_from_logical_core(*eb.begin(), CoreType::ETH));
+        auto read_clk = [&](const tt_cxy_pair& t) {
+            uint32_t lo = 0, hi = 0;
+            cluster.read_reg(&lo, t, kWallL);
+            cluster.read_reg(&hi, t, kWallH);
+            return ((uint64_t)hi << 32) | lo;
+        };
+        auto host_ns = [] {
+            return (double)std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now().time_since_epoch()).count();
+        };
+        // One sample = A,B,A with the tightest bracket of 16 tries, so B is compared against A interpolated
+        // to B's instant. Same idea as the eth sync's min-RTT filter.
+        auto sample_offset = [&](double& t_out) {
+            double best = 1e18, off = 0, mid = 0;
+            for (int k = 0; k < 16; k++) {
+                const double h0 = host_ns();
+                const uint64_t a0 = read_clk(ta);
+                const uint64_t b0 = read_clk(tb);
+                const uint64_t a1 = read_clk(ta);
+                const double h1 = host_ns();
+                const double span = h1 - h0;
+                if (span < best) {
+                    best = span;
+                    off = (double)b0 - ((double)a0 + ((double)a1 - (double)a0) * 0.5);
+                    mid = (h0 + h1) * 0.5;
+                }
+            }
+            t_out = mid;
+            return off;
+        };
+
+        if (force_low) {
+            for (IDevice* d : devices) {
+                cluster.get_driver()->get_chip(d->id())->set_clock_state(tt::umd::DevicePowerState::LONG_IDLE);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("[ethsync] forced LOW: chip %d aiclk %u MHz | chip %d aiclk %u MHz\n", da->id(),
+                   (unsigned)cluster.get_device_aiclk(da->id()), db->id(),
+                   (unsigned)cluster.get_device_aiclk(db->id()));
+        }
+        printf("\n[ethsync] DRIFTCHECK: chip %d vs chip %d, host-only, %u s%s%s\n", da->id(), db->id(),
+               driftcheck, force_low ? ", AT 800 MHz" : "", busy_wait ? ", busy-wait gaps" : ", sleeping gaps");
+        std::vector<std::pair<double, double>> fitw;  // first 51 ms: (host_ns, offset_cyc)
+        double t0 = 0, o0 = sample_offset(t0);
+        fitw.push_back({t0, o0});
+        while (true) {
+            double t = 0;
+            const double o = sample_offset(t);
+            fitw.push_back({t, o});
+            if (t - t0 > 51e6) { break; }
+        }
+        // Least squares on the 51 ms window, centred, exactly like the eth solve.
+        double sx = 0, sy = 0;
+        for (const auto& p : fitw) { sx += p.first - t0; sy += p.second; }
+        const double mx = sx / (double)fitw.size(), my = sy / (double)fitw.size();
+        double num = 0, den = 0;
+        for (const auto& p : fitw) {
+            const double dx = (p.first - t0) - mx;
+            num += dx * (p.second - my);
+            den += dx * dx;
+        }
+        const double slope = den > 0 ? num / den : 0.0;  // cycles per host ns
+        printf("  fit over %.1f ms, %zu samples: slope %.3f ppm, intercept %.0f cyc\n",
+               (fitw.back().first - t0) / 1e6, fitw.size(), slope / ghz * 1e6, my);
+
+        // Now wait and re-measure, comparing against what the fit predicts.
+        const double deadline = t0 + (double)driftcheck * 1e9;
+        while (true) {
+            if (busy_wait) {
+                const double until = host_ns() + 2e9;
+                while (host_ns() < until) {
+                    (void)read_clk(ta);
+                    (void)read_clk(tb);
+                }
+            } else {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+            }
+            double t = 0;
+            const double o = sample_offset(t);
+            const double predicted = my + slope * ((t - t0) - mx);
+            const double err_cyc = o - predicted;
+            printf("  t=%6.1f s   measured %14.0f   predicted %14.0f   error %+10.0f cyc (%+8.2f us)\n",
+                   (t - t0) / 1e9, o, predicted, err_cyc, err_cyc / ghz / 1000.0);
+            if (t >= deadline) { break; }
+        }
+        printf("[ethsync] if this reproduces the eth path's ~5 us/s, the drift is REAL; if it stays near "
+               "zero, the eth measurement is manufacturing it\n");
+        if (force_low) {
+            for (IDevice* d : devices) {
+                cluster.get_driver()->get_chip(d->id())->set_clock_state(tt::umd::DevicePowerState::BUSY);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            printf("[ethsync] restored: chip %d aiclk %u MHz | chip %d aiclk %u MHz\n", da->id(),
+                   (unsigned)cluster.get_device_aiclk(da->id()), db->id(),
+                   (unsigned)cluster.get_device_aiclk(db->id()));
+        }
+        mesh_device->close();
+        return 0;
+    }
 
     if (lowclock != 0 && !devices.empty()) {
         IDevice* d0 = devices.front();
