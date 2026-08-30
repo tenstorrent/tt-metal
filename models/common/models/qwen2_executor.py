@@ -326,22 +326,6 @@ def _warmup_model_prefill_q128(
     )
 
 
-def _warmup_model_prefill_plain(
-    self,
-    *,
-    kv_cache: Any,
-    can_sample_on_device: bool,
-    enable_trace: bool,
-) -> None:
-    target = _model_executor_target(self)
-    target._ensure_active()
-    return target.warmup.warmup_prefill(
-        kv_cache=kv_cache,
-        can_sample_on_device=can_sample_on_device,
-        enable_trace=enable_trace,
-    )
-
-
 def _warmup_q128_topk_tile_ends_method(
     self,
     *,
@@ -408,11 +392,12 @@ class Qwen25Executor:
 @_with_executor_facade
 @_with_qwen2_request_surface
 class Qwen25_72BExecutor:
-    """Qwen2.5-72B façade over one family-neutral executor."""
+    """Qwen2.5-72B façade with explicit Q128 top-k priming."""
 
     requires_prefill_trace_warmup = True
     _owner_name = "Qwen25_72BExecutor"
-    warmup_model_prefill = _warmup_model_prefill_plain
+    warmup_model_prefill = _warmup_model_prefill_q128
+    _warmup_q128_topk_tile_ends = _warmup_q128_topk_tile_ends_method
 
     def __init__(self, model: Any, runtime_config: Any, config: Qwen25_72BExecutorConfig) -> None:
         if not isinstance(config, Qwen25_72BExecutorConfig):
@@ -423,7 +408,9 @@ class Qwen25_72BExecutor:
             config,
             owner_name="Qwen25_72BExecutor",
             sampling_type=Sampling1D,
+            prefill_warmup=_warmup_q128_around_prefill,
         )
+        self._model_executor._q128_topk_tile_ends_warmed = set()
 
     def allocate_kv_cache(self, kv_cache_shape=None, dtype=None, num_layers=None):
         return ModelExecutor.allocate_kv_cache(
@@ -437,11 +424,12 @@ class Qwen25_72BExecutor:
 @_with_executor_facade
 @_with_qwen2_request_surface
 class Qwen25Coder32BExecutor:
-    """Qwen2.5-Coder-32B façade over one family-neutral executor."""
+    """Qwen2.5-Coder-32B façade with explicit Q128 top-k priming."""
 
     requires_prefill_trace_warmup = True
     _owner_name = "Qwen25Coder32BExecutor"
-    warmup_model_prefill = _warmup_model_prefill_plain
+    warmup_model_prefill = _warmup_model_prefill_q128
+    _warmup_q128_topk_tile_ends = _warmup_q128_topk_tile_ends_method
 
     def __init__(self, model: Any, runtime_config: Any, config: Qwen25Coder32BExecutorConfig) -> None:
         if not isinstance(config, Qwen25Coder32BExecutorConfig):
@@ -452,7 +440,9 @@ class Qwen25Coder32BExecutor:
             config,
             owner_name="Qwen25Coder32BExecutor",
             sampling_type=Sampling1D,
+            prefill_warmup=_warmup_q128_around_prefill,
         )
+        self._model_executor._q128_topk_tile_ends_warmed = set()
 
     def allocate_kv_cache(self, kv_cache_shape=None, dtype=None, num_layers=None):
         return ModelExecutor.allocate_kv_cache(

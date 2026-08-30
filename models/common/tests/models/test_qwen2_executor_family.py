@@ -27,9 +27,14 @@ def test_qwen2_public_executors_are_unique_composition_facades():
 
 @pytest.mark.parametrize(
     "executor_class",
-    (qwen2_executor.Qwen2Executor, qwen2_executor.Qwen25Executor),
+    (
+        qwen2_executor.Qwen2Executor,
+        qwen2_executor.Qwen25Executor,
+        qwen2_executor.Qwen25_72BExecutor,
+        qwen2_executor.Qwen25Coder32BExecutor,
+    ),
 )
-def test_qwen2_7b_warms_every_q128_topk_tile_end_once_per_execution_mode(executor_class):
+def test_qwen2_family_warms_every_q128_topk_tile_end_once_per_execution_mode(executor_class):
     executor = object.__new__(executor_class)
     executor._q128_topk_tile_ends_warmed = set()
     executor.eager_executor = object()
@@ -86,3 +91,32 @@ def test_qwen2_7b_q128_warmup_preserves_mode_specific_order(monkeypatch, enable_
     )
 
     assert tuple(events) == expected_events
+
+
+@pytest.mark.parametrize(
+    ("executor_class", "config_class", "owner_name"),
+    (
+        (qwen2_executor.Qwen25_72BExecutor, qwen2_executor.Qwen25_72BExecutorConfig, "Qwen25_72BExecutor"),
+        (
+            qwen2_executor.Qwen25Coder32BExecutor,
+            qwen2_executor.Qwen25Coder32BExecutorConfig,
+            "Qwen25Coder32BExecutor",
+        ),
+    ),
+)
+def test_qwen2_large_executor_installs_q128_prefill_hook_and_per_mode_state(
+    monkeypatch,
+    executor_class,
+    config_class,
+    owner_name,
+):
+    core = SimpleNamespace()
+    model_executor = MagicMock(return_value=core)
+    monkeypatch.setattr(qwen2_executor, "ModelExecutor", model_executor)
+
+    executor = executor_class(object(), object(), object.__new__(config_class))
+
+    assert executor._model_executor is core
+    assert core._q128_topk_tile_ends_warmed == set()
+    assert model_executor.call_args.kwargs["owner_name"] == owner_name
+    assert model_executor.call_args.kwargs["prefill_warmup"] is qwen2_executor._warmup_q128_around_prefill

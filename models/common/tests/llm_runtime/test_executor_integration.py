@@ -1075,12 +1075,10 @@ def test_executor_call_contract(binding, method, positional, keyword_only):
 @pytest.mark.parametrize(
     "executor_class",
     [
-        qwen25_72b_executor.Qwen25_72BExecutor,
-        qwen25_coder_32b_executor.Qwen25Coder32BExecutor,
         qwen3_32b_executor.Qwen3_32BExecutor,
     ],
 )
-def test_qwen32_family_delegates_resolved_sampling_warmup_and_activation_to_coordinator(executor_class):
+def test_qwen3_delegates_resolved_sampling_warmup_and_activation_to_coordinator(executor_class):
     warmup = SimpleNamespace(warmup_prefill=MagicMock(), warmup_decode=MagicMock())
     executor = SimpleNamespace(_ensure_active=MagicMock(), warmup=warmup)
 
