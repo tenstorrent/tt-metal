@@ -1,0 +1,75 @@
+// tt-metal/src/tt/algorithm/statistics/welford.hpp
+#pragma once
+
+#include <tt/algorithm.hpp>
+#include <tt/tensor.hpp>
+#include <tt/device.hpp>
+
+namespace tt::algorithm::statistics {
+
+// Welford's online algorithm for computing mean and variance in a single pass
+// Reference: Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products"
+template <typename T>
+struct WelfordResult {
+    T mean;
+    T variance;
+    uint64_t count;
+};
+
+template <typename T>
+WelfordResult<T> welford_update(WelfordResult<T> state, T value) {
+    state.count++;
+    T delta = value - state.mean;
+    state.mean += delta / static_cast<T>(state.count);
+    T delta2 = value - state.mean;
+    state.variance += delta * delta2;
+    return state;
+}
+
+template <typename T>
+WelfordResult<T> welford_combine(const WelfordResult<T>& a, const WelfordResult<T>& b) {
+    if (a.count == 0) return b;
+    if (b.count == 0) return a;
+
+    WelfordResult<T> result;
+    result.count = a.count + b.count;
+    T delta = b.mean - a.mean;
+    result.mean = a.mean + delta * (static_cast<T>(b.count) / static_cast<T>(result.count));
+    result.variance = a.variance + b.variance + delta * delta * (static_cast<T>(a.count) * static_cast<T>(b.count) / static_cast<T>(result.count));
+    return result;
+}
+
+// Single-pass Welford statistics for tensor data
+template <typename T>
+WelfordResult<T> welford_statistics(const tt::Tensor<T>& tensor) {
+    WelfordResult<T> state{0, 0, 0};
+    
+    auto data = tensor.data();
+    for (size_t i = 0; i < tensor.numel(); ++i) {
+        state = welford_update(state, data[i]);
+    }
+    
+    // Compute population variance (divide by N)
+    if (state.count > 0) {
+        state.variance /= static_cast<T>(state.count);
+    }
+    
+    return state;
+}
+
+// Device-optimized version for TT-Metal device tensors
+template <typename T>
+WelfordResult<T> welford_statistics_device(const tt::Tensor<T>& tensor, const tt::Device& device) {
+    // Partition tensor across devices if needed
+    // For now, assume single device operation
+    auto host_tensor = tensor.to_host();
+    return welford_statistics(host_tensor);
+}
+
+// Utility: compute standard deviation from Welford result
+template <typename T>
+T welford_std(const WelfordResult<T>& result) {
+    return std::sqrt(result.variance);
+}
+
+} // namespace tt::algorithm::statistics
