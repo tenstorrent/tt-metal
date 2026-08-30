@@ -51,11 +51,15 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
     sfpi::vFloat val = sfpi::dst_reg[0]; // load x from dest (SFPLOAD)
     sfpi::vFloat t   = beta * val;
 
-    // Linear region (t >= threshold): softplus(x) = x; default for every lane so the single store covers it.
+    // Linear region (t > threshold): softplus(x) = x; default for every lane so the single store covers it.
     sfpi::vFloat result = val;
 
-    // `t < threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
-    v_if (t < threshold)
+    // The boundary lane belongs to the nonlinear side: torch documents the linear fallback as
+    // `input * beta > threshold`, so at exactly t == threshold the answer is log1p(exp(t))/beta,
+    // not x. wormhole_b0 and blackhole were corrected to `<=` in #54208; this copy predates that
+    // fix and kept the strict form. `<=` is also the comparison shape #53058 prefers on Quasar.
+    // Relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
+    v_if (t <= threshold)
     {
         sfpi::vFloat a = sfpi::abs(t);
         sfpi::vFloat residual;
