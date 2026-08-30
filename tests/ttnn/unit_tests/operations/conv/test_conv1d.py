@@ -1118,7 +1118,7 @@ def run_conv1d_depthwise_fp32_exact(device, C, kernel_size, input_length, stride
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 16}], indirect=True)
 def test_conv1d_depthwise_fp32_exact_coalesced(device):
-    """Coalesced SFPU layout: C*4*K = 3072 B fits every arch's NoC burst, dilation 1."""
+    """Coalesced SFPU layout: C*4*K = 3072 B fits every arch's NoC burst."""
     run_conv1d_depthwise_fp32_exact(device, C=64, kernel_size=12, input_length=4096)
 
 

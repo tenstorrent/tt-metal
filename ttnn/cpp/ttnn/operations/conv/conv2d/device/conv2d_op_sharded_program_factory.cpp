@@ -1052,8 +1052,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const uint32_t dest_reuse_scratch_cb_id =
             get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
 
-        // Only when both operands really are fp32: a bf16/bf8 unpack already widens into the full
-        // 32-bit Dest slot, so overriding it there would be a behaviour change for no gain.
+        // Only when both operands really are fp32: the JIT honors the mode only for Float32-format
+        // CBs (get_unpack_dst_formats), so flagging anything else would be a silent no-op.
         if (fp32_dest_acc_en && a.dtype() == tt::tt_metal::DataType::FLOAT32 &&
             b.dtype() == tt::tt_metal::DataType::FLOAT32) {
             depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
