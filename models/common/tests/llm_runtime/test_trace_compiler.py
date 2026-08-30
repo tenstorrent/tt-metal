@@ -13,7 +13,12 @@ from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersisten
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
 from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
-from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, PersistentInputs, TraceCapturePlan, TraceCompiler
+from models.common.llm_runtime.trace_compiler import (
+    InputRefreshPolicy,
+    PersistentInputs,
+    TraceCapturePlan,
+    TraceCompiler,
+)
 
 
 @dataclass(frozen=True)
@@ -199,6 +204,7 @@ def test_capture_allocates_every_input_before_capture_and_coordinates_gates(monk
 def test_opt_in_capture_prime_runs_after_allocations_and_before_capture_gate(monkeypatch):
     events = []
     _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
     program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
     trace = TraceCompiler(compiler)
 
@@ -309,6 +315,8 @@ def test_capture_prime_release_failure_still_synchronizes_before_rollback(monkey
 
 def test_capture_orders_decode_before_prefill_after_allocating_every_input(monkeypatch):
     events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
     programs = [compiler.compile(_Signature("program", variant), lambda context: torch.zeros(1)) for variant in (1, 2)]
     trace = TraceCompiler(compiler)
     trace.register_capture_plan(_plan(programs[0], 1, events, operation="prefill"))

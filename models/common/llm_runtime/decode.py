@@ -485,15 +485,24 @@ class DecodeRuntime:
         host_inputs = self._prepare_inputs_host(prepared)
         device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
         owned = (device_inputs, kpt)
-        compile_only_state = self._sampling_state_controller is not None and not count_tokens
+        compile_only_state = not count_tokens and (
+            self._sampling_state_controller is not None or self._seed_manager is not None
+        )
         try:
             if compile_only_state:
                 sampling = prepared.prepared_sampling
-                if sampling is not None:
+                if self._sampling_state_controller is not None and sampling is not None:
                     self._sampling_state_controller.reset(
                         self._sampling_state,
                         dataclasses.replace(sampling, slot_remap=None),
                     )
+                elif self._seed_manager is not None:
+                    # Program warmup compiles sampled decode before any real
+                    # prefill/admission boundary.  Give the fallback seed
+                    # manager a temporary replacement batch so its normal
+                    # strict serving checks do not mistake synthetic warmup
+                    # rows for live requests.
+                    self._refresh_sampling_seeds(dataclasses.replace(prepared, reset_batch=True))
             else:
                 self._refresh_sampling_seeds(prepared)
             with _validate_module_inputs(self.config.model):
@@ -508,14 +517,14 @@ class DecodeRuntime:
         except BaseException as primary:
             if compile_only_state:
                 try:
-                    self._sampling_state_controller.reset(self._sampling_state)
+                    self._reset_compile_only_sampling_state()
                 except BaseException as cleanup_error:
                     attach_cleanup_failures(primary, (cleanup_error,))
             failures = self._release_or_retain_transient(owned)
             attach_cleanup_failures(primary, failures)
             raise
         if compile_only_state:
-            self._sampling_state_controller.reset(self._sampling_state)
+            self._reset_compile_only_sampling_state()
         self._note_submitted(prepared)
         return InvocationResult(
             value=output,
@@ -906,6 +915,14 @@ class DecodeRuntime:
             manager.refresh(state, active_slots, positions=prepared.start_pos)
         else:
             manager.restore_defaults(state)
+
+    def _reset_compile_only_sampling_state(self) -> None:
+        """Discard synthetic compile admissions and restore seed defaults."""
+
+        if self._sampling_state_controller is not None:
+            self._sampling_state_controller.reset(self._sampling_state)
+        elif self._seed_manager is not None and self._seed_state is not None:
+            self._seed_manager.reset(self._seed_state)
 
     def _make_device_kpt(self, prepared):
         host = self._make_host_kpt(prepared)

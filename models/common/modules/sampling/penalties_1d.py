@@ -510,7 +510,7 @@ class Penalties1D(LightweightModule):
         counts_new = ttnn.scatter_add(self._zeros, 1, new_tokens, src, **op)
 
         new_tokens.deallocate()
-        counts_new = ttnn.tilize(counts_new, **op, use_low_perf=self._use_low_perf_tilize)
+        counts_new = self._tilize_counts(counts_new)
         if counts is not None:
             counts = ttnn.add(counts, counts_new, output_tensor=counts, **op)
         else:
@@ -527,6 +527,13 @@ class Penalties1D(LightweightModule):
 
         mask = ttnn.gt(counts_sliced, 0, output_tensor=mask, **op)
         return counts, mask
+
+    def _tilize_counts(self, counts):
+        """Tilize one histogram while preserving non-tile batch heights."""
+
+        if counts.padded_shape[-2] % ttnn.TILE_SIZE == 0:
+            return ttnn.tilize(counts, **self._op_kwargs, use_low_perf=self._use_low_perf_tilize)
+        return ttnn.to_layout(counts, ttnn.TILE_LAYOUT, **self._op_kwargs)
 
 
 # ---------------------------------------------------------------------------

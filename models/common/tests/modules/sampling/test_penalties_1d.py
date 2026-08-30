@@ -3,6 +3,8 @@
 
 """Tests for Penalties1D module."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -835,16 +837,69 @@ class TestPenalties1DDeviceExtra:
     # init_prompt_penalties + _token_bin_counts_and_mask counts=None path
     # ------------------------------------------------------------------
 
+    @pytest.mark.parametrize("max_batch_size", [1, 32])
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size):
+    def test_init_prompt_penalties(self, ttnn_mesh_device, vocab_size, max_batch_size):
         """init_prompt_penalties scatters prompt tokens into prompt_mask."""
-        B = 32
-        pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+        pen = Penalties1D(
+            vocab_size=vocab_size,
+            mesh_device=ttnn_mesh_device,
+            max_batch_size=max_batch_size,
+        )
         pen.load_device_buffers()
         params, accum = _make_proper_params_accum(pen)
 
-        prompt_tokens = torch.randint(0, vocab_size, (B, 10))
+        prompt_tokens = torch.randint(0, vocab_size, (max_batch_size, 10))
         pen.init_prompt_penalties(params, accum, prompt_tokens)
+
+    @pytest.mark.parametrize(
+        ("batch_height", "expected_operation"),
+        [(1, "to_layout"), (32, "tilize")],
+    )
+    def test_histogram_tilize_preserves_batch32_path_and_pads_smaller_batches(
+        self,
+        monkeypatch,
+        batch_height,
+        expected_operation,
+    ):
+        """Only non-tile batch heights use the padding-aware layout conversion."""
+
+        calls = []
+        counts = SimpleNamespace(padded_shape=(batch_height, 1024))
+        result = object()
+        pen = object.__new__(Penalties1D)
+        pen._op_kwargs = {"sub_core_grids": "sub-grid"}
+        pen._use_low_perf_tilize = True
+
+        monkeypatch.setattr(
+            ttnn,
+            "tilize",
+            lambda tensor, **kwargs: calls.append(("tilize", tensor, kwargs)) or result,
+        )
+        monkeypatch.setattr(
+            ttnn,
+            "to_layout",
+            lambda tensor, layout, **kwargs: calls.append(("to_layout", tensor, layout, kwargs)) or result,
+        )
+
+        assert pen._tilize_counts(counts) is result
+        if expected_operation == "tilize":
+            assert calls == [
+                (
+                    "tilize",
+                    counts,
+                    {"sub_core_grids": "sub-grid", "use_low_perf": True},
+                )
+            ]
+        else:
+            assert calls == [
+                (
+                    "to_layout",
+                    counts,
+                    ttnn.TILE_LAYOUT,
+                    {"sub_core_grids": "sub-grid"},
+                )
+            ]
 
     # ------------------------------------------------------------------
     # forward() prompt init dispatch
@@ -904,17 +959,21 @@ class TestPenalties1DDeviceExtra:
     # and _token_bin_counts_and_mask counts-not-None path (line 419)
     # ------------------------------------------------------------------
 
+    @pytest.mark.parametrize("max_batch_size", [1, 32])
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_update_output_tokens_standard(self, ttnn_mesh_device, vocab_size):
+    def test_update_output_tokens_standard(self, ttnn_mesh_device, vocab_size, max_batch_size):
         """update_output_tokens with standard decode-shape [1,1,1,B] (lines 290-294)."""
-        B = 32
-        pen = Penalties1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+        pen = Penalties1D(
+            vocab_size=vocab_size,
+            mesh_device=ttnn_mesh_device,
+            max_batch_size=max_batch_size,
+        )
         pen.load_device_buffers()
         _, accum = _make_proper_params_accum(pen)
 
-        # Standard sampling output: shape[-1]=B=32, shape[-2]=1 → if-branch
+        # Standard sampling output: shape[-1]=B, shape[-2]=1 → if-branch.
         tokens_tt = ttnn.from_torch(
-            torch.randint(0, vocab_size, (1, 1, 1, B), dtype=torch.int32),
+            torch.randint(0, vocab_size, (1, 1, 1, max_batch_size), dtype=torch.int32),
             device=ttnn_mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,

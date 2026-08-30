@@ -227,6 +227,95 @@ def stochastic_sampling(seed=None):
     )
 
 
+def make_four_slot_seed_runtime():
+    seed_buffer = FakeLazySeedBuffer()
+    seed_buffer.source = torch.arange(4, dtype=torch.int64)
+    model = FakeModel(seed_buffer)
+    model.config.max_batch_size = 4
+    model.sampling.config.max_batch_size = 4
+    runtime = DecodeRuntime(
+        DecodeRuntimeConfig.resolve(
+            model=model,
+            output_reader=OutputReader(FakeMesh()),
+            lane_capacity=4,
+            page_table_layout=page_table_layout(),
+            device_sampling_enabled=True,
+        )
+    )
+    return runtime, seed_buffer
+
+
+def four_slot_sampled_warmup(runtime):
+    return runtime.prepare(
+        torch.zeros(4, dtype=torch.long),
+        torch.zeros(4, dtype=torch.long),
+        torch.zeros((4, 8), dtype=torch.int32),
+        sampling_params=SamplingParams(
+            temperature=torch.ones(4),
+            top_k=torch.full((4,), 32, dtype=torch.int32),
+            top_p=torch.full((4,), 0.08),
+            seed=[11, 22, 33, 44],
+        ),
+    )
+
+
+def _stub_compile_only_decode(runtime, monkeypatch, run_body):
+    monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda prepared: "host")
+    monkeypatch.setattr(
+        runtime,
+        "_stage_inputs_and_kpt",
+        lambda host, prepared: (DecodeDeviceInputs(None, None, None, None), None),
+    )
+    monkeypatch.setattr(runtime, "_run_body", run_body)
+
+
+def test_compile_only_sampled_decode_temporarily_admits_and_resets_fallback_seed_slots(monkeypatch):
+    runtime, seed_buffer = make_four_slot_seed_runtime()
+    defaults = seed_buffer.source.clone()
+    prepared = four_slot_sampled_warmup(runtime)
+    during_compile = []
+
+    def run_body(*args, **kwargs):
+        during_compile.append(runtime._seed_state.snapshot())
+        assert not kwargs["count_tokens"]
+        assert not kwargs["advance_seeds"]
+        return object()
+
+    _stub_compile_only_decode(runtime, monkeypatch, run_body)
+
+    runtime.invoke(prepared, count_tokens=False)
+
+    assert during_compile[0].active_slots == (0, 1, 2, 3)
+    assert not during_compile[0].buffer_is_default
+    reset = runtime._seed_state.snapshot()
+    assert reset.active_slots == ()
+    assert reset.buffer_is_default
+    assert torch.equal(seed_buffer.source, defaults)
+    with pytest.raises(RuntimeError, match="reset_batch=True"):
+        runtime._refresh_sampling_seeds(prepared)
+
+
+def test_compile_only_sampled_decode_resets_fallback_seed_slots_after_failure(monkeypatch):
+    runtime, seed_buffer = make_four_slot_seed_runtime()
+    defaults = seed_buffer.source.clone()
+    prepared = four_slot_sampled_warmup(runtime)
+
+    def run_body(*args, **kwargs):
+        assert runtime._seed_state.snapshot().active_slots == (0, 1, 2, 3)
+        raise RuntimeError("compile boom")
+
+    _stub_compile_only_decode(runtime, monkeypatch, run_body)
+    monkeypatch.setattr(runtime, "_release_or_retain_transient", lambda owned: [])
+
+    with pytest.raises(RuntimeError, match="compile boom"):
+        runtime.invoke(prepared, count_tokens=False)
+
+    reset = runtime._seed_state.snapshot()
+    assert reset.active_slots == ()
+    assert reset.buffer_is_default
+    assert torch.equal(seed_buffer.source, defaults)
+
+
 def test_runtime_seed_same_request_and_absolute_position_are_cardinality_independent():
     first_buffer = FakeLazySeedBuffer()
     first = make_runtime(seed_buffer=first_buffer)

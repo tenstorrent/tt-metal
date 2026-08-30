@@ -389,8 +389,14 @@ def build_llama32_3b_generator(config: Llama32_3BGeneratorConfig) -> Llama32_3BG
                 paged_attention_config=paged_attention_config,
             )
             model_kv_cache_dtypes, _, _, _ = _model_kv_metadata(llm.model)
+            trace_mode = config.trace_mode
+            if trace_mode == "all" and not llm.runtime_config.trace_prefill_supported_seq_lens:
+                # N150 has no supported prefill trace bucket for Llama-3.2-3B.
+                # Preserve decode tracing without advertising an execution
+                # target that this lane cannot construct or warm.
+                trace_mode = "decode_only"
             executor_config = Llama32_3BExecutorConfig(
-                trace=TraceConfig(mode=config.trace_mode),
+                trace=TraceConfig(mode=trace_mode),
                 warmup=WarmupConfig(),
                 paged_kv_cache=PagedKVCacheConfig(
                     block_size=_PROVISIONAL_BLOCK_SIZE,
