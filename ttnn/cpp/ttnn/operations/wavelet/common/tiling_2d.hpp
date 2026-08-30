@@ -9,6 +9,8 @@
 #include <limits>
 #include <tt_stl/assert.hpp>
 
+#include "tt-metalium/math.hpp"
+
 namespace ttnn::operations::wavelet {
 
 inline constexpr size_t kTileHeight2D = 32;
@@ -38,7 +40,6 @@ struct TiledShape2D {
 struct Lwt2DTilingContract {
     TiledShape2D input{};
     TiledShape2D band{};
-    bool padding_precedes_split{true};
 };
 
 [[nodiscard]] inline size_t checked_shape_area_2d(const Shape2D shape, const char* label) {
@@ -60,7 +61,7 @@ struct Lwt2DTilingContract {
         label,
         value,
         tile_extent);
-    return ((value + tile_extent - 1) / tile_extent) * tile_extent;
+    return tt::round_up(value, tile_extent);
 }
 
 inline TiledShape2D TiledShape2D::from_logical(const Shape2D logical) {
@@ -101,7 +102,6 @@ inline void validate_tiled_shape_2d(const TiledShape2D& shape, const char* label
 }
 
 inline void validate_lwt_2d_tiling_contract(const Lwt2DTilingContract& contract) {
-    TT_FATAL(contract.padding_precedes_split, "2D input padding must be applied before split2d");
     validate_tiled_shape_2d(contract.input, "2D LWT input");
     validate_tiled_shape_2d(contract.band, "2D LWT output band");
 }

@@ -6,17 +6,16 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <limits>
 #include <optional>
 #include <tt_stl/assert.hpp>
-#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/operations/wavelet/common/signal.hpp"
 #include "ttnn/operations/wavelet/common/storage_contract.hpp"
 #include "ttnn/operations/wavelet/common/tiling_2d.hpp"
@@ -47,11 +46,6 @@ struct PolyphaseDependencyRectangles {
     IndexRectangle oo{};
 
     [[nodiscard]] constexpr size_t total_area() const noexcept { return ee.area() + eo.area() + oe.area() + oo.area(); }
-};
-
-enum class Lwt2DWorkspacePolicy : uint8_t {
-    kFivePlaneGeneric,
-    kFourPlaneAligned,
 };
 
 enum class Lwt2DRouteDomainPolicy : uint8_t {
@@ -199,8 +193,8 @@ constexpr uint64_t kSynchronizationBytes = 64 + device_protocol::kLwt2DSplitScra
         interval.end <= std::numeric_limits<size_t>::max() - (tile_extent - 1),
         "{} interval end cannot be rounded to a tile",
         label);
-    const size_t begin = (interval.begin / tile_extent) * tile_extent;
-    const size_t end = round_up(interval.end, tile_extent);
+    const size_t begin = tt::round_down(interval.begin, tile_extent);
+    const size_t end = tt::round_up(interval.end, tile_extent);
     return end - begin;
 }
 
@@ -218,10 +212,7 @@ inline void account_plane_use(
 }
 
 [[nodiscard]] inline Lwt2DResourceModel make_resource_model(
-    const PolyphaseDependencyRectangles& initial,
-    const std::vector<Lwt2DRoutePlan>& routes,
-    const Lwt2DWorkspacePolicy workspace_policy) {
-    const uint32_t plane_count = workspace_policy == Lwt2DWorkspacePolicy::kFourPlaneAligned ? 4U : 5U;
+    const PolyphaseDependencyRectangles& initial, const std::vector<Lwt2DRoutePlan>& routes) {
     std::array<size_t, 5> heights{};
     std::array<size_t, 5> widths{};
     account_plane_use(Lwt2DPlaneSlot::kP0, initial.ee, heights, widths);
@@ -237,7 +228,7 @@ inline void account_plane_use(
     std::array<uint32_t, 5> plane_heights{};
     std::array<uint32_t, 5> plane_widths{};
     uint64_t workspace_bytes = 0;
-    for (size_t slot = 0; slot < plane_count; ++slot) {
+    for (size_t slot = 0; slot < plane_heights.size(); ++slot) {
         TT_FATAL(heights[slot] > 0 && widths[slot] > 0, "2D LWT workspace plane {} is unused", slot);
         TT_FATAL(
             heights[slot] <= std::numeric_limits<uint32_t>::max() &&
@@ -282,11 +273,9 @@ inline void append_axis_routes(
     const AxisConePlan& cone,
     const Lwt2DAxis axis,
     const IndexInterval transverse,
-    const Lwt2DWorkspacePolicy workspace_policy,
     const TerminalScaleInline* terminal_scale,
     AxisPairSlots& slots,
     std::vector<Lwt2DRoutePlan>& routes) {
-    const bool aligned_in_place = workspace_policy == Lwt2DWorkspacePolicy::kFourPlaneAligned;
     for (size_t route_index = 0; route_index < cone.routes.size(); ++route_index) {
         const AxisRouteRequirement& requirement = cone.routes[route_index];
         if (requirement.type == StepType::kSwap) {
@@ -321,8 +310,7 @@ inline void append_axis_routes(
                                            : scale_even ? slots.even
                                                         : slots.odd;
         const Lwt2DPlaneSlot base_slot = predict ? slots.odd : update ? slots.even : source_slot;
-        const Lwt2DPlaneSlot output_slot =
-            predict || update ? (aligned_in_place ? base_slot : slots.free) : source_slot;
+        const Lwt2DPlaneSlot output_slot = predict || update ? slots.free : source_slot;
         routes.push_back(Lwt2DRoutePlan{
             .axis = axis,
             .axis_route_index = route_index,
@@ -339,9 +327,6 @@ inline void append_axis_routes(
         if (!predict && !update) {
             continue;
         }
-        if (aligned_in_place) {
-            continue;
-        }
         if (predict) {
             slots.free = slots.odd;
             slots.odd = output_slot;
@@ -355,7 +340,6 @@ inline void append_axis_routes(
 [[nodiscard]] inline std::pair<std::vector<Lwt2DRoutePlan>, Lwt2DBandSlots> build_route_schedule(
     const AxisConePlan& y_cone,
     const AxisConePlan& x_cone,
-    const Lwt2DWorkspacePolicy workspace_policy,
     const TerminalScaleInline* y_terminal_scale,
     const TerminalScaleInline* x_terminal_scale) {
     std::vector<Lwt2DRoutePlan> routes;
@@ -366,44 +350,28 @@ inline void append_axis_routes(
         .odd = Lwt2DPlaneSlot::kP2,
         .free = Lwt2DPlaneSlot::kScratch,
     };
-    append_axis_routes(
-        y_cone, Lwt2DAxis::kVertical, x_cone.initial_even, workspace_policy, y_terminal_scale, x_even_pair, routes);
+    append_axis_routes(y_cone, Lwt2DAxis::kVertical, x_cone.initial_even, y_terminal_scale, x_even_pair, routes);
 
     AxisPairSlots x_odd_pair{
         .even = Lwt2DPlaneSlot::kP1,
         .odd = Lwt2DPlaneSlot::kP3,
         .free = x_even_pair.free,
     };
-    append_axis_routes(
-        y_cone, Lwt2DAxis::kVertical, x_cone.initial_odd, workspace_policy, y_terminal_scale, x_odd_pair, routes);
+    append_axis_routes(y_cone, Lwt2DAxis::kVertical, x_cone.initial_odd, y_terminal_scale, x_odd_pair, routes);
 
     AxisPairSlots vertical_low_pair{
         .even = x_even_pair.even,
         .odd = x_odd_pair.even,
         .free = x_odd_pair.free,
     };
-    append_axis_routes(
-        x_cone,
-        Lwt2DAxis::kHorizontal,
-        y_cone.final_even,
-        workspace_policy,
-        x_terminal_scale,
-        vertical_low_pair,
-        routes);
+    append_axis_routes(x_cone, Lwt2DAxis::kHorizontal, y_cone.final_even, x_terminal_scale, vertical_low_pair, routes);
 
     AxisPairSlots vertical_high_pair{
         .even = x_even_pair.odd,
         .odd = x_odd_pair.odd,
         .free = vertical_low_pair.free,
     };
-    append_axis_routes(
-        x_cone,
-        Lwt2DAxis::kHorizontal,
-        y_cone.final_odd,
-        workspace_policy,
-        x_terminal_scale,
-        vertical_high_pair,
-        routes);
+    append_axis_routes(x_cone, Lwt2DAxis::kHorizontal, y_cone.final_odd, x_terminal_scale, vertical_high_pair, routes);
 
     const Lwt2DBandSlots bands{
         .ll = vertical_low_pair.even,
@@ -421,14 +389,6 @@ inline void append_axis_routes(
     TT_FATAL(
         std::adjacent_find(final_slots.begin(), final_slots.end()) == final_slots.end(),
         "2D LWT route schedule aliases two final bands to one plane");
-    if (workspace_policy == Lwt2DWorkspacePolicy::kFourPlaneAligned) {
-        TT_FATAL(
-            std::none_of(
-                final_slots.begin(),
-                final_slots.end(),
-                [](const Lwt2DPlaneSlot slot) { return slot == Lwt2DPlaneSlot::kScratch; }),
-            "Aligned four-plane 2D LWT schedule used the scratch plane");
-    }
     return {std::move(routes), bands};
 }
 
@@ -464,18 +424,14 @@ inline void append_axis_routes(
         .oo = interval_product(y_cone.initial_odd, x_cone.initial_odd),
     };
 
-    // The correctness-first production path always uses a separate scratch
-    // plane. Four-plane route aliasing remains a future optimization.
-    constexpr Lwt2DWorkspacePolicy workspace_policy = Lwt2DWorkspacePolicy::kFivePlaneGeneric;
     const TerminalScaleInline y_terminal_scale = execution_detail::terminal_scale_inline(y_plan);
     const TerminalScaleInline x_terminal_scale = execution_detail::terminal_scale_inline(x_plan);
     auto [routes, final_bands] = build_route_schedule(
         y_cone,
         x_cone,
-        workspace_policy,
         fuse_terminal_scale ? &y_terminal_scale : nullptr,
         fuse_terminal_scale ? &x_terminal_scale : nullptr);
-    const Lwt2DResourceModel resources = make_resource_model(initial, routes, workspace_policy);
+    const Lwt2DResourceModel resources = make_resource_model(initial, routes);
     const Lwt2DBandSourceRectangles final_band_sources{
         .ll = interval_product(exact_y_cone.final_even, exact_x_cone.final_even),
         .lh = interval_product(exact_y_cone.final_even, exact_x_cone.final_odd),
@@ -504,13 +460,13 @@ inline void append_axis_routes(
             IndexRectangle{
                 .y =
                     IndexInterval{
-                        .begin = (final_band_rect.y.begin / kTileHeight) * kTileHeight,
-                        .end = round_up(final_band_rect.y.end, static_cast<size_t>(kTileHeight)),
+                        .begin = tt::round_down(final_band_rect.y.begin, kTileHeight),
+                        .end = tt::round_up(final_band_rect.y.end, static_cast<size_t>(kTileHeight)),
                     },
                 .x =
                     IndexInterval{
-                        .begin = (final_band_rect.x.begin / kTileWidth) * kTileWidth,
-                        .end = round_up(final_band_rect.x.end, static_cast<size_t>(kTileWidth)),
+                        .begin = tt::round_down(final_band_rect.x.begin, kTileWidth),
+                        .end = tt::round_up(final_band_rect.x.end, static_cast<size_t>(kTileWidth)),
                     },
             },
         .initial = initial,
@@ -635,7 +591,7 @@ inline void append_cone_signature(
         update_signature_anchor(*routed_cone, anchor);
     }
     TT_FATAL(anchor != std::numeric_limits<size_t>::max(), "2D planner axis cone is empty");
-    anchor = (anchor / tile_extent) * tile_extent;
+    anchor = tt::round_down(anchor, tile_extent);
 
     AxisConeSignature signature;
     signature.reserve(
@@ -822,6 +778,7 @@ enum class AlignmentCostClass : uint8_t {
 }
 
 [[nodiscard]] constexpr uint64_t staging_class_cycles(const AlignmentCostClass tile_class) noexcept {
+    // Relative planner weights; these are not cycle-accurate profiler measurements.
     switch (tile_class) {
         case AlignmentCostClass::kExact: return 900;
         case AlignmentCostClass::kOneAxisShifted: return 7'000;
@@ -856,11 +813,11 @@ enum class AlignmentCostClass : uint8_t {
         const LiftingStepRoute& axis_route = route.axis == Lwt2DAxis::kVertical ? y_plan.routes[route.axis_route_index]
                                                                                 : x_plan.routes[route.axis_route_index];
         const uint32_t k = is_predict_update_step(route.type) ? execution_detail::coefficient_count(axis_route) : 1U;
-        const int64_t output_y_origin = static_cast<int64_t>((route.output.y.begin / kTileHeight) * kTileHeight);
-        const int64_t output_x_origin = static_cast<int64_t>((route.output.x.begin / kTileWidth) * kTileWidth);
-        const size_t tile_rows = round_up(route.output.y.end, static_cast<size_t>(kTileHeight)) / kTileHeight -
+        const int64_t output_y_origin = static_cast<int64_t>(tt::round_down(route.output.y.begin, kTileHeight));
+        const int64_t output_x_origin = static_cast<int64_t>(tt::round_down(route.output.x.begin, kTileWidth));
+        const size_t tile_rows = tt::round_up(route.output.y.end, static_cast<size_t>(kTileHeight)) / kTileHeight -
                                  route.output.y.begin / kTileHeight;
-        const size_t tile_columns = round_up(route.output.x.end, static_cast<size_t>(kTileWidth)) / kTileWidth -
+        const size_t tile_columns = tt::round_up(route.output.x.end, static_cast<size_t>(kTileWidth)) / kTileWidth -
                                     route.output.x.begin / kTileWidth;
         for (size_t tile_y = 0; tile_y < tile_rows; ++tile_y) {
             for (size_t tile_x = 0; tile_x < tile_columns; ++tile_x) {
@@ -1053,7 +1010,6 @@ enum class AlignmentCostClass : uint8_t {
     const Lwt2DTilingContract tiling{
         .input = TiledShape2D::from_logical(Shape2D{.height = input_height, .width = input_width}),
         .band = TiledShape2D::from_logical(Shape2D{.height = band_height, .width = band_width}),
-        .padding_precedes_split = true,
     };
     validate_lwt_2d_tiling_contract(tiling);
     std::array<uint32_t, 5> allocated_plane_heights{};

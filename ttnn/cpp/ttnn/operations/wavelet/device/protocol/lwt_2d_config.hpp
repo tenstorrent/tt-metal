@@ -8,7 +8,6 @@
 
 namespace ttnn::operations::wavelet::device_protocol {
 
-inline constexpr uint32_t kLwt2DProtocolVersion = 1;
 inline constexpr uint32_t kLwt2DTileHeight = 32;
 inline constexpr uint32_t kLwt2DTileWidth = 32;
 inline constexpr uint32_t kLwt2DFullTileElements = kLwt2DTileHeight * kLwt2DTileWidth;
@@ -24,7 +23,6 @@ inline constexpr uint32_t kLwt2DSymmetricSplitScratchTileRows = 3;
 inline constexpr uint32_t kLwt2DSymmetricSplitScratchTileColumns = 3;
 inline constexpr uint32_t kLwt2DSymmetricSplitScratchTileCount =
     kLwt2DSymmetricSplitScratchTileRows * kLwt2DSymmetricSplitScratchTileColumns;
-inline constexpr uint32_t kLwt2DSymmetricSplitScratchBytes = kLwt2DSymmetricSplitScratchTileCount * kLwt2DFullTileBytes;
 inline constexpr uint32_t kLwt2DFinalYBegin = 0;
 inline constexpr uint32_t kLwt2DFinalYLength = 1;
 inline constexpr uint32_t kLwt2DFinalXBegin = 2;
