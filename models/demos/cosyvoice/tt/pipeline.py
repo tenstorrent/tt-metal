@@ -442,6 +442,17 @@ class CosyVoiceTTNN:
     ) -> "StreamResult":
         """The full chain, **interleaved**: waveform chunks start before the LLM stops.
 
+        **Known defect: the audio this returns has an amplitude spike.** Generation is
+        correct -- the tokens are identical to `synthesize`'s under greedy sampling,
+        asserted in `tests/e2e/test_pipeline_api.py` -- and the chunk schedule is
+        correct, but the assembled waveform peaks around 72 where speech should peak
+        near 1. The fault is in how *this wrapper* builds each chunk's conditioning,
+        not in the interleaving: the same `StreamSession` scheduler driven with the
+        golden's own prompt produces audio that
+        `test_device_streamed_matches_non_streamed` gates on content. Until it is
+        closed, treat this method as the pipelining *mechanism* rather than a way to
+        get audio, and use `synthesize` for output that is gated.
+
         `synthesize` above runs the three stages strictly in order -- every token,
         then all the mel, then all the audio -- so the first sample of output exists
         only once the last token does. This method runs the same three stages against
@@ -492,7 +503,12 @@ class CosyVoiceTTNN:
         # cannot be warmed in advance. It is also the last thing to run, by which point
         # the trace has served its purpose; if that turns out to matter, releasing the
         # trace before the final chunk is the next step.
-        warm_tokens = [int(ctx.text_tokens.flatten()[0])] * synth.cfg.chunk_size()
+        # Speech token 0, not a text token: `flow_chunk` feeds these to the flow
+        # decoder's *speech* embedding, whose vocabulary is unrelated to the text
+        # tokenizer's. An out-of-range id there is an out-of-bounds gather, not a
+        # harmless one -- and this pass exists only to allocate shapes, so the safest
+        # in-vocabulary id is the right filler.
+        warm_tokens = [0] * synth.cfg.chunk_size()
         with synth.session(stream_ctx, rng_for_chunk) as warm:
             for wav, _n in warm.push_all(warm_tokens):
                 ttnn.deallocate(wav)
