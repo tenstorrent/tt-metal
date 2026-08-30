@@ -34,6 +34,7 @@ struct PageGeometry {
 enum class ReaderRtArg : std::size_t {
     InputAddress,
     OutputAddress,
+    PageBundleIndicesAddress,
     InitialStripe,
     StripeStep,
     NumIters,
@@ -80,7 +81,10 @@ constexpr std::size_t rt_arg_index(Enum value) {
 }
 
 PageGeometry derive_page_geometry(
-    const Tensor& input_tensor, const Tensor& output_tensor, const HighBwAllGatherParams& operation_attributes) {
+    const HighBwAllGatherInputs& tensor_args,
+    const Tensor& output_tensor,
+    const HighBwAllGatherParams& operation_attributes) {
+    const auto& input_tensor = tensor_args.input_tensor;
     const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t input_unaligned_page_size = input_tensor.buffer()->page_size();
     const uint32_t output_unaligned_page_size = output_tensor.buffer()->page_size();
@@ -92,7 +96,13 @@ PageGeometry derive_page_geometry(
         output_chunks_per_page == 1 || input_page_size == input_unaligned_page_size,
         "concat requires an unpadded input page");
 
-    const auto& input_shape = input_tensor.padded_shape();
+    auto input_shape = input_tensor.padded_shape();
+    const bool has_paged_input = tensor_args.has_paged_input();
+    if (has_paged_input) {
+        input_shape[0] = 1;
+        input_shape[1] = 1;
+        input_shape[2] = tensor_args.page_bundle_indices->logical_volume() * operation_attributes.kv_cache_page_size;
+    }
     const uint32_t rank = input_shape.rank();
     int32_t gather_dim = operation_attributes.dim;
     if (gather_dim < 0) {
@@ -155,8 +165,8 @@ PageGeometry derive_page_geometry(
     const bool selected_batch = operation_attributes.input_batch_index.has_value();
     const bool selected_or_partial = selected_batch || has_runtime_extent;
     uint32_t input_page_base = 0;
-    uint32_t num_input_pages = input_tensor.buffer()->num_pages();
-    if (selected_or_partial) {
+    uint32_t num_input_pages = has_paged_input ? max_input_pages_per_stripe : input_tensor.buffer()->num_pages();
+    if (selected_or_partial || has_paged_input) {
         // A partial all-gather is sourced from one contiguous batch slot. Its active pages are
         // placed in each rank's fixed worst-case output slot, preserving stable cache offsets.
         for (int32_t i = 1; i < gather_dim; ++i) {
@@ -180,9 +190,15 @@ PageGeometry derive_page_geometry(
                 input_shape[0]);
         }
         num_input_pages = input_pages_per_stripe;
-        TT_FATAL(
-            input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
-            "high_bw_all_gather selected range exceeds input allocation");
+        if (has_paged_input) {
+            TT_FATAL(
+                input_page_base + num_input_pages <= max_input_pages_per_stripe,
+                "high_bw_all_gather paged logical range exceeds the page-bundle table");
+        } else {
+            TT_FATAL(
+                input_page_base + num_input_pages <= input_tensor.buffer()->num_pages(),
+                "high_bw_all_gather selected range exceeds input allocation");
+        }
     }
     const uint32_t num_output_chunks = num_input_pages * split_factor;
     return {
@@ -380,7 +396,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const uint32_t num_links = operation_attributes.num_links;
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value();
-    const auto page_geometry = derive_page_geometry(input_tensor, output_tensor, operation_attributes);
+    const auto page_geometry = derive_page_geometry(tensor_args, output_tensor, operation_attributes);
     // gathered_dim_size is deliberately cache-key-independent. Runtime controls reuse the compiled
     // schedule and patch its selected page base and active ranges below from page_geometry.
     const uint32_t input_page_size = page_geometry.input_page_size;
@@ -654,6 +670,17 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
+    constexpr uint32_t page_bundle_cb_id = tt::CB::c_in1;
+    const bool has_paged_input = tensor_args.has_paged_input();
+    if (has_paged_input) {
+        const uint32_t table_bytes = tensor_args.page_bundle_indices->logical_volume() * sizeof(uint16_t);
+        const uint32_t aligned_table_bytes = (table_bytes + 31u) & ~31u;
+        tt::tt_metal::CircularBufferConfig page_bundle_cb_config =
+            tt::tt_metal::CircularBufferConfig(aligned_table_bytes, {{page_bundle_cb_id, tt::DataFormat::RawUInt16}})
+                .set_page_size(page_bundle_cb_id, aligned_table_bytes);
+        CreateCircularBuffer(program, worker_core_range, page_bundle_cb_config);
+    }
+
     // data_valid_granularity:
     // data_valid is signalled once per this many CB pages so a downstream can start relaying before the whole
     // stripe arrives. Larger = fewer syncs, smaller = finer pipelining.
@@ -681,6 +708,28 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(
+        has_paged_input ? tensor_args.page_bundle_indices->buffer() : input_tensor.buffer())
+        .append_to(reader_compile_args);
+    const uint32_t row_height =
+        input_tensor.layout() == Layout::TILE ? input_tensor.tensor_spec().tile().get_height() : 1;
+    const uint32_t logical_row_bytes = input_tensor.padded_shape()[-1] * input_tensor.element_size();
+    TT_FATAL(
+        !has_paged_input || input_tensor.layout() == Layout::TILE ||
+            logical_row_bytes % input_tensor.buffer()->page_size() == 0,
+        "Paged row-major input rows must occupy whole tensor pages");
+    const uint32_t logical_wt = input_tensor.layout() == Layout::TILE
+                                    ? input_tensor.padded_shape()[-1] / input_tensor.tensor_spec().tile().get_width()
+                                    : logical_row_bytes / input_tensor.buffer()->page_size();
+    reader_compile_args.insert(
+        reader_compile_args.end(),
+        {static_cast<uint32_t>(has_paged_input),
+         has_paged_input ? page_bundle_cb_id : 0u,
+         operation_attributes.kv_cache_page_size / row_height,
+         operation_attributes.kv_cache_num_layers,
+         operation_attributes.kv_cache_layer_idx,
+         logical_wt,
+         has_paged_input ? static_cast<uint32_t>(tensor_args.page_bundle_indices->logical_volume()) : 0u});
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
@@ -737,6 +786,8 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
+    const uint32_t page_bundle_indices_addr =
+        has_paged_input ? tensor_args.page_bundle_indices->buffer()->address() : input_addr;
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
     // direction's workers all feed this one connection.
@@ -831,6 +882,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 std::vector<uint32_t> reader_rt_args(rt_arg_index(ReaderRtArg::Count));
                 reader_rt_args[rt_arg_index(ReaderRtArg::InputAddress)] = input_addr;
                 reader_rt_args[rt_arg_index(ReaderRtArg::OutputAddress)] = output_addr;
+                reader_rt_args[rt_arg_index(ReaderRtArg::PageBundleIndicesAddress)] = page_bundle_indices_addr;
                 reader_rt_args[rt_arg_index(ReaderRtArg::InitialStripe)] = device_idx;
                 reader_rt_args[rt_arg_index(ReaderRtArg::StripeStep)] = stripe_step;
                 reader_rt_args[rt_arg_index(ReaderRtArg::NumIters)] = num_iters;
@@ -936,9 +988,12 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
     const uint32_t output_addr = output_tensor.buffer()->address();
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value();
-    const auto page_geometry = has_runtime_controls
-                                   ? derive_page_geometry(tensor_args.input_tensor, output_tensor, operation_attributes)
+    const bool has_paged_input = tensor_args.has_paged_input();
+    const auto page_geometry = has_runtime_controls || has_paged_input
+                                   ? derive_page_geometry(tensor_args, output_tensor, operation_attributes)
                                    : PageGeometry{};
+    const uint32_t page_bundle_indices_addr =
+        has_paged_input ? tensor_args.page_bundle_indices->buffer()->address() : input_addr;
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
@@ -951,6 +1006,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args.at(rt_arg_index(ReaderRtArg::InputAddress)) = input_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
+            reader_args.at(rt_arg_index(ReaderRtArg::PageBundleIndicesAddress)) = page_bundle_indices_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
             reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
             auto& writer_args = writer_args_by_core[core.x][core.y];
@@ -959,7 +1015,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
             writer_args.at(rt_arg_index(WriterRtArg::DataValidSemaphore)) = data_valid_addr;
         }
 
-        if (!has_runtime_controls) {
+        if (!has_runtime_controls && !has_paged_input) {
             continue;
         }
 

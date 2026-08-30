@@ -60,11 +60,19 @@ struct HighBwAllGatherParams {
     // reuse one cached program.
     std::optional<uint32_t> input_batch_index;
     std::optional<uint32_t> gathered_dim_size;
+
+    // Shared paged-cache geometry. The table itself is a tensor argument so its address is repatched.
+    uint32_t kv_cache_page_size = 32;
+    uint32_t kv_cache_num_layers = 1;
+    uint32_t kv_cache_layer_idx = 0;
 };
 
 struct HighBwAllGatherInputs {
     Tensor input_tensor;
     Tensor output_tensor;
+    std::optional<Tensor> page_bundle_indices;
+
+    bool has_paged_input() const { return page_bundle_indices.has_value(); }
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

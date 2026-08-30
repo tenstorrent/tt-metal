@@ -221,6 +221,46 @@ def _make_tensor(mesh_device, host_tensor, dtype, layout, mesh_mapper):
     return ttnn.typecast(tensor, dtype) if dtype == ttnn.fp8_e4m3 else tensor
 
 
+def _paged_pool_memory_config(device, page_size, width):
+    cores = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(device.dram_grid_size().x)
+    ]
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, page_size, width],
+            grid=ttnn.CoreRangeSet(cores),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+def _make_paged_pool(mesh_device, physical_bundles, num_layers, page_size, width, dtype, layout):
+    pool = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([physical_bundles * num_layers, 1, page_size, width]),
+        dtype,
+        layout,
+        mesh_device,
+        _paged_pool_memory_config(mesh_device, page_size, width),
+    )
+    num_devices = math.prod(tuple(mesh_device.shape))
+    coords = list(ttnn.MeshCoordinateRange(ttnn.MeshShape(*tuple(mesh_device.shape))))
+    pool.update_tensor_topology(ttnn.TensorTopology(ttnn.MeshShape([num_devices]), [ttnn.PlacementReplicate()], coords))
+    return pool
+
+
+def _make_page_bundle_table(mesh_device, order):
+    return ttnn.from_torch(
+        torch.tensor(order, dtype=torch.int64).reshape(1, 1, 1, len(order)),
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=mesh_device,
+    )
+
+
 def _fp8_payloads(tensor, mesh_device):
     assert tensor.dtype == ttnn.fp8_e4m3
     device_tensors = ttnn.get_device_tensors(tensor)
@@ -1051,6 +1091,214 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device):
                 assert torch.equal(
                     actual[:, :, start : start + rows_this_call, :], expected[:, :, start : start + rows_this_call, :]
                 )
+
+
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@run_for_blackhole("high_bw_all_gather paged KV coverage requires Blackhole")
+def test_high_bw_all_gather_paged_kv_pool(mesh_device, expect_error):
+    """Depage a non-monotonic multi-layer pool directly into sparse-SDPA's fixed-stride gather buffer."""
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    axis_size = rank_line.shape[cluster_axis]
+    logical_rows, num_layers, layer_idx = 256, 3, 1
+    page_size = 32
+    logical_bundles = logical_rows // page_size
+    physical_bundles = logical_bundles + 4
+    orders = (
+        [9, 1, 7, 3, 10, 0, 6, 4],
+        [2, 10, 5, 0, 8, 3, 11, 6],
+    )
+
+    for dtype, layout, width in (
+        (ttnn.bfloat16, ttnn.TILE_LAYOUT, 128),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 128),
+        (ttnn.fp8_e4m3, ttnn.ROW_MAJOR_LAYOUT, 656),
+    ):
+        torch.manual_seed(913)
+        host_input = torch.randn(1, 1, logical_rows * axis_size, width, dtype=torch.bfloat16)
+        device_input = _make_tensor(
+            rank_line,
+            host_input,
+            dtype,
+            layout,
+            ttnn.ShardTensor2dMesh(
+                rank_line,
+                dims=(2, None) if cluster_axis == 0 else (None, 2),
+                mesh_shape=tuple(rank_line.shape),
+            ),
+        )
+        entries_after_first = None
+        active_rows_by_order = (logical_rows, logical_rows if dtype == ttnn.fp8_e4m3 else logical_rows // 2)
+        for order, active_rows in zip(orders, active_rows_by_order):
+            pool = _make_paged_pool(rank_line, physical_bundles, num_layers, page_size, width, dtype, layout)
+            table = _make_page_bundle_table(rank_line, order)
+            output = _make_tensor(
+                rank_line,
+                torch.zeros(1, 1, logical_rows * axis_size, width, dtype=torch.bfloat16),
+                dtype,
+                layout,
+                ttnn.ReplicateTensorToMesh(rank_line),
+            )
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                pool,
+                device_input,
+                slot_idx=0,
+                layer_idx=layer_idx,
+                num_layers=num_layers,
+                kv_actual_global=0,
+                cluster_axis=cluster_axis,
+                page_bundle_indices=table,
+                kv_cache_page_size=page_size,
+            )
+            gathered = ttnn.experimental.high_bw_all_gather(
+                pool,
+                dim=2,
+                output_tensor=output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                gathered_dim_size=active_rows * axis_size,
+                page_bundle_indices=table,
+                kv_cache_page_size=page_size,
+                kv_cache_num_layers=num_layers,
+                kv_cache_layer_idx=layer_idx,
+            )
+            ttnn.synchronize_device(rank_line)
+            if dtype == ttnn.fp8_e4m3:
+                _assert_exact_all_gather(device_input, gathered, rank_line, dtype)
+            else:
+                expected_shards = [ttnn.to_torch(tensor) for tensor in ttnn.get_device_tensors(device_input)]
+                for output_shard in ttnn.get_device_tensors(gathered):
+                    actual = ttnn.to_torch(output_shard)
+                    for rank, expected in enumerate(expected_shards):
+                        rank_start = rank * logical_rows
+                        assert torch.equal(
+                            actual[:, :, rank_start : rank_start + active_rows], expected[:, :, :active_rows]
+                        )
+                        assert (
+                            torch.count_nonzero(
+                                actual[:, :, rank_start + active_rows : rank_start + logical_rows].float()
+                            )
+                            == 0
+                        )
+
+            if entries_after_first is None:
+                entries_after_first = rank_line.num_program_cache_entries()
+            else:
+                assert rank_line.num_program_cache_entries() == entries_after_first
+
+        with expect_error(RuntimeError, "incompatible with input_batch_index"):
+            ttnn.experimental.high_bw_all_gather(
+                pool,
+                dim=2,
+                output_tensor=output,
+                cluster_axis=cluster_axis,
+                num_links=_NUM_LINKS,
+                input_batch_index=0,
+                page_bundle_indices=table,
+                kv_cache_page_size=page_size,
+                kv_cache_num_layers=num_layers,
+                kv_cache_layer_idx=layer_idx,
+            )
+
+
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+@run_for_blackhole("high_bw_all_gather paged KV performance coverage requires Blackhole")
+def test_high_bw_all_gather_paged_kv_perf_matches_contiguous(mesh_device):
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.skip("paged high_bw_all_gather performance coverage requires the realtime device profiler")
+
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    axis_size = rank_line.shape[cluster_axis]
+    rows, width, page_size = 6400, 576, 32
+    num_layers, layer_idx = 3, 1
+    logical_bundles = rows // page_size
+    physical_bundles = logical_bundles + 8
+    torch.manual_seed(271)
+    host_input = torch.randn(1, 1, rows * axis_size, width, dtype=torch.bfloat16)
+    device_input = _make_tensor(
+        rank_line,
+        host_input,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ShardTensor2dMesh(
+            rank_line,
+            dims=(2, None) if cluster_axis == 0 else (None, 2),
+            mesh_shape=tuple(rank_line.shape),
+        ),
+    )
+    pool = _make_paged_pool(
+        rank_line,
+        physical_bundles,
+        num_layers,
+        page_size,
+        width,
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    )
+    order = torch.randperm(physical_bundles)[:logical_bundles].tolist()
+    table = _make_page_bundle_table(rank_line, order)
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        pool,
+        device_input,
+        slot_idx=0,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        kv_actual_global=0,
+        cluster_axis=cluster_axis,
+        page_bundle_indices=table,
+        kv_cache_page_size=page_size,
+    )
+    contiguous_output = _make_tensor(
+        rank_line,
+        torch.zeros(1, 1, rows * axis_size, width, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    paged_output = _make_tensor(
+        rank_line,
+        torch.zeros(1, 1, rows * axis_size, width, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ReplicateTensorToMesh(rank_line),
+    )
+
+    def gather_contiguous():
+        return ttnn.experimental.high_bw_all_gather(
+            device_input,
+            dim=2,
+            output_tensor=contiguous_output,
+            cluster_axis=cluster_axis,
+            num_links=_NUM_LINKS,
+        )
+
+    def gather_paged():
+        return ttnn.experimental.high_bw_all_gather(
+            pool,
+            dim=2,
+            output_tensor=paged_output,
+            cluster_axis=cluster_axis,
+            num_links=_NUM_LINKS,
+            page_bundle_indices=table,
+            kv_cache_page_size=page_size,
+            kv_cache_num_layers=num_layers,
+            kv_cache_layer_idx=layer_idx,
+        )
+
+    gather_contiguous()
+    gather_paged()
+    ttnn.synchronize_device(rank_line)
+    contiguous_ns, paged_ns = [], []
+    for _ in range(7):
+        contiguous_ns.append(_profile_high_bw_all_gather(rank_line, gather_contiguous))
+        paged_ns.append(_profile_high_bw_all_gather(rank_line, gather_paged))
+    contiguous_median = statistics.median(contiguous_ns)
+    paged_median = statistics.median(paged_ns)
+    ratio = paged_median / contiguous_median
+    print(
+        f"PAGED_HIGH_BW_ALL_GATHER contiguous={contiguous_median / 1e6:.3f}ms "
+        f"paged={paged_median / 1e6:.3f}ms ratio={ratio:.4f}"
+    )
+    assert ratio <= 1.05, f"paged high_bw_all_gather regressed device time by {(ratio - 1) * 100:.2f}%"
 
 
 @run_for_blackhole("high_bw_all_gather requires Blackhole fabric")

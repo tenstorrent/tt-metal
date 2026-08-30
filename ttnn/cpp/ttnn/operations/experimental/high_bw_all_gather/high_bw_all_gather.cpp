@@ -17,7 +17,11 @@ Tensor high_bw_all_gather(
     const std::optional<CoreRangeSet>& sub_core_grid,
     std::optional<uint32_t> num_links,
     std::optional<uint32_t> input_batch_index,
-    std::optional<uint32_t> gathered_dim_size) {
+    std::optional<uint32_t> gathered_dim_size,
+    const std::optional<Tensor>& page_bundle_indices,
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_num_layers,
+    uint32_t kv_cache_layer_idx) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
         output_tensor,
@@ -27,7 +31,11 @@ Tensor high_bw_all_gather(
         sub_core_grid,
         num_links,
         input_batch_index,
-        gathered_dim_size);
+        gathered_dim_size,
+        page_bundle_indices,
+        kv_cache_page_size,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
