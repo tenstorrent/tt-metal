@@ -19,7 +19,7 @@
     # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
     # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
   skus:
-    bh_quietbox_2:
+    bh_loudbox:
       timeout: 15
     bh_p300:
       timeout: 15

@@ -51,9 +51,9 @@ GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
 
 GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
 
-# Measurement-only same-runner A/B at the boundary and production 55K point.
-RING_PERF_KV_LENS = (51_200, GLM52_KV_55K)
-RING_PERF_KV_IDS = ("qb_units_40_repeat", "55k")
+# Measurement-only same-runner LoudBox A/B at both production endpoints and the imbalance diagnostic.
+RING_PERF_KV_LENS = (GLM52_KV_55K, 58_880, GLM52_KV_512K)
+RING_PERF_KV_IDS = ("55k", "lb_units_23", "512k")
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
