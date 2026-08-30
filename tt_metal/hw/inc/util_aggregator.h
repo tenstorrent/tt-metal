@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // DELIBERATELY DEPENDENCY-FREE.
@@ -95,22 +96,47 @@ struct util_agg_entry_t {
 static_assert(sizeof(util_agg_entry_t) == 32);
 static_assert(sizeof(util_agg_entry_t) % 16 == 0, "entry must be a multiple of WH L1_ALIGNMENT");
 
-// Header is 64 B so journal[] starts 16 B-aligned (and, incidentally, 64 B-aligned).
+// Header is 64 B so journal[] starts 16 B-aligned.
+//
+// FIELD ORDER IS LOAD-BEARING. A host reading this header over the NON_MMIO tunnel does
+// NOT get an atomic 64 B snapshot -- the read is served in 16 B chunks that can come
+// from different moments. Measured on a T3K: `head` (offset 8) and a checksum at offset
+// 32 arrived from different publishes, every time, with every field individually sane.
+//
+// So the only field that changes fast -- `head` -- lives in the FIRST 16 B chunk next
+// to its own tear detector, and nothing else volatile shares that chunk. A reader that
+// sees `head ^ UTIL_AGG_HEAD_SALT == head_xor` has a good head, whatever happened to
+// the rest of the header. Everything after chunk 0 is either static after init or
+// advisory.
+//
+// Do not "tidy" this by grouping fields logically. The grouping IS the correctness
+// argument.
+constexpr uint32_t UTIL_AGG_HEAD_SALT = 0xA5A5A5A5u;
+
 struct util_agg_msg_t {
-    volatile uint32_t magic;         // 'TTAG'
-    volatile uint32_t version;       // 1
-    volatile uint32_t head;          // monotonic COUNT of entries ever written. Written LAST.
+    // --- chunk 0: the fast-changing field and its self-check. Nothing else. ---
+    volatile uint32_t magic;     // 'TTAG'
+    volatile uint32_t version;   // 1
+    volatile uint32_t head;      // monotonic COUNT of entries ever written
+    volatile uint32_t head_xor;  // head ^ UTIL_AGG_HEAD_SALT, written immediately after head
+
+    // --- chunk 1: static after init, guarded by hdr_checksum ---
     volatile uint32_t capacity;      // entries in journal[]; head % capacity is the write slot
     volatile uint32_t num_cores;     // cores this aggregator sweeps. NEVER assume 64 (see 2.1)
-    volatile uint32_t sweep_count;   // aggregator liveness heartbeat; host staleness check keys on this
-    volatile uint32_t lost;          // entries dropped because a Tensix ring wrapped before we swept it
-    volatile uint32_t src_chip;      // fabric node id of the chip this journal came from
-    volatile uint32_t hdr_checksum;  // sum of the 8 u32s above, so a torn header is detectable
-    volatile uint32_t reserved[7];   // pad to 64 B
+    volatile uint32_t src_chip;      // PHYSICAL chip id of the chip this journal describes
+    volatile uint32_t hdr_checksum;  // over the static fields only -- a layout sanity check
+
+    // --- chunk 2: advisory. A torn value here costs nothing. ---
+    volatile uint32_t sweep_count;  // liveness heartbeat; the host's staleness check keys on this
+    volatile uint32_t lost;         // entries dropped because a Tensix ring wrapped before we swept it
+    volatile uint32_t reserved[6];
+
     volatile util_agg_entry_t journal[];
 };
 static_assert(sizeof(util_agg_msg_t) == 64);
 static_assert(sizeof(util_agg_msg_t) % 16 == 0, "journal[] must start 16 B-aligned");
+static_assert(offsetof(util_agg_msg_t, head) < 16, "head must live in the first 16 B chunk");
+static_assert(offsetof(util_agg_msg_t, head_xor) < 16, "head_xor must share head's chunk");
 
 // M1 journal sizing. 192 KiB / 32 B = 6144 entries.
 //
@@ -123,57 +149,58 @@ constexpr uint32_t UTIL_AGG_JOURNAL_BYTES = 192u * 1024u;
 constexpr uint32_t UTIL_AGG_CAPACITY = (UTIL_AGG_JOURNAL_BYTES - sizeof(util_agg_msg_t)) / sizeof(util_agg_entry_t);
 static_assert(UTIL_AGG_CAPACITY == 6142);
 
-// Header checksum over the 8 u32s preceding it. Cheap enough to recompute on
-// every header push, and it is the ONLY thing that lets the host distinguish a
-// torn header from a valid one -- there is no handshake with the aggregator.
+// Checksum over the STATIC fields only. Those never change after init, so this is a
+// layout/sanity check across chunks, not a tear detector -- tearing is handled by
+// head_xor inside chunk 0.
 inline uint32_t util_agg_hdr_checksum(
-    uint32_t magic,
-    uint32_t version,
-    uint32_t head,
-    uint32_t capacity,
-    uint32_t num_cores,
-    uint32_t sweep_count,
-    uint32_t lost,
-    uint32_t src_chip) {
-    return magic + version + head + capacity + num_cores + sweep_count + lost + src_chip;
+    uint32_t magic, uint32_t version, uint32_t capacity, uint32_t num_cores, uint32_t src_chip) {
+    return magic + version + capacity + num_cores + src_chip;
 }
 
-// PUSH ORDERING CONTRACT
+// PUBLISH ORDERING CONTRACT
 //
-// Each sweep that produces entries issues TWO fabric packets on the SAME
-// connection, in this order:
-//   1. the new journal[] entries (may be split in two if the ring wraps)
-//   2. the 64 B header, with `head` advanced to cover them
+// Per sweep the aggregator: (1) barriers its NOC reads so every sample is committed to
+// the journal, (2) writes `head`, then `head_xor` immediately after, (3) updates the
+// advisory fields. The static fields and hdr_checksum are written once at init.
 //
-// Packets on one fabric connection are delivered in order, so a host that sees
-// an advanced `head` is guaranteed the entries behind it have landed. The
-// checksum guards the header itself; `head`-written-last guards the entries.
-// A host that sees a bad checksum must retry, NOT fall back to the previous
-// head -- the entries are already committed and skipping them loses samples.
+// A host reads the header and accepts `head` iff magic is right and
+// head ^ UTIL_AGG_HEAD_SALT == head_xor. On mismatch it re-reads; it must NOT fall back
+// to a previous head, because those entries are committed and skipping them loses
+// samples.
+//
+// Entries below `head` are committed, but the ring still wraps: a host that dawdles
+// between reading the header and reading the entries can have the oldest slots
+// overwritten underneath it. At the default sizing that is ~96 ms of slack; read
+// promptly, and re-read `head` afterwards if you need to prove you were not lapped.
 
 // Plain host-side view of the header.
 //
 // util_agg_msg_t's fields are volatile -- they are written by the aggregator and polled
 // by a host that must not have them cached -- which makes the struct non-trivially
 // copyable and therefore not a legal memcpy destination. This is the identical layout
-// without the qualifier, for host code that reads a landed journal into a buffer.
+// without the qualifier, for host code that reads a journal into a buffer.
 struct util_agg_hdr_view_t {
     uint32_t magic;
     uint32_t version;
     uint32_t head;
+    uint32_t head_xor;
     uint32_t capacity;
     uint32_t num_cores;
-    uint32_t sweep_count;
-    uint32_t lost;
     uint32_t src_chip;
     uint32_t hdr_checksum;
-    uint32_t reserved[7];
+    uint32_t sweep_count;
+    uint32_t lost;
+    uint32_t reserved[6];
 };
+
+// Did this header read cleanly? Chunk 0 is self-validating, which is the whole point.
+inline bool util_agg_hdr_ok(const util_agg_hdr_view_t& h) {
+    return h.magic == UTIL_AGG_MAGIC && (h.head ^ UTIL_AGG_HEAD_SALT) == h.head_xor;
+}
 static_assert(sizeof(util_agg_hdr_view_t) == sizeof(util_agg_msg_t), "host view must match the device header");
 
-// Offset of journal[] from the base of the landing region. The aggregator
-// computes a destination as UTIL_AGG_JOURNAL_OFFSET + (head % capacity) * 32,
-// which is 32 B-aligned for every head -- see the alignment note on
-// util_agg_entry_t.
+// Offset of journal[] from the base of the journal region. The aggregator writes entry
+// `head % capacity` at UTIL_AGG_JOURNAL_OFFSET + slot * 32, which is 32 B-aligned for
+// every head -- see the alignment note on util_agg_entry_t.
 constexpr uint32_t UTIL_AGG_JOURNAL_OFFSET = sizeof(util_agg_msg_t);
 static_assert(UTIL_AGG_JOURNAL_OFFSET % 16 == 0);

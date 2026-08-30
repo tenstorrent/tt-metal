@@ -423,10 +423,13 @@ inline std::vector<Landing> probe_landings(Dev* dev, const tt::umd::SocDescripto
         if (hdr.magic != UTIL_AGG_MAGIC) {
             continue;
         }
-        const uint32_t sum = util_agg_hdr_checksum(
-            hdr.magic, hdr.version, hdr.head, hdr.capacity, hdr.num_cores, hdr.sweep_count, hdr.lost, hdr.src_chip);
-        if (sum != hdr.hdr_checksum) {
-            continue;  // torn read; the next probe will catch it
+        // Chunk 0 is self-validating (head/head_xor); the static checksum guards the
+        // layout. A remote read is served in 16 B chunks from different moments, so
+        // this pair is the only way to know the head is trustworthy.
+        if (!util_agg_hdr_ok(hdr) ||
+            util_agg_hdr_checksum(hdr.magic, hdr.version, hdr.capacity, hdr.num_cores, hdr.src_chip) !=
+                hdr.hdr_checksum) {
+            continue;  // torn or not ours; the next probe will catch it
         }
         Landing l;
         l.core = eth;

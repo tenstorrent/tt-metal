@@ -1204,6 +1204,72 @@ prove B can compute the connection args itself (derived, so expected to work) or
 the binary itself (needs the ELF artifact). And the test staged only ONE aggregator, so
 coexistence with an ACTIVE competing client on the same EDM is still untested.
 
+## 5k. Fabric push REMOVED; host-pull of a local journal -- 2026-08-30
+
+The push design is withdrawn. The aggregator now sweeps into a journal in its OWN eth
+L1 and uses NO FABRIC AT ALL; the host reads the journal where it lies.
+
+### Why the reversal
+
+Reading the EDM code settled 7.4's remaining half:
+
+- `EDMChannelWorkerLocationInfo` (fabric_edm_types.hpp:69) holds exactly ONE worker --
+  `worker_semaphore_address`, `worker_teardown_semaphore_address`, `worker_xy`,
+  `edm_read_counter`. Not an array.
+- `WorkerToFabricEdmSender::open_start()` writes that struct UNCONDITIONALLY: three
+  `noc_inline_dw_write`s, no test-and-set, no wait-for-free, no arbitration. A second
+  worker silently overwrites the first, after which the EDM sends credits to the new
+  worker while the old one waits forever.
+- The handshake semaphore is tri-state (`unused=0 / open=1 / close=2`), not a counter.
+  It cannot represent two connected workers.
+
+So a persistent telemetry client does not "share" sender channel 0 -- it clobbers
+whatever CCL op connects next, and gets clobbered in turn. That is the mechanism behind
+5f's 5-sweeps-vs-73,284, and it means transient open/close does not help either: with no
+mutual exclusion, being brief only narrows the race.
+
+Reserving a dedicated sender channel or taking a `link_idx` both remove interconnect
+resource from the workload, which is not acceptable for monitoring. Hence: no fabric.
+
+### What that buys
+
+The aggregator consumes ZERO fabric resource. What leaves the chip is one host-initiated
+journal read instead of 64 per-core reads -- attacking the mechanism 5b identified,
+starvation by transaction VOLUME (~770 NON_MMIO acquire/release cycles per sweep).
+
+Verified on Blackhole: 120 cores, `lost=0`, journal wrapped 3797x, all 120 core_ids
+present, guard band clean.
+
+### Two hard findings from the T3K
+
+**1. A remote read is NOT a coherent snapshot at any granularity.** The first layout put
+`head` at offset 8 and a checksum at offset 32 -- different 16 B chunks -- and every
+remote read tore, with every field individually sane. Moving `head` and a `head_xor`
+tear-detector ADJACENT in chunk 0 did not fix it either: they disagreed too
+(`head=621121`, `head_xor` decoding to 625337). A remote read samples words across the
+read's duration; it is not atomic even within 16 bytes. Any host-pull scheme must
+tolerate that -- a single-word `head` read, or a header held stable for longer than a
+read takes.
+
+**2. The aggregator's own NOC sweep degrades the host's tunnel reads.** Measured on
+remote chip 4, varying only the sweep interval:
+
+| sweep interval | 64 B header read | result |
+|---|---|---|
+| 1 ms (64k NOC reads/s) | **2512 ms** | torn, failed |
+| 20 ms (3.2k NOC reads/s) | **634 ms** | **passed** |
+
+The eth core servicing remote IO competes with the sweep for the same chip. This is a
+direct tension with M2's 100 us goal: the finer we sample on-chip, the slower and less
+reliable the host's readout of it becomes. The tradeoff curve is real and needs
+characterising before M2 is scoped.
+
+### Status
+
+- Blackhole (local journal, multi-core, wrap, guard): **passing**
+- T3K remote chip at a 20 ms sweep: **passing**
+- T3K remote chip at a 1 ms sweep: **fails** -- read cost and tearing, per finding 2
+
 ## 6. Risks
 
 | Risk | Mitigation |
