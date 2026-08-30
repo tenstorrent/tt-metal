@@ -131,17 +131,14 @@ HITL MODE (human-in-the-loop): you do NOT have git_commit / git_revert. After yo
 )
 
 
-def _visible_devices(devices: str) -> str | None:
-    """DEVICE VISIBILITY IS INTENTIONALLY NEVER RESTRICTED — this is what makes the tool chip-count /
-    hardware agnostic. Pinning TT_VISIBLE_DEVICES to a chip SUBSET ('single' -> '0', '0,1', ...) makes
-    tt-metal's fabric auto-discovery classify the board as a CUSTOM cluster and fatally demand a
-    mesh-graph-descriptor path that we don't provide — so a subset spec crashes device/fabric init
-    (before any forward) on any multi-chip board. The full physical topology must stay visible so
-    auto-discovery works for single | all | explicit-ids alike. HOW MANY chips a run actually uses is
-    controlled by the mesh SHAPE (TT_PERF_MESH_ROWS/COLS via _derive_topology_env + resolve_mesh_shape),
-    which is the chip-count-agnostic lever. Hence: always None (leave TT_VISIBLE_DEVICES unset)."""
-    _ = devices  # spec informs the mesh shape, not OS-level visibility (which would break fabric)
-    return None
+def _apply_scope(env, config):
+    """Set the visibility+descriptor pair from a manifest config. Delegates to the one owner."""
+    try:
+        from agent.mesh_descriptor import apply_scope
+
+        return apply_scope(env, config or {})
+    except Exception:  # noqa: BLE001 -- a scope that cannot be applied must not stop the run
+        return env
 
 
 def cc_env(repo_root: Path, devices: str) -> dict:
@@ -157,13 +154,12 @@ def cc_env(repo_root: Path, devices: str) -> dict:
     pybin = repo_root / "python_env" / "bin"
     if pybin.is_dir():
         env["PATH"] = str(pybin) + os.pathsep + env.get("PATH", "")
-    vis = _visible_devices(devices)
-    if vis is not None:
-        env["TT_VISIBLE_DEVICES"] = vis
-        env["TT_METAL_VISIBLE_DEVICES"] = vis
-    else:
-        env.pop("TT_VISIBLE_DEVICES", None)
-        env.pop("TT_METAL_VISIBLE_DEVICES", None)
+    # THE SCOPE IS INHERITED, NOT RE-DECIDED. This used to pop both variables unconditionally --
+    # on the reasoning that pinning a chip subset
+    # crashes fabric init. It does, but only WITHOUT a mesh-graph descriptor, and the pair is now
+    # resolved once after discovery and lives in os.environ. Popping it here re-widened every
+    # cc_env-built subprocess back to the whole host: verified on a --devices 0 run where the
+    # full-pipeline measurement ran on four chips at 85W each while the rest of the run used one.
     return env
 
 
@@ -328,10 +324,7 @@ def _mcp_config(repo_root: Path, manifest_path: str, pipe: dict, devices: str, k
     _mrel = pipe.get("model_rel") or _model_rel_from_perf_test(pipe.get("perf_test"))
     if _mrel:
         env["PERF_MCP_MODEL_ROOT"] = str((Path(repo_root) / _mrel).resolve())
-    vis = _visible_devices(devices)
-    if vis is not None:
-        env["TT_VISIBLE_DEVICES"] = vis
-        env["TT_METAL_VISIBLE_DEVICES"] = vis
+    # The chip scope is inherited from os.environ, resolved once after discovery -- see _apply_scope.
     _seq = os.environ.get("TT_PERF_SEQ_LEN")
     if _seq:
         env["TT_PERF_SEQ_LEN"] = _seq
@@ -6146,6 +6139,16 @@ def run_cc_optimize(
     if not manifest:
         print("  [optimize/cc] discovery failed (before_loop produced no manifest).")
         return None
+    # ADOPT THE CHIP SCOPE DISCOVERY WORKED OUT, FOR THIS PROCESS AND EVERY CHILD OF IT.
+    #
+    # before_loop runs as a SUBPROCESS, so the TT_VISIBLE_DEVICES + descriptor pair it sets reaches
+    # only its own children -- this process never saw it, and cc_env below then built each device
+    # subprocess from a fresh os.environ with those variables explicitly popped. Measured on a
+    # 4-chip p300c: most of a --devices 0 run correctly used one chip, while the five cc_env paths
+    # (the full-pipeline measurement among them, the hottest step in the run) used all four and took
+    # the board to 89C. Applying it here puts it in os.environ once, so cc_env inherits it like any
+    # other setting and all five paths agree with the rest of the run.
+    _apply_scope(os.environ, (manifest.get("config") or {}))
     perf_dir = repo_root / PERF_DIR
     manifest_path = str(_latest_manifest(perf_dir))
     _seqf = Path(manifest_path).parent / "perf_seq_len"
