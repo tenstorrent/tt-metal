@@ -200,7 +200,7 @@ def discover(
     if case:
         cmd += ["-k", case]
     launch_ts = time.time()
-    rc, _ = _run_device_proc(
+    rc, _ = _run_device_step(
         cmd,
         perf_dir,
         cc_env(repo_root, devices),
@@ -375,7 +375,7 @@ def _gate_status(repo_root: Path, mcp_env: dict, devices: str) -> dict:
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)  # PERF_MCP_* so the gate targets this pipeline
-    rc, out = _run_device_proc(
+    rc, out = _run_device_step(
         [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
         repo_root / PERF_DIR,
         env,
@@ -523,7 +523,7 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     # (6 x a 281 s capped baseline) when it needed 1734 s. `fullpipe` has its own history and its own
     # cold start, expressed in baseline-profile units like every other op.
     _fp_op = "fullpipe"
-    rc, out = _run_device_proc(
+    rc, out = _run_device_step(
         [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
         repo_root / PERF_DIR,
         env,
@@ -758,7 +758,7 @@ def _run_op_sigs(repo_root: Path, mcp_env: dict, devices: str, node: str, case, 
     cmd = [_python_bin(repo_root), str(repo_root / CC_DIR / "_op_sig_probe.py"), node]
     if case:
         cmd.append(case)
-    rc, raw = _run_device_proc(
+    rc, raw = _run_device_step(
         cmd,
         repo_root,
         env,
@@ -3369,6 +3369,8 @@ def _warn_gate_broken(exc: BaseException) -> None:
 
 
 _THERMAL_WATCH_REPORT_S = 300.0
+_THERMAL_ABORTED = [False]
+_THERMAL_ABORT_RETRIES = 2
 
 
 def _thermal_watch_new() -> dict:
@@ -3433,6 +3435,41 @@ def timed_op_for(env, fallback: str = "profile") -> str:
     except Exception:  # noqa: BLE001
         capped = True
     return fallback if capped else "fullpipe"
+
+
+def _run_device_step(*args, **kwargs):
+    """_run_device_proc, retried when the board got too hot to keep going.
+
+    THE STEP IS RE-RUN, NOT THE RUN. Killing the whole optimize run over a temperature is a heavy
+    answer to a recoverable problem: the round's ledger, its baseline and its best-so-far are all
+    still good, and the board only needs a few minutes. Ending the CHILD releases the device (the
+    driver cleans up, observed every time a run was killed today), the launch gate then cools to
+    _COOL_BACK_TO_C before the relaunch, and the caller sees one slower step instead of a failure.
+
+    Bounded, because a board that reaches the abort line three times running is not going to be
+    fixed by a fourth attempt -- at that point the last result is returned and the ordinary failure
+    handling upstream takes it from there.
+    """
+    for attempt in range(1 + _THERMAL_ABORT_RETRIES):
+        _THERMAL_ABORTED[0] = False
+        result = _run_device_proc(*args, **kwargs)
+        if not _THERMAL_ABORTED[0]:
+            return result
+        if attempt >= _THERMAL_ABORT_RETRIES:
+            print(
+                "  [thermal-abort] the board reached the abort limit on every attempt (%d); "
+                "returning the last result rather than retrying forever" % (attempt + 1),
+                file=sys.stderr,
+                flush=True,
+            )
+            return result
+        print(
+            "  [thermal-abort] retrying that step from a cool board (attempt %d of %d)"
+            % (attempt + 2, _THERMAL_ABORT_RETRIES + 1),
+            file=sys.stderr,
+            flush=True,
+        )
+    return result
 
 
 def _run_device_proc(
@@ -3540,6 +3577,23 @@ def _run_device_proc(
             while proc.poll() is None:
                 time.sleep(5)
                 _thermal_watch_sample(_therm, label)
+                # ABOVE THE ABORT LINE, END THE CHILD RATHER THAN WATCH IT COOK. The ceiling holds
+                # work at a boundary; inside one long job there is no boundary to hold at, and the
+                # board did 75C -> 95C with none available on 2026-08-29. Raising the same exception
+                # the stall detector raises reuses the kill + _reclaim_device path below verbatim --
+                # the child dies, the device is released, and _run_device_proc's caller retries it
+                # from cool rather than the whole run starting over.
+                _hot, _hot_c = _perf_mcp().board_over_abort_limit()
+                if _hot:
+                    _THERMAL_ABORTED[0] = True
+                    print(
+                        "  [thermal-abort] %s: board at %.1fC -- ending this step and re-running it "
+                        "once the board is cool, rather than holding the device at this temperature"
+                        % (label or "device subprocess", _hot_c if _hot_c is not None else -1.0),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    raise subprocess.TimeoutExpired(cmd, int(time.monotonic() - start))
                 now = time.monotonic()
                 # A cooling child is idle ON PURPOSE: it is sleeping against a thermometer, so it
                 # burns no CPU and prints only when the temperature moves. Both of this loop's

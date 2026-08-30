@@ -3497,6 +3497,33 @@ def _read_die_temp_c():
 
 _SAFETY_CEILING_C = 90.0
 _COOL_BACK_TO_C = 65.0
+_ABORT_CEILING_C = 95.0
+
+
+def board_over_abort_limit():
+    """(over, temp) -- is the board hot enough that work in flight should be ENDED, not waited on?
+
+    _SAFETY_CEILING_C holds work at a boundary, which is the cheap and safe lever, and it is enough
+    whenever boundaries come round. They do not always: a baseline measurement is ONE continuous job
+    -- you cannot pause halfway through timing something -- and with a cold kernel cache it runs for
+    twelve minutes instead of two. Measured 2026-08-29: the last boundary passed at 74C, heavy work
+    began, and the board went 75C -> 90C in four and a half minutes and 95C over the next ten, with
+    no boundary in between. The ceiling was checked at every boundary and was correctly silent at
+    every one; nothing was left to check when it mattered.
+
+    So there is a second, higher line for the case the ceiling cannot reach. Above it the only safe
+    action is to END the child: a process holding the device cannot be paused mid-kernel without
+    risking a wedge, but killing one is clean -- the driver releases everything, observed repeatedly.
+    95C, five degrees above the hold and three or four below where this board has actually lost chips
+    (98.7C and 98.8C), so an abort has room to land before the silicon stops answering.
+    """
+    try:
+        cur = _read_die_temp_c()
+        if cur is None:
+            return False, None
+        return cur >= _ABORT_CEILING_C, cur
+    except Exception:  # noqa: BLE001 -- a thermometer that cannot be read must never stop the work
+        return False, None
 
 
 def cool_if_over_safety_ceiling(label: str = "") -> bool:
