@@ -287,6 +287,15 @@ struct MappedShm {
     const ttnvtop::UtilShmHeader* header = nullptr;
     const ttnvtop::PerCoreView* cores = nullptr;
     std::string path;
+    // WHICH INODE this mapping is of, not just which path.
+    //
+    // A collector restart replaces the file at the same path with a NEW inode: the old one
+    // is unlinked, and an unlinked inode that someone still has mapped stays alive and
+    // frozen forever. Matching on path alone kept that dead mapping and rendered its last
+    // frame indefinitely while /dev/shm was perfectly fresh -- the whole "the TUI is hung,
+    // values look stale, restarting the viewer fixes it" symptom.
+    dev_t st_dev = 0;
+    ino_t st_ino = 0;
 };
 
 // Program name registry mapping. Read-only view of the writer-side circular
@@ -375,6 +384,8 @@ bool map_shm(const std::string& path, MappedShm& out) {
         return false;
     }
     out.map_size = static_cast<size_t>(st.st_size);
+    out.st_dev = st.st_dev;
+    out.st_ino = st.st_ino;
     out.map = ::mmap(nullptr, out.map_size, PROT_READ, MAP_SHARED, out.fd, 0);
     if (out.map == MAP_FAILED) {
         out.map = nullptr;
@@ -573,10 +584,17 @@ int main(int argc, char* argv[]) {
                 [&](MappedShm& m) {
                     bool still_there = false;
                     for (const auto& e : entries) {
-                        if (e.path == m.path) {
-                            still_there = true;
-                            break;
+                        if (e.path != m.path) {
+                            continue;
                         }
+                        // Same path is NOT the same file. Compare the inode: if the
+                        // collector was restarted, the name now points somewhere else and
+                        // what we hold is a frozen orphan. Treat it as gone so the loop
+                        // below re-maps the live one.
+                        struct stat st{};
+                        still_there =
+                            ::stat(e.path.c_str(), &st) == 0 && st.st_dev == m.st_dev && st.st_ino == m.st_ino;
+                        break;
                     }
                     if (!still_there) {
                         unmap_shm(m);

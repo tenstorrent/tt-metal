@@ -3402,7 +3402,13 @@ int main(int argc, char* argv[]) {
                     try {
                         chip.aiclk_mhz = chip.cores.front().device->get_clock();
                     } catch (const std::exception&) {
-                        chip.aiclk_mhz = 0;
+                        // KEEP THE LAST GOOD VALUE. get_clock() is a legacy ARC message on
+                        // Wormhole and it times out intermittently -- observed rotating
+                        // between chips run to run (5, 7, then 4, 6, 7), which is a flaky
+                        // mailbox, not a chip whose clock is genuinely 0. Zeroing on every
+                        // transient failure made the viewer flip to "@ 0 MHz" and back,
+                        // which reads as broken telemetry. 0 now means only "never read
+                        // successfully", which is what the viewer's "unknown" branch means.
                     }
                 }
             }

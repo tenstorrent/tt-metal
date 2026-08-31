@@ -2400,3 +2400,65 @@ agree to 1.00 at all four load levels. Nothing to fix.
   - All of the above is the HOST-DRAIN path. The on-chip aggregator path has not been put
     through this ramp, and it is the path with the different arithmetic (busy/wall deltas
     folded on-chip). It needs the same treatment before the aggregator numbers are trusted.
+
+## 5x. The frozen TUI is a VIEWER bug: it matches by path, but the inode changes -- 2026-08-31
+
+The screenshot that "looks soooo wrong" showed every core on a chip reporting the identical
+value (chip 0: all 64 at 0.8%, chip 3: all at 16.2%) with `@ 0 MHz` on chip 7, and was
+byte-identical to a screenshot taken much earlier in the session. At that moment the live
+SHM said something else entirely:
+
+    tt_device_0_util age=0.04s aiclk=1000 F distinct=1 (min 0.0 max 0.0)
+    ... all eight chips: fresh, all zeros, no workload running ...
+
+Fresh files, zeros in them, and a viewer on screen showing 16.2%. The viewer was not
+reading the files it appeared to be reading.
+
+`refresh_maps()` decides an existing mapping is still valid by comparing the PATH. A
+collector restart unlinks the file and creates a new inode at the same name; an unlinked
+inode that someone still has mapped stays alive and frozen forever. So the viewer held a
+dead orphan, rendered its last frame indefinitely, and looked perfectly healthy doing it.
+Now it compares `st_dev`/`st_ino` and re-maps when the inode changes.
+
+This is the same class of bug as 5v(a) and its exact counterpart: there, the PUBLISHER
+unlinked and stole the name; here the READER failed to notice the name had been re-pointed.
+Fixing only the publisher side left this half live -- a collector restart still froze the
+view, which is why "restarting the viewer fixes it" was the observed workaround.
+
+It also explains why my calibration in 5w passed while the display was wrong: the probe
+reads SHM directly, so it never went through the viewer's mapping. And note what the
+calibration did NOT check -- it regressed CHIP AVERAGES against a known duty cycle and
+never once asserted that per-core values are LOCALIZED. A bug handing every core the same
+number would have passed all of 5w. The uniform-across-64-cores appearance is still
+unexplained and is now the open question; `Fnz` from 5w (41.9 of 64 nonzero at 8.7% duty)
+says the host path does differentiate cores, so the uniformity may be the frozen frame
+rather than a real mapping defect -- but that is a hypothesis, not a measurement.
+
+### AICLK dropouts were self-inflicted blanking
+
+`aiclk=0` rotated between chips run to run (5,7 then 4,6,7), which is a flaky ARC mailbox,
+not a clock that is genuinely zero. The telemetry thread zeroed the field on every
+transient `get_clock()` failure, so the viewer flipped to "@ 0 MHz" and back. It now keeps
+the last good value, and 0 means only "never read successfully".
+
+### BOARD DOWN -- and it was my doing
+
+After the calibration the T3K wedged with:
+
+    Timeout waiting for Ethernet core service remote IO request.
+    Location: /project/device/common/utils.hpp:178
+
+Every entry point hits it -- collector discovery aborts, and `tt-smi -ls` and `tt-smi -r`
+both fail inside re-initialization. `tt-smi -r` does reset the PCI devices [0,1,2,3] and
+then fails re-init, twice, because the wedge is on the REMOTE chips' ethernet and a PCIe
+reset of the MMIO ASICs does not reach it. This needs a power cycle.
+
+The cause was mine: I ran `pkill -9` on the collector. Killing a process mid-tunnel-
+transaction is the documented way to wedge the remote-IO path, and the shutdown watchdog
+added in 5v exists precisely so that SIGKILL is never necessary -- the collector now leaves
+on its own in 6 s. Use SIGINT and wait. Do not use -9 on this tool.
+
+Unrelated and still unexplained: a Llama-70B run and an earlier collector both aborted
+inside UMD's `wait_arc_core_start`/`read_from_arc_csm` with 1000 ms ARC timeouts before any
+of this, on a board already carrying 37k+ AER entries. The ARC path on this board is flaky
+independently of the ethernet wedge.
