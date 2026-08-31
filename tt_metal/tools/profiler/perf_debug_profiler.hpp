@@ -307,6 +307,8 @@ private:
     void start_fabric_sync(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
     void publish_fabric_sync_corrections();
     void log_fabric_sync_closure(bool final_report);
+    // Draw the sync exchanges onto the eth lanes that carried them (initiator zone, responder marker).
+    void render_fabric_sync_into_tracy();
     void fabric_sync_disable_devices();  // early in stop(): no new rounds while the drain quiesces
     void stop_fabric_sync();
 

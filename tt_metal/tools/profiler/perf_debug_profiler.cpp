@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>  // std::memcpy for the fabric-sync config re-arm
 #include <fstream>
 #include <iterator>
 #include <optional>
@@ -2084,12 +2085,20 @@ double fabric_sync_hz() {
 
 struct PerfDebugProfiler::FabricSyncState {
     static constexpr uint32_t kNSamples = tt::tt_fabric::router_sync::kMaxSamples;
+    // Cap on per-edge render data, so a long soak cannot grow this without bound (a 20 Hz link at
+    // 16 samples/round fills this in ~10 min of continuous syncing; beyond that the drawing stops
+    // but the MEASUREMENT is untouched).
+    static constexpr size_t kMaxDraws = 200000;
 
     struct End {
         uint32_t chip = 0;
         CoreCoord logical;
         CoreCoord virt;
         uint32_t blk_addr = 0;
+        // Saved Cfg body (flags..peer_blk), so the aggregator can RE-ARM this end. The hook zeroes
+        // its own block at kernel start, so every fabric re-init silently unconfigures the hook.
+        uint32_t cfg[7] = {};
+        bool cfg_valid = false;
     };
     struct Round {
         uint64_t t0[kNSamples] = {}, t1[kNSamples] = {}, t2[kNSamples] = {};
@@ -2113,6 +2122,14 @@ struct PerfDebugProfiler::FabricSyncState {
         int64_t off_min = 0, off_max = 0;
         double residual_last = 0.0;
         uint64_t stray_samples = 0;  // which/side mismatches (should stay 0)
+        // Render data for the Tracy consumer, filled at SOLVE time so only samples the solver
+        // actually accepted are drawn: an FSYNC_RTT zone on the INITIATOR lane spanning t0 -> t2
+        // (its width IS the measured round trip) and an FSYNC_ECHO marker on the RESPONDER lane
+        // at t1 (the instant that ping was observed).
+        struct Draw {
+            uint64_t t0 = 0, t1 = 0, t2 = 0;
+        };
+        std::vector<Draw> draws;
     };
     std::vector<Edge> edges;
     // (chip << 32 | vx << 16 | vy) -> (edge index, 0 = initiator end, 1 = responder end)
@@ -2136,6 +2153,7 @@ struct PerfDebugProfiler::FabricSyncState {
     bool publish = false;
     int64_t baseline = 0;
     bool disabled_devices = false;
+    uint64_t rearms = 0;  // times a router relaunch wiped a config and the aggregator rewrote it
 
     static uint64_t core_key(uint32_t chip, uint32_t vx, uint32_t vy) {
         return (static_cast<uint64_t>(chip) << 32) | (static_cast<uint64_t>(vx) << 16) | vy;
@@ -2303,7 +2321,7 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
 
     // ---- write configs: responder first, magic last ----
     using namespace tt::tt_fabric::router_sync;
-    auto write_cfg = [&](const FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
+    auto write_cfg = [&](FabricSyncState::End& en, bool initiator, uint64_t interval, uint32_t peer_blk) {
         uint32_t body[7];  // flags .. peer_blk (Cfg minus magic)
         body[0] = kFlagEnabled | (initiator ? kFlagInitiator : 0);
         body[1] = static_cast<uint32_t>(interval & 0xFFFFFFFFu);
@@ -2315,6 +2333,8 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
         cluster.write_core(body, sizeof(body), tt_cxy_pair(en.chip, en.virt), en.blk_addr + 4);
         const uint32_t magic = kCfgMagic;
         cluster.write_core(&magic, sizeof(magic), tt_cxy_pair(en.chip, en.virt), en.blk_addr);
+        std::memcpy(en.cfg, body, sizeof(body));
+        en.cfg_valid = true;
     };
     for (auto& e : st->edges) {
         if (e.init.blk_addr == 0) {
@@ -2356,8 +2376,40 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
         uint64_t last_log_solved = 0;
         auto last_pub = std::chrono::steady_clock::now();
         auto last_dbg = std::chrono::steady_clock::now();
+        auto last_rearm = std::chrono::steady_clock::now();
         while (!st->stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+            // ---- RE-ARM: the config does NOT survive a fabric re-init ----
+            // The hook zeroes its own block at kernel start (init()), and the host wrote the config
+            // exactly once at start_fabric_sync. So the first time fabric tears down and relaunches
+            // its routers, magic goes to 0 and the hook parks in state 1 (unconfigured) for the rest
+            // of the run -- it keeps ticking, it is just never asked for another round. Symptom is a
+            // run that solves ONE round and then reports `device init ok/fail 1/0` forever.
+            // Keyed on the magic only: fabric_sync_disable_devices() clears FLAGS and deliberately
+            // leaves magic valid, so teardown is never fought by this.
+            if (!st->disabled_devices &&
+                std::chrono::steady_clock::now() - last_rearm >= std::chrono::milliseconds(100)) {
+                last_rearm = std::chrono::steady_clock::now();
+                const uint32_t magic_v = kCfgMagic;
+                for (auto& e : st->edges) {
+                    // responder first, then initiator -- same order as the initial write, so the
+                    // initiator can never start a round against an unconfigured peer
+                    for (auto* en : {&e.resp, &e.init}) {
+                        if (!en->cfg_valid || en->blk_addr == 0) {
+                            continue;
+                        }
+                        uint32_t magic = 0;
+                        cluster.read_core(&magic, sizeof(magic), tt_cxy_pair(en->chip, en->virt), en->blk_addr);
+                        if (magic == magic_v) {
+                            continue;
+                        }
+                        cluster.write_core(en->cfg, sizeof(en->cfg), tt_cxy_pair(en->chip, en->virt), en->blk_addr + 4);
+                        cluster.write_core(&magic_v, sizeof(magic_v), tt_cxy_pair(en->chip, en->virt), en->blk_addr);
+                        st->rearms++;
+                    }
+                }
+            }
             {
                 std::lock_guard<std::mutex> lk(st->mu);
                 batch.swap(st->q);
@@ -2419,6 +2471,9 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
                             r.t0[i], r.t1[i], r.t2[i],
                             static_cast<int64_t>(r.t1[i]) - static_cast<int64_t>(mid),
                             r.t2[i] - r.t0[i], mid});
+                        if (e.draws.size() < FabricSyncState::kMaxDraws) {
+                            e.draws.push_back({r.t0[i], r.t1[i], r.t2[i]});
+                        }
                     }
                     if (trips.size() < 4) {
                         e.rounds_dropped++;
@@ -2693,6 +2748,108 @@ void PerfDebugProfiler::fabric_sync_disable_devices() {
     }
 }
 
+// Draw the in-router fabric sync onto the two eth lanes that actually carried it: one FSYNC_RTT zone
+// per accepted sample on the INITIATOR lane (t0 -> t2, so the box width is the measured round trip)
+// and one FSYNC_ECHO marker on the RESPONDER lane at t1. This is what makes the sync VISIBLE -- the
+// PP_SYNC packets are routed OUT of the record stream at decode and never reach a consumer, so
+// without this the exchanges exist only in the log.
+//
+// Same shape and the same deferral as the eth-tracker ribbon: called at teardown, when the receiver
+// consumers are already down and nothing else is pushing into the handler. Tracy requires
+// non-decreasing zone END per (context, thread), so each lane is sorted on the field that lane is
+// keyed by -- t2 for the initiator zones, t1 for the responder markers.
+void PerfDebugProfiler::render_fabric_sync_into_tracy() {
+    auto* st = fabric_sync_;
+    if (st == nullptr || tracy_ == nullptr) {
+        return;
+    }
+    static constexpr std::string_view kRtt = "FSYNC_RTT";
+    static constexpr std::string_view kEcho = "FSYNC_ECHO";
+    auto& cluster = MetalContext::instance().get_cluster();
+    uint64_t zones = 0, marks = 0, links = 0;
+    bool capped = false;
+    for (const auto& e : st->edges) {
+        if (e.draws.empty()) {
+            continue;
+        }
+        // Tracy lanes are keyed by NOC0 and the sync state carries LOGICAL -- convert, exactly as the
+        // eth tracker does. A bad mapping would silently draw onto some other core's row.
+        CoreCoord in0, rn0;
+        try {
+            in0 = cluster.get_physical_coordinate_from_logical_coordinates(
+                e.init.chip, e.init.logical, CoreType::ETH, /*no_warn=*/true);
+            rn0 = cluster.get_physical_coordinate_from_logical_coordinates(
+                e.resp.chip, e.resp.logical, CoreType::ETH, /*no_warn=*/true);
+        } catch (const std::exception&) {
+            continue;
+        }
+        tracy_->RegisterEthCore(e.init.chip, in0.x, in0.y);
+        tracy_->RegisterEthCore(e.resp.chip, rn0.x, rn0.y);
+        capped = capped || e.draws.size() >= FabricSyncState::kMaxDraws;
+        std::vector<FabricSyncState::Edge::Draw> d(e.draws);
+
+        std::sort(d.begin(), d.end(), [](const auto& a, const auto& b) { return a.t2 < b.t2; });
+        for (const auto& dr : d) {
+            if (dr.t2 < dr.t0) {
+                continue;
+            }
+            perf_debug::WorkerZonePacket z;
+            z.chip_id = e.init.chip;
+            z.core_virtual_x = static_cast<uint32_t>(in0.x);
+            z.core_virtual_y = static_cast<uint32_t>(in0.y);
+            z.core_noc0_x = static_cast<uint32_t>(in0.x);
+            z.core_noc0_y = static_cast<uint32_t>(in0.y);
+            z.risc = 0;
+            z.timer_id = 0;
+            z.name = kRtt;
+            z.start = dr.t0;
+            z.end = dr.t2;
+            z.color = 0x9B59B6u;  // purple: in-router fabric sync, distinct from the tracker teal
+            tracy_->HandleWorkerZone(z);
+            zones++;
+        }
+
+        std::sort(d.begin(), d.end(), [](const auto& a, const auto& b) { return a.t1 < b.t1; });
+        for (const auto& dr : d) {
+            perf_debug::WorkerEventPacket pe;
+            pe.chip_id = e.resp.chip;
+            pe.core_virtual_x = static_cast<uint32_t>(rn0.x);
+            pe.core_virtual_y = static_cast<uint32_t>(rn0.y);
+            pe.core_noc0_x = static_cast<uint32_t>(rn0.x);
+            pe.core_noc0_y = static_cast<uint32_t>(rn0.y);
+            pe.risc = 0;
+            pe.id = 0;
+            pe.name = kEcho;
+            pe.timestamp = dr.t1;
+            pe.num_values = 0;
+            tracy_->HandleWorkerEvent(pe);
+            marks++;
+        }
+        links++;
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC drawn {} -> {}: {} FSYNC_RTT zone(s) on initiator eth "
+            "NOC0 ({},{}) + {} FSYNC_ECHO marker(s) on responder eth NOC0 ({},{})",
+            e.init.chip,
+            e.resp.chip,
+            d.size(),
+            in0.x,
+            in0.y,
+            d.size(),
+            rn0.x,
+            rn0.y);
+    }
+    if (links != 0) {
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FABRIC SYNC: {} zone(s) + {} marker(s) drawn across {} eth link(s){}",
+            zones,
+            marks,
+            links,
+            capped ? " -- DRAW CAP HIT, the tail is not drawn" : "");
+    }
+}
+
 void PerfDebugProfiler::stop_fabric_sync() {
     auto* st = fabric_sync_;
     if (st == nullptr) {
@@ -2727,6 +2884,7 @@ void PerfDebugProfiler::stop_fabric_sync() {
             stat_i >> 8, stat_i & 0xFF, stat_r >> 8, stat_r & 0xFF, e.in_tree ? "" : " [closure]");
     }
     log_fabric_sync_closure(true);
+    render_fabric_sync_into_tracy();
     // planes=2 cross-check: when the resident-pair tracker measured the same links on FREE channels,
     // print the two instruments' disagreement per shared chip pair.
     if (eth_track_ != nullptr) {
@@ -2764,8 +2922,10 @@ void PerfDebugProfiler::stop_fabric_sync() {
     }
     log_info(
         tt::LogMetal,
-        "[perf-debug profiler] FABRIC SYNC: {} samples reached the sink end to end",
-        st->sink_samples);
+        "[perf-debug profiler] FABRIC SYNC: {} samples reached the sink end to end; {} config re-arm(s) "
+        "after router relaunch",
+        st->sink_samples,
+        st->rearms);
     delete st;
     fabric_sync_ = nullptr;
 }
