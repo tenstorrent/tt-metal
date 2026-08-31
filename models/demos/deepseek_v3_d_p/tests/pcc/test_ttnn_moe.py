@@ -1005,8 +1005,9 @@ def test_kimi_k3_moe(
 # reference is a different class; the shared run_model body is unchanged.
 #
 # 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite. 128 experts at top-4 exercises
-# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. Random weights
-# only: the checkpoint stacks the routed experts, so the pretrained fixture loads attention alone.
+# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. 3200 x dgs 8 =
+# 25600 tokens is the same shape at 5x the load. Random weights only: the checkpoint stacks the
+# routed experts, so the pretrained fixture loads attention alone.
 #
 # GPT_DEVICE, not DEVICE_FP32. Mistral's router is softmax -> top-4 -> renormalize, which at zero
 # bias equals top-4 on the raw logits followed by softmax over the selection -- what the GPT gate
@@ -1022,6 +1023,7 @@ def test_kimi_k3_moe(
     [
         # fmt: off
         pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
         # fmt: on
     ],
 )
