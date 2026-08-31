@@ -563,6 +563,20 @@ struct ChipState {
     // only one chip of eight ever had its sampler period reasserted or probed.
     uint64_t last_period_assert_us = 0;
     uint64_t last_period_probe_us = 0;
+
+    // JOURNAL FEED (the on-chip aggregator as the data source for this chip).
+    //
+    // When an aggregator is running on this chip we publish from ITS accumulators instead
+    // of draining 64 per-core rings ourselves, and we stop the ring drain for this chip
+    // entirely. That is not merely an optimisation: on a remote chip the per-core drain
+    // measured 0.1-0.2 Hz and 99.4-99.9% sample loss under a CCL workload, while the
+    // aggregator measured lost=0 on every remote chip across four runs. Dropping the
+    // 64 KiB-per-pass tunnel traffic also removes the contention that caused it.
+    bool journal_active = false;
+    tt::umd::CoreCoord journal_core{};
+    uint32_t journal_num_cores = 0;
+    std::vector<int> journal_to_core;  // journal state index -> index into `cores`
+    std::vector<uint32_t> prev_busy, prev_wall, prev_seq;
     uint64_t drain_lost_samples = 0;  // count of entries dropped because head moved more than ring capacity (debug)
     uint64_t drain_entries_seen = 0;  // total ring entries ingested across all cores (debug)
 
@@ -1069,6 +1083,74 @@ int main(int argc, char* argv[]) {
             }
         }
         std::cout << "tunnel pinned on " << pinned_chips << " remote chip(s).\n";
+    }
+
+    // Bind each chip to a running aggregator, if there is one.
+    //
+    // The journal's states[] are indexed exactly as the kernel addresses the grid:
+    //   i -> translated (xs[i % nx], ys[i / nx])
+    // (eth_aggregator.cpp ring_base_of). Reproducing that mapping is mandatory -- getting
+    // it wrong would publish real numbers against the wrong cores, which is worse than
+    // publishing nothing.
+    if (!cli.journal_probe && cli.fidelity_probe_s == 0 && cli.launch_artifact.empty() && !cli.stop_aggregator &&
+        cli.peek.empty() && cli.watchdog_s == 0 && !cli.read_latency_probe) {
+        const uint64_t now_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        for (auto& chip : chips) {
+            if (chip.cores.empty()) {
+                continue;
+            }
+            auto* dev = chip.cores.front().device;
+            SocDescriptor soc(std::make_shared<SocArchDescriptor>(chip.arch), dev->get_chip_info());
+            const auto found = ttnvtop_agg::probe_landings(dev, soc, now_us, chip.arch);
+            if (found.empty()) {
+                continue;
+            }
+            const auto& l = found.front();
+            std::set<uint32_t> xs, ys;
+            for (const auto& c : soc.get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
+                xs.insert(static_cast<uint32_t>(c.x));
+                ys.insert(static_cast<uint32_t>(c.y));
+            }
+            const std::vector<uint32_t> xv(xs.begin(), xs.end()), yv(ys.begin(), ys.end());
+            if (xv.empty() || yv.empty() || l.num_cores != xv.size() * yv.size()) {
+                std::cerr << "  chip " << chip.chip_id << ": journal reports " << l.num_cores
+                          << " cores but the grid is " << xv.size() << "x" << yv.size() << " — refusing to map\n";
+                continue;
+            }
+            std::unordered_map<uint64_t, int> by_translated;
+            for (size_t i = 0; i < chip.cores.size(); ++i) {
+                by_translated
+                    [(static_cast<uint64_t>(chip.cores[i].translated.x) << 32) |
+                     static_cast<uint32_t>(chip.cores[i].translated.y)] = static_cast<int>(i);
+            }
+            chip.journal_to_core.assign(l.num_cores, -1);
+            size_t mapped = 0;
+            for (uint32_t i = 0; i < l.num_cores; ++i) {
+                const uint64_t key = (static_cast<uint64_t>(xv[i % xv.size()]) << 32) | yv[i / xv.size()];
+                auto it = by_translated.find(key);
+                if (it != by_translated.end()) {
+                    chip.journal_to_core[i] = it->second;
+                    ++mapped;
+                }
+            }
+            if (mapped != l.num_cores) {
+                std::cerr << "  chip " << chip.chip_id << ": mapped only " << mapped << "/" << l.num_cores
+                          << " journal cores — refusing to publish from it\n";
+                chip.journal_to_core.clear();
+                continue;
+            }
+            chip.journal_active = true;
+            chip.journal_core = l.core;
+            chip.journal_num_cores = l.num_cores;
+            chip.prev_busy.assign(l.num_cores, 0);
+            chip.prev_wall.assign(l.num_cores, 0);
+            chip.prev_seq.assign(l.num_cores, 0);
+            std::cout << "chip " << chip.chip_id << (chip.is_remote ? " (remote)" : " (mmio)")
+                      << ": publishing from the ON-CHIP AGGREGATOR at eth (" << l.core.x << "," << l.core.y << "), "
+                      << l.num_cores << " cores — per-core ring drain disabled for this chip\n";
+        }
     }
 
     if (chips.empty()) {
@@ -2396,6 +2478,9 @@ int main(int argc, char* argv[]) {
         std::vector<uint8_t> buf(kSamplerSize);
         uint64_t reattach_throttle_us = 0;
         auto& chip = chips[chip_idx];
+        if (chip.journal_active) {
+            return;  // the aggregator feeds this chip; do not add tunnel traffic
+        }
         while (!g_stop.load(std::memory_order_relaxed)) {
             const auto loop_t0 = std::chrono::steady_clock::now();
             const uint64_t now_us =
@@ -2725,6 +2810,88 @@ int main(int argc, char* argv[]) {
             }
         }
     };
+    // JOURNAL FEED THREAD: the on-chip aggregator -> shm, so the viewers see the lossless
+    // source instead of a per-core drain that reads 0.1 Hz on a busy remote chip.
+    //
+    // Two small reads per chip per tick (header + state table, ~2 KB) against the 64 KiB
+    // the ring drain moved, and the accumulators are MONOTONIC -- a late or missed read
+    // costs staleness, never data, which is the property the whole design rests on. So
+    // this loop cannot lose samples no matter how contended the tunnel gets; that is why
+    // it is the answer for remote chips.
+    auto journal_feed = [&]() {
+        std::vector<uint8_t> buf;
+        while (!g_stop.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            for (auto& chip : chips) {
+                if (!chip.journal_active) {
+                    continue;
+                }
+                const uint32_t nc = chip.journal_num_cores;
+                const uint32_t bytes = util_agg_bytes_for(nc);
+                buf.assign(bytes, 0);
+                auto* dev = chip.cores.front().device;
+                try {
+                    dev->read_from_device(buf.data(), chip.journal_core, ttnvtop_agg::landing_base(chip.arch), bytes);
+                } catch (const std::exception&) {
+                    continue;
+                }
+                util_agg_hdr_view_t hdr{};
+                std::memcpy(&hdr, buf.data(), sizeof(hdr));
+                // A remote read arrives in 16 B chunks from different moments, so the
+                // header's self-check is not optional.
+                if (hdr.magic != UTIL_AGG_MAGIC || !util_agg_hdr_ok(hdr)) {
+                    continue;
+                }
+                for (uint32_t i = 0; i < nc; ++i) {
+                    const int ci = chip.journal_to_core[i];
+                    if (ci < 0) {
+                        continue;
+                    }
+                    util_agg_core_state_t st{};
+                    std::memcpy(
+                        &st, buf.data() + sizeof(util_agg_msg_t) + i * sizeof(util_agg_core_state_t), sizeof(st));
+                    if (st.seq == chip.prev_seq[i]) {
+                        continue;  // this core's block has not been rewritten since last read
+                    }
+                    // Unsigned subtraction is wrap-correct; both counters are u32 and
+                    // wall_cycles wraps every ~4.3 s at 1 GHz, which is why the drain must
+                    // read faster than that (10 Hz here, three orders of margin).
+                    const uint32_t dbusy = st.busy_cycles - chip.prev_busy[i];
+                    const uint32_t dwall = st.wall_cycles - chip.prev_wall[i];
+                    chip.prev_busy[i] = st.busy_cycles;
+                    chip.prev_wall[i] = st.wall_cycles;
+                    chip.prev_seq[i] = st.seq;
+                    if (dwall == 0) {
+                        continue;
+                    }
+                    double util = static_cast<double>(dbusy) / static_cast<double>(dwall);
+                    util = std::clamp(util, 0.0, 1.0);
+                    auto& v = chip.publisher.cores()[static_cast<size_t>(ci)];
+                    // counter_sel says WHICH pipe the accumulated deltas came from, so the
+                    // number lands in the matching field rather than being asserted as FPU.
+                    if (st.counter_sel == 1u) {
+                        v.sfpu_busy_p1000 = static_cast<uint16_t>(util * 1000.0);
+                    } else {
+                        v.compute_busy_p1000 = static_cast<uint16_t>(util * 1000.0);
+                    }
+                    v.samples_seen = st.samples;
+                    if (st.kernel_id != 0) {
+                        v.last_kernel_id = (st.kernel_id >> 10) & 0x1FFFFFu;
+                    }
+                }
+                chip.publisher.mark_updated();
+            }
+        }
+    };
+    std::thread journal_feed_thread;
+    {
+        const bool any_journal =
+            std::any_of(chips.begin(), chips.end(), [](const ChipState& c) { return c.journal_active; });
+        if (any_journal) {
+            journal_feed_thread = std::thread(journal_feed);
+        }
+    }
+
     std::vector<std::thread> ring_drain_threads;
     ring_drain_threads.reserve(chips.size());
     for (size_t i = 0; i < chips.size(); ++i) {
@@ -2788,6 +2955,9 @@ int main(int argc, char* argv[]) {
     sampler_thread.join();
     for (auto& t : ring_drain_threads) {
         t.join();
+    }
+    if (journal_feed_thread.joinable()) {
+        journal_feed_thread.join();
     }
     std::cout << "\nttnvtop-collector: exiting.\n";
     return 0;
