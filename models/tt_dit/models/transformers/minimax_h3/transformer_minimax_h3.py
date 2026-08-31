@@ -14,6 +14,7 @@ from ....layers.module import Module, ModuleList
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.tensor import from_torch
 from ....utils.tracing import traced_function
 from .adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -391,10 +392,38 @@ class MiniMaxH3Transformer3DModel(Module):
         self.audio_proj_out = Linear(hidden_size, audio_in_channels, bias=True, mesh_device=mesh_device)
 
     def set_vsa_stage(self, stage) -> None:
-        """Bind one geometry-specific VSA coarse stage to every block's attention (shared statics)."""
+        """Bind one geometry-specific VSA coarse stage to every block's attention (shared statics).
+
+        Also uploads the model-level pack/unpack row maps: `forward` gathers the assembled sequence
+        into VSA tile order before the block stack and back to packed order after the output heads.
+        Pad slots replicate a valid row of their tile (finite don't-cares; the fine stage masks pad
+        key columns by valid count and pad-row outputs are dropped by the unpack gather).
+        """
         assert self.vsa_config is not None, "set_vsa_stage requires the model to be built with vsa_config"
         for block in self.transformer_blocks:
             block.attn.set_vsa_stage(stage)
+        self._vsa_geometry = stage.geometry
+        self._vsa_pack_idx = from_torch(
+            stage.geometry.row_source.to(torch.int32).reshape(1, -1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=None,
+        )
+        self._vsa_unpack_idx = from_torch(
+            stage.geometry.untile_index.to(torch.int32).reshape(1, -1),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=None,
+        )
+
+    def _vsa_gather_rows(self, x: ttnn.Tensor, idx: ttnn.Tensor) -> ttnn.Tensor:
+        """Reorder the rows of a replicated [1, 1, S, D] tensor by a [1, S'] row-index tensor."""
+        rows = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        rows = ttnn.reshape(rows, (rows.shape[2], rows.shape[3]))
+        gathered = ttnn.embedding(idx, rows)  # [1, S', D]
+        return ttnn.to_layout(ttnn.reshape(gathered, (1, 1, gathered.shape[-2], gathered.shape[-1])), ttnn.TILE_LAYOUT)
 
     def forward(
         self,
@@ -493,18 +522,32 @@ class MiniMaxH3Transformer3DModel(Module):
         # needed. The padding must stay at the tail: interior pad rows would be attended to as
         # keys and values by every real row, which is why unaligned modalities are handled by
         # changing the layout of the concat rather than by padding each modality.
-        alignment = self.sp_factor * tile
-        padded_len = ((seq_len + alignment - 1) // alignment) * alignment
-        pad_layout = ttnn.TILE_LAYOUT if tile_aligned else ttnn.ROW_MAJOR_LAYOUT
-        if not tile_aligned:
-            streams = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in streams]
-        hidden = ttnn.concat(streams, dim=2)
-        if padded_len != seq_len:
-            hidden = ttnn.concat([hidden, self._padding_rows(padded_len - seq_len, hidden.dtype, pad_layout)], dim=2)
-        if not tile_aligned:
-            # `padded_len` is a multiple of sp_factor * TILE, so the assembled sequence is tile
-            # aligned even though none of its parts was.
-            hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
+        if self.vsa_config is not None:
+            # VSA runs the whole block stack in tile order: gather the assembled rows through the
+            # pack map (which also realizes the tile padding -- pad slots replicate valid rows and
+            # are don't-cares), then fracture. rope/adaln inputs must already be in tile order.
+            if not hasattr(self, "_vsa_pack_idx"):
+                raise RuntimeError("vsa_config is set but no VSA stage is bound; call set_vsa_stage first")
+            if not tile_aligned:
+                streams = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in streams]
+            hidden = ttnn.concat(streams, dim=2)
+            hidden = self._vsa_gather_rows(hidden, self._vsa_pack_idx)
+            padded_len = hidden.shape[2]
+        else:
+            alignment = self.sp_factor * tile
+            padded_len = ((seq_len + alignment - 1) // alignment) * alignment
+            pad_layout = ttnn.TILE_LAYOUT if tile_aligned else ttnn.ROW_MAJOR_LAYOUT
+            if not tile_aligned:
+                streams = [ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT) for t in streams]
+            hidden = ttnn.concat(streams, dim=2)
+            if padded_len != seq_len:
+                hidden = ttnn.concat(
+                    [hidden, self._padding_rows(padded_len - seq_len, hidden.dtype, pad_layout)], dim=2
+                )
+            if not tile_aligned:
+                # `padded_len` is a multiple of sp_factor * TILE, so the assembled sequence is tile
+                # aligned even though none of its parts was.
+                hidden = ttnn.to_layout(hidden, ttnn.TILE_LAYOUT)
         hidden = ttnn.mesh_partition(hidden, 2, cluster_axis=self.sp_mesh_axis)
 
         # 3. One timestep embedding per distinct noise level, shared by every AdaLN projection. With
@@ -551,7 +594,11 @@ class MiniMaxH3Transformer3DModel(Module):
             audio_all = self.ccl_manager.all_gather_persistent_buffer(audio_all, dim=2, mesh_axis=self.sp_mesh_axis)
 
         # 7. Select each modality's rows out of the reassembled global sequence. The reference runs both
-        # heads over every row and selects afterwards, which is what this does.
+        # heads over every row and selects afterwards, which is what this does. Under VSA the heads
+        # ran in tile order, so gather back to packed order first (dropping pad rows).
+        if self.vsa_config is not None:
+            video_all = self._vsa_gather_rows(video_all, self._vsa_unpack_idx)
+            audio_all = self._vsa_gather_rows(audio_all, self._vsa_unpack_idx)
         audio_start = l_len + c_len
         video_start = audio_start + a_len
         video_out = ttnn.slice(video_all, [0, 0, video_start, 0], [1, 1, seq_len, video_all.shape[-1]])

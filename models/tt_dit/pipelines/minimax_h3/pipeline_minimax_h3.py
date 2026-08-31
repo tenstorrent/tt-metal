@@ -256,7 +256,12 @@ class MiniMaxH3Pipeline:
         topology: ttnn.Topology | None = None,
         coresident: bool | None = None,
         task: str = "t2va",
+        vsa_config=None,
     ) -> None:
+        # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
+        # untouched; a MiniMaxH3VSAConfig selects the sparse path and runs the whole packed
+        # sequence in VSA tile order. t2va/fl2va layouts only in v0.
+        self.vsa_config = vsa_config
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         # Only consult the preset for what the caller left unset, so an untuned shape with every
@@ -855,6 +860,7 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             precomputed_adaln=True,
             cache_padding=self.trace_denoise,
+            vsa_config=self.vsa_config,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
@@ -868,7 +874,8 @@ class MiniMaxH3Pipeline:
             # The `_precomputed_adaln` term keeps these caches distinct from any full-tensor-set
             # cache (the parity test builds the projected model), and the partition term keeps the
             # two partitions -- which share a repository and a config -- from hashing to one entry.
-            subfolder=f"{self.transformer_subfolder}_precomputed_adaln",
+            # VSA adds the 50 zero-init `to_gate_compress` tensors to the set, so it caches apart.
+            subfolder=f"{self.transformer_subfolder}_precomputed_adaln" + ("_vsa" if self.vsa_config else ""),
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
@@ -876,6 +883,52 @@ class MiniMaxH3Pipeline:
         )
         self._transformer = model
         return model
+
+    def _prepare_vsa(self, transformer, layout, num_latent_frames: int, latent_height: int, latent_width: int):
+        """Build the request's VSA tile geometry and bind one shared coarse stage to the model.
+
+        v0 supports the standard `[text | cond | audio | video]` packing (t2va / fl2va): condition
+        keyframes are one 1D exempt segment, matching FastVideo's `_h3_vsa_prefix_segments`.
+        Cached per geometry signature so repeated requests at one shape re-upload nothing.
+        """
+        from ..minimax_h3.vsa_geometry import build_vsa_geometry
+        from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage
+
+        if layout.num_condition_audio_rows:
+            raise NotImplementedError("VSA v0 supports t2va/fl2va layouts only (no audio condition rows)")
+        p_t, p_h, p_w = self.transformer_config["patch_size"]
+        grid = (num_latent_frames // p_t, latent_height // p_h, latent_width // p_w)
+        n_text = int(layout.text_indices.numel())
+        n_cond = int(layout.num_condition_video_rows)
+        n_audio = int(layout.audio_indices.numel())
+        n_video = grid[0] * grid[1] * grid[2]
+        if n_text + n_cond + n_audio + n_video != layout.sequence_length:
+            raise ValueError(
+                f"VSA prefix segments ({n_text}, {n_cond}, {n_audio}) + video {n_video} do not sum to "
+                f"sequence length {layout.sequence_length}"
+            )
+
+        signature = (n_text, n_cond, n_audio, grid, self.vsa_config)
+        if getattr(self, "_vsa_signature", None) != signature:
+            geometry = build_vsa_geometry(
+                (n_text, n_cond, n_audio), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
+            )
+            self._vsa_stage = MiniMaxH3VSACoarseStage(
+                geometry,
+                sparsity=self.vsa_config.sparsity,
+                head_dim=self.transformer_config["attention_head_dim"],
+                mesh_device=self.mesh_device,
+                sp_axis=self.sp_axis,
+                ccl_manager=self.ccl_manager,
+            )
+            self._vsa_signature = signature
+            logger.info(
+                f"VSA geometry: {geometry.n_tiles} tiles ({geometry.n_pad_tiles} pad), "
+                f"k={self._vsa_stage.k} of {self._vsa_stage.n_candidates} candidates, "
+                f"placement={self.vsa_config.placement}"
+            )
+        transformer.set_vsa_stage(self._vsa_stage)
+        return self._vsa_stage.geometry
 
     def _adaln_cache_path(self, num_inference_steps: int) -> Path:
         """Disk location for a built table.
@@ -980,16 +1033,22 @@ class MiniMaxH3Pipeline:
     def patch_size(self) -> tuple[int, int, int]:
         return tuple(self.transformer_config["patch_size"])
 
-    def _device_metadata(self, layout: MiniMaxH3PackedSequence, padded_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _device_metadata(
+        self, layout: MiniMaxH3PackedSequence, padded_len: int, geometry=None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Rotary tables for the padded global sequence, sharded on SP the way the model fractures it.
 
         Pad rows are excluded from attention by ring attention's `logical_n`, so their rotary values
         are arbitrary --- but they must exist, hence the zero tail rather than a shorter table.
         """
-        pad = padded_len - layout.sequence_length
         position_ids = layout.position_ids
-        if pad:
-            position_ids = torch.cat([position_ids, torch.zeros(pad, 3, dtype=position_ids.dtype)])
+        if geometry is not None:
+            # VSA tile order: permute rows; pad slots replicate a valid row of their tile.
+            position_ids = geometry.permute_metadata(position_ids, dim=0)
+        else:
+            pad = padded_len - layout.sequence_length
+            if pad:
+                position_ids = torch.cat([position_ids, torch.zeros(pad, 3, dtype=position_ids.dtype)])
         cos, sin = build_rope_tables(position_ids, rope_freq_dim=self.rope_freq_dim, rope_theta=self.rope_theta)
         cos, sin = prepare_rope_tables(cos, sin, self.transformer_config["attention_head_dim"])
         rotary_dim = cos.shape[-1]
@@ -1006,11 +1065,14 @@ class MiniMaxH3Pipeline:
 
         return seq_sharded(cos), seq_sharded(sin)
 
-    def _row_indices(self, values: torch.Tensor, padded_len: int) -> ttnn.Tensor:
+    def _row_indices(self, values: torch.Tensor, padded_len: int, geometry=None) -> ttnn.Tensor:
         """An integer per-row index tensor, ROW_MAJOR and sharded on SP along the row axis."""
-        pad = padded_len - values.shape[0]
-        if pad:
-            values = torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
+        if geometry is not None:
+            values = geometry.permute_metadata(values, dim=0)
+        else:
+            pad = padded_len - values.shape[0]
+            if pad:
+                values = torch.cat([values, torch.zeros(pad, dtype=values.dtype)])
         return from_torch(
             values.to(torch.int32).reshape(1, 1, 1, padded_len),
             device=self.mesh_device,
@@ -1614,6 +1676,9 @@ class MiniMaxH3Pipeline:
         # build, which is paid once per (checkpoint, schedule).
         transformer = self._prepare_transformer()
         adaln_cache = self._prepare_adaln_cache(num_inference_steps)
+        vsa_geometry = None
+        if self.vsa_config is not None:
+            vsa_geometry = self._prepare_vsa(transformer, layout, num_latent_frames, latent_height, latent_width)
         t0 = time.time()
         video_rows, audio_rows = self._denoise(
             transformer,
@@ -1625,6 +1690,7 @@ class MiniMaxH3Pipeline:
             audio_scheduler,
             adaln_cache,
             condition_spec=condition_spec,
+            vsa_geometry=vsa_geometry,
         )
         t_denoise = time.time() - t0
         timings.append(("Denoise", t_denoise))
@@ -1733,6 +1799,7 @@ class MiniMaxH3Pipeline:
         audio_scheduler: MiniMaxH3Scheduler,
         adaln_cache,
         condition_spec: Sequence[tuple[str, int]] | None = None,
+        vsa_geometry=None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Denoise in place. `video_rows` is `[condition rows | target rows]`, cond first, as the
         reference's `latents` is; `num_condition_video_rows` is 0 for `t2va`. `audio_rows` is the same
@@ -1761,8 +1828,12 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time()
         anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         anchor_audio_rows = audio_rows[:num_cond_audio].clone() if num_cond_audio else None
-        alignment = self.sp_factor * ttnn.TILE_SIZE
-        padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
+        if vsa_geometry is not None:
+            # VSA tile order realizes its own padding (whole zero-valid tiles, SP-aligned).
+            padded_len = vsa_geometry.padded_len
+        else:
+            alignment = self.sp_factor * ttnn.TILE_SIZE
+            padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
         self.last_padded_len = padded_len
         logger.info(
             f"packed sequence {layout.sequence_length} -> {padded_len} padded, "
@@ -1774,7 +1845,7 @@ class MiniMaxH3Pipeline:
         # `num_cond_audio` on, and raises if a conditioning row moved. Hoisting them is
         # bit-identical and worth ~0 % of wall time, the upload having overlapped device work.
         t_rope = time.time()
-        rope_cos, rope_sin = self._device_metadata(layout, padded_len)
+        rope_cos, rope_sin = self._device_metadata(layout, padded_len, geometry=vsa_geometry)
         t_rope = time.time() - t_rope
         tt_cond = []
         video_cursor = audio_cursor = 0
@@ -1846,8 +1917,10 @@ class MiniMaxH3Pipeline:
             position = torch.tensor([int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype)
             step_row_index = adaln_cache.step_offset(i) + position[row_index]
 
-            tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)
-            tt_tsi = self._row_indices(step_row_index, padded_len)
+            tt_adaln = self._row_indices(
+                adaln_indices(layout.token_tags, step_row_index), padded_len, geometry=vsa_geometry
+            )
+            tt_tsi = self._row_indices(step_row_index, padded_len, geometry=vsa_geometry)
 
             if traced:
                 video_velocity, audio_velocity = transformer.traced_step(

@@ -1,5 +1,27 @@
 # VSA v0 implementation plan
 
+## Status (2026-08-31, end of first session)
+
+| Item | State | Evidence |
+|---|---|---|
+| Machine bring-up | ✅ | bare-metal build + venv; eth link retrained via glx_reset; smoke test PCC 99.9995% |
+| R1 host geometry | ✅ | `vsa_geometry.py`; 14 CPU tests incl. bit-exact vs vendored upstream at 4 shapes |
+| Topk spike | ✅ resolved | `topk_large_indices` exact, 0.83 ms at [1,14,226,1808] k=192; no fallback needed |
+| R4 `vsa_sdpa` op | ✅ | 11 device tests: m∈{1,3}, ragged/non-uniform/dense/single-block rows, 14 heads |
+| R3 coarse stage | ✅ | `vsa_stages_minimax_h3.py`; 4 device tests vs oracle (sp=1), + coarse+fine e2e |
+| R2 KV all-gather | ✅ | persistent-buffer AG in the attention VSA branch (4x8 tests exercise it) |
+| R5 attention path | ✅ | 4x8: sparsity0≡ring PCC 99.98%; vs torch oracle 99.5% (gate/placement matrix) |
+| R5 traced block | ✅ | 15s/768p block traced+untraced, full gate branch, finite output |
+| R6b/c production | ✅ | 15s/768p PCC 99.41%, 1280x768/39f 99.31% (zero gate), 99.35% (random gate) |
+| R5 model+pipeline plumbing | ✅ code, model tests pending | pack/unpack gathers in model forward; `_prepare_vsa` + tiled metadata in pipeline |
+| R6a/R6d model level | tests written, running | `test_vsa_transformer_minimax_h3.py` |
+| Full pipeline run w/ VSA | ⬜ untested | plumbing in place (`MiniMaxH3Pipeline(vsa_config=...)`); needs a real-checkpoint generation run |
+| R6a "config off bit-identical" | by construction + dense regression test | every change branches on `vsa_config`/geometry being set |
+
+Residual PCC vs the fp32 torch oracle (~99.3-99.5% on random data) is dominated by near-tie
+top-k selection across the bf16/fp32 boundary — index sets are compared as sets with ties
+tolerated per the scope; the dense-set comparison (sparsity 0) sits at 99.98%.
+
 Companion to `VSA_SCOPE.md` (requirements). Facts below were surveyed from this tree; upstream
 FastVideo reference files are vendored in `vsa_reference/` (from
 github.com/hao-ai-lab/FastVideo @ main, 2026-08-31).
