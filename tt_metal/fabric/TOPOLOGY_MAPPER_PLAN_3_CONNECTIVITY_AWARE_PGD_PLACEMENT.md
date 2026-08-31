@@ -1,0 +1,134 @@
+# Plan 3 — Connectivity-aware PGD grouping placement
+
+**Priority: 2.** This is the plan that actually answers #54623.
+
+Tracking issue: [#54623 — \[Auto-mapper\] Verify inter-mesh connectivity in heterogeneous placements via
+SAT-based joint planning](https://github.com/tenstorrent/tt-metal/issues/54623)
+Related: #40640 (SAT engine), #50510 (epic), #52016 (pipeline-stage adjacency in MGD).
+Sibling plans: [Plan 1 — PGD-shape-aware inter-mesh constraints](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md),
+[Plan 2 — incremental inter-mesh solving](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.md).
+
+> **Goal.** Take the logical mesh-level adjacency graph into account when choosing PGD groupings, so the
+> selected placements are seam-compatible by construction instead of accidentally so.
+
+Plans 1 and 2 make the *inter-mesh solve* cheap and correct. Neither stops Phase 6 from choosing a
+disjoint packing whose seams are unroutable — that is this plan.
+
+---
+
+## 1. Where placements are chosen today
+
+`build_physical_multi_mesh_adjacency_graph`, `tt_metal/fabric/topology_mapper_utils.cpp:838`:
+
+| Phase | Lines | What happens |
+| --- | --- | --- |
+| 2 | `882` | `get_valid_groupings_for_mgd` → candidate groupings per mesh shape |
+| 3 | `907–951` | Per shape: `find_all_in_psd` → candidate `PsdPlacement`s; precompute one chip bitmask per placement (`927–946`) |
+| 5 | `993–1058` | One `MeshEnumState` per shape: its own logical subgraph (`1037`), its own physical graph, its own `TopologyMappingEnumerationSession` |
+| 6 | `1085–1458` | `DisjointPackingSearch`: DFS over one cached placement per shape |
+| 7 | `1480–1515` | Re-key winners under logical MeshId; build the combined graph |
+
+## 2. The gap
+
+`DisjointPackingSearch` accepts any combination of per-shape placements that is **chip-disjoint** — the
+only test is `bitset_disjoint` (`1103`). Each shape's placements were enumerated independently by its
+own session (`pull_next_solution`, `1151`) against the logical subgraph built at `1037–1051`. That
+subgraph comes from `build_mgd_mesh_level_subgraph_for_mesh_descriptor_name` (`1037`), which keeps
+**only the FABRIC edges between meshes of the same shape** — every cross-shape edge is dropped on the
+floor.
+
+So for the issue's worked example (a ring alternating shapes A and B, where *every* hop crosses shapes)
+each shape's subgraph has no edges at all. The placer packs A's meshes adjacently and B's meshes
+adjacently, produces a perfectly disjoint solution, and strands half the ring. This is the failure mode
+in #54623 verbatim.
+
+It gets *more* likely as shapes approach physical capacity: packing slack is what accidentally saves
+the seams today, and slack vanishes exactly when the MGD is interesting.
+
+## 3. Design — cross-shape seam feasibility as a first-class filter
+
+Keep the per-shape enumeration (it is what makes the search tractable) and add a **seam check** to the
+combination step, plus a **seam-aware ordering** so good combinations surface early.
+
+Three layers, cheapest first.
+
+### (a) Seam check at the leaf of the packing DFS
+
+When a full combination is assembled, every logical mesh has a physical region. Walk the MGD's
+cross-shape mesh-level edges and require each to land on a physical region pair with at least one link —
+and, in `STRICT`, at least the requested channel count. Reject the combination otherwise, exactly like
+the overlap rejection.
+
+This needs a **region-adjacency oracle**: given two candidate placements (chip sets), how many links run
+between them? Build it once from the PSD flat graph (`build_flat_adjacency_map_from_psd`, `737`) at the
+same point the per-placement bitmasks are built (`927–946`): for each ordered pair of candidate
+placements across shapes, count flat-graph edges crossing the two footprints. Cost is bounded by
+`Σ_placements (chips × degree)`, i.e. one pass over the PSD edge list per placement pair bucket — the
+same order as the bitmask precompute already accepted there.
+
+### (b) Seam-aware ordering
+
+Sort each shape's cached placements by how many cross-shape seams they can still satisfy, so the DFS
+meets a viable combination before exhausting the pathological ones. The existing order is "largest
+embedding first" (`embedding_sizes`, `1189`); add seam degree as the tie-break.
+
+### (c) Push seams into the SAT — the issue's "joint planning"
+
+The end state in #54623 is one solve where disjointness *and* connectivity are both hard. That means
+abandoning per-shape independent sessions for a single mesh-level problem over all shapes, with
+region-adjacency encoded as support clauses. The mechanism already exists for intra-shape edges:
+`topology_sat_encode_adjacency_support`, step 6 of `topology_sat_encode_hard_constraints`
+(`topology_solver_sat.cpp:1130–1180`).
+
+Layers (a) and (b) are worth doing first regardless: they are small, they make the failure *loud*
+instead of silent, and they give a correctness oracle to test (c) against.
+
+## 4. Ownership and function passing
+
+| Concern | Owner | Notes |
+| --- | --- | --- |
+| Cross-shape logical edges | New `build_mgd_cross_shape_mesh_level_edges(mgd, mgd_intermesh_mesh_level)` next to `build_mgd_mesh_level_subgraph_for_mesh_descriptor_name` (`1037`) | Returns `vector<tuple<MeshId, MeshId, channels>>`; the exact complement of what the per-shape subgraph keeps |
+| Region adjacency | New `PlacementAdjacencyOracle`, built in Phase 3 beside `group_bits_by_name` (`927`) | Owns `link_count(shape_a, idx_a, shape_b, idx_b)`; built from `flat_graph`, which Phase 3 already holds |
+| Seam check | `DisjointPackingSearch` leaf (`1085–1458`) | Takes `const PlacementAdjacencyOracle&` and the cross-shape edge list by const ref; no ownership |
+| Placement ordering | `pull_next_solution` / the per-shape caches (`1151–1192`) | Seam degree computed from the oracle at insert time, stored next to `embedding_sizes` (`1189`) |
+| Diagnostics | The existing `TT_THROW` at `1472` | Must distinguish "no disjoint packing" from "disjoint packing exists but seam L_i—L_j is unroutable" — the second is the actionable message and the one #54623 asks for |
+
+`PlacementAdjacencyOracle` should be a plain struct in `topology_mapper_utils.cpp`'s anonymous namespace
+until layer (c) needs it in the header. Key it by `(shape_name, placement_index)` — the same key space
+`group_bits_by_name` and `placements_by_shape` already use — so no new index mapping is introduced.
+
+## 5. Interaction with Plan 1
+
+Complementary, and they compose cleanly. Plan 1 fixes *which physical region a logical mesh may use*,
+given a set of regions. This plan fixes *which set of regions gets chosen*. Doing 3 without 1 still
+leaves the inter-mesh solve free to permute within a shape class; doing 1 without 3 leaves the seam
+problem intact. Both are needed to close #54623.
+
+## 6. Validation
+
+- The issue's 4-slot cycle example is small enough to encode directly as a unit test in
+  `tests/tt_metal/tt_fabric/fabric_router/test_topology_mapper_utils.cpp`: 4 physical slots in a cycle,
+  4 logical meshes alternating two shapes, assert the mapper produces the interleaved placement and not
+  the packed one.
+- `bh_glx_2branch_mesh_per_stage_router_pipeline.textproto`: assert every declared MGD boundary resolves
+  to ≥1 channel — the router mesh at fabric degree 4 is the sharpest case, since three of its four seams
+  cross shapes.
+- Extend the `bh-heterogeneous` CI group in
+  `tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh` with a boundary-resolution assertion
+  rather than only `TestGalaxyLayoutCheck`.
+
+## 7. Open questions
+
+- Should the seam check be hard, or hard-with-soft-fallback like the host cap? The issue argues hard
+  ("fails loudly with an infeasibility core"); the host-cap precedent argues for an orchestration-level
+  relaxation. **Recommend hard**, since an unroutable seam is a wrong answer rather than a suboptimal
+  one.
+- Is the full pairwise oracle affordable at SC36 scale, or does it need to be built lazily per queried
+  pair? The bitmask precompute is `O(placements)`; the oracle is `O(placements²)` in the worst case.
+  Lazy-with-memo is the obvious fallback if the eager build shows up in profiles.
+- Where does #52016 (pipeline-stage adjacency in MGD) intersect? If stage adjacency becomes explicit in
+  the MGD, the cross-shape edge list gets richer semantics — ordered pipeline hops rather than
+  undirected seams — and the seam check could enforce direction as well as existence.
+- Does layer (c) subsume layers (a) and (b), or should the leaf check stay as a cheap assertion even
+  after the joint SAT lands? Keeping it is a guard against encoding bugs, at the cost of one extra walk
+  per accepted solution.
