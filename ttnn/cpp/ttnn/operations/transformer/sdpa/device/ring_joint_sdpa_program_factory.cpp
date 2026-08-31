@@ -2502,15 +2502,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //                          float per owner -- chunk ids [base*C+F, base*C+2F) are then never
     //                          scheduled (silent garbage). And balanced_skip_q's parity decision
     //                          desyncs injector from receivers at the float slot -> hang.
-    //   !kv_pad_rotation_enabled  MEASURED hang (see below). Root cause: under kv-pad the KERNELS
-    //                          replace the host mask with a device-derived one, so the host cannot
-    //                          know which iterations run; a skipped iteration means the donor never
-    //                          flushes and the receiver waits on a semaphore nobody posts.
-    //   active_ring_iter_mask == full_ring_iter_mask  restricts the feature to CHUNKED prefill, and
-    //                          that is broader than it looks: ring_mla hardcodes is_causal, and
-    //                          kernel_is_causal = is_causal && !kernel_chunked, so DENSE causal ring
-    //                          MLA always has a partial mask (device 0 keeps 1 of ring_size iters)
-    //                          and is excluded too. Same handoff failure as above.
+    //   (!kv_pad_rotation_enabled was here and has been REMOVED -- kv-pad now rotates. See the
+    //    rot_active_ordinal note in the predicate for why the device-derived mask stopped mattering.)
+    //   (active_ring_iter_mask == full_ring_iter_mask was here and has been REMOVED -- partial masks
+    //    are handled by ordinal indexing. See the predicate. It still feeds the log line below, which
+    //    reports whether the mask was full, since that is useful context when reading a decline.)
     //   (rot_float_chunks != 0 and rot_rows_needed < grid_size.y were COST guards here and have
     //    been REMOVED -- see the predicate for why both are provable no-ops rather than guards.)
     //   rot_base_chunks >= 1   definitional. At base 0 the first failure is actually the compute
@@ -2580,32 +2576,27 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // rotated ownership rather than merely coexist. A joint K (L != 0) would likewise add
         // per-iteration chunks this schedule does not count; unreachable today, since joint tensors
         // are a video-gen shape and latent-V an MLA one, but validation does not forbid the pair.
-        !args.is_balanced && !kv_pad_rotation_enabled &&
-        // Partial masks: the ordinal fix is known, and there is nothing to test it on. Building the
-        // rotation cycle over the ORDINAL sequence of active iterations (rather than absolute t) makes
-        // a skipped iteration harmless, since the handoff is then always between consecutive ACTIVE
-        // iterations; the writer can derive the same ordinal by popcount of active_ring_iter_mask, so
-        // it costs no runtime arg. I implemented that and verified it is a no-op for chunked prefill
-        // (full mask => ordinal == t: accuracy 10 passed, determinism 4, perf unchanged), then
-        // REVERTED it, because no configuration in the tree can exercise it:
-        //   - kv-pad partial masks are device-derived, so the host cycle cannot match them (measured
-        //     hang, see the kv-pad note below);
-        //   - the only other source of a partial mask is DENSE causal (ring_iter_does_work drops
-        //     device_index < ring_id when !is_balanced), and the sole dense ring-MLA config,
-        //     mla_100k, is is_balanced=True -- which both trips !args.is_balanced above AND makes the
-        //     mask full, since balanced disables that causal drop.
-        // So relaxing this today would ship an unexercised relaxation of a hang-prone contract. If a
-        // non-balanced dense ring-MLA config ever lands, the ordinal cycle is the fix.
+        !args.is_balanced &&
+        // Partial active masks are handled, not excluded. The rotation schedule is indexed by the
+        // ORDINAL of an iteration within the active subsequence (rot_active_ordinal, in
+        // chunked_prefill_utils.hpp) rather than by absolute ring_iter, so a skipped iteration is
+        // harmless: consecutive ordinals are consecutive EXECUTED iterations, which is the only thing
+        // the donor-signal / receiver-wait pair actually requires. For a full mask ordinal ==
+        // ring_iter identically, so chunked prefill is bit-identical to before.
         //
-        // Ring shape: the rotation cycle needs every iteration active. No ring_size bounds needed.
-        // The old ring_size <= 8 cap was the semaphore budget, gone now that the handoff is O(1) in
-        // ring_size; ring_size <= 32 (the width of the per-iteration masks) is already enforced by
-        // build_runtime_derivation. Rings above 8 are unvalidated -- no Blackhole system has one
-        // today -- but are where a static split wastes the most, since the spare +1 slot is paid on
-        // every iteration. A degenerate ring_size <= 1 needs no guard either: rot_handoff_sem_count
-        // clamps to 1 so the kernel's slot array and modulo stay well-formed, and iteration 0 never
-        // receives a float.
-        active_ring_iter_mask == full_ring_iter_mask &&
+        // This is also what unblocked kv-pad, and the reason two earlier attempts failed. Both tried
+        // to make the HOST agree with the device about which iterations run -- impossible under
+        // kv_pad_from_metadata, where the kernels overwrite active_ring_iter_mask from trace metadata
+        // the host never sees. The host does not need to agree: every per-ordinal entry it emits is
+        // already a valid partition of all Q chunks, and the KERNELS choose which entries get used.
+        // All three read the same device-derived mask before their ring loop (reader :506, writer
+        // :569, compute via cb_kv_pad_derived) and all three `continue` past inactive iterations on
+        // it, so their ordinals cannot diverge.
+        //
+        // No guard is needed for the last active iteration either: is_last_active_ring_iter is
+        // mask-aware, so that iteration takes the final-output branch and creates NO deferred save,
+        // which means the host's float_dest at the last ordinal is simply never read -- no unpaired
+        // donor signal, no stale semaphore.
         // Degenerate cases need NO guard: they are provably no-ops, and both were measured.
         // rot_float_chunks == 0 (work divides evenly): with no floats, every core's rotated range
         // i*base .. i*base+base-1 is IDENTICAL to its static range on every iteration, so the

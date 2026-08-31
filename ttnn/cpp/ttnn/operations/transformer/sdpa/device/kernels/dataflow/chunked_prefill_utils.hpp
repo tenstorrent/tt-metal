@@ -70,6 +70,36 @@ constexpr bool kt_inplace_v_enabled(bool v_shares_k_buffer, uint32_t Sq_chunk_t)
 // budget with ring length.
 constexpr uint32_t kRotHandoffSemDepth = 3;
 
+// Ordinal of ring iteration `ring_iter` within the ACTIVE subsequence: how many active iterations
+// precede it. All three kernels index the rotation schedule by this instead of by absolute
+// ring_iter, and all three `continue` past inactive iterations on the same mask, so they stay in
+// lockstep.
+//
+// Why this is the fix and not a workaround: the float handoff is a donor signal in one iteration
+// paired with a receiver wait in the NEXT, so it is only well-formed between CONSECUTIVE EXECUTED
+// iterations. Indexed by absolute ring_iter, a skipped iteration t+1 means the donor never runs the
+// flush that carries its signal while the receiver at t+2 still waits -> hang. Indexed by ordinal,
+// consecutive ordinals ARE consecutive executed iterations, so the pair cannot straddle a skip.
+//
+// For a full mask ordinal == ring_iter identically, so this is a provable no-op for chunked prefill.
+// It is what lets the kv-pad path rotate at all: there the mask is DEVICE-derived from trace
+// metadata the host never sees, so the host cannot build a cycle matching it -- but it does not need
+// to, because every per-ordinal entry the host emits is already a valid partition of all Q chunks,
+// and the kernels merely choose which entries get used.
+//
+// Assumes the caller consults the mask at all: with sliding window every active check
+// short-circuits on has_sliding_window and the mask is bypassed, but rotation excludes that path.
+constexpr uint32_t rot_active_ordinal(uint32_t active_ring_iter_mask, uint32_t ring_iter) {
+    const uint32_t before = ring_iter >= 32 ? 0xFFFFFFFFu : ((1u << ring_iter) - 1u);
+    uint32_t bits = active_ring_iter_mask & before;
+    uint32_t count = 0;
+    while (bits) {
+        bits &= bits - 1u;  // clear lowest set bit
+        ++count;
+    }
+    return count;
+}
+
 // Number of handoff semaphores to allocate/read for a given ring size. Host and kernel derive it
 // from this one place so the runtime-arg count can't drift.
 constexpr uint32_t rot_handoff_sem_count(uint32_t ring_size) {

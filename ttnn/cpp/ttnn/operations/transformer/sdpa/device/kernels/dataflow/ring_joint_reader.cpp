@@ -752,7 +752,9 @@ void kernel_main() {
         // The factory precomputes this row's mcast slot count per ring iteration (its row max, so
         // members with less real work still run the padded handshakes), superseding the static
         // per-chain maxima used by every other schedule.
-        const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+        // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rot_active_ordinal.
+        const uint32_t rot_ordinal = rot_active_ordinal(active_ring_iter_mask, ring_iter);
+        const uint32_t rot_iter_base = rot_args_base + rot_ordinal * rot_iter_stride;
         const uint32_t loop_q_count = get_arg_val<uint32_t>(rot_iter_base);
         const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base + 1);
 #else

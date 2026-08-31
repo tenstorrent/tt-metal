@@ -516,13 +516,15 @@ void kernel_main() {
     for (uint32_t sem_slot = 0; sem_slot < rot_sem_count; ++sem_slot) {
         rot_sem_ids[sem_slot] = get_arg_val<uint32_t>(argidx++);
     }
-    // ring_iter >= 1 at both call sites: iteration 0 neither receives a float nor has a deferred
-    // save to flush. The modulo keeps an underflowed index in range, so a violation would NOT
-    // fault -- donor and receiver would quietly pick different slots and hang. ASSERT is
-    // watcher-only, so this documents a host-schedule invariant rather than guarding it in release.
-    auto rot_sem_slot = [&](uint32_t ring_iter_1_based) {
-        ASSERT(ring_iter_1_based >= 1);
-        return (ring_iter_1_based - 1) % rot_sem_count;
+    // Takes the ACTIVE ORDINAL, not absolute ring_iter, so donor and receiver agree even when the
+    // mask skips iterations between them (see rot_active_ordinal). Ordinal >= 1 at both call sites:
+    // the first active iteration neither receives a float nor has a deferred save to flush. The
+    // modulo keeps an underflowed index in range, so a violation would NOT fault -- donor and
+    // receiver would quietly pick different slots and hang. ASSERT is watcher-only, so this
+    // documents a host-schedule invariant rather than guarding it in release.
+    auto rot_sem_slot = [&](uint32_t ordinal_1_based) {
+        ASSERT(ordinal_1_based >= 1);
+        return (ordinal_1_based - 1) % rot_sem_count;
     };
     const uint32_t rot_args_base = argidx;
 #endif
@@ -773,15 +775,20 @@ void kernel_main() {
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
 #ifdef ROTATED_Q_SPLIT
-            const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+            // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rot_active_ordinal.
+            const uint32_t rot_ordinal = rot_active_ordinal(active_ring_iter_mask, ring_iter);
+            const uint32_t rot_iter_base = rot_args_base + rot_ordinal * rot_iter_stride;
             // Chunks this core owns THIS iteration (base, or base+1 when it holds the float). Note
             // this shadows the static flat-split meaning that global_q_start/global_q_end carry.
             const uint32_t q_per_core = get_arg_val<uint32_t>(rot_iter_base);
             const uint32_t rot_has_mig_in_float = get_arg_val<uint32_t>(rot_iter_base + 1);
             const uint32_t rot_float_dest = get_arg_val<uint32_t>(rot_iter_base + 2);
             // Flat chunk id at slot `slot` of ring iteration `iter`'s list for this core.
-            auto rot_flat_at = [&](uint32_t iter, uint32_t slot) {
-                return get_arg_val<uint32_t>(rot_args_base + iter * rot_iter_stride + kRotWriterIterHeaderWords + slot);
+            // `ordinal` is an ACTIVE ordinal, so ordinal + 1 is the NEXT EXECUTED iteration -- which
+            // is what every cross-iteration caller below actually means.
+            auto rot_flat_at = [&](uint32_t ordinal, uint32_t slot) {
+                return get_arg_val<uint32_t>(
+                    rot_args_base + ordinal * rot_iter_stride + kRotWriterIterHeaderWords + slot);
             };
 #else
             const uint32_t q_per_core = global_q_end - global_q_start;
@@ -795,10 +802,10 @@ void kernel_main() {
             constexpr uint32_t kRotNoPrefetch = 0xFFFFFFFFu;
             auto rot_prefetch_target_flat = [&](uint32_t q_index) {
                 if (q_index + 1 < q_per_core) {
-                    return rot_flat_at(ring_iter, q_index + 1);
+                    return rot_flat_at(rot_ordinal, q_index + 1);
                 }
                 if (!is_last_ring_iter) {
-                    return rot_flat_at(ring_iter + 1, 0);
+                    return rot_flat_at(rot_ordinal + 1, 0);
                 }
                 return kRotNoPrefetch;
             };
@@ -887,7 +894,7 @@ void kernel_main() {
                 // restore reads, then reset the semaphore for the next (possibly cached) run.
                 if (rot_has_mig_in_float != 0 && next_q_index == last_q_index) {
                     // Never set on the first active iteration, so ring_iter >= 1 here.
-                    Semaphore<> handoff_sem(rot_sem_ids[rot_sem_slot(ring_iter)]);
+                    Semaphore<> handoff_sem(rot_sem_ids[rot_sem_slot(rot_ordinal)]);
                     handoff_sem.wait_min(rot_has_mig_in_float);
                     handoff_sem.set(0);
                 }
@@ -896,7 +903,7 @@ void kernel_main() {
                 const bool need_barrier = (next_trid != TRID_INNER || next_q_index == 1);
                 prefetch_for(
 #ifdef ROTATED_Q_SPLIT
-                    rot_flat_at(ring_iter, next_q_index),
+                    rot_flat_at(rot_ordinal, next_q_index),
 #else
                     global_q_start + next_q_index,
 #endif
@@ -941,7 +948,7 @@ void kernel_main() {
                 // Donor half of the float handoff. Floats sit last in the donor's list, so their
                 // deferred save always crosses the ring-iteration boundary and this flush runs
                 // during the RECEIVER's use iteration -- donor and receiver therefore index
-                // rot_sem_slot() with the same ring_iter (>= 1).
+                // rot_sem_slot() with the same ordinal (>= 1).
                 // A core can be donor and receiver in the SAME iteration (giving one float away and
                 // taking another). That is not a cycle, because the signal always precedes the wait.
                 // Receiving means holding a float, so q_per_core == base + 1 >= 3 and last_q_index
@@ -951,7 +958,7 @@ void kernel_main() {
                 // Barrier first: flushed-but-not-landed writes must not be visible as "ready".
                 if (deferred.mig_dest != kRotNoDest) {
                     noc.async_write_barrier<NocOptions::TXN_ID>({.trid = deferred.trid});
-                    Semaphore<>(rot_sem_ids[rot_sem_slot(ring_iter)])
+                    Semaphore<>(rot_sem_ids[rot_sem_slot(rot_ordinal)])
                         .up(noc, rot_dest_x(deferred.mig_dest), rot_dest_y(deferred.mig_dest), 1);
                     deferred.mig_dest = kRotNoDest;
                 }
@@ -962,7 +969,7 @@ void kernel_main() {
 #ifdef ROTATED_Q_SPLIT
             for (uint32_t q_index = 0; q_index < q_per_core; ++q_index) {
                 const auto decoded_q =
-                    decompose_global_q_index(rot_flat_at(ring_iter, q_index), num_q_chunks, NH, use_zigzag_balancing);
+                    decompose_global_q_index(rot_flat_at(rot_ordinal, q_index), num_q_chunks, NH, use_zigzag_balancing);
 #else
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                 const auto decoded_q =
@@ -1031,7 +1038,7 @@ void kernel_main() {
                 // already pending, which the identity-based early flush above handles instead.
                 const bool rot_postpone_cross_prefetch =
                     !is_last_ring_iter && q_index == last_q_index &&
-                    rot_flat_at(ring_iter + 1, 0) == rot_flat_at(ring_iter, q_index);
+                    rot_flat_at(rot_ordinal + 1, 0) == rot_flat_at(rot_ordinal, q_index);
 #endif
                 const bool defer_prefetch = balanced_skip_q && is_last_ring_iter;
                 if (!single_q_chunk && !is_first_active_iter && !defer_prefetch) {
@@ -1047,7 +1054,7 @@ void kernel_main() {
                 ) {
                     prefetch_for(
 #ifdef ROTATED_Q_SPLIT
-                        rot_flat_at(ring_iter + 1, 0),
+                        rot_flat_at(rot_ordinal + 1, 0),
 #else
                         /*pf_flat_q=*/global_q_start,
 #endif
@@ -1101,7 +1108,7 @@ void kernel_main() {
 #ifdef ROTATED_Q_SPLIT
                     // Only the last (float) slot can migrate; base chunks keep kRotNoDest.
                     deferred.mig_dest = (q_index == last_q_index) ? rot_float_dest : kRotNoDest;
-                    deferred.flat_q = rot_flat_at(ring_iter, q_index);
+                    deferred.flat_q = rot_flat_at(rot_ordinal, q_index);
 #endif
                 }
 
@@ -1112,7 +1119,7 @@ void kernel_main() {
                 if (rot_postpone_cross_prefetch) {
                     const uint32_t save_trid = deferred.trid;
                     flush_deferred_save();
-                    prefetch_for(rot_flat_at(ring_iter + 1, 0), save_trid, /*barrier_first=*/true);
+                    prefetch_for(rot_flat_at(rot_ordinal + 1, 0), save_trid, /*barrier_first=*/true);
                 }
 #endif
 

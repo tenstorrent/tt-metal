@@ -268,7 +268,11 @@ void kernel_main() {
 #ifdef ROTATED_Q_SPLIT
         // This iteration's [my_count, chunk ids...] block. Read once: the call below wants the
         // count as the q-loop end and the id-list base, and takes the mode selector separately.
-        const uint32_t rot_iter_base = rot_args_base + ring_iter * rot_iter_stride;
+        // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rot_active_ordinal. Compute reads
+        // the same device-derived mask the reader published through cb_kv_pad_derived, so the ordinal
+        // it computes is identical to the reader's and the writer's.
+        const uint32_t rot_ordinal = rot_active_ordinal(active_ring_iter_mask, ring_iter);
+        const uint32_t rot_iter_base = rot_args_base + rot_ordinal * rot_iter_stride;
         const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base);
 #endif
         // Sliding folds all local/halo source ranges into one synthetic local iteration.
