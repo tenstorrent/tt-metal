@@ -343,7 +343,7 @@ inline void read_k_chunk_fused(
  *  (edge-device empty directions are never required -- a band never lands in a shard the device does not
  *  receive). */
 struct FusedRingGate {
-    static constexpr uint32_t max_ring_size = 32;  // bounds the largest supported SP ring
+    static constexpr uint32_t max_ring_size = iscore::kMaxRingSize;
     using KLocalAcc = decltype(TensorAccessor(kl_args, uint32_t{}, uint32_t{}));
 
     uint32_t ring_index;

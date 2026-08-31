@@ -55,7 +55,7 @@ struct FusedRingConfig {
     ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
     uint32_t mesh_rows{0};
     uint32_t mesh_cols{0};
-    uint64_t route_plan_hash{0};
+    std::optional<uint64_t> route_plan_hash;
     // NOTE: the all-gather concat dim is structurally fixed to seq (dim 2) -- the reader's block-cyclic
     // permutation assumes it -- so it is a named constant at the AG call site, not a configurable field. The AG
     // workers' grid offset is likewise computed by the factory (reserved-column math), not carried here.

@@ -321,7 +321,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             ag.mesh_rows,
             ag.mesh_cols,
             ag.ring_size);
-        TT_FATAL(ag.route_plan_hash != 0, "Full-mesh RingJointSDPA requires a resolved direct-neighbor route hash");
+        TT_FATAL(
+            ag.route_plan_hash.has_value(), "Full-mesh RingJointSDPA requires a resolved direct-neighbor route hash");
         const auto live_shape = input_tensor_q.device()->shape();
         TT_FATAL(
             live_shape.dims() == 2 && live_shape[0] == ag.mesh_rows && live_shape[1] == ag.mesh_cols,
@@ -1146,7 +1147,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t mesh_rows = 0;
     uint32_t mesh_cols = 0;
-    uint64_t route_plan_hash = 0;
+    std::optional<uint64_t> route_plan_hash;
     if (full_mesh) {
         TT_FATAL(topology == ttnn::ccl::Topology::Ring, "ring_mla cluster_axis=None requires Ring topology");
         TT_FATAL(

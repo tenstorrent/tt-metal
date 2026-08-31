@@ -33,7 +33,7 @@ struct MeshRingPlan {
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
-    uint64_t route_plan_hash = 0;
+    std::optional<uint64_t> route_plan_hash;
 };
 
 struct MeshRingPosition {

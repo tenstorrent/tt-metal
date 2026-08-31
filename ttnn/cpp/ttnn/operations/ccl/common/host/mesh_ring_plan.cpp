@@ -262,6 +262,17 @@ std::optional<MeshRingPlan> resolve_mesh_ring_plan(
         }
         return std::nullopt;
     }
+
+    // The transport-to-tensor mapping is only valid for row-major mesh coordinates.
+    if (!has_row_major_mesh_coordinates(tensor)) {
+        if (log_rejection) {
+            log_warning(
+                tt::LogOp,
+                "{} full-mesh ring requires row-major mesh coordinates on the participating tensor",
+                operation_name);
+        }
+        return std::nullopt;
+    }
     for (const auto orientation :
          {ttnn::ccl::snake_ring::Orientation::Row, ttnn::ccl::snake_ring::Orientation::Column}) {
         const uint32_t lane_count = orientation == ttnn::ccl::snake_ring::Orientation::Row ? shape[0] : shape[1];

@@ -5,7 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "snake_ring.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/mesh/api.h"
@@ -53,7 +53,7 @@ template <
     uint32_t slice_step,
     uint32_t static_output_chunks_per_stripe,
     bool linearized_mesh_ring,
-    ttnn::operations::experimental::high_bw_all_gather::snake_ring::Orientation snake_orientation,
+    ttnn::ccl::snake_ring::Orientation snake_orientation,
     uint32_t mesh_rows,
     uint32_t mesh_cols>
 class OutputStripeIterator {
@@ -67,8 +67,7 @@ public:
             // Fabric walks a snake Hamiltonian ring, while tensor shards retain
             // normal row-major rank order. Translate the ring stripe here so
             // local copies and relays address the canonical output position.
-            stripe = ttnn::operations::experimental::high_bw_all_gather::snake_ring::row_major_index(
-                stripe, mesh_rows, mesh_cols, snake_orientation);
+            stripe = ttnn::ccl::snake_ring::row_major_index(stripe, mesh_rows, mesh_cols, snake_orientation);
         }
         if constexpr (static_output_chunks_per_stripe != 0) {
             output_chunks_per_stripe_ = static_output_chunks_per_stripe;

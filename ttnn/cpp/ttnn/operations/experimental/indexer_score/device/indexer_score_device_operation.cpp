@@ -261,7 +261,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     ttnn::ccl::snake_ring::Orientation fused_snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
     uint32_t fused_mesh_rows = 0;
     uint32_t fused_mesh_cols = 0;
-    uint64_t fused_route_plan_hash = 0;
+    std::optional<uint64_t> fused_route_plan_hash;
     if (attrs.fused_ring.has_value()) {
         const auto& fused = *attrs.fused_ring;
         fused_num_links = fused.num_links;
@@ -385,9 +385,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
             kls[2]);
         const uint32_t ring_size = program::ring_size_for(attrs, q);  // shared with the fused factory
         TT_FATAL(
-            ring_size <= 32,
-            "indexer_score fused: ring_size {} exceeds the reader's maximum supported ring size 32",
-            ring_size);
+            ring_size <= kMaxRingSize,
+            "indexer_score fused: ring_size {} exceeds the reader's maximum supported ring size {}",
+            ring_size,
+            kMaxRingSize);
         TT_FATAL(
             ks[2] == ring_size * kls[2],
             "indexer_score fused: gathered k seq {} must equal ring_size ({}) * k_local seq ({})",
@@ -1047,8 +1048,9 @@ ttnn::Tensor ring_indexer_score_dsa(
             q, std::nullopt, num_links, axis_topology, true, "ring_indexer_score_dsa");
         TT_FATAL(plan.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh snake ring");
         TT_FATAL(
-            plan->ring_size <= 32,
-            "ring_indexer_score_dsa supports at most 32 full-mesh ranks, got {}",
+            plan->ring_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
+            "ring_indexer_score_dsa supports at most {} full-mesh ranks, got {}",
+            ttnn::operations::experimental::indexer_score::kMaxRingSize,
             plan->ring_size);
         fused_ring.full_mesh = true;
         fused_ring.snake_orientation = plan->orientation;
