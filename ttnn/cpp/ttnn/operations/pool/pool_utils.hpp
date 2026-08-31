@@ -183,8 +183,7 @@ FactoryParameters get_factory_parameters(
     uint32_t in_w,
     const Layout& output_layout,
     bool force_max_tiles_per_reduction_4 = false,
-    bool single_reader_stream = false,
-    const std::vector<sliding_window::ShardBoundary>& shard_boundaries = {});
+    bool single_reader_stream = false);
 
 pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,

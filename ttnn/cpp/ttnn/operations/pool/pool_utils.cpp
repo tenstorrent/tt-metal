@@ -131,8 +131,7 @@ FactoryParameters get_factory_parameters(
     uint32_t in_w,
     const Layout& output_layout,
     bool force_max_tiles_per_reduction_4,
-    bool single_reader_stream,
-    const std::vector<sliding_window::ShardBoundary>& shard_boundaries) {
+    bool single_reader_stream) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = !single_reader_stream;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
@@ -194,16 +193,6 @@ FactoryParameters get_factory_parameters(
         MAX_TILES_PER_REDUCTION = 4;
     }
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-
-    // Sticks are dealt whole to (reader thread, NEO) lanes; every core's count must divide evenly.
-    for (const auto& boundary : shard_boundaries) {
-        const uint32_t core_out_nsticks = boundary.output_range.end - boundary.output_range.start + 1;  // inclusive end
-        TT_FATAL(
-            core_out_nsticks % num_threads_per_cluster == 0,
-            "pool2d with num_threads={}: per-core output stick count {} is not divisible by the thread count",
-            num_threads_per_cluster,
-            core_out_nsticks);
-    }
 
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
