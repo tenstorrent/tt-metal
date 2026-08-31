@@ -2,6 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+import os
+import subprocess
+import sys
+
 import pytest
 
 import networkx as nx
@@ -16,6 +21,33 @@ from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.demos.bert.tt import ttnn_bert
 from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
+
+
+def read_tracer_startup_config(overrides):
+    env = os.environ.copy()
+    env.pop("TTNN_CONFIG_PATH", None)
+    if overrides is None:
+        env.pop("TTNN_CONFIG_OVERRIDES", None)
+    else:
+        env["TTNN_CONFIG_OVERRIDES"] = json.dumps(overrides)
+
+    script = """
+import json
+import ttnn
+
+print(json.dumps({
+    "enable_graph_report": ttnn.CONFIG.enable_graph_report,
+    "enable_detailed_buffer_report": ttnn.CONFIG.enable_detailed_buffer_report,
+    "enable_torch_tracer": ttnn._PYTHON_CONFIG["enable_torch_tracer"],
+    "is_tracing_enabled": ttnn.tracer.is_tracing_enabled(),
+}))
+"""
+    return subprocess.run([sys.executable, "-c", script], env=env, text=True, capture_output=True)
+
+
+def parse_tracer_startup_config(result):
+    result.check_returncode()
+    return json.loads(result.stdout.strip().splitlines()[-1])
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
@@ -67,30 +99,28 @@ def test_reshape():
 @pytest.mark.requires_fast_runtime_mode_off
 def test_config_owned_tracing_is_disabled_when_config_turns_off():
     """Config-owned tracing stops when its opt-in flag is restored."""
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", False):
+    with ttnn.manage_config("enable_graph_report", False), ttnn.manage_config("enable_torch_tracer", False):
         with ttnn.manage_config("enable_torch_tracer", True):
-            ttnn.from_torch(torch.ones((1, 1)))
             assert ttnn.tracer.is_tracing_enabled()
 
         assert not ttnn.tracer.is_tracing_enabled()
-        ttnn.from_torch(torch.ones((1, 1)))
-        assert not ttnn.tracer.is_tracing_enabled()
+        assert not ttnn.torch_tracer.is_tracing_enabled()
 
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_config_changes_do_not_disable_explicit_trace_session():
     """Config restoration leaves an explicit trace session active."""
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", False):
+    with ttnn.manage_config("enable_graph_report", False), ttnn.manage_config("enable_torch_tracer", False):
         with trace():
             with ttnn.manage_config("enable_torch_tracer", True):
-                ttnn.from_torch(torch.ones((1, 1)))
+                assert ttnn.tracer.is_tracing_enabled()
 
             assert ttnn.tracer.is_tracing_enabled()
 
 
 @pytest.mark.requires_fast_runtime_mode_off
 def test_config_owned_tracing_is_disabled_when_context_raises(expect_error):
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", False):
+    with ttnn.manage_config("enable_graph_report", False), ttnn.manage_config("enable_torch_tracer", False):
         with expect_error(RuntimeError, "expected failure"):
             with ttnn.manage_config("enable_torch_tracer", True):
                 assert ttnn.tracer.is_tracing_enabled()
@@ -101,10 +131,33 @@ def test_config_owned_tracing_is_disabled_when_context_raises(expect_error):
 
 
 @pytest.mark.requires_fast_runtime_mode_off
+def test_explicit_tracing_is_disabled_when_context_raises(expect_error):
+    with ttnn.manage_config("enable_torch_tracer", False):
+        with expect_error(RuntimeError, "expected failure"):
+            with trace():
+                assert ttnn.tracer.is_tracing_enabled()
+                raise RuntimeError("expected failure")
+
+        assert not ttnn.tracer.is_tracing_enabled()
+        assert not ttnn.torch_tracer.is_tracing_enabled()
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_explicit_torch_tracing_with_graph_report_is_rejected(expect_error):
+    with ttnn.manage_config("enable_torch_tracer", False), ttnn.manage_config("enable_graph_report", True):
+        with expect_error(ValueError, "Torch tracing is not supported while enable_graph_report is enabled"):
+            with trace():
+                pass
+
+
+@pytest.mark.requires_fast_runtime_mode_off
 def test_graph_report_does_not_enable_torch_tracer_during_dtype_conversion():
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config(
-        "enable_graph_report", True
-    ), ttnn.manage_config("enable_torch_tracer", False):
+    with (
+        ttnn.manage_config("enable_torch_tracer", False),
+        ttnn.manage_config("enable_logging", True),
+        ttnn.manage_config("enable_graph_report", True),
+        ttnn.manage_config("enable_detailed_buffer_report", False),
+    ):
         output = ttnn.from_torch(torch.ones((1, 1), dtype=torch.float32), dtype=ttnn.bfloat16)
 
         assert output.dtype == ttnn.bfloat16
@@ -112,23 +165,72 @@ def test_graph_report_does_not_enable_torch_tracer_during_dtype_conversion():
         assert not ttnn.torch_tracer.is_tracing_enabled()
 
 
-@pytest.mark.requires_fast_runtime_mode_off
-def test_dtype_conversion_of_traced_torch_tensor_reports_ndarray_import_failure(expect_error):
-    with ttnn.manage_config("enable_logging", True), ttnn.manage_config("enable_torch_tracer", True):
-        tensor = torch.ones((1, 1), dtype=torch.float32)
-        assert isinstance(tensor, ttnn.torch_tracer.TracedTorchTensor)
+def test_torch_tracer_is_disabled_by_default_at_startup():
+    config = parse_tracer_startup_config(read_tracer_startup_config(None))
 
-        with expect_error(RuntimeError, "parse_py_tensor: ndarray_import failed") as exc_info:
-            ttnn.from_torch(tensor, dtype=ttnn.bfloat16)
+    assert not config["enable_torch_tracer"]
+    assert not config["is_tracing_enabled"]
 
-    message = str(exc_info.value)
-    assert "python type: ttnn.torch_tracer.TracedTorchTensor" in message
-    assert "source: ndim: 2, dtype.code:" in message
-    assert "requested: dtype.code:" in message
-    assert "order: 'C', device_type:" in message
-    assert "(ttnn DataType: DataType::BFLOAT16)" in message
-    assert "tensor.as_subclass(torch.Tensor)" in message
-    assert "ttnn.CONFIG.enable_torch_tracer" in message
+
+def test_graph_report_startup_config_does_not_enable_torch_tracer():
+    config = parse_tracer_startup_config(
+        read_tracer_startup_config(
+            {
+                "enable_logging": True,
+                "enable_fast_runtime_mode": False,
+                "enable_graph_report": True,
+                "enable_detailed_buffer_report": False,
+                "report_name": "tracer_startup_test",
+            }
+        )
+    )
+
+    assert config["enable_graph_report"]
+    assert not config["enable_detailed_buffer_report"]
+    assert not config["enable_torch_tracer"]
+    assert not config["is_tracing_enabled"]
+
+
+def test_torch_tracer_can_be_enabled_independently_at_startup():
+    config = parse_tracer_startup_config(
+        read_tracer_startup_config(
+            {
+                "enable_fast_runtime_mode": False,
+                "enable_graph_report": False,
+                "enable_torch_tracer": True,
+            }
+        )
+    )
+
+    assert not config["enable_graph_report"]
+    assert config["enable_torch_tracer"]
+    assert config["is_tracing_enabled"]
+
+
+def test_torch_and_graph_tracer_startup_config_is_rejected():
+    result = read_tracer_startup_config(
+        {
+            "enable_fast_runtime_mode": False,
+            "enable_graph_report": True,
+            "enable_torch_tracer": True,
+        }
+    )
+
+    assert result.returncode != 0
+    assert "enable_torch_tracer and enable_graph_report cannot both be enabled" in result.stderr
+
+
+def test_torch_tracer_in_fast_runtime_mode_is_rejected():
+    result = read_tracer_startup_config(
+        {
+            "enable_fast_runtime_mode": True,
+            "enable_graph_report": False,
+            "enable_torch_tracer": True,
+        }
+    )
+
+    assert result.returncode != 0
+    assert "enable_torch_tracer requires enable_fast_runtime_mode=false" in result.stderr
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

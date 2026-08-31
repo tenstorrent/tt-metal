@@ -459,10 +459,10 @@ _CONFIG_OWNS_TRACING = False
 
 
 def sync_tracing_with_config():
-    """Synchronize config-owned tracing without affecting explicit trace sessions."""
+    """Synchronize Python-config-owned tracing without affecting explicit trace sessions."""
     global _CONFIG_OWNS_TRACING
 
-    config_requests_tracing = ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_torch_tracer
+    config_requests_tracing = ttnn._PYTHON_CONFIG["enable_torch_tracer"]
     if config_requests_tracing:
         if not is_tracing_enabled():
             enable_tracing()
@@ -476,6 +476,8 @@ def enable_tracing():
     global GRAPH_STACK
     if ttnn.CONFIG.enable_fast_runtime_mode:
         raise ValueError("Tracing is not supported in fast runtime mode.")
+    if ttnn.CONFIG.enable_graph_report:
+        raise ValueError("Torch tracing is not supported while enable_graph_report is enabled.")
     if ENABLE_TRACER:
         raise ValueError("Tracing is already enabled.")
     ENABLE_TRACER = True
@@ -500,8 +502,10 @@ def is_tracing_enabled():
 @contextmanager
 def trace():
     enable_tracing()
-    yield
-    disable_tracing()
+    try:
+        yield
+    finally:
+        disable_tracing()
 
 
 def get_module_input_nodes(module_operation):

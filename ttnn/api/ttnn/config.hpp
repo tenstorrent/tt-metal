@@ -33,11 +33,6 @@ struct Config {
         bool enable_logging = false;
         bool enable_graph_report = false;
         bool enable_graph_python_stack_traces = false;
-        // Legacy python-side torch tracer (ttnn.tracer / ttnn.torch_tracer). It is NOT needed by the graph
-        // report, which is produced from the C++ GraphProcessor capture, and it wraps every incoming
-        // torch.Tensor in a TracedTorchTensor subclass that nanobind cannot dtype-convert (its __module__ is
-        // not "torch", so framework detection fails and tensor creation aborts). Opt in explicitly.
-        bool enable_torch_tracer = false;
         bool enable_detailed_buffer_report = false;
         bool enable_detailed_tensor_report = false;
         bool enable_comparison_mode = false;

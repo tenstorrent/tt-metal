@@ -23,21 +23,54 @@ if "TTNN_CONFIG_PATH" in os.environ:
     CONFIG_PATH = pathlib.Path(os.environ["TTNN_CONFIG_PATH"])
 
 CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
+_PYTHON_CONFIG = {"enable_torch_tracer": False}
+
+
+def _validate_python_config(config):
+    enable_torch_tracer = config.get("enable_torch_tracer", _PYTHON_CONFIG["enable_torch_tracer"])
+    if not isinstance(enable_torch_tracer, bool):
+        raise ValueError("enable_torch_tracer must be a boolean")
+
+    enable_graph_report = config.get("enable_graph_report", CONFIG.enable_graph_report)
+    enable_fast_runtime_mode = config.get("enable_fast_runtime_mode", CONFIG.enable_fast_runtime_mode)
+    if enable_torch_tracer and enable_graph_report:
+        raise ValueError("enable_torch_tracer and enable_graph_report cannot both be enabled")
+    if enable_torch_tracer and enable_fast_runtime_mode:
+        raise ValueError("enable_torch_tracer requires enable_fast_runtime_mode=false")
+
+
+def _sync_python_config():
+    if hasattr(ttnn, "tracer"):
+        ttnn.tracer.sync_tracing_with_config()
 
 
 def load_config_from_dictionary(config, from_file=False):
     global CONFIG
+    global _PYTHON_CONFIG
+
+    cpp_config = {}
     for key, value in config.items():
+        if key == "enable_torch_tracer":
+            continue
         if hasattr(CONFIG, key):
-            if getattr(CONFIG, key) is not None:
-                value = type(getattr(CONFIG, key))(value)
-            setattr(CONFIG, key, value)
+            cpp_config[key] = value
         elif from_file:
             logger.warning(
                 f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
             )
         else:
             raise ValueError(f"Unknown configuration key: {key}")
+
+    _validate_python_config(config)
+
+    for key, value in cpp_config.items():
+        if getattr(CONFIG, key) is not None:
+            value = type(getattr(CONFIG, key))(value)
+        setattr(CONFIG, key, value)
+
+    if "enable_torch_tracer" in config:
+        _PYTHON_CONFIG["enable_torch_tracer"] = config["enable_torch_tracer"]
+    _sync_python_config()
 
 
 def load_config_from_json_file(json_path):
@@ -78,23 +111,30 @@ if CONFIG_OVERRIDES is not None:
 logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 
 
-def _sync_torch_tracer_config(name):
-    """Synchronize the torch tracer when a related config setting changes."""
-    if name in {"enable_logging", "enable_torch_tracer"} and hasattr(ttnn, "tracer"):
-        ttnn.tracer.sync_tracing_with_config()
-
-
 @contextlib.contextmanager
 def manage_config(name: str, value):
     global CONFIG
+
+    if name == "enable_torch_tracer":
+        original_value = _PYTHON_CONFIG["enable_torch_tracer"]
+        load_config_from_dictionary({name: value})
+        logger.debug(f"Set Python config {name} to {value}")
+        try:
+            yield
+        finally:
+            load_config_from_dictionary({name: original_value})
+            logger.debug(f"Restored Python config {name} to {original_value}")
+        return
+
     original_value = getattr(CONFIG, name)
+    _validate_python_config({name: value})
     setattr(CONFIG, name, value)
     logger.debug(f"Set ttnn.CONFIG.{name} to {value}")
     try:
-        _sync_torch_tracer_config(name)
         yield
     finally:
         try:
+            _validate_python_config({name: original_value})
             setattr(CONFIG, name, original_value)
             logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
         except Exception as e:
@@ -110,8 +150,6 @@ def manage_config(name: str, value):
                     )
             else:
                 logger.error(f"{e}. ERROR_A! Cannot reset ttnn.CONFIG.{name} to {original_value}")
-
-        _sync_torch_tracer_config(name)
 
 
 from ttnn._ttnn.multi_device import (
@@ -669,6 +707,8 @@ import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer
+
+    _sync_python_config()
 
 from ttnn._ttnn.device import get_arch_name as _get_arch_name
 

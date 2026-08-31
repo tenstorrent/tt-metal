@@ -121,21 +121,6 @@ std::vector<size_t> ttnn_shape_to_ndarray(const T& arr) {
     return shp;
 }
 
-// Best-effort "module.qualname" of the type of a python object, for diagnostics only.
-std::string py_type_name(nb::handle obj) {
-    if (!obj.is_valid()) {
-        return "<invalid>";
-    }
-    nb::handle type = nb::handle(reinterpret_cast<PyObject*>(Py_TYPE(obj.ptr())));
-    try {
-        return fmt::format(
-            "{}.{}", nb::cast<std::string>(type.attr("__module__")), nb::cast<std::string>(type.attr("__qualname__")));
-    } catch (const std::exception&) {
-        // nb::python_error's constructor takes ownership of the error indicator, so nothing is left set here.
-        return "<unknown>";
-    }
-}
-
 // Preprocess the python tensor, optionally performing dtype conversion.
 // May need to create a handle and hold onto it here?
 struct PreprocessedPyTensor {
@@ -173,35 +158,10 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         config.dtype.code,
         config.dtype.bits);
 
-    nb::object source_py_tensor = py_tensor.cast(nb::rv_policy::automatic);
-    nb::detail::ndarray_handle* converted_tensor_handle =
-        nanobind::detail::ndarray_import(source_py_tensor.ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
+    nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
+        py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 
-    // ndarray_import returns nullptr without setting a python error, so spell out everything needed to tell the
-    // failure modes apart: an un-representable dtype, a non-CPU / read-only source, or (most commonly) a source
-    // whose framework nanobind could not detect. Detection matches on `type(tensor).__module__`, so a
-    // torch.Tensor subclass declared outside the `torch` package (e.g. ttnn.torch_tracer.TracedTorchTensor)
-    // cannot be dtype-converted or made contiguous, even though importing it as-is works.
-    TT_FATAL(
-        converted_tensor_handle != nullptr,
-        "parse_py_tensor: ndarray_import failed.\n\t"
-        "python type: {} (nanobind detects the source framework from this type's __module__)\n\t"
-        "source: ndim: {}, dtype.code: {}, dtype.bits: {}\n\t"
-        "requested: dtype.code: {}, dtype.bits: {}, dtype.lanes: {}, order: '{}', device_type: {} "
-        "(ttnn DataType: {})\n\t"
-        "The source tensor could not be converted to the requested dtype / row-major contiguous layout. If it is a "
-        "torch.Tensor subclass, pass `tensor.as_subclass(torch.Tensor)` instead; if ttnn tracing is enabled "
-        "(ttnn.CONFIG.enable_torch_tracer), disable it.",
-        py_type_name(source_py_tensor),
-        py_tensor.ndim(),
-        py_tensor.dtype().code,
-        py_tensor.dtype().bits,
-        config.dtype.code,
-        config.dtype.bits,
-        config.dtype.lanes,
-        config.order ? config.order : ' ',
-        config.device_type,
-        data_type);
+    TT_FATAL(converted_tensor_handle != nullptr, "parse_py_tensor: ndarray_import failed.");
     return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
 }
 

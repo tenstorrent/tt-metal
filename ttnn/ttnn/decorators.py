@@ -994,12 +994,6 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
-                # The graph report is built from the C++ GraphProcessor capture and does not use the python
-                # torch tracer, so it is not enabled here. The tracer must be requested explicitly, since it
-                # replaces torch.Tensor arguments with TracedTorchTensor, which cannot be dtype-converted by
-                # nanobind on the way into ttnn.Tensor.
-                ttnn.tracer.sync_tracing_with_config()
-
                 if ttnn.tracer.is_tracing_enabled():
                     decorated_function = ttnn.tracer.trace_ttnn_operation(
                         self.python_fully_qualified_name, decorated_function
