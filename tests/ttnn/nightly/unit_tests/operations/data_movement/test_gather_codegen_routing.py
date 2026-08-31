@@ -153,7 +153,9 @@ def _brimful_streaming_case(device, wt_index, ht_tiles=2):
     selection reaches the streaming factory rather than the interleaved one.
     """
     # total_bytes_per_bank is the allocator's allocatable size, i.e. already net of the base the
-    # static CB region starts at — the same quantity gather_usable_l1() derives on the C++ side.
+    # static CB region starts at — the same quantity gather_static_l1() derives on the C++ side.
+    # gather_usable_l1(), which the factory plans against, is this clamped to the live frontier, so
+    # the two agree only on an otherwise-clear device; the tests that pin L1 rely on the difference.
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
     wt_input = (budget - 2 * _TILE_BYTES) // _TILE_BYTES
     height = 32 * ht_tiles

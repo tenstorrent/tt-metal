@@ -110,11 +110,12 @@ bool supported_by_codegen(const Tensor& input_tensor, int8_t dim, const Tensor& 
     // gather_output_cb_tiles(Wt_index) tile pages; streaming: chunk_tiles input pages) scale down to the streaming
     // floor, so a call is feasible exactly when that floor fits per-core L1. Only answerable with a
     // real device behind the tensors; the prim's validation step raises native's structural error
-    // for anything else.
+    // for anything else. Measured against the device's static L1 window, never its live occupancy,
+    // which is what keeps this predicate's answer identical at the router and at validate.
     const bool on_device = input_tensor.storage_type() == StorageType::DEVICE &&
                            input_index_tensor.storage_type() == StorageType::DEVICE &&
                            input_tensor.buffer() != nullptr && input_index_tensor.buffer() != nullptr;
-    return !(on_device && !ttnn::prim::gather_min_plan_fits_l1(input_tensor, input_index_tensor));
+    return !on_device || ttnn::prim::gather_min_plan_fits_l1(input_tensor, input_index_tensor);
 }
 
 bool is_demoted(const Tensor& /*input_tensor*/, int8_t /*dim*/, const Tensor& /*input_index_tensor*/) {

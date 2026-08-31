@@ -50,6 +50,11 @@ bool gather_interleaved_fits_l1(
 // Whether the SHALLOWEST plan any gather factory can be built with fits per-core L1. Every other
 // plan scales down to this one (streaming's input CB bottoms out at two pages), so a call this
 // rejects has no feasible codegen dispatch at all and the routing gate must send it to native.
+//
+// A pure function of static tensor and device properties: unlike gather_interleaved_fits_l1 and
+// gather_streaming_chunk_tiles, which the program factory consults, this one is a ROUTING gate and
+// must not read live L1 occupancy -- ttnn::gather()'s router and the prim's validate evaluate it at
+// different points of the same dispatch and are consistent only while the answer cannot move.
 bool gather_min_plan_fits_l1(const Tensor& input_tensor, const Tensor& input_index_tensor);
 
 // Depth of the streaming factory's input CB, in input tile pages. The streaming reader rescans the

@@ -79,7 +79,9 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
         ttnn::operations::data_movement::gather::supported_by_codegen(
             tensor_args.input_tensor, /*dim=*/-1, tensor_args.input_index_tensor),
         "gather_codegen: input/index tensors are not supported by the codegen prim (see "
-        "supported_by_codegen() -- TILE layout, bfloat16, non-sharded input/index only)");
+        "supported_by_codegen() -- TILE layout, bfloat16, non-sharded input/index, a uint16 index only "
+        "on an axis it can address, and a shallowest CB plan that fits the device's static per-core L1 "
+        "window)");
 
     // Structural preconditions copied from GatherDeviceOperation::validate_on_program_cache_miss
     // (device/gather_device_operation.cpp): supported_by_codegen() only answers layout/dtype/
@@ -94,6 +96,15 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
         "index dim: {}",
         input_rank,
         index_rank);
+    // The readers address an input page as `h * Wt_input`, which lands on the intended row only while
+    // the two tensors' flattened tile-row numberings coincide -- i.e. their leading padded dims are
+    // EQUAL, not merely ordered. ttnn::gather() slices the input to the index's padded dims before
+    // dispatch, so the routed path always satisfies this; a direct prim caller with, say, input
+    // [1,2,64,W] and index [1,2,32,w] would otherwise gather batch 1's output from batch 0's rows.
+    // The logical bound stays alongside it: equal padded dims still admit an index with more valid
+    // rows than the input (H 64 against H 40, both padded to 64), which would read input padding.
+    const auto& input_padded = tensor_args.input_tensor.padded_shape();
+    const auto& index_padded = tensor_args.input_index_tensor.padded_shape();
     for (int i = 0; i < input_rank - 1; ++i) {
         TT_FATAL(
             index_shape[i] <= input_shape[i],
@@ -103,6 +114,15 @@ void GatherCodegenDeviceOperation::validate_on_program_cache_miss(
             i,
             index_shape[i],
             input_shape[i]);
+        TT_FATAL(
+            index_padded[i] == input_padded[i],
+            "gather_codegen: index and input tensor must have equal padded leading dimensions; dimension {} is {} "
+            "on the index and {} on the input. Got index padded shape: {} and input padded shape: {}",
+            i,
+            index_padded[i],
+            input_padded[i],
+            index_padded,
+            input_padded);
     }
     TT_FATAL(
         tensor_args.input_index_tensor.dtype() == DataType::UINT32 ||

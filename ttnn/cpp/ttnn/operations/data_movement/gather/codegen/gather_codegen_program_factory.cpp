@@ -40,13 +40,31 @@ constexpr const char* kReaderStreaming =
 constexpr const char* kWriterStreaming =
     "ttnn/cpp/ttnn/operations/data_movement/gather/codegen/kernels/gather_writer_streaming.cpp";
 
-// The device's real per-core CB ceiling.
+// The device's STATIC per-core CB budget: the whole allocator-managed L1 window, with no regard for
+// what is live in it.
+//
+// This is the only budget a routing gate may plan against. supported_by_codegen() is evaluated twice
+// in one dispatch -- ttnn::gather()'s router and
+// GatherCodegenDeviceOperation::validate_on_program_cache_miss -- with the op's own
+// create_output_tensors() in between, and those two sites are consistent with each other only
+// because the answer cannot move: budget the gate against live occupancy and an L1 output lowers the
+// ceiling between them, so routing admits the call and validate then TT_FATALs on the tensor it is
+// already committed to.
+uint64_t gather_static_l1(const Tensor& input_tensor) {
+    auto* device = input_tensor.device();
+    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
+    return ceiling > base ? ceiling - base : 0;
+}
+
+// The device's real per-core CB ceiling. Confined to the program factory, which reads it once per
+// cache miss with nothing moving underneath it.
 //
 // L1 tensors are allocated downward from the top of L1 while static CBs stack upward from the
 // allocator base, so any live L1 buffer -- this call's own output when output_mem_config asks for
 // L1 -- is the true ceiling: Program::validate_circular_buffer_region rejects a CB region that
-// ends above the lowest occupied L1 address, and a routing gate that ignored it would fail program
-// creation instead of picking a plan that fits.
+// ends above the lowest occupied L1 address, so a plan built against the static budget alone would
+// fail program creation instead of scaling down to one that fits.
 //
 // The frontier is read here at program-creation time and baked into the resulting program, so it
 // has to reach the program-cache key as well: validate_circular_buffer_region re-reads the frontier
@@ -58,11 +76,12 @@ constexpr const char* kWriterStreaming =
 uint64_t gather_usable_l1(const Tensor& input_tensor) {
     auto* device = input_tensor.device();
     const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
+    uint64_t usable = gather_static_l1(input_tensor);
     if (const auto lowest_l1_buffer = device->lowest_occupied_compute_l1_address(); lowest_l1_buffer.has_value()) {
-        ceiling = std::min(ceiling, static_cast<uint64_t>(lowest_l1_buffer.value()));
+        const uint64_t frontier = static_cast<uint64_t>(lowest_l1_buffer.value());
+        usable = std::min(usable, frontier > base ? frontier - base : 0);
     }
-    return ceiling > base ? ceiling - base : 0;
+    return usable;
 }
 
 // Packs `nc` cores into at most two CoreRanges by treating x as the row index and grid.y as the row
@@ -202,10 +221,15 @@ bool gather_min_plan_fits_l1(const Tensor& input_tensor, const Tensor& input_ind
     // two input pages (gather_streaming_chunk_tiles' minimum), one index page and one output page.
     // Below this there is no depth left to scale down to, so the routing gate must send the call to
     // native instead of failing during program creation.
+    //
+    // Budgeted against the STATIC window rather than the live one, because this is a routing gate
+    // (see gather_static_l1). The residual case that leaves -- a device whose live L1 cannot even
+    // seat these four pages -- has nothing to route to either: native's own CBs are fixed at
+    // Wt_input input pages, so it fails the same allocation harder.
     const uint64_t input_page = input_tensor.buffer()->aligned_page_size();
     const uint64_t index_page = input_index_tensor.buffer()->aligned_page_size();
     const uint64_t output_page = input_page;
-    return 2 * input_page + index_page + output_page <= gather_usable_l1(input_tensor);
+    return 2 * input_page + index_page + output_page <= gather_static_l1(input_tensor);
 }
 
 uint32_t gather_streaming_chunk_tiles(const Tensor& input_tensor, const Tensor& input_index_tensor, uint32_t Wt_input) {
