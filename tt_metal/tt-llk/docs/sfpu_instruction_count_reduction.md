@@ -67,6 +67,152 @@ math ELF: `relu_max` 14 → 8 SFPU instructions, `SFPSETCC`/`SFPENCC` gone.
 variants that feed NaN, ±inf and −0.0. The skips are the pre-existing ReluMin gate
 (tt-llk#1120), not a consequence of these changes.
 
+### Blackhole — all three ideas ported and measured on p100a
+
+Ported to the Blackhole trees (`tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_relu.h`,
+`hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_i0.h`, `.../ckernel_sfpu_softplus.h`)
+and measured the same way: `MATH_ISOLATE`, `KERNEL` marker, Float16_b→Float16_b, `tile_cnt=8`,
+`loop_factor=16`, `iterations=32`, a fresh build root per variant, each op A/B'd against the same
+tree with only that change reverted.
+
+| kernel | idea | BH `KERNEL` before → after | BH delta | WH delta |
+|---|---|---|---|---|
+| `_relu_max_impl_` (LLK) | §3 branch-free clamp | 53167 → **32815** | **−38.3 %** | −39.2 % |
+| `Hardsigmoid` via `_relu_max_body_` (MTL) | §3, free rider | 61615 → **36782** | **−40.3 %** | not measured |
+| `ckernel_sfpu_i0.h` (MTL) | §1 program CREGs | 167855 → 155564 | −7.3 % | −6.7 % |
+| `ckernel_sfpu_i0.h` (MTL) | §2 2-way interleave, on §1 | 155564 → **130987** | **−15.8 %** | −18.3 % |
+| `ckernel_sfpu_softplus.h` (MTL) | §1 program CREGs | 192177 → 179885 | −6.4 % | −6.4 % |
+| `ckernel_sfpu_softplus.h` (MTL) | §2 2-way interleave, on §1 | 179885 → **155310** | **−13.7 %** | not done on WH |
+
+Cumulative against an unmodified tree: `i0` **−22.0 %**, `softplus` **−19.2 %** (dest_acc No) /
+**−20.7 %** (dest_acc Yes). `TILE_LOOP` tracks `KERNEL` to within 0.1 % throughout, and `Square`
+carried as a control read 20398 → 20398 in every run. `INIT` rises 17–25 cycles on `i0` and
+`softplus`, which is §1 working as designed.
+
+**Correctness:** 318 passed / 234 skipped in `test_eltwise_unary_sfpu.py` for
+`mathop ∈ {I0, Softplus, ReluMax, ReluMin, Hardsigmoid, Lrelu}`, plus 65/65 in
+`test_sfpu_sdpa.py` — which calls `calculate_softplus_body` directly and so exercises §1's CREG
+contract through a second init path (`sdpa_op_init` does call `softplus_init`, as does the one
+production call site in `logsigmoid_sub`). Outcomes were compared **per test ID** against the same
+selection on the unmodified tree and are identical, so the 234 skips are pre-existing.
+
+**Bit-exactness, measured rather than argued.** All **308** result buffers, across every format
+pair including the Float32→Float32 `_edges` cases carrying NaN, ±inf and ±0.0, are
+**byte-identical** to the unmodified tree — for §1, §2 and §3 together. Method: wrap
+`TestConfig.run` in a pytest plugin, sha256 `outcome.result`, key by node id, diff the two hash
+files. Worth doing routinely: the golden comparison is tolerance-based and cannot tell bit-exact
+from merely-within-tolerance, and for §2-on-softplus the predication hoist below is exactly the
+step where an argument could have been wrong.
+
+**Full-sweep regression check.** The whole 1154-variant unary SFPU perf sweep was run on both
+trees (1152 passed / 2 skipped each). Of 3456 matched rows, **3400 are within ±0.5 %**. Every row
+outside that band is either one of the four intended ops or an `INIT` row moving ≤6 cycles out of
+~170–230. **No `KERNEL` or `TILE_LOOP` row outside the four intended ops moved at all.**
+
+#### §2 on `softplus`: lifting the `v_if` barrier instead of interleaving inside it
+
+§2's "Where else to apply it" establishes that interleaving cannot cross a `v_if`. `softplus` looks
+like a casualty of that rule — the single-element body puts its whole polynomial inside
+`v_if (t <= threshold)`. It is not, because there is a third option beyond good-target and
+poor-target: **hoist the interleaved work out of the guard**, and predicate only the store.
+
+That is legitimate wherever the guard exists to protect a *write* rather than to skip work. SFPU
+predication masks the destination write, not the execution, so evaluating the polynomial on all
+lanes and discarding it on the `t > threshold` lanes leaves them holding the same `dst_reg` value
+they would have kept anyway. The counts move the way the rule predicts once the barrier is gone:
+
+| `softplus` bf16 body | dependent-adjacent pairs | loop `cc` |
+|---|---|---|
+| §1, one element per iteration | 12 / element | 8 / element |
+| §1 + §2, hoisted and interleaved | **6.5 / element** | 7 / element |
+
+`cc` does not grow — the nested `PUSHC`/`POPC` pair becomes two flat guards — and the stalls halve,
+which is the same factor §2 achieved on `i0` (15 → 8). Measured payoff −13.7 %. So the survey's
+`cc` column reads as "can §2 reach this *as written*", not as a permanent verdict: a kernel whose
+predication only gates stores can be restructured into the straight-line case first. A kernel whose
+`v_if` bodies do genuinely different arithmetic per branch — `rpow`, `gelu_derivative` — still
+needs §3.
+
+Applied to the **bf16 path only**. The fp32 path's exp tail is a second, deeper chain that does not
+fit alongside a second element's live values, and the perf sweep drives Float16_b, so an fp32
+interleave could not be measured in this harness.
+
+#### Blackhole diverges in mechanism, not in outcome
+
+The headline numbers resemble Wormhole's. They do not come from the same place, and §2's survey
+table does not transfer as written.
+
+- **There is essentially no `SFPNOP` tax on Blackhole to remove.** Scanning the largest math ELF
+  for each of 103 unary SFPU ops (5760 ELFs, full build) finds **145** `SFPNOP` in total, and all
+  of them are in six hand-written TTI kernels: `exponential` 33, `exp_with_base` 33,
+  `topk_local_sort` 32, `topk_rebuild` 12, `reciprocal` 9, `erf` 1. **97 of the 103 ops carry
+  zero.** Every compiler-scheduled polynomial kernel is at 0. So on Blackhole the `SFPNOP` column
+  ranks the entire candidate list at zero and cannot be used.
+- **§2 on Blackhole changes the instruction count by nothing and still wins.** `i0`'s body goes
+  29 → 28.5 slots per element between §1 and §1+§2, and buys −15.8 %. What §2 removes is a
+  producer immediately followed by its consumer, which no instruction count shows.
+- **The Blackhole opportunity column is dependent-adjacency count** — pairs where instruction
+  *i+1* reads a register instruction *i* wrote. It separates the two levers cleanly:
+
+  | kernel | variant | body insns | dependent pairs | measured |
+  |---|---|---|---|---|
+  | `relu_max` | as shipped | 14 | 1 | — |
+  | `relu_max` | §3 | **9** | 2 | **−38.3 %**, a slot win |
+  | `i0` | as shipped | 37 | 15 | — |
+  | `i0` | §1 | 40 (−6 in body) | 15 | **−7.3 %**, a slot win |
+  | `i0` | §1 + §2 | 68 (two elements) | 16, i.e. **8 / element** | **−15.8 %**, a stall win |
+
+- **§1's Wormhole latency correction does not apply, but §1 shrinks anyway.** On Wormhole, parking
+  a coefficient converts two `SFPLOADI` into one exposed `SFPNOP`, netting ~1 slot. On Blackhole
+  the loads simply disappear: `i0` and `softplus` each lose exactly 6 slots per element for three
+  parked coefficients, the full −2 apiece. `relu_max` goes 11 → 6 slots per element under §3.
+- **2-way is the ceiling on Blackhole too; 3-way spills.** Static probe on `i0`: 2-way is 29.5
+  slots per element, 3-way is **50.3**, because GCC rematerializes the loads and the squaring under
+  register pressure (`SFPLOADI` 12 → 17.3 per element, `SFPMAD` 9 → 15.7). Same 8 general LRegs.
+
+##### Blackhole candidate ranking
+
+Same two-column read as §2's Wormhole table, with dependent-adjacency in place of `SFPNOP`.
+Largest body-bearing ELF per op, ops above 25 SFPU instructions:
+
+| op | sfp | dep-adjacent | share | loop `cc` | §2 prospect |
+|---|---|---|---|---|---|
+| `power` | 1489 | 616 | 41.4 % | 132 | poor — §3 first |
+| `rpow` | 879 | 303 | 34.5 % | 90 | poor — §3 first |
+| `gelu_derivative` | 604 | 232 | 38.4 % | 100 | poor — §3 first |
+| `tanhshrink` | 428 | 161 | 37.6 % | 34 | poor — §3 first |
+| `gelu` | 386 | 156 | 40.4 % | 26 | marginal |
+| `polygamma` | 332 | 124 | 37.3 % | 56 | poor — §3 first |
+| `mish` | 324 | 122 | 37.7 % | 81 | poor — §3 first |
+| `gelu_tanh` | 227 | 69 | 30.4 % | 8 | good — but no register headroom on WH |
+| `silu` | 172 | 67 | 39.0 % | 24 | marginal |
+| `rsqrt_compat` | 202 | 66 | 32.7 % | 43 | poor — §3 first |
+| `sigmoid` | 164 | 59 | 36.0 % | 24 | marginal — regressed on WH |
+| `asinh` | 134 | 47 | 35.1 % | 13 | marginal |
+| `i1` | 105 | 41 | 39.0 % | 5 | **good** — port WH's chain interleave |
+| `erfinv` | 80 | 30 | 37.5 % | 6 | good |
+| `tanh_derivative` | 88 | 29 | 33.0 % | 8 | good |
+| `expm1_cw` | 38 | 16 | 42.1 % | 0 | **ideal** — straight-line |
+| `cbrt` | 35 | 15 | 42.9 % | 0 | **ideal** — straight-line |
+| `cosine` | 41 | 13 | 31.7 % | 0 | **ideal** — straight-line |
+
+Note `polygamma` ranks *ideal* on Wormhole (14 stalls, 0 `cc`) and *poor* on Blackhole (124
+dependent pairs, 56 `cc`) — the two architectures compile it differently enough that the
+feasibility verdict flips. Read the target architecture's own scan; do not carry a verdict across.
+`power` is a Blackhole-only entry at the top of the list and was not in the Wormhole survey at all.
+
+**Same two methodology traps as Appendix D, and the second one caught this scan too.** The first
+Blackhole ranking took the first `MATH_ISOLATE` ELF per op rather than the largest, and reported
+`power` 248 / `gelu_derivative` 184 / `SFPNOP` total 81. Correcting to the largest ELF per op moved
+those to 616 / 232 / 145. The numbers above are the corrected ones; the measured A/B results are
+unaffected, since those came from dedicated perf runs rather than this scan.
+
+**One earlier working assumption in this repo was too broad.** "Issue slots are free on Blackhole"
+came from a load/store-bound EMA replay experiment where removing 69 instructions per tile bought
+zero cycles. It does **not** generalise to compute-dense polynomial bodies — §1 removed exactly 6
+slots per element from `i0` and was worth −7.3 %. Decide per kernel whether it sits near the ~124
+cycles/tile `Identity` floor, where slots are free, or well above it, where they cost.
+
 ### Four assumptions in this document that were wrong
 
 1. **§3's clamp rewrite had the operand order backwards.** Corrected in §3.
@@ -441,6 +587,15 @@ different branches cannot have their predicated blocks interleaved. In a predica
 the independent work is fragmented into one block at a time and most of the payoff disappears.
 `i0` delivered a clean 18 percent cut precisely because it has **zero** predicate instructions.
 
+**There is one escape hatch, and it is measured.** Where a `v_if` exists to protect a *write*
+rather than to skip work, the interleaved chain can be hoisted out of the guard and only the store
+left predicated — predication masks the destination write, not the execution. `softplus` was
+rewritten that way on Blackhole and its dependent-adjacent pairs halved, 12 → 6.5 per element, with
+loop `cc` unchanged, for **−13.7 %**. So read the `cc` column as "can §2 reach this *as written*",
+not as a permanent verdict. It is a real barrier only where the `v_if` bodies do genuinely different
+arithmetic per branch, which is the case for `rpow` and `gelu_derivative`. See §0's Blackhole
+subsection.
+
 So read two columns together: `SFPNOP` for how much is on the table, and `cc`
 (`SFPSETCC`/`SFPENCC`/`PUSHC`/`POPC` inside the loop) for whether §2 can reach it. All 48 unary
 SFPU ops whose math ELF carries more than 25 SFPU instructions, largest body-bearing ELF per op:
@@ -814,8 +969,11 @@ Remaining order of work (items 1–2 are **done** — see §0):
 3. ~~2-way interleave (§2) on `i0`~~ — **done, −18.3 % on top of §1** (−23.8 % cumulative). The
    compounding worked as predicted. Note it required expanding `POLYVAL10` into explicit
    alternating steps; see §2.
-4. **2-way interleave (§2) on `softplus`** — still 6 `SFPNOP` per element after §1, same
-   `PolynomialEvaluator::eval` shape as `i0`. Cheapest next win.
+4. ~~**2-way interleave (§2) on `softplus`**~~ — **done on Blackhole, −13.7 % on top of §1**
+   (−19.2 % cumulative), bit-exact. Required hoisting the polynomial out of its
+   `v_if (t <= threshold)` guard first; see §0's Blackhole subsection for why that is sound and
+   what it implies for the `cc` column. Not yet ported to Wormhole — the rewrite is
+   arch-independent, so this should transfer.
 5. ~~2-way interleave on `sigmoid`, `gelu_tanh`, `i1`~~ — **attempted; see §2.** `sigmoid`
    regressed on register pressure and was reverted, `gelu_tanh` has no register headroom, and `i1`
    paid −1.53 % via a different route (interleaving its own `number`/`denom` chains). The remaining
