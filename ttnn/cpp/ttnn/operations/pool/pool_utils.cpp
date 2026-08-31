@@ -129,12 +129,15 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    bool force_max_tiles_per_reduction_4,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
     TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
+    const bool is_quasar = tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR;
     // SPMD compute threads per cluster for the Gen2/Quasar pool factory (see FactoryParameters).
-    uint32_t num_threads_per_cluster = 4;
+    uint32_t num_threads_per_cluster = is_quasar ? 4 : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)
@@ -178,8 +181,38 @@ FactoryParameters get_factory_parameters(
     if (return_indices) {
         TT_FATAL(!is_avg_pool, "return_indices only applies for MaxPool");
     }
-    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+    uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
+    // QSR pack-bounds fix: cap tiles-per-pack to 4. pack_untilize_dest<N> faults with PACR0_TILE_INC
+    // (ERROR_TRISC1 code 0x19) for N>=6 -- the pack's per-tile increment crosses the scratch CB's
+    // descriptor L1_LIMIT_ADDR (N<=5 works, N>=6 faults on the emulator). Forcing MAX_TILES_PER_REDUCTION=4
+    // makes any channel count >4 tiles chunk (in_nblocks_c>1) into <=4-tile packs, staying within bounds.
+    // <=4-tile configs (incl. the resnet stem = 2 tiles) keep in_nblocks_c==1 / is_wide==false -> unchanged.
+    // Paired with force_max_tiles_per_reduction_4=1u (compute + reader compile args in the quasar factory)
+    // so all three agree on the 4-tile chunk size. Caller-keyed (not hal-arch): the quasar op runs this
+    // pack path on WH silicon too.
+    if (force_max_tiles_per_reduction_4) {
+        MAX_TILES_PER_REDUCTION = 4;
+    }
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
+
+    TT_FATAL(
+        num_threads_per_cluster == 1 || !is_large_kernel,
+        "pool2d with num_threads={} does not support large kernels (window {} > max_rows_for_reduction {}): "
+        "chunked reductions span multiple in_cb entries per stick",
+        num_threads_per_cluster,
+        kernel_size_hw,
+        max_rows_for_reduction);
+    // Compute threads must divide every core's stick count in (in_cb_0, in_cb_1) pairs.
+    for (const auto& boundary : shard_boundaries) {
+        const uint32_t core_out_nsticks = boundary.output_range.end - boundary.output_range.start + 1;  // inclusive end
+        TT_FATAL(
+            num_threads_per_cluster == 1 || core_out_nsticks % (2 * num_threads_per_cluster) == 0,
+            "pool2d with num_threads={}: per-core output stick count {} is not divisible by 2*num_threads={} "
+            "(threaded compute consumes sticks in (in_cb_0, in_cb_1) pairs per thread)",
+            num_threads_per_cluster,
+            core_out_nsticks,
+            2 * num_threads_per_cluster);
+    }
 
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
