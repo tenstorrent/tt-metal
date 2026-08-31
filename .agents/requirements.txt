@@ -1,1 +1,7 @@
+# Backend for scripts/multigoal (Codex app-server runner):
 openai-codex==0.1.0b3
+
+# scripts/multigoal-claude (Claude Code runner) needs no extra Python packages
+# beyond the standard library. Install Claude Code separately and make the
+# `claude` CLI available on PATH (override with --claude-bin or $CLAUDE_BIN):
+#   https://docs.claude.com/en/docs/claude-code

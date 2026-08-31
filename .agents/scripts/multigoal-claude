@@ -1,0 +1,1273 @@
+#!/usr/bin/env python3
+"""Run a sequence of goals through Claude Code (headless).
+
+Each prompt file is one stage/goal. This runner launches a fresh `claude -p`
+session per stage, waits for it to reach a terminal verdict, runs the stage's
+verification check, and only then starts the next stage. It is the Claude Code
+port of the original Codex app-server runner: all runner-side logic (manifest,
+STATUS.md, check gates, remediation, resume, exit codes) is unchanged; only the
+agent transport is different.
+
+Terminal status comes from a machine-readable verdict the agent is required to
+emit: the run is launched with `--json-schema`, and the final structured output
+carries {"status": "complete"|"blocked", ...}. Infra failures (usage/rate
+limits, max-turns, execution errors) are classified from the Claude Code result
+object, its terminal_reason, and the process stderr tail.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from typing import Any, Callable
+
+MAX_GOAL_OBJECTIVE_CHARS = 100_000  # generous; Claude has no app-server cap
+SKILL_RE = re.compile(r"\$([A-Za-z0-9][A-Za-z0-9_-]*)")
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Stage check scripts exit with: 0 = pass, 1 = advisory failure (recorded,
+# pipeline continues), 2 = critical failure (after remediation attempts are
+# exhausted, no further stages are launched). Any other exit (including the
+# checker-internal-error convention of 3) is a broken check or misconfigured
+# environment: it is retried once for transients and then, by default, stops
+# the pipeline as a runner/infra failure. A silently disabled guardrail would
+# bypass the evidence gate. Use --check-error-policy continue to override in an
+# emergency.
+CHECK_PASS = 0
+CHECK_ADVISORY = 1
+CHECK_CRITICAL = 2
+CHECK_TIMEOUT_CODE = 124  # synthesized when a check script exceeds --check-timeout
+
+# Terminal goal statuses. "complete"/"blocked" come from the agent verdict; the
+# rest are runner-classified infra outcomes.
+TERMINAL_COMPLETE = "complete"
+TERMINAL_BLOCKED = "blocked"
+TERMINAL_TURN_FAILED = "turnFailed"
+TERMINAL_USAGE_LIMITED = "usageLimited"
+TERMINAL_MAX_TURNS = "maxTurns"
+
+# The agent must end every goal by emitting exactly this structured verdict.
+VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "status": {"type": "string", "enum": [TERMINAL_COMPLETE, TERMINAL_BLOCKED]},
+        "summary": {"type": "string"},
+        "blocker": {"type": "string"},
+    },
+    "required": ["status", "summary"],
+}
+
+# Substrings that mean the run stopped because of an account/usage/rate limit
+# rather than a genuine agent decision. Matched case-insensitively against the
+# result object and the stderr tail.
+USAGE_LIMIT_MARKERS = (
+    "usage limit",
+    "rate limit",
+    "rate_limit",
+    "ratelimit",
+    "quota",
+    "credit balance",
+    "insufficient",
+    "429",
+    "overloaded",
+    "resource_exhausted",
+)
+
+JsonObject = dict[str, Any]
+
+
+@dataclass
+class GoalResult:
+    terminal_status: str
+    session_id: str | None
+    structured_output: JsonObject | None
+    result_obj: JsonObject | None
+    error: str | None
+
+
+class ClaudeRunner:
+    """Launches one `claude -p` process per goal and streams its events."""
+
+    def __init__(
+        self,
+        claude_bin: str,
+        repo: pathlib.Path,
+        env: dict[str, str],
+        permission_mode: str,
+        model: str | None,
+        effort: str | None,
+        settings: str | None,
+        extra_args: list[str],
+        stage_timeout: float | None,
+    ) -> None:
+        self.claude_bin = claude_bin
+        self.repo = repo
+        self.env = env
+        self.permission_mode = permission_mode
+        self.model = model
+        self.effort = effort
+        self.settings = settings
+        self.extra_args = extra_args
+        self.stage_timeout = stage_timeout
+
+    def _base_cmd(self) -> list[str]:
+        cmd = [
+            self.claude_bin,
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-mode",
+            self.permission_mode,
+            "--json-schema",
+            json.dumps(VERDICT_SCHEMA),
+        ]
+        if self.model:
+            cmd += ["--model", self.model]
+        if self.effort:
+            cmd += ["--effort", self.effort]
+        if self.settings:
+            cmd += ["--settings", self.settings]
+        cmd += self.extra_args
+        return cmd
+
+    def run(
+        self,
+        prompt_text: str,
+        output_log: pathlib.Path,
+        stderr_log: pathlib.Path,
+        *,
+        session_id: str | None = None,
+        resume_session: str | None = None,
+    ) -> GoalResult:
+        cmd = self._base_cmd()
+        # Mutually exclusive: the CLI rejects --session-id together with --resume
+        # unless --fork-session is also passed, and it reports that on stderr while
+        # still exiting 0 - which would surface here as an opaque "no result event".
+        if resume_session is not None:
+            cmd += ["--resume", resume_session]
+        elif session_id is not None:
+            cmd += ["--session-id", session_id]
+
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=self.repo,
+            env=self.env,
+            bufsize=1,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+
+        stderr_tail: list[str] = []
+        stderr_thread = _start_stderr_drain(proc, stderr_log, stderr_tail)
+
+        # Write the prompt from a separate thread: a wrapped stage prompt can be
+        # hundreds of KiB, well past the OS pipe buffer, so writing it inline
+        # before we start draining stdout would deadlock.
+        def write_stdin() -> None:
+            try:
+                assert proc.stdin is not None
+                proc.stdin.write(prompt_text)
+                proc.stdin.close()
+            except (BrokenPipeError, ValueError):
+                pass
+
+        writer_thread = threading.Thread(target=write_stdin, daemon=True)
+        writer_thread.start()
+
+        result_obj: JsonObject | None = None
+        seen_session_id = session_id or resume_session
+        start = time.monotonic()
+        stop_heartbeat = threading.Event()
+
+        def heartbeat() -> None:
+            while not stop_heartbeat.wait(60):
+                elapsed = int(time.monotonic() - start)
+                if elapsed and elapsed % 300 < 60:
+                    print(f"stage still active: elapsed={elapsed}s", file=sys.stderr)
+
+        hb_thread = threading.Thread(target=heartbeat, daemon=True)
+        hb_thread.start()
+
+        # The stage timeout runs on its own timer rather than being checked inside
+        # the stdout loop below: the case it exists for is a child that stops
+        # emitting events entirely, and in that case the loop is blocked in
+        # readline() and would never reach an inline check.
+        timed_out = threading.Event()
+
+        def watchdog() -> None:
+            if self.stage_timeout is None:
+                return
+            if stop_heartbeat.wait(self.stage_timeout):
+                return  # finished normally
+            timed_out.set()
+            print(f"stage exceeded --stage-timeout={self.stage_timeout}s; terminating", file=sys.stderr)
+            proc.kill()
+
+        wd_thread = threading.Thread(target=watchdog, daemon=True)
+        wd_thread.start()
+
+        try:
+            with output_log.open("w", encoding="utf-8") as log:
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    if not line:
+                        continue
+                    log.write(line + "\n")
+                    log.flush()
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    sid = event.get("session_id")
+                    if isinstance(sid, str):
+                        seen_session_id = sid
+                    if event.get("type") == "result":
+                        result_obj = event
+        finally:
+            stop_heartbeat.set()
+            try:
+                returncode = proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                returncode = proc.wait()
+            if writer_thread.is_alive():
+                writer_thread.join(timeout=1)
+            if stderr_thread.is_alive():
+                stderr_thread.join(timeout=1)
+            if wd_thread.is_alive():
+                wd_thread.join(timeout=1)
+
+        if timed_out.is_set():
+            return GoalResult(
+                terminal_status=TERMINAL_TURN_FAILED,
+                session_id=seen_session_id,
+                structured_output=None,
+                result_obj=result_obj,
+                error=f"stage exceeded --stage-timeout={self.stage_timeout}s",
+            )
+
+        terminal, structured, error = classify_terminal(result_obj, stderr_tail, returncode)
+        if isinstance(result_obj, dict):
+            sid = result_obj.get("session_id")
+            if isinstance(sid, str):
+                seen_session_id = sid
+        return GoalResult(
+            terminal_status=terminal,
+            session_id=seen_session_id,
+            structured_output=structured,
+            result_obj=result_obj,
+            error=error,
+        )
+
+
+def _start_stderr_drain(proc: subprocess.Popen[str], stderr_log: pathlib.Path, tail: list[str]) -> threading.Thread:
+    def drain() -> None:
+        assert proc.stderr is not None
+        with stderr_log.open("w", encoding="utf-8") as stderr:
+            for line in proc.stderr:
+                line = line.rstrip("\n")
+                tail.append(line)
+                del tail[:-80]
+                stderr.write(line + "\n")
+                stderr.flush()
+
+    thread = threading.Thread(target=drain, daemon=True)
+    thread.start()
+    return thread
+
+
+def classify_terminal(
+    result_obj: JsonObject | None,
+    stderr_tail: list[str],
+    returncode: int,
+) -> tuple[str, JsonObject | None, str | None]:
+    """Map a Claude Code result object to a terminal goal status.
+
+    Returns (terminal_status, structured_output, error_detail).
+    """
+    stderr_text = "\n".join(stderr_tail[-40:])
+
+    def looks_usage_limited(*texts: str) -> bool:
+        blob = " ".join(t for t in texts if t).lower()
+        return any(marker in blob for marker in USAGE_LIMIT_MARKERS)
+
+    if not isinstance(result_obj, dict):
+        # No terminal result line: the process died before emitting one.
+        if looks_usage_limited(stderr_text):
+            return TERMINAL_USAGE_LIMITED, None, stderr_text[-400:] or "usage/rate limit"
+        return TERMINAL_TURN_FAILED, None, (stderr_text[-400:] or f"claude exited {returncode} without a result event")
+
+    subtype = str(result_obj.get("subtype") or "")
+    terminal_reason = str(result_obj.get("terminal_reason") or "")
+    api_error = result_obj.get("api_error_status")
+    is_error = bool(result_obj.get("is_error"))
+    structured = result_obj.get("structured_output")
+    structured = structured if isinstance(structured, dict) else None
+    result_text = result_obj.get("result")
+    result_text = result_text if isinstance(result_text, str) else ""
+    # The error variant of the result event has no `result` and no
+    # `structured_output`; its detail lives in an `errors` string array. Without
+    # reading it, every failure detail came out empty or as a bare stderr tail.
+    errors = result_obj.get("errors")
+    error_text = "; ".join(str(e) for e in errors) if isinstance(errors, list) else ""
+
+    error_blob = " ".join(str(x) for x in (subtype, terminal_reason, api_error, error_text, result_text, stderr_text))
+
+    if subtype == "error_max_turns" or terminal_reason == "max_turns":
+        return (
+            TERMINAL_MAX_TURNS,
+            structured,
+            error_text or "reached max turns before completing the goal",
+        )
+
+    # The agent could not produce a schema-conforming verdict within the CLI's
+    # retry budget. The stage work may well be done, so this is recoverable with
+    # --resume-stage rather than a hard failure; the stage check remains the
+    # independent arbiter either way.
+    if subtype == "error_max_structured_output_retries" or terminal_reason == "structured_output_retry_exhausted":
+        return (
+            TERMINAL_BLOCKED,
+            structured,
+            error_text or "agent could not emit a schema-conforming status verdict",
+        )
+
+    if is_error or subtype.startswith("error") or api_error:
+        if looks_usage_limited(error_blob):
+            return (
+                TERMINAL_USAGE_LIMITED,
+                structured,
+                (error_text or result_text or stderr_text)[-400:] or "usage/rate limit",
+            )
+        return (
+            TERMINAL_TURN_FAILED,
+            structured,
+            (error_text or result_text or api_error or stderr_text or "turn failed"),
+        )
+
+    # Successful process: trust the agent verdict.
+    if structured and structured.get("status") in (TERMINAL_COMPLETE, TERMINAL_BLOCKED):
+        status = structured["status"]
+        detail = structured.get("blocker") or structured.get("summary")
+        return status, structured, (detail if status == TERMINAL_BLOCKED else None)
+
+    # Success subtype but no usable verdict: treat as a failed turn so the
+    # pipeline stops rather than silently advancing on an unverified stage.
+    return (
+        TERMINAL_TURN_FAILED,
+        structured,
+        ("goal ended without a valid {status} verdict; " f"result={result_text[:200]!r}"),
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run each prompt file as an exact persisted goal through Claude Code "
+            "(headless `claude -p`). Requires the `claude` CLI on PATH (override "
+            "with --claude-bin)."
+        )
+    )
+    parser.add_argument("prompt_files", nargs="+", type=pathlib.Path)
+    parser.add_argument("--repo", type=pathlib.Path, default=pathlib.Path.cwd())
+    parser.add_argument(
+        "--claude-bin",
+        default=os.environ.get("CLAUDE_BIN", "claude"),
+        help="Claude Code CLI binary. Default: $CLAUDE_BIN or `claude` on PATH.",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=pathlib.Path,
+        default=None,
+        help="Default: $RUN_MULTIGOAL_LOG_DIR or $TMPDIR/claude-multigoal-runs/<UTC timestamp>",
+    )
+    parser.add_argument(
+        "--replace",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help="Literal text replacement applied to every prompt before sending.",
+    )
+    parser.add_argument(
+        "--start-index",
+        type=int,
+        default=1,
+        help="Stage number to use for the first prompt file, useful when continuing from a later stage.",
+    )
+    parser.add_argument(
+        "--resume-stage",
+        type=int,
+        default=None,
+        help=(
+            "Resume an existing terminal stage from --log-dir/manifest.txt using "
+            "its recorded stage_N_session_id, then continue later stages. This is "
+            "for usageLimited/blocker recovery where --start-index would lose the "
+            "stopped session's context."
+        ),
+    )
+    parser.add_argument(
+        "--check-retries",
+        type=int,
+        default=1,
+        help=(
+            "Remediation goals to run when a stage's <prompt>.check.sh fails "
+            "before recording the failure (default: 1)."
+        ),
+    )
+    parser.add_argument(
+        "--no-checks",
+        action="store_true",
+        help="Skip <prompt>.check.sh verification scripts entirely.",
+    )
+    parser.add_argument(
+        "--check-error-policy",
+        choices=("stop", "continue"),
+        default="stop",
+        help=(
+            "What to do when a check script itself is broken (exit outside "
+            "0/1/2 after one retry). Default: stop the pipeline as an infra "
+            "failure so a disabled guardrail cannot pass silently."
+        ),
+    )
+    parser.add_argument(
+        "--permission-mode",
+        default="bypassPermissions",
+        help=(
+            "Claude Code permission mode for unattended runs (default: "
+            "bypassPermissions). Other choices: acceptEdits, auto, dontAsk, manual, plan."
+        ),
+    )
+    parser.add_argument("--model", help="Claude model alias or full id (e.g. opus, sonnet).")
+    parser.add_argument("--effort", help="Reasoning effort: low, medium, high, xhigh, max.")
+    parser.add_argument(
+        "--settings",
+        help="Path to a settings JSON file or a JSON string passed to `claude --settings`.",
+    )
+    parser.add_argument(
+        "--claude-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="Extra verbatim argument appended to every `claude` invocation. May be repeated.",
+    )
+    parser.add_argument(
+        "--stage-timeout",
+        type=float,
+        default=None,
+        help="Optional wall-clock seconds after which a stuck stage is killed (default: no limit).",
+    )
+    parser.add_argument(
+        "--check-timeout",
+        type=float,
+        default=1800,
+        help=(
+            "Seconds before a stage check script is killed and treated as a broken "
+            "check (default: 1800). Without this a hung check hangs the pipeline."
+        ),
+    )
+    parser.add_argument(
+        "--claude-config-dir",
+        type=pathlib.Path,
+        help="Sets CLAUDE_CONFIG_DIR for the agent processes (auth/config home).",
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if args.start_index < 1:
+        raise SystemExit("--start-index must be >= 1")
+    if args.resume_stage is not None and args.resume_stage < 1:
+        raise SystemExit("--resume-stage must be >= 1")
+    if args.resume_stage is not None and args.log_dir is None:
+        raise SystemExit("--resume-stage requires --log-dir pointing at the existing multigoal log directory")
+    return args
+
+
+def timestamp() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def parse_replacements(items: list[str]) -> list[tuple[str, str]]:
+    replacements: list[tuple[str, str]] = []
+    for item in items:
+        if "=" not in item:
+            raise SystemExit(f"--replace expects OLD=NEW, got: {item}")
+        old, new = item.split("=", 1)
+        if not old:
+            raise SystemExit("--replace OLD cannot be empty")
+        replacements.append((old, new))
+    return replacements
+
+
+def replacement_value(replacements: list[tuple[str, str]], name: str) -> str | None:
+    value: str | None = None
+    for old, new in replacements:
+        if old == name:
+            value = new
+    return value
+
+
+def claude_env(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
+    """Pin the agent's auth path and return its config home.
+
+    Unattended bringup runs are hours of high-effort work. An ambient
+    ANTHROPIC_API_KEY takes precedence over the subscription login, so leaving it
+    in the child environment can silently move a whole run onto metered API
+    billing. Mirrors the Codex runner's OPENAI_API_KEY/CODEX_API_KEY hygiene.
+    """
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if explicit is not None:
+        home = explicit.expanduser()
+        env["CLAUDE_CONFIG_DIR"] = str(home)
+        return home
+    return pathlib.Path(env.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser()
+
+
+def resolve_claude_bin(explicit: str | None) -> str:
+    """Resolve the CLI up front so a bad binary fails at launch, not hours in."""
+    candidate = explicit or "claude"
+    found = shutil.which(candidate)
+    if found:
+        return found
+    path = pathlib.Path(candidate).expanduser()
+    if path.is_file() and os.access(path, os.X_OK):
+        return str(path)
+    raise SystemExit(
+        f"The claude CLI ({candidate}) was not found on PATH or is not executable. "
+        "Install Claude Code or pass --claude-bin/$CLAUDE_BIN."
+    )
+
+
+def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
+    text = path.read_text()
+    for old, new in replacements:
+        text = text.replace(old, new)
+    if not text.lstrip().startswith("/goal"):
+        raise SystemExit(f"{path} must start with a /goal command")
+    return text.rstrip() + "\n"
+
+
+def objective_from_prompt(prompt: str) -> str:
+    text = prompt.lstrip()
+    if not text.startswith("/goal"):
+        raise SystemExit("prompt must start with /goal")
+    objective = text[len("/goal") :].strip()
+    if not objective:
+        raise SystemExit("goal objective must not be empty")
+    chars = len(objective)
+    if chars > MAX_GOAL_OBJECTIVE_CHARS:
+        raise SystemExit(
+            f"goal objective is {chars} characters; runner limit is "
+            f"{MAX_GOAL_OBJECTIVE_CHARS}. Put long details in a prompt file and "
+            "make the objective point at that file."
+        )
+    return objective
+
+
+def parse_skill_names(text: str) -> list[str]:
+    return sorted(set(SKILL_RE.findall(text)))
+
+
+def skill_path(repo: pathlib.Path, name: str) -> pathlib.Path | None:
+    candidates = [
+        repo / ".agents" / "skills" / name / "SKILL.md",
+        pathlib.Path.home() / ".claude" / "skills" / name / "SKILL.md",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+# The verdict contract every goal ends on, and the convention that teaches the
+# agent how to interpret the $skill references it will find in the objective and
+# inside the skills themselves.
+SKILL_CONVENTION = (
+    "You are running as one stage of an autonomous, unattended tt-metal model "
+    "bringup pipeline. A runner launched you with a single goal (below) and will "
+    "verify your work with an independent check script after you finish.\n\n"
+    "Skill references: tokens of the form `$skill-name` refer to skills stored at "
+    "`.agents/skills/<skill-name>/SKILL.md` in this repo. Before doing any real "
+    "work, read the SKILL.md of every skill your goal references (listed below) "
+    "and follow its instructions as authoritative for how to do the work. When a "
+    "skill or the goal points at another `$skill-name` you have not read yet, read "
+    "that `.agents/skills/<skill-name>/SKILL.md` (and its sibling files) before "
+    "relying on it."
+)
+
+FRONTMATTER_DESC_RE = re.compile(r"^description:\s*(.*)$", re.MULTILINE)
+
+
+def skill_description(path: pathlib.Path) -> str:
+    """Best-effort one-line description from a SKILL.md YAML frontmatter."""
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return ""
+    match = FRONTMATTER_DESC_RE.search(head)
+    if not match:
+        return ""
+    return match.group(1).strip().strip("\"'").strip()
+
+
+VERDICT_CONTRACT = (
+    "Terminal contract: keep working until the goal's completion requirements are "
+    "genuinely met, then end by emitting the required JSON verdict with "
+    '`status: "complete"`. If it is truly impossible to proceed, emit '
+    '`status: "blocked"` and put the concrete blocker in `blocker`. Your final '
+    "message must be only that JSON verdict object; do all real work via tools "
+    "before it. Do not claim complete unless the requirements are actually "
+    "satisfied — an independent check script runs immediately after you finish."
+)
+
+
+def build_skill_context(repo: pathlib.Path, objective: str) -> tuple[str, list[str]]:
+    """List the skills the objective references so the agent can load each on demand.
+
+    Skills are large and reference each other, so front-loading their full text
+    would waste context and can exceed practical prompt limits. Instead the agent
+    gets each referenced skill's name, path, and one-line description and is told
+    to read the SKILL.md before relying on it (progressive disclosure).
+    """
+    sections: list[str] = [SKILL_CONVENTION]
+    missing: list[str] = []
+    lines: list[str] = []
+    for name in parse_skill_names(objective):
+        path = skill_path(repo, name)
+        if path is None:
+            missing.append(name)
+            continue
+        rel = path.relative_to(repo) if path.is_relative_to(repo) else path
+        desc = skill_description(path)
+        suffix = f" — {desc}" if desc else ""
+        lines.append(f"- ${name}: read {rel}{suffix}")
+    if lines:
+        sections.append("Skills your goal references (read each before use):\n" + "\n".join(lines))
+    if missing:
+        sections.append("Referenced skills with no SKILL.md found (proceed without them): " + ", ".join(missing))
+    return "\n\n".join(sections), missing
+
+
+def wrap_fresh_prompt(objective: str, skill_context: str) -> str:
+    return "\n\n".join(
+        [
+            skill_context,
+            "===== GOAL =====",
+            objective,
+            "===== END GOAL =====",
+            VERDICT_CONTRACT,
+        ]
+    )
+
+
+def wrap_resume_prompt(objective: str, skill_context: str, prompt_copy: pathlib.Path) -> str:
+    continuation = "\n".join(
+        [
+            "Continue this existing multigoal stage after the previous session stopped before the stage was complete.",
+            "",
+            f"Original goal prompt copy: {prompt_copy}",
+            "",
+            "Keep working on the same goal and use the existing artifacts, logs, and code state.",
+            "Do not restart from scratch unless the current artifacts require it.",
+            "The multigoal runner will run this stage's check script after you emit a complete verdict, then continue later stages.",
+        ]
+    )
+    return "\n\n".join(
+        [
+            skill_context,
+            "===== GOAL (original) =====",
+            objective,
+            "===== END GOAL =====",
+            continuation,
+            VERDICT_CONTRACT,
+        ]
+    )
+
+
+def stage_name(index: int, path: pathlib.Path) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.stem).strip("-") or "prompt"
+    return f"{index:02d}-{safe}"
+
+
+def write_manifest_header(
+    path: pathlib.Path,
+    repo: pathlib.Path,
+    claude_bin: str,
+    claude_home: pathlib.Path,
+    args: argparse.Namespace,
+    replacements: list[tuple[str, str]],
+    model_dir: str | None,
+) -> None:
+    hf_model = replacement_value(replacements, "HF_MODEL")
+    path.write_text(
+        "\n".join(
+            [
+                f"started_at_utc={timestamp()}",
+                f"repo={repo}",
+                f"claude_bin={claude_bin}",
+                f"claude_config_dir={claude_home}",
+                f"hf_model={hf_model or ''}",
+                f"model_dir={model_dir or ''}",
+                "runner=claude-code",
+                f"permission_mode={args.permission_mode}",
+                f"model={args.model or ''}",
+                f"effort={args.effort or ''}",
+                "prompt_files:",
+                *[f"- {prompt}" for prompt in args.prompt_files],
+                "",
+            ]
+        )
+    )
+
+
+def append_manifest(path: pathlib.Path, lines: list[str]) -> None:
+    with path.open("a", encoding="utf-8") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+
+def read_manifest(path: pathlib.Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if "=" not in raw or raw.startswith("- "):
+            continue
+        key, value = raw.split("=", 1)
+        values[key] = value
+    return values
+
+
+def next_resume_attempt(manifest_values: dict[str, str], index: int) -> int:
+    prefix = f"stage_{index}_resume_"
+    attempts: list[int] = []
+    for key in manifest_values:
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix) :]
+        number = rest.split("_", 1)[0]
+        if number.isdigit():
+            attempts.append(int(number))
+    return max(attempts, default=0) + 1
+
+
+def execute_goal(
+    runner: ClaudeRunner,
+    repo: pathlib.Path,
+    objective: str,
+    output_log: pathlib.Path,
+    stderr_log: pathlib.Path,
+    on_session_id: Callable[[str], None] | None = None,
+) -> GoalResult:
+    """Run one objective in a fresh session to a terminal verdict.
+
+    The session id is reported through ``on_session_id`` BEFORE the agent starts.
+    Recording it only after the goal returns loses the resume anchor whenever the
+    runner or host dies mid-stage - exactly the case --resume-stage exists for.
+    """
+    skill_context, _missing = build_skill_context(repo, objective)
+    prompt_text = wrap_fresh_prompt(objective, skill_context)
+    session_id = str(uuid.uuid4())
+    if on_session_id is not None:
+        on_session_id(session_id)
+    return runner.run(prompt_text, output_log, stderr_log, session_id=session_id)
+
+
+def execute_resumed_goal(
+    runner: ClaudeRunner,
+    repo: pathlib.Path,
+    objective: str,
+    session_id: str,
+    output_log: pathlib.Path,
+    stderr_log: pathlib.Path,
+    prompt_copy: pathlib.Path,
+) -> GoalResult:
+    """Resume an existing stage session and run one continuation turn."""
+    skill_context, _missing = build_skill_context(repo, objective)
+    prompt_text = wrap_resume_prompt(objective, skill_context, prompt_copy)
+    return runner.run(prompt_text, output_log, stderr_log, resume_session=session_id)
+
+
+def find_check_script(prompt_path: pathlib.Path) -> pathlib.Path | None:
+    candidate = prompt_path.with_name(prompt_path.stem + ".check.sh")
+    return candidate if candidate.exists() else None
+
+
+def requires_model_dir(args: argparse.Namespace) -> bool:
+    if args.no_checks:
+        return False
+    return any(find_check_script(prompt_path) is not None for prompt_path in args.prompt_files)
+
+
+def resolve_model_dir_for_launch(
+    *,
+    replacements: list[tuple[str, str]],
+    manifest_values: dict[str, str],
+    required: bool,
+) -> str | None:
+    replacement_model_dir = replacement_value(replacements, "MODEL_DIR")
+    manifest_model_dir = manifest_values.get("model_dir") or None
+    if replacement_model_dir and manifest_model_dir and replacement_model_dir != manifest_model_dir:
+        raise SystemExit(
+            "MODEL_DIR replacement does not match existing manifest model_dir:\n"
+            f"  --replace MODEL_DIR={replacement_model_dir}\n"
+            f"  manifest model_dir={manifest_model_dir}"
+        )
+    model_dir = replacement_model_dir or manifest_model_dir
+    if required and not model_dir:
+        raise SystemExit(
+            "MODEL_DIR is required when launching prompts with runner-side check scripts. "
+            "Pass --replace MODEL_DIR=models/autoports/<model_dir> so stage gates are "
+            "scoped to the exact autoport directory instead of relying on HF_MODEL fuzzy matching."
+        )
+    return model_dir
+
+
+def replacement_env(replacements: list[tuple[str, str]]) -> dict[str, str]:
+    return {old: new for old, new in replacements if ENV_NAME_RE.match(old)}
+
+
+def run_check_script(
+    script: pathlib.Path,
+    repo: pathlib.Path,
+    extra_env: dict[str, str],
+    check_log: pathlib.Path,
+    check_timeout: float,
+) -> int:
+    env = os.environ.copy()
+    env.update(extra_env)
+    try:
+        result = subprocess.run(
+            ["bash", str(script)],
+            cwd=repo,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=check_timeout or None,
+        )
+        output = result.stdout or ""
+        returncode = result.returncode
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        output = (stdout or "") + f"\n[multigoal] check killed after --check-timeout {check_timeout:.0f}s\n"
+        # Outside the 0/1/2 contract, so the gate treats it as a broken check.
+        returncode = CHECK_TIMEOUT_CODE
+    check_log.write_text(output, encoding="utf-8")
+    tail = "\n".join(output.splitlines()[-15:])
+    print(f"check {script.name} exited {returncode}; log: {check_log}", file=sys.stderr)
+    if tail:
+        print(tail, file=sys.stderr)
+    return returncode
+
+
+def remediation_objective(
+    prompt: str,
+    *,
+    script: pathlib.Path,
+    check_log: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    exit_code: int,
+) -> str:
+    first_line = objective_from_prompt(prompt).splitlines()[0].strip()
+    severity = "CRITICAL" if exit_code >= CHECK_CRITICAL else "ADVISORY"
+    objective = "\n".join(
+        [
+            first_line,
+            "",
+            "Runner-side verification: an independent check script ran after this goal "
+            f"was previously reported complete and FAILED (exit {exit_code}, {severity}).",
+            f"Check script: {script}",
+            f"Full check output: {check_log}",
+            f"Original goal requirements: {prompt_copy}",
+            "Read the check output and treat it as a bug report against the previous "
+            "completion claim. Reproduce the problem, fix the underlying cause, and "
+            "re-verify by running the check script yourself until it exits 0 - or refute "
+            "it with concrete evidence recorded in the stage work_log. All original "
+            "completion requirements still apply.",
+        ]
+    )
+    return objective
+
+
+def append_status(log_dir: pathlib.Path, name: str, goal_status: str, check_status: str) -> None:
+    status = log_dir / "STATUS.md"
+    if not status.exists():
+        status.write_text("| stage | goal | check |\n|---|---|---|\n", encoding="utf-8")
+    with status.open("a", encoding="utf-8") as f:
+        f.write(f"| {name} | {goal_status} | {check_status} |\n")
+
+
+def run_stage_checks(
+    runner: ClaudeRunner,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    name: str,
+    prompt: str,
+    prompt_path: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    replacements: list[tuple[str, str]],
+    manifest_key_prefix: str | None = None,
+) -> str:
+    """Run the stage's check script with remediation. Returns the check status string."""
+    manifest_key_prefix = manifest_key_prefix or f"stage_{index}"
+    script = find_check_script(prompt_path)
+    if script is None or args.no_checks:
+        status = "skipped" if args.no_checks and script is not None else "none"
+        append_manifest(manifest, [f"{manifest_key_prefix}_check={status}"])
+        return status
+
+    extra_env = replacement_env(replacements)
+    extra_env["MULTIGOAL_LOG_DIR"] = str(log_dir)
+    extra_env["MULTIGOAL_STAGE"] = name
+
+    code = -1
+    for attempt in range(args.check_retries + 1):
+        check_log = log_dir / f"{name}.check-{attempt + 1}.log"
+        code = run_check_script(script, repo, extra_env, check_log, args.check_timeout)
+        append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}=exit{code}"])
+        if code not in (CHECK_PASS, CHECK_ADVISORY, CHECK_CRITICAL):
+            # Broken check or environment: retry once for transients.
+            check_log = log_dir / f"{name}.check-{attempt + 1}-retry.log"
+            code = run_check_script(script, repo, extra_env, check_log, args.check_timeout)
+            append_manifest(manifest, [f"{manifest_key_prefix}_check_attempt_{attempt + 1}_retry=exit{code}"])
+        if code == CHECK_PASS:
+            append_manifest(manifest, [f"{manifest_key_prefix}_check=pass"])
+            return "pass"
+        if code not in (CHECK_ADVISORY, CHECK_CRITICAL):
+            append_manifest(manifest, [f"{manifest_key_prefix}_check=check-error(exit{code})"])
+            return f"check-error(exit{code})"
+        if attempt >= args.check_retries:
+            break
+        objective = remediation_objective(
+            prompt,
+            script=script,
+            check_log=check_log,
+            prompt_copy=prompt_copy,
+            exit_code=code,
+        )
+        remediation_log = log_dir / f"{name}.remediation-{attempt + 1}.jsonl"
+        remediation_stderr = log_dir / f"{name}.remediation-{attempt + 1}.stderr.log"
+        print(f"\n== Stage {index} remediation {attempt + 1}: check failed (exit {code}) ==", file=sys.stderr)
+        print(f"+ log: {remediation_log}", file=sys.stderr)
+        result = execute_goal(
+            runner,
+            repo,
+            objective,
+            remediation_log,
+            remediation_stderr,
+            on_session_id=lambda sid: append_manifest(
+                manifest, [f"{manifest_key_prefix}_remediation_{attempt + 1}_session_id={sid}"]
+            ),
+        )
+        append_manifest(
+            manifest,
+            [f"{manifest_key_prefix}_remediation_{attempt + 1}_terminal_status={result.terminal_status}"],
+        )
+        if result.terminal_status != TERMINAL_COMPLETE:
+            detail = f": {result.error}" if result.error else ""
+            print(f"remediation goal ended {result.terminal_status}{detail}", file=sys.stderr)
+            break
+
+    status = "critical-fail" if code >= CHECK_CRITICAL else "advisory-fail"
+    append_manifest(manifest, [f"{manifest_key_prefix}_check={status}"])
+    return status
+
+
+def _finish_stage(
+    runner: ClaudeRunner,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    name: str,
+    prompt: str,
+    prompt_path: pathlib.Path,
+    prompt_copy: pathlib.Path,
+    replacements: list[tuple[str, str]],
+    result: GoalResult,
+    manifest_key_prefix: str,
+    stage_label: str,
+) -> int:
+    """Shared post-goal handling for fresh and resumed stages."""
+    append_manifest(manifest, [f"{manifest_key_prefix}_terminal_status={result.terminal_status}"])
+    print(f"stage_terminal_status={result.terminal_status}", file=sys.stderr)
+
+    if result.terminal_status == TERMINAL_TURN_FAILED:
+        append_status(log_dir, name, result.terminal_status, "not-run")
+        print(f"Stopping after {stage_label} {index}: turn failed: {result.error}", file=sys.stderr)
+        return 5
+    if result.terminal_status != TERMINAL_COMPLETE:
+        append_status(log_dir, name, result.terminal_status, "not-run")
+        detail = f": {result.error}" if result.error else ""
+        print(f"Stopping after {stage_label} {index}: goal is {result.terminal_status}{detail}", file=sys.stderr)
+        return 3
+
+    check_status = run_stage_checks(
+        runner,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+        manifest_key_prefix=manifest_key_prefix,
+    )
+    append_status(log_dir, name, result.terminal_status, check_status)
+    if check_status == "critical-fail":
+        print(
+            f"Stopping after {stage_label} {index}: verification failed critically after "
+            f"{args.check_retries} remediation attempt(s). Artifacts are preserved; "
+            "later stages would build on a broken base.",
+            file=sys.stderr,
+        )
+        return 6
+    if check_status.startswith("check-error") and args.check_error_policy == "stop":
+        print(
+            f"Stopping after {stage_label} {index}: the verification check itself failed "
+            f"({check_status}). This is a runner/environment fault, not a model verdict. "
+            "Fix the check or environment, then resume.",
+            file=sys.stderr,
+        )
+        return 7
+    return 0
+
+
+def run_stage(
+    runner: ClaudeRunner,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    prompt_copy.write_text(prompt)
+    output_log = log_dir / f"{name}.jsonl"
+    stderr_log = log_dir / f"{name}.stderr.log"
+    _skill_context, missing_skills = build_skill_context(repo, objective)
+
+    print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    print(f"+ objective_chars: {len(objective)}", file=sys.stderr)
+    if missing_skills:
+        print(f"+ missing skill paths: {', '.join(missing_skills)}", file=sys.stderr)
+
+    if args.dry_run:
+        output_log.write_text(objective)
+        check_script = find_check_script(prompt_path)
+        append_manifest(
+            manifest,
+            [
+                f"stage_{index}_dry_run=true",
+                f"stage_{index}_objective_chars={len(objective)}",
+                f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+                f"stage_{index}_check_script={check_script if check_script else 'none'}",
+            ],
+        )
+        return 0
+
+    append_manifest(
+        manifest,
+        [
+            f"stage_{index}_objective_chars={len(objective)}",
+            f"stage_{index}_skills={','.join(parse_skill_names(objective))}",
+            f"stage_{index}_missing_skills={','.join(missing_skills)}",
+        ],
+    )
+
+    result = execute_goal(
+        runner,
+        repo,
+        objective,
+        output_log,
+        stderr_log,
+        on_session_id=lambda sid: append_manifest(manifest, [f"stage_{index}_session_id={sid}"]),
+    )
+
+    return _finish_stage(
+        runner,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+        result,
+        manifest_key_prefix=f"stage_{index}",
+        stage_label="stage",
+    )
+
+
+def run_resumed_stage(
+    runner: ClaudeRunner,
+    args: argparse.Namespace,
+    repo: pathlib.Path,
+    log_dir: pathlib.Path,
+    manifest: pathlib.Path,
+    index: int,
+    prompt_path: pathlib.Path,
+    replacements: list[tuple[str, str]],
+    manifest_values: dict[str, str],
+) -> int:
+    prompt = load_prompt(prompt_path, replacements)
+    objective = objective_from_prompt(prompt)
+    name = stage_name(index, prompt_path)
+    prompt_copy = log_dir / f"{name}.prompt.txt"
+    if not prompt_copy.exists():
+        prompt_copy.write_text(prompt, encoding="utf-8")
+    session_id = manifest_values.get(f"stage_{index}_session_id")
+    if not session_id:
+        raise RuntimeError(f"cannot resume stage {index}: manifest has no stage_{index}_session_id")
+    attempt = next_resume_attempt(manifest_values, index)
+    resume_name = f"{name}.resume-{attempt}"
+    output_log = log_dir / f"{resume_name}.jsonl"
+    stderr_log = log_dir / f"{resume_name}.stderr.log"
+
+    print(f"\n== Resume stage {index}: {prompt_path} ==", file=sys.stderr)
+    print(f"+ session: {session_id}", file=sys.stderr)
+    print(f"+ log: {output_log}", file=sys.stderr)
+    append_manifest(
+        manifest,
+        [
+            f"stage_{index}_resume_{attempt}_started_at_utc={timestamp()}",
+            f"stage_{index}_resume_{attempt}_session_id={session_id}",
+        ],
+    )
+
+    result = execute_resumed_goal(runner, repo, objective, session_id, output_log, stderr_log, prompt_copy)
+
+    return _finish_stage(
+        runner,
+        args,
+        repo,
+        log_dir,
+        manifest,
+        index,
+        resume_name,
+        prompt,
+        prompt_path,
+        prompt_copy,
+        replacements,
+        result,
+        manifest_key_prefix=f"stage_{index}_resume_{attempt}",
+        stage_label="resumed stage",
+    )
+
+
+def main() -> int:
+    args = parse_args()
+    repo = args.repo.expanduser().resolve()
+    env = os.environ.copy()
+    claude_home = claude_env(env, args.claude_config_dir)
+    default_log_root = pathlib.Path(
+        os.environ.get(
+            "RUN_MULTIGOAL_LOG_DIR",
+            pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "claude-multigoal-runs",
+        )
+    )
+    log_dir = args.log_dir or default_log_root / timestamp()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    replacements = parse_replacements(args.replace)
+    manifest = log_dir / "manifest.txt"
+    if args.resume_stage is not None and not manifest.exists():
+        raise SystemExit(f"--resume-stage requires an existing manifest: {manifest}")
+    manifest_values = read_manifest(manifest) if args.resume_stage is not None else {}
+    model_dir = resolve_model_dir_for_launch(
+        replacements=replacements,
+        manifest_values=manifest_values,
+        required=requires_model_dir(args),
+    )
+    if model_dir and replacement_value(replacements, "MODEL_DIR") is None:
+        replacements.append(("MODEL_DIR", model_dir))
+    claude_bin = resolve_claude_bin(args.claude_bin)
+    if args.resume_stage is None:
+        write_manifest_header(manifest, repo, claude_bin, claude_home, args, replacements, model_dir)
+    elif model_dir and not manifest_values.get("model_dir"):
+        append_manifest(manifest, [f"model_dir={model_dir}"])
+
+    # Validate every prompt up front so a malformed late-stage prompt cannot kill
+    # a run hours in.
+    for prompt_path in args.prompt_files:
+        objective_from_prompt(load_prompt(prompt_path, replacements))
+
+    runner = ClaudeRunner(
+        claude_bin=claude_bin,
+        repo=repo,
+        env=env,
+        permission_mode=args.permission_mode,
+        model=args.model,
+        effort=args.effort,
+        settings=args.settings,
+        extra_args=args.claude_arg,
+        stage_timeout=args.stage_timeout,
+    )
+
+    if args.dry_run:
+        for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+            if args.resume_stage is not None and index < args.resume_stage:
+                continue
+            code = run_stage(runner, args, repo, log_dir, manifest, index, prompt_path, replacements)
+            if code != 0:
+                return code
+        return 0
+
+    manifest_values = read_manifest(manifest)
+    for index, prompt_path in enumerate(args.prompt_files, start=args.start_index):
+        if args.resume_stage is not None and index < args.resume_stage:
+            continue
+        if args.resume_stage is not None and index == args.resume_stage:
+            code = run_resumed_stage(
+                runner, args, repo, log_dir, manifest, index, prompt_path, replacements, manifest_values
+            )
+        else:
+            code = run_stage(runner, args, repo, log_dir, manifest, index, prompt_path, replacements)
+        if code != 0:
+            return code
+
+    print(f"\nAll {len(args.prompt_files)} goals completed.", file=sys.stderr)
+    print(f"Logs: {log_dir}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
