@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_tp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
@@ -150,6 +150,7 @@ def run_model(
     upstream_activation = _UPSTREAM_ACT[routed_activation]
     if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU):
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
