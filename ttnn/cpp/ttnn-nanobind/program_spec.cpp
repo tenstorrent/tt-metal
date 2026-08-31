@@ -349,7 +349,11 @@ void py_module_types(nb::module_& mod) {
         .def(nb::init<>())
         .def_rw("fpu_math_fidelity", &exp::ComputeGen1Config::fpu_math_fidelity)
         .def_rw("sfpu_precision_mode", &exp::ComputeGen1Config::sfpu_precision_mode)
-        .def_rw("bfp_pack_precision_mode", &exp::ComputeGen1Config::bfp_pack_precision_mode);
+        .def_rw("bfp_pack_precision_mode", &exp::ComputeGen1Config::bfp_pack_precision_mode)
+        // Halves the DST tile budget, which tt/unified/math.hpp's kMaxDstTiles must follow.
+        // The harness sets this and emits TT_UNIFIED_DST_32BIT from the same value, and the
+        // compute projection static_asserts the two against each other.
+        .def_rw("enable_32_bit_dest", &exp::ComputeGen1Config::enable_32_bit_dest);
 
     nb::class_<exp::KernelAdvancedOptions>(mod, "KernelAdvancedOptions")
         .def(nb::init<>())
