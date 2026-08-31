@@ -61,8 +61,14 @@ inline __attribute__((always_inline)) void begin_recording()
 }
 
 template <RecordBehavior Behavior>
-inline __attribute__((always_inline)) void begin_recording(const BufferRange range)
+inline __attribute__((always_inline)) void begin_recording(BufferRange range)
 {
+#ifdef ENABLE_LLK_ASSERT
+    // The diagnostic range check ahead of this call leaves a specialized code path on which the
+    // count is a provably invalid constant, which the recording intrinsic rejects at compile
+    // time. Keeping the value opaque removes that path; the register constraint adds no code.
+    asm("" : "+r"(range.count));
+#endif
     __builtin_rvtt_ttreplay(range.start, encoded_count(range.count), Behavior == RecordBehavior::RecordAndExecute, true);
 }
 
