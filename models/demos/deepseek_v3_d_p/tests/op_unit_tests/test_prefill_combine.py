@@ -18,14 +18,15 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
@@ -58,53 +59,17 @@ def run_combine(
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
-    num_links,
     topology,
     use_predictable_data,
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
-    cmb_version,
-    is_ci_env,
-    is_ci_v2_env,
+    num_links=2,
+    cmb_version=1,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
     num_experts_per_tok) shape axis."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
-        pytest.skip("8-chip perf only runs with random data")
-
-    # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
-    # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
-    # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
-    if use_fp8_output and use_predictable_data:
-        pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
-
-    if use_fp8_output and not run_pcc_check:
-        pytest.skip("fp8 perf test doesn't run PCC")
-
-    # The fp8 output path is only wired up in combine_program_factory.cpp inside the
-    # is_tile_layout branch (the c_18 untilized_output CB swap to Fp8_e4m3). The ROW_MAJOR
-    # path has no untilize stage to retarget, so fp8 + row_major isn't a supported combo.
-    if use_fp8_output and dispatched_buffer_layout != ttnn.TILE_LAYOUT:
-        pytest.skip("fp8 combine output is only supported with TILE layout")
-
-    # FP8_E4M3 hardware support (Fp8_e4m3 DataFormat in CBs, packer FP8 path) only exists on
-    # Blackhole. TtCombineModule already raises ValueError if fp8_output is requested on
-    # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
-    if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
-        pytest.skip("fp8 combine output requires Blackhole hardware")
-
-    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
-
-    # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
-    # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
-    if (is_ci_env or is_ci_v2_env) and is_blackhole() and num_links == 1 and 1 in tuple(mesh_device.shape):
-        pytest.skip("1-link linear/ring coverage does not run on BH in CI")
-
     torch.manual_seed(42)
 
     num_devices = mesh_device.get_num_devices()
@@ -375,8 +340,10 @@ def run_combine(
 class _Test_Mesh:
     full_model_mesh: tuple[int, int]  # Intended for full production-scale testing
     target_meshes: list[
+        # Any mesh smaller than the full_model_mesh will be assumed to be intended for a proxy test and
+        # will result in model hyperparams dowscaling according to the op-specific downscaling function
         dict[tuple[int, int], ttnn.FabricConfig]
-    ]  # Intended for [0..N] proxy tests, typically on smaller HW
+    ]
 
 
 SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
@@ -392,26 +359,34 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
 )
 
 
+ONLY_PROXY_QB_MESH = _Test_Mesh(
+    (8, 4),
+    {
+        (2, 2): ttnn.FabricConfig.FABRIC_2D,
+    },
+)
+
+
 # Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes a pcc
 # param (seq 128, // 16 experts, top-4) and a perf param (seq 640, // 4 experts, top-2). DeepSeek
 # V3 is the baseline and runs by default; every other model is gated behind
 # @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
 COMBINE_MODELS = [
-    ("dsv3", DeepSeekV3Config, False, SINGLE_GLX_AND_PROXY_MESHES),
-    ("glm_51", GLM51Config, True, SINGLE_GLX_AND_PROXY_MESHES),
-    ("kimi_k26", KimiK26Config, True, SINGLE_GLX_AND_PROXY_MESHES),
-    ("minimax_m27", MiniMaxM27Config, True, SINGLE_GLX_AND_PROXY_MESHES),
-    ("dsv4_pro", DeepSeekV4ProConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
-    ("dsv4_flash", DeepSeekV4FlashConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
-    ("gptoss_120b", GptOss120BConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
+    ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
+    ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
+    ("kimi_k26", KimiK26Config, ONLY_PROXY_QB_MESH),
+    ("minimax_m27", MiniMaxM27Config, ONLY_PROXY_QB_MESH),
+    ("dsv4_pro", DeepSeekV4ProConfig, ONLY_PROXY_QB_MESH),
+    ("dsv4_flash", DeepSeekV4FlashConfig, ONLY_PROXY_QB_MESH),
+    ("gptoss_120b", GptOss120BConfig, ONLY_PROXY_QB_MESH),
 ]
 
 
 # Scales down model hyper-params for a given hardware to obtain good/meaningful proxy test
 # How exactly to scale it down is op-specific (more precisely - even op-implementation specific)
 # Thus it makes sense for this to be combine-specific function
-def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
+def _model_scaledown(model, ref_mesh, target_mesh, pcc_only):
     # number of experts has to be reduced to preserve the experts per chip
     ref_num_chips = ref_mesh[0] * ref_mesh[1]
     target_num_chips = target_mesh[0] * target_mesh[1]
@@ -420,8 +395,11 @@ def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
         model.NUM_ROUTED_EXPERTS = (model.NUM_ROUTED_EXPERTS // ref_num_chips) * target_num_chips
 
     # number of experts selected to proces every token (top-K) has to be scaled to preserve average expert activation per dispatch group
+    # Clamped at 1: the ideal scale is topK * target_groups / ref_groups, which lands below 1 whenever the
+    # model routes to fewer experts than the reference mesh has dispatch groups (e.g. GPT-OSS top-4 on a
+    # 4x8 reference collapsed to a single-group proxy). Routing every token to zero experts is not a test.
     if ref_mesh[1] != target_mesh[1]:
-        model.NUM_EXPERTS_PER_TOKEN = (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1]
+        model.NUM_EXPERTS_PER_TOKEN = max(1, (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1])
 
     # further reduce these two hyperparams in case of pcc check test to get faster, although not perf-representative test
     if pcc_only:
@@ -448,24 +426,17 @@ def _mesh_id(mesh, fabric_cfg):
 
 def _cross_product_conflated_cmb_test_dimensions():
     params = []
-    for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
+    for model_name, model_config_class, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
             device_params = fabric_to_device_params(fabric_cfg)
             topo_marker = _topo_marker(target_mesh, fabric_cfg)
-            mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            marks = (
-                (pytest.mark.extended_model, mesh_requirements_marker)
-                if is_extended_model
-                else (mesh_requirements_marker)
-            )
+            marks = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
             test_scenarios = [
                 ("pcc", 128, 4, True),
                 ("perf_no_pcc", 640, 8, False),
             ]
             for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown_for_combine(
-                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
-                )
+                model_config = _model_scaledown(model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc)
 
                 num_experts = model_config.NUM_ROUTED_EXPERTS
                 topk = model_config.NUM_EXPERTS_PER_TOKEN
@@ -489,36 +460,77 @@ def _cross_product_conflated_cmb_test_dimensions():
     return params
 
 
+def _unsupported_param_combos(**params):
+    mesh_device = params["mesh_device"]
+    run_pcc_check = params["run_pcc_check"]
+    use_predictable_data = params["use_predictable_data"]
+    use_fp8_output = params["use_fp8_output"]
+    dispatched_buffer_layout = params["dispatched_buffer_layout"]
+    is_ci_env = params["is_ci_env"]
+    is_ci_v2_env = params["is_ci_v2_env"]
+    is_bh = params["is_bh"]
+
+    # This function is called before test cases are fully formed, so 'mesh_device' here, unlike in the test_ttnn_combine
+    # function is not fully formed device object. Rather it is the first parametrization axis argument that parametrization
+    # logic itterates over (which is also named 'mesh_device') and which is a simple shape tuple.
+    num_devices = mesh_device[0] * mesh_device[1]
+    if num_devices >= 8 and not run_pcc_check and use_predictable_data:
+        return True
+
+    # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
+    # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
+    # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
+    if use_fp8_output and use_predictable_data:
+        return True
+
+    # fp8 perf test doesn't run PCC
+    if use_fp8_output and not run_pcc_check:
+        return True
+
+    # The fp8 output path is only wired up in combine_program_factory.cpp inside the
+    # is_tile_layout branch (the c_18 untilized_output CB swap to Fp8_e4m3). The ROW_MAJOR
+    # path has no untilize stage to retarget, so fp8 + row_major isn't a supported combo.
+    if use_fp8_output and dispatched_buffer_layout != ttnn.TILE_LAYOUT:
+        return True
+
+    # FP8_E4M3 hardware support (Fp8_e4m3 DataFormat in CBs, packer FP8 path) only exists on
+    # Blackhole. TtCombineModule already raises ValueError if fp8_output is requested on
+    # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
+    if use_fp8_output and not is_bh:
+        return True
+
+    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        return True
+
+    # Otherwise don't uncollect the test case. Keep it.
+    return False
+
+
 # Test parametrization axes are semantically
 # 1. Chip count and layout
 #   1.1. mesh column size, which is consequently the size of a dispatch group
 #   1.2. mesh row size, which is consequently the number of dispatch groups
-# 2. Number of fabric links in a single chip-to-chip connection. (Other fabric props are either cherry-picked
-#    for the test case, such as fabric config or packet size, or are derivable from them, like fabric topology)
-# 3. Model-related (embed-dim, topK, num-experts, ...)
-# 4. Input related (ISL, tile/RM, datum format, ...)
-# 5. Scenario/type of test
-#   5.1. accuracy or perf test
-#   5.2. production test / proxy test on smaller hardware (like single DG simulation) / op generality test
-#   5.3. random or predictable (fixed) data
+# 2. Model-related (embed-dim, topK, num-experts, ...)
+# 3. Input related (ISL, tile/RM, datum format, ...)
+# 4. Scenario/type of test
+#   4.1. accuracy or perf test
+#   4.2. production test / proxy test on smaller hardware (like single DG simulation) / op generality test
+#   4.3. random or predictable (fixed) data
 #
 # Each level-2 item in this list is a valid parametrization axis (semantically).
-# However there are two reasons some of them are conflated into single parametrization axis.
-# 1. pytest requires some marks to be populated. And it allows marks to be calculated only based on a single axis values.
-#    Some of our marks are besed on multiple semantic axes (e.g. topology marker is calculated based on 1.1, 1.2, 2.1, 2.2 and 2.3)
-#    Industry standard work-around is conflating these axes into a single @pytest.mark.parametrize axis + a function which generates
-#    its values as a cross product of the semantical axis which are conflated. Then calculate marks based on the value of the resulting
-#    conflated axis, which from the perspective of the pytest is a single parametrization axis.
-# 2. Even on a semantical level, we don't want full cross product of some axes. E.g. production test makes sense only on 8x4 mesh.
-#    Or fp8 test doesn't run PCC. Or fabric 1d doesn't support both x and y rings. Such combination are either prevented during necesarry
-#    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
+# However pytest requires some marks to be populated. And it allows marks to be calculated only based on a single axis values.
+# Some of our marks are besed on multiple semantic axes (e.g. topology marker is calculated based on 1.1, 1.2, 2.1, 2.2 and 2.3)
+# Industry standard work-around is conflating these axes into a single @pytest.mark.parametrize axis + a function which generates
+# its values as a cross product of the semantical axis which are conflated. Then calculate marks based on the value of the resulting
+# conflated axis, which from the perspective of the pytest is a single parametrization axis.
 #
+@pytest.mark.uncollect_if(pred=_unsupported_param_combos)
 @pytest.mark.parametrize(
     "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
 @pytest.mark.parametrize(
     "dispatched_buffer_layout",
@@ -534,7 +546,6 @@ def test_ttnn_combine(
     num_routed_experts,
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
-    num_links,
     use_predictable_data,
     run_pcc_check,
     dispatched_buffer_layout,
@@ -550,19 +561,85 @@ def test_ttnn_combine(
         num_routed_experts,
         num_experts_per_tok,
         dispatch_buffer_capacity_factor,
-        num_links,
         topology,
         use_predictable_data,
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
-        cmb_version=1,
-        is_ci_env=is_ci_env,
-        is_ci_v2_env=is_ci_v2_env,
     )
 
 
-# ── combine_fabric2d ──────────────────────────────────────────────────────────────────────────
+def _all_externally_owned_test_cases():
+    def _tc(mesh, fabric_cfg, seq_len_per_chip, num_links, model):
+        model_name = model.__class__.__name__.removesuffix("Config")
+        return pytest.param(
+            mesh,
+            fabric_to_device_params(fabric_cfg),
+            seq_len_per_chip,
+            model.EMB_SIZE,
+            model.NUM_ROUTED_EXPERTS,
+            model.NUM_EXPERTS_PER_TOKEN,
+            num_links,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg)),
+            id=f"{model_name}-{mesh[0]}x{mesh[1]}-{fabric_cfg.name.lower()}-{seq_len_per_chip}-{num_links}link-rand-pcc-tile-bf16",
+        )
+
+    return [
+        # Full scale mesh tests as invoked in production scenarios
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1024, 4, GptOss20BConfig()),
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 128, 2, GptOss120BConfig()),
+        _tc((4, 8), ttnn.FabricConfig.FABRIC_1D, 1280, 2, GptOss120BConfig()),
+        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 128, 2, MiniMaxM3Config()),
+        _tc((8, 4), ttnn.FabricConfig.FABRIC_1D, 640, 2, MiniMaxM3Config()),
+        # Proxy tests executable on CIs which run op unit tests
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1024, 4, _model_scaledown(GptOss20BConfig(), (4, 8), (4, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
+        _tc((4, 1), ttnn.FabricConfig.FABRIC_1D, 1280, 2, _model_scaledown(GptOss120BConfig(), (4, 8), (4, 1), False)),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 128, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
+        _tc((8, 1), ttnn.FabricConfig.FABRIC_1D, 640, 2, _model_scaledown(MiniMaxM3Config(), (8, 4), (8, 1), False)),
+    ]
+
+
+def _unsupported_externally_owned_param_combos(**params):
+    # Blackhole exposes 2 fabric links per device, Wormhole 4.
+    if params["num_links"] > 2 and params["is_bh"]:
+        return True
+
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_unsupported_externally_owned_param_combos)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, num_links",
+    _all_externally_owned_test_cases(),
+    indirect=["mesh_device", "device_params"],
+)
+def test_externally_owned_cases(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    num_links,
+):
+    # Same derivation test_ttnn_combine uses: combine drives cluster_axis=0, so it wants the
+    # sp-axis topology of whatever fabric the case opened (Linear for the unwrapped FABRIC_1D).
+    topology = per_axis_topology(device_params["fabric_config"])[0]
+    run_combine(
+        mesh_device,
+        seq_len_per_chip,
+        emb_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        2,  # buffer capacity factor
+        topology,
+        use_predictable_data=False,
+        run_pcc_check=True,
+        dispatched_buffer_layout=ttnn.TILE_LAYOUT,
+        use_fp8_output=False,
+        num_links=num_links,
+    )
 
 
 def _cmb_fabric2d_dimensions():
@@ -580,7 +657,7 @@ def _cmb_fabric2d_dimensions():
         ("pcc", 128, 4, True),
         ("perf_no_pcc", 640, 8, False),
     ):
-        model_config = _model_scaledown_for_combine(
+        model_config = _model_scaledown(
             DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
         )
         params.append(
@@ -615,8 +692,6 @@ def test_ttnn_combine_fabric2d(
     dispatch_buffer_capacity_factor,
     topology,
     run_pcc_check,
-    is_ci_env,
-    is_ci_v2_env,
 ):
     run_combine(
         mesh_device,
@@ -632,6 +707,4 @@ def test_ttnn_combine_fabric2d(
         dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
         use_fp8_output=False,
         cmb_version=2,
-        is_ci_env=is_ci_env,
-        is_ci_v2_env=is_ci_v2_env,
     )

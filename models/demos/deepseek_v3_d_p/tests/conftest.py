@@ -309,7 +309,9 @@ def pytest_collection_modifyitems(config, items):
             if mesh_shape in allowed_fabric_dct.keys():
                 allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
 
-        if requested_fabric_cfg not in allowed_fabric_cfgs:
+        # A case with no device_params fabric never opens a fabric, so it cannot request an
+        # unfeasible mesh/fabric combination — only device-count matching below applies to it.
+        if requested_fabric_cfg is not None and requested_fabric_cfg not in allowed_fabric_cfgs:
             item.add_marker(
                 pytest.mark.skip(
                     reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
