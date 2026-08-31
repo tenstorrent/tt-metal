@@ -24,7 +24,39 @@ import time
 from collections import defaultdict
 
 H = struct.Struct("<4sHHQIIQQIIIIIIII")
-V = struct.Struct("<IIHHHHIIIIII")
+# PerCoreView, field for field against common/shm_schema.hpp.
+#
+# The previous format string was "<IIHHHHIIIIII". It is also 40 bytes, so
+# `assert V.size == 40` PASSED while every field was shifted: what was read as
+# compute_busy was dispatch_busy, what was read as sfpu_busy was compute_busy,
+# and samples_seen was noc1_out_mbps. A size check cannot catch a wrong SHAPE --
+# only naming the fields can, so they are named here and indexed by name below.
+V_FIELDS = [
+    "noc_x",
+    "noc_y",
+    "logical_x",
+    "logical_y",
+    "is_remote",
+    "dispatched",  # 6 x u8
+    "sfpu_busy_p1000",
+    "dispatch_busy_p1000",
+    "compute_busy_p1000",  # u16...
+    "unpack_busy_p1000",
+    "pack_busy_p1000",
+    "stall_p1000",
+    "noc0_in_mbps",
+    "noc0_out_mbps",
+    "noc1_in_mbps",
+    "noc1_out_mbps",
+    "samples_seen",
+    "last_kernel_id",
+    "reserved_1",  # 3 x u32 after 2 pad
+]
+V = struct.Struct("<6B10H2x3I")
+assert V.size == 40, V.size
+assert len(V_FIELDS) == 19, "field names must match the format"
+VI = {n: i for i, n in enumerate(V_FIELDS)}
+
 assert H.size == 72, H.size
 assert V.size == 40, V.size
 
@@ -49,10 +81,10 @@ def sample():
         fnz = 0
         for i in range(nc):
             v = V.unpack_from(b, H.size + i * V.size)
-            fsum += v[2]
-            ssum += v[3]
-            dsum += v[4]
-            if v[2]:
+            fsum += v[VI["compute_busy_p1000"]]
+            ssum += v[VI["sfpu_busy_p1000"]]
+            dsum += v[VI["dispatch_busy_p1000"]]
+            if v[VI["compute_busy_p1000"]]:
                 fnz += 1
         out[os.path.basename(f)] = {
             "t": now,

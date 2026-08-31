@@ -12,8 +12,8 @@ from collections import defaultdict
 
 
 def main() -> int:
-    raw_path, ph_path = sys.argv[1], sys.argv[2]
-    metric = sys.argv[3] if len(sys.argv) > 3 else "F"
+    raw_path, ph_path = sys.argv[1], sys.argv[VI["compute_busy_p1000"]]
+    metric = sys.argv[VI["sfpu_busy_p1000"]] if len(sys.argv) > 3 else "F"
     rows = [json.loads(l) for l in open(raw_path) if l.strip()]
     ph = json.load(open(ph_path))
     per = defaultdict(list)

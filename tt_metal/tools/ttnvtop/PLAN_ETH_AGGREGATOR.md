@@ -2697,3 +2697,62 @@ flag. Last known-good budgeted baseline remains slope 0.281-0.307, R^2 0.976-0.9
 Both changes were argued from the transport model (cost is per transaction, so fewer
 transactions must be better) and both were wrong for reasons only the hardware knew. On
 this stack, a transport optimisation is a hypothesis until a duty ramp says otherwise.
+
+## 5ab. RETRACTION: the probe's struct format was the wrong SHAPE at the right SIZE -- 2026-08-31
+
+`shm_probe.py` and `calib_report.py` parsed `PerCoreView` as `"<IIHHHHIIIIII"`. That is
+40 bytes, so `assert V.size == 40` passed -- and every field was shifted by one:
+
+    label in the reports   index   what it ACTUALLY read
+    F  (FPU)               v[2]    dispatch_busy_p1000
+    S  (SFPU)              v[3]    compute_busy_p1000   <- the real FPU
+    D  (dispatch)          v[4]    unpack_busy_p1000
+    samples_seen           v[8]    noc1_out_mbps
+
+Proven by offset arithmetic against common/shm_schema.hpp and by round-tripping a synthetic
+record: the old format decodes a struct whose compute=333/sfpu=111/dispatch=222 as
+compute=222, sfpu=333, dispatch=444.
+
+This is the THIRD time a hand-written parser of this struct has been wrong (5-series notes
+record a 76-vs-72 header and a 38-vs-40 stride). A size assertion cannot catch a wrong
+shape. Both scripts now use `"<6B10H2x3I"` with a named `V_FIELDS`/`VI` map and are indexed
+by name, never by position.
+
+### What this VOIDS
+
+  - **"SFPU is a duplicate of FPU" (5w) is RETRACTED.** It compared v[2] against v[3], i.e.
+    dispatch_busy against compute_busy. The data never contained SFPU at all. SFPU is
+    unmeasured, not broken. The `--sfpu` A/B was never run to completion either.
+  - **The FLOP cross-check is RETRACTED.** 27.58 TFLOP/s / 21.93% -> "125.8 TFLOP/s implied
+    bf16 peak" used dispatch_busy as the divisor. Its agreement with a plausible WH peak was
+    coincidence.
+  - **The FPU duty-cycle calibration must be RE-RUN.** The linearity (R^2 0.976-0.996,
+    intercept ~0) is real but describes `dispatch_busy_p1000` tracking duty, not FPU.
+  - **The `--remote-util-only` backout was WRONG, and the mechanism is now obvious.** That
+    flag skips the mailbox reads, so `have_dispatch` stays false and `dispatch_busy_p1000`
+    is never written -- it stays 0 BY DESIGN. The probe then plotted exactly that field and
+    reported "remote chips read 0.00%". The flag was doing what it was built to do; the
+    measurement was reading the one field the flag deliberately stops updating. It was
+    removed on the strength of that artifact and should be reconsidered on real FPU data.
+
+### What SURVIVES, and why
+
+  - **DRAM ratio 1.00 at four load levels.** Read from the HEADER (`h[12]`/`h[13]`), whose
+    format string has 16 fields and does match the C struct. Unaffected.
+  - **Freshness / staleness (0 stalls in 16,912 samples).** Header field `last_update_us`.
+  - **agg-loss = 0 on all 8 chips.** Counted by the collector in C++ from the journal header,
+    never through this parser.
+  - **Llama 10.28-10.35 tok/s and the CCL throughput numbers.** From the workload's own JSON.
+  - **The 100% clamp fix.** Found by READING THE CODE -- the host sampler has
+    `fpu_d <= wall_d`, the aggregator kernel did not. That asymmetry is real and independent
+    of any measurement; the "flat 100.0%" screenshot that drew attention to it was
+    mislabelled, but the defect it led to was not.
+  - Everything found by code inspection: the unlink-vs-flock race, path-vs-inode in the
+    viewer, the two-writers race, the missing shutdown, the system-wide ARC_MSG lock.
+
+### Lesson
+
+Every conclusion drawn through this parser needed a second, independent path before being
+believed. The DRAM number had one (analytic bytes-moved) and survived. The FPU number's
+"independent" check went through the same broken parser and did not. When a cross-check
+shares a component with the thing it is checking, it is not a cross-check.
