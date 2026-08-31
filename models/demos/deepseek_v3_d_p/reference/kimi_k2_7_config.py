@@ -6,15 +6,11 @@
 Kimi K2.7-Code Model Configuration (text tower only).
 
 Single source of truth for model dimension constants.
-Values from HuggingFace config.json for Kimi-K2.7-Code (``text_config``), vendored in-tree at
-``reference/kimi_k2_7/config.json``.
+Values from HuggingFace config.json for Kimi-K2.7-Code (``text_config``).
 
-Deliberately standalone rather than subclassing ``KimiK26Config``. The two generations happen to
-agree on every dimension today, so inheritance would have been shorter -- but it would also mean an
-edit made for K2.6 silently moved K2.7, and it would hide which values K2.7 actually asserts. Every
-constant here is transcribed from K2.7's own checkpoint and pinned by
-``tests/torch/test_kimi_k2_7_config.py`` against both the vendored copy and the staged checkpoint, so
-a divergence in either direction shows up as a named field rather than as a device PCC miss.
+Deliberately standalone rather than subclassing ``KimiK26Config``. The two generations agree on every
+dimension today, so inheritance would have been shorter -- but it would also mean an edit made for
+K2.6 silently moved K2.7, and it would hide which values K2.7 actually asserts.
 """
 
 
