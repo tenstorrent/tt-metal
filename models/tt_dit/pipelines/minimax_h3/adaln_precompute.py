@@ -39,8 +39,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from ...lora.keys import AdapterEntry
 
 # diffusers' shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp order.
 MINIMAX_H3_ADALN_PARAM_NAMES = (
@@ -235,6 +241,7 @@ def precompute_adaln_table(
     hidden_size: int = 5376,
     freq_dim: int = 256,
     device: torch.device | str = "cpu",
+    weight_hook: Callable[[str, torch.Tensor], torch.Tensor] | None = None,
 ) -> MiniMaxH3AdalnTable:
     """Build the modulation table, reading each block's projection once.
 
@@ -244,6 +251,13 @@ def precompute_adaln_table(
 
     ``temb`` is computed per step at the reference's own batch size -- see the
     module docstring; batching it changes its fp32 GEMM.
+
+    ``weight_hook`` sees every tensor as it is read and may return a modified one. That is where a
+    LoRA adapter's AdaLN half is applied: these weights never reach the device, so the on-device
+    adapter path cannot touch them, and folding here keeps the streaming property -- one block
+    resident at a time -- that reading the whole 26 GB to patch it would destroy. Anything it
+    changes must also change :meth:`MiniMaxH3Pipeline._adaln_cache_path`'s key, or a later run
+    silently loads the unadapted table.
     """
     from safetensors import safe_open
 
@@ -281,7 +295,8 @@ def precompute_adaln_table(
         def get(key: str) -> torch.Tensor:
             if key not in location:
                 raise KeyError(f"{key} not present in {checkpoint_dir}")
-            return handles[location[key]].get_tensor(key)
+            tensor = handles[location[key]].get_tensor(key)
+            return tensor if weight_hook is None else weight_hook(key, tensor)
 
         def get_any(*candidates: str) -> torch.Tensor:
             """First candidate key that exists.
@@ -341,3 +356,74 @@ def precompute_adaln_table(
         final_shift=shift,
         final_scale=scale,
     )
+
+
+# The two checkpoint layouts name every AdaLN surface differently, and an adapter is published
+# against the diffusers one. Both spellings map to the same fold entry so a hook built from one
+# adapter serves either checkpoint.
+_ADALN_KEY_ALIASES: tuple[tuple[str, str], ...] = (
+    ("time_embedder.linear_1", "time_embedder.proj_in"),
+    ("time_embedder.linear_2", "time_embedder.proj_out"),
+    ("norm_out.linear", "final_layer.adaln_proj.linear"),
+)
+
+
+class MiniMaxH3AdalnLoraFold:
+    """Applies an adapter's AdaLN half while :func:`precompute_adaln_table` streams the checkpoint.
+
+    ``adaln_proj``, ``time_embedder`` and ``norm_out.linear`` hold about 40% of the checkpoint's
+    parameters and, under ``precomputed_adaln``, never become device modules -- the pipeline
+    projects them on host into a table instead. Their adapter entries therefore have no Linear to
+    bind to. Folding them in as the weights stream past is the only point at which they exist.
+
+    :meth:`unapplied` exists because the failure mode here is silence: a spelling this fold does not
+    recognise produces a perfectly valid table built from unadapted weights, and every downstream
+    check passes. Assert it is empty.
+    """
+
+    def __init__(self, entries: Sequence[AdapterEntry], *, strength: float = 1.0) -> None:
+        self._strength = float(strength)
+        self._deltas: dict[str, torch.Tensor] = {}
+        self._seen: set[str] = set()
+        for entry in entries:
+            suffix = "bias" if entry.kind == "diff_b" else "weight"
+            if entry.kind == "lora":
+                delta = entry.B.to(torch.float32) @ entry.A.to(torch.float32)
+            elif entry.kind in ("diff", "diff_b"):
+                delta = entry.delta.to(torch.float32)
+            else:
+                msg = f"{entry.path}: {entry.kind} has no meaning for a host-folded AdaLN weight"
+                raise ValueError(msg)
+            for name in self._aliases(entry.path):
+                self._deltas[f"{name}.{suffix}"] = delta
+
+    @staticmethod
+    def _aliases(path: str) -> tuple[str, ...]:
+        for diffusers_name, original_name in _ADALN_KEY_ALIASES:
+            if path == diffusers_name:
+                return (diffusers_name, original_name)
+        if ".adaln_proj.linear" in path:
+            layer = path.split(".")[1]
+            return (f"transformer_blocks.{layer}.adaln_proj.linear", f"blocks.{layer}.adaln_proj.linear")
+        return (path,)
+
+    def __call__(self, key: str, tensor: torch.Tensor) -> torch.Tensor:
+        delta = self._deltas.get(key)
+        if delta is None:
+            return tensor
+        self._seen.add(key)
+        if delta.shape != tensor.shape:
+            msg = f"{key}: adapter delta {tuple(delta.shape)} does not match checkpoint {tuple(tensor.shape)}"
+            raise ValueError(msg)
+        # fp32 accumulate, then back to the checkpoint's dtype -- the same single rounding a
+        # host-fused checkpoint would carry, and the ordering this module's docstring calls
+        # load-bearing for `time_embedder`.
+        return (tensor.to(torch.float32) + self._strength * delta).to(tensor.dtype)
+
+    def unapplied(self) -> list[str]:
+        """Fold entries no checkpoint key ever matched. Non-empty means part of the adapter is lost."""
+        # Aliases double every entry; report the diffusers spelling only.
+        return sorted(
+            {key for key in self._deltas if key not in self._seen}
+            & {key for key in self._deltas if not key.startswith(("blocks.", "final_layer.", "time_embedder.proj_"))}
+        )
