@@ -23,9 +23,16 @@ Tensor unary_impl(
     if (op_chain.back().type() == unary::UnaryOpType::TYPECAST ||
         op_chain.back().type() == unary::UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));
-    }
-    if (optional_output_tensor.has_value()) {
+        if (optional_output_tensor.has_value()) {
+            TT_FATAL(
+                (output_dtype == optional_output_tensor->dtype()),
+                "Preallocated tensor's dtype is not compatible with the expected dtype");
+        }
+    } else if (optional_output_tensor.has_value()) {
         output_dtype = optional_output_tensor->dtype();
+        TT_FATAL(
+            (output_dtype == input_dtype) || (is_floating_point(output_dtype) && is_floating_point(input_dtype)),
+            "Preallocated tensor's dtype is not compatible with the expected dtype");
     }
     bool preserve_fp32_precision = (input_dtype == DataType::FLOAT32);
     bool fp32_dest_acc_en = preserve_fp32_precision || output_dtype == DataType::UINT32 ||
