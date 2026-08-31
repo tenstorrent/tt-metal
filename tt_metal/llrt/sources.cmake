@@ -4,7 +4,6 @@ set(LLRT_SRC
     dispatch_engine_cores.cpp
     firmware_capability.cpp
     rtoptions.cpp
-    tlb_config.cpp
     tt_cluster.cpp
     tt_elffile.cpp
     tt_memory.cpp

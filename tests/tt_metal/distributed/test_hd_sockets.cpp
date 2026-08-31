@@ -9,7 +9,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <internal/cluster_noc_helpers.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
@@ -29,6 +28,7 @@
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include <umd/device/io_window/io_window.hpp>
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -517,9 +517,9 @@ TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
     }
 }
 
-// Every L2CPU tile must have a static TLB window anchored at the LIM base; without
-// the registration get_tlb_window() throws.
-TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
+// H2D/D2H socket setup maps an L2CPU tile with a window anchored at the LIM base. Every tile must
+// be mappable that way, and the window must cover the LIM aperture the sockets address through it.
+TEST_F(L2CpuSocketFixture, L2CpuIoWindowsAnchoredAtLimBase) {
     if (!is_blackhole()) {
         GTEST_SKIP() << "L2CPU tiles only exist on Blackhole";
     }
@@ -531,19 +531,22 @@ TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
         GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
     }
 
+    // Spelled out here rather than taken from ll_api so the test checks the aperture the sockets
+    // are built around, not just that it agrees with itself.
     constexpr uint64_t kL2CpuLimBase = 0x08000000ULL;
-    auto* tlb_manager = MetalContext::instance().get_cluster().get_driver()->get_chip(device_id)->get_tlb_manager();
-    ASSERT_NE(tlb_manager, nullptr);
+    constexpr uint64_t kL2CpuLimSize = 2ULL * 1024 * 1024;
+    auto& cluster = MetalContext::instance().get_cluster();
 
     for (const auto& core : l2cpu_cores) {
-        const tt_xy_pair xy(core.x, core.y);
-        ASSERT_TRUE(tlb_manager->is_tlb_mapped(xy))
-            << "L2CPU (" << core.x << ", " << core.y << ") has no static TLB; H2D/D2H socket setup would throw";
-        EXPECT_EQ(tlb_manager->get_tlb_window(xy)->get_base_address(), kL2CpuLimBase)
-            << "L2CPU (" << core.x << ", " << core.y << ") TLB must be anchored at the LIM base";
-        // The config buffer and (in HOST_PUSH) the data FIFO are addressed
-        // through this window, so LIM base itself must be inside it.
-        EXPECT_TRUE(tlb_manager->is_tlb_mapped(xy, kL2CpuLimBase, sizeof(uint32_t)));
+        std::unique_ptr<tt::umd::IoWindow> window =
+            cluster.get_driver()->create_io_window(device_id, core, kL2CpuLimBase, {.size = kL2CpuLimSize});
+        ASSERT_NE(window, nullptr) << "L2CPU (" << core.x << ", " << core.y
+                                   << ") cannot be mapped; H2D/D2H socket setup would throw";
+        EXPECT_EQ(window->get_target_config().addr, kL2CpuLimBase)
+            << "L2CPU (" << core.x << ", " << core.y << ") window must be anchored at the LIM base";
+        // The config buffer and (in HOST_PUSH) the data FIFO are addressed through this window, so
+        // the whole LIM aperture has to be reachable from the anchor.
+        EXPECT_GE(window->get_size(), kL2CpuLimSize);
     }
 }
 
@@ -581,7 +584,7 @@ TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
     EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
 
-    // In HOST_PUSH the ring lives in LIM and is reached through the static TLB window,
+    // In HOST_PUSH the ring lives in LIM and is reached through the LIM window,
     // so a ring running past the window end must be rejected at construction.
     EXPECT_ANY_THROW(H2DSocket(
         *mesh_device_,

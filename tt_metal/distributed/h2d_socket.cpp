@@ -15,14 +15,14 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
+#include "tt_metal/llrt/l2cpu_lim.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/io_window/io_window.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdlib>
@@ -309,12 +309,11 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they can't take the
-    // static-TLB path: the target_in_static_tlb guard below excludes them (which also keeps
-    // is_tlb_mapped() from dereferencing the null manager), and they fall through to the
-    // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
-    // MockChip never invokes pcie_writer at runtime (only socket construction / JIT), so the
-    // installed writer is harmless there.
+    // Mock/emulated chips have no device to map, so create_io_window() returns nullptr for them and
+    // the guards below leave receiver_core_window_ null and fall through to the cluster.write_core()
+    // dynamic writer. SWEmuleChip backs that with real memory-backed I/O; MockChip never invokes
+    // pcie_writer at runtime (only socket construction / JIT), so the installed writer is harmless
+    // there.
 
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
     // ctor sets Dram, every other path is Tensix). Used only to resolve the
@@ -324,17 +323,16 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     if (is_l2cpu_) {
         // recv_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
-        // logical->virtual translation is applied. The window is the static TLB
-        // configure_static_tlbs() anchors at the LIM base.
+        // logical->virtual translation is applied. The window is anchored at the LIM
+        // base rather than at 0, because LIM does not start at 0.
         TT_FATAL(mesh_device, "L2CPU H2D sockets require a mesh_device for TLB setup.");
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = recv_core_.core_coord;
-        if (!cluster.is_mock_or_emulated()) {
-            receiver_core_tlb_ = cluster.get_driver()
-                                     ->get_chip(recv_device_id)
-                                     ->get_tlb_manager()
-                                     ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
-        }
+        receiver_core_window_ = cluster.get_driver()->create_io_window(
+            recv_device_id,
+            cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
+            ll_api::kL2cpuLimBase,
+            {.size = ll_api::kL2cpuLimTlbSize});
     } else if (mesh_device) {
         // Per-device translation (see metal_SocDescriptor::dram_bank_endpoint_coords): the
         // mesh-level translation validates that every device agrees and throws when they do not,
@@ -354,47 +352,44 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // Captured into the lambdas below so write() can keep passing local addresses.
     const uint64_t l1_offset = dram_l1_noc_offset_;
 
-    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
+    if (is_l2cpu_ && receiver_core_window_ != nullptr) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
-        // have no TLB manager and fall through to the write_core() writer below.
-        const uint64_t l2cpu_tlb_base = receiver_core_tlb_->get_base_address();
-        pcie_writer = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
+        // have no window and fall through to the write_core() writer below.
+        const uint64_t l2cpu_window_base = receiver_core_window_->get_target_config().addr;
+        pcie_writer = [this, l2cpu_window_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_window_->write_block(device_addr - l2cpu_window_base, data, num_bytes);
         };
         return;
     }
 
-    // Take the static-TLB path only when UMD reports that our actual write target
-    // lives inside a static window for this core — ask the TLB manager rather than
-    // assuming based on core type. On Blackhole, Tensix/Eth cores get a static
-    // window mapping L1, so their writes land inside it; DRAM cores also get a
-    // static window, but it maps the DRAM-bank space at [0, 4 GB) while our writes
-    // target device_addr + l1_offset (a high DRAM-L1 NOC address, e.g.
-    // 0x2000000000+…) outside that window, so is_tlb_mapped reports false and we
-    // fall through to cluster.write_core. Also gated on owning a mesh_device
-    // (statically initialized TLBs) and Blackhole — on Wormhole B0 the device
-    // address space isn't fully statically mapped and a mapped window may still
-    // need a per-write driver reconfig.
-    const tt_xy_pair tlb_core(recv_virtual_core.x, recv_virtual_core.y);
-    const bool target_in_static_tlb =
-        mesh_device && !cluster.is_mock_or_emulated() &&
-        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
-        cluster.get_driver()
-            ->get_chip(recv_device_id)
-            ->get_tlb_manager()
-            ->is_tlb_mapped(tlb_core, static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset, fifo_size_);
+    // Write through a window of our own only when our actual write target lives inside one — ask for
+    // the window and test it rather than assuming based on core type. Anchored at 0, it maps a
+    // Tensix/Eth core's L1, so those writes land inside it; for a DRAM receiver the writes target
+    // device_addr + l1_offset (a high DRAM-L1 NOC address, e.g. 0x2000000000+…) which a window
+    // anchored at 0 does not reach, so the range test below fails, the window is released
+    // immediately, and we fall through to cluster.write_core. Also gated on owning a mesh_device and
+    // on Blackhole — on Wormhole B0 the device address space isn't fully mapped this way and a write
+    // may still need a per-write driver reconfig.
+    const uint64_t addr = static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset;
+    if (mesh_device && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        std::unique_ptr<tt::umd::IoWindow> window = cluster.get_driver()->create_io_window(
+            recv_device_id,
+            cluster.get_soc_desc(recv_device_id).get_coord_at(recv_virtual_core, tt::CoordSystem::TRANSLATED),
+            /*addr=*/0);
+        if (window != nullptr && addr + fifo_size_ <= window->get_size()) {
+            receiver_core_window_ = std::move(window);
+        }
+    }
 
-    if (target_in_static_tlb) {
-        receiver_core_tlb_ =
-            cluster.get_driver()->get_chip(recv_device_id)->get_tlb_manager()->get_tlb_window(tlb_core);
+    if (receiver_core_window_ != nullptr) {
         pcie_writer = [this, l1_offset](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            receiver_core_tlb_->write_block(device_addr + l1_offset, data, num_bytes);
+            receiver_core_window_->write_block(device_addr + l1_offset, data, num_bytes);
         };
     } else {
-        // Mesh device not owned, non-Blackhole, or no static window covers the
-        // target: use dynamic TLBs through UMD (the driver may reconfigure the TLB
-        // per write). Covers Wormhole B0 and the DRAM-recv L1 path described above.
+        // Mesh device not owned, non-Blackhole, or no window reaches the target:
+        // write through UMD instead (the driver may reconfigure a window per write).
+        // Covers Wormhole B0 and the DRAM-recv L1 path described above.
         pcie_writer = [recv_device_id, recv_virtual_core, l1_offset](
                           void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
@@ -584,16 +579,15 @@ H2DSocket::H2DSocket(
             device_id);
     }
 
-    // The receiver_socket_md is written through the L2CPU static TLB, and
+    // The receiver_socket_md is written through the L2CPU LIM window, and
     // notify_receiver() later routes config_buffer_address_ + bytes_sent through
     // the same window (subtracting its base). An address outside the window is
-    // accepted by the alignment checks above but underflows or trips
-    // TlbWindow::validate() on the first notification, so reject it up front.
+    // accepted by the alignment checks above but underflows or trips the window's
+    // bounds check on the first notification, so reject it up front.
     const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + sizeof(receiver_socket_md);
     TT_FATAL(
         config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
-        "L2CPU H2D config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}) covered by the "
-        "static TLB.",
+        "L2CPU H2D config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}).",
         config_buffer_address,
         config_end,
         ll_api::kL2cpuLimBase,
@@ -601,17 +595,17 @@ H2DSocket::H2DSocket(
 
     // HOST_PUSH only: the H2D FIFO writes are issued through the same window via
     // pcie_writer, so the FIFO must end inside it. Going past that boundary would
-    // surface later as TlbWindow::validate() throwing "Out of bounds access" on
-    // the first wrapping write -- catch it here instead.
+    // surface later as the window throwing "Out of bounds access" on the first
+    // wrapping write -- catch it here instead.
     //
     // DEVICE_PULL keeps the ring in pinned host memory, so it is not bounded by
-    // the TLB window and data_fifo_address is only a base for ring offsets.
+    // the window and data_fifo_address is only a base for ring offsets.
     if (h2d_mode_ == H2DMode::HOST_PUSH) {
         const uint64_t fifo_end = static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_);
         TT_FATAL(
             fifo_end <= ll_api::kL2cpuLimTlbEnd,
-            "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the {} MiB static "
-            "TLB window [0x{:x}, 0x{:x}). Reduce fifo_size or move data_fifo_address "
+            "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the {} MiB LIM "
+            "window [0x{:x}, 0x{:x}). Reduce fifo_size or move data_fifo_address "
             "earlier in LIM. (HOST_PUSH only; DEVICE_PULL has no such limit.)",
             data_fifo_address,
             fifo_end,
@@ -621,7 +615,7 @@ H2DSocket::H2DSocket(
         TT_FATAL(
             data_fifo_address >= ll_api::kL2cpuLimBase,
             "L2CPU H2D data FIFO address 0x{:x} must lie inside the LIM region "
-            "[0x{:x}, 0x{:x}) covered by the static TLB.",
+            "[0x{:x}, 0x{:x}) the window covers.",
             data_fifo_address,
             ll_api::kL2cpuLimBase,
             ll_api::kL2cpuLimTlbEnd);

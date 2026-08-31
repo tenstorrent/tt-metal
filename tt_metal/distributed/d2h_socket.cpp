@@ -13,7 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
+#include "tt_metal/llrt/l2cpu_lim.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
 #include "tt_metal/impl/emulation/emulated_program_runner.hpp"  // emule::pump_device (host-interleaved socket)
 #endif
@@ -21,7 +21,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
-#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/io_window/io_window.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -253,33 +253,35 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    // Mock/emulated chips have no TLB manager (get_tlb_manager() == nullptr), so they skip the
-    // static-TLB fetch below (guarded by !is_mock_or_emulated()) and fall through to the
-    // cluster.write_core() dynamic writer. SWEmuleChip backs that with real memory-backed I/O;
-    // MockChip never invokes pcie_writer_ at runtime (only socket construction / JIT), so the
-    // installed writer is harmless there.
+    // Mock/emulated chips have no device to map, so create_io_window() returns nullptr for them,
+    // sender_core_window_ stays null and we fall through to the cluster.write_core() dynamic writer.
+    // SWEmuleChip backs that with real memory-backed I/O; MockChip never invokes pcie_writer_ at
+    // runtime (only socket construction / JIT), so the installed writer is harmless there.
+
+    const auto arch = MetalContext::instance().hal().get_arch();
 
     if (is_l2cpu_) {
         // sender_core_.core_coord is already a TRANSLATED L2CPU NOC coord, so no
-        // logical->virtual translation is applied. The window is the static TLB
-        // configure_static_tlbs() anchors at the LIM base.
+        // logical->virtual translation is applied. The window is anchored at the LIM
+        // base rather than at 0, because LIM does not start at 0.
         TT_FATAL(mesh_device, "L2CPU D2H sockets require a mesh_device for TLB setup.");
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = sender_core_.core_coord;
-        if (!cluster.is_mock_or_emulated()) {
-            sender_core_tlb_ = cluster.get_driver()
-                                   ->get_chip(sender_device_id)
-                                   ->get_tlb_manager()
-                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
-        }
+        sender_core_window_ = cluster.get_driver()->create_io_window(
+            sender_device_id,
+            cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
+            ll_api::kL2cpuLimBase,
+            {.size = ll_api::kL2cpuLimTlbSize});
     } else if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        if (!cluster.is_mock_or_emulated()) {
-            sender_core_tlb_ = cluster.get_driver()
-                                   ->get_chip(sender_device_id)
-                                   ->get_tlb_manager()
-                                   ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+        if (arch == tt::ARCH::BLACKHOLE) {
+            // Anchored at 0, so a write addresses the core's L1 by its device address. Only
+            // Blackhole maps L1 this way; see the writer selection below.
+            sender_core_window_ = cluster.get_driver()->create_io_window(
+                sender_device_id,
+                cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
+                /*addr=*/0);
         }
     } else {
         sender_device_id = device_id.value();
@@ -287,26 +289,24 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
             sender_device_id, sender_core_.core_coord, CoreType::TENSIX);
     }
 
-    auto arch = MetalContext::instance().hal().get_arch();
-    if (is_l2cpu_ && !cluster.is_mock_or_emulated()) {
+    if (is_l2cpu_ && sender_core_window_ != nullptr) {
         // The L2CPU window is anchored at the LIM base, so absolute addresses are
         // converted to window-relative offsets before write_block(). Mock/emule
-        // have no TLB manager and fall through to the write_core() path below.
-        const uint64_t l2cpu_tlb_base = sender_core_tlb_->get_base_address();
-        pcie_writer_ = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
+        // have no window and fall through to the write_core() path below.
+        const uint64_t l2cpu_window_base = sender_core_window_->get_target_config().addr;
+        pcie_writer_ = [this, l2cpu_window_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            sender_core_window_->write_block(device_addr - l2cpu_window_base, data, num_bytes);
         };
-    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
-        // This process owns a mesh_device and hence has statically initialized TLBs.
-        // Entire device address space for Blackhole is statically mapped.
-        // Safe to use static TLBs without requiring the driver to do a reconfig.
+    } else if (sender_core_window_ != nullptr) {
+        // This process owns a mesh_device, so it holds a window onto the sender core anchored at 0,
+        // and Blackhole reaches the whole L1 through it — no driver reconfig per write.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
-            sender_core_tlb_->write_block(device_addr, data, num_bytes);
+            sender_core_window_->write_block(device_addr, data, num_bytes);
         };
     } else {
-        // Mesh Device not owned - use dynamic TLBs through UMD.
-        // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
-        // since the device address space is not statically mapped.
+        // Mesh Device not owned - write through UMD instead.
+        // Wormhole B0 may require the driver to reconfigure a window for each write,
+        // since the device address space is not mapped this way.
         pcie_writer_ = [sender_device_id, sender_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
@@ -450,16 +450,15 @@ D2HSocket::D2HSocket(
             device_id);
     }
 
-    // The sender_socket_md blob is written through the L2CPU static TLB, and
+    // The sender_socket_md blob is written through the L2CPU LIM window, and
     // notify_sender() later routes config_buffer_address_ + bytes_acked_device_offset_
     // through the same window (subtracting its base). An address outside the window
-    // passes the alignment check above but then underflows or trips
-    // TlbWindow::validate() on the first acknowledgement, so reject it up front.
+    // passes the alignment check above but then underflows or trips the window's
+    // bounds check on the first acknowledgement, so reject it up front.
     const uint64_t config_end = static_cast<uint64_t>(config_buffer_address) + required_config_buffer_size();
     TT_FATAL(
         config_buffer_address >= ll_api::kL2cpuLimBase && config_end <= ll_api::kL2cpuLimTlbEnd,
-        "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}) covered by the "
-        "static TLB.",
+        "L2CPU D2H config buffer [0x{:x}, 0x{:x}) must lie inside the LIM window [0x{:x}, 0x{:x}).",
         config_buffer_address,
         config_end,
         ll_api::kL2cpuLimBase,

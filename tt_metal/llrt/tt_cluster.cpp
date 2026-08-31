@@ -32,7 +32,6 @@
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/llrt/tlb_config.hpp"
 #include "tunnels_from_mmio_device.hpp"
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
@@ -506,36 +505,6 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
-
-    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) &&
-        device_params.init_device) {
-        // Configure TLBs on all MMIO devices in parallel
-        std::vector<std::shared_future<void>> futures;
-        const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
-        futures.reserve(mmio_device_ids.size());
-
-        for (const auto& mmio_device_id : mmio_device_ids) {
-            futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
-                bool include_dram_tlbs = (this->target_type_ == TargetDevice::Silicon);
-                if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled()) {
-                    // Functional ttsim (libttsim.so) does not model BH DRAM TLBs and crashes if they
-                    // are configured. RTL sim uses a directory simulator path and still needs them.
-                    include_dram_tlbs = (rtoptions_.get_simulator_path().extension() != ".so");
-                }
-                ll_api::configure_static_tlbs(
-                    this->arch_,
-                    mmio_device_id,
-                    this->get_soc_desc(mmio_device_id),
-                    *this->driver_,
-                    include_dram_tlbs);
-            }));
-        }
-
-        // Wait for all TLB configurations to complete
-        for (auto& future : futures) {
-            future.get();
-        }
-    }
 }
 
 Cluster::~Cluster() {
