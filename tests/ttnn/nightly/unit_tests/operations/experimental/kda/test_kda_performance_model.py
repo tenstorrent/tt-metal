@@ -151,9 +151,16 @@ def test_all_operation_specific_functions_derive_mathematical_work() -> None:
         _FakeTensor((1, chunks * 32, heads * key_dim)),
         _FakeTensor((heads, chunks, 32, 1)),
     )
-    prepared = perf_model.prepare_chunk_recurrence_performance(
-        prepare_inputs, tuple(_FakeTensor((1,)) for _ in range(7)), **_hardware()
-    ).work
+    prepare_outputs = (
+        _FakeTensor((heads, chunks, 32, value_dim)),
+        _FakeTensor((heads, chunks, 32, key_dim)),
+        _FakeTensor((heads, chunks, 32, key_dim)),
+        _FakeTensor((heads, chunks, 32, 32)),
+        _FakeTensor((heads, chunks, key_dim, 32)),
+        _FakeTensor((heads, chunks, key_dim, 1)),
+        _FakeTensor((heads, chunks, 32, 32)),
+    )
+    prepared = perf_model.prepare_chunk_recurrence_performance(prepare_inputs, prepare_outputs, **_hardware()).work
     instances = heads * chunks
     assert prepared.fpu_matrix_flops == instances * (4 * 32**2 * key_dim + 32 * 31 * 33 // 3)
     assert prepared.fpu_reduction_ops == instances * 2 * 32 * (key_dim - 1)
@@ -173,24 +180,39 @@ def test_all_operation_specific_functions_derive_mathematical_work() -> None:
         fpu_add_ops=instances * (2 * 32 * value_dim + key_dim * value_dim),
     )
 
+    summary_protocol = _protocol(heads, chunks, key_dim, key_dim)
     summarized = perf_model.summarize_chunk_recurrence_performance(
-        protocol, (_FakeTensor((heads, key_dim, key_dim)), _FakeTensor((heads, key_dim, value_dim))), **_hardware()
+        summary_protocol,
+        (_FakeTensor((heads, key_dim, key_dim)), _FakeTensor((heads, key_dim, key_dim))),
+        **_hardware(),
     ).work
     assert summarized == perf_model.KdaWork(
-        fpu_matrix_flops=instances * (8 * 32 * key_dim * value_dim + 4 * 32**2 * value_dim),
-        fpu_multiply_ops=instances * 2 * key_dim * value_dim,
-        fpu_add_ops=instances * (2 * 32 * value_dim + 2 * key_dim * value_dim) + heads * key_dim * value_dim,
+        fpu_matrix_flops=instances * (8 * 32 * key_dim**2 + 4 * 32**2 * key_dim),
+        fpu_multiply_ops=instances * 2 * key_dim**2,
+        fpu_add_ops=instances * (2 * 32 * key_dim + 2 * key_dim**2) + heads * key_dim**2,
     )
 
 
-def test_dram_traffic_deduplicates_aliases_per_direction() -> None:
+def test_dram_traffic_counts_each_read_and_write() -> None:
     address = 0xCAFE
     a = _FakeTensor((2, 4, 4), buffer_type=ttnn.BufferType.DRAM, address=address)
-    b = _FakeTensor((2, 4, 4), buffer_type=ttnn.BufferType.DRAM, address=address)
+    b = _FakeTensor((2, 4, 4), buffer_type=ttnn.BufferType.DRAM)
     state = _FakeTensor((1, 4, 4), buffer_type=ttnn.BufferType.L1)
     output = _FakeTensor((2, 4, 4), buffer_type=ttnn.BufferType.DRAM, address=address)
     work = perf_model.affine_exclusive_scan_performance(a, b, state, output, **_hardware()).work
-    assert work.dram_bytes == a.volume() * a.element_size() + output.volume() * output.element_size()
+    assert work.dram_bytes == sum(tensor.volume() * tensor.element_size() for tensor in (a, b, output))
+
+
+def test_input_aliases_raise(expect_error: Callable) -> None:
+    address = 0xCAFE
+    with expect_error(ValueError, "aliased inputs"):
+        perf_model.affine_exclusive_scan_performance(
+            _FakeTensor((2, 4, 4), address=address),
+            _FakeTensor((2, 4, 4), address=address),
+            _FakeTensor((1, 4, 4)),
+            _FakeTensor((2, 4, 4)),
+            **_hardware(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -229,6 +251,14 @@ def test_invalid_tensor_or_shape_raises(expect_error: Callable) -> None:
             _FakeTensor((3, 4, 4)),
             _FakeTensor((2, 4, 4)),
             _FakeTensor((3, 4, 4)),
+            **_hardware(),
+        )
+    with expect_error(ValueError, "shapes must be positive"):
+        perf_model.affine_exclusive_scan_performance(
+            _FakeTensor((2, 0, 4)),
+            _FakeTensor((2, 0, 4)),
+            _FakeTensor((1, 0, 4)),
+            _FakeTensor((2, 0, 4)),
             **_hardware(),
         )
 
