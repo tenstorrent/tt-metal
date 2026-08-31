@@ -89,6 +89,7 @@ import os
 import random
 import struct
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -362,6 +363,33 @@ def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> i
         time.sleep(0.01)
     logger.info(f"[producer] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
     return drained
+
+
+def _record_ack_timeline(ack_channel, out, stop_at: int, poll_s: float = 0.001, timeout_s: float = 600.0):
+    """Record the full LayerAck arrival timeline into `out` as (cumulative_acks, epoch) samples, one per
+    poll on which the counter advanced, until the cumulative count reaches `stop_at` or `timeout_s` elapses.
+
+    Meant to run in a background thread so arrivals are observed live while the main thread is still
+    pushing. The counter carries only a COUNT (try_consume_all() returns an int, no per-ack identity or
+    device timestamp), so the finest resolvable time is per-poll: acks landing inside one `poll_s` interval
+    collapse into a single sample sharing one host-arrival epoch. All boundary/e2e interpretation is left to
+    the caller, which owns the schedule shape. Sole consumer of the counter: try_consume_all() REMOVES
+    completions, so nothing else may drain it."""
+    if ack_channel is None or stop_at <= 0:
+        return
+    drained = 0
+    start = time.perf_counter()
+    while drained < stop_at:
+        n = ack_channel.try_consume_all()
+        if n:
+            drained += n
+            out.append((drained, time.time()))
+        if drained >= stop_at:
+            break
+        if time.perf_counter() - start > timeout_s:
+            logger.warning(f"[producer] ack-timer timed out at {drained}/{stop_at} acks after {timeout_s}s")
+            break
+        time.sleep(poll_s)
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
@@ -1431,7 +1459,11 @@ def main() -> None:
 
     # If we're not performing golden trace PCC-validation, then don't consume these and allow loopback
     # migration test in prefill_runner.py to consume acks and perform the testing of loopback migration
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
+    # ACK_TIMING derives async per-request throughput from the LayerAck stream (see
+    # _record_ack_timeline). It needs the channel connected but no KV table, so it is independent
+    # of CHECK_PCC.
+    ack_timing = os.environ.get("PREFILL_PRODUCER_ACK_TIMING", "0") == "1"
+    ack_channel = _connect_layer_ack_channel(timeout_s) if (cfg.verify or ack_timing) else None
     if cfg.verify and ack_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
@@ -1439,7 +1471,13 @@ def main() -> None:
             "(Gate 1 mock defaults this on via run_prefill_migration_gate.sh)."
         )
         sys.exit(1)
-    if not cfg.verify:
+    if ack_timing and ack_channel is None:
+        logger.error(
+            "[producer] ACK_TIMING=1 but LayerAck channel missing — set PREFILL_ENABLE_LAYER_ACK=1 on "
+            "the runner so it publishes per-layer completions."
+        )
+        sys.exit(1)
+    if not cfg.verify and not ack_timing:
         logger.info(
             "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
             "channel (pure token feeder; the runner's migration self-test owns it)"
@@ -1461,6 +1499,24 @@ def main() -> None:
         service.forward_to_tensor_bytes(chunk_bytes, metadata=_pack_metadata(slot_id, actual_start, actual_end))
         return (time.perf_counter() - push_start) * 1000.0
 
+    # ACK_TIMING: record the full ack arrival timeline in a background thread while this thread is still
+    # pushing; boundary/e2e interpretation happens in post-processing below. Only well-defined for a
+    # single-user, fixed-depth schedule (deterministic per-request ack count = NUM_LAYERS * chunks_per_req);
+    # reject anything else rather than derive meaningless boundaries.
+    ack_boundaries = []
+    ack_timeline = []
+    ack_timer = None
+    if ack_timing:
+        if cfg.num_users != 1 or cfg.chunks_min != cfg.chunks_max:
+            logger.error("[producer] ACK_TIMING requires PREFILL_NUM_USERS=1 and a fixed PREFILL_PRODUCER_CHUNKS.")
+            sys.exit(1)
+        chunks_per_req = cfg.chunks_min
+        ack_boundaries = [NUM_LAYERS * chunks_per_req * k for k in range(1, cfg.max_requests + 1)]
+        ack_timer = threading.Thread(
+            target=_record_ack_timeline, args=(ack_channel, ack_timeline, ack_boundaries[-1]), daemon=True
+        )
+        ack_timer.start()
+
     stats = run_schedule(cfg, push_fn=push_chunk)
     service.barrier()
 
@@ -1473,10 +1529,50 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
+    if ack_timing:
+        if ack_timer is not None:
+            ack_timer.join(timeout=600.0)
+        # Optionally persist the raw timeline (every count-change sample) for offline analysis.
+        trace_path = os.environ.get("PREFILL_PRODUCER_ACK_TRACE", "")
+        if trace_path:
+            with open(trace_path, "w") as f:
+                f.write("cum_acks,epoch\n")
+                for cum, t in ack_timeline:
+                    f.write(f"{cum},{t:.6f}\n")
+            logger.info(f"[producer] wrote ack timeline ({len(ack_timeline)} samples) to {trace_path}")
+        # Per-request boundary crossing = first sample whose cumulative count reached that boundary.
+        ack_stamps = []
+        ti = 0
+        for b in ack_boundaries:
+            while ti < len(ack_timeline) and ack_timeline[ti][0] < b:
+                ti += 1
+            if ti >= len(ack_timeline):
+                break
+            ack_stamps.append((b, ack_timeline[ti][1]))
+        for cum, t in ack_stamps:
+            logger.info(f"[producer] ACK_REQ_DONE cum_acks={cum} t={t:.6f}")
+        # The last request is the warm push; its e2e is the gap between the two most recent completions.
+        if len(ack_stamps) >= 2:
+            warm_e2e = ack_stamps[-1][1] - ack_stamps[-2][1]
+            warm_chunks = (ack_boundaries[-1] - ack_boundaries[-2]) // NUM_LAYERS
+            warm_tokens = warm_chunks * CHUNK_SIZE
+            tok_s = warm_tokens / warm_e2e if warm_e2e > 0 else 0.0
+            logger.info(
+                f"[producer] ACK_WARM_E2E e2e_s={warm_e2e:.4f} tokens={warm_tokens} chunks={warm_chunks} "
+                f"tok_s={tok_s:.1f}"
+            )
+        else:
+            logger.warning(
+                f"[producer] ACK_TIMING: only {len(ack_stamps)}/{len(ack_boundaries)} boundaries stamped — "
+                "no warm e2e"
+            )
+
     # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed. With a
     # pipeline runner (num_ranks>1) the branch's LayerCompletionRouter funnels every rank's completions
-    # into this master channel, so this waits for ALL ranks' layers, not just the first stage's.
-    _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+    # into this master channel, so this waits for ALL ranks' layers, not just the first stage's. Skipped
+    # under ACK_TIMING: the timer thread is the counter's sole consumer and has already drained it.
+    if not ack_timing:
+        _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
     # Multi-rank: all layers of all chunks are now written across every stage's DRAM. Release the
     # validators (they PCC their own host's layers) by broadcasting the resident-slot map. Do it BEFORE
