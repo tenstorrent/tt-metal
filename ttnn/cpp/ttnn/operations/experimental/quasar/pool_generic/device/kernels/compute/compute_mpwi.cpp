@@ -144,7 +144,7 @@ void kernel_main() {
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
     uint32_t num_out_sticks_this_core =
-        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_per_thread);
 
     bool first_iteration = true;
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
