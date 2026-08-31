@@ -190,8 +190,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             std::vector<CoreCoord> cores_to_scan;
             const bool scope_to_own_cores =
                 experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
-            // A distribution spec reserves L1 on its cores_with_data(), which is what
-            // Buffer::num_cores() reports for it; shard_spec_ is not set on that path.
+            // A tensor carries both specs, so the order matters: the distribution spec wins, as it
+            // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
+            // allocation, which the shard grid overstates when the data does not fill it.
             if (const auto& distribution_spec = buffer->buffer_distribution_spec();
                 scope_to_own_cores && distribution_spec.has_value()) {
                 cores_to_scan = distribution_spec->cores_with_data();
