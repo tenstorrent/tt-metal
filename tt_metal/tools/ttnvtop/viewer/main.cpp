@@ -748,11 +748,34 @@ int main(int argc, char* argv[]) {
                 const uint32_t af = n ? static_cast<uint32_t>(sf / n / 10) : 0;
                 const uint32_t as = n ? static_cast<uint32_t>(ss / n / 10) : 0;
                 const uint32_t ad = n ? static_cast<uint32_t>(sd / n / 10) : 0;
-                out << "\n"
-                    << kAnsiBold << "chip " << ci << kAnsiReset << "  " << n << " cores  @ " << h->aiclk_mhz
-                    << " MHz   " << kMetricFpuCol << "F " << af << "%" << kAnsiReset << "  " << kMetricSfpuCol << "S "
-                    << as << "%" << kAnsiReset << "  " << kMetricDispCol << "D " << ad << "%" << kAnsiReset
-                    << render_dram(h) << "\n";
+                // STALENESS, in the default view too.
+                //
+                // The other chip-title path prints (STALE); this one did not, and this is
+                // the view people actually look at. A collector that hard-exits (the
+                // shutdown watchdog, when a thread is stuck in a UMD poll) does not get to
+                // unlink its SHM files, so they survive holding their last values -- and
+                // the grid rendered them as live, indefinitely, with a plausible clock and
+                // plausible percentages. Every "is this frozen or is the machine idle?"
+                // question in this session came from that ambiguity.
+                const bool chip_stale =
+                    (monotonic_us() - h->last_update_us) > static_cast<uint64_t>(kStaleThresholdMs) * 1000;
+                out << "\n" << kAnsiBold << "chip " << ci << kAnsiReset << "  " << n << " cores  @ ";
+                // 0 means the ARC clock has NEVER been read successfully on this chip (the
+                // collector keeps the last good value), so say that rather than print a
+                // literal 0 MHz, which reads as "this chip is stopped".
+                if (h->aiclk_mhz > 0) {
+                    out << h->aiclk_mhz << " MHz";
+                } else {
+                    out << "clk n/a";
+                }
+                out << "   " << kMetricFpuCol << "F " << af << "%" << kAnsiReset << "  " << kMetricSfpuCol << "S " << as
+                    << "%" << kAnsiReset << "  " << kMetricDispCol << "D " << ad << "%" << kAnsiReset << render_dram(h);
+                if (chip_stale) {
+                    const double age = static_cast<double>(monotonic_us() - h->last_update_us) / 1e6;
+                    out << kAnsiBold << "   (STALE " << std::fixed << std::setprecision(0) << age
+                        << "s -- no collector writing this chip)" << kAnsiReset;
+                }
+                out << "\n";
 
                 const int rows = (static_cast<int>(n) + cols - 1) / cols;
                 for (int r = 0; r < rows; ++r) {

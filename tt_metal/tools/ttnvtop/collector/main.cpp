@@ -200,6 +200,7 @@ struct CliOptions {
     bool stop_aggregator = false;     // Phase 2.2: ask every running aggregator to return
     bool pin_tunnel = false;          // Narrow each remote chip's tunnel to its real link channels
     bool local_only = false;          // Skip remote discovery entirely -- the rescue path for a wedged tunnel
+    std::string sfpu_probe;           // "chip,x,y" -- prove whether the FPU/SFPU counter mux exists at all
     std::string peek;                 // "chip,x,y,addr[,len]" -- read raw L1 twice and print it
     int watchdog_s = 0;               // Guard against a dead aggregator hard-blocking the next device open
 
@@ -349,6 +350,8 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
             out.stop_aggregator = true;
         } else if (a == "--local-only") {
             out.local_only = true;
+        } else if (a == "--sfpu-probe" && i + 1 < argc) {
+            out.sfpu_probe = argv[++i];
         } else if (a == "--fidelity-probe") {
             const char* v = need_arg("--fidelity-probe");
             if (v == nullptr) {
@@ -843,6 +846,46 @@ const char* arch_name(tt::ARCH a) {
 // Returns true on success; false if any of the four writes threw. A user
 // kernel that calls StartPerfCounters later will fight with this (transient
 // reset + new start), which our sampler's negative-delta guard tolerates.
+// AICLK from the KERNEL, not from the ARC mailbox.
+//
+// `TTDevice::get_clock()` is a legacy ARC message on Wormhole. The ARC mailbox is a single
+// hardware resource shared by every process on the box, and a lock gives mutual exclusion,
+// not fairness: with `tt-mgmt smi` (or tt-smi) polling telemetry on one side and this
+// collector polling eight chips on the other, somebody loses. Measured: `aiclk=0` on chip
+// 5 for 3949 of 3949 samples, rotating between chips run to run, "Timed out after waiting
+// 1000 ms for ARC to respond", and an abort inside `wait_arc_core_start`.
+//
+// The KMD already owns that conversation and republishes the result at
+// /sys/class/tenstorrent/tenstorrent!<n>/tt_aiclk -- verified live (it tracks 500 MHz idle
+// -> 1000 MHz under load, and tt_heartbeat advances). Reading it costs one open+read of a
+// kernel file, takes no device lock, blocks nothing, and any number of readers can do it
+// at once. That is the interoperable path, and it is what a monitor should have used.
+//
+// The node index is the /dev/tenstorrent number from PCIDevice::get_device_num(), NOT the
+// UMD chip id and NOT the BDF order -- on this T3K sysfs enumerates 61,e1,a1,81 while UMD
+// numbers 61,81,a1,e1, so mapping by ordinal would silently report chip 1's clock as
+// chip 3's. Remote chips have no PCIe node and are left to the caller.
+std::optional<uint32_t> aiclk_from_sysfs(TTDevice* device) {
+    if (device == nullptr || device->is_remote()) {
+        return std::nullopt;
+    }
+    tt::umd::PCIDevice* pci = device->get_pci_device();
+    if (pci == nullptr) {
+        return std::nullopt;
+    }
+    char path[128];
+    std::snprintf(path, sizeof(path), "/sys/class/tenstorrent/tenstorrent!%d/tt_aiclk", pci->get_device_num());
+    std::ifstream f(path);
+    if (!f) {
+        return std::nullopt;
+    }
+    uint32_t mhz = 0;
+    if (!(f >> mhz) || mhz == 0) {
+        return std::nullopt;
+    }
+    return mhz;
+}
+
 bool arm_fpu_counter(TTDevice* device, const tt_xy_pair& core) {
     const auto write32 = [&](uint64_t addr, uint32_t value) {
         device->write_to_device(&value, core, addr, sizeof(value));
@@ -2282,6 +2325,92 @@ int main(int argc, char* argv[]) {
     // MUST be called while the tt-metal process that started the aggregator still holds
     // the device. Once it closes, the aggregator is already gone and the word is already
     // frozen.
+    // Does the FPU/SFPU counter mux actually exist?
+    //
+    // The whole SFPU axis rests on one claim, made in our own util_sampler.h and nowhere
+    // corroborated: that PERF_CNT_FPU1[16:8] selects the event feeding PERF_CNT_OUT_*_FPU,
+    // 0 = FPU_INSTRUCTION and 1 = SFPU_INSTRUCTION. tt-metal's own profiler does not model
+    // it -- FPU is a single counter group there and MUX_CTRL selects L1 banks only.
+    //
+    // Calibration (5w) says the claim is false: with a workload running NO SFPU op, the
+    // SFPU field tracked the duty cycle at the FPU's magnitude and agreed to three decimals
+    // across eight chips. That is what a duplicate looks like, because if the mux is a
+    // no-op both branches read the same accumulator over the same two-tick window and
+    // compute the identical ratio.
+    //
+    // This settles it against the hardware instead of by inference. Two independent checks:
+    //   1. WRITE-BACK: set the field, read the register back. If the bits do not stick,
+    //      there is no such field.
+    //   2. BEHAVIOUR: measure the counter's rate under each selector setting. A real mux
+    //      feeding different events gives different rates under a mixed workload; a no-op
+    //      gives the same rate twice.
+    if (!cli.sfpu_probe.empty()) {
+        int pc = -1, px = -1, py = -1;
+        if (std::sscanf(cli.sfpu_probe.c_str(), "%d,%d,%d", &pc, &px, &py) != 3) {
+            std::cerr << "--sfpu-probe wants chip,x,y\n";
+            return 2;
+        }
+        ChipState* target = nullptr;
+        for (auto& ch : chips) {
+            if (static_cast<int>(ch.chip_id) == pc) {
+                target = &ch;
+                break;
+            }
+        }
+        if (target == nullptr || target->cores.empty()) {
+            std::cerr << "chip " << pc << " not found\n";
+            return 2;
+        }
+        const CoreState* core = nullptr;
+        for (const auto& cc : target->cores) {
+            if (static_cast<int>(cc.translated.x) == px && static_cast<int>(cc.translated.y) == py) {
+                core = &cc;
+                break;
+            }
+        }
+        if (core == nullptr) {
+            core = &target->cores.front();
+            std::cout << "note: (" << px << "," << py << ") not found, using (" << core->translated.x << ","
+                      << core->translated.y << ")\n";
+        }
+        auto* dev = core->device;
+        const auto xy = core->translated;
+        const auto rd = [&](uint64_t addr) {
+            uint32_t v = 0;
+            dev->read_from_device(&v, xy, addr, sizeof(v));
+            return v;
+        };
+        const auto wr = [&](uint64_t addr, uint32_t v) { dev->write_to_device(&v, xy, addr, sizeof(v)); };
+
+        std::cout << "sfpu-probe: chip " << pc << " core (" << xy.x << "," << xy.y << ")\n";
+        for (uint32_t sel : {kFpuCounterSelFpu, kFpuCounterSelSfpu}) {
+            const uint32_t want = (sel << kFpuCounterSelShift) | kFpuModeContinuous;
+            wr(kRegFpu1, want);
+            const uint32_t got = rd(kRegFpu1);
+            const uint32_t a0 = rd(kAddrFpuOutH);
+            const uint32_t w0 = rd(kAddrWallL);
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            const uint32_t a1 = rd(kAddrFpuOutH);
+            const uint32_t w1 = rd(kAddrWallL);
+            const uint32_t dcount = a1 - a0;
+            const uint32_t dwall = w1 - w0;
+            std::printf(
+                "  sel=%u  wrote FPU1=0x%08x  read back 0x%08x  %s | OUT_H %u -> %u  d=%u  dwall=%u  busy=%.4f\n",
+                sel,
+                want,
+                got,
+                (got == want ? "STUCK" : "DID NOT STICK"),
+                a0,
+                a1,
+                dcount,
+                dwall,
+                dwall ? static_cast<double>(dcount) / static_cast<double>(dwall) : 0.0);
+        }
+        std::cout << "  Same busy under both selectors => the mux is a no-op and the SFPU axis is a\n"
+                     "  duplicate of FPU. Different busy => the mux works and the bug is elsewhere.\n";
+        return 0;
+    }
+
     if (cli.stop_aggregator) {
         const uint64_t now_us = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -3399,6 +3528,12 @@ int main(int argc, char* argv[]) {
                 last_t = now_t;
                 dram_update(chip, dt);
                 if (++tick % 5 == 0 && !chip.cores.empty()) {
+                    // Kernel first. Only a remote chip, with no PCIe node of its own, still
+                    // needs the ARC round trip.
+                    if (auto mhz = aiclk_from_sysfs(chip.cores.front().device)) {
+                        chip.aiclk_mhz = *mhz;
+                        continue;
+                    }
                     try {
                         chip.aiclk_mhz = chip.cores.front().device->get_clock();
                     } catch (const std::exception&) {

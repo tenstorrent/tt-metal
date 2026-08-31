@@ -2462,3 +2462,77 @@ Unrelated and still unexplained: a Llama-70B run and an earlier collector both a
 inside UMD's `wait_arc_core_start`/`read_from_arc_csm` with 1000 ms ARC timeouts before any
 of this, on a board already carrying 37k+ AER entries. The ARC path on this board is flaky
 independently of the ethernet wedge.
+
+## 5y. Why tt-mgmt and the collector fight, and the architectural fix -- 2026-08-31
+
+Observed: `tt-mgmt smi` hangs while the collector runs, and the collector's AICLK reads
+fail. Both processes hold all four MMIO devices at once:
+
+    pid=19668 python   -> /dev/tenstorrent/0,1,2,3    (the workload)
+    pid=20267 tt-mgmt  -> /dev/tenstorrent/0,1,2,3    (tt-mgmt smi, default backend)
+
+### It is not a locking bug, it is a fairness problem
+
+Both sides use UMD, so both DO participate in UMD's interprocess `LockManager`. There is no
+corruption and no missing mutual exclusion. But a lock provides exclusion, not fairness:
+this collector polls 8 chips at 300 Hz and holds those locks almost continuously, so a
+1 Hz telemetry poll on the other side simply never wins, and tt-mgmt times out at its
+1000 ms ARC bound. It is the same starvation that made Llama's teardown crawl in 5v -- one
+greedy poller, no backoff.
+
+The reverse direction explains a whole class of symptoms I had been attributing to flaky
+hardware: `aiclk=0` rotating between chips, "Timed out after waiting 1000 ms for ARC to
+respond", the abort inside `wait_arc_core_start`, and a third process never completing
+topology discovery. tt-mgmt was running through those measurements.
+
+### Three ways two processes can share one accelerator's telemetry
+
+  1. Both poll ARC from userspace. Correct only with a shared lock domain, and even then it
+     degrades to starvation under an unfair poller. This is what we were doing.
+  2. Read what the KERNEL already publishes. The KMD owns the ARC conversation and
+     republishes the result; readers are unlimited, take no lock, and cannot block anyone.
+  3. One userspace owner plus IPC fan-out. This is what the collector already does for core
+     utilization via /dev/shm.
+
+tt-mgmt does NOT need a different architecture -- it already has (2) available as
+`--backend sysfs` ("lightweight, no UMD"). Its default is `--backend auto`, which tries UMD
+first, which is why the shipped default collides.
+
+### The fix on OUR side: AICLK from sysfs
+
+The kernel already publishes what we were taking an ARC round trip for:
+
+    /sys/class/tenstorrent/tenstorrent!<n>/  ->  tt_aiclk tt_arcclk tt_axiclk tt_heartbeat
+                                                tt_asic_id tt_serial tt_fw_bundle_ver ...
+    plus hwmon: temp1_input curr1_input in0_input
+
+Verified live: tt_aiclk tracks 500 MHz idle -> 1000 MHz under load, and tt_heartbeat
+advances (19064 -> 19084 in 2 s). `aiclk_from_sysfs()` now reads it, with the ARC call kept
+only for remote chips, which have no PCIe node of their own.
+
+Result, measured WITH tt-mgmt still running: all 8 chips report 500 MHz, chip 5 included --
+the chip that read 0 for 3949 of 3949 samples. The remote chips' ARC fallback also started
+succeeding, because dropping four ARC users left mailbox headroom for them.
+
+TRAP, and it nearly bit: the sysfs node index is NOT the UMD chip id and NOT BDF order.
+
+    tenstorrent!0 -> 61:00.0     tenstorrent!1 -> e1:00.0
+    tenstorrent!2 -> a1:00.0     tenstorrent!3 -> 81:00.0
+
+while UMD numbers those 61, 81, a1, e1. Mapping by ordinal would have reported chip 1's
+clock as chip 3's -- silently, plausibly, and undetectably. The join must go through
+`PCIDevice::get_device_num()`, which is the /dev/tenstorrent index by construction.
+
+### Still open from the saturation attempt
+
+The compute+fabric saturation run did NOT meet its bar and is not evidence of anything yet:
+  - Workload cost: none. Control 1.0608 ms/iter vs monitored 1.0485 ms/iter over 226k and
+    458k iterations, 8/8 aggregators, 8/8 journal-fed, 0 fatals.
+  - But compute was NOT saturated: F_avg ~0.5% and DRAM ~23.6 GB/s, against the 5w
+    calibration markers of ~22% and ~40 GB/s for 100% duty. `--ccl 4` is fabric-heavy and
+    compute-light; the all-gathers dominate wall time.
+  - And LOSS WAS NOT MEASURED AT ALL: `--fidelity-probe` produced no output, because as a
+    fourth process it could not finish topology discovery against workload + collector +
+    tt-mgmt. The loss metric must come from the ALREADY-ATTACHED collector, which tracks
+    `journal_lost_reported` and `drain_lost_samples`, not from a second process that has to
+    re-discover the topology under exactly the load being tested.
