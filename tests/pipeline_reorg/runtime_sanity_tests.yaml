@@ -99,22 +99,23 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# Quasar simulator coverage (ttsim-owned list). NOC_API_V2 is deleted at test-run time
-# because libttsim_qsr.so doesn't model it yet; runs 9 of ttsim's 14 tests. The other 5
-# (data-movement/semaphore) fail to compile without NOC_API_V2 and are deferred here.
-# TODO(#54794): add them back once ttsim models NOC_API_V2 or noc_zero_l1.inl gets a V1 fallback.
+# Quasar simulator coverage (ttsim-owned list, full set as originally requested by Matt
+# Craighead). Some of these may fail today due to a known libttsim_qsr.so NOC_API_V2 gap
+# in the simulator itself, not this CI wiring — see #54794.
 - name: runtime_sim_quasar_cpp_unit_tests
   cmd: >-
-    hdr=$TT_METAL_HOME/tt_metal/hw/inc/internal/tt-2xx/quasar/noc_nonblocking_api.h;
-    grep -q 'define NOC_API_V2' $hdr || { echo no NOC_API_V2 define in $hdr - see issue 54794; exit 1; };
-    sed -i -e '/define NOC_API_V2/d' $hdr;
     f=HostOnlyTest.Bfp8Conversion;
     f=$f:UnitMeshFixture.InterleavedL1Buffer;
     f=$f:UnitMeshFixture.UnalignedReadWriteCore;
+    f=$f:QuasarMeshDeviceSingleCardFixture.DmLoopback;
+    f=$f:QuasarMeshDeviceSingleCardFixture.MultiDmAddTwoInts;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelMultipleThreads;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelSingleThread;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarComputeKernelTLS;
     f=$f:QuasarMeshDeviceSingleCardFixture.QuasarCreateMultipleComputeKernelsSingleCluster;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultiSemaphorePipeline;
+    f=$f:QuasarMeshDeviceSingleCardFixture.QuasarMultipleClustersMultiSemaphorePipeline;
+    f=$f:QuasarMeshDeviceSingleCardFixture.SingleDmL1Write;
     f=$f:RISCVAtomicsFixture.TestAtomicAddFetchRISCV;
     f=$f:RISCVAtomicsFixture.TestAtomicLoadStoreRISCV;
     ./build/test/tt_metal/unit_tests_legacy --gtest_filter=$f
