@@ -205,7 +205,9 @@ class TorchMoe(nn.Module):
             num_dispatch_groups: Number of dispatch groups (default: 1)
             routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj per expert
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj for shared expert
-            gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_weights: Optional dict with "weight" and optional "e_score_correction_bias" keys for
+                gate. A missing/None bias zeros the router's bias, expressing a bias-free router
+                (e.g. Mistral) instead of requiring the caller to pass a pre-zeroed tensor.
             routed_emb_dim: LatentMoE routed-side width. Defaults to emb_dim (no latent space).
                 When set (Kimi-K3: 3584), dispatch / experts / combine / reduce all run at this
                 width and the latent projections wrap them.
@@ -247,7 +249,10 @@ class TorchMoe(nn.Module):
             if topk_method == "noaux_tc":
                 self.gate = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
                 self.gate.weight.data = gate_weights["weight"]
-                self.gate.e_score_correction_bias.data = gate_weights["e_score_correction_bias"]
+                bias = gate_weights.get("e_score_correction_bias")
+                self.gate.e_score_correction_bias.data = (
+                    bias if bias is not None else torch.zeros_like(self.gate.e_score_correction_bias.data)
+                )
             elif topk_method == "gpt_softmax":
                 # top-k on the raw logits, then softmax over the selection. For a bias-free router
                 # that is identically softmax -> top-k -> renormalize, which is what Mistral does.
@@ -265,7 +270,8 @@ class TorchMoe(nn.Module):
                 assert route_scale in (None, 1.0), f"gpt_softmax needs route_scale 1.0, got {route_scale}"
                 assert (n_expert_groups or 1) == 1 and (n_limited_groups or 1) == 1, "gpt_softmax needs no grouping"
                 self.gate.weight.data = gate_weights["weight"]
-                self.gate.bias.data = gate_weights["e_score_correction_bias"]
+                bias = gate_weights.get("e_score_correction_bias")
+                self.gate.bias.data = bias if bias is not None else torch.zeros_like(self.gate.bias.data)
             else:
                 raise ValueError(f"unknown topk_method {topk_method!r}")
             self._gate_returns_logits = topk_method == "gpt_softmax"

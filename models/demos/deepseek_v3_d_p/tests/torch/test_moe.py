@@ -297,3 +297,77 @@ def test_moe(
     logger.debug("\n" + "=" * 60)
     logger.debug(f"TorchMoe Test ({label}) PASSED!")
     logger.debug("=" * 60)
+
+
+# A caller with no correction bias (Mistral's gpt_softmax router) must get exactly the same gate
+# as one that explicitly zeroes it -- a missing/None key is not allowed to silently keep DeepSeek's
+# random bias instead of zero.
+@pytest.mark.parametrize("topk_method", ["noaux_tc", "gpt_softmax"])
+@pytest.mark.parametrize("omit_key", [True, False], ids=["missing_key", "none_value"])
+def test_torch_moe_gate_bias_defaults_to_zero_when_absent(topk_method, omit_key):
+    num_routed_experts, emb_dim = 8, 16
+    gate_weights = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32, seed=1)
+    zero_bias = torch.zeros_like(gate_weights["e_score_correction_bias"])
+
+    no_bias_weights = {"weight": gate_weights["weight"]}
+    if not omit_key:
+        no_bias_weights["e_score_correction_bias"] = None
+
+    common_kwargs = dict(
+        dispatch_group_size=1,
+        experts_per_chip=num_routed_experts,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=2,
+        metadata_len=1,
+        max_dispatched_tokens_per_expert=1,
+        max_dispatch_buffer_token_size=1,
+        seq_len_per_chip=1,
+        emb_dim=emb_dim,
+        hidden_dim=emb_dim,
+        expert_dispatch_table=ExpertMapping.create_dispatch_table(
+            num_routed_experts=num_routed_experts, dispatch_group_size=1, num_dispatch_groups=1
+        ),
+        topk_method=topk_method,
+        n_expert_groups=1,
+        n_limited_groups=1,
+        route_scale=1.0,
+    )
+
+    moe_no_bias = TorchMoe(gate_weights=no_bias_weights, **common_kwargs)
+    moe_explicit_zero = TorchMoe(
+        gate_weights={**no_bias_weights, "e_score_correction_bias": zero_bias}, **common_kwargs
+    )
+
+    def bias_of(moe):
+        return moe.gate.bias.data if topk_method == "gpt_softmax" else moe.gate.e_score_correction_bias.data
+
+    assert torch.equal(bias_of(moe_no_bias), zero_bias)
+    assert torch.equal(bias_of(moe_no_bias), bias_of(moe_explicit_zero))
+
+
+def test_torch_moe_gate_bias_preserved_when_present():
+    """A real bias in gate_weights must be used as-is, not overwritten by the None fallback."""
+    num_routed_experts, emb_dim = 8, 16
+    gate_weights = create_gate_weights(num_routed_experts, emb_dim, dtype=torch.float32, seed=1)
+
+    moe = TorchMoe(
+        dispatch_group_size=1,
+        experts_per_chip=num_routed_experts,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=2,
+        metadata_len=1,
+        max_dispatched_tokens_per_expert=1,
+        max_dispatch_buffer_token_size=1,
+        seq_len_per_chip=1,
+        emb_dim=emb_dim,
+        hidden_dim=emb_dim,
+        expert_dispatch_table=ExpertMapping.create_dispatch_table(
+            num_routed_experts=num_routed_experts, dispatch_group_size=1, num_dispatch_groups=1
+        ),
+        gate_weights=gate_weights,
+        n_expert_groups=1,
+        n_limited_groups=1,
+        route_scale=1.0,
+    )
+
+    assert torch.equal(moe.gate.e_score_correction_bias.data, gate_weights["e_score_correction_bias"])
