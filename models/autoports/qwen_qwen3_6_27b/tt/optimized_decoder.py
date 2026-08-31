@@ -60,6 +60,14 @@ class OptimizationPolicy:
     linear_recurrent_program: str = "auto"
     linear_recurrent_fidelity: object = ttnn.MathFidelity.HiFi2
     linear_recurrent_state_dtype: object = ttnn.float32
+    # Replace the hand-rolled depthwise causal convolution in the linear
+    # attention prefill chunk with the fused KDA kernel.  Default-off
+    # until measured; see doc/kda_conv_swap/.
+    linear_kda_conv: bool = False
+    # Swept on Blackhole at this model's 10240 conv channels: device time is
+    # 29.2 us at 320 against 73.8 us at 1280 and 51.9 us at 64.  See
+    # doc/kda_conv_swap/README.md.
+    linear_kda_conv_channel_chunk: int = 320
     decode_storage_cores: int = 8
     # Advisor-challenger placement bundle.  This remains default-off in the
     # shipped decoder; experiment policies are constructed with
@@ -341,6 +349,10 @@ POLICIES.update(
             linear_outer_product=True,
         ),
         "linear_final": _LINEAR_FINAL,
+        # Fused KDA four-tap causal conv, swapped into the shipped
+        # linear-attention prefill chunk.  The model's conv kernel is
+        # exactly the op's four taps, and Q/K/V are tile-aligned.
+        "linear_kda_conv": replace(_LINEAR_FINAL, linear_kda_conv=True),
         "advisor_mlp_product_linear_b32": replace(_LINEAR_FINAL, advisor_plan="mlp_product_only"),
         "linear_state_fp32": replace(
             _LINEAR_PROJECTION_BASELINE,
@@ -651,6 +663,39 @@ class OptimizedDecoder(FunctionalDecoder):
                 policy.linear_recurrent_state_dtype,
             )
             ttnn.deallocate(functional_state)
+
+        if self.layer_kind == "linear_attention" and policy.linear_kda_conv:
+            # ``qkv_causal_conv1d_silu`` takes the four depthwise taps as
+            # separate per-channel tensors of logical volume 2*K+V, rather
+            # than the [conv_width, kernel] block the hand-rolled loop slices.
+            # Materialize them once during setup so runtime stays device-only.
+            conv_weight = (
+                _require_tensor(state_dict, self.layer_idx, "linear_attn.conv1d.weight").to(torch.bfloat16).squeeze(1)
+            )
+            kernel = int(self.hf_config.linear_conv_kernel_dim)
+            assert (
+                conv_weight.shape[-1] == kernel == 4
+            ), f"KDA causal conv is a four-tap kernel; this checkpoint has {conv_weight.shape[-1]}"
+            self.linear_kda_taps = tuple(
+                _to_device(
+                    conv_weight[:, tap].reshape(1, 1, -1).contiguous(),
+                    mesh_device=self.mesh_device,
+                )
+                for tap in range(kernel)
+            )
+            self.linear_kda_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
+                channel_chunk_size=policy.linear_kda_conv_channel_chunk,
+            )
+            # The fused conv kernel does not accumulate through L1, so it
+            # rejects the packer_l1_acc the projection configs carry.  Match
+            # the projection's fidelity otherwise.
+            self.linear_kda_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=policy.linear_input_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
 
         self.attention_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -1181,6 +1226,59 @@ class OptimizedDecoder(FunctionalDecoder):
             "mlp_down_prefill",
             k=self.intermediate_size,
             n=self.hidden_size,
+        )
+
+    def _linear_causal_conv_prefill(self, mixed, sequence, key_width, value_width):
+        """Fuse the causal convolution into the KDA kernel where it applies.
+
+        ``ttnn.experimental.kda.qkv_causal_conv1d_silu`` computes exactly this
+        block -- a four-tap depthwise causal convolution, SiLU, and the Q/K/V
+        split -- in one op, replacing the permute/concat/slice/multiply/add
+        chain and its layout conversions.  It takes a single ``[1, T, C]``
+        sequence, so batched prefill keeps the inherited implementation.
+        """
+        kernel = self.caches["conv"].shape[-1]
+        # The op requires a tile-aligned sequence, and the state refill below
+        # needs a chunk at least as long as the kernel.  A ragged tail chunk
+        # from a non-aligned prompt satisfies neither, so it keeps the
+        # inherited implementation; correctness never depends on the knob.
+        if not self.policy.linear_kda_conv or self.batch != 1 or sequence % ttnn.TILE_SIZE or sequence < kernel:
+            return FunctionalDecoder._linear_causal_conv_prefill(self, mixed, sequence, key_width, value_width)
+
+        history_rows = kernel - 1
+        # ``mixed`` is [1, B, S, C] with B == 1; the op wants [1, S, C]
+        # row-major, and the running state as the three preceding rows.
+        chunk = ttnn.reshape(mixed, (1, sequence, -1))
+        chunk = ttnn.to_layout(chunk, ttnn.ROW_MAJOR_LAYOUT)
+        history = ttnn.permute(self.caches["conv"], (0, 1, 3, 2))
+        history = ttnn.reshape(history, (1, self.caches["conv"].shape[-1], -1))
+        history = ttnn.to_layout(history[:, -history_rows:], ttnn.ROW_MAJOR_LAYOUT)
+
+        query, key, value = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            chunk,
+            history,
+            *self.linear_kda_taps,
+            key_width,
+            key_width,
+            value_width,
+            program_config=self.linear_kda_program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.linear_kda_compute_kernel_config,
+        )
+        ttnn.deallocate(history)
+
+        # The op leaves history updates to the caller.  The next state is the
+        # last ``kernel`` rows of concat(state, chunk), which for a chunk at
+        # least that long is the chunk's own tail.  Slice before transposing
+        # so only the retained rows are moved.
+        next_state = ttnn.permute(mixed[:, :, -kernel:, :], (0, 1, 3, 2))
+        ttnn.copy(next_state, self.caches["conv"])
+        ttnn.deallocate(next_state)
+        ttnn.deallocate(chunk)
+        return (
+            ttnn.reshape(query, (1, 1, sequence, key_width)),
+            ttnn.reshape(key, (1, 1, sequence, key_width)),
+            ttnn.reshape(value, (1, 1, sequence, value_width)),
         )
 
     def _linear_attention_prefill_chunk(self, hidden_states):

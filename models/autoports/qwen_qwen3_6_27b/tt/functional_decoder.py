@@ -469,6 +469,37 @@ class FunctionalDecoder(LightweightModule):
             chunk_index += 1
         return output.finish()
 
+    def _linear_causal_conv_prefill(self, mixed, sequence, key_width, value_width):
+        """Stateful depthwise causal convolution, vectorized across the chunk.
+
+        Consumes the packed ``[1, B, S, 2*K+V]`` projection, advances the
+        persistent conv state, and returns the SiLU-activated ``query``,
+        ``key`` and ``value`` slices.  Split out so an optimized subclass can
+        substitute a fused kernel for the whole block.
+        """
+        mixed = ttnn.permute(mixed, (0, 1, 3, 2))
+        conv_input = ttnn.concat([self.caches["conv"], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        next_conv_state = conv_input[..., -self.caches["conv"].shape[-1] :]
+        # ``conv_state`` stores the last ``kernel`` inputs, while the HF
+        # update concatenates it with this chunk and retains the last L
+        # *valid* convolution windows.  Their starts are 1..L, not 0..L-1.
+        convolved = ttnn.multiply(conv_input[..., 1 : sequence + 1], self.weights["conv"][..., 0:1])
+        for kernel_index in range(1, self.caches["conv"].shape[-1]):
+            convolved = ttnn.add(
+                convolved,
+                ttnn.multiply(
+                    conv_input[..., kernel_index + 1 : kernel_index + sequence + 1],
+                    self.weights["conv"][..., kernel_index : kernel_index + 1],
+                ),
+            )
+        ttnn.copy(next_conv_state, self.caches["conv"])
+        mixed = ttnn.silu(ttnn.permute(convolved, (0, 1, 3, 2)))
+        return (
+            mixed[..., :key_width],
+            mixed[..., key_width : 2 * key_width],
+            mixed[..., 2 * key_width :],
+        )
+
     def _linear_attention_prefill_chunk(self, hidden_states):
         """Run one gated-delta chunk with a logarithmic affine scan.
 
@@ -492,28 +523,7 @@ class FunctionalDecoder(LightweightModule):
         beta = ttnn.linear(hidden_states, self.weights["in_b"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         decay = ttnn.linear(hidden_states, self.weights["in_a"], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Stateful depthwise causal convolution, vectorized across the chunk.
-        mixed = ttnn.permute(mixed, (0, 1, 3, 2))
-        conv_input = ttnn.concat([self.caches["conv"], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        next_conv_state = conv_input[..., -self.caches["conv"].shape[-1] :]
-        # ``conv_state`` stores the last ``kernel`` inputs, while the HF
-        # update concatenates it with this chunk and retains the last L
-        # *valid* convolution windows.  Their starts are 1..L, not 0..L-1.
-        convolved = ttnn.multiply(conv_input[..., 1 : sequence + 1], self.weights["conv"][..., 0:1])
-        for kernel_index in range(1, self.caches["conv"].shape[-1]):
-            convolved = ttnn.add(
-                convolved,
-                ttnn.multiply(
-                    conv_input[..., kernel_index + 1 : kernel_index + sequence + 1],
-                    self.weights["conv"][..., kernel_index : kernel_index + 1],
-                ),
-            )
-        ttnn.copy(next_conv_state, self.caches["conv"])
-        mixed = ttnn.silu(ttnn.permute(convolved, (0, 1, 3, 2)))
-
-        query = mixed[..., :key_width]
-        key = mixed[..., key_width : 2 * key_width]
-        value = mixed[..., 2 * key_width :]
+        query, key, value = self._linear_causal_conv_prefill(mixed, sequence, key_width, value_width)
         query = ttnn.reshape(query, (self.batch, sequence, key_heads, key_dim))
         key = ttnn.reshape(key, (self.batch, sequence, key_heads, key_dim))
         value = ttnn.reshape(value, (self.batch, sequence, value_heads, value_dim))
