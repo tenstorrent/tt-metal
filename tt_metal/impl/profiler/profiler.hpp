@@ -323,6 +323,8 @@ public:
 
     void dumpRoutingInfo() const;
 
+    void dumpSocDescriptor() const;
+
     void dumpClusterCoordinates() const;
 
     // Dump device results to files and tracy

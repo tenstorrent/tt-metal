@@ -2635,6 +2635,18 @@ void DeviceProfiler::processResults(
 #endif
 }
 
+void DeviceProfiler::dumpSocDescriptor() const {
+    const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump soc descriptor to '{}' because the directory path could not be created!",
+            noc_trace_data_output_dir);
+        return;
+    }
+    soc_desc.serialize_to_file(noc_trace_data_output_dir / "soc_descriptor.yaml");
+}
+
 void DeviceProfiler::dumpRoutingInfo() const {
     tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
     if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {

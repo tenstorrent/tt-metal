@@ -815,6 +815,7 @@ void InitDeviceProfiler(IDevice* device) {
 
     if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
         profiler.dumpRoutingInfo();
+        profiler.dumpSocDescriptor();
         profiler.dumpClusterCoordinates();
     }
 #endif
