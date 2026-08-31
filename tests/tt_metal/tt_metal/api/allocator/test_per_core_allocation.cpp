@@ -358,6 +358,17 @@ TEST_F(PerCoreAllocationTest, RangeLockstepAndPerCoreExcludeEachOtherInBothOrder
     EXPECT_ANY_THROW(per_core::set_per_core_allocation(range_lockstep_first, true));
 }
 
+// Only the L1 branch of allocate_buffer reads the flag, so anywhere else it would be a no-op that
+// is_range_lockstep_allocation() still reports as enabled.
+TEST_F(PerCoreAllocationTest, RangeLockstepRejectsNonL1Buffers) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    auto args = BufferShardingArgs(
+        ShardSpecBuffer(CoreRangeSet(CoreCoord(0, 0)), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    range_lockstep::set_range_lockstep_allocation(args, true);
+    EXPECT_ANY_THROW(Buffer::create(device, PAGE_SIZE, PAGE_SIZE, BufferType::DRAM, args));
+}
+
 TEST_F(PerCoreAllocationTest, RangeLockstepSurvivesNdShardSpecConversion) {
     // TensorSpec rebuilds the MemoryConfig from named fields when it converts an nd shard spec to
     // a legacy one, and a rebuild drops the experimental flags unless they are explicitly restored.

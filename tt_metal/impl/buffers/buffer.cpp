@@ -432,6 +432,11 @@ Buffer::Buffer(
     per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)),
     range_lockstep_allocation_(experimental::range_lockstep_allocation::is_range_lockstep_allocation(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
+    // BufferShardingArgs does not know the buffer type; this is the first point where both are visible.
+    TT_FATAL(
+        !this->range_lockstep_allocation_ || buffer_type == BufferType::L1,
+        "range_lockstep_allocation is only supported for L1 buffers, but this buffer is {}",
+        enchantum::to_string(buffer_type));
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
