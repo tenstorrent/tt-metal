@@ -139,20 +139,10 @@ _GALAXY_CI_MIN_BANDWIDTH_GBPS = {
 # which is what bounds per-device DRAM.
 _GALAXY_FULL_MESH_CI_PERF_GLOBAL_ROWS = (55_040, 512 * 1024)
 
-# These floors are NOT the axis gate's. Holding global volume fixed gives the 32-rank snake
-# only 1/4 the rows-per-device of the 8-rank axis gate, so its per-hop payload is 4x smaller
-# and it cannot amortize the fixed per-hop cost as well. That is a property of the
-# configuration, not a defect -- at equal rows-per-device the snake matches or beats the axis
-# ring (see _GALAXY_FULL_MESH_MATCHED_LOCAL_MIN_BANDWIDTH_GBPS, which is the comparable gate
-# and does carry the axis floors).
-#
-# The short case is also the most variable, so these floors are set from the LOWEST value seen
-# across repeated runs, not a single sample, at 0.9x for margin. Observed on a high-power
-# Blackhole Galaxy (8x4, 2 links, FABRIC_2D_TORUS_XY) over two runs:
-#   1720 rows/device : bf16 RM 70.4-72.4 | fp8 RM 62.7-68.1 | bf16 TILE 69.5-72.8 |
-#                      bfp8 TILE 59.9-64.9   -> min 59.9, floor 53
-#   16384 rows/device: 90.6-93.9 across all four payloads -> min 90.6, floor 81
-# bfp8 TILE at the short length swings ~8% run to run; do not raise these from one good run.
+# Not the axis gate's floors: fixed global volume gives the snake 1/4 the rows-per-device, so
+# a 4x smaller per-hop payload. Set from the LOWEST value over repeated runs, not one sample --
+# short-case bfp8 TILE swings ~8%. Lowest seen on an 8x4 Blackhole Galaxy, 2 links,
+# FABRIC_2D_TORUS_XY: 54.7 at 1720 rows/device (floor 53), 88.9 at 16384 (floor 81).
 # Override with TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS when recalibrating.
 _GALAXY_FULL_MESH_CI_MIN_BANDWIDTH_GBPS = {
     55_040: float(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_FULL_MESH_MIN_GBPS", "53.0")),
