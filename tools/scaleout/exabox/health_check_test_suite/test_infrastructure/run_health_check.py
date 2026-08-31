@@ -74,11 +74,6 @@ log = logging.getLogger(__name__)
 # key is loaded — dispatch on this. Default preserves the Slurm behavior.
 LAUNCH_MODES = ("slurm", "orchestration")
 
-# TESTING SWITCH: reboot and requeue on every run, whatever the check returned, so
-# the self-heal can be exercised on a healthy node instead of having to break one.
-# Set back to False before merging.
-FORCE_SELF_HEAL = True
-
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -408,9 +403,7 @@ def main() -> int:
             "needs Slurm); proceeding to JIRA ticketing",
             launch_mode,
         )
-    # The restart_count check is what keeps the forced reboot from looping: the
-    # requeued run comes back with SLURM_RESTART_COUNT=1 and proceeds normally.
-    elif (FORCE_SELF_HEAL and restart_count < REBOOT_CAP) or should_reboot(
+    elif should_reboot(
         exit_code=effective_code,
         enabled=args.reboot_on_failure,
         slurm_job_id=slurm_job_id,
@@ -418,13 +411,13 @@ def main() -> int:
         cap=REBOOT_CAP,
     ):
         log.info(
-            "Rebooting and requeuing for a clean rerun (exit %d, restart_count=%d, cap=%d)",
+            "Test failed (exit %d); rebooting and requeuing for a clean rerun (restart_count=%d, cap=%d)",
             effective_code,
             restart_count,
             REBOOT_CAP,
         )
-        # Upload this run as discard=1 (visible but out of fleet stats) before
-        # rebooting; suffix avoids colliding with the post-reboot row.
+        # Upload the failing run as discard=1 (visible but out of fleet stats)
+        # before rebooting; suffix avoids colliding with the post-reboot row.
         pre_reboot_csv = run_csv_analysis(
             json_report=json_report,
             node=node,
