@@ -1,0 +1,482 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# Mesh-per-stage router pipeline: every pipeline stage is its OWN mesh (host [1,1],
+# one rank each), so stage shapes are free to differ -- unlike a single BigMesh carved
+# by host_topology, which deals one identical slice shape to every rank.
+#
+# Topology (both branches loop back to the router):
+#
+#   Branch A: router(4x2) -> 4x1 -> ( 4x1 -> 4x1 -> 4x1 -> 4x1 -> 4x1 -> 4x2 ) x10 -> 4x4 -> router
+#   Branch B: router(4x2) -> 4x1 -> ( 4x2 ) x5 -> router
+#
+# 69 meshes / 69 ranks total:
+#   mesh 0            router                4x2
+#   mesh 1            branch A head         4x1
+#   meshes 2..61      branch A body         ten groups of (4x1 x5 + 4x2)
+#   mesh 62           branch A tail         4x4
+#   mesh 63           branch B head         4x1
+#   meshes 64..68     branch B body         4x2 x5
+#
+# 352 chips = 11 BLACKHOLE galaxies. The row axis is RING (the 4-row Y ring the
+# decoder / lm-head CCLs need); the column axis is LINE. The router sits at fabric degree 4
+# -- a_send / a_recv / b_send / b_recv -- which is what a two-branch FABRIC-return fork needs.
+#
+# Physical placement is NOT encoded here: pass this to
+#   tt-run --mesh-graph-descriptor <this file> --hosts <hosts>
+# and tt-run's phase-1 (generate_rank_bindings) solves the graph against the real cabling.
+
+mesh_descriptors {
+  name: "S4x1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 1 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "S4x2"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "S4x4"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  # MGD 1.0 compatibility requires the single top-level graph to be a FABRIC graph
+  # (a "POD"/other type trips "There can only be one FABRIC level graph").
+  type: "FABRIC"
+
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 0 } }  # router (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 1 } }  # A head (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 2 } }  # A group 0 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 3 } }  # A group 0 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 4 } }  # A group 0 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 5 } }  # A group 0 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 6 } }  # A group 0 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 7 } }  # A group 0 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 8 } }  # A group 1 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 9 } }  # A group 1 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 10 } }  # A group 1 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 11 } }  # A group 1 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 12 } }  # A group 1 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 13 } }  # A group 1 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 14 } }  # A group 2 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 15 } }  # A group 2 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 16 } }  # A group 2 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 17 } }  # A group 2 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 18 } }  # A group 2 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 19 } }  # A group 2 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 20 } }  # A group 3 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 21 } }  # A group 3 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 22 } }  # A group 3 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 23 } }  # A group 3 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 24 } }  # A group 3 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 25 } }  # A group 3 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 26 } }  # A group 4 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 27 } }  # A group 4 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 28 } }  # A group 4 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 29 } }  # A group 4 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 30 } }  # A group 4 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 31 } }  # A group 4 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 32 } }  # A group 5 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 33 } }  # A group 5 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 34 } }  # A group 5 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 35 } }  # A group 5 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 36 } }  # A group 5 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 37 } }  # A group 5 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 38 } }  # A group 6 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 39 } }  # A group 6 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 40 } }  # A group 6 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 41 } }  # A group 6 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 42 } }  # A group 6 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 43 } }  # A group 6 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 44 } }  # A group 7 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 45 } }  # A group 7 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 46 } }  # A group 7 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 47 } }  # A group 7 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 48 } }  # A group 7 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 49 } }  # A group 7 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 50 } }  # A group 8 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 51 } }  # A group 8 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 52 } }  # A group 8 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 53 } }  # A group 8 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 54 } }  # A group 8 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 55 } }  # A group 8 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 56 } }  # A group 9 stage 0 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 57 } }  # A group 9 stage 1 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 58 } }  # A group 9 stage 2 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 59 } }  # A group 9 stage 3 (4x1)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 60 } }  # A group 9 stage 4 (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 61 } }  # A group 9 join (4x2)
+  instances { mesh { mesh_descriptor: "S4x4" mesh_id: 62 } }  # A tail (4x4)
+  instances { mesh { mesh_descriptor: "S4x1" mesh_id: 63 } }  # B head (4x1)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 64 } }  # B stage 0 (4x2)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 65 } }  # B stage 1 (4x2)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 66 } }  # B stage 2 (4x2)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 67 } }  # B stage 3 (4x2)
+  instances { mesh { mesh_descriptor: "S4x2" mesh_id: 68 } }  # B stage 4 (4x2)
+
+  # --- Branch A ------------------------------------------------------------
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }  # router -> A head
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A head -> A group 0 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 0 stage 0 -> A group 0 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 4 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 0 stage 1 -> A group 0 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 4 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 5 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 0 stage 2 -> A group 0 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 5 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 6 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 0 stage 3 -> A group 0 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 6 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 7 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 0 stage 4 -> A group 0 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 7 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 8 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 0 join -> A group 1 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 8 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 9 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 1 stage 0 -> A group 1 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 9 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 10 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 1 stage 1 -> A group 1 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 10 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 11 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 1 stage 2 -> A group 1 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 11 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 12 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 1 stage 3 -> A group 1 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 12 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 13 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 1 stage 4 -> A group 1 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 13 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 14 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 1 join -> A group 2 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 14 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 15 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 2 stage 0 -> A group 2 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 15 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 16 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 2 stage 1 -> A group 2 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 16 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 17 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 2 stage 2 -> A group 2 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 17 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 18 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 2 stage 3 -> A group 2 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 18 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 19 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 2 stage 4 -> A group 2 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 19 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 20 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 2 join -> A group 3 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 20 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 21 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 3 stage 0 -> A group 3 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 21 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 22 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 3 stage 1 -> A group 3 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 22 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 23 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 3 stage 2 -> A group 3 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 23 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 24 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 3 stage 3 -> A group 3 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 24 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 25 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 3 stage 4 -> A group 3 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 25 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 26 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 3 join -> A group 4 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 26 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 27 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 4 stage 0 -> A group 4 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 27 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 28 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 4 stage 1 -> A group 4 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 28 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 29 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 4 stage 2 -> A group 4 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 29 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 30 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 4 stage 3 -> A group 4 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 30 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 31 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 4 stage 4 -> A group 4 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 31 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 32 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 4 join -> A group 5 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 32 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 33 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 5 stage 0 -> A group 5 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 33 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 34 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 5 stage 1 -> A group 5 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 34 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 35 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 5 stage 2 -> A group 5 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 35 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 36 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 5 stage 3 -> A group 5 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 36 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 37 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 5 stage 4 -> A group 5 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 37 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 38 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 5 join -> A group 6 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 38 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 39 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 6 stage 0 -> A group 6 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 39 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 40 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 6 stage 1 -> A group 6 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 40 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 41 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 6 stage 2 -> A group 6 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 41 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 42 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 6 stage 3 -> A group 6 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 42 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 43 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 6 stage 4 -> A group 6 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 43 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 44 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 6 join -> A group 7 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 44 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 45 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 7 stage 0 -> A group 7 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 45 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 46 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 7 stage 1 -> A group 7 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 46 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 47 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 7 stage 2 -> A group 7 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 47 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 48 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 7 stage 3 -> A group 7 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 48 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 49 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 7 stage 4 -> A group 7 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 49 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 50 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 7 join -> A group 8 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 50 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 51 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 8 stage 0 -> A group 8 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 51 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 52 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 8 stage 1 -> A group 8 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 52 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 53 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 8 stage 2 -> A group 8 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 53 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 54 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 8 stage 3 -> A group 8 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 54 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 55 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 8 stage 4 -> A group 8 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 55 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 56 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 8 join -> A group 9 stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 56 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 57 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 9 stage 0 -> A group 9 stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 57 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 58 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 9 stage 1 -> A group 9 stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 58 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 59 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 9 stage 2 -> A group 9 stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 59 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 60 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 9 stage 3 -> A group 9 stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 60 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 61 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 9 stage 4 -> A group 9 join
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 61 } }
+    nodes { mesh { mesh_descriptor: "S4x4" mesh_id: 62 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A group 9 join -> A tail
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x4" mesh_id: 62 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }  # A tail -> router
+  # --- Branch B ------------------------------------------------------------
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 63 } }
+    channels { count: 8 policy: RELAXED }
+  }  # router -> B head
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x1" mesh_id: 63 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 64 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B head -> B stage 0
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 64 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 65 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B stage 0 -> B stage 1
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 65 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 66 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B stage 1 -> B stage 2
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 66 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 67 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B stage 2 -> B stage 3
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 67 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 68 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B stage 3 -> B stage 4
+  connections {
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 68 } }
+    nodes { mesh { mesh_descriptor: "S4x2" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }  # B stage 4 -> router
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
