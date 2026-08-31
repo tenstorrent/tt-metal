@@ -31,6 +31,22 @@ def main() -> int:
     ap.add_argument("--iters", type=int, default=50000, help="timed iterations")
     ap.add_argument("--warmup", type=int, default=500, help="discarded iterations")
     ap.add_argument("--label", type=str, default="", help="free-form tag echoed in output")
+    # HEAVY CCL: all-gathers per iteration, so the workload and the monitor contend for
+    # TT-FABRIC and not merely for compute.
+    #
+    # The matmul-only loop is deliberately fabric-free (see the header) because it was
+    # built to isolate the collector's COST. That is the wrong shape for a COEXISTENCE
+    # test: fabric is exactly where the interesting failures live, since tt-metal places
+    # EDMs on link-free ethernet cores and that is what decides whether the aggregator can
+    # find a core at all.
+    # NOTE cluster_axis=0. On a T3K reshaped to 2x4 only ONE mesh axis carries fabric
+    # links; gathering along axis 1 dies with "Requested link index 0 is out of bounds.
+    # 0 ethernet channels available to forward" -- on a CLEAN board with no monitor
+    # running, so it is a topology mistake, not contention. The working reference is
+    # tests/ttnn/unit_tests/base_functionality/test_multi_device.py's
+    # test_line_all_gather_after_reshape: all_gather(dim=2, cluster_axis=0).
+    ap.add_argument("--ccl", type=int, default=0, help="all_gathers per iteration over tt-fabric (0 = compute only)")
+    ap.add_argument("--ccl-dim", type=int, default=2048, help="width of the CCL tensor")
     # Run for a bounded WALL TIME and exit through the normal `finally`, closing the mesh
     # device cleanly.
     #
@@ -49,9 +65,27 @@ def main() -> int:
     import torch
     import ttnn
 
-    result = {"label": args.label, "ok": False}
+    result = {"label": args.label, "ok": False, "ccl_per_iter": args.ccl}
 
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(args.rows, args.cols))
+    # FABRIC MUST BE CONFIGURED BEFORE THE MESH DEVICE IS CREATED.
+    #
+    # Without this, all_gather dies with "Requested link index 0 is out of bounds. 0
+    # ethernet channels available to forward" -- on a CLEAN board with no monitor running,
+    # and on every mesh shape tried (2x4 direct, 1x8 line, both cluster axes). The tree's
+    # own reference test passes on the same machine, and the only difference is that its
+    # pytest fixture calls set_fabric_config first (conftest.py set_fabric: "Must be called
+    # before creating the mesh device"). Fabric appears in the log as initialised either
+    # way, which is what made this look like a topology problem rather than a missing call.
+    if args.ccl > 0:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+
+    # Open as the 8-chip LINE and reshape, exactly as the reference test does; opening a
+    # 2x4 mesh directly does not give the same fabric node mapping.
+    if args.ccl > 0:
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, args.rows * args.cols))
+        mesh.reshape(ttnn.MeshShape(args.rows, args.cols))
+    else:
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(args.rows, args.cols))
     try:
         num_devices = mesh.get_num_devices()
         result["num_devices"] = num_devices
@@ -60,6 +94,22 @@ def main() -> int:
         torch.manual_seed(0)
         a_t = torch.randn(1, 1, n, n, dtype=torch.bfloat16)
         b_t = torch.randn(1, 1, n, n, dtype=torch.bfloat16)
+
+        # CCL tensor: sharded across BOTH mesh axes, gathered along the 4-device axis each
+        # iteration. Follows the ShardTensor2dMesh + all_gather(cluster_axis=) pattern from
+        # tests/ttnn/unit_tests/base_functionality/test_multi_device.py.
+        ccl_t = None
+        if args.ccl > 0:
+            # Mirrors test_line_all_gather_after_reshape: shard both dims over the 2x4
+            # mesh, gather dim 2 back along cluster_axis 0.
+            ccl_axis, ccl_gather_dim = 0, 2
+            ccl_torch = torch.rand((1, 1, 64 * args.rows, args.ccl_dim), dtype=torch.bfloat16)
+            ccl_t = ttnn.from_torch(
+                ccl_torch,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=[args.rows, args.cols], dims=(2, 3)),
+            )
 
         mapper = ttnn.ReplicateTensorToMesh(mesh)
         a = ttnn.from_torch(a_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
@@ -79,11 +129,17 @@ def main() -> int:
                 for _ in range(50):
                     c = ttnn.matmul(a, b)
                     ttnn.deallocate(c)
+                    for _ in range(args.ccl):
+                        g = ttnn.all_gather(ccl_t, dim=ccl_gather_dim, cluster_axis=ccl_axis)
+                        ttnn.deallocate(g)
                 done += 50
         else:
             for _ in range(args.iters):
                 c = ttnn.matmul(a, b)
                 ttnn.deallocate(c)
+                for _ in range(args.ccl):
+                    g = ttnn.all_gather(ccl_t, dim=ccl_gather_dim, cluster_axis=ccl_axis)
+                    ttnn.deallocate(g)
             done = args.iters
         ttnn.synchronize_device(mesh)
         t1 = time.perf_counter()
@@ -103,6 +159,12 @@ def main() -> int:
             ttnn.close_mesh_device(mesh)
         except Exception:
             pass
+        # conftest's reset_fabric: set DISABLED after the device is closed.
+        if args.ccl > 0:
+            try:
+                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+            except Exception:
+                pass
 
     print("TTNVTOP_AB_RESULT " + json.dumps(result))
     return 0 if result["ok"] else 1

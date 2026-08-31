@@ -197,6 +197,7 @@ struct CliOptions {
     bool stop_aggregator = false;     // Phase 2.2: ask every running aggregator to return
     bool pin_tunnel = false;          // Narrow each remote chip's tunnel to its real link channels
     std::string peek;                 // "chip,x,y,addr[,len]" -- read raw L1 twice and print it
+    int watchdog_s = 0;               // Guard against a dead aggregator hard-blocking the next device open
 };
 
 void print_help(const char* argv0) {
@@ -288,6 +289,12 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
                 return false;
             }
             out.launch_artifact = v;
+        } else if (a == "--watchdog") {
+            const char* v = need_arg("--watchdog");
+            if (v == nullptr || !parse_int(v, out.watchdog_s) || out.watchdog_s <= 0) {
+                std::cerr << "ttnvtop-collector: --watchdog expects a positive number of seconds\n";
+                return false;
+            }
         } else if (a == "--peek") {
             const char* v = need_arg("--peek");
             if (v == nullptr) {
@@ -844,7 +851,8 @@ int main(int argc, char* argv[]) {
         // debuggable on a board where a wedged eth core costs nothing, instead of only on
         // the T3K where it costs a board reset (tt-eth-idle-core-firmware-contracts).
         const bool arch_agnostic_mode = !cli.launch_artifact.empty() || cli.journal_probe || cli.fidelity_probe_s > 0 ||
-                                        cli.read_latency_probe || cli.stop_aggregator || !cli.peek.empty();
+                                        cli.read_latency_probe || cli.stop_aggregator || !cli.peek.empty() ||
+                                        cli.watchdog_s > 0;
         if (arch != tt::ARCH::WORMHOLE_B0 && !(arch_agnostic_mode && arch == tt::ARCH::BLACKHOLE)) {
             std::cerr << "ttnvtop-collector: skipping chip " << chip_id << " arch " << arch_name(arch)
                       << " (Wormhole-only for Phase 1).\n";
@@ -900,7 +908,7 @@ int main(int argc, char* argv[]) {
         // all device WRITES, and on a remote chip they cross the NON_MMIO tunnel.
         // Publish the static per-core fields, then skip every write below.
         if (cli.journal_probe || cli.read_latency_probe || cli.fidelity_probe_s > 0 || !cli.peek.empty() ||
-            !cli.launch_artifact.empty()) {
+            cli.watchdog_s > 0 || !cli.launch_artifact.empty()) {
             for (size_t i = 0; i < chip.cores.size(); ++i) {
                 auto& v = chip.publisher.cores()[i];
                 v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -1373,10 +1381,32 @@ int main(int argc, char* argv[]) {
                     chip_ok = true;
                     std::cout << " — RUNNING (sweeps " << s0 << " -> " << s1 << ")\n";
                 } else {
-                    std::cout
-                        << " — NOT RUNNING (magic 0x" << std::hex << magic << std::dec << ", sweeps " << s0 << " -> "
-                        << s1 << "). Nothing on an idle eth core polls go_messages[0] unless tt-metal's\n"
-                        << "    idle-erisc firmware is resident, and only a tt-metal device init puts it there.\n";
+                    std::cout << " — NOT RUNNING (magic 0x" << std::hex << magic << std::dec << ", sweeps " << s0
+                              << " -> " << s1 << ")";
+
+                    // NEUTRALISE AN ABANDONED CANDIDATE BEFORE MOVING ON.
+                    //
+                    // By this point the 25 KB image, the runtime args, the launch message
+                    // AND the go word have all been written to this core. If the kernel
+                    // merely started LATE -- past the verification window -- walking away
+                    // leaves a live aggregator on a core nothing tracks, which no
+                    // --stop-aggregator will ever find and whose 0xABCD heartbeat then
+                    // freezes when it dies. That is the likely source of the stray
+                    // "Stuck at 0xabcd9a81" seen on core e4-0, which is NOT the core the
+                    // launcher settles on: an abandoned fallback candidate.
+                    //
+                    // Disarm it: take the go word back and clear the journal magic so no
+                    // later probe reads a corpse as live.
+                    try {
+                        const std::vector<uint8_t> go_off(go_bytes.size(), 0);
+                        dev->write_to_device(go_off.data(), target, go_addr, go_off.size());
+                        const uint32_t jz = 0;
+                        dev->write_to_device(&jz, target, l1.journal, sizeof(jz));
+                        std::cout << ", disarmed";
+                    } catch (const std::exception&) {
+                        std::cout << ", DISARM FAILED";
+                    }
+                    std::cout << ((cand + 1 < candidates.size()) ? " — trying next core\n" : "\n");
                 }
             }
             if (!chip_ok) {
@@ -1570,6 +1600,114 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         std::cout << "launch-go: go word written — the staged aggregator should now be running.\n";
+        return 0;
+    }
+
+    // WATCHDOG: stop a dead aggregator from hard-blocking the next device open.
+    //
+    // THE HAZARD. Our kernel maintains the eth firmware heartbeat it displaced, writing
+    // (0xABCD << 16) | counter. A CLEAN cooperative stop is already safe: the kernel
+    // returns, idle_erisc.cc regains its wait loop and resumes posting its own heartbeat.
+    // But if the kernel dies WITHOUT returning -- it hangs, or the owning process closes
+    // the device under it -- the word is left FROZEN with a VALID signature, and UMD's
+    // eth_heartbeat_running THROWS on exactly that. The next tt-metal device open then
+    // fails outright:
+    //
+    //     RuntimeError: Timed out waiting for ETH heartbeat ... Stuck at 0xabcd9a81
+    //
+    // Observed for real. A monitor that can prevent the next job from starting is not
+    // shippable, and no in-kernel fix can cover it -- a dead kernel cannot write.
+    //
+    // THE FIX, from reading UMD's predicate rather than guessing. Two loops:
+    //   loop 1 waits for the word to be NON-ZERO; still zero at timeout -> error. So
+    //          "clearing" the heartbeat to 0 makes things WORSE, not better.
+    //   loop 2 if (value >> 16) is neither 0xABCD nor 0xAABB it logs "FW possibly
+    //          corrupted" and returns false IMMEDIATELY, with no throw.
+    // So an INVALID signature is a warning; a frozen VALID one is fatal. Writing a
+    // non-zero word with a deliberately invalid signature converts a hard block into a
+    // skipped core, which for an INACTIVE eth core costs nothing.
+    if (cli.watchdog_s > 0) {
+        constexpr uint32_t kDeadSignature = 0xDEADu;  // deliberately NOT 0xABCD or 0xAABB
+        constexpr int kStallPolls = 5;                // ~2.5 s at 2 Hz before declaring death
+        struct Watched {
+            tt::ChipId chip_id = 0;
+            tt::umd::CoreCoord core{};
+            TTDevice* dev = nullptr;
+            uint32_t hb_addr = 0;
+            uint32_t last_sweeps = 0;
+            int stalled = 0;
+            bool neutralised = false;
+        };
+        const uint64_t t_now_us = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
+        std::vector<Watched> watched;
+        for (auto& chip : chips) {
+            if (chip.cores.empty() || chip.arch != tt::ARCH::WORMHOLE_B0) {
+                continue;  // Blackhole's idle_erisc posts no heartbeat and its discovery does not check one
+            }
+            auto* dev = chip.cores.front().device;
+            SocDescriptor soc(std::make_shared<SocArchDescriptor>(chip.arch), dev->get_chip_info());
+            for (const auto& l : ttnvtop_agg::probe_landings(dev, soc, t_now_us, chip.arch)) {
+                Watched w;
+                w.chip_id = chip.chip_id;
+                w.core = l.core;
+                w.dev = dev;
+                w.hb_addr = ttnvtop::kWormholeEthHeartbeatAddr;
+                w.last_sweeps = l.last_sweep_count;
+                watched.push_back(w);
+            }
+        }
+        std::cout << "watchdog: " << watched.size() << " aggregator(s), " << cli.watchdog_s << " s at 2 Hz\n";
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(cli.watchdog_s);
+        int neutralised = 0;
+        while (std::chrono::steady_clock::now() < deadline && !g_stop.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            for (auto& w : watched) {
+                if (w.neutralised) {
+                    continue;
+                }
+                uint32_t sweeps = 0;
+                bool ok = false;
+                try {
+                    std::vector<uint8_t> buf(sizeof(util_agg_msg_t), 0);
+                    w.dev->read_from_device(
+                        buf.data(), w.core, ttnvtop_agg::landing_base(tt::ARCH::WORMHOLE_B0), sizeof(buf[0]) * 64);
+                    util_agg_hdr_view_t h{};
+                    std::memcpy(&h, buf.data(), sizeof(h));
+                    ok = h.magic == UTIL_AGG_MAGIC;
+                    sweeps = h.sweep_count;
+                } catch (const std::exception&) {
+                    ok = false;
+                }
+                if (!ok) {
+                    w.stalled = 0;  // no journal -> stopped cleanly, nothing to neutralise
+                    continue;
+                }
+                w.stalled = (sweeps == w.last_sweeps) ? w.stalled + 1 : 0;
+                w.last_sweeps = sweeps;
+                if (w.stalled < kStallPolls) {
+                    continue;
+                }
+                // Dead with a live-looking journal. Neutralise the heartbeat and clear the
+                // magic so no later reader mistakes the corpse for a running aggregator.
+                try {
+                    const uint32_t dead = (kDeadSignature << 16) | (sweeps & 0xFFFFu);
+                    w.dev->write_to_device(&dead, w.core, w.hb_addr, sizeof(dead));
+                    const uint32_t zero = 0;
+                    w.dev->write_to_device(
+                        &zero, w.core, ttnvtop_agg::landing_base(tt::ARCH::WORMHOLE_B0), sizeof(zero));
+                    w.neutralised = true;
+                    ++neutralised;
+                    std::cout << "  chip " << w.chip_id << " eth (" << w.core.x << "," << w.core.y
+                              << "): aggregator DEAD at sweeps=" << sweeps << " — heartbeat neutralised to 0x"
+                              << std::hex << dead << std::dec << " (invalid signature: UMD warns, does not throw)\n";
+                } catch (const std::exception& e) {
+                    std::cout << "  chip " << w.chip_id << ": neutralise failed: " << e.what() << "\n";
+                }
+            }
+        }
+        std::cout << "watchdog: neutralised " << neutralised << " dead aggregator(s).\n";
         return 0;
     }
 
