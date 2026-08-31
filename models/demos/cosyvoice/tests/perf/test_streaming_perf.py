@@ -81,25 +81,20 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # **Wormhole cannot run this schedule, and the limit is the device rather than the
-    # code.** Running the flow decoder and the vocoder while the AR decode trace is
-    # live -- which is what interleaving *is* -- hangs n300 outright: log frozen, JIT
-    # cache flat, 100 % CPU, board needing a reset. Both 32 GB Blackhole boards run the
-    # identical code and identical geometries without complaint, and shrinking this
-    # test's trace region from 384 MB to 64 MB (it captures one trace, not 65) did not
-    # change it, so it is not simply the reserved region.
-    #
-    # Skipped rather than left to hang, because a test that wedges the board costs
-    # every later test in the run as well. `PERF.md` records it as a known limitation,
-    # and the streaming *content* gate --
-    # `tests/e2e/test_device_streamed_matches_non_streamed` -- does run on n300 and
-    # passes there: what is unavailable on Wormhole is the interleaved *schedule*, not
-    # chunked synthesis.
+    # **Still hangs Wormhole n300, and the StreamState fix did not change that.**
+    # Parking the carried caches on the host cured the *corruption* -- see
+    # `StreamState` -- and `CosyVoiceTTNN.synthesize_streaming` now runs clean on n300.
+    # This test does not, and the difference is how long a trace stays live: it holds
+    # one `TracedDecodeStep` across four passes and runs the flow decoder and vocoder
+    # under it repeatedly, where `synthesize_streaming` captures and releases per call.
+    # That is a hypothesis, not a diagnosis; what is measured is that this test wedges
+    # the board there and the shipped path does not.
     if "WORMHOLE" in str(device.arch()).upper():
         pytest.skip(
-            "the interleaved schedule hangs Wormhole n300 -- flow/vocoder allocation "
-            "against a live decode trace; see PERF.md, Known limitations"
+            "hangs Wormhole n300: one decode trace held live across repeated flow/vocoder "
+            "work; see PERF.md, Known limitations"
         )
+
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
     from models.demos.cosyvoice.tt.llm.decoder import TracedDecodeStep, TtARDecoder, right_aligned_bias

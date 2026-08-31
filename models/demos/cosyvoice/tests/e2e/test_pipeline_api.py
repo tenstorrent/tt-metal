@@ -120,13 +120,6 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     import ttnn
     from models.demos.cosyvoice.tt.pipeline import PromptContext
 
-    # Same device limit as `tests/perf/test_streaming_perf.py`: the interleaved
-    # schedule runs the flow decoder and the vocoder against a live decode trace, and
-    # that hangs Wormhole n300 while both Blackhole boards are fine with it. See
-    # PERF.md, *Known limitations*.
-    if "WORMHOLE" in str(device.arch()).upper():
-        pytest.skip("the interleaved schedule hangs Wormhole n300; see PERF.md, Known limitations")
-
     ctx, meta = PromptContext.from_npz(_cases(1)[0])
     model = _model(device)
 
@@ -150,36 +143,32 @@ def test_device_streaming_generates_the_same_tokens_as_batch(device):
     )
     assert streamed.shape[1] > 0 and torch.isfinite(streamed).all(), "streamed audio is empty or not finite"
 
-    # **This is a defect band, not an acceptance band.** Speech should peak near 1.0
-    # and the batch path does; `synthesize_streaming`'s output peaks around 72 on this
-    # prompt -- finite, mostly near-silent, with a spike. The tokens are identical
-    # (asserted above) and the chunk schedule is right, so the fault is downstream of
-    # generation, somewhere in how this wrapper assembles the per-chunk conditioning
-    # for the flow decoder and the vocoder. It is not the interleaving itself: the same
-    # `StreamSession` scheduler, driven from `tests/perf/test_streaming_perf.py` with
-    # the golden's own prompt, produces audio that `test_device_streamed_matches_non_
-    # streamed` gates on content in mel space.
+    # **This is where a real defect used to be pinned, and the shape of the assertion
+    # is what caught it.** Interleaved synthesis once produced audio peaking at 72.5
+    # against a batch path peaking at 0.001 -- correct tokens, correct schedule,
+    # bit-identical mel, destroyed waveform. The cause was device buffers carried
+    # across a chunk boundary while the AR decode trace was live; `StreamState` now
+    # parks them on the host and its docstring carries the measurement.
     #
-    # It is pinned rather than printed for the same reason `tests/perf/gates.py` pins a
-    # missed threshold: an unasserted number drifts silently, and this one has to be
-    # visible until it is fixed. **Closing the defect means replacing this with
-    # `< 1.5`**, not widening the band.
-    # **The magnitude differs by architecture, which is itself a clue.** Blackhole
-    # measures ~72, Wormhole ~8, on the same prompt and the same tokens -- roughly a
-    # factor of nine apart. A scale error that varies by part points at the arithmetic
-    # rather than at the schedule, and narrows where to look when this is picked up.
-    lo, hi = (4.0, 16.0) if "WORMHOLE" in str(device.arch()).upper() else (40.0, 120.0)
-    peak = float(streamed.abs().max())
-    assert lo < peak < hi, (
-        f"streamed peak {peak:.1f} is outside this architecture's recorded defect band "
-        f"({lo}, {hi}). If it is now near 1.0 the amplitude defect is fixed -- replace "
-        "this assertion with `peak < 1.5` and drop the note in docs/VALIDATION.md. If it "
-        "moved elsewhere, something new is wrong."
+    # Two bounds, because either alone misses it. The absolute one catches clipping;
+    # the relative one catches a stream that is quiet in absolute terms but still
+    # wrong against its own batch reference -- which is exactly the case above, where
+    # 72.5 would have looked unremarkable next to a threshold set for normal speech.
+    peak, batch_peak = float(streamed.abs().max()), float(n_batch.abs().max())
+    assert peak < 1.5, f"streamed audio clips: peak {peak:.4f}"
+    # The ratio only carries information when the reference is not itself near-silent.
+    # A greedy, token-capped synthesis of a synthetic prompt can be, and dividing by it
+    # would turn noise into a verdict.
+    if batch_peak > 0.01:
+        assert peak <= 3.0 * batch_peak, (
+            f"streamed peak {peak:.4f} is out of proportion to the batch path's "
+            f"{batch_peak:.4f} on the same prompt and the same tokens -- the schedule is "
+            "right (tokens match above), so suspect what is carried across a chunk seam"
+        )
+    assert batch_peak < 1.5, (
+        f"the *batch* path clips at {batch_peak:.4f} -- that path is gated elsewhere " "and should never do this"
     )
-    assert float(n_batch.abs().max()) < 1.5, (
-        f"the *batch* path clips at {float(n_batch.abs().max()):.1f} -- that path is "
-        "gated elsewhere and should never do this"
-    )
+
     assert res.first_audio_s is not None and res.first_audio_s <= res.total_s
 
     # If the utterance is long enough to chunk, a chunk must have been emitted before
