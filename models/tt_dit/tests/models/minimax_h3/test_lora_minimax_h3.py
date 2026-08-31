@@ -304,12 +304,18 @@ def test_lora_block_weight_parity(
     # The device rounds the base, rounds the rank-r product, and adds; the reference rounds their
     # fp32 sum once. A few ULP of the peak covers that. A delta on the wrong columns is two orders
     # of magnitude clear of it, since the fixture's delta is the size of the base.
-    over = [(u, r, p) for u, r, p in measured if u > MAX_ULP_OF_PEAK or r > MAX_RELATIVE_RMS]
+    dense_floor = max((r for _, r, p in measured if p in dense_paths), default=0.0)
+    assert dense_floor > 0.0, "no dense delta landed, so there is nothing to calibrate the budget from"
+    rms_budget = MAX_RMS_OVER_DENSE_FLOOR * dense_floor
+
+    over = [(u, r, p) for u, r, p in measured if u > MAX_ULP_OF_PEAK or r > rms_budget]
     assert not over, "beyond bf16 rounding: " + ", ".join(
         f"{p} ({u:.1f} ULP-of-peak, {r * 100:.3f}% RMS)" for u, r, p in sorted(over, reverse=True)
     )
     logger.info(
-        f"{len(measured)} parameters within {max(u for u, _, _ in measured):.2f} ULP-of-peak " f"at strength {strength}"
+        f"{len(measured)} parameters within {max(u for u, _, _ in measured):.2f} ULP-of-peak and "
+        f"{max(r for _, r, _ in measured) / dense_floor:.2f}x the {dense_floor * 100:.3f}% dense "
+        f"floor at strength {strength}"
     )
 
 
