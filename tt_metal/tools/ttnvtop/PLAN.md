@@ -345,6 +345,13 @@ Tasks:
 
 Exit criterion: meets all §2 acceptance criteria.
 
+### Phase 2.2 — Idle-eth aggregator (see [`PLAN_ETH_AGGREGATOR.md`](PLAN_ETH_AGGREGATOR.md))
+
+A persistent kernel on an idle ethernet core gathers all 64 Tensix sampler rings
+intra-chip, so the host does one block read per chip instead of per-core reads. Cuts
+remote-chip tunnel traffic from 256 transactions/tick to 1, and lifts the host-drain
+sample-loss ceiling that forced `UTIL_SAMPLER_DEFAULT_PERIOD_CYCLES` from 100 µs to 1 ms.
+
 ### Phase 4 — Extensions (opportunistic, post-v1)
 
 - **PC-sampling mode** via debug-bus L1 sampling (the exalens mechanism) — adds compute vs stall attribution to symbol ranges in the loaded kernel ELF.

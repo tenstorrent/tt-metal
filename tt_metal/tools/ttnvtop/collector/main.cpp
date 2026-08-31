@@ -196,6 +196,7 @@ struct CliOptions {
     int fidelity_probe_s = 0;         // Phase 2.2: drain the aggregator journal for N s and report loss
     bool stop_aggregator = false;     // Phase 2.2: ask every running aggregator to return
     bool pin_tunnel = false;          // Narrow each remote chip's tunnel to its real link channels
+    std::string peek;                 // "chip,x,y,addr[,len]" -- read raw L1 twice and print it
 };
 
 void print_help(const char* argv0) {
@@ -287,6 +288,12 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
                 return false;
             }
             out.launch_artifact = v;
+        } else if (a == "--peek") {
+            const char* v = need_arg("--peek");
+            if (v == nullptr) {
+                return false;
+            }
+            out.peek = v;
         } else if (a == "--pin-tunnel") {
             out.pin_tunnel = true;
         } else if (a == "--stop-aggregator") {
@@ -837,7 +844,7 @@ int main(int argc, char* argv[]) {
         // debuggable on a board where a wedged eth core costs nothing, instead of only on
         // the T3K where it costs a board reset (tt-eth-idle-core-firmware-contracts).
         const bool arch_agnostic_mode = !cli.launch_artifact.empty() || cli.journal_probe || cli.fidelity_probe_s > 0 ||
-                                        cli.read_latency_probe || cli.stop_aggregator;
+                                        cli.read_latency_probe || cli.stop_aggregator || !cli.peek.empty();
         if (arch != tt::ARCH::WORMHOLE_B0 && !(arch_agnostic_mode && arch == tt::ARCH::BLACKHOLE)) {
             std::cerr << "ttnvtop-collector: skipping chip " << chip_id << " arch " << arch_name(arch)
                       << " (Wormhole-only for Phase 1).\n";
@@ -892,7 +899,8 @@ int main(int argc, char* argv[]) {
         // perf counters, overriding period_cycles and the FPU_OUT_L liveness probe are
         // all device WRITES, and on a remote chip they cross the NON_MMIO tunnel.
         // Publish the static per-core fields, then skip every write below.
-        if (cli.journal_probe || cli.read_latency_probe || cli.fidelity_probe_s > 0 || !cli.launch_artifact.empty()) {
+        if (cli.journal_probe || cli.read_latency_probe || cli.fidelity_probe_s > 0 || !cli.peek.empty() ||
+            !cli.launch_artifact.empty()) {
             for (size_t i = 0; i < chip.cores.size(); ++i) {
                 auto& v = chip.publisher.cores()[i];
                 v.noc_x = static_cast<uint8_t>(chip.cores[i].noc_x);
@@ -1020,6 +1028,22 @@ int main(int argc, char* argv[]) {
                     continue;
                 }
                 rc->set_remote_transfer_ethernet_cores(xy);
+
+                // ALSO pin the MMIO chip's OWN RemoteCommunication.
+                //
+                // `Cluster::configure_active_ethernet_cores_for_mmio_device` sets TWO
+                // objects, and the first attempt here set only the first: each remote
+                // chip's RemoteCommunication, AND
+                // `remote_communications_.at(mmio_chip)` -- the MMIO chip's own, which
+                // the Cluster comment says "local chips hold communication primitives
+                // for broadcasting". Pinning one side only left the two disagreeing
+                // about which channels are in play, and the measured result was
+                // incoherent: one remote chip's drain returned zero entries and another
+                // lost its aggregator launch, with overall loss slightly WORSE than
+                // unpinned. Set both.
+                if (auto* mmio_rc = mmio_dev->get_remote_communication(); mmio_rc != nullptr) {
+                    mmio_rc->set_remote_transfer_ethernet_cores(xy);
+                }
                 ++pinned_chips;
                 std::cout << "pinned chip " << chip.chip_id << " (via mmio " << mmio_id << ") to channels";
                 for (uint32_t ch : local_channels) {
@@ -1057,6 +1081,7 @@ int main(int argc, char* argv[]) {
         const std::string dir = cli.launch_artifact;
         uint32_t cfg_base = 0, image_bytes = 0, rta_off = 0, launch_addr = 0, go_addr = 0, eth_l1 = 0;
         uint32_t go_index_addr = 0;
+        uint32_t rd_ptr_addr = 0;
         std::vector<uint8_t> launch_bytes, go_bytes, reset_go_bytes;
         {
             std::ifstream f(dir + "/aggregator.desc");
@@ -1078,6 +1103,8 @@ int main(int argc, char* argv[]) {
                     f >> go_addr;
                 } else if (k == "go_msg_index_addr") {
                     f >> go_index_addr;
+                } else if (k == "launch_msg_rd_ptr_addr") {
+                    f >> rd_ptr_addr;
                 } else if (k == "eth_l1_unreserved") {
                     f >> eth_l1;
                 } else if (k == "launch_bytes" || k == "go_bytes" || k == "reset_go_bytes") {
@@ -1161,112 +1188,200 @@ int main(int argc, char* argv[]) {
             // The cluster descriptor knows which channels are active. Exclude them, and
             // prefer the channels no shipped WH descriptor ever routes (2), so a
             // recabling cannot turn our core into a live link underneath us.
+            // ALL usable candidates, in preference order -- not just the best one.
+            //
+            // "No live link" is NOT the same as "nobody is using this core". The cluster
+            // descriptor's active-channel set is about LINKS, and tt-metal's FABRIC can
+            // place an EDM on a link-free eth core; which cores it takes varies per
+            // device-open epoch. Measured on a T3K: within one epoch every repetition
+            // gives an identical result, but across epochs remote successes were 4/4,
+            // 3/4, 2/4 and 1/4. On a chip where fabric owns our pick, the 25 KB image and
+            // the launch message land byte-identical to a working chip and only the go
+            // word fails to take -- because the core is not running idle_erisc and nothing
+            // is polling go_messages[0].
+            //
+            // agg_core_select.hpp documents exactly this hazard for the ETH DISPATCH pool.
+            // Fabric was not considered. Rather than try to query a control plane this
+            // process deliberately does not have, try candidates in order and keep the
+            // first that VERIFIES as running -- the verification already exists and is the
+            // only ground truth available.
             const auto active = cluster_desc->get_active_eth_channels(chip.chip_id);
-            tt::umd::CoreCoord target{};
-            bool found = false;
-            int best_rank = -1;
+            std::vector<std::pair<int, tt::umd::CoreCoord>> candidates;
             for (const auto& eth : soc.get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
                 const auto logical = soc.translate_coord_to(eth, CoordSystem::LOGICAL);
                 const uint32_t channel = static_cast<uint32_t>(logical.y);
                 if (active.count(channel) != 0) {
                     continue;  // carries a live link — never ours
                 }
-                const int rank = ttnvtop::is_never_routed_channel(channel) ? 2 : 1;
-                if (rank > best_rank) {
-                    best_rank = rank;
-                    target = eth;
-                    found = true;
-                }
+                candidates.emplace_back(ttnvtop::is_never_routed_channel(channel) ? 0 : 1, eth);
             }
+            std::stable_sort(
+                candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            const bool found = !candidates.empty();
+            tt::umd::CoreCoord target = found ? candidates.front().second : tt::umd::CoreCoord{};
             if (!found) {
                 std::cerr << "  chip " << chip.chip_id
                           << ": every ethernet core is active — refusing to displace a live link\n";
                 continue;
             }
 
-            const auto l1 = ttnvtop::agg_layout(eth_l1, grid.num_cores());
-            const auto rt = ttnvtop::agg_rt_args(
-                grid,
-                l1,
-                static_cast<uint32_t>(chip.chip_id),
-                1000000u,
-                16u,
-                chip.arch == tt::ARCH::WORMHOLE_B0 ? ttnvtop::kWormholeEthHeartbeatAddr : 0u);
-            try {
-                // Reset the go signal FIRST, exactly as LaunchProgram does via
-                // send_reset_go_signal(). Omitting this was why the replay never started
-                // the kernel: the firmware reads mailboxes->launch[launch_msg_rd_ptr],
-                // and without RUN_MSG_RESET_READ_PTR_FROM_HOST plus a zeroed
-                // GO_MSG_INDEX it can keep a stale read pointer and consume a different
-                // launch slot than the one we write.
-                if (!reset_go_bytes.empty()) {
-                    dev->write_to_device(reset_go_bytes.data(), target, go_addr, reset_go_bytes.size());
-                }
-                if (go_index_addr != 0) {
-                    const uint32_t zero = 0;
-                    dev->write_to_device(&zero, target, go_index_addr, sizeof(zero));
-                }
-                dev->write_to_device(image.data(), target, cfg_base, image_bytes);
-                dev->write_to_device(rt.data(), target, cfg_base + rta_off, rt.size() * 4);
+            // Try candidates in preference order; keep the first that VERIFIES.
+            bool chip_ok = false;
+            for (size_t cand = 0; cand < candidates.size() && !chip_ok; ++cand) {
+                target = candidates[cand].second;
+                const auto l1 = ttnvtop::agg_layout(eth_l1, grid.num_cores());
+                const auto rt = ttnvtop::agg_rt_args(
+                    grid,
+                    l1,
+                    static_cast<uint32_t>(chip.chip_id),
+                    1000000u,
+                    16u,
+                    chip.arch == tt::ARCH::WORMHOLE_B0 ? ttnvtop::kWormholeEthHeartbeatAddr : 0u);
+                try {
+                    // Reset the go signal FIRST, exactly as LaunchProgram does via
+                    // send_reset_go_signal(). Omitting this was why the replay never started
+                    // the kernel: the firmware reads mailboxes->launch[launch_msg_rd_ptr],
+                    // and without RUN_MSG_RESET_READ_PTR_FROM_HOST plus a zeroed
+                    // GO_MSG_INDEX it can keep a stale read pointer and consume a different
+                    // launch slot than the one we write.
+                    if (!reset_go_bytes.empty()) {
+                        dev->write_to_device(reset_go_bytes.data(), target, go_addr, reset_go_bytes.size());
+                    }
+                    if (go_index_addr != 0) {
+                        const uint32_t zero = 0;
+                        dev->write_to_device(&zero, target, go_index_addr, sizeof(zero));
+                    }
 
-                // Zero the journal header before the go word.
+                    // ZERO launch_msg_rd_ptr, exactly as device init does
+                    // (risc_firmware_initializer.cpp writes 0 here).
+                    //
+                    // The launcher always writes launch slot 0, so the firmware must be reading
+                    // slot 0. It is not guaranteed to be: idle_erisc.cc advances this pointer
+                    // whenever a kernel returns under DISPATCH_MODE_DEV, and
+                    // RUN_MSG_RESET_READ_PTR_FROM_HOST does NOT reset it -- that firmware has no
+                    // handler for it at all, unlike brisc/active_erisc. So the go-signal reset
+                    // cannot be relied on and the pointer is zeroed explicitly. Without this,
+                    // the first launch works and every one after it silently starts nothing.
+                    if (rd_ptr_addr != 0) {
+                        const uint32_t zero = 0;
+                        dev->write_to_device(&zero, target, rd_ptr_addr, sizeof(zero));
+                    }
+                    dev->write_to_device(image.data(), target, cfg_base, image_bytes);
+                    dev->write_to_device(rt.data(), target, cfg_base + rta_off, rt.size() * 4);
+
+                    // Zero the journal header before the go word.
+                    //
+                    // A journal left by an earlier aggregator keeps a valid magic and a valid
+                    // header checksum indefinitely, and its sweep_count simply stops. Verify
+                    // against that and a dead core reads as a healthy one -- it has already
+                    // produced two near-false-positives. Worse, a RESTARTED aggregator
+                    // counts from zero, so "did the count go up" is wrong in both
+                    // directions unless the baseline is known. Zeroing it makes the baseline
+                    // zero, which is the only baseline that cannot lie.
+                    const std::vector<uint8_t> hdr_zero(sizeof(util_agg_msg_t), 0);
+                    dev->write_to_device(hdr_zero.data(), target, l1.journal, hdr_zero.size());
+
+                    // READ IT BACK before releasing the go word.
+                    //
+                    // On a REMOTE chip these two writes are not ordered against each other:
+                    // the zeroing goes over the NON_MMIO tunnel and the go word follows, and
+                    // measured on T3K chip 7 the zeroing landed AFTER the kernel had already
+                    // stamped its magic -- leaving a live aggregator publishing an advancing
+                    // sweep_count under `magic 0x0`. `probe_landings` gates on the magic, so
+                    // the launcher called a running kernel NOT RUNNING and --stop-aggregator
+                    // could not reach it either. The tell was sweeps ADVANCING while the magic
+                    // read zero.
+                    //
+                    // A read of the same address forces the write to have landed, which closes
+                    // the window instead of relying on the kernel to republish over it.
+                    for (int rb = 0; rb < 20; ++rb) {
+                        std::vector<uint8_t> chk(sizeof(util_agg_msg_t), 0xFF);
+                        dev->read_from_device(chk.data(), target, l1.journal, chk.size());
+                        if (std::all_of(chk.begin(), chk.end(), [](uint8_t b) { return b == 0; })) {
+                            break;
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+
+                    dev->write_to_device(launch_bytes.data(), target, launch_addr, launch_bytes.size());
+
+                    // WRITE THE GO WORD, THEN VERIFY IT, AND RETRY.
+                    //
+                    // On a remote chip this last 4-byte write is the one that gets lost.
+                    // Measured on T3K chip 6, deterministically, every attempt: the 25 KB
+                    // kernel image and the 144 B launch message both land byte-identical to a
+                    // chip that works (same 0x00007df0 config base, same 0xf4010113 first
+                    // instruction) -- and the go word reads back 0x00000000 instead of
+                    // 0x80000000. Everything arrives except the one write that starts the
+                    // kernel, so the launcher reported a correct-looking failure.
+                    //
+                    // Read-back-and-retry rather than a blind second write: a blind retry
+                    // cannot tell "landed" from "lost", and writing GO twice to a core that
+                    // already started is not free.
+                    bool go_landed = false;
+                    for (int attempt = 0; attempt < 8 && !go_landed; ++attempt) {
+                        dev->write_to_device(go_bytes.data(), target, go_addr, go_bytes.size());
+                        std::vector<uint8_t> back(go_bytes.size(), 0);
+                        dev->read_from_device(back.data(), target, go_addr, back.size());
+                        go_landed = std::equal(go_bytes.begin(), go_bytes.end(), back.begin());
+                        if (!go_landed) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                        }
+                    }
+                    if (!go_landed) {
+                        std::cout << " — go word never landed after 8 attempts";
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "  chip " << chip.chip_id << ": launch failed: " << e.what() << "\n";
+                    continue;
+                }
+                std::cout << "  chip " << chip.chip_id << (chip.is_remote ? " (remote)" : " (mmio)") << " eth ("
+                          << target.x << "," << target.y << ") " << grid.xs.size() << "x" << grid.ys.size() << " = "
+                          << grid.num_cores() << " cores, journal 0x" << std::hex << l1.journal << std::dec;
+
+                // VERIFY, do not assume. The four writes succeeding says only that L1
+                // accepted them; it says nothing about whether anything on the core is
+                // polling go_messages[0]. This launcher spent a day reporting success on all
+                // eight chips while starting nothing, because "the writes returned" was
+                // treated as "the kernel is running".
                 //
-                // A journal left by an earlier aggregator keeps a valid magic and a valid
-                // header checksum indefinitely, and its sweep_count simply stops. Verify
-                // against that and a dead core reads as a healthy one -- it has already
-                // produced two near-false-positives. Worse, a RESTARTED aggregator
-                // counts from zero, so "did the count go up" is wrong in both
-                // directions unless the baseline is known. Zeroing it makes the baseline
-                // zero, which is the only baseline that cannot lie.
-                const std::vector<uint8_t> hdr_zero(sizeof(util_agg_msg_t), 0);
-                dev->write_to_device(hdr_zero.data(), target, l1.journal, hdr_zero.size());
-
-                dev->write_to_device(launch_bytes.data(), target, launch_addr, launch_bytes.size());
-                dev->write_to_device(go_bytes.data(), target, go_addr, go_bytes.size());
-            } catch (const std::exception& e) {
-                std::cerr << "  chip " << chip.chip_id << ": launch failed: " << e.what() << "\n";
-                continue;
+                // Liveness is an ADVANCING sweep_count from a ZEROED baseline, never a valid
+                // magic. The header was zeroed above, so a live kernel republishes the magic
+                // and counts up from zero, and anything that does not is not running.
+                bool running = false;
+                uint32_t s0 = 0, s1 = 0;
+                uint32_t magic = 0;
+                try {
+                    std::vector<uint8_t> buf(sizeof(util_agg_msg_t), 0);
+                    util_agg_hdr_view_t h{};
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    dev->read_from_device(buf.data(), target, l1.journal, sizeof(util_agg_hdr_view_t));
+                    std::memcpy(&h, buf.data(), sizeof(h));
+                    s0 = h.sweep_count;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    dev->read_from_device(buf.data(), target, l1.journal, sizeof(util_agg_hdr_view_t));
+                    std::memcpy(&h, buf.data(), sizeof(h));
+                    s1 = h.sweep_count;
+                    magic = h.magic;
+                    running = magic == UTIL_AGG_MAGIC && s1 > s0;
+                } catch (const std::exception& e) {
+                    std::cout << " — verify read failed: " << e.what() << "\n";
+                    continue;
+                }
+                if (running) {
+                    ++launched;
+                    chip_ok = true;
+                    std::cout << " — RUNNING (sweeps " << s0 << " -> " << s1 << ")\n";
+                } else {
+                    std::cout
+                        << " — NOT RUNNING (magic 0x" << std::hex << magic << std::dec << ", sweeps " << s0 << " -> "
+                        << s1 << "). Nothing on an idle eth core polls go_messages[0] unless tt-metal's\n"
+                        << "    idle-erisc firmware is resident, and only a tt-metal device init puts it there.\n";
+                }
             }
-            std::cout << "  chip " << chip.chip_id << (chip.is_remote ? " (remote)" : " (mmio)") << " eth (" << target.x
-                      << "," << target.y << ") " << grid.xs.size() << "x" << grid.ys.size() << " = " << grid.num_cores()
-                      << " cores, journal 0x" << std::hex << l1.journal << std::dec;
-
-            // VERIFY, do not assume. The four writes succeeding says only that L1
-            // accepted them; it says nothing about whether anything on the core is
-            // polling go_messages[0]. This launcher spent a day reporting success on all
-            // eight chips while starting nothing, because "the writes returned" was
-            // treated as "the kernel is running".
-            //
-            // Liveness is an ADVANCING sweep_count from a ZEROED baseline, never a valid
-            // magic. The header was zeroed above, so a live kernel republishes the magic
-            // and counts up from zero, and anything that does not is not running.
-            bool running = false;
-            uint32_t s0 = 0, s1 = 0;
-            uint32_t magic = 0;
-            try {
-                std::vector<uint8_t> buf(sizeof(util_agg_msg_t), 0);
-                util_agg_hdr_view_t h{};
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                dev->read_from_device(buf.data(), target, l1.journal, sizeof(util_agg_hdr_view_t));
-                std::memcpy(&h, buf.data(), sizeof(h));
-                s0 = h.sweep_count;
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                dev->read_from_device(buf.data(), target, l1.journal, sizeof(util_agg_hdr_view_t));
-                std::memcpy(&h, buf.data(), sizeof(h));
-                s1 = h.sweep_count;
-                magic = h.magic;
-                running = magic == UTIL_AGG_MAGIC && s1 > s0;
-            } catch (const std::exception& e) {
-                std::cout << " — verify read failed: " << e.what() << "\n";
-                continue;
-            }
-            if (running) {
-                ++launched;
-                std::cout << " — RUNNING (sweeps " << s0 << " -> " << s1 << ")\n";
-            } else {
-                std::cout << " — NOT RUNNING (magic 0x" << std::hex << magic << std::dec << ", sweeps " << s0 << " -> "
-                          << s1 << "). Nothing on an idle eth core polls go_messages[0] unless tt-metal's\n"
-                          << "    idle-erisc firmware is resident, and only a tt-metal device init puts it there.\n";
+            if (!chip_ok) {
+                std::cerr << "  chip " << chip.chip_id << ": no idle ethernet core accepted the launch ("
+                          << candidates.size() << " tried). Fabric may own them all this epoch.\n";
             }
         }
         std::cout << "launched " << launched << " aggregator(s) — no tt-metal, no dispatch, no fabric.\n";
@@ -1455,6 +1570,71 @@ int main(int argc, char* argv[]) {
             return 1;
         }
         std::cout << "launch-go: go word written — the staged aggregator should now be running.\n";
+        return 0;
+    }
+
+    // Raw L1 peek: --peek chip,x,y,addr[,len]   (TRANSLATED eth coords; addr hex or decimal)
+    //
+    // Most dead ends in this work were "what does the device actually hold there", and each
+    // needed a throwaway probe. Reads TWICE 300 ms apart and flags changed words, because
+    // for a heartbeat the only question that matters is whether it is ADVANCING -- a static
+    // word with a valid signature is exactly the failure mode that costs a board reset.
+    if (!cli.peek.empty()) {
+        long long pc = -1, px = -1, py = -1, plen = 32;
+        unsigned long long paddr = 0;
+        {
+            std::string t = cli.peek;
+            std::replace(t.begin(), t.end(), ',', ' ');
+            std::istringstream is(t);
+            std::string astr;
+            is >> pc >> px >> py >> astr;
+            if (!(is >> plen)) {
+                plen = 32;
+            }
+            try {
+                paddr = astr.rfind("0x", 0) == 0 ? std::stoull(astr, nullptr, 16) : std::stoull(astr);
+            } catch (...) {
+                std::cerr << "ttnvtop-collector: --peek could not parse address '" << astr << "'\n";
+                return 1;
+            }
+        }
+        if (pc < 0 || px < 0 || py < 0) {
+            std::cerr << "ttnvtop-collector: --peek expects chip,x,y,addr[,len]\n";
+            return 1;
+        }
+        ChipState* ptarget = nullptr;
+        for (auto& c : chips) {
+            if (static_cast<long long>(c.chip_id) == pc) {
+                ptarget = &c;
+            }
+        }
+        if (ptarget == nullptr || ptarget->cores.empty()) {
+            std::cerr << "ttnvtop-collector: chip " << pc << " not present\n";
+            return 1;
+        }
+        plen = std::min<long long>(std::max<long long>(plen, 4), 512);
+        plen = (plen + 3) & ~3LL;
+        const tt::umd::CoreCoord pcore(
+            static_cast<size_t>(px), static_cast<size_t>(py), CoreType::ETH, CoordSystem::TRANSLATED);
+        std::vector<uint8_t> pa(plen, 0), pb(plen, 0);
+        try {
+            ptarget->cores.front().device->read_from_device(pa.data(), pcore, paddr, plen);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            ptarget->cores.front().device->read_from_device(pb.data(), pcore, paddr, plen);
+        } catch (const std::exception& e) {
+            std::cerr << "peek: read failed: " << e.what() << "\n";
+            return 1;
+        }
+        std::cout << "peek chip " << pc << " eth (" << px << "," << py << ") 0x" << std::hex << paddr << std::dec
+                  << " len " << plen << "   (two reads, 300 ms apart)\n";
+        for (long long o = 0; o < plen; o += 4) {
+            uint32_t wa = 0, wb = 0;
+            std::memcpy(&wa, pa.data() + o, 4);
+            std::memcpy(&wb, pb.data() + o, 4);
+            std::cout << "  +0x" << std::hex << std::setw(3) << std::setfill('0') << o << "  0x" << std::setw(8) << wa
+                      << "  0x" << std::setw(8) << wb << std::setfill(' ') << std::dec
+                      << (wa != wb ? "   <- ADVANCING" : "") << "\n";
+        }
         return 0;
     }
 

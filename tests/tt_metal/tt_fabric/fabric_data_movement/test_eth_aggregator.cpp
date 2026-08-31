@@ -580,6 +580,23 @@ static void emit_artifact(
         // so these bytes are NOT what a working launch puts on the device. Both fields
         // are read by idle_erisc.cc only AFTER the kernel returns, and this kernel never
         // returns — but the replay diff is the place that settles that, not this comment.
+        // DISPATCH_MODE_HOST, set here before the bytes are captured.
+        //
+        // `llrt::write_launch_msg_to_core` sets this at write time, so a snapshot taken
+        // before it records DISPATCH_MODE_DEV (0). That was harmless while the aggregator
+        // never returned -- idle_erisc.cc reads `mode` only in its post-kernel block. The
+        // cooperative stop made it return, and the DEV branch then does three things we
+        // must not have: zeroes `enables`, notifies a dispatch core that is not listening,
+        // and ADVANCES `launch_msg_rd_ptr`. After one stop the firmware reads launch slot
+        // 1 while the launcher keeps writing slot 0, so every relaunch finds enables = 0
+        // and starts nothing. Measured as: first launch 4/4 on MMIO, every launch after it
+        // 0/4 everywhere.
+        lm.kernel_config().mode() = tt::tt_metal::dev_msgs::DISPATCH_MODE_HOST;
+        f << "launch_msg_rd_ptr_addr "
+          << hal.get_dev_addr(
+                 tt::tt_metal::HalProgrammableCoreType::IDLE_ETH,
+                 tt::tt_metal::HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)
+          << "\n";
         const auto* lp = reinterpret_cast<const uint8_t*>(lm.data());
         f << "launch_bytes " << lm.size();
         for (size_t i = 0; i < lm.size(); i++) {
