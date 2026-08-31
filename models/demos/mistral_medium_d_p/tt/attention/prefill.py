@@ -151,13 +151,18 @@ def attention_forward(
                 k_chunk_size=128,
                 exp_approx_mode=False,
             )
+            # HiFi2, matching deepseek_v3_d_p's ring SDPA (mla.py default_compute_kernel_config).
+            # The KV cache is bf8, so HiFi4's extra mantissa passes buy precision the operand does
+            # not carry, while halving peak throughput: 110 -> 220 TFLOP/s/chip on Blackhole across
+            # the 110 SDPA cores. Since the ring SDPA is 77-80% of this block's device time at a
+            # realistic prefix, that fidelity choice is the single largest lever on it.
             # fp32_dest_acc_en=False is required by the ring op's streaming compute.
             sp_kcfg = ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
-                packer_l1_acc=False,
+                packer_l1_acc=True,
             )
             tt_sdpa_out = dense_sp_attention(
                 tt_q,

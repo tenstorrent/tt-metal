@@ -85,10 +85,10 @@ class ProgramConfig:
     prefill_k_chunk_size_large: int = 256
     prefill_threshold: int = 2048
 
-    math_fidelity: str = "HiFi4"
+    math_fidelity: str = "HiFi2"
     math_approx_mode: bool = False
     fp32_dest_acc_en: bool = False
-    packer_l1_acc: bool = False
+    packer_l1_acc: bool = True
 
     def __post_init__(self):
         if (

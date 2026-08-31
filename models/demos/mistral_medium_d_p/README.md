@@ -146,7 +146,7 @@ proves the fp8-dequant + Meta-swizzle round-trip, and pins `reference/torch_refe
 `Ministral3DecoderLayer`. The device tests then PCC against that reference at 0.99, so a device
 failure is never ambiguous about which side is wrong.
 
-## Performance (first profile, 2026-08-30)
+## Performance (2026-08-31, HiFi2)
 
 Measured on a 32-chip Blackhole Galaxy with `tests/test_attention_perf.py` under the light profiler
 (`python3 -m tracy -p -r -a device_kernel_duration`), 8 iterations after 2 warmups, signpost-bracketed.
@@ -154,33 +154,58 @@ Device kernel time, critical path across the 32 chips.
 
 | case | chunk_global | cached_len | µs/call | ns/token | SDPA share |
 |---|---|---|---|---|---|
-| c128_p0 | 1,024 | 0 | 1170.2 | 1142.8 | 25.3% |
-| c640_p0 | 5,120 | 0 | 2076.5 | 405.6 | 42.6% |
-| c1024_p0 | 8,192 | 0 | 3073.0 | 375.1 | 45.8% |
-| c640_p4 | 5,120 | 20,480 | 5310.4 | 1037.2 | **77.3%** |
-| c1024_p4 | 8,192 | 32,768 | 8222.2 | 1003.7 | **79.5%** |
+| c128_p0 | 1,024 | 0 | 1087.9 | 1062.4 | 21.9% |
+| c640_p0 | 5,120 | 0 | 1854.8 | 362.3 | 35.8% |
+| c1024_p0 | 8,192 | 0 | 2672.2 | 326.2 | 37.7% |
+| c640_p4 | 5,120 | 20,480 | 4054.6 | 791.9 | **70.2%** |
+| c1024_p4 | 8,192 | 32,768 | 6182.9 | 754.7 | **72.9%** |
 
 **Ring SDPA is the budget at realistic depth.** Everything else — matmul, RoPE, head reshape, the TP
-reduce-scatter — is flat in `cached_len`, because only the ring touches the whole prefix. It goes from
-43% of the call at chunk 0 to 79.5% five chunks in.
+reduce-scatter — is flat in `cached_len`, because only the ring touches the whole prefix.
 
-**Chunk size is the lever.** SDPA fits `t = k · chunk_global · logical_n`, with `k` fit **per chunk size**
-(it is not shared across them — averaging in the overhead-bound `chunk_local=128` point inflates a 128K
-projection ~3x):
+**Lever 1 — fidelity.** The ring SDPA now runs `HiFi2 + packer_l1_acc=True`, matching
+`deepseek_v3_d_p`'s `mla.py` default. The KV cache is bf8, so HiFi4 spent four mantissa passes on
+~7-bit operands while halving peak throughput (110 vs 220 TFLOP/s across the 110 SDPA cores):
+
+| case | SDPA HiFi4 → HiFi2 | speedup | block speedup |
+|---|---|---|---|
+| c640_p0 | 885.5 → 663.1 | 1.34x | 1.12x |
+| c640_p4 | 4105.9 → 2847.5 | 1.44x | 1.31x |
+| c1024_p4 | 6535.0 → 4510.3 | **1.45x** | 1.33x |
+
+Accuracy did not move: ring-SDPA PCC 0.9998847 (HiFi2) vs 0.9998858 (HiFi4); chunked-vs-reference
+0.9976430 vs 0.9976288. All 8 correctness tests pass either way. Utilization at HiFi2 reaches
+**102.8 TFLOP/s = 46.7% of peak** at the deepest point, so the op is not inefficient — it was
+fidelity-capped. The 1.45x (not 2x) says the ring gather contributes real non-compute time.
+
+**Lever 2 — chunk size.** SDPA fits `t = k * chunk_global * logical_n`, with `k` fit **per chunk size**:
 
 ```
-chunk_global 5120   k = 3.378e-5 (logical_n 5120) -> 3.133e-5 (25600)
-chunk_global 8192   k = 2.099e-5 (logical_n 8192) -> 1.948e-5 (40960)     38% cheaper per Q*KV unit
+chunk_global 5120   k = 2.530e-5 (logical_n 5120) -> 2.172e-5 (25600)
+chunk_global 8192   k = 1.501e-5 (logical_n 8192) -> 1.344e-5 (40960)     39% cheaper per Q*KV unit
 ```
 
-`k` moves only ~7% across a 5x range of `logical_n`, so extrapolating: a 128K prefill over 88 layers is
-~28.3 s at `chunk_global=5120` (the `prefill_producer_manifest` default) versus ~18.6 s at 8192 — **34%**.
-That is attention-only and ignores whatever memory or scheduling constraint sets the current default.
+Projected 128K prefill over 88 layers: **28.3 s** (HiFi4 @5120) -> **21.2 s** (HiFi2 @5120) ->
+**13.8 s** (HiFi2 @8192). Attention-only; 5120 is a shared default in `prefill_runner.py:124`
+(`PREFILL_CHUNK_SIZE`) that likely encodes D2D/migration constraints this profile cannot see.
 
-**Caveat that outweighs the rest:** this box has no wrap-around links, so the sweep ran on a *linear*
-fabric (`MISTRAL_LINEAR_FABRIC=1`). The ring SDPA's KV gather is exactly what a torus changes, and it is
-the dominant cost — treat the absolute numbers as a ceiling and the ratios as sound. Re-run on a
-ring-capable Galaxy by dropping the env var.
+**Accuracy at depth (open issue).** The bf8 KV cache loses accuracy as the prefix grows — measured on
+a single *unchunked* call, so it is not a chunking effect:
+
+| attended prefix | 1,024 | 2,048 | 4,096 | 51,200 |
+|---|---|---|---|---|
+| tail PCC | 0.99185 | 0.98379 | 0.93517 | **0.60253** |
+
+The 51,200 point is from `tests/unit/test_attention_accuracy_at_depth.py` and was measured under
+HiFi4; it has not been re-run at HiFi2 (at 2048 the two agree to five decimals). Random activations
+are the worst case for this, so treat 0.61 as a lower bound — but real-weight PCC at length should be
+measured before trusting bf8 at 128K. Re-running the depth sweep with a bf16 cache would confirm the
+cause.
+
+**Caveat that outweighs the rest:** this box has no wrap-around links, so everything ran on a *linear*
+fabric (`MISTRAL_LINEAR_FABRIC=1`). The ring SDPA's KV gather is exactly what a torus changes, and it
+is the dominant cost — absolute numbers are a ceiling, ratios hold. Drop the env var on a
+ring-capable Galaxy.
 
 Reduce a run with `tests/summarize_attention_perf.py <iters> <label>=<csv>`.
 

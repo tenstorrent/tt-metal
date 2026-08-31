@@ -139,13 +139,14 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, chunk_local, reset_see
             k_chunk_size=128,
             exp_approx_mode=False,
         ),
-        # fp32_dest_acc_en=False is required by the ring op's streaming compute.
+        # HiFi2 + packer_l1_acc, matching production (tt/attention/prefill.py) and deepseek's
+        # ring SDPA. fp32_dest_acc_en=False is required by the ring op's streaming compute.
         compute_kernel_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         ),
         scale=HEAD_DIM**-0.5,
         cluster_axis=sp_axis,
