@@ -175,8 +175,8 @@ def bge_qkv_heads_headsplit(
     out_dtype = qkv_fused.dtype
     # The kernel writes every head in the input dtype. A caller that asks for a
     # narrower K or V dtype gets the conversion after the split.
-    k_dtype = k_out_dtype or out_dtype
-    v_dtype = v_out_dtype or out_dtype
+    k_dtype = out_dtype if k_out_dtype is None else k_out_dtype
+    v_dtype = out_dtype if v_out_dtype is None else v_out_dtype
     q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
     k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
     v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)

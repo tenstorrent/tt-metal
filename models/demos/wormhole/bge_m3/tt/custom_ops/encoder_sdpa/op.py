@@ -608,7 +608,9 @@ def build_encoder_sdpa_descriptor(
     return EncoderSDPABuild(
         descriptor=descriptor,
         output=output,
-        io_tensors=[q, k, v, output] + ([valid_lengths] if valid_lengths is not None else []),
+        # generic_op treats the last entry as the output, so valid_lengths goes
+        # before it.
+        io_tensors=[q, k, v] + ([valid_lengths] if valid_lengths is not None else []) + [output],
         plan=plan,
     )
 
@@ -622,11 +624,10 @@ def bge_encoder_sdpa_experimental(
     config: EncoderSDPAConfig = EncoderSDPAConfig(),
     output_mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """Launch the unverified model-local descriptor.
+    """Run the model-local encoder SDPA.
 
-    This function is intentionally not imported or called by ``attention.py``.
-    Use only from a dedicated parity probe until PCC, device time, repeat-cache,
-    and trace replay all match production SDPA.
+    ``BgeM3AttentionJit._attend`` calls this for every layer of the
+    data-parallel serving path.
     """
     if config.kv_alias:
         # Safety gate (reviewer point #5/#6): the kv_alias CB-token ring IS

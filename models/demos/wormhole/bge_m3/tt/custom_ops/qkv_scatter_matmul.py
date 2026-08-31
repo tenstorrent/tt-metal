@@ -113,10 +113,13 @@ def bge_qkv_scatter_matmul(
     dtype: ttnn.DataType = ttnn.bfloat8_b,
     config: QKVScatterConfig | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Run the exact B6/S8192 QKV matmul through a Python ProgramDescriptor.
+    """Run the B6/S8192 QKV projection and write the Q, K, and V heads.
 
-    Required padded tile shape per DP shard: M=1536, K=32, N=96.  The output is
-    ``[B, 1, S, 3072]`` with the same dtype/memory contract as MinimalMatmul.
+    One program does the matmul, the head split, and the dtype conversion.
+    Required padded tile shape per DP shard: M=1536, K=32, N=96.
+
+    Returns ``(q, k, v)``, each ``[B, 16, S, 64]``. Q takes ``dtype``, and the
+    op always writes K and V as BF4, which is what SDPA reads.
     """
     input_shape = tuple(input_tensor.padded_shape)
     weight_shape = tuple(weight_tensor.padded_shape)
@@ -414,8 +417,11 @@ def bge_qkv_scatter_matmul(
     ]
 
     descriptor = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
-    io_tensors = [input_tensor, weight_tensor, q_output, k_output, v_output]
+    # generic_op treats the last entry as the output, so every read-only tensor
+    # comes first and an output stays last.
+    io_tensors = [input_tensor, weight_tensor]
     if bias_tensor is not None:
         io_tensors.append(bias_tensor)
+    io_tensors += [q_output, k_output, v_output]
     ttnn.generic_op(io_tensors, descriptor)
     return q_output, k_output, v_output

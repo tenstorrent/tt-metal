@@ -228,7 +228,7 @@ def _build_mlp_config(args, mlp_weights, mesh_device, dtype, max_seq_len, max_ba
         intermediate_size=args.intermediate_size,
         mesh_device=mesh_device,
         wi_dtype=dtype,
-        wi_output_dtype=args.mlp_wi_output_dtype or dtype,
+        wi_output_dtype=dtype if args.mlp_wi_output_dtype is None else args.mlp_wi_output_dtype,
         wo_dtype=dtype,
         activation_dtype=ttnn.bfloat16,
         max_seq_len=max_seq_len,
