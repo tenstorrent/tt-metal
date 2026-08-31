@@ -434,9 +434,16 @@ def test_encode_stage(mesh_device, case):
 
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
-    # `profile=True` syncs after each forward so `device` and `readback` are separable; encode
-    # reads each wave back before enqueuing the next, so unlike decode it serializes nothing.
-    vae = MiniMaxH3Vae(config, mesh_device=mesh_device, ccl_manager=ccl_manager, profile=True)
+    # `profile` stays False: its per-forward sync would serialize the encode wave streaming and
+    # measure a schedule production never runs. The cost is attribution -- `device` times the
+    # enqueue and the wait lands in `readback` -- so flip it on only to chase a split, not a total.
+    # `pixel_norm` matches the pipeline: conv_in carries the normalize and pixels upload as uint8.
+    vae = MiniMaxH3Vae(
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+    )
     vae.load_encoder_state(_encode_stage_state(weights_dir))
 
     ratio = config.spatial_compression_ratio
@@ -457,7 +464,9 @@ def test_encode_stage(mesh_device, case):
         expected_rows = len(keyframes) * rows_per_frame
 
         def run():
-            return encode_keyframes(keyframes, vae.encode_clip, config.latents_mean, config.latents_std)
+            return encode_keyframes(
+                keyframes, vae.encode_clip, config.latents_mean, config.latents_std, raw_pixels=True
+            )
 
     else:
         vae._encoder_for(config.clip_length, vae.tile_size, vae.tile_size, 3)
@@ -496,6 +505,7 @@ def test_encode_stage(mesh_device, case):
                 audio_latents_mean=audio_config["latents_mean"],
                 audio_latents_std=audio_config["latents_std"],
                 audio_latent_channels=audio_config["latent_channels"],
+                raw_pixels=True,
             )
 
     run()  # warm: compiles every program and fills lazy allocations, off the record
