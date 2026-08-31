@@ -105,4 +105,25 @@ github.com/hao-ai-lab/FastVideo @ main, 2026-08-31).
    identity.
 
 ## Decisions log
-- (fill in as we go)
+- **2026-08-31 machine setup**: 4x8 BH galaxy runs bare-metal (no docker): build_metal.sh with
+  clang-20, create_venv.sh, pinned diffusers (abc5e9bf71) for the torch reference. Requires
+  `TT_MESH_GRAPH_DESC_PATH=tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto`
+  (see run_h3_test.sh). The machine had one untrained eth link (chips 1<->25, torus wrap) which
+  broke FABRIC_1D_RING topology mapping; `tt-smi -glx_reset` retrained it. Smoke test
+  `test_minimax_h3_transformer_block[blackhole-small_s2048-4x8...]` passes at PCC 99.9995%.
+- **R3 topk spike (resolved)**: at production selection shape [1, 14, 226 rows, 1808 cols] bf16,
+  k=192 (179 rounded to k%16==0): `ttnn.experimental.topk_large_indices` is correct (index sets
+  match torch exactly on sampled rows) and takes 0.83 ms/iter, uint32 out; composite `ttnn.topk`
+  also correct at 1.63 ms/iter but returns uint16 indices. Decision: use topk_large_indices, slice
+  to exact k on host side of the index assembly; no threshold-bisection fallback needed.
+  (models/tt_dit/tests/models/minimax_h3/vsa_topk_spike.py)
+- **R4 kernel structure**: work unit = flat index w over H*(S/64) rows; head-major layout makes
+  q/out/index page addressing `w * tiles_per_work`. Fixed-size CB batches (m blocks per chunk,
+  m mask slots) keep reader/writer L1 offsets stable; partial last chunks leave tail tiles
+  unread (runtime chunk width in compute; no zero-fill, no masking of absent blocks). Ragged
+  blocks masked via count-derived partial-column tiles (slot b = block b) + neginf stamps,
+  L1-accumulated onto scores before the row-max reduce.
+- **Pad rows carry finite garbage**: the tiled sequence flows through the whole model, so pad
+  slots are nonzero by the time they reach attention; correctness relies on count masking
+  (K side), the averaging matrix (pooling), and unpack dropping pad rows (Q side) — never on
+  pad values. -inf mask via L1-acc add requires finite (non-NaN) inputs.
