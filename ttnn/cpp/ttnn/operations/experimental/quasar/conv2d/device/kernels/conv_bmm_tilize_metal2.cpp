@@ -30,7 +30,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"  // DEBUG (matmul-pack address locator, remove after)
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -403,8 +402,7 @@ void kernel_main() {
 #endif
 #else
     [[maybe_unused]] uint32_t act_cb_start_address = activation_reuse ? cb_in0.get_read_ptr() : 0;
-    [[maybe_unused]] const uint32_t tilized_cb_start_address =
-        activation_reuse ? cb_tilized_in0.get_write_ptr() : 0;
+    [[maybe_unused]] const uint32_t tilized_cb_start_address = activation_reuse ? cb_tilized_in0.get_write_ptr() : 0;
 #ifdef SPLIT_READER
     [[maybe_unused]] const uint32_t act_cb_second_reader_start_address =
         activation_reuse ? cb_in0_second_reader.get_read_ptr() : 0;
@@ -417,9 +415,7 @@ void kernel_main() {
 
     // WH fast_tilize RACE-GUARD (DPRINT-independent; do NOT remove without the LLK fix). The WH fast_tilize
     // dest/semaphore handshake has a timing-sensitive race that deadlocks the tilize on the PACK thread
-    // (first tile). Bisect proved conv PASSES on WH at 26ce761e002 (which had two plain PACK(DPRINT) calls
     // here) and HANGS once they were removed — NO other WH-path change — and that it only passes when DPRINT
-    // actually executes (TT_METAL_DPRINT_CORES=all). So the mask is PACK-thread latency before
     // compute_kernel_hw_startup. Replicate that latency WITHOUT DPRINT: on the PACK thread, read the same CB
     // interface registers into a volatile sink and spin briefly. `kRaceGuardSpin` is a TUNABLE delay — if WH
     // still hangs, raise it. Real fix = the fast_tilize LLK handshake race (TEN-4746 class).
@@ -453,6 +449,12 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
+                // TRISC1) so the LAST BS* line in that file before the 0x19 pins the stall point:
+                //   BSLOOP present but no "mmin0-ok" -> stuck in cb_mm_in0.wait_front (tilized act never
+                //     delivered by the mcast reader / tilize never completed for this K-block).
+                //   "mmin0-ok" but no "in1-ok"       -> stuck in cb_in1.wait_front (weights never delivered
+                //     by the DM3 weights mcast).
+                //   "in1-ok" (+ existing MMBLK/MMMV) then fault -> the matmul MVMULs read missing SrcA/SrcB.
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -557,28 +559,14 @@ void kernel_main() {
                     // (the in-place matmul-partials ring rewind leaves ACT_TILIZED off ring-start) the +t
                     // overshoots the ring around t=5. Gated to the first tilize so it flushes pre-fault.
                     if (in0_block_w_i == 0 && in0_block_h_i == 0) {
-                        PACK(DPRINT(
-                            "TZCUR tc_idx={} wr_entry_idx={} nent={}\n",
-                            (uint32_t)get_local_dfb_interface(tilized_in0_cb_id).tc_idx,
-                            (uint32_t)get_local_dfb_interface(tilized_in0_cb_id)
-                                .tc_slots[get_local_dfb_interface(tilized_in0_cb_id).tc_idx]
-                                .wr_entry_idx,
-                            (uint32_t)cb_tilized_in0.get_total_num_entries()));
                         // [stale-pack-BD confirm] The tilize packs into act_tilized (tilized base). If the
                         // ERROR_TRISC1 0x19 fault address (~0x37c28) lands in the OUT CB's L1 range instead of
                         // the tilized CB's range, the packer BD is still pointed at OUT (from hw_startup) --
                         // the Quasar tilize_init omits the pack hw_configure that would repoint it. esz = entry
                         // size (bytes); tilized range = [tilized_base, tilized_base + nent*esz).
-                        PACK(DPRINT(
-                            "TZBASE tilized_base={} tilized_esz={} out_base={} out_esz={}\n",
-                            (uint32_t)cb_tilized_in0.get_write_ptr(),
-                            (uint32_t)cb_tilized_in0.get_entry_size(),
-                            (uint32_t)cb_out.get_write_ptr(),
-                            (uint32_t)cb_out.get_entry_size()));
                     }
 #endif
                     // (TZHWCFG/TZBD/TZBDTAB/TILIZEPACK probes removed — they confirmed the tilize pack BD is
-                    //  correctly at tilized's base; freed DPRINT-ring slots for the TZBLK/TZPK localizer.)
 
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
@@ -653,35 +641,39 @@ void kernel_main() {
                 // need this (they recompute the full L1 addr from fifo_wr_ptr each pack). Mirrors
                 // compute_pool_2d.cpp's llk_pack_init re-init.
                 PACK((llk_pack_init(curr_matmul_out_cb)));
+                // [#48552] Re-seed the MATH<->PACK DEST bank-recycle handshake for the MATMUL — the exact
+                // MIRROR of the PROVEN pre-tilize re-seed (:564-570). Root cause (confirmed by removing the
+                // MVMUL entirely: the hang PERSISTS byte-identical, so it is the acquire/commit/pack/
+                // section_done/recycle HANDSHAKE, NOT compute — drop the earlier FPU-dvalid framing): a plain
+                // matmul kernel runs this identical handshake and passes; the ONLY difference here is the
+                // pretilize (datacopy->DEST->pack, 294 tiles) that ran FIRST on the SAME MATH_PACK semaphore
+                // + DEST bank-parity, then the matmul reuses that machinery. The transition (reconfig /
+                // matmul_block_init / the PACK llk_pack_init above) does NOT reset the MATH-side DEST section
+                // pointer / MATH_PACK sem / bank-parity, so the matmul inherits the pretilize's ending phase.
+                // That is self-consistent for the first two subblocks (banks 0,1 fresh) but DEADLOCKS at the
+                // FIRST bank0 REUSE (out_subblock 2) -> ERROR_TRISC1 0x0119. llk_math_pack_sync_init drains the
+                // pretilize's outstanding packs (cb_mm_in0.wait_front already guaranteed the data), resets
+                // MATH dest parity to bank0 and re-seeds MATH_PACK to its SyncHalf init (max 2); llk_pack_dest_
+                // init resets PACK parity to bank0 + re-selects the packer dest registers. Both threads restart
+                // at a clean bank0/init handshake — the same clean start the standalone matmul gets from its
+                // own init and the tilize gets from :564-570.
+                MATH((llk_math_pack_sync_init()));
+                PACK((llk_pack_dest_init()));
 #endif
-                // DEBUG (op localizer): marks the matmul pack for this height block. Printed BEFORE the packs
                 // (flushes) so the LAST marker seen before the PACR0_TILE_INC fault tells whether the faulting
                 // pack is the MATMUL (MMBLK) or the fuse_bias->OUT pack (BIASBLK). base is the current pack
-                // write ptr; expected first-tile addr = base, tiles step by 128 units. Remove after diagnosis.
-                PACK(DPRINT(
-                    "MMBLK h={} cb={} base={}\n",
-                    (uint32_t)in0_block_h_i,
-                    (uint32_t)curr_matmul_out_cb,
-                    (uint32_t)cb_matmul_partials.get_write_ptr()));
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
-#ifndef ARCH_QUASAR
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
-#else
-                            // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
-                            // two constituent steps (identical reconfig + copy init) on Quasar.
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_tile_to_dst_init_short(matmul_partials_cb);
-#endif
+                            copy_init(matmul_partials_cb);
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
                             uint32_t start_dst_index = 0;
                             uint32_t start_tile_index = 0;
-                            copy_block(
-                                matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
+                            copy_block(matmul_partials_cb, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
@@ -694,18 +686,17 @@ void kernel_main() {
                         uint32_t dst_index = 0;
                         uint32_t in0_index = in0_index_subblock_offset;
                         uint32_t in1_index = in1_index_subblock_offset;
-                        // [#48552] MATH-side matmul localizer: marks the subblock about to run its MVMULs. If MMMV
                         // prints for (i0,i1) but MMMVOK does NOT, the MATH 0x19 is in that subblock's matmul_block.
                         // Gated to the first height block (bsp1 faulted there, ~3 MMPACKs in).
-                        if (in0_block_h_i == 0) {
-                            MATH(DPRINT(
-                                "MMMV kb={} i0={} i1={} idw={}\n",
-                                (uint32_t)in0_block_w_i,
-                                (uint32_t)in0_subblock_i,
-                                (uint32_t)in1_subblock_i,
-                                (uint32_t)in0_block_w));
-                        }
                         for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; inner_dim_idx++) {
+                            // hang is at idx=0 the very first MVMUL of subblock 2 stalls (SrcA/SrcB unpack for
+                            // that DEST section never validated); if idx>0 it stalls mid-K accumulation. Prints
+                            // the mm_in0 / in1 tile indices being read (to check for an OOB read too).
+                            // NEW text => proves the JIT recompiled. On TRISC0 (UNPACK). If "UNPK i0=2 idx=0" prints
+                            // (unpacker delivered SrcA/SrcB for the stalling MVMUL) yet MATH still hangs at MMK i0=2
+                            // idx=0 => the fault is the DEST FPU-dvalid (a) and the per-subblock clear is
+                            // ineffective/misplaced. If the last UNPK is i0=1 idx=2 (unpacker stalled ENTERING
+                            // subblock 2) => it's SrcA/SrcB unpack re-arm (b), fix belongs in the unpack handshake.
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,
@@ -720,9 +711,6 @@ void kernel_main() {
                             in1_index += in1_block_w;
                         }
                         // [#48552] all MVMULs for this subblock completed (MATH survived the matmul_block loop).
-                        if (in0_block_h_i == 0) {
-                            MATH(DPRINT("MMMVOK i0={} i1={}\n", (uint32_t)in0_subblock_i, (uint32_t)in1_subblock_i));
-                        }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
                         if constexpr (!fuse_bias) {
@@ -792,15 +780,28 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     if constexpr (fuse_bias) {
                         if (in0_block_w_i < in0_num_blocks_w - 1) {
+#ifdef ARCH_QUASAR
+                            // TEN-4746: a bare wait_front->pop_front traps the Quasar unpacker (POP_TILES races
+                            // past WAIT_TILES). Interpose a REAL unpack TDMA (dummy copy_tile of tile 0); NOP/
+                            // TTI_NOP are INSUFFICIENT (LLK-team guidance + abhullar/pop-wait-fix 69014037a).
+                            // Reconfig srcA to partials for the copy, then restore srcA + re-init the matmul.
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_init(matmul_partials_cb);
+#endif
                             cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
-                            // TEN-4746: a bare pop_front right after wait_front traps the Quasar unpacker (HW
-                            // expects TDMA activity between). Interpose a dummy op as the documented quick
-                            // guard; proper fix is a scratch-CB + semaphore sequence. Now reachable on the
-                            // Quasar spill path (force_conv_no_spill disabled).
-                            UNPACK(TTI_NOP);
+                            tile_regs_acquire();
+                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
 #endif
                             cb_matmul_partials.pop_front(out_block_num_tiles);
+#ifdef ARCH_QUASAR
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
@@ -809,12 +810,26 @@ void kernel_main() {
                         enable_reload = false;
                     } else {
                         if (in0_block_w_i < in0_num_blocks_w - 2) {
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (see above): REAL unpack TDMA (dummy copy_tile) between the bare
+                            // wait_front/pop_front; NOP/TTI_NOP insufficient.
+                            reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
+                            copy_init(matmul_partials_cb);
+#endif
                             cb_matmul_partials.wait_front(out_block_num_tiles);
 #ifdef ARCH_QUASAR
-                            // TEN-4746 (see above): TDMA interpose between bare wait_front/pop_front.
-                            UNPACK(TTI_NOP);
+                            tile_regs_acquire();
+                            copy_tile(matmul_partials_cb, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
 #endif
                             cb_matmul_partials.pop_front(out_block_num_tiles);
+#ifdef ARCH_QUASAR
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                             if constexpr (spill) {
                                 UNPACK(RESTORE_PARTIALS_RD(partials_cb_read_ptr, cb_matmul_partials));
                                 PACK(RESTORE_PARTIALS_WR(partials_cb_write_ptr, cb_matmul_partials));
@@ -941,7 +956,7 @@ void kernel_main() {
 
                 if constexpr (packer_untilize) {
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(matmul_partials_cb);
+                    copy_init(matmul_partials_cb);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             cb_matmul_partials, cb_out, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);

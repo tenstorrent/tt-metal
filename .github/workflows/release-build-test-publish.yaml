@@ -28,7 +28,7 @@ on:
         default: "Ubuntu 22.04"
         type: string
       tests-yaml-gist-url:
-        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided)"
         required: false
         default: ""
         type: string
@@ -62,8 +62,12 @@ jobs:
 
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+  # One manylinux wheel: tests, Docker, docs, and PyPI all consume it.
+  # Dry-run does not create/move the version tag, so build from github.sha.
+  # A real release tags that SHA first; the wheel is then built from the tag.
   build-artifact:
     needs: [check-harbor, parse-platform]
+    if: ${{ !cancelled() && needs.parse-platform.result == 'success' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -77,40 +81,10 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
-
-  build-artifact-tracy:
-    name: "Build artifact with tracy (for testing)"
-    needs: parse-platform
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      build-wheel: true
-      tracy: true
-      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
-      fetch-depth: 0
-      skip-tt-train: false
-      enable-lto: false
-
-  build-artifact-release:
-    name: "Build artifact for release (without tracy)"
-    needs: parse-platform
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      build-wheel: true
-      tracy: false
-      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
-      fetch-depth: 0
-      skip-tt-train: false
-      enable-lto: false
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', inputs.tag-version) }}
+      # Released packages must be self-contained (bundle the SFPI JIT toolchain) since
+      # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
+      use-system-sfpi: false
 
   determine-test-skus:
     runs-on: ubuntu-slim
@@ -120,51 +94,186 @@ jobs:
       - name: Select SKUs based on platform
         id: select-skus
         run: |
+          # SKUs used by tier-1 release_ready entries in tests/pipeline_reorg/models_e2e_tests.yaml
           if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
-            # Main platform runs all tests including multi-card
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf,wh_galaxy,bh_p100,bh_p150,bh_p150_perf,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
+            # Main platform runs all tier-1 SKUs including multi-card and exabox multihost
+            echo "enabled-skus=wh_n150,wh_galaxy_perf,bh_p150,bh_quietbox_2,bh_galaxy,bh_sc4,bh_sc16" >> "$GITHUB_OUTPUT"
           else
-            # Other platforms run only single-card tests
-            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf" >> "$GITHUB_OUTPUT"
+            # Other platforms run only single-card tier-1 tests
+            echo "enabled-skus=wh_n150,bh_p150" >> "$GITHUB_OUTPUT"
           fi
 
   release-demo-tests:
-    needs: [check-harbor, build-artifact-tracy, determine-test-skus]
+    needs: [check-harbor, build-artifact, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
+    # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
+    # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
     secrets: inherit
     uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+      tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      summary-scope: ${{ inputs.platform }}
 
-  # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
-  # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
+  runtime-sanity-tests:
+    needs: [build-artifact]
+    if: ${{ inputs.tag-version != '' }}
+    permissions:
+      contents: read
+      packages: read
+    secrets: inherit
+    uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: wh_n150,bh_p150
+
+  # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
+  # expected-jobs is the union of single-host and exabox multihost legs so a
+  # missing ai_job_summary artifact is reconciled as INFRA_FAILURE.
+  ai-run-summary:
+    name: "AI Run Summary"
+    needs: [release-demo-tests]
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
+    if: ${{ !cancelled() && needs.release-demo-tests.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Merge single-host and multihost expected jobs
+        id: merge
+        env:
+          SINGLE: ${{ needs.release-demo-tests.outputs.matrix }}
+          MULTI: ${{ needs.release-demo-tests.outputs.matrix_multihost }}
+        run: |
+          SINGLE=${SINGLE:-[]}
+          MULTI=${MULTI:-[]}
+          merged=$(jq -cn --argjson s "$SINGLE" --argjson m "$MULTI" '$s + $m')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$merged" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - id: ai-run-summary
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dir": "ai_job_summaries",
+              "output_dir": "ai_run_summaries",
+              "scope": "${{ inputs.platform }}"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          expected-jobs: ${{ steps.merge.outputs.matrix }}
+          run-result: ${{ needs.release-demo-tests.result }}
+      - name: Show report
+        if: always() && steps.ai-run-summary.outputs.report-file != ''
+        continue-on-error: true
+        env:
+          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
+        run: |
+          if [ -f "$REPORT_FILE" ]; then
+            cat "$REPORT_FILE"
+            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Report file not found: $REPORT_FILE"
+          fi
+
+  # Polls the "RTL Sim CI test" GitHub check on the released commit (posted by
+  # the tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
   # with release-demo-tests so other tests still surface failures, and is
   # non-blocking for now (continue-on-error). 60-min budget covers the sim
   # pipeline's typical 30-60 min runtime.
   #
-  # Only runs when github.ref == refs/heads/stable. Other paths (cron-on-main
-  # dev release, manual dispatches on main) tag artifacts from github.sha per
-  # release-verify-or-create-tag.yaml line 73, so a stable-HEAD check would
-  # give a false-green for them.
+  # Only runs on a release ref -- refs/heads/stable or a version tag. Other
+  # paths (cron-on-main dev release, manual dispatches on main) tag artifacts
+  # from github.sha per release-verify-or-create-tag.yaml line 73, so checking
+  # a release commit would give a false-green for them.
   check-rtl-sim-status:
-    needs: [build-artifact-tracy, determine-test-skus]
-    if: ${{ github.ref == 'refs/heads/stable' }}
+    # main moved this off the tracy build; keep that. The platform gate is ours:
+    # the reusable workflow runs as a per-platform matrix but this check is
+    # platform-independent, so without it both platforms file duplicate tickets
+    # (search-then-create is not atomic).
+    needs: [build-artifact, determine-test-skus]
+    if: >-
+      ${{ (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))
+          && inputs.platform == inputs.main-platform }}
     runs-on: ubuntu-slim
     continue-on-error: true
+    outputs:
+      sha: ${{ steps.rtl-sim.outputs.sha }}
+      conclusion: ${{ steps.rtl-sim.outputs.conclusion }}
+      detail: ${{ steps.rtl-sim.outputs.detail }}
+      url: ${{ steps.rtl-sim.outputs.url }}
     steps:
-      - name: Verify RTL Sim CI test check is green on stable HEAD
+      # jira_client.py needs .github/actions.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions
+            tests/scripts/quasar
+          sparse-checkout-cone-mode: false
+
+      - name: Verify RTL Sim CI test check is green on the released commit
+        id: rtl-sim
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -uo pipefail
 
-          SHA=$(gh api repos/tenstorrent/tt-metal/branches/stable --jq .commit.sha)
-          echo "Checking 'RTL Sim CI test' check on stable HEAD $SHA"
+          # On stable, the sim agent posts its check against the branch HEAD.
+          # On a tag, stable may already have moved past the tagged commit, so
+          # resolving the branch would report some other commit's result. Use
+          # the tagged commit, which was stable HEAD when the tag was cut and
+          # therefore carries the check.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            SHA="$GITHUB_SHA"
+          else
+            SHA=$(gh api repos/tenstorrent/tt-metal/branches/stable --jq .commit.sha)
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Checking 'RTL Sim CI test' check on released commit $SHA"
+
+          # Record the failure for the downstream Jira step. Kept as step
+          # outputs so the poll step can exit 0 (continue-on-error already makes
+          # this job non-blocking) and let the Jira/re-assert steps run.
+          # Per-test detail lives in the check's output.summary/text, and on the
+          # green path it carries the sim's authoritative rtl-sim-results block,
+          # so fetch it whatever the conclusion.
+          fetch_detail() {
+            gh api "repos/tenstorrent/tt-metal/commits/$SHA/check-runs?check_name=RTL+Sim+CI+test&filter=latest" \
+              --jq '[.check_runs[0].output.summary, .check_runs[0].output.text] | map(select(. != null and . != "")) | join("\n")' 2>/dev/null || true
+          }
+
+          emit_result() {  # $1=sim-failed  $2=conclusion  $3=url  $4=detail
+            # $4 is arbitrary external check text; use a random delimiter so it
+            # cannot collide with a line in the content and corrupt the output.
+            local d="DETAIL_EOF_${RANDOM}${RANDOM}${RANDOM}"
+            {
+              echo "sim-failed=$1"
+              echo "conclusion=$2"
+              echo "url=$3"
+              echo "detail<<$d"
+              printf '%s\n' "$4"
+              echo "$d"
+            } >> "$GITHUB_OUTPUT"
+          }
 
           for i in $(seq 1 120); do  # 120 * 30s = 60 min
             read -r STATUS CONCLUSION URL < <(
@@ -172,19 +281,136 @@ jobs:
                 --jq '(.check_runs[0] // {}) | "\(.status // "missing") \(.conclusion // "-") \(.html_url // "-")"'
             )
             case "$STATUS:$CONCLUSION" in
-              completed:success) echo "::notice::Check passed on $SHA. $URL"; exit 0 ;;
-              completed:*)       echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"; exit 1 ;;
+              completed:success)
+                echo "::notice::Check passed on $SHA. $URL"
+                emit_result false success "$URL" "$(fetch_detail)"
+                exit 0 ;;
+              completed:*)
+                echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"
+                emit_result true "$CONCLUSION" "$URL" "$(fetch_detail)"
+                exit 0 ;;
             esac
             echo "  [$i/120] status=$STATUS — re-polling in 30s ($URL)"
             sleep 30
           done
 
           echo "::error::Timed out after 60 min on $SHA (last status=$STATUS, last URL=$URL)."
+          emit_result true "timed_out (no result within 60 min)" "$URL" ""
+          exit 0
+
+      # Files one RELEASE issue per *relevant* failed test (see the relevance
+      # map .github/actions/scripts/ai_ip_tests.json). Falls back to a
+      # single aggregate ticket if the check carried no per-test detail.
+      - name: File Jira issue(s) for relevant failed RTL sim tests
+        if: ${{ steps.rtl-sim.outputs.sim-failed == 'true' }}
+        env:
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ISSUE_TYPE: "Bug"
+          # Overrides the per-test owners in ai_ip_tests.json while set.
+          # Everything lands on one owner for triage, who reassigns.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
+          RTL_SIM_DETAIL: ${{ steps.rtl-sim.outputs.detail }}
+          RTL_SIM_SHA: ${{ steps.rtl-sim.outputs.sha }}
+          RTL_SIM_URL: ${{ steps.rtl-sim.outputs.url }}
+          RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
+            echo "::notice::JIRA_RELEASE_* secrets not configured; skipping Jira filing."
+            exit 0
+          fi
+          python3 .github/actions/scripts/create_jira.py
+
+      - name: Re-assert sim failure
+        if: ${{ always() && steps.rtl-sim.outputs.sim-failed == 'true' }}
+        run: |
+          echo "RTL sim check failed on the released commit. See the Jira step above for whether an issue was filed."
           exit 1
+
+
+  # Per-release record of which AIIPSW requirements have passing test evidence,
+  # plus a summary of the model e2e suites. Separate job so it can wait on
+  # release-demo-tests without holding up the sim poll.
+  release-test-evidence:
+    needs: [check-rtl-sim-status, release-demo-tests]
+    # The RELEASE board carries stable-release evidence only. Gate on the ref
+    # explicitly: the sha check alone makes this stable-only by accident, since
+    # always() defeats skip-propagation and the empty output is the only brake.
+    if: >-
+      ${{ always() && (github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))
+          && inputs.platform == inputs.main-platform
+          && needs.check-rtl-sim-status.outputs.sha != '' }}
+    runs-on: ubuntu-slim
+    # Reporting only: it must not fail or stall the release. Steps are
+    # individually non-fatal so a broken report does not redden the run.
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions
+            tests/scripts/quasar
+            tests/tt_metal
+          sparse-checkout-cone-mode: false
+
+      - name: Download test reports from the release test suites
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          pattern: test_reports_*
+          path: test-reports
+          merge-multiple: false
+
+      - name: Build report
+        continue-on-error: true
+        env:
+          JIRA_BASE_URL: "https://tenstorrent.atlassian.net"
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_RELEASE_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_RELEASE_API_TOKEN }}
+          JIRA_PROJECT_KEY: "RELEASE"
+          JIRA_ISSUE_TYPE: "Task"
+          # Everything lands on one owner for triage, who reassigns.
+          JIRA_ASSIGNEE_ACCOUNT_ID: ${{ vars.RELEASE_JIRA_ASSIGNEE || '63c5a7806178fcc941d86a9d' }}
+          RTL_SIM_CONCLUSION: ${{ needs.check-rtl-sim-status.outputs.conclusion }}
+          RTL_SIM_DETAIL: ${{ needs.check-rtl-sim-status.outputs.detail }}
+          RTL_SIM_SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
+          RTL_SIM_URL: ${{ needs.check-rtl-sim-status.outputs.url }}
+          RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_VERSION: ${{ inputs.tag-version }}
+          TEST_REPORTS_DIR: test-reports
+          REPORT_MD_OUT: release-test-evidence.md
+        run: |
+          set -uo pipefail
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          if [ -z "${JIRA_USER_EMAIL}" ] || [ -z "${JIRA_API_TOKEN}" ]; then
+            echo "::notice::JIRA_RELEASE_* secrets not configured; building the report without filing it."
+            export JIRA_SKIP=1
+          fi
+          python3 .github/actions/scripts/release_test_report.py
+          cat release-test-evidence.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate the Quasar test coverage inventory
+        continue-on-error: true
+        run: python3 tests/scripts/quasar/gen_test_coverage_doc.py
+
+      - name: Upload report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: release-test-evidence-${{ inputs.tag-version || github.run_id }}
+          path: |
+            release-test-evidence.md
+            tests/scripts/quasar/QUASAR_TEST_COVERAGE.md
+          if-no-files-found: warn
 
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:
-    needs: build-artifact-release
+    needs: build-artifact
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -193,7 +419,7 @@ jobs:
       - name: Push dev docker image to GHCR with release tag
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
+          docker-image-tag: ${{ needs.build-artifact.outputs.dev-docker-image }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           new-tag: ${{ inputs.tag-version || 'latest' }}
 
@@ -202,7 +428,7 @@ jobs:
       matrix:
         image: [release, release-models]
     needs:
-      - build-artifact-release
+      - build-artifact
       - check-harbor
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
@@ -212,7 +438,7 @@ jobs:
       platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
       tag-latest: ${{ inputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -239,19 +465,19 @@ jobs:
   # like v0.69.0-rc1 or v0.68.0-dev20260319 are excluded so they don't accumulate
   # on gh-pages and inflate the Pages artifact past the 10 GB limit. See #45440.
   release-docs:
-    needs: [build-artifact-release, parse-platform, resolve-docs-version]
+    needs: [build-artifact, parse-platform, resolve-docs-version]
     if: ${{ inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-')) || inputs.dry-run) }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.resolve-docs-version.outputs.docs-version }}
-      docker-image: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit
 
   publish-wheels:
     name: "Publish wheels to internal PyPI"
-    needs: build-artifact-release
+    needs: build-artifact
     runs-on: ubuntu-latest
     permissions:
       id-token: write # Required for AWS OIDC
@@ -275,7 +501,7 @@ jobs:
       - name: Download wheel artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: ./wheels
 
       - name: Publish wheels to internal PyPI

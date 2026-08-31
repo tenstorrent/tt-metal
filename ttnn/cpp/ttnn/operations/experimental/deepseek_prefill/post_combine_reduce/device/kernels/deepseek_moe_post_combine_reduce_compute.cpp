@@ -67,7 +67,7 @@ void kernel_main() {
         cb_dispatch_table.wait_front(dispatch_table_num_pages);
     }
 
-    binary_op_init_common(cb_combine_input_id, cb_weights_id, cb_output_id);
+    compute_kernel_hw_startup(cb_combine_input_id, cb_weights_id, cb_output_id);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (use_dispatch_table_skip) {
@@ -80,7 +80,7 @@ void kernel_main() {
         // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
         // one expert at a time by reader and writer respectively.
         for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
-            mul_tiles_bcast_scalar_init_short(cb_combine_input_id, cb_weights_id);
+            mul_bcast_scalar_init(cb_combine_input_id, cb_weights_id);
 
             // first_active tracks whether we've picked the accumulator-initializing
             // expert yet: the DeepSeek path looks for a locally-mapped expert via

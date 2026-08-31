@@ -8,30 +8,29 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t N = get_named_compile_time_arg_val("N");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr uint32_t N = get_arg(args::N);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t num_rows = get_arg(args::num_rows);
 
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_row = get_arg_val<uint32_t>(1);
-    const uint32_t end_row = get_arg_val<uint32_t>(2);
+    const uint32_t start_row = get_arg(args::start_row);
+    const uint32_t end_row = get_arg(args::end_row);
 
-    const auto s0 = TensorAccessor(dst_args, dst_addr);
+    const auto s0 = TensorAccessor(tensor::output);
     Noc noc;
-    DataflowBuffer dfb(tt::CBIndex::c_0);
+    DataflowBuffer dfb(dfb::cb_src);
 
-    // start at runtime arg 3 since address/start_block/end_block make up the first 3 args
+    // shape / permutation / destination-stride arrays (rank-length; count = N, a compile-time arg).
+    // Delivered as runtime varargs: input_shape occupies varargs [0, N), perm [N, 2N), dest_strides [2N, 3N).
     uint32_t input_shape[N], perm[N], dest_strides[N];
-    for (uint32_t i = 3; i < N + 3; i++) {
-        input_shape[i - 3] = get_arg_val<uint32_t>(i);
-        perm[i - 3] = get_arg_val<uint32_t>(i + N);
-        dest_strides[i - 3] = get_arg_val<uint32_t>(i + 2 * N);
+    for (uint32_t i = 0; i < N; i++) {
+        input_shape[i] = get_vararg(i);
+        perm[i] = get_vararg(i + N);
+        dest_strides[i] = get_vararg(i + 2 * N);
     }
 
-    uint32_t curr_addr = dst_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {
         // Compute multi-dimensional index for the source row
         uint32_t src_multi_idx[N];

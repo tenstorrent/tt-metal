@@ -9,7 +9,6 @@
 # Team names are currently assigned to tests by best guess.
 #   Please message #tt-metal-infra if there are any concerns.
 
-# Example:
 metal_infra:
   pr_gate:
     wh_n150_civ2: 0
@@ -23,7 +22,7 @@ metal_infra:
     wh_llmbox_civ2: 0
     bh_p150b_civ2_viommu: 0
     bh_p150b_civ2: 0
-  sanity: # APC and BHPC will be renamed to sanity
+  sanity:
     CPU: 0
     N150: 0
     N300: 0
@@ -68,8 +67,6 @@ metal_infra:
     wh_galaxy: 0
     bh_galaxy: 0
 
-# Current time budgets are based on sums of existing tests.
-# No official decision has been made yet for division of budgets per team.
 ttnn:
   pr_gate:
     wh_n150_civ2: 15
@@ -78,77 +75,72 @@ ttnn:
     wh_n300_civ2: 55
     wh_llmbox_civ2_viommu: 15
     bh_p150b_civ2_viommu: 45
-    sim_wormhole_b0: 40
-    sim_blackhole: 40
+    sim_wh_n150: 40
+    sim_bh_p150: 40
   sanity:
     wh_n300_civ2: 545
     bh_p100: 545
     bh_p150b_civ2: 545
     bh_quietbox_2: 65
     bh_p300: 15
-    wh_llmbox: 25
-    sim_wormhole_b0: 680
-    sim_blackhole: 680
+    wh_llmbox_civ2: 40
+    sim_wh_n150: 695  # +15 for trace allocation tracker simulator coverage
+    sim_bh_p150: 680
   unit:
     wh_llmbox: 50
-    wh_galaxy: 35
+    wh_galaxy: 120
+    bh_galaxy: 40
     bh_p100: 805
     bh_p150b_civ2: 1045
-    wh_n150_civ2: 1185
-    wh_n300_civ2: 1175
+    wh_n150_civ2: 1215
+    wh_n300_civ2: 1180
     bh_p150b_civ2_viommu: 115
+    bh_p300: 60
+    bh_quietbox_2: 60
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 120
-    bh_galaxy: 70
+    wh_galaxy: 0
+    bh_galaxy: 30
     bh_p150b_civ2: 55
-    bh_loudbox: 145
-    bh_p300: 145
-    bh_quietbox_2: 145
+    bh_loudbox: 85
+    bh_p300: 85
+    bh_quietbox_2: 85
+  e2e_tier1:
+    wh_n150: 8
+    wh_llmbox_perf: 6
+  unit_tier1:
+    wh_n150: 20
+    wh_llmbox: 8
+  e2e_tier3:
+    wh_n150: 21
+  unit_tier3:
+    wh_n150: 4
+  device_perf:
+    bh_p150b_civ2: 7
+    wh_n150: 5
+    wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
-    wh_galaxy: 340
+    wh_galaxy: 100
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
-  # Profiler budgets are kept under their own subheading for now while team /
-  # test-framework assignment is being settled. Tracked in
-  # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
-    wh_llmbox: 150
-    wh_galaxy: 50
-    wh_n150_civ2: 60
-    wh_n300_civ2: 60
-    bh_p100a_civ2_viommu: 60
-    bh_p150b_civ2_viommu: 60
+    wh_llmbox: 30
+    wh_n150_civ2: 8
+    wh_n300_civ2: 8
+    bh_p100a_civ2_viommu: 8
+    bh_p150b_civ2_viommu: 8
   demo:
-    # 10 min for Blaze - high_bw_all_gather CCL perf and accuracy in
-    # tests/pipeline_reorg/blaze_models_prefill_tests.yaml.
     bh_sc1_high_power: 10
-  # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
-  # workflows.
   sweep:
-    # Each ceiling is the TOTAL time budget for a SKU for ONE run — the sum of
-    # every batch's timeout on that SKU — NOT a per-job number. The sweep matrix
-    # is dynamic (modules discovered at runtime, then batched), so per-job
-    # timeouts are built up per op from tests/pipeline_reorg/ttnn_sweep_tests.yaml
-    # (batch.overhead/default/overrides) and the whole-SKU total is enforced here.
-    # verify_time_budget.py sums skus.<sku>.timeout per (team, sku) from that file
-    # against these caps; compute_sweep_matrix.py additionally reports each run's
-    # live batch-timeout sum against the same budget. Seeded from observed
-    # wall-clock with ceiling headroom (Lead run 29559503564: 29 galaxy batches /
-    # ~4h28m total, no job hitting its ceiling; Model-Traced run 30553811243, where
-    # 42 of 119 jobs WERE killed by their ceiling and the model_traced per-op
-    # numbers had to roughly double — see that file's header). SKU names are the
-    # existing logical SKUs in sku_config.yaml. Shared SKUs cover both targets'
-    # entries, so wh_n150_civ2 carries lead + model_traced.
-    wh_galaxy: 640 # lead galaxy (obs ~4h28m total / 29 batches)
-    wh_n150_civ2: 1100 # lead(150) + model_traced(950)
-    wh_n300_civ2: 990 # model_traced
-    wh_llmbox: 920 # model_traced t3k
-    bh_p100a_civ2_viommu: 660 # model_traced
-    bh_p150b_civ2_viommu: 640 # model_traced
-    bh_p300_viommu: 720 # model_traced
+    wh_galaxy: 640
+    wh_n150_civ2: 1100
+    wh_n300_civ2: 990
+    wh_llmbox: 920
+    bh_p100a_civ2_viommu: 660
+    bh_p150b_civ2_viommu: 640
+    bh_p300_viommu: 720
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
@@ -157,30 +149,25 @@ ttnn:
 
 train:
   merge_gate:
-    wh_n150_civ2: 30
+    bh_p150b_civ2: 30
   unit:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 90
     bh_p100: 90
     bh_p150b_civ2: 90
   perf:
-    wh_n150_civ2: 160
-    wh_n300_civ2: 160
     bh_p100: 160
     bh_p150b_civ2: 400
-    bh_galaxy_perf: 180
+  e2e_tier3:
+    bh_sc1: 260
 
 ttsim:
   unit:
-    sim_wormhole_b0: 15
-    sim_blackhole: 15
+    sim_wh_n150: 15
+    sim_bh_p150: 15
   sanity:
-    sim_wormhole_b0: 30
-    sim_blackhole: 30
+    sim_wh_n150: 30
+    sim_bh_p150: 30
 
 shield:
-  e2e:
-    wh_llmbox: 110
   e2e_tier2:
     wh_n150: 150
     wh_n300: 30
@@ -198,16 +185,22 @@ shield:
   device_perf:
     wh_n150: 100
     bh_p150: 60
+  demo:
+    bh_sc4: 35
 
-# Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 235 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30 + bh-ring-stress ×10
+    cpu_medium: 235
     wh_llmbox: 60
-    wh_galaxy: 25
+    wh_galaxy: 75
+    wh_n300_civ2: 15
+    wh_llmbox_civ2: 65
+    bh_loudbox: 195
+    bh_p300: 195
+    bh_quietbox_2: 195
   stress:
     wh_galaxy_perf: 120
   integration:
@@ -217,38 +210,49 @@ scaleout:
     bh_galaxy: 10
   sanity:
     wh_galaxy: 20
+    wh_llmbox_civ2: 30
+    wh_n300_civ2: 15
     bh_quietbox_2: 15
     bh_p300: 15
-    wh_llmbox: 20
+  perf:
+    wh_llmbox_perf: 140
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_sc1: 20 # single galaxy
+    bh_sc1: 20
     bh_sc4: 90
-    bh_sc4-blitz: 90 #blitz specific mgd sku
-    bh_sc4-mgd: 90 #general mgd sku
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
+  # Per-tier e2e budgets for DeepSeek supercluster tests now living in
+  # tests/pipeline_reorg/models_e2e_tests.yaml (consumed by models-e2e / release-demo).
+  e2e_tier1:
+    bh_sc1: 20
+    bh_sc4: 90
+    bh_sc16: 150
 
 runtime:
   pr_gate:
     wh_n150_civ2: 15
+    github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 15
     wh_llmbox_civ2_viommu: 15
     bh_p150b_civ2_viommu: 45
+    github_hosted_cpu: 15
   sanity:
     wh_n150_civ2: 13
     bh_p150b_civ2: 13
     bh_loudbox: 5
-    sim_wormhole_b0: 30
-    sim_blackhole: 30
-    sim_wormhole_b0_galaxy: 10
-    sim_blackhole_galaxy: 10
+    wh_n150: 10
+    bh_p150: 10
+    sim_wh_n150: 30
+    sim_bh_p150: 30
+    sim_wh_galaxy: 10
+    sim_bh_galaxy: 10
   unit:
     wh_n150_civ2: 232
     wh_n300_civ2: 99
@@ -265,10 +269,14 @@ runtime:
     bh_loudbox: 25
     wh_galaxy: 15
     bh_galaxy: 15
+  profiler:
+    wh_llmbox: 60
+    wh_galaxy: 50
+    wh_n150_civ2: 52
+    wh_n300_civ2: 52
+    bh_p100a_civ2_viommu: 52
+    bh_p150b_civ2_viommu: 52
   perf:
-    # +10 min/SKU over the prior 55/40 to cover the new runtime_perf_jit_build job
-    # (JIT-build compile-throughput microbenchmark: 300 kernels x 3 reps, ~2-3 min
-    # measured, budgeted at 10 min in runtime_perf_tests.yaml).
     wh_n300_civ2: 65
     bh_p150_perf: 50
   perf_profiler:
@@ -305,100 +313,90 @@ llk:
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70
+  weekly:
+    sim_wh_n150_xl: 75
+    sim_bh_p150_xl: 240
+    sim_quasar_xl: 180
 
 models:
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
-    wh_galaxy_perf: 10
+    wh_galaxy_perf: 8
     wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
-  frequent:
-    wh_n150: 765
-    wh_n300: 765
-    wh_n150_civ2: 30
-    wh_n300_civ2: 30
-    bh_p150b_civ2: 120
   stress:
     wh_galaxy_perf: 500
   e2e:
-    wh_llmbox: 198
     bh_p150b_civ2: 8
     bh_p300: 20
     bh_loudbox: 193
     bh_quietbox_2: 90
-    bh_sc1: 20 # single galaxy MLA chunked prefill
-  # Per-tier e2e budgets, consumed by the tiered model pipelines;
-  # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
+    bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
-    wh_galaxy_perf: 120
+    wh_galaxy_perf: 215
     bh_p150: 27
-    bh_quietbox_2: 195
+    bh_quietbox_2: 255
     bh_galaxy: 78
-    bh_sc1: 230
-    bh_sc4-mgd: 120
+    bh_sc1: 140
+    bh_sc4: 120
   e2e_tier2:
     wh_llmbox_perf: 266
-    wh_n150: 30
+    wh_n150: 45
+    wh_n300: 6
     bh_p150: 26
     bh_p300: 42
     bh_quietbox_2: 186
   e2e_tier3:
-    wh_llmbox_perf: 64
-    wh_n150: 42
-    wh_n300: 15
-    bh_p150: 7
+    wh_llmbox_perf: 180
+    wh_galaxy_perf: 55
+    wh_n150: 105
+    wh_n300: 60
+    bh_p150: 33
     bh_p300: 8
-    bh_quietbox_2: 30
-  unit:
-    wh_llmbox: 100
-    wh_galaxy_perf: 10
-  # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
-  # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
+    bh_quietbox_2: 42
   unit_tier1:
-    wh_llmbox: 61
+    wh_llmbox: 150
     wh_n150: 110
-    wh_galaxy: 235
-    wh_galaxy_perf: 45
+    wh_galaxy: 260
+    wh_galaxy_perf: 60
     bh_p150: 20
-    bh_quietbox_2: 260
+    bh_quietbox_2: 390
     bh_galaxy: 75
     bh_sc1: 75
-    bh_sc4-mgd: 50
+    bh_sc4: 50
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 172
-    wh_n150: 55
+    wh_n150: 82
+    wh_n300: 30
+    wh_galaxy_perf: 80
     bh_p150: 20
-    bh_quietbox_2: 50
+    bh_quietbox_2: 60
   unit_tier3:
+    wh_llmbox: 90
+    wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 33
-    wh_n300: 15
-    bh_p150: 20
+    wh_n150: 75
+    wh_n150_civ2: 12
+    wh_n300: 33
+    bh_p150: 30
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 422
-  perf:
-    wh_llmbox_perf: 685
-    wh_galaxy: 280
-    wh_galaxy_perf: 150
+    wh_llmbox: 0
   device_perf:
     wh_n150: 20
+    wh_galaxy_perf: 55
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 1290
-    wh_galaxy: 345
-    wh_galaxy_perf: 150
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
-    bh_sc1: 437
-    bh_sc1_high_power: 143
+    bh_sc1: 488
+    bh_sc1_high_power: 166
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -410,10 +408,11 @@ models:
     bh_p150b_civ2_viommu: 50
     bh_loudbox: 1200
     bh_p300: 800
-    bh_quietbox_2: 280
   sweep_tier1:
+    wh_llmbox: 131
     wh_n150: 30
-    wh_galaxy: 30
+    wh_galaxy: 40
+    wh_galaxy_perf: 55
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30

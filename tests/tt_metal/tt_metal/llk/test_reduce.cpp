@@ -42,7 +42,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/tile.hpp>
 
@@ -86,9 +86,6 @@ struct ReduceConfig {
     // Set to MxFp4 to drive the MxFp4 stimulus path: random floats are packed to MxFp4 for the
     // device and decoded back to bf16 to feed the golden. Output stays Float16_b.
     tt::DataFormat input_format = tt::DataFormat::Float16_b;
-    // Opt into the 2x-packed src-register format (Quasar). Only valid with an MxFp4 input on a
-    // column (H) reduce, where GAPOOL reads the 2x-packed SrcA correctly.
-    bool enable_2x_src_format = false;
 };
 
 float get_scaler(const ReduceConfig& test_config) {
@@ -430,7 +427,6 @@ void run_single_core_reduce_program(
             .fpu_math_fidelity = test_config.math_fidelity,
             .enable_32_bit_dest = test_config.fp32_dest_acc_en,
             .double_buffer_dest = !test_config.dst_full_sync_en,
-            .enable_2x_src_register = test_config.enable_2x_src_format,
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
@@ -883,8 +879,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4X2) {
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
         .math_fidelity = MathFidelity::HiFi4,
+        // MxFp4 + column (H) reduce auto-selects the 2x-packed src-register format on Quasar.
         .input_format = tt::DataFormat::MxFp4,
-        .enable_2x_src_format = true,
     };
     run_single_core_reduce_program(this->devices_.at(0), test_config);
 }

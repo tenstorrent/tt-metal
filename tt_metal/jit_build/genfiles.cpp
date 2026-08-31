@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -99,6 +100,29 @@ void write_file(const string& path, const string& content) {
     }
 }
 
+// Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
+// of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
+// on the command line. Emitted for any kernel with named CT args, Metal 2.0 or legacy, blaze or not.
+// Returns true if a header was written.
+//
+// Written here rather than in the build step so it lands in the kernel's generated-files directory
+// alongside the other generated headers, which is what the remote JIT path uploads to the compile
+// server (Program's read_directory_files) and what preprocess-and-ship inlines into the .ii. Every
+// caller of jit_build_genfiles_* runs it immediately before jit_build(), so the file is in place for
+// the local compile too.
+bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings& settings) {
+    std::unordered_map<std::string, uint32_t> named_args;
+    settings.process_named_compile_time_args(
+        [&named_args](const std::unordered_map<std::string, uint32_t>& args) { named_args = args; });
+    if (named_args.empty()) {
+        return false;
+    }
+    write_file(
+        out_dir + string(jit_build::utils::NAMED_CT_ARG_MAP_HEADER),
+        jit_build::utils::format_named_ct_arg_map_header(named_args));
+    return true;
+}
+
 // METAL 2.0 only:
 // This is only invoked for Metal 2.0 kernels created via the new ProgramSpec host APIs.
 // Legacy kernels (created via CreateKernel) do not get kernel_bindings_generated.h.
@@ -148,6 +172,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
+    // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
+    struct TensorBindingSequenceEntry {
+        string name;
+        vector<string> members;
+    };
+    vector<TensorBindingSequenceEntry> tensor_binding_sequence_entries;
+    settings.process_tensor_binding_sequences(
+        [&tensor_binding_sequence_entries](const string& name, const vector<string>& members) {
+            tensor_binding_sequence_entries.push_back({name, members});
+        });
+
     // Emit the header content:
     //  - DFB binding tokens are emitted into the dfb namespace
     //  - Semaphore ids are emitted into the sem namespace (semaphores have no binding-token type;
@@ -169,7 +204,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n";
-    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty()) {
+    if (dfb_entries.empty() && sem_entries.empty() && ta_entries.empty() && scratch_entries.empty() &&
+        tensor_binding_sequence_entries.empty()) {
         content << "// No bindings for this kernel.\n";
     } else {
         if (!dfb_entries.empty()) {
@@ -182,6 +218,9 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             // This header defines TensorBindingToken, a type which can be used
             // to construct a TensorAccessor or LocalTensorAccessor.
             content << "#include \"api/tensor/tensor_binding_token.h\"\n";
+        }
+        if (!tensor_binding_sequence_entries.empty()) {
+            content << "#include <tuple>\n";
         }
         if (!scratch_entries.empty()) {
             // The full Scratchpad type (NOC-free, so it compiles on both data-movement and
@@ -206,7 +245,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             content << "}  // namespace sem\n";
         }
 
-        if (!ta_entries.empty()) {
+        if (!ta_entries.empty() || !tensor_binding_sequence_entries.empty()) {
             // TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>: pairs the binding's
             // static layout metadata (TensorAccessorArgs<CTA_OFFSET>) with the byte offset of
             // its implicit base-address CRTA.
@@ -214,11 +253,17 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
+            //
+            // Tensor binding sequences are constexpr std::tuple of those member tokens (members order).
             content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorBindingToken<" << entry.cta_offset
                         << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
+            }
+            for (const auto& sequence : tensor_binding_sequence_entries) {
+                content << fmt::format(
+                    "constexpr auto {} = std::make_tuple({});\n", sequence.name, fmt::join(sequence.members, ", "));
             }
             content << "}  // namespace tensor\n";
         }
@@ -275,10 +320,17 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
+    // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
+    const uint32_t cta_vararg_size = settings.get_compile_time_vararg_count();
+
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
-               "#include \"experimental/kernel_args.h\"\n\n";
+               "#include <array>\n"
+               "#include \"experimental/kernel_args.h\"\n"
+               "#include \"api/compile_time_args.h\"\n"
+               "#include \"api/debug/assert.h\"\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
@@ -312,7 +364,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         content << "}  // namespace args\n\n";
     }
 
-    // Vararg helpers — always emitted.
+    // Runtime / common-runtime vararg helpers — always emitted.
     // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
@@ -324,6 +376,37 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
+
+    // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
+    // Three accessors:
+    //   1. get_num_compile_time_varargs() — baked prefix length
+    //   2. get_compile_time_vararg<idx>() — template index (with bounds check)
+    //   3. get_compile_time_vararg(idx) — function-parameter index
+    content << fmt::format(
+        R"(
+FORCE_INLINE constexpr uint32_t get_num_compile_time_varargs() {{
+    return {0}u;
+}}
+template <uint32_t idx>
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
+    static_assert(idx < get_num_compile_time_varargs(), "Compile-time vararg index out of range");
+    return kernel_compile_time_args[idx];
+}}
+// Called when an OOB access to vararg CTA is attempted. Meant to trigger the assertion
+// failure as an indirection: the ASSERT macro may expand to inline asm, which cannot be
+// present in a C++17 constexpr function. This is a workaround and can be inlined once we
+// migrate to C++20.
+inline void assert_compile_time_vararg_index_out_of_range() {{
+    ASSERT(false);  // Attempt to access out of bound vararg CTA.
+}}
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
+    if (idx >= get_num_compile_time_varargs()) {{
+        assert_compile_time_vararg_index_out_of_range();
+    }}
+    return kernel_compile_time_args[idx];
+}}
+)",
+        cta_vararg_size);
 
     write_file(path, content.str());
 }
@@ -475,6 +558,9 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
+    // No #include line: this one is force-included by the compile recipe so the map is defined
+    // before any header that reads it (api/compile_time_args.h) can be pulled in.
+    write_named_ct_arg_map_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953
@@ -507,6 +593,9 @@ void jit_build_genfiles_triscs_src(
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
+    // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead
+    // of any header that reads it (api/compile_time_args.h).
+    write_named_ct_arg_map_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953
@@ -609,7 +698,6 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
-    bool enable_2x_src_format,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
@@ -618,8 +706,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
         unpack_conditional_dst_format,
         fp32_dest_acc_en,
         std::move(unpack_to_dest_mode),
-        /*int_fpu_en=*/false,
-        enable_2x_src_format);
+        /*int_fpu_en=*/false);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -753,7 +840,6 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         unpack_conditional_dst_format,
         options.fp32_dest_acc_en,
         options.unpack_to_dest_mode,
-        options.enable_2x_src_format,
         max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(

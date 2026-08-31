@@ -32,7 +32,7 @@ void sub_exp_block_bcast_cols_inplace() {
     DataflowBuffer in0_dfb_obj(in0_dfb);
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
-    sub_bcast_cols_init_short(in0_dfb, in1_dfb);
+    sub_bcast_cols_init(in0_dfb, in1_dfb);
     exp_tile_init<true>();
     in0_dfb_obj.wait_front(rows * cols);
     in1_dfb_obj.wait_front(rows);
@@ -72,10 +72,11 @@ void add_block_bcast_rows_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t r
 
     uint32_t num_tiles = rows * cols;
     if (first_call) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb, in0_dfb);
+        compute_kernel_hw_startup(in0_dfb, in1_dfb, in0_dfb);
+        bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_dfb, in1_dfb);
     } else {
         reconfig_data_format(in0_dfb, in1_dfb);
-        add_bcast_rows_init_short(in0_dfb, in1_dfb);
+        add_bcast_rows_init(in0_dfb, in1_dfb);
     }
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(cols);
@@ -106,7 +107,7 @@ void mul_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    mul_tiles_init(in0_dfb, in1_dfb);
+    mul_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -135,7 +136,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t r
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     uint32_t num_tiles = rows * cols;
-    mul_bcast_cols_init_short(in0_dfb, in1_dfb);
+    mul_bcast_cols_init(in0_dfb, in1_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     in1_dfb_obj.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -165,7 +166,7 @@ void eqz_block_inplace(uint32_t in0_dfb, uint32_t num_tiles) {
 
     reconfig_data_format_srca(in0_dfb);
     eqz_tile_init();
-    copy_tile_to_dst_init_short(in0_dfb);
+    copy_init(in0_dfb);
     in0_dfb_obj.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -190,7 +191,7 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(in_dfb);
 
-    copy_tile_to_dst_init_short(in_dfb);
+    copy_init(in_dfb);
     recip_tile_init();
 
     in_dfb_obj.wait_front(num_tiles);
@@ -286,7 +287,7 @@ void mask_and_topk() {
             // Before transposing, add expert_mask to the two input tiles and store the result in masked_input_dfb.
             tile_regs_acquire();
             reconfig_data_format(input_dfb_index, expert_mask_dfb_index);
-            add_bcast_rows_init_short(input_dfb_index, expert_mask_dfb_index);
+            add_bcast_rows_init(input_dfb_index, expert_mask_dfb_index);
             add_tiles_bcast_rows(input_dfb_index, expert_mask_dfb_index, 0, wt, 0);
             add_tiles_bcast_rows(input_dfb_index, expert_mask_dfb_index, 1, wt + 1, 1);
             masked_input_dfb.reserve_back(2);
@@ -349,12 +350,14 @@ void mask_and_topk() {
                 uint32_t right_ind = left_ind + (1 << m_iter);
                 tile_regs_acquire();
 
-                copy_tile_to_dst_init_short_with_dt(index_transposed_dfb_index, input_transposed_dfb_index);
+                reconfig_data_format_srca(index_transposed_dfb_index, input_transposed_dfb_index);
+                copy_init(input_transposed_dfb_index);
                 copy_tile(input_transposed_dfb_index, left_ind, input_dest_start);
                 copy_tile(input_transposed_dfb_index, right_ind, input_dest_end);
 
                 // unpack indices into dest
-                copy_tile_to_dst_init_short_with_dt(input_transposed_dfb_index, index_transposed_dfb_index);
+                reconfig_data_format_srca(input_transposed_dfb_index, index_transposed_dfb_index);
+                copy_init(index_transposed_dfb_index);
                 copy_tile(index_transposed_dfb_index, left_ind, index_dest_start);
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 

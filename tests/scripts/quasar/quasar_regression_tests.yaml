@@ -3,7 +3,9 @@
 # Structure:
 #   <group>:              gtest binary under build/test/tt_metal/, or pytest file path
 #                         relative to TT_METAL_HOME
-#     - filter: <pattern> gtest filter glob, or pytest node id after :: (e.g. test_foo)
+#     - filter: <pattern> (optional) gtest filter glob, or pytest node id after ::
+#                         (e.g. test_foo). Omit or use "" to run all tests in the
+#                         gtest binary / pytest file.
 #       config: <config>  Simulator grid (emu-quasar-<config>): 1x3, 2x3, 2x3_DISPATCH
 #       runner: <type>    (optional) gtest (default) or pytest
 #       env:              (optional) Extra environment variables as key: value pairs
@@ -13,6 +15,8 @@
 #                         same group, config, env, and gtest_repeat. Used by
 #                         run_quasar_regression.sh. Defaults to false.
 #                         Illegal for runner: pytest.
+#                         Illegal to mix empty filter (run all) with named filters in
+#                         the same back2back batch.
 #
 # Example gtest entry
 #
@@ -113,6 +117,40 @@ unit_tests_legacy:
   - filter: "*MeshDeviceSingleCardFixture.Bmm"
     config: 2x3_DISPATCH
     back2back: true
+
+  - filter: "*MeshBufferHeightShardedL1*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*MeshBufferWidthShardedL1*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestWorkloadAcrossMultipleWorkerNodes*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDevicePartitionsWorkerGrid*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDeviceShardedL1BufferAllocation*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDeviceStallGroup*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*TestSubDeviceManagerSwitching*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*QuasarFdsFixture*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
 
 unit_tests_debug_tools:
   - filter: "*WatcherAssertTests*/DM2"

@@ -306,7 +306,13 @@ void kernel_main() {
                                 untilize_row_addr + off, dst_addr + off, chunk, TRID_NON_LOCAL_WRITE);
                             off += chunk;
                         }
-                        noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);  // zone measures only row-data landing
+                        // The tagged barrier drains this row's remote metadata and
+                        // data writes without waiting for local DRAM writes.
+                        noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                        // A transaction ID is retained by the command buffer after
+                        // its barrier. Clear it before the next row so a later local
+                        // noc.async_write remains untagged.
+                        noc_async_write_set_trid(0);
                     }
 
                     noc_semaphore_inc<true>(sender_data_ready_noc_addr, 1);
@@ -342,5 +348,11 @@ void kernel_main() {
     Semaphore<> sender_data_ready_sem(data_ready_semaphore_id);
     sender_data_ready_sem.up(noc, sender_noc_x, sender_noc_y, 1);
     noc.async_atomic_barrier();
+
+    // The per-row remote path resets the transaction ID after every tagged
+    // barrier. Repeat it at exit so the firmware's dynamic-NoC handoff check
+    // sees an idle command buffer on every path.
+    noc_async_write_set_trid(0);
+
     cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }

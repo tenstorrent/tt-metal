@@ -74,7 +74,7 @@ void kernel_main() {
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(13);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(14);
 
-    binary_op_init_common(sin_cb, sin_cb, untilized_sin_cb);
+    compute_kernel_hw_startup(sin_cb, sin_cb, untilized_sin_cb);
     UNTILIZE_ONE_TILE<sin_cb, untilized_sin_cb>();
     UNTILIZE_ONE_TILE<cos_cb, untilized_cos_cb>();
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
@@ -86,7 +86,7 @@ void kernel_main() {
 #endif
 
     cb_trans_mat.wait_front(onetile);
-    binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
+    compute_kernel_hw_startup(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
@@ -116,10 +116,10 @@ void kernel_main() {
 
         tile_regs_acquire();
 #ifdef DECODE_MODE
-        mul_bcast_rows_init_short(rotated_in_interm_cb, updated_sin_cb);
+        mul_bcast_rows_init(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles_bcast_rows(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
 #else
-        mul_tiles_init(rotated_in_interm_cb, updated_sin_cb);
+        mul_init(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
 #endif
         tile_regs_commit();
@@ -145,10 +145,10 @@ void kernel_main() {
 
         tile_regs_acquire();
 #ifdef DECODE_MODE
-        mul_bcast_rows_init_short(in_cb, updated_cos_cb);
+        mul_bcast_rows_init(in_cb, updated_cos_cb);
         mul_tiles_bcast_rows(in_cb, updated_cos_cb, 0, 0, 0);
 #else
-        mul_tiles_init(in_cb, updated_cos_cb);
+        mul_init(in_cb, updated_cos_cb);
         mul_tiles(in_cb, updated_cos_cb, 0, 0, 0);
 #endif
         tile_regs_commit();
@@ -171,7 +171,7 @@ void kernel_main() {
         cb_sin_interm.wait_front(onetile);
         reconfig_data_format(cos_interm_cb, sin_interm_cb);
         pack_reconfig_data_format(out_cb);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
+        add_init(cos_interm_cb, sin_interm_cb);
 
         tile_regs_acquire();
         add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);

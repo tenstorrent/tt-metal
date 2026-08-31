@@ -45,7 +45,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint.h"  // DEBUG (matmul-pack address locator, remove after)
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -427,9 +426,7 @@ void kernel_main() {
 
     // WH fast_tilize RACE-GUARD (DPRINT-independent; do NOT remove without the LLK fix). The WH fast_tilize
     // dest/semaphore handshake has a timing-sensitive race that deadlocks the tilize on the PACK thread
-    // (first tile). Bisect proved conv PASSES on WH at 26ce761e002 (which had two plain PACK(DPRINT) calls
     // here) and HANGS once they were removed — NO other WH-path change — and that it only passes when DPRINT
-    // actually executes (TT_METAL_DPRINT_CORES=all). So the mask is PACK-thread latency before
     // compute_kernel_hw_startup. Replicate that latency WITHOUT DPRINT: on the PACK thread, read the same CB
     // interface registers into a volatile sink and spin briefly. `kRaceGuardSpin` is a TUNABLE delay — if WH
     // still hangs, raise it. Real fix = the fast_tilize LLK handshake race (TEN-4746 class).
@@ -534,7 +531,6 @@ void kernel_main() {
                     // is no per-block tilize here. Only (re)establish the matmul unpack/math format for this
                     // height block -- the fuse_bias / untilize phases below leave a non-matmul format, so each
                     // block must re-init before its matmul. (The Quasar per-block tilize pack setup, the
-                    // tilize_in calls, and the tilize DPRINT localizers that lived here in the fused kernel
                     // are all gone -- hoisting them into the single Phase 1 setup is the point of Option C.)
                     reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -575,27 +571,14 @@ void kernel_main() {
                 // compute_pool_2d.cpp's llk_pack_init re-init.
                 PACK((llk_pack_init(curr_matmul_out_cb)));
 #endif
-                // DEBUG (op localizer): marks the matmul pack for this height block. Printed BEFORE the packs
                 // (flushes) so the LAST marker seen before the PACR0_TILE_INC fault tells whether the faulting
                 // pack is the MATMUL (MMBLK) or the fuse_bias->OUT pack (BIASBLK). base is the current pack
-                // write ptr; expected first-tile addr = base, tiles step by 128 units. Remove after diagnosis.
-                PACK(DPRINT(
-                    "MMBLK h={} cb={} base={}\n",
-                    (uint32_t)in0_block_h_i,
-                    (uint32_t)curr_matmul_out_cb,
-                    (uint32_t)cb_matmul_partials.get_write_ptr()));
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
                         if (enable_reload) {
-#ifndef ARCH_QUASAR
-                            copy_tile_to_dst_init_short_with_dt(in1_cb_id, matmul_partials_cb);
-#else
-                            // QSR: copy_tile_to_dst_init_short_with_dt is WH/BH-only; expand it into its
-                            // two constituent steps (identical reconfig + copy init) on Quasar.
                             reconfig_data_format_srca(in1_cb_id, matmul_partials_cb);
-                            copy_tile_to_dst_init_short(matmul_partials_cb);
-#endif
+                            copy_init(matmul_partials_cb);
                             cb_matmul_partials.wait_front(out_subblock_num_tiles);
                             tile_regs_acquire();
 
@@ -656,24 +639,13 @@ void kernel_main() {
                             }
 
                             uint32_t start_dst_index = 0;
-                            // DEBUG (matmul-pack OOB locator): the pack faults with PACR0_TILE_INC at ~0x37d90.
                             // Print the target CB + its current write ptr + capacity so we can see whether the
-                            // write address exceeds the CB extent (offset wrong / CB too small). Remove after.
                             // The arch-lookup proved this is NOT a kernel-index bug: the residual sub-tile
                             // misalignment (in-bounds, non-tile-aligned, differ-by-one-face) can only come from a
                             // BD-tile-geometry vs entry-size mismatch on the borrowed OUT/MATMUL_PARTIALS DFB.
                             // frdim/nf are the pack tile geometry that sets the physical per-tile stride: for a
                             // symmetric 32x32 tile frdim=16, nf=4 -> stride=128 units (=esz). If frdim!=16 or
                             // nf!=4 the stride != esz -> every tile step drifts by a sub-tile amount (root cause).
-                            PACK(DPRINT(
-                                "MMPACK cb={} wptr={} nent={} esz={} nt={} frdim={} nf={}\n",
-                                (uint32_t)curr_matmul_out_cb,
-                                (uint32_t)curr_out_cb.get_write_ptr(),
-                                (uint32_t)curr_out_cb.get_total_num_entries(),
-                                (uint32_t)curr_out_cb.get_entry_size(),
-                                (uint32_t)out_subblock_num_tiles,
-                                (uint32_t)get_output_face_r_dim(curr_matmul_out_cb),
-                                (uint32_t)get_output_num_faces(curr_matmul_out_cb)));
 #ifdef ARCH_QUASAR
                             // QSR matmul-pack DST addressing fix. The Quasar SEQUENTIAL pack
                             // (pack_block -> llk_pack_block -> get_output_tile_index<out_of_order=false>)
@@ -785,14 +757,8 @@ void kernel_main() {
                 PACK((llk_pack_init(untilize_mode_out_cb_id)));
 #endif
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
-                add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
+                add_bcast_rows_init(matmul_partials_cb, bias_cb_id);
 
-                // DEBUG (op localizer): marks the fuse_bias->OUT pack for this height block. See MMBLK above.
-                PACK(DPRINT(
-                    "BIASBLK h={} cb={} base={}\n",
-                    (uint32_t)in0_block_h_i,
-                    (uint32_t)untilize_mode_out_cb_id,
-                    (uint32_t)cb_untilize_mode_out.get_write_ptr()));
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -859,7 +825,7 @@ void kernel_main() {
 
                 if constexpr (packer_untilize) {
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
-                    copy_tile_to_dst_init_short(matmul_partials_cb);
+                    copy_init(matmul_partials_cb);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             cb_matmul_partials, cb_out, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);

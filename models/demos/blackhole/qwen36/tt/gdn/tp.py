@@ -385,6 +385,7 @@ class TPGatedDeltaNet:
                     weight.shape[-2],
                     weight.shape[-1],
                     max_cols=getattr(self.args, "decode_grid_w", 8),
+                    tuning=getattr(self.args, "prefill_tuning", None),
                 )
                 return ttnn.linear(
                     x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -734,6 +735,55 @@ class TPGatedDeltaNet:
         end[dim] = hi
         return ttnn.slice(buf, tuple(start), tuple(end))
 
+    def _write_recurrent_state_prefix(self, new_rec, B):
+        """Write active rows [0:B] without reading or copying idle rows."""
+        grid_size = self.mesh.compute_with_storage_grid_size()
+        assert (
+            grid_size.x >= 8 and grid_size.y >= 6
+        ), f"GDN prefix state write needs an 8x6 core rectangle, got {grid_size.x}x{grid_size.y}"
+        nhw = B * self.Nv * self.Dk
+        assert (
+            nhw % ttnn.TILE_SIZE == 0
+        ), f"GDN prefix state rows B={B}, Nv={self.Nv}, Dk={self.Dk} -> {nhw} is not tile-aligned"
+        n_tiles = nhw // ttnn.TILE_SIZE
+
+        # Prefer the tuned 8x6=48-core rectangle, which every TP=4 shape hits (Nv=12 -> nhw=B*1536
+        # -> 48*B tiles). At TP=8 Nv halves to 6, so B=1 gives only 24 tiles and cannot fill 48
+        # cores with tile-aligned shards — fall back to the largest core count that divides evenly.
+        if n_tiles % 48 == 0:
+            num_cores = 48
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))})
+        else:
+            num_cores = max(c for c in range(1, min(48, grid_size.x * grid_size.y) + 1) if n_tiles % c == 0)
+            grid = ttnn.num_cores_to_corerangeset(num_cores, grid_size, row_wise=True)
+
+        shard_memcfg = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                grid,
+                (nhw // num_cores, self.Dv),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        src = (
+            new_rec
+            if new_rec.dtype == self.rec_state.dtype
+            else ttnn.typecast(new_rec, self.rec_state.dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+        )
+        sharded = ttnn.to_memory_config(src, shard_memcfg)
+        ttnn.experimental.slice_write(
+            sharded,
+            self.rec_state,
+            [0, 0, 0, 0],
+            [B, self.Nv, self.Dk, self.Dv],
+            [1, 1, 1, 1],
+        )
+        ttnn.deallocate(sharded)
+        if src is not new_rec:
+            ttnn.deallocate(src)
+        ttnn.deallocate(new_rec)
+
     def _write_index(self, buf, src, idx, dim):
         """Replace slice `idx` of `buf` along `dim` with `src` (extent 1 along `dim`), preserving
         the other slices, via an in-place copy into `buf`. Consumes `src` (and the temporary
@@ -971,17 +1021,34 @@ class TPGatedDeltaNet:
         )
 
     def forward_decode(self, x):
-        tw, B, Nk, Nv, Dk, Dv = self.tw, self.B, self.Nk, self.Nv, self.Dk, self.Dv
+        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
+        Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
         if self.conv_states is None:
             self.reset_state()
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
 
+        # Active decode width, taken from the input. Normally == Bmax. BUCKETED decode: a request
+        # feeds B<Bmax tokens and the whole step runs on state rows [0:B]; idle rows [B:Bmax] are
+        # preserved. Conv taps are per-channel (broadcast over batch), so the conv weighted-sum
+        # works at any width. The B==Bmax path is byte-identical to before.
+        B = x.shape[-2]
+
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 
         # Conv1d shift-register + weighted sum + SiLU
         st = self.conv_states
+        if B < Bmax:
+            # Bucketed decode: active requests occupy a contiguous prefix [0:B]; idle rows [B:Bmax]
+            # hold no live request (a slot is re-initialized by prefill/write_slot when reused), so
+            # they are don't-care. Pad the width-B new input up to Bmax and run the SAME full-width
+            # shift-register as below -- the conv sum's active rows [0:B] are exact and the downstream
+            # q/k/v slices take [0:B]. This keeps the op COUNT identical to the baseline path (just a
+            # single pad), vs a per-row slice/concat that added ~4*K ops/layer and erased the width win.
+            qkv_p = ttnn.pad(qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0, memory_config=_L1)
+            ttnn.deallocate(qkv)
+            qkv = qkv_p
         for j in range(self.K - 1):
             ttnn.copy(st[j + 1], st[j])
         ttnn.copy(qkv, st[self.K - 1])
@@ -1015,6 +1082,7 @@ class TPGatedDeltaNet:
         g = ttnn.reshape(g, (B, 1, Nv))
 
         # fp32 decode step by default (QWEN35_GDN_DECODE_BF16=1 reverts)
+        init_state = self.rec_state if B == Bmax else self._slice_along(self.rec_state, 0, 0, B)
         o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
             q,
             k,
@@ -1022,14 +1090,19 @@ class TPGatedDeltaNet:
             beta,
             g,
             scale=self.scale,
-            initial_state=self.rec_state,
+            initial_state=init_state,
             device=self.mesh,
             high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
         )
+        if init_state is not self.rec_state:
+            ttnn.deallocate(init_state)
         if self._stable_state:
             # In-place update preserves rec_state address for decode trace replay
-            ttnn.copy(new_rec, self.rec_state)
-            ttnn.deallocate(new_rec)
+            if B == Bmax:
+                ttnn.copy(new_rec, self.rec_state)
+                ttnn.deallocate(new_rec)
+            else:
+                self._write_recurrent_state_prefix(new_rec, B)
         else:
             self.rec_state = new_rec
 
@@ -1045,7 +1118,7 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
-        return tt_all_reduce(
+        out = tt_all_reduce(
             partial,
             self.mesh,
             self.tt_ccl,
@@ -1054,3 +1127,4 @@ class TPGatedDeltaNet:
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        return out

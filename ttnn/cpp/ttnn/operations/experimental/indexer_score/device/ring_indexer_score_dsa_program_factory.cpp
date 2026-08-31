@@ -20,7 +20,7 @@
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"        // RingSDPAFusedOpSignaler
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"                // RingSDPAFusedOpSignaler
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // host replay for band arrival order
 #include "ttnn/operations/ccl/ccl_common.hpp"     // linearized index / neighbor / fwd-bwd config
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"  // AllGatherFusedOpSignaler
@@ -32,6 +32,8 @@
 #include "kernels/indexer_score_work_split.hpp"
 
 namespace ttnn::operations::experimental::indexer_score::program {
+
+namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 
 using tt::tt_metal::CBDescriptor;
 using tt::tt_metal::CBFormatDescriptor;
@@ -52,12 +54,15 @@ namespace rt_arg {
 constexpr uint32_t reader_num_scalars = 3 + 6;  // q/k/w addrs + schedule {row_group0..max_bands}
 constexpr uint32_t mcast_args_per_dir = 8;      // role, rect(xs,ys,xe,ye), sender(sx,sy), ndst
 constexpr uint32_t reader_num_mcast_dirs = 2;   // K column, then Q/W row
-constexpr uint32_t fused_rt_width = 6;          // {ring_size, ring_index, fwd, bwd, sem0, sem1}
+// {ring_size, ring_index, fwd, bwd, sem0, sem1, split_enabled, split_shard_id, split_second_half_wait}
+// (the kernel-side RingSDPAOpReceiver consumes all nine; this consumer runs with split forwarding off)
+constexpr uint32_t fused_rt_width = 9;
 constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast_dirs * mcast_args_per_dir;  // 25
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t reader_fused_rt_base = reader_kv_len_tiles + 1;                                           // 27
-constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 33
-constexpr uint32_t reader_band_perm_base = reader_k_local_addr + 1;                                          // 34
+constexpr uint32_t reader_k_local_addr = reader_fused_rt_base + fused_rt_width;                              // 36
+constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;                                    // 37
+constexpr uint32_t reader_band_perm_base = reader_k_local_batch_offset + 1;                                  // 38
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_band_perm_base = 6 + 4;  // 10
 // Writer RT: out addr, schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, perm.
@@ -66,8 +71,8 @@ constexpr uint32_t writer_band_perm_base = 1 + 6 + 4;  // 11
 // compute/writer read their perm at 10/11). A drift here would silently desync the kernels -> this fails to build.
 static_assert(
     reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
-        reader_k_local_addr == 33 && reader_band_perm_base == 34 && compute_band_perm_base == 10 &&
-        writer_band_perm_base == 11,
+        reader_k_local_addr == 36 && reader_k_local_batch_offset == 37 && reader_band_perm_base == 38 &&
+        compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
@@ -88,6 +93,20 @@ RingWrites ring_writes_for(uint32_t ring_size, uint32_t ring_index, ttnn::ccl::T
         return {static_cast<uint32_t>(num_targets_backward), static_cast<uint32_t>(num_targets_forward)};
     }
     return {static_cast<uint32_t>(num_targets_forward), static_cast<uint32_t>(num_targets_backward)};
+}
+
+// Block-cyclic caches are slab-major on every SP rank. A global valid prefix can end partway through a
+// global slab, whose valid row count differs by rank, so gather complete touched slabs. This is the smallest
+// uniform per-rank prefix that preserves the fixed-size ring protocol and contains every valid key.
+std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& args, const Tensor& k_local) {
+    if (!args.kv_len.has_value() || !args.block_cyclic.has_value()) {
+        return std::nullopt;
+    }
+    const uint32_t chunk_local = args.block_cyclic->chunk_local;
+    const uint32_t chunk_global = args.block_cyclic->sp * chunk_local;
+    const uint32_t valid_slabs = (*args.kv_len + chunk_global - 1) / chunk_global;
+    const uint32_t valid_local_rows = valid_slabs * chunk_local;
+    return std::min<uint32_t>(valid_local_rows, k_local.logical_shape()[2]) / tt::constants::TILE_HEIGHT;
 }
 
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
@@ -247,14 +266,15 @@ ProgramDescriptor build_ring_program_descriptor(
         num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
     uint32_t max_bands = 0;
     {
-        const uint32_t bands_per_block = band_count / num_blocks, blk_extra = band_count % num_blocks;
-        uint32_t blk_off = 0;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            const uint32_t blk_bands = bands_per_block + (blk < blk_extra ? 1u : 0u);
             uint32_t col_cursor = 0;
             for (uint32_t rlevel = 0; rlevel < ring_size; ++rlevel) {
-                for (uint32_t i = 0; i < blk_bands; ++i) {
-                    const uint32_t band_abs = blk_off + i;
+                // Keep every row-block useful when kv_len is a runtime prefix of the persistent K capacity.
+                // A contiguous split would give block 0 [0, capacity/blocks), block 1 the next range, etc.
+                // Consequently a short valid prefix activates only block 0 even though all row-blocks are live.
+                // Deal bands round-robin across blocks instead: every prefix is balanced to within one band, while
+                // each block still has a disjoint band set and its K-mcast remains lockstep down the block's rows.
+                for (uint32_t band_abs = blk; band_abs < band_count; band_abs += num_blocks) {
                     if (band_readiness(band_abs) != rlevel) {
                         continue;
                     }
@@ -262,7 +282,6 @@ ProgramDescriptor build_ring_program_descriptor(
                     ++col_cursor;
                 }
             }
-            blk_off += blk_bands;
             for (uint32_t col = 0; col < cols_used; ++col) {
                 max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(band_list[blk][col].size()));
             }
@@ -454,12 +473,17 @@ ProgramDescriptor build_ring_program_descriptor(
             rt.push_back(v);
         }
     };
-    const auto pcache = persistent_cache_args(args, k);  // shared with the classic factory
-    const uint32_t k_batch_page_offset = pcache.k_batch_page_offset;
+    const auto pcache = persistent_cache_args(args, k);  // kv_len derivation shared with the classic factory
+    // Indexed fused mode gathers the selected cache slot into slot 0 of batch-1 k. Keep the gathered and
+    // local offsets independent: remote reads start at zero, own-shard reads select the original k_local slot.
+    const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
+    const uint32_t local_slot_pages = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
+                                      (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
+    const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
     const uint32_t kv_len_tiles = pcache.kv_len_tiles;
 
     std::vector<uint32_t> fused_rt;
-    sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // {ring_size, ring_index, fwd, bwd, sem0, sem1}
+    sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // the fused_rt_width-wide block (see rt_arg above)
 
     // ---- Step E: band-visit reorder (local-first, then remote by ring arrival) --------------------------
     // shard_order / band_readiness are computed above (hoisted so the band->column assignment can balance
@@ -531,11 +555,12 @@ ProgramDescriptor build_ring_program_descriptor(
                 q_sender,
                 cols_used - 1);
             // Reader tail (sequential push; slots named in rt_arg, matched positionally by the kernel).
-            reader_rt.push_back(k_batch_page_offset);  // rt_arg::reader_k_batch_offset (25)
-            reader_rt.push_back(kv_len_tiles);         // rt_arg::reader_kv_len_tiles (26)
-            reader_rt.append(fused_rt);                // rt_arg::reader_fused_rt_base (27..32): ring/dir/sems
-            reader_rt.push_back(k_local.buffer());     // rt_arg::reader_k_local_addr (33): local SP shard address
-            reader_rt.append(band_perm);               // rt_arg::reader_band_perm_base (34..): band-visit perm
+            reader_rt.push_back(k_batch_page_offset);        // rt_arg::reader_k_batch_offset (25)
+            reader_rt.push_back(kv_len_tiles);               // rt_arg::reader_kv_len_tiles (26)
+            reader_rt.append(fused_rt);             // rt_arg::reader_fused_rt_base (27..35): ring/dir/sems/split
+            reader_rt.push_back(k_local.buffer());  // rt_arg::reader_k_local_addr (36): local SP shard address
+            reader_rt.push_back(k_local_batch_page_offset);  // selected slot in the original local cache
+            reader_rt.append(band_perm);                     // rt_arg::reader_band_perm_base (38..): band-visit perm
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;
@@ -601,7 +626,16 @@ ProgramDescriptor build_ring_program_descriptor(
             ccl_core_grid_offset,
             // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((compute_cols_x,0),
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
-            ttnn::ccl::CoreAllocationStrategy::COL_MAJOR);
+            ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
+            args.cache_batch_idx,
+            gather_valid_height_tiles(args, k_local),
+            /*slot_id=*/std::nullopt,
+            /*kv_actual_isl=*/std::nullopt,
+            /*chunk_local_tiles=*/0,
+            /*kv_cache_num_layers=*/1,
+            /*kv_cache_layer_idx=*/0,
+            // This consumer's FusedRingGate has no split-shard second-half wait; keep the gather unsplit.
+            /*split_forwarding_enabled=*/false);
     }
 
     log_debug(
@@ -664,46 +698,111 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     // compute_program_hash: one cached program is reused across chunked-prefill chunks and decode steps that
     // differ only in these), so on a program-cache HIT the WorkloadDescriptor fast path above leaves them
     // frozen at the FIRST dispatch's values -- a stale causal offset (chunk_start_tiles/straddle) and valid
-    // length (kv_len_tiles), which silently corrupts every chunk after the first (the classic Program-model
-    // factory re-applies them in its own override; the descriptor fast path does not). Re-derive them per
-    // coord by rebuilding the CONSUMER kernels only (consumers_only=true skips the AG helper -- its per-hit
-    // fabric-worker setup is not needed here and this drops any dependence on it being alloc-free) and copy
-    // ONLY the scalar slots back. Rebuilding via the same builder as create() keeps the scalar values/slots
-    // byte-identical between the two paths (the invariant the historical stale-scalar bug violated), while the
-    // buffers stay owned by the fast path above; the schedule + band-visit permutation are geometry-only
-    // (independent of chunk_start/kv_len), so they are stable across dispatches and need no re-patch.
+    // length (kv_len_tiles), which silently corrupts every chunk after the first. Patch the fields directly
+    // into the cached programs, as the classic Program-model factory does. Rebuilding the descriptor here was
+    // correct but expensive: it reconstructed geometry, schedules, descriptors and consumer runtime args for
+    // every mesh coordinate even though only these scalar fields vary between cache hits.
     using tt::tt_metal::GetRuntimeArgs;
-    const auto patch_scalars = [](tt::tt_metal::Program& program,
-                                  const ProgramDescriptor& desc,
-                                  uint32_t kernel_idx,
-                                  std::initializer_list<uint32_t> slots) {
-        for (const auto& [core, src] : desc.kernels[kernel_idx].runtime_args) {
-            auto& dst = GetRuntimeArgs(program, kernel_idx, core);
-            for (uint32_t s : slots) {
-                // Guard the literal slot indices (matching the classic factory's patch_arg) so a future
-                // arg-layout drift fails loudly here instead of silently reading/writing past the arg vector.
-                TT_FATAL(
-                    s < dst.size() && s < src.size(),
-                    "indexer_score fused override: scalar slot {} out of range (dst {}, src {}) for kernel {}",
-                    s,
-                    dst.size(),
-                    src.size(),
-                    kernel_idx);
-                dst[s] = src[s];
-            }
-        }
-    };
+
+    const auto& q = tensors.q;
+    const auto& k = tensors.k;
+    const auto& k_local = *tensors.k_local;
+    const auto pcache = persistent_cache_args(args, k);
+    const uint32_t k_batch_page_offset = args.cache_batch_idx.has_value() ? 0u : pcache.k_batch_page_offset;
+    const auto& k_local_shape = k_local.logical_shape();
+    const uint32_t local_slot_pages =
+        (k_local_shape[2] / tt::constants::TILE_HEIGHT) * (k_local_shape[3] / tt::constants::TILE_WIDTH);
+    const uint32_t k_local_batch_page_offset = args.cache_batch_idx.value_or(0) * local_slot_pages;
+
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto desc =
-            build_ring_program_descriptor(args, tensors, out, range.start_coord(), /*consumers_only=*/true);
-        // kernel_idx: reader=0, writer=1, compute=2 (AG worker kernels 3.. carry no per-dispatch scalars).
-        // Slots are literals (matching the file-local rt_arg static_assert: reader_k_batch_offset==25,
-        // reader_kv_len_tiles==26) -- rt_arg is in an anonymous namespace not visible here.
-        patch_scalars(program, desc, 0, {25u, 26u});  // reader: k_batch_page_offset, kv_len_tiles
+        const uint32_t device_index = device_index_for(args, range.start_coord(), q);
+        const uint32_t tp_index =
+            (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                ? ttnn::ccl::get_linearized_index_from_physical_coord(q, range.start_coord(), args.tp_axis())
+                : 0u;
+        const auto geom = device_causal_geometry(args, device_index, tp_index, q.logical_shape()[2]);
+
+        const auto patch_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    TT_FATAL(
+                        slot < core_args.size(),
+                        "indexer_score fused override: scalar slot {} out of range (size {}) for kernel {}",
+                        slot,
+                        core_args.size(),
+                        kernel_idx);
+                    core_args[slot] = value;
+                }
+            }
+        };
+
+        // kernel_idx: reader=0, writer=1, compute=2; AG workers are 3..6.
+        // The fused rt_arg namespace is file-local, but this .cpp participates in unity builds alongside
+        // the classic factory's same-named namespace. Keep these literals synchronized with its static_assert
+        // (reader_k_batch_offset=25, reader_kv_len_tiles=26, reader_k_local_batch_offset=37 — past the
+        // 9-wide fused block at 27..35 and k_local_addr at 36).
+        patch_field(0, 25u, k_batch_page_offset);
+        patch_field(0, 26u, pcache.kv_len_tiles);
+        patch_field(0, 37u, k_local_batch_page_offset);
         // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
-        patch_scalars(program, desc, 2, {6u, 7u, 8u, 9u});
+        patch_field(2, 6u, pcache.kv_len_tiles);
+        patch_field(2, 7u, geom.chunk_start_tiles);
+        patch_field(2, 8u, geom.straddle_q_tile);
+        patch_field(2, 9u, geom.straddle_jump_tiles);
         // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
-        patch_scalars(program, desc, 1, {7u, 8u, 9u, 10u});
+        patch_field(1, 7u, pcache.kv_len_tiles);
+        patch_field(1, 8u, geom.chunk_start_tiles);
+        patch_field(1, 9u, geom.straddle_q_tile);
+        patch_field(1, 10u, geom.straddle_jump_tiles);
+
+        // The descriptor fast path patches buffer bindings but not scalar fields embedded in the fused AG
+        // workers. cache_batch_idx and kv_len are hash-excluded, so update the selected input slot and the
+        // slab-rounded gather extent on every cache hit (same protocol as ring_joint_sdpa).
+        const auto& shape = k_local.padded_shape();
+        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+        const uint32_t input_batch_base =
+            ag_rt::input_batch_base_pages(args.cache_batch_idx.value_or(0), shape[1], Ht, Wt);
+        const auto valid_Ht = gather_valid_height_tiles(args, k_local);
+        const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
+
+        const auto patch_ag_field = [&](uint32_t kernel_idx, uint32_t slot, uint32_t value) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_idx);
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    if (core_args.size() > slot) {
+                        core_args[slot] = value;
+                    }
+                }
+            }
+        };
+
+        // Semaphore identity is hash-excluded. Rebind both ring directions on every cache hit so callers
+        // can alternate double-buffered semaphore pairs without compiling a second otherwise-identical
+        // program. Runtime-arg layouts are declared in ring_attention_all_gather_async_detail.
+        const auto& ag_semaphores = args.fused_ring->ag_semaphore;
+        TT_FATAL(
+            ag_semaphores.size() >= 2,
+            "indexer_score fused override: expected at least 2 AG semaphores, got {}",
+            ag_semaphores.size());
+        const uint32_t backward_semaphore = static_cast<uint32_t>(ag_semaphores[0].address());
+        const uint32_t forward_semaphore = static_cast<uint32_t>(ag_semaphores[1].address());
+        patch_ag_field(/*reader forward=*/3, /*out_ready_sem=*/2, forward_semaphore);
+        patch_ag_field(/*writer forward=*/4, /*out_ready_sem=*/4, forward_semaphore);
+        patch_ag_field(/*reader backward=*/5, /*out_ready_sem=*/2, backward_semaphore);
+        patch_ag_field(/*writer backward=*/6, /*out_ready_sem=*/4, backward_semaphore);
+
+        constexpr uint32_t ag_reader_input_base =
+            ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset;
+        constexpr uint32_t ag_reader_valid_pages = ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
+        constexpr uint32_t ag_writer_valid_pages = ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset;
+        patch_ag_field(/*reader forward=*/3, ag_reader_input_base, input_batch_base);
+        patch_ag_field(/*reader backward=*/5, ag_reader_input_base, input_batch_base);
+        patch_ag_field(/*reader forward=*/3, ag_reader_valid_pages, valid_pages);
+        patch_ag_field(/*reader backward=*/5, ag_reader_valid_pages, valid_pages);
+        patch_ag_field(/*writer forward=*/4, ag_writer_valid_pages, valid_pages);
+        patch_ag_field(/*writer backward=*/6, ag_writer_valid_pages, valid_pages);
     }
 }
 

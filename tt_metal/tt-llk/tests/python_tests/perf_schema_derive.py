@@ -6,12 +6,14 @@
 
 Helpers the merge gate uses to re-derive, from source, the columns each perf
 test's CSV would carry, so a change to a test's columns is caught as drift from
-the recorded catalog in helpers/perf_test_schemas.py. Everything parses source
+the recorded catalog in helpers/perf/test_schemas.py. Everything parses source
 with ``ast`` and touches no device libraries.
 
 Two arch families, derived separately:
 
-  WH/BH  perf_*.py at the python_tests root, derived from themselves.
+  WH/BH  perf_*.py at the python_tests root, derived from themselves
+         unless they are thin wrappers and the sibling test_*.py holds
+         create_test_or_perf_config (Quasar-style shared harness).
          ->  PERF_TEST_SCHEMAS
 
   Quasar quasar/perf_*_quasar.py wrappers, derived from the sibling
@@ -37,6 +39,7 @@ PARAM_BASES = {"TemplateParameter", "RuntimeParameter"}
 LIST_KWARGS = {"templates", "runtimes"}
 MARKER_COLUMN = "marker"
 QUASAR_DIR = "quasar"
+PERF_CONFIG_BUILDERS = {"PerfConfig", "create_test_or_perf_config"}
 
 
 def iter_source_files(include_quasar: bool = True):
@@ -53,11 +56,11 @@ def iter_source_files(include_quasar: bool = True):
 def load_pure_module(module_filename: str):
     """Load a device-free helpers module directly by path.
 
-    perf_schema.py / perf_test_schemas.py hold no device imports, so loading them
+    schema.py / test_schemas.py hold no device imports, so loading them
     by path bypasses the helpers package __init__ (which pulls ttexalens) and
     keeps the gate runnable without hardware.
     """
-    path = ROOT / "helpers" / module_filename
+    path = ROOT / "helpers" / "perf" / module_filename
     spec = importlib.util.spec_from_file_location(f"_gate_{path.stem}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -124,7 +127,14 @@ def _has_perfconfig(tree) -> bool:
     return any(
         isinstance(n, ast.Call)
         and isinstance(n.func, ast.Name)
-        and n.func.id == "PerfConfig"
+        and n.func.id in PERF_CONFIG_BUILDERS
+        for n in ast.walk(tree)
+    )
+
+
+def _is_fuser_perf_test(tree) -> bool:
+    return any(
+        isinstance(n, ast.Attribute) and n.attr == "run_perf_test"
         for n in ast.walk(tree)
     )
 
@@ -153,8 +163,10 @@ def _param_fields_in_tree(tree, specs) -> set:
                     and isinstance(node.value, (ast.List, ast.Tuple, ast.Set))
                 ):
                     add_list(node.value)
-        elif isinstance(node, ast.Call) and (
-            isinstance(node.func, ast.Name) and node.func.id == "PerfConfig"
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in PERF_CONFIG_BUILDERS
         ):
             for kw in node.keywords:
                 if kw.arg in LIST_KWARGS and isinstance(
@@ -175,7 +187,8 @@ def _param_fields_in_tree(tree, specs) -> set:
 def _perf_test_sources(quasar: bool):
     """Yield (catalog_key, source_path) for each perf test.
 
-    WH/BH: perf_*.py outside quasar/, derived from itself.
+    WH/BH: perf_*.py at the python_tests root, derived from itself unless the
+    sibling test_*.py holds create_test_or_perf_config and the wrapper does not.
     Quasar: quasar/perf_*_quasar.py wrappers, derived from the sibling
     test_*_quasar.py (perf_ -> test_) that actually calls PerfConfig and holds the
     templates/runtimes lists. Keyed by the wrapper name a developer runs.
@@ -183,12 +196,28 @@ def _perf_test_sources(quasar: bool):
     if quasar:
         for wrapper in sorted(ROOT.glob(f"{QUASAR_DIR}/perf_*_quasar.py")):
             sibling = wrapper.parent / wrapper.name.replace("perf_", "test_", 1)
-            if sibling.exists():
+            if _is_fuser_perf_test(ast.parse(wrapper.read_text())):
+                yield wrapper.stem, wrapper
+            elif sibling.exists():
                 yield wrapper.stem, sibling
     else:
-        for path in sorted(ROOT.rglob("perf_*.py")):
-            if QUASAR_DIR not in path.parts:
-                yield path.stem, path
+        for path in sorted(ROOT.glob("perf_*.py")):
+            sibling = path.parent / path.name.replace("perf_", "test_", 1)
+            source = path
+            if sibling.exists():
+                try:
+                    sibling_tree = ast.parse(sibling.read_text())
+                    perf_tree = ast.parse(path.read_text())
+                except SyntaxError:
+                    sibling_tree = None
+                    perf_tree = None
+                if (
+                    sibling_tree
+                    and _has_perfconfig(sibling_tree)
+                    and (not perf_tree or not _has_perfconfig(perf_tree))
+                ):
+                    source = sibling
+            yield path.stem, source
 
 
 def derive_perf_test_schemas(quasar: bool = False) -> dict:
@@ -205,7 +234,7 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
     runtime (comprehensions/helpers) are not visible; only the runtime report (or
     the hardware-free report test, #51244) is exact.
     """
-    ps = load_pure_module("perf_schema.py")
+    ps = load_pure_module("schema.py")
     fixed = list(ps.FORMAT_HEADERS) + list(ps.FLAG_HEADERS)
     specs = class_field_specs()
     schemas: dict[str, list] = {}
@@ -213,6 +242,9 @@ def derive_perf_test_schemas(quasar: bool = False) -> dict:
         try:
             tree = ast.parse(path.read_text())
         except SyntaxError:
+            continue
+        if _is_fuser_perf_test(tree):
+            schemas[key] = sorted({MARKER_COLUMN, ps.LOOP_FACTOR_COLUMN})
             continue
         if not _has_perfconfig(tree):
             continue

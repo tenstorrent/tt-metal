@@ -3,7 +3,7 @@
 
 """Self-conditioning gated MLP (pure-torch reference, #47461 loader / #47463 runtime).
 
-The one net-new weight module beyond the Gemma-4 backbone (plan.md §3 N4). This
+The one net-new weight module beyond the Gemma-4 backbone. This
 reference is reconciled **1:1** against transformers
 ``modeling_diffusion_gemma.DiffusionGemmaSelfConditioning`` + the soft-embedding
 step in ``DiffusionGemmaDecoderModel.forward``:
@@ -109,7 +109,7 @@ class SelfConditioning(nn.Module):
         """Probability-weighted average of token embeddings from prev-step logits.
 
         ``prev_logits`` ``[B, L, vocab]`` -> ``[B, L, hidden]``. Matches the decoder
-        (``modeling_diffusion_gemma.py:1278-1281``):
+        soft-embedding step in ``modeling_diffusion_gemma.py``:
         ``(softmax(dim=-1, fp32) @ embed_tokens.weight) * embed_scale``, where
         ``embed_scale = hidden_size ** 0.5`` (the same scale the tied
         ``DiffusionGemmaTextScaledWordEmbedding`` applies to token embeddings). NO

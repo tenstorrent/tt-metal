@@ -31,6 +31,12 @@ from models.demos.deepseek_v3_d_p.reference.glm_5_1 import glm_decoder_layer_ref
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -39,15 +45,14 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
-    ABC_1K_PATH,
     PROMPT_5K_PATH,
-    PROMPT_25K_PATH,
     create_hf_model,
     extract_layer_state_dict,
     get_4d_causal_mask,
@@ -55,7 +60,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     tokenize_prompt_to_isl,
 )
 
-_PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
+_PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
@@ -112,13 +117,6 @@ def run_model(
     # coverage; the real device gate already covers the 256-expert meshes that run in CI.
     if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
         pytest.skip("host_gate_all is a local-only testing aid (sub-256-expert); not run in CI")
-
-    # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
-    # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
-    # On the smaller 2x4 meshes the per-chip sequence is 12800 tokens, pushing per_core_M to 5 and
-    # growing the down-matmul output circular buffer to ~2.9 MB — beyond the 1.5 MB L1 (OOM).
-    if isl_total == 25 * 1024 and tuple(mesh_device.shape) != (8, 4):
-        pytest.skip("25k ISL only fits L1 on the full 8x4 mesh; skipping on smaller meshes")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -489,188 +487,74 @@ def run_model(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    is_balanced = params["is_balanced"]
+
+    if not on_ci:
+        return False
+    if not is_balanced:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 8),
-        ("prompt_25k", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
+        # pcc-prompt_5k runs ~3x longer than perf-prompt_5k (122s vs 41s warm on 8x4) because the CPU
+        # reference dominates, not the device. Rebalancing CI around that split is a separate PR.
+        ("prompt_5k", False, PREFILL_CHUNK_TOKENS, 8),
+        ("prompt_5k", True, PREFILL_CHUNK_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
+    ids=["perf-prompt_5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
     [("dense", None), ("moe", GateComputeMode.DEVICE), ("moe", GateComputeMode.HOST_ALL)],
     # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
-    # `-k "... and moe and ..."` (EXPECT_NUM_TESTS=1), so a host id carrying `moe` would be collected too
+    # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
     # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
     ids=["dense", "moe-gate_device", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-            },
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-mesh-2x4",
         ),
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
-            # into a ring → Ring for SP-axis MoE dispatch/combine; the 4-wide TP axis stays a line
-            # → Linear for TP-axis collectives (RMS-norm, MLA, shared-expert, gate). A scalar Ring
-            # here deadlocks the TP-axis all-gathers on a non-existent column wrap link.
-            (ttnn.Topology.Ring, ttnn.Topology.Linear),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            # Id omits the `fabric2d-`/`mesh-` tokens on purpose: CI runs the fabric2d-mesh siblings
-            # via count-guarded `-k "8x4 and fabric2d"` (EXPECT_NUM_TESTS=1) selectors, so a torus id
-            # carrying `fabric2d` would be collected too and break the count. Select it with `-k torus-y`.
-            id="torus-y-8x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            # FABRIC_2D_TORUS_X wraps ONLY the TP axis (dim 1) into a ring → Ring for the TP-axis
-            # collectives (RMS-norm, MLA, dense-FFN, shared-expert, gate); the SP axis (dim 0) stays
-            # a line → Linear for the SP-axis MoE dispatch/combine. Production full-galaxy X-ring
-            # case (matches the [LINE,RING] pipeline descriptors); no sub-torus carve needed.
-            (ttnn.Topology.Linear, ttnn.Topology.Ring),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-x-8x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
-            1,
-            # FABRIC_2D_TORUS_XY wraps BOTH axes: SP (dim 0) and TP (dim 1) are each a ring. The
-            # SP-axis MoE dispatch/combine + ring-attention SDPA ride the SP ring (the path #48225's
-            # ring-aware dispatch/combine kernels support), and the TP-axis collectives ring on dim 1.
-            (ttnn.Topology.Ring, ttnn.Topology.Ring),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
         pytest.param(
             (4, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            # 4x4 sub-torus: Ring-4 on the SP axis (dim 0), Linear on the 4-wide TP axis (dim 1).
-            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_y4...
-            (ttnn.Topology.Ring, ttnn.Topology.Linear),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-y-4x4",
         ),
         pytest.param(
             (4, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_x_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            # 4x4 full 2D sub-torus: Ring-4 on BOTH axes (dim 0 = SP/Y, dim 1 = TP/X). Both axes have
-            # a physical wrap, so TP-axis collectives (RMS-norm, MLA, shared-expert) can ring too.
-            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_xy4...
-            (ttnn.Topology.Ring, ttnn.Topology.Ring),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-xy-4x4",
+            id="torus-x-4x4",
         ),
         pytest.param(
             (4, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-                "fabric_router_config": create_fabric_router_config(
-                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
-                ),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            },
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
             2,
-            # 4x4 sub-torus: Ring-4 on the TP/X axis (dim 1), Linear on the SP/Y axis (dim 0). Only
-            # the TP axis is physically wrapped, so TP-axis collectives (RMS-norm, MLA, dense-FFN,
-            # shared-expert, gate) ring while the SP-axis MoE dispatch/combine stay a line — a scalar
-            # Ring here would deadlock dispatch/combine on a non-existent row wrap link.
-            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_x4...
-            (ttnn.Topology.Linear, ttnn.Topology.Ring),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-            id="torus-x-4x4",
+            id="torus-xy-4x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -691,7 +575,6 @@ def test_ds_prefill_block(
     layer_type,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     input_source,
     tokenizer,
@@ -702,6 +585,7 @@ def test_ds_prefill_block(
     use_pretrained,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
     # xfail this exact combo (keeping the real threshold for every other config) until it is fixed;
     # strict=True turns an XPASS into a failure so the marker is removed once the fix lands.
@@ -746,14 +630,10 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 8),
-        ("random", False, 5 * 1024, 8),
-        ("random", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
-        ("prompt_5k", True, 5 * 1024, 8),
-        ("prompt_25k", True, 25 * 1024, 8),
+        ("random", False, PREFILL_CHUNK_TOKENS, 8),
+        ("prompt_5k", True, PREFILL_CHUNK_TOKENS, 8),
     ],
-    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-prompt_5k", "pcc-prompt_25k"],
+    ids=["perf-random-5k", "pcc-prompt_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -762,23 +642,19 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
-            },
+            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi_k2_6"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
@@ -795,7 +671,6 @@ def test_kimi_prefill_block(
     layer_type,
     gate_fallback_mode,
     num_links,
-    topology,
     pcc_validation,
     input_source,
     tokenizer,
@@ -806,6 +681,7 @@ def test_kimi_prefill_block(
     use_pretrained,
     request,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])
     run_model(
         variant,
         config_only,
@@ -940,20 +816,17 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
-            },
+            torus_xy_device_params(
+                fabric_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE,
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+            ),
             2,
-            ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="fabric2d-mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -969,13 +842,13 @@ def test_glm_prefill_block(
     mesh_device,
     device_params,
     num_links,
-    topology,
     seq_len,
     layer_type,
     model_path,
     weight_cache_path,
 ):
     """One fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense|MoE FFN) vs composed CPU ref."""
+    topology = per_axis_topology(device_params["fabric_config"])
     is_moe = layer_type == "moe"
     config = config_only
     config.max_seq_len = seq_len

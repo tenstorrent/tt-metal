@@ -52,29 +52,29 @@ inline uint32_t dense_rm_padding_identity_bits(tt::DataFormat df, tt::tt_metal::
 }
 
 // True when the reduce uses the SFPU path instead of the FPU GMPOOL/matmul path.
-// Int32 MAX/SUM always use SFPU (FPU has no Int32 support); MIN is lowered to MAX + negate on the
-// host before reaching the factories. Float32 SUM opts into SFPU only when the host requests the
-// accurate ttnn.mean path (`use_sfpu_reduce`): the FPU path truncates fp32 to tf32,
-// so accumulating register-to-register in the SFPU preserves full fp32. mean is lowered to SUM +
-// a 1/N post-mul before this is consulted, so only SUM (never AVG) is checked for fp32.
+// Int32 always uses SFPU (FPU has no Int32 support). Float32 opts in only when the host requests
+// the accurate path (`use_sfpu_reduce`): the FPU truncates fp32 to tf32, so the SFPU preserves full
+// fp32. mean arrives as SUM (the host lowers it to SUM + a 1/N post-mul), and fast-mode float/bf16
+// MIN arrives as MAX with negate=true via -MAX(-x), so only accurate MIN reaches here as MIN.
 inline bool use_sfpu_reduce_path(
     tt::tt_metal::DataType dtype, tt::tt_metal::ReduceOpMath math_op, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
     if (dtype == tt::tt_metal::DataType::INT32) {
-        return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM;
+        return math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MIN;
     }
-    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 && math_op == ReduceOpMath::SUM;
+    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
+           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
 // True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,
-// the Int32 SFPU path, and the accurate fp32 SFPU mean all ignore the scaler CB (fp32 matches AVG/SUM).
+// the Int32 SFPU path, and the accurate fp32 SFPU path all ignore the scaler CB.
 inline bool requires_post_mul(
     tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler, bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
     if (scaler == 1.0f) {
         return false;
     }
-    if (math_op == ReduceOpMath::MAX) {
+    if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
         return true;
     }
     if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
@@ -127,18 +127,33 @@ void validate_rm_preconditions(
 
 // Build the reader compile-time args vector for the RM path (slots match
 // reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
+// `num_h_slices` / `slice_Ht` are H-axis-split geometry (H path only; 1 / full Ht_rm = normal
+// reduce).
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan,
+    uint32_t scaler_bits,
+    const tt::tt_metal::MeshTensor& src,
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t num_h_slices = 1,
+    uint32_t slice_Ht = 0);
 
 // Build the writer compile-time args vector for the RM path (slots match
-// writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst).
+// writer_reduce_rm_scalar.cpp): scalar slots followed by TensorAccessorArgs(dst). `tile_output`
+// selects TILE instead of ROW_MAJOR pages on the H path; it and `num_h_slices` are ignored on the
+// W path, which only emits ROW_MAJOR.
 std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan,
+    const tt::tt_metal::MeshTensor& dst,
+    tt::tt_metal::ReduceOpDim dim,
+    bool tile_output = false,
+    uint32_t num_h_slices = 1);
 
 // Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
-// keeps NC pinned at 1.
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits);
+// keeps NC pinned at 1. `fp32_sfpu_reduce` (slot 6) routes Float32 through the SFPU for
+// full-fp32 accumulation instead of the tf32 FPU path.
+std::vector<uint32_t> build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);

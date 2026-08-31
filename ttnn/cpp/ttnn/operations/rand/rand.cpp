@@ -5,12 +5,15 @@
 
 #include "rand.hpp"
 
-#include "ttnn/operations/rand/device/rand_device_operation.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <cstdint>
+
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/rand/device/rand_device_operation.hpp"
+#include "ttnn/operations/uniform/uniform_range.hpp"
+#include "ttnn/core/distributed/distribution_mode.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <ttnn/distributed/tensor_topology.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 
 namespace ttnn {
 
@@ -51,6 +54,20 @@ ttsl::SmallVector<bool> build_shard_mask(const tt::tt_metal::distributed::MeshMa
     return mask;
 }
 
+constexpr bool is_supported_output_dtype(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16:
+        case DataType::FLOAT32:
+        case DataType::UINT32:
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+        case DataType::UINT16:
+        case DataType::INT32:
+        case DataType::INT8: return true;
+        default: return false;
+    }
+}
+
 }  // namespace
 
 Tensor rand(
@@ -61,12 +78,16 @@ Tensor rand(
     const MemoryConfig& memory_config,
     float from,
     float to,
-    uint32_t seed,
+    std::uint32_t seed,
     const std::optional<tt::tt_metal::distributed::MeshMapperConfig>& mesh_mapper) {
-    TT_FATAL(dtype != DataType::UINT8, "[ttnn::rand] DataType::UINT8 is not supported.");
+    TT_FATAL(is_supported_output_dtype(dtype), "[ttnn::rand] Output dtype {} is not supported.", dtype);
+
+    const bool needs_typecast = dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT16;
+    const DataType generation_dtype = needs_typecast ? DataType::FLOAT32 : dtype;
 
     ttnn::Shape device_shape = shape;
     ttsl::SmallVector<bool> mesh_dim_is_sharded;
+    std::optional<tt::tt_metal::TensorTopology> tensor_topology;
     if (mesh_mapper.has_value()) {
         const auto& config = mesh_mapper.value();
         auto mesh_shape = config.mesh_shape_override.value_or(device.shape());
@@ -75,39 +96,41 @@ Tensor rand(
             "ttnn::rand: placements size ({}) must match mesh dimensions ({})",
             config.placements.size(),
             mesh_shape.dims());
+        TT_FATAL(
+            mesh_shape.mesh_size() <= device.num_devices(),
+            "ttnn::rand: distribution mesh size ({}) exceeds device mesh size ({})",
+            mesh_shape.mesh_size(),
+            device.num_devices());
         device_shape = compute_shard_shape(shape, config, mesh_shape);
         mesh_dim_is_sharded = build_shard_mask(config);
+        tensor_topology.emplace(
+            mesh_shape,
+            config.placements,
+            ttnn::distributed::compute_distribution_to_mesh_mapping(mesh_shape, device.shape()));
     }
+
+    const auto output_range = ttnn::operations::uniform::make_inclusive_output_range(from, to, generation_dtype);
 
     auto tensor = ttnn::prim::uniform(
         device_shape,
-        DataType::FLOAT32,
+        generation_dtype,
         Layout::TILE,
         memory_config,
         device,
-        from,
-        to,
+        output_range.lower_bound,
+        output_range.upper_bound,
         seed,
-        std::move(mesh_dim_is_sharded));
-    if (dtype != DataType::FLOAT32) {
+        std::move(mesh_dim_is_sharded),
+        tensor_topology);
+    if (needs_typecast) {
         tensor = ttnn::typecast(tensor, dtype);
     }
     if (layout != Layout::TILE) {
         tensor = ttnn::to_layout(tensor, layout);
     }
 
-    if (mesh_mapper.has_value()) {
-        const auto& config = mesh_mapper.value();
-        auto mesh_shape = config.mesh_shape_override.value_or(device.shape());
-
-        std::vector<tt::tt_metal::distributed::MeshCoordinate> coords;
-        coords.reserve(mesh_shape.mesh_size());
-        for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
-            coords.push_back(coord);
-        }
-
-        tt::tt_metal::TensorTopology topology(mesh_shape, config.placements, coords);
-        tensor.update_tensor_topology(topology);
+    if (tensor_topology.has_value()) {
+        tensor.update_tensor_topology(*tensor_topology);
     }
 
     return tensor;

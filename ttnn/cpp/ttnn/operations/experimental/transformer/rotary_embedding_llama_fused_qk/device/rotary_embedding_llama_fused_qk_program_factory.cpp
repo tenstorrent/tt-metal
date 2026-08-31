@@ -67,7 +67,13 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
 
     CoreRangeSet all_cores = cos_sin_shard_spec->grid;
     CoreRangeSet all_cores_bb = all_cores.bounding_box();
-    CoreRangeSet unused_cores = all_cores_bb.subtract(all_cores);
+
+    // The compute kernel must only run on cores that actually receive per-core (unique) runtime args
+    // (the is_q/is_k flag at index 0 below). Using all_cores_bb (the bounding box) would place the
+    // kernel on "hole" cores that are inside the bounding box but belong to neither q nor k. Those
+    // cores have zero runtime args set, so get_arg_val<uint32_t>(0) reads out of bounds and trips the
+    // watcher assert (SIGABRT). q and k grids are guaranteed non-overlapping by validate().
+    CoreRangeSet work_cores = q_cores.merge(k_cores);
 
     const uint32_t num_q_input_tiles = q_n_heads_t * head_dim_t;
     const uint32_t num_q_output_tiles = num_q_input_tiles;
@@ -238,7 +244,7 @@ ProgramDescriptor RotaryEmbeddingLlamaFusedQKProgramFactory::create_descriptor(
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_kernel_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores_bb;
+    compute_desc.core_ranges = work_cores;
     compute_desc.compile_time_args = std::move(compute_kernel_args);
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,

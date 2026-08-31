@@ -62,7 +62,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(dfb::inp, dfb::inp, dfb::var);
+    compute_kernel_hw_startup(dfb::inp, dfb::inp, dfb::var);
 
     DataflowBuffer dfb_reduce(dfb::reduce);
     DataflowBuffer dfb_eps(dfb::eps);
@@ -109,7 +109,7 @@ void kernel_main() {
         reconfig_data_format(dfb::var, dfb::eps);
         pack_reconfig_data_format(dfb::recip_sqrt_var);
 
-        add_tiles_init(dfb::var, dfb::eps);
+        add_init(dfb::var, dfb::eps);
         ACQ();
         add_tiles(dfb::var, dfb::eps, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();
@@ -125,7 +125,7 @@ void kernel_main() {
          */
         reconfig_data_format(dfb_norm_x_input, dfb::recip_sqrt_var);
         pack_reconfig_data_format(normed_output_dfb);
-        mul_bcast_cols_init_short(dfb_norm_x_input, dfb::recip_sqrt_var);
+        mul_bcast_cols_init(dfb_norm_x_input, dfb::recip_sqrt_var);
         dfb_recip_sqrt_var.wait_front(1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_norm_x.wait_front(blk);
@@ -148,7 +148,7 @@ void kernel_main() {
         reconfig_data_format(dfb::x_normed, dfb::gamma);
         pack_reconfig_data_format(dfb_times_gamma_out);
         dfb_gamma.wait_front(Wt);
-        mul_bcast_rows_init_short(dfb::x_normed, dfb::gamma);
+        mul_bcast_rows_init(dfb::x_normed, dfb::gamma);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_normed_output.wait_front(blk);
             dfb_times_gamma.reserve_back(blk);
@@ -169,7 +169,7 @@ void kernel_main() {
         reconfig_data_format(dfb_times_gamma_out, dfb::beta);
         pack_reconfig_data_format(dfb::out);
         dfb_beta.wait_front(Wt);
-        add_bcast_rows_init_short(dfb_times_gamma_out, dfb::beta);
+        add_bcast_rows_init(dfb_times_gamma_out, dfb::beta);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_times_gamma.wait_front(blk);
             dfb_out.reserve_back(blk);

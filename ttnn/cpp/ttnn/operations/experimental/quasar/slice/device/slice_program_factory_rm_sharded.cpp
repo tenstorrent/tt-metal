@@ -10,6 +10,7 @@
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -204,11 +205,17 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
 
-    // stick sizes
-    uint32_t W_padded = input.logical_shape()[-1];
     uint32_t W_unpadded = output.logical_shape()[-1];
-    auto stick_size_padded = W_padded * input.element_size();
     auto stick_size_unpadded = W_unpadded * output.element_size();
+
+    // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
+    const uint32_t src_stride_bytes = input.buffer()->aligned_page_size();
+    const uint32_t dst_stride_bytes = output.buffer()->aligned_page_size();
+    const uint32_t begins_bytes = args.slice_start[-1] * input.element_size();
+    TT_FATAL(
+        begins_bytes % ::hal::get_l1_alignment() == 0,
+        "qsr::SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
+        begins_bytes);
 
     // input shard spec
     auto shard_spec_padded = input.shard_spec().value();
@@ -280,8 +287,10 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
             {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"},
              TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args =
-            {{"stick_size_padded", static_cast<uint32_t>(stick_size_padded)},
-             {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)}},
+            {{"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)},
+             {"src_stride_bytes", src_stride_bytes},
+             {"dst_stride_bytes", dst_stride_bytes},
+             {"begins_bytes", begins_bytes}},
         .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
         .advanced_options = {.num_runtime_varargs = max_varargs},
     };

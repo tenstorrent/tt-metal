@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_multi_core_sharded_retile_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -253,6 +256,28 @@ ProgramDescriptor TilizeMultiCoreShardedRetileProgramFactory::create_descriptor(
     }
 
     return desc;
+}
+
+void TilizeMultiCoreShardedRetileProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TilizeParams& /*operation_attributes*/,
+    const TilizeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Sharded input rides on a buffer-backed CB, so the reader carries no address. The writer only
+    // does when the output is interleaved; otherwise it is CB-backed too.
+    const bool output_is_interleaved =
+        tensor_return_value.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+    if (output_is_interleaved) {
+        patch_tilize_kernel_slot0(program, 1, tensor_return_value.buffer()->address());
+    }
+
+    // CBs are matched positionally against create_descriptor's push order.
+    ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_args.input_tensor.buffer()});
+    cb_addr_only.cbs.push_back(CBDescriptor{});  // retile scratch, not tensor-backed
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = output_is_interleaved ? nullptr : tensor_return_value.buffer()});
+    apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
 }
 
 }  // namespace ttnn::prim

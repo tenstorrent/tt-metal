@@ -30,10 +30,13 @@ void kernel_main() {
     DataflowBuffer cb_inp1 = cb_in1;
 #endif
 
-    binary_op_init_common(cb_inp0.get_id(), cb_inp1.get_id(), cb_out0.get_id());
+    compute_kernel_hw_startup(cb_inp0.get_id(), cb_inp1.get_id(), cb_out0.get_id());
 
 #if not PRE_SCALE
-    binary_tiles_init<false, ELTWISE_OP_TYPE>(cb_inp0.get_id(), cb_inp1.get_id());
+    // full_init=true: compute_kernel_hw_startup configures the hardware but does not run
+    // llk_unpack_AB_init, so the binary op init must supply the unpacker init here. (The PRE_SCALE
+    // path does its own full binary_tiles_init<true> inside the loop.)
+    binary_tiles_init<true, ELTWISE_OP_TYPE>(cb_inp0.get_id(), cb_inp1.get_id());
 #endif
 
 #ifdef PACK_RELU
@@ -42,7 +45,7 @@ void kernel_main() {
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 #if PRE_SCALE
-        copy_tile_to_dst_init_short(cb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
+        copy_init(cb_in0.get_id());  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0

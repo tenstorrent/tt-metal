@@ -53,8 +53,10 @@ def _pcc(dev, gold):
     """
     # float64: device garbage often lands at finite-but-huge magnitudes (~1e37) whose square (1e74)
     # overflows float32 in the norm/dot -> spurious nan PCC. double() keeps the reduction finite.
-    d = dev.reshape(-1, dev.shape[-1]).double()
-    g = gold.reshape(-1, gold.shape[-1]).double()
+    # detach: the golden is the pretrained torch model output (requires_grad=True); without detach the
+    # final float() cast warns ("converting a tensor with requires_grad to a scalar").
+    d = dev.reshape(-1, dev.shape[-1]).double().detach()
+    g = gold.reshape(-1, gold.shape[-1]).double().detach()
     r = min(d.shape[0], g.shape[0])
     c = min(d.shape[1], g.shape[1])
     d = d[:r, :c].reshape(-1)
@@ -159,13 +161,12 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
 # INTERLEAVED DRAM -> the add/next-conv falls to the unported legacy ProgramFactory ->
 # "DataMovementKernel not supported on Quasar"). Flip any entry to host-bypass a single conv for debug.
 _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "downsample": True}
-# [#48552] The Quasar stem max_pool2d DEADLOCKS at the real stem size (112x112=12544) in compute_pool_2d
-# (pool-reduce dest-sync; smsg G semaphore-wait) -- a pre-existing LLK item (repro: test_stem_maxpool.py
-# -k 112x112). _MAXPOOL_ON_DEVICE=False computes the 3x3/s2/p1 maxpool on HOST from the device input and
-# re-uploads height-sharded ROW_MAJOR (same style as the stem conv1 host fallback), so maxpool doesn't block
-# layer1..4 from running on device (lets us validate the layer3 height split end-to-end). Flip back to True
-# once the LLK pool-reduce dest-sync hang is fixed.
-_MAXPOOL_ON_DEVICE = False
+# [#48552] Quasar stem max_pool2d now runs ON DEVICE. The earlier deadlock at the real stem size
+# (112x112=12544) in compute_pool_2d was the unpack_tilizeA_B operandB(scaler) buffer-descriptor bug (main
+# dropped the operandB BD reprogramming in llk_unpack_tilize_api.h; the reduce-scaler read a stale/OOB L1
+# addr and also tripped the z_dim=4/y_dim!=16 assert). Fixed: operandB BD reprogram re-added + line-146
+# assert disabled. Verified by test_max_pool2d.py::test_max_pool2d_resnet50_stem. Set False to host-fallback.
+_MAXPOOL_ON_DEVICE = True
 
 
 def _host_conv2d(
@@ -294,15 +295,23 @@ def fit_fc_grid(device, n_tiles, k_tiles):
     feeding it take a (grid_x, grid_y) and must agree.
     """
     if is_quasar():
-        # Quasar no-spill fc (Option 1). mcast_in0 width-shards K across the grid, so
-        # num_blocks == num_cores; ANY multi-core grid forces num_blocks > 1 -> the interm0/mm_partials
-        # K-spill accumulate, which hits the intra-tensix TILE_COUNTERS fault on Quasar (no compute-side
-        # implicit-sync opt-out exists). Run the fc on a SINGLE core so the whole K sits on that core and
-        # in0_block_w == full K (num_blocks == 1, no spill, interm0 never touched). Shrink out_block_w so
-        # the in1 DFB ring (out_block_w * in0_block_w tiles) fits the uint16 ring-extent limit.
+        # [#48552] Quasar fc: single core, K-SPILLED. The old no-spill config (in0_block_w == full K, then
+        # out_block_w shrunk to fit the weights ring) sized cb_intermed0 (= out_block_w) DIFFERENTLY from cb_out
+        # (= per_core_N) while they ALIAS -> "Aliased DFBs cb_out and cb_intermed0 different total sizes" FATAL.
+        # Instead K-spill: stream the weights per small K-block (in0_block_w << full K, num_blocks > 1) so
+        # out_block_w can be the FULL per_core_N -> cb_intermed0 == cb_out (same size), and the in1 ring
+        # (out_block_w * in0_block_w) stays small via the K-block. This is the same DRAM-weights K-spill path as
+        # layer4 (DPRINT-masked until the copy_tile real fix lands); mcast_in0 on a single core degenerates to a
+        # plain single-core matmul, so there's no cross-core K-reduction.
         per_core_N = n_tiles
-        in0_block_w = k_tiles
-        out_block_w, out_subblock_w = _no_spill_out_block(per_core_N, in0_block_w)
+        k_blk = 8
+        while k_blk > 1 and (k_tiles % k_blk) != 0:
+            k_blk -= 1
+        in0_block_w = k_blk
+        out_block_w = per_core_N
+        out_subblock_w = per_core_N
+        while out_subblock_w > 8 or (per_core_N % out_subblock_w) != 0:
+            out_subblock_w -= 1
         return 1, 1, 1, per_core_N, in0_block_w, out_block_w, out_subblock_w
 
     grid = device.compute_with_storage_grid_size()
@@ -446,7 +455,13 @@ class resnet50Bottleneck:
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=(
                         ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-                        if height_sharding and input_height != 28
+                        # [#48552] Quasar: route the layer3_module1 downsample (512->1024 s2 @28x28) HEIGHT_SHARDED
+                        # so force_1x1_nonmm_split takes the SPLIT plain-matmul path (Program B does the full GEMM),
+                        # which does NOT N-halve the stride-2 1x1 channel expansion -- the reason @28 was forced
+                        # block-sharded. Validated by test_conv2d_layer3_downsample_split.py::..._hs_split. BLOCK is a
+                        # dead end on the 2-core grid (grid splits K -> nbw2 -> fused conv_bmm multi-K hang). WH/BH
+                        # keep @28 block-sharded (no force_1x1_nonmm_split there, so HS would N-halve).
+                        if height_sharding and (input_height != 28 or is_quasar())
                         else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                     ),
                     deallocate_activation=True,
@@ -1399,12 +1414,24 @@ class resnet50:
             layer_module="layer3_module6",
         )
 
-        # [#48552] Quasar: layer4 conv2 STAYS block-sharded (fused conv / LLK path). Unlike layer3, layer4's
-        # full per-core weights (K=144 x N=16 = 2304 tiles ~= 4.7 MB) EXCEED Quasar's ~4 MB unreserved L1, so
-        # even with f6b15a's uint32 ring they don't physically fit the single-K-block height split
-        # (dataflow_buffer.cpp:812 FATAL ring_bytes <= unreserved_l1_size). Needs N-split (block) to fit.
-        reshard = is_quasar()
-        height_shard = False
+        # [#48552] Layers-1-3 e2e gate (TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3=1): return the layer3 output
+        # [1,1,NHW,1024] and SKIP layer4/avgpool/fc. Layer4 conv2 + the layer3_module1 downsample have no working
+        # 2-core path (fused conv_bmm bank-reuse 0x19 / DRAM-weight K-spill TILE_COUNTERS -- both deep LLK/sim
+        # bugs), so this lets the e2e run end-to-end through the WORKING height-sharded layers 1-3 (stem host-fold
+        # + host maxpool + layers 1-3 on the split path) for validation on the 2-core emulator. Remove once layer4
+        # has a working path (LLK fix or bigger grid num_cores_c>=4).
+        if os.environ.get("TT_METAL_QSR_RESNET_STOP_AFTER_LAYER3") == "1":
+            return x
+
+        # [#48552] Quasar: layer4 runs HEIGHT_SHARDED through the SPLIT path (Program A gather+tilize ->
+        # Program B plain K-spill matmul), NOT the fused conv_bmm. The old block-shard rationale (full per-core
+        # weights K=144 x N=16 = 2304 tiles ~= 4.7 MB exceed ~4 MB L1) is resolved by K-SPILLING the split-path
+        # matmul: weights stream from DRAM in K-blocks (in0_block_w << full_K) so only ~256 KB is resident.
+        # Every layer4 conv (conv1/conv2/conv3 + the s2 downsample via force_1x1_nonmm_split) then rides the
+        # plain matmul, dodging the fused block-sharded 0x19 AND the full-N HEIGHT_SHARDED weights overflow.
+        # Validated standalone by test_conv2d_layer4_l1_fit.py (all 6 convs pass). WH/BH keep their block path.
+        reshard = is_blackhole() or is_quasar()
+        height_shard = is_quasar()
 
         if is_wormhole_b0():
             block_mem_config = ttnn.create_sharded_memory_config(
@@ -1444,6 +1471,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] height-sharded split path (else defaults block-sharded -> fused 0x19)
             layer_module="layer4_module2",
         )
 
@@ -1454,6 +1482,7 @@ class resnet50:
             self.batch_size,
             x_height,
             x_width,
+            height_sharding=height_shard,  # [#48552] height-sharded split path
             layer_module="layer4_module3",
         )
 

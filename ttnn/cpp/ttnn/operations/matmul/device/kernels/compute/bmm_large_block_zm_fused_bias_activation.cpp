@@ -105,7 +105,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     // FPU consumer keeps the original view. The alias has its own read pointer, so align it with the
     // partials CB's current read position before copying.
     // Reconfigure input
-    copy_tile_to_dst_init_short_with_dt(in1_dfb_id, mm_partials_reload_dfb_id);
+    reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
+    copy_init(mm_partials_reload_dfb_id);
     mm_partials_dfb.wait_front(out_subblock_num_tiles);
 
     if (mm_partials_reload_dfb_id != mm_partials_dfb_id) {
@@ -490,9 +491,9 @@ void kernel_main() {
 #endif
                 reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init_short(mm_partials_dfb_id, bias_dfb_id);
+                    add_bcast_rows_init(mm_partials_dfb_id, bias_dfb_id);
                 } else {
-                    add_tiles_init(mm_partials_dfb_id, bias_dfb_id);
+                    add_init(mm_partials_dfb_id, bias_dfb_id);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
@@ -589,7 +590,7 @@ void kernel_main() {
 #endif
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_dfb_id);
-                    copy_tile_to_dst_init_short(mm_partials_dfb_id);
+                    copy_init(mm_partials_dfb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_dfb_id, out_dfb_id);

@@ -1189,6 +1189,64 @@ def test_binary_scalar_div_int32(device):
         ttnn.fmod,
     ],
 )
+@pytest.mark.parametrize("scalar", [1, 2, 3, 7, 100, 65535, -3, -7, -2147483648, 2147483647])
+def test_binary_remainder_fmod_int32_scalar(ttnn_op, scalar, device):
+    torch_input_tensor_a = torch.tensor(
+        [0, 1, 5, 7, -5, -7, 100, -100, 2147483647, -2147483647, -2147483648, 1073872896, -1073872896]
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
+
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor_a, scalar))
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("scalar", [3, 7, -3])
+@pytest.mark.parametrize(
+    "activation, torch_activation",
+    [
+        (ttnn.UnaryOpType.NEG, lambda t: -t),
+        (ttnn.UnaryOpType.SQUARE, lambda t: t * t),
+        (ttnn.UnaryOpType.RELU, torch.relu),
+    ],
+    ids=["neg", "square", "relu"],
+)
+def test_binary_remainder_int32_scalar_activations(scalar, activation, torch_activation, device):
+    # Activations force the scalar overload off the unary fast path, so this covers the
+    # other side of that branch. Values stay small enough that SQUARE cannot overflow int32.
+    torch_input_tensor_a = torch.tensor([0, 1, 5, 7, -5, -7, 100, -100, 1000, -1000], dtype=torch.int32)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    activations = [ttnn.UnaryWithParam(activation)]
+
+    post_output = ttnn.to_torch(ttnn.remainder(input_tensor_a, scalar, activations=activations))
+    assert torch.equal(post_output, torch_activation(torch.remainder(torch_input_tensor_a, scalar)))
+
+    pre_output = ttnn.to_torch(ttnn.remainder(input_tensor_a, scalar, input_tensor_a_activations=activations))
+    assert torch.equal(pre_output, torch.remainder(torch_activation(torch_input_tensor_a), scalar))
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.remainder,
+        ttnn.fmod,
+    ],
+)
 def test_binary_remainder_fmod_int32_edge_cases(ttnn_op, device):
     torch_input_tensor_a = torch.tensor(
         [0, 0, 1, 1, -1, -1, 2147483647, -2147483647, -2147483647, 2147483647, 0, 1073872896, -1073872896, -2147483647]

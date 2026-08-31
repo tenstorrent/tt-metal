@@ -33,7 +33,7 @@ void kernel_main() {
     // unified reduce compute kernel (row_chunk = DEST_AUTO_LIMIT). For shard_Wt=1 this
     // degenerates to one column per chunk; for shard_Wt>1 it interleaves columns.
     // Int32 SFPU max reserves one DST for the binary-fold work tile (DEST_AUTO_LIMIT - 1).
-    // Accurate fp32 mean: host sets CT arg 4 to 1 so SFPU chunk sizing here matches the compute kernel.
+    // Accurate fp32: host sets CT arg 4 to 1 so SFPU chunk sizing here matches the compute kernel.
     constexpr auto fp32_mode = get_compile_time_arg_val(4) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
@@ -41,11 +41,12 @@ void kernel_main() {
         use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT;
 
     constexpr uint32_t onetile = 1;
-    uint32_t tile_bytes = get_tile_size(dfb_id_in0);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in1(dfb_id_in1);
+
+    uint32_t tile_bytes = dfb_in0.get_tile_size();
 
     dfb_in1.reserve_back(num_tiles);
     uint32_t base_l1_addr = dfb_in1.get_write_ptr();

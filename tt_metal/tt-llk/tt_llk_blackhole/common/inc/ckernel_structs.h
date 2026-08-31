@@ -35,12 +35,17 @@ struct semaphore
 struct mutex
 {
     constexpr static std::uint32_t REG_RMW = 0; // used for atomic register read-modify-write from different threads
-    constexpr static std::uint32_t SFPU    = 4; // used for atomic access to SFPU since it's instructions can be issued from both TRISC1 and TRISC2
+    // Serializes SETADC* issue across threads: two SETADC* that reach the MISC unit in the same cycle
+    // corrupt each other's address counters, so an op where one thread borrows another's ADCs takes this
+    // mutex around each of its SETADC* sites. Acquire/release via ckernel::T6MutexLockGuard.
+    constexpr static std::uint32_t THREAD2_ADC = 3;
+    constexpr static std::uint32_t SFPU        = 4; // used for atomic access to SFPU since it's instructions can be issued from both TRISC1 and TRISC2
 };
 
 constexpr std::uint8_t PC_BUF_SEMAPHORE_BASE = 8;  // base address for semaphores in PC buffer
 constexpr std::uint8_t MATH_HALF_DEST_SIZE   = 32; // arch specific 1/2 dest registers size in 16x16 faces
 constexpr std::uint8_t MAX_CONFIG_STATES     = 2;
+constexpr std::uint8_t REPLAY_BUF_SIZE       = 32; // arch specific replay buffer depth per thread, in instructions
 
 // Firmware messages to ckernels
 enum firmware_msg_e

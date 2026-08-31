@@ -11,7 +11,7 @@ import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import skip_for_slow_dispatch, run_for_blackhole, skip_for_wormhole_b0
 
 shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
@@ -822,22 +822,28 @@ def test_tilize_col_major_orientation(device, memory_layout, tensor_shape, shard
 
 
 @pytest.mark.parametrize(
-    "tensor_shape, num_cores",
+    "tensor_shape, num_cores, shard_h",
     [
-        ([1, 1, 32, 64], 1),
-        ([1, 1, 64, 64], 2),
-        ([1, 1, 128, 64], 4),
-        ([1, 1, 256, 128], 8),
-        ([1, 1, 512, 64], 8),
-        ([1, 1, 96, 128], 3),
-        ([1, 1, 192, 256], 6),
+        ([1, 1, 32, 64], 1, None),
+        ([1, 1, 64, 64], 2, None),
+        ([1, 1, 128, 64], 4, None),
+        ([1, 1, 256, 128], 8, None),
+        ([1, 1, 512, 64], 8, None),
+        ([1, 1, 96, 128], 3, None),
+        ([1, 1, 192, 256], 6, None),
+        # Uneven shard (last core does not have a full shard, i.e. total height is less
+        # than shard_h * num_cores) across ranks 2/3/4, via ttnn.to_layout's height-sharded
+        ([63, 32], 2, 32),
+        ([1, 63, 32], 2, 32),
+        ([1, 1, 63, 32], 2, 32),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, dtype):
+def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, shard_h, dtype):
     torch.manual_seed(42)
     H, W = tensor_shape[-2], tensor_shape[-1]
-    shard_h = H // num_cores
+    if shard_h is None:
+        shard_h = H // num_cores
     if shard_h == 0 or shard_h % 32 != 0:
         pytest.skip(f"shard_height={shard_h} not tile-aligned")
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
@@ -848,9 +854,10 @@ def test_tilize_height_sharded_shapes(device, tensor_shape, num_cores, dtype):
     tt_input = ttnn.from_torch(
         torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_cfg
     )
-    tt_output = ttnn.tilize(tt_input, memory_config=mem_cfg)
+    tt_output = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
     assert tt_output.layout == ttnn.TILE_LAYOUT
     assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert list(tt_output.shape) == tensor_shape
     assert_equal(torch_input, ttnn.to_torch(tt_output))
 
 
@@ -1116,6 +1123,65 @@ def test_tilize_retile(device, tensor_shape, shard_layout, input_tile_shape, out
     if shard_layout is not None:
         assert tt_output.memory_config().memory_layout == shard_layout
     assert_equal(torch_input, ttnn.to_torch(tt_output))
+
+
+# Tilize with simultaneous tile-shape and dtype change (the retile path).
+# The packer destination format must be reconfigured to match the output CB before
+# the tilize phase; without it the dtype conversion is silently skipped and the
+# output tensor carries data in the wrong format.
+@skip_for_wormhole_b0("LLK for tiny tiles not fully supported on Wormhole B0")
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype, min_pcc",
+    [
+        (ttnn.bfloat16, ttnn.bfloat8_b, 0.999),
+        (ttnn.float32, ttnn.bfloat16, 0.9999),
+    ],
+    ids=["bf16_to_bfp8", "fp32_to_bf16"],
+)
+@pytest.mark.parametrize(
+    "input_tile_shape, output_tile_shape",
+    [
+        ((32, 32), (16, 32)),
+        ((16, 32), (32, 32)),
+    ],
+    ids=["32x32_to_16x32", "16x32_to_32x32"],
+)
+@pytest.mark.parametrize("tensor_shape", [[1, 1, 64, 128], [1, 1, 128, 256]])
+def test_tilize_retile_dtype_conversion(
+    device, tensor_shape, input_tile_shape, output_tile_shape, in_dtype, out_dtype, min_pcc
+):
+    """Tilize with simultaneous tile-shape and dtype change: verifies that the output
+    tensor carries the requested dtype and numerically correct data."""
+    # Blocked (exponent-shared) formats pack a full 32-row tile, so the device rejects
+    # tiny (<32-row) output tile heights for them (see tilize_device_operation.cpp).
+    if output_tile_shape[0] < 32 and out_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        pytest.skip("Tiny tile heights are not supported for blocked output dtypes (BFLOAT8_B/BFLOAT4_B)")
+
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.rand(tensor_shape, dtype=torch_dtype)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        tile=ttnn.Tile(list(input_tile_shape)),
+    )
+    tt_output = ttnn.tilize(tt_input, tile=ttnn.Tile(list(output_tile_shape)), dtype=out_dtype)
+
+    assert tt_output.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {tt_output.layout}"
+    assert tt_output.dtype == out_dtype, f"Expected dtype {out_dtype}, got {tt_output.dtype}"
+
+    torch_output = ttnn.to_torch(tt_output)
+    if out_dtype == ttnn.bfloat16:
+        # fp32 → bfloat16 rounds on the packer. A near-bit-exact ULP comparison catches any
+        # dest-format misconfiguration that PCC 0.9999 could silently absorb. Allow 1 ULP
+        # because the packer breaks exact-half ties by rounding away from zero, whereas
+        # torch's .to(bfloat16) uses round-half-to-even, so tie values may differ by 1 ULP.
+        assert_with_ulp(torch_input.to(torch.bfloat16), torch_output, ulp_threshold=1)
+    else:
+        assert_with_pcc(torch_input.to(torch.float32), torch_output.to(torch.float32), min_pcc)
 
 
 #   Blackhole LLK (_llk_unpack_tilize_init_): uint8 datums produced a

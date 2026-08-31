@@ -38,12 +38,78 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // wasted rows — e.g. 160 tiles -> 64 + 64 + 32 (per_core_M 8,8,4), 3 chunks,
 // zero phantom.
 //
-// CRITICAL: the tail per_core_M is a DIVISOR of per_core_M_max. The gate/up CBs
-// (cb_in0_x, partials, activated) are allocated to per_core_M_max but reserved/
-// pushed at the runtime per_core_M; a per_core_M that does not divide
-// per_core_M_max would make those blocks wrap the CB ring (ring size not a
-// multiple of the block size) and reserve_back would deadlock. Divisors tile
-// evenly, so the ring never wraps mid-block.
+// CRITICAL — per_core_M BOUNDS WORK, IT DOES NOT SIZE CB BLOCKS.
+//
+// per_core_M is free to differ per expert and per chunk (that is the whole point:
+// each expert gets the chunk shape its own token count deserves). It bounds MACs,
+// tilize strips, DRAM reads, multicast payloads and emitted output rows.
+//
+// It must NOT size any circular-buffer block. cb_push_back / cb_pop_front wrap the
+// FIFO pointer only when it lands EXACTLY on fifo_limit:
+//
+//     fifo_wr_ptr += num_words;
+//     // this will basically reset fifo_wr_ptr to fifo_addr -- no other wrap is legal
+//     ASSERT(fifo_wr_ptr <= fifo_limit);
+//     if (fifo_wr_ptr == fifo_limit) { fifo_wr_ptr -= fifo_size; }
+//                                              (tt_metal/hw/inc/api/dataflow/dataflow_api.h)
+//
+// A block size that changes between pushes leaves the pointer at an offset the
+// next (larger) block does not divide; that push OVERSHOOTS fifo_limit, the
+// equality fails, the wrap is skipped, the ASSERT is a no-op in release, and the
+// CB pointer then runs away into neighbouring L1 for the rest of the kernel.
+//
+// Under the retired one-program-per-expert design this was invisible: every expert
+// launched its own program, so the pointers restarted at fifo_addr and only the
+// within-expert full-chunks-then-tail order mattered (and that order happens to
+// realign). ONE program looping over all local experts carries the pointers over,
+// so a per-expert block size corrupts L1 — e.g. on cb_activated (ring = 8 blocks at
+// per_core_M=1, one push per chunk) a run of per_core_M=1 experts leaves the
+// pointer at 3, and a following per_core_M=2 expert pushes 3 -> 5 -> 7 -> 9, which
+// never equals 8.
+//
+// So the reader/compute kernels reserve/push/wait/pop a CONSTANT compile-time-max
+// block on cb_x_rm, cb_in0_x, cb_gate_intermed, cb_activated and cb_mm_partials_*,
+// and settle the runtime remainder with O(1) pointer-only bumps. This is the same
+// pattern cb_in0_down_full and cb_out already use. The adaptive win is untouched:
+// no MAC, tilize, DRAM read or multicast byte is spent on the padded rows.
+//
+// The tail per_core_M is still returned as a DIVISOR of per_core_M_max, so the
+// runtime rows always tile evenly inside the constant block.
+
+// Clamp a DEVICE-PROVIDED token-tile count to what this expert can actually
+// hold: its region (`m_tiles_full` tile-rows), and — as a backstop — the chunk
+// loop the program was built for (`num_chunks_max` chunks of `max_chunk`).
+//
+// counts[] is produced on device (dispatch) and is never host-validated, so an
+// over-capacity entry must not be allowed to drive the chunk loop past
+// num_chunks_max: the CBs and the num_chunks compile-time arg are sized to that
+// bound. ASSERT is a no-op unless watcher / lightweight kernel
+// asserts are enabled, so the bound has to be enforced by arithmetic to hold in
+// Release builds — the kernels ASSERT on top of it to still fail loudly in
+// debug builds.
+//
+// Clamping the COUNT (not the chunk index) is what keeps the three kernels in
+// lockstep: reader, compute and writer all derive effective_chunks, per_core_M
+// and their row-validity guards from this same value, so they agree on the row
+// mapping and the excess rows are uniformly dropped rather than emitted at the
+// wrong offsets.
+inline uint32_t clamp_count_tiles(
+    uint32_t count_tiles, uint32_t max_chunk, uint32_t num_chunks_max, uint32_t m_tiles_full) {
+    // Two independent caps; the tighter one wins.
+    //   * m_tiles_full  - this expert's region is only this many tile-rows, so a
+    //     larger count is bogus. Rows past it are dropped downstream anyway (the
+    //     reader zero-fills past M_bound, the writer guards row < M_tiles_full), so
+    //     without this cap an over-capacity count only bought wasted chunks.
+    //   * num_chunks_max * max_chunk - the chunk-loop bound the CBs and the
+    //     num_chunks compile-time arg were sized for.
+    // m_tiles_full is normally much the tighter of the two: num_chunks_max is
+    // ceil(m_tiles_full / min_chunk) with min_chunk <= max_chunk, so the loop cap
+    // sits at roughly (max_chunk / min_chunk) * m_tiles_full. Both are kept so
+    // neither bound can be violated if that host-side derivation ever changes.
+    const uint32_t loop_cap = num_chunks_max * max_chunk;
+    const uint32_t cap = (m_tiles_full < loop_cap) ? m_tiles_full : loop_cap;
+    return (count_tiles < cap) ? count_tiles : cap;
+}
 
 // Number of chunks for `count_tiles`: full chunks of max_chunk + one tail chunk.
 inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {

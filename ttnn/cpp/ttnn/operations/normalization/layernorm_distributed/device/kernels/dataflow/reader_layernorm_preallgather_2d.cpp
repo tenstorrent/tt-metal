@@ -28,8 +28,6 @@ void kernel_main() {
     const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
     const auto y = get_arg(args::y);
 
-    const uint32_t TILE_SIZE = 32 * 32;
-    const uint32_t BF16_TILE_BYTES = 2 * TILE_SIZE;
     const uint32_t onetile = 1;
 
     constexpr auto blk = get_arg(args::blk);
@@ -107,7 +105,8 @@ void kernel_main() {
     // wait on the partial output and then write it to the merge core over the NoC
     dfb_out_buf.wait_front(onetile);
 
-    uint32_t o_write_size = BF16_TILE_BYTES;
+    // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.
+    uint32_t o_write_size = dfb_out_buf.get_tile_size();
     uint32_t worker_offset = o_write_size * y;
 
     UnicastEndpoint reduce_ep;

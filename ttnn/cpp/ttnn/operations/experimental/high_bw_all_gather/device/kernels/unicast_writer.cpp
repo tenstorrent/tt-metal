@@ -33,14 +33,15 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(3);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(7);
-    constexpr uint32_t slice_step = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr uint32_t num_devices = get_compile_time_arg_val(2);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(5);
+    constexpr uint32_t slice_step = get_compile_time_arg_val(6);
+    // See unicast_reader.cpp: the maximum per-rank output slot remains fixed for
+    // runtime-controlled gathers, so its stripe width can be baked.
+    constexpr uint32_t static_output_chunks_per_stripe = get_compile_time_arg_val(7);
+    constexpr auto output_tensor_args = TensorAccessorArgs<8>();
 
     // The direct-EDM/mux path and mux geometry follow the tensor-accessor arguments.
     constexpr uint32_t mux_ct_base = output_tensor_args.next_compile_time_args_offset();
@@ -66,12 +67,17 @@ void kernel_main() {
     const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
+    const address_t ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t ready_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-direction core
+    const uint8_t ready_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
     const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
+    const uint32_t data_valid_granularity = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint8_t neighbor_dev_id = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_chunks_per_stripe = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
     // A direction with no neighbor (a line endpoint) relays nothing; no fabric/mux connection was appended.
@@ -122,7 +128,9 @@ void kernel_main() {
     auto run_writer = [&](auto* sender) {
         using SenderT = std::remove_pointer_t<decltype(sender)>;
 
-        FabricWriter<output_chunk_size, packet_size, (slice_step > 1), SenderT> fabric(
+        constexpr bool coalesce_contiguous_pages = slice_step > 1 && outputs_per_cb_page > 1;
+        static_assert(!coalesce_contiguous_pages || cb_page_size <= packet_size);
+        FabricWriter<output_chunk_size, packet_size, coalesce_contiguous_pages, SenderT> fabric(
             noc, sender, neighbor_dev_id, neighbor_mesh_id);
 
         // One 1-hop atomic-inc header for data_valid signals. Flush keeps each
@@ -146,6 +154,12 @@ void kernel_main() {
                 sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
         };
 
+        // Announce that this device has reached the collective program. Its
+        // earlier command-queue entries, including output initialization, are
+        // complete, so the neighbor can safely write into this output. Target
+        // the opposite-direction reader paired with the writer returning here.
+        atomic_inc(safe_get_noc_addr(ready_sem_noc_x, ready_sem_noc_y, ready_sem, 0), 1);
+
         const uint64_t downstream_data_valid_addr =
             safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
         auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
@@ -155,11 +169,11 @@ void kernel_main() {
         ///////////////////////////////////////////////////
 
         OutputStripeIterator<
-            output_chunks_per_stripe,
             output_chunks_per_page,
             output_chunk_size,
             num_devices,
-            slice_step>
+            slice_step,
+            static_output_chunks_per_stripe>
             it;
 
         uint32_t stripe = initial_stripe;
@@ -169,7 +183,7 @@ void kernel_main() {
             const uint32_t count = last ? final_count : slice_count;
             const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
             const bool local_copy = (iter == 0) && (do_local_write != 0);
-            it.init(stripe, start, count);
+            it.init(stripe, start, count, output_chunks_per_stripe);
 
             uint32_t pending_chunks = 0, pending_pages = 0;
             for (uint32_t chunks_sent = 0; chunks_sent < count;) {
@@ -180,7 +194,7 @@ void kernel_main() {
                 cb.wait_front(1);
                 uint32_t l1_read_addr = cb.get_read_ptr();
                 bool signal_fused = false;
-                if constexpr (slice_step > 1 && outputs_per_cb_page > 1) {
+                if constexpr (coalesce_contiguous_pages) {
                     // Bank-owned logical pages are physically contiguous. Send the complete CB batch as one Fabric
                     // packet and use the same contiguous address for the optional local output copy.
                     auto [first_page_id, first_byte_off] = it.next();

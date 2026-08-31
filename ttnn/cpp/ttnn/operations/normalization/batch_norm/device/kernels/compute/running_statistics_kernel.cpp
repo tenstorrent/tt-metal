@@ -22,7 +22,7 @@ void kernel_main() {
     DataflowBuffer dfb_momentum_obj(dfb::momentum);
     DataflowBuffer dfb_one_obj(dfb::one);  // holds 1, for the (1 - momentum) term
 
-    binary_op_init_common(dfb::batch_mean, dfb::batch_var, dfb::out);
+    compute_kernel_hw_startup(dfb::batch_mean, dfb::batch_var, dfb::out);
     constexpr uint32_t onetile = 1;
 
     dfb_one_obj.wait_front(1);

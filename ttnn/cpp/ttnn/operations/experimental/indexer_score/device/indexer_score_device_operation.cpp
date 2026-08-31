@@ -80,9 +80,13 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
 void validate_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& k = t.k;
 
-    // Indexed KV cache: cache_batch_idx picks a slot of [B,1,T,D] k; an out-of-range slot offsets pages OOB.
+    // Indexed KV cache: on the fused path the full multi-slot cache is k_local while k is the batch-1
+    // gathered scratch. On the classic path k itself is the cache.
     if (attrs.cache_batch_idx.has_value()) {
-        const uint32_t kB = k.logical_shape()[0];
+        TT_FATAL(
+            !attrs.has_fused_ring() || t.k_local.has_value(), "indexer_score fused indexed cache requires k_local");
+        const auto& indexed_k = attrs.has_fused_ring() ? *t.k_local : k;
+        const uint32_t kB = indexed_k.logical_shape()[0];
         TT_FATAL(
             attrs.cache_batch_idx.value() < kB,
             "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
@@ -192,9 +196,15 @@ void validate_fused_runtime_values(const operation_attributes_t& attrs, const te
     TT_FATAL(
         k_local.storage_type() == StorageType::DEVICE && k_local.buffer() != nullptr,
         "indexer_score fused: k_local must be allocated on device");
+    const auto& kl_mem = k_local.memory_config();
+    const bool nd_sharded_dram =
+        (kl_mem.memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+         (kl_mem.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED && kl_mem.created_with_nd_shard_spec())) &&
+        kl_mem.is_dram();
     TT_FATAL(
-        k_local.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "indexer_score fused: k_local must use interleaved memory");
+        kl_mem.memory_layout() == TensorMemoryLayout::INTERLEAVED || nd_sharded_dram,
+        "indexer_score fused: k_local must be interleaved or ND-sharded DRAM (got {})",
+        kl_mem.memory_layout());
     TT_FATAL(k_local.device() == t.q.device(), "indexer_score fused: k_local must be on the same mesh device as q");
 
     const auto& semaphores = attrs.fused_ring->ag_semaphore;
@@ -226,10 +236,10 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     // apply_relu / num_groups / block_size pick the compile-time kernel path, so they MUST be hashed (else
     // DSA vs MSA, or pooled vs unpooled, would collide). Hash via the SP/TP accessors so the key is identical
     // to the pre-consolidation (cluster_axis, seq_subshard_axis) form.
-    // The fused descriptor embeds the AG semaphore addresses in worker runtime arguments, while num_links,
-    // topology, and sub-device selection shape worker allocation/routing. The fused override only rebuilds
-    // consumer kernels, so all of that state must participate in the cache key to prevent a stale AG program.
-    std::vector<uint32_t> fused_semaphore_addresses;
+    // The fused descriptor embeds the AG semaphore addresses in worker runtime arguments, but the cache-hit
+    // override re-applies them to all four AG worker kernels. Semaphore identity therefore does not shape the
+    // program and is deliberately excluded from the cache key (matching ExpRingJointSDPA). num_links,
+    // topology, and sub-device selection still shape worker allocation/routing and must remain hashed.
     uint32_t fused_num_links = 0;
     ttnn::ccl::Topology fused_topology = ttnn::ccl::Topology::Linear;
     bool fused_has_sub_device = false;
@@ -240,10 +250,6 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_topology = fused.topology;
         fused_has_sub_device = fused.ag_sub_device_id.has_value();
         fused_sub_device = fused_has_sub_device ? static_cast<uint32_t>(**fused.ag_sub_device_id) : 0u;
-        fused_semaphore_addresses.reserve(fused.ag_semaphore.size());
-        for (const auto& semaphore : fused.ag_semaphore) {
-            fused_semaphore_addresses.push_back(static_cast<uint32_t>(semaphore.address()));
-        }
     }
 
     return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
@@ -272,7 +278,6 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_topology,
         fused_has_sub_device,
         fused_sub_device,
-        fused_semaphore_addresses,
         tensor_args);
 }
 
@@ -324,11 +329,17 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         const auto& ks = k.logical_shape();
         TT_FATAL(ks.rank() == 4, "indexer_score fused: gathered k must be rank 4");  // guard before indexing ks below
         TT_FATAL(kls.rank() == 4 && kls[1] == 1, "indexer_score fused: k_local must be [B,1,sll,D]");
-        // k_local and the gathered k must share the batch dim: the reader offsets the LOCAL shard read by
-        // cache_batch_idx * (Tt/ring_size) tiles, bounded only against k's batch (validate_runtime_values).
-        // A smaller k_local batch would read OOB on the local shard for a cache_batch_idx valid for k.
-        TT_FATAL(
-            kls[0] == ks[0], "indexer_score fused: k_local batch {} must equal gathered k batch {}", kls[0], ks[0]);
+        // Indexed fused mode gathers exactly one selected k_local slot into slot 0 of a batch-1 scratch.
+        // Non-indexed mode retains the original equal-batch contract.
+        if (attrs.cache_batch_idx.has_value()) {
+            TT_FATAL(ks[0] == 1, "indexer_score fused indexed cache requires gathered k batch 1 (got {})", ks[0]);
+        } else {
+            TT_FATAL(
+                kls[0] == ks[0],
+                "indexer_score fused: k_local batch {} must equal gathered k batch {} when cache_batch_idx is unset",
+                kls[0],
+                ks[0]);
+        }
         TT_FATAL(kls[3] == ks[3], "indexer_score fused: k_local head dim {} != k head dim {}", kls[3], ks[3]);
         TT_FATAL(
             kl.dtype() == k.dtype(),
@@ -539,13 +550,24 @@ IndexerScoreDeviceOperation::create_op_performance_model(
         2ull * valid_tiles * Hi * B * static_cast<uint64_t>(tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH) * D;
 
     // Cores used: the banded schedule's (group_rows x row_blocks) x cols rectangle, via the same helper the
-    // factory uses (block-split included), so this equals tracy's CORE COUNT.
+    // factory uses (block-split included). The fused ring factory reserves columns for its all-gather workers;
+    // model the same reduced compute width so ideal/actual reports use the real FPU core count.
     const uint32_t QC = attrs.program_config.q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t KC = attrs.program_config.k_chunk_size / tt::constants::TILE_WIDTH;
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);  // ceil(Tt/KC); shared with the factory
     const auto grid = q.device()->compute_with_storage_grid_size();
-    const uint64_t num_cores = banded_core_count(group_count, band_count, grid.x, grid.y);
+    uint32_t compute_grid_x = grid.x;
+    if (attrs.has_fused_ring()) {
+        const uint32_t ag_worker_cores = attrs.fused_ring->num_links * 2u;  // forward + backward per link
+        const uint32_t reserved_cols = (ag_worker_cores + grid.y - 1) / grid.y;
+        TT_FATAL(
+            compute_grid_x > reserved_cols,
+            "indexer_score fused: grid too small to reserve {} AG columns",
+            reserved_cols);
+        compute_grid_x -= reserved_cols;
+    }
+    const uint64_t num_cores = banded_core_count(group_count, band_count, compute_grid_x, grid.y);
 
     // Blackhole matmul peak: 4096 mul-adds/cycle/core at LoFi, scaled by the fidelity multiplier.
     const auto math_fidelity = std::get<0>(ttnn::get_compute_kernel_config_args(arch, attrs.compute_kernel_config));

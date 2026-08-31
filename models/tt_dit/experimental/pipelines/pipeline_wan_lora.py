@@ -17,6 +17,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
@@ -26,7 +27,11 @@ import ttnn
 from models.tt_dit.experimental.utils.lightx2v_loader import wan_lightx2v_to_diffusers_key
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
+from models.tt_dit.solvers.factory import CustomSigmaScheduler
 from models.tt_dit.utils import cache
+
+if TYPE_CHECKING:
+    from diffusers.schedulers import SchedulerMixin
 
 
 @dataclass(frozen=True)
@@ -290,9 +295,12 @@ def _lora_stack_cache_namespace(specs_by_expert: dict[int, list[LoRASpec]]) -> s
 
 
 class WanPipelineI2VLora(WanPipelineI2V):
-    """Wan2.2 I2V with LoRA stacks fused into the base PyTorch weights."""
+    """Wan2.2 I2V with LoRA stacks fused into the base PyTorch weights.
 
-    BASE_DIFFUSERS_REPO = "Wan-AI/Wan2.2-I2V-A14B-Diffusers"
+    Adapters distilled to be guidance-free want ``cfg_enabled=False``, which halves the
+    denoising cost by dropping the unconditional pass. With it off the caller must keep both
+    guidance scales at 1.0, which ``__call__`` enforces.
+    """
 
     def __init__(
         self,
@@ -301,6 +309,9 @@ class WanPipelineI2VLora(WanPipelineI2V):
         config: WanPipelineConfig,
         lora_high: LoRAArg = None,
         lora_low: LoRAArg = None,
+        scheduler: SchedulerMixin | None = None,
+        run_warmup: bool = True,
+        lora_enabled: bool = False,
     ) -> None:
         high_specs = _normalize_lora_arg(lora_high)
         low_specs = _normalize_lora_arg(lora_low)
@@ -320,8 +331,18 @@ class WanPipelineI2VLora(WanPipelineI2V):
         self._cache_namespace = _lora_stack_cache_namespace(self._lora_specs)
         # Cleared after TT cache handoff (see _prepare_transformer) to free CPU memory.
         self._fused_state_dicts: dict[int, dict[str, torch.Tensor] | None] = {0: None, 1: None}
+        self.custom_sigmas = None
 
-        super().__init__(device=device, config=config)
+        if scheduler is None:
+            scheduler = CustomSigmaScheduler()
+            self.custom_sigmas = [1.0, 0.9375, 0.8333333, 0.625, 0.0]  # default for Wan 2.2 I2V Lightning
+            logger.info(
+                f"WanPipelineI2VLora: default Euler scheduler with custom sigmas {self.custom_sigmas} -- (Wan 2.2 I2V Lightning)"
+            )
+
+        super().__init__(
+            device=device, config=config, scheduler=scheduler, run_warmup=run_warmup, lora_enabled=lora_enabled
+        )
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         # guidance_scale=1.0 → encoder returns None for negative embeds; combined_step
@@ -329,6 +350,12 @@ class WanPipelineI2VLora(WanPipelineI2V):
         if prompt_embeds is None:
             return buffer
         return super().prepare_text_conditioning(tt_model, prompt_embeds, buffer, traced)
+
+    def prepare_schedule(self, num_inference_steps: int, *, flow_shift: float | None = None) -> None:
+        if self._solver.scheduler is None:
+            self._solver.set_schedule(sigmas=self.custom_sigmas)
+        else:
+            super().prepare_schedule(num_inference_steps, flow_shift=flow_shift)
 
     def _build_fused_state_dict(self, idx: int) -> dict[str, torch.Tensor] | None:
         specs = self._lora_specs[idx]
@@ -385,39 +412,3 @@ class WanPipelineI2VLora(WanPipelineI2V):
             get_torch_state_dict=_get_state_dict,
         )
         self._fused_state_dicts[idx] = None
-
-    @classmethod
-    def create_pipeline(
-        cls,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        height: int = 480,
-        width: int = 832,
-        num_frames: int = 81,
-        num_links: int | None = None,
-        dynamic_load: bool | None = None,
-        topology: ttnn.Topology | None = None,
-        is_fsdp: bool | None = None,
-        boundary_ratio: float | None = 0.875,
-        lora_high: LoRAArg = None,
-        lora_low: LoRAArg = None,
-    ) -> WanPipelineI2VLora:
-        config = WanPipelineConfig.default(
-            mesh_shape=mesh_device.shape,
-            checkpoint_name=cls.BASE_DIFFUSERS_REPO,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_links=num_links,
-            topology=topology,
-            dynamic_load=dynamic_load,
-            is_fsdp=is_fsdp,
-            boundary_ratio=boundary_ratio,
-            model_type="i2v",
-        )
-        return cls(
-            device=mesh_device,
-            config=config,
-            lora_high=lora_high,
-            lora_low=lora_low,
-        )

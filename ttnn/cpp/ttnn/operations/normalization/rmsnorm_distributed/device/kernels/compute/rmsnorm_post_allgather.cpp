@@ -69,7 +69,7 @@ void kernel_main() {
         cb_times_gamma_out_idx = tt::CBIndex::c_13;
     }
 
-    binary_op_init_common(cb_inp, cb_inp, cb_var_idx);
+    compute_kernel_hw_startup(cb_inp, cb_inp, cb_var_idx);
 
     CircularBuffer cb_reduce(cb_reduce_idx);
     CircularBuffer cb_eps(cb_eps_idx);
@@ -106,7 +106,7 @@ void kernel_main() {
         reconfig_data_format(cb_var_idx, cb_eps_idx);
         pack_reconfig_data_format(cb_recip_sqrt_var_idx);
 
-        add_tiles_init(cb_var_idx, cb_eps_idx);
+        add_init(cb_var_idx, cb_eps_idx);
         ACQ();
         add_tiles(cb_var_idx, cb_eps_idx, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();
@@ -129,7 +129,7 @@ void kernel_main() {
 
         reconfig_data_format(cb_norm_x_input_idx, cb_recip_sqrt_var_idx);
         pack_reconfig_data_format(normed_output_cb_idx);
-        mul_bcast_cols_init_short(cb_norm_x_input_idx, cb_recip_sqrt_var_idx);
+        mul_bcast_cols_init(cb_norm_x_input_idx, cb_recip_sqrt_var_idx);
         cb_recip_sqrt_var.wait_front(1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_norm_x_input.wait_front(blk);
@@ -152,7 +152,7 @@ void kernel_main() {
             reconfig_data_format(cb_x_normed_idx, cb_gamma_idx);
             pack_reconfig_data_format(cb_times_gamma_out_idx);
             cb_gamma.wait_front(Wt);
-            mul_bcast_rows_init_short(cb_x_normed_idx, cb_gamma_idx);
+            mul_bcast_rows_init(cb_x_normed_idx, cb_gamma_idx);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_x_normed.wait_front(blk);
                 cb_times_gamma_out.reserve_back(blk);
@@ -173,7 +173,7 @@ void kernel_main() {
                 reconfig_data_format(cb_times_gamma_out_idx, cb_beta_idx);
                 pack_reconfig_data_format(cb_out_idx);
                 cb_beta.wait_front(Wt);
-                add_bcast_rows_init_short(cb_times_gamma_out_idx, cb_beta_idx);
+                add_bcast_rows_init(cb_times_gamma_out_idx, cb_beta_idx);
                 for (uint32_t wt = 0; wt < Wt; wt += blk) {
                     cb_times_gamma_out.wait_front(blk);
                     cb_out.reserve_back(blk);

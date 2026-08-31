@@ -46,7 +46,7 @@ constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 // NOC V2 command buffer VC assignments (same HW values as overlay::CMDBUF_*_VC)
 constexpr uint32_t NOC_V2_RD_REQ_VC = 1;
 constexpr uint32_t NOC_V2_RD_RESP_VC = 12;
-constexpr uint32_t NOC_V2_WR_REQ_VC = 2;
+constexpr uint32_t NOC_V2_WR_REQ_VC = 1;
 constexpr uint32_t NOC_V2_WR_RESP_VC = 13;
 constexpr uint32_t NOC_V2_MCAST_REQ_VC = 8;
 constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
@@ -252,6 +252,8 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
 
 inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t /* noc */, uint32_t /* cmd_buf */) {}
 
+inline __attribute__((always_inline)) void noc_clear_packet_tags(uint32_t /* noc */) {}
+
 inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     uint32_t noc, uint32_t cmd_buf, const NocCmdBufState* state) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
@@ -330,6 +332,29 @@ inline __attribute__((always_inline)) uint64_t noc_local_xy() {
     uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
     uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     return NOC_XY_COORD(my_x, my_y);
+}
+
+// snoop asks the destination NIU to raise a cache snoop on receive. flush, per quasar noc spec,
+// prevents the next packet from committing until all previous packets have committed -- so tagging
+// just the final transfer guarantees the whole payload is committed before any later same-VC packet
+// to that destination.
+//
+// Persistent command-buffer state, not a per-transaction argument: set the tags, issue the transfer
+// that should carry them, then call again with both false. Left set, they tag every subsequent packet
+// on this buffer.
+//
+// Writes the whole register, so a call overwrites the other caller's bit as well as its own.
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_set_packet_tags(bool snoop, bool flush) {
+    static_assert(
+        cmd_buf == OVERLAY_WR_CMD_BUF || cmd_buf == OVERLAY_RD_CMD_BUF,
+        "packet tags are only defined for the full command buffers (0/1)");
+    TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tags;
+    tags.val = 0;
+    tags.f.snoop_bit = snoop;
+    tags.f.flush_bit = flush;
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, tags.val);
 }
 
 inline __attribute__((always_inline)) void init_wr_cmd_buf(uint64_t my_xy) {
@@ -1789,7 +1814,11 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    constexpr uint32_t base = MEM_DISPATCH_NOC_COUNTER_BASE;
+#else
     constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+#endif
     constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.

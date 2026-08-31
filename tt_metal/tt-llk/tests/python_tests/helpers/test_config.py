@@ -4,9 +4,12 @@
 import fcntl
 import glob
 import os
+import re
+import shlex
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
@@ -80,6 +83,8 @@ from .test_variant_parameters import (
 )
 from .utils import create_directories, run_shell_command
 
+TEMP_DIR = Path(tempfile.gettempdir())
+
 
 class ProfilerBuild(Enum):
     Yes = "true"
@@ -125,9 +130,10 @@ class TestConfig:
     CHIP_ARCH: ClassVar[ChipArchitecture]
     DATA_FORMAT_ENUM: ClassVar[dict]
 
-    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over /tmp (often tmpfs)
-    # so compile artefacts do not accumulate in RAM and OOM the runner (exit 137).
-    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = Path("/tmp/tt-llk-build")
+    # Artefact directories. Prefer GHA RUNNER_TEMP (disk) over the system temp
+    # directory (often tmpfs) so compile artefacts do not accumulate in RAM and
+    # OOM the runner (exit 137).
+    DEFAULT_ARTEFACTS_PATH: ClassVar[Path] = TEMP_DIR / "tt-llk-build"
     ARTEFACTS_DIR: ClassVar[Path]
     SHARED_DIR: ClassVar[str]
     SHARED_OBJ_DIR: ClassVar[str]
@@ -159,6 +165,15 @@ class TestConfig:
     OPTIONS_LINK: ClassVar[str] = None
     INITIAL_OPTIONS_COMPILE: ClassVar[str] = None
     INCLUDES: ClassVar[List[str]] = []
+    # Out-of-tree -I header dirs from add_include_dirs(). Prepend shadows
+    # in-tree copies; append sits after them.
+    EXTRA_INCLUDE_PREPEND: ClassVar[List[str]] = []
+    EXTRA_INCLUDE_APPEND: ClassVar[List[str]] = []
+    # Extra -I dirs for #include <foo.cpp> (tests/helpers/src style).
+    EXTRA_SRC_INCLUDE_PREPEND: ClassVar[List[str]] = []
+    EXTRA_SRC_INCLUDE_APPEND: ClassVar[List[str]] = []
+    # Truncated sha256 in _safe_artefact_key — on-disk name only, not a variant id.
+    ARTEFACT_KEY_HASH_CHARS: ClassVar[int] = 12
     WITH_COVERAGE: ClassVar[bool] = False
 
     OPTIONS_COMPILE: ClassVar[str] = None
@@ -184,6 +199,9 @@ class TestConfig:
 
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
+    # xdist worker index waiting for Exalens. setup_mode cannot ask the card yet:
+    # silicon init_ttexalens and the RTL remote connect both happen after it.
+    _PENDING_WORKER_INDEX: ClassVar[int | None] = None
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
@@ -198,6 +216,8 @@ class TestConfig:
 
     # CLI perf counter flags
     ENABLE_PERF_COUNTERS: ClassVar[bool] = False
+    # One run observes one group of 8 L1 interfaces; sweep this to cover all of them.
+    PERF_L1_MUX_GROUP: ClassVar[int] = int(os.environ.get("LLK_PERF_L1_MUX_GROUP", "0"))
     DUMP_RAW_COUNTERS: ClassVar[bool] = False
     DUMP_RAW_METRICS: ClassVar[bool] = False
     DUMP_CSV_COUNTERS: ClassVar[bool] = False
@@ -239,28 +259,6 @@ class TestConfig:
 
     # Size of one full zone block (data + sync/pad)
     PERF_COUNTERS_ZONE_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES + 40
-
-    # Zone-0 flat addresses (kept for legacy callers; prefer zone_*_addr helpers below).
-    PERF_COUNTERS_DATA_ADDR: ClassVar[int] = PERF_COUNTERS_ZONES_BASE
-    PERF_COUNTERS_SYNC_CTRL_ADDR: ClassVar[int] = (
-        PERF_COUNTERS_ZONES_BASE + _PERF_COUNTERS_ZONE_DATA_BYTES
-    )
-
-    # Trailing metadata written by PerfCounterManager (must match counters.h):
-    # enabled_flag (4 B) + bank_mask (4 B) + valid_count[MAX_ZONES] (4 B each).
-    _PERF_COUNTERS_TRAILING_METADATA_BYTES: ClassVar[int] = (
-        4 + 4 + PERF_COUNTERS_MAX_ZONES * 4
-    )
-
-    # Total L1 reservation: shared config + per-zone blocks + trailing metadata.
-    PERF_COUNTERS_SIZE: ClassVar[int] = (
-        _PERF_COUNTERS_CONFIG_WORDS * 4
-        + PERF_COUNTERS_MAX_ZONES * PERF_COUNTERS_ZONE_SIZE
-        + _PERF_COUNTERS_TRAILING_METADATA_BYTES
-    )
-
-    # Legacy alias — sums per-zone bytes for back-compat with old callers
-    _PERF_COUNTERS_BUFFER_SIZE: ClassVar[int] = _PERF_COUNTERS_ZONE_DATA_BYTES
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -371,7 +369,7 @@ class TestConfig:
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
-        """Build artefact root: $RUNNER_TEMP/tt-llk-build in GHA, else /tmp/tt-llk-build."""
+        """Use $RUNNER_TEMP/tt-llk-build in GHA, else tempfile.gettempdir()/tt-llk-build."""
         runner_temp = os.environ.get("RUNNER_TEMP")
         if runner_temp:
             return Path(runner_temp) / "tt-llk-build"
@@ -421,6 +419,44 @@ class TestConfig:
         )
 
     @staticmethod
+    def perf_run_tag() -> str:
+        """Directory name for this run's reports. Unique per invocation.
+
+        Purely a filesystem concern: it never reaches the published table. The
+        Parquet's ``run_id`` cannot serve here because every shard of one CI
+        workflow shares it by design (it is a ROW_KEY column, and the data team's
+        notion of "one run" spans all shards) — naming directories after it would
+        make two shards collide the moment their artefacts are unzipped together.
+
+        Seeded into the environment on first use so xdist workers and the
+        controller agree; the pytest plugin sets it before workers spawn.
+
+        CI sets ``PERF_RUN_TAG`` itself, because only the workflow can see the
+        shard index: ``GITHUB_RUN_ID`` and ``CHIP_ARCH`` are shared by every shard
+        of one architecture, so a tag built from them here would collide. The
+        fallback below therefore only has to keep successive invocations apart,
+        which a UTC timestamp does on its own.
+        """
+        tag = os.environ.get("PERF_RUN_TAG", "").strip()
+        if not tag:
+            run = os.environ.get("GITHUB_RUN_ID", "").strip()
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            tag = f"{run}-{stamp}" if run else f"local-{stamp}"
+            os.environ["PERF_RUN_TAG"] = tag
+        return tag
+
+    @staticmethod
+    def perf_run_dir() -> Path:
+        """This run's report directory, ``perf_data/runs/<tag>``.
+
+        One directory per invocation is what makes a report trustworthy: a shared
+        mutable directory lets a narrower second run leave the first run's test
+        directories in place, so the tree reads as complete while holding a blend
+        of two runs. Nothing here is ever written by a second invocation.
+        """
+        return TestConfig.LLK_ROOT / "perf_data" / "runs" / TestConfig.perf_run_tag()
+
+    @staticmethod
     def create_build_directories():
         """Create build directories. Uses class flag to skip redundant filesystem checks."""
         if TestConfig._BUILD_DIRS_CREATED:
@@ -452,7 +488,9 @@ class TestConfig:
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-ffast-math "
+            "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+            "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
@@ -464,16 +502,26 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                # Some SFPU kernels include their neighbours unqualified
+                # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
+                # resolves with this on the path. Listed last so the tt-llk copy still
+                # wins the basenames that exist in both trees.
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
+                # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
+                # ClassVar, so anything added here lands in the compile command for every Blackhole test. A
+                # root only some tests need belongs in a per-test fixture instead.
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:
@@ -511,17 +559,237 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        TestConfig.INCLUDES = [
-            "-Isfpi/include",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
-            "-I../common",
-            "-I../../hw/inc",
-            "-Ifirmware/riscv/common",
-            "-Ihelpers/include",
-            "-I../../hostdevcommon/api",
-        ] + hw_specific_includes
+        TestConfig.INCLUDES = (
+            [
+                "-Isfpi/include",
+                # Relative to tests/ (compile cwd), not pytest's cwd.
+                *[
+                    f"-I{p}"
+                    for p in TestConfig.llk_tree_include_roots(
+                        Path("..") / TestConfig.ARCH_LLK_ROOT
+                    )
+                ],
+                "-I../common",
+                "-I../../hw/inc",
+                "-Ifirmware/riscv/common",
+                "-Ihelpers/include",
+                "-I../../hostdevcommon/api",
+                # perf_counters.hpp: the PerfCounterType enum that hw_counters.h needs
+                "-I../../tools/profiler",
+            ]
+            + hw_specific_includes
+            + [
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
+                "-I../../../ttnn/cpp/ttnn/operations/experimental",
+            ]
+        )
+        TestConfig._apply_extra_includes()
+
+    @staticmethod
+    def _as_include_flags(roots) -> List[str]:
+        """Turn roots into unquoted ``-I`` flags (one list entry per dir)."""
+        flags: List[str] = []
+        for root in roots:
+            text = str(root)
+            flags.append(
+                text
+                if text.startswith("-I")
+                else f"-I{Path(text).expanduser().resolve()}"
+            )
+        return flags
+
+    @staticmethod
+    def _argv(*parts) -> list:
+        """Flatten compile-flag strings and raw path tokens into one argv.
+
+        Strings are ``shlex.split`` (so already-quoted ``-I`` flags stay one
+        token). Lists/tuples are appended as-is — use those for paths that
+        may contain whitespace.
+        """
+        argv: list = []
+        for part in parts:
+            if part is None or part == "":
+                continue
+            if isinstance(part, (list, tuple)):
+                argv.extend(
+                    str(item) for item in part if item is not None and item != ""
+                )
+            else:
+                argv.extend(shlex.split(str(part)))
+        return argv
+
+    @staticmethod
+    def _safe_artefact_key(source_path: str) -> str:
+        """Artefact dir under ``ARTEFACTS_DIR`` for an absolute driver path.
+
+        The basename is used when it is a single safe token; otherwise it is
+        sanitized and disambiguated so ``VARIANT_DIR`` never carries spaces
+        or shell metacharacters.
+        """
+        name = Path(source_path).name
+        if re.fullmatch(r"[A-Za-z0-9._+-]+", name):
+            return f"sources/{name}"
+        digest = sha256(os.path.abspath(source_path).encode()).hexdigest()[
+            : TestConfig.ARTEFACT_KEY_HASH_CHARS
+        ]
+        safe = re.sub(r"[^A-Za-z0-9._+-]+", "_", name) or "driver.cpp"
+        return f"sources/{safe}.{digest}"
+
+    @staticmethod
+    def _reject_unsafe_cpp_include_path(path: str) -> None:
+        """``#include "..."`` is a q-char-sequence — no C-string escapes."""
+        if any(char in path for char in '"\\\n'):
+            raise ValueError(
+                'C++ driver path cannot contain ", backslash, or newline '
+                f'(not valid in #include "..."): {path!r}'
+            )
+
+    @staticmethod
+    def _resolve_flag_roots(roots) -> list:
+        resolved = []
+        for root in roots:
+            if str(root).startswith("-I"):
+                resolved.append(str(root))
+            else:
+                resolved.append(Path(root).expanduser().resolve())
+        return resolved
+
+    @staticmethod
+    def _extra_header_include_flag_lists(already: list) -> tuple[list, list]:
+        """Registered header extras that ``already`` does not contain.
+
+        The header-side counterpart of ``_extra_src_include_flag_lists``, kept
+        in one place so the two filters cannot drift. Only
+        ``generate_variant_hash`` needs it: after ``setup_build`` these extras
+        are folded into ``INCLUDES``, but a variant hashed before that would
+        otherwise not see them at all.
+        """
+        return (
+            [flag for flag in TestConfig.EXTRA_INCLUDE_PREPEND if flag not in already],
+            [flag for flag in TestConfig.EXTRA_INCLUDE_APPEND if flag not in already],
+        )
+
+    def _extra_src_include_flag_lists(self) -> tuple[list, list]:
+        """Instance + process extras split for before/after in-tree ``helpers/src``."""
+        instance = TestConfig._as_include_flags(self.src_include_dirs)
+        prepend = instance + [
+            flag
+            for flag in TestConfig.EXTRA_SRC_INCLUDE_PREPEND
+            if flag not in instance
+        ]
+        seen = set(prepend)
+        append = [
+            flag for flag in TestConfig.EXTRA_SRC_INCLUDE_APPEND if flag not in seen
+        ]
+        return prepend, append
+
+    @staticmethod
+    def _merge_flag_list(existing: list, flags: list, prepend: bool) -> list:
+        rest = [flag for flag in existing if flag not in flags]
+        return flags + rest if prepend else rest + flags
+
+    @staticmethod
+    def _register_search_dirs(
+        prepend_list: list, append_list: list, flags: list, prepend: bool
+    ) -> tuple[list, list]:
+        """Move ``flags`` onto the prepend or append side; never both."""
+        if prepend:
+            append_list = [flag for flag in append_list if flag not in flags]
+            prepend_list = TestConfig._merge_flag_list(
+                prepend_list, flags, prepend=True
+            )
+        else:
+            prepend_list = [flag for flag in prepend_list if flag not in flags]
+            append_list = TestConfig._merge_flag_list(append_list, flags, prepend=False)
+        return prepend_list, append_list
+
+    @staticmethod
+    def _apply_extra_includes() -> None:
+        prepend = list(TestConfig.EXTRA_INCLUDE_PREPEND)
+        append = list(TestConfig.EXTRA_INCLUDE_APPEND)
+        extras = set(prepend + append)
+        rest = [flag for flag in TestConfig.INCLUDES if flag not in extras]
+        TestConfig.INCLUDES = prepend + rest + append
+
+    @staticmethod
+    def llk_tree_include_roots(arch_root) -> List[Path]:
+        """``-I`` dirs for one ``tt_llk_<arch>`` tree. ``-I`` is not recursive.
+
+        Headers are spelled ``"ckernel.h"``, ``"experimental/foo.h"``,
+        ``"sfpu/..."`` — the same three roots ``setup_compilation_options``
+        already adds for the in-tree copy.
+        """
+        root = Path(arch_root)
+        return [
+            root / "llk_lib",
+            root / "common" / "inc",
+            root / "common" / "inc" / "sfpu",
+        ]
+
+    @staticmethod
+    def add_include_dirs(*dirs, prepend: bool = True) -> None:
+        """Add header search dirs (``-I``) for this process.
+
+        Use for ``#include "foo.h"`` / ``"experimental/foo.h"``. Safe before or
+        after ``setup_build``. ``prepend=True`` (default) places dirs before
+        in-tree ``INCLUDES`` so they can shadow ``experimental/`` copies.
+        ``prepend=False`` places them after in-tree dirs (no shadowing).
+        Call from the external ``conftest`` after ``helpers`` is on ``sys.path``.
+
+        For one variant only, pass ``include_dirs=[...]`` to the constructor.
+        """
+        flags = TestConfig._as_include_flags(dirs)
+        (
+            TestConfig.EXTRA_INCLUDE_PREPEND,
+            TestConfig.EXTRA_INCLUDE_APPEND,
+        ) = TestConfig._register_search_dirs(
+            TestConfig.EXTRA_INCLUDE_PREPEND,
+            TestConfig.EXTRA_INCLUDE_APPEND,
+            flags,
+            prepend,
+        )
+        if TestConfig.INCLUDES:
+            TestConfig._apply_extra_includes()
+
+    @staticmethod
+    def add_src_include_dirs(*dirs, prepend: bool = True) -> None:
+        """Add search dirs for ``#include <foo.cpp>`` on the kernel compile.
+
+        This is the ``tests/helpers/src`` role — not where the test driver
+        lives (that is ``test_name`` / an absolute path). ``prepend=True``
+        (default) places dirs ahead of in-tree ``helpers/src`` so an
+        out-of-tree ``trisc.cpp`` can shadow it. ``prepend=False`` places
+        them after. Safe before or after ``setup_build``.
+
+        For one variant only, pass ``src_include_dirs=[...]`` to the constructor.
+        """
+        flags = TestConfig._as_include_flags(dirs)
+        (
+            TestConfig.EXTRA_SRC_INCLUDE_PREPEND,
+            TestConfig.EXTRA_SRC_INCLUDE_APPEND,
+        ) = TestConfig._register_search_dirs(
+            TestConfig.EXTRA_SRC_INCLUDE_PREPEND,
+            TestConfig.EXTRA_SRC_INCLUDE_APPEND,
+            flags,
+            prepend,
+        )
+
+    @staticmethod
+    def add_helpers_tree(*trees, prepend: bool = True) -> None:
+        """Add a ``tests/helpers``-layout tree: ``<tree>/include`` + ``<tree>/src``.
+
+        Shorthand for ``add_include_dirs(<tree>/include)`` plus
+        ``add_src_include_dirs(<tree>/src)``. For one variant only, pass
+        ``helpers_trees=[...]`` to the constructor.
+        """
+        includes = []
+        sources = []
+        for tree in trees:
+            tree = Path(tree)
+            includes.append(tree / "include")
+            sources.append(tree / "src")
+        TestConfig.add_include_dirs(*includes, prepend=prepend)
+        TestConfig.add_src_include_dirs(*sources, prepend=prepend)
 
     @staticmethod
     def setup_build(
@@ -549,14 +817,23 @@ class TestConfig:
         compile_producer: bool,
         stimuli_only: str = None,
         use_stimuli: str = None,
+        collect_only: bool = False,
     ):
         TestConfig.WORKER_ID = worker_id
 
-        if worker_id != "master":
+        TestConfig._PENDING_WORKER_INDEX = None
+        if worker_id == "master":
+            TestConfig.TENSIX_LOCATION = "0,0"
+        elif compile_producer:
+            # Builds ELFs on the CPU and never reads the device, so it is not worth
+            # opening a context per worker to answer a question it does not ask.
             row, col = divmod(int(worker_id[2:]), 8)
             TestConfig.TENSIX_LOCATION = f"{row},{col}"
         else:
-            TestConfig.TENSIX_LOCATION = "0,0"
+            # Silicon and RTL do not have an Exalens context until later in
+            # pytest_configure / pytest_runtest_setup. Asking now would miss,
+            # and a cached miss used to pin the session to the 8-wide fallback.
+            TestConfig._PENDING_WORKER_INDEX = int(worker_id[2:])
 
         if compile_consumer and compile_producer:
             raise RuntimeError(
@@ -599,22 +876,33 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling. Under xdist, only the
-        # controller may remove the shared artifact tree; workers can already
-        # be compiling variants under it.
+        # Start compilation from a clean artifact directory. With xdist, only
+        # the controller can safely remove shared artifacts because workers may
+        # already be writing to them. Skip cleanup during test collection so a
+        # subsequent consumer run can reuse the existing build.
         if (
             TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
             and worker_id == "master"
+            and not collect_only
         ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
+
+    @staticmethod
+    def resolve_worker_tensix_location():
+        """Bind TENSIX_LOCATION from the card once Exalens has a context."""
+        index = TestConfig._PENDING_WORKER_INDEX
+        if index is None:
+            return
+        TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(index)
+        TestConfig._PENDING_WORKER_INDEX = None
 
     # === Instance fields and methods ===
     def __init__(
         self,
         test_name: str,
         formats: InputOutputFormat = None,
-        templates: list[TemplateParameter] = [],
-        runtimes: list[RuntimeParameter] = [],
+        templates: list[TemplateParameter] = None,
+        runtimes: list[RuntimeParameter] = None,
         variant_stimuli: StimuliConfig = None,
         boot_mode: BootMode = BootMode.DEFAULT,
         profiler_build: ProfilerBuild = ProfilerBuild.No,
@@ -628,6 +916,9 @@ class TestConfig:
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
         expected_nondeterministic: bool = False,
+        include_dirs: list = None,
+        src_include_dirs: list = None,
+        helpers_trees: list = None,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -640,12 +931,31 @@ class TestConfig:
 
         self._prepared = False
 
+        # This instance owns its parameter lists: copy on the way in, and never
+        # mutate a caller's list or a default in place. The speed-of-light
+        # branch below rebinds rather than appending, for the same reason.
+        # (These used to default to a shared ``[]`` that the fold mutated, so a
+        # variant constructed without explicit ``templates`` inherited the
+        # previous variant's runtimes -- invisible until it changed what got
+        # compiled. Regression coverage: test_test_config.py.)
+        templates = list(templates or [])
+        runtimes = list(runtimes or [])
+
         if TestConfig.SPEED_OF_LIGHT:
-            templates += runtimes
+            templates = templates + runtimes
             runtimes = []
             compile_time_formats = True
 
-        self.test_name = test_name
+        # Artefact directory is always relative to ARTEFACTS_DIR. An absolute
+        # test_name is the C++ driver path; keep a sources/<basename> artefact
+        # key so we don't mkdir through a .cpp file.
+        if os.path.isabs(test_name):
+            TestConfig._reject_unsafe_cpp_include_path(test_name)
+            self.test_source_path = test_name
+            self.test_name = TestConfig._safe_artefact_key(test_name)
+        else:
+            self.test_source_path = test_name
+            self.test_name = test_name
         self.templates = templates
         self.runtimes = runtimes
         self.variant_stimuli = variant_stimuli
@@ -661,6 +971,19 @@ class TestConfig:
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
         self.expected_nondeterministic = expected_nondeterministic
+        # Per-variant header ``-I`` dirs land in ``local_options_compile`` (last
+        # ``-I`` group), so they win over ``add_include_dirs`` and in-tree
+        # headers but not over ``add_src_include_dirs``. Per-variant
+        # ``src_include_dirs`` are emitted first and do win over
+        # ``add_src_include_dirs``. Class methods are for suite-wide dirs.
+        include_list = list(include_dirs or [])
+        src_include_list = list(src_include_dirs or [])
+        for helpers_tree in helpers_trees or []:
+            helpers_tree = Path(helpers_tree)
+            include_list.append(helpers_tree / "include")
+            src_include_list.append(helpers_tree / "src")
+        self.include_dirs = TestConfig._resolve_flag_roots(include_list)
+        self.src_include_dirs = TestConfig._resolve_flag_roots(src_include_list)
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -706,10 +1029,15 @@ class TestConfig:
             self.formats_config = None
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
-        # Inject use_srcs and dest_acc into StimuliConfig
+        # SrcS MX slice geometry follows unpack_S_dst width (same as _is_srcs_32bit_mode_), not dest_acc.
         if self.variant_stimuli:
             self.variant_stimuli.set_use_srcs(self.unpack_to_srcs)
-            self.variant_stimuli.set_dest_acc(self.dest_acc)
+            srcs_32bit_mode = (
+                self.unpack_to_srcs
+                and self.formats_config is not None
+                and self.formats_config[0].unpack_S_dst.is_32_bit()
+            )
+            self.variant_stimuli.set_srcs_32bit_mode(srcs_32bit_mode)
 
         if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
             itd_param = next(
@@ -769,15 +1097,15 @@ class TestConfig:
 
         if not self.compile_time_formats:
             # Append struct.pack format for each FormatConfig to L1. Each "I" encodes one
-            # uint32_t DataFormat enum. Twelve I's = twelve fields appended in
+            # uint32_t DataFormat enum. Thirteen I's = thirteen fields appended in
             # write_runtimes_to_L1 (same order as argument_data). struct.pack encodes
             # those values using runtime_format into bytes for RuntimeParams on device.
             if self.L1_to_L1_iterations == 1:
                 lines.append("FormatConfig formats;")
-                self.runtime_format += "IIIIIIIIIIII"
+                self.runtime_format += "IIIIIIIIIIIII"
             else:
                 lines.append(f"FormatConfig formats[{self.L1_to_L1_iterations}];")
-                self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIIII"
+                self.runtime_format += self.L1_to_L1_iterations * "IIIIIIIIIIIII"
 
         if self.variant_stimuli:
             stimuli_fields, stimuli_pack_format = (
@@ -816,7 +1144,8 @@ class TestConfig:
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.unpack_B_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.unpack_S_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.math],
-                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_math],
+                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_src],
+                        TestConfig.DATA_FORMAT_ENUM[format_tuple.sfpu_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_src],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_dst],
                         TestConfig.DATA_FORMAT_ENUM[format_tuple.pack_S_src],
@@ -858,7 +1187,7 @@ class TestConfig:
                 )
 
     def collect_hash(self):
-        lock_file = Path("/tmp/tt-llk-build-print.lock")
+        lock_file = TEMP_DIR / "tt-llk-build-print.lock"
         lock_file.touch(exist_ok=True)
 
         with open(lock_file, "w") as lock:
@@ -869,6 +1198,23 @@ class TestConfig:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
         pytest.skip()
+
+    def _kernel_source_include(self) -> str:
+        """C++ snippet that pulls in this variant's driver.
+
+        Relative names keep the historical ``#include <sources/foo.cpp>`` form
+        (resolved from ``tests/``). Absolute paths are quote-included so an
+        out-of-tree driver does not have to live under ``tests/sources/``.
+
+        ``test_source_path`` is set in ``__init__``. Some in-tree callers
+        (the fuser) assign ``test_name`` later and leave ``test_source_path``
+        empty — fall back to ``test_name`` so ``#include <>`` is never emitted.
+        """
+        source = str(self.test_source_path or self.test_name)
+        if os.path.isabs(source):
+            TestConfig._reject_unsafe_cpp_include_path(source)
+            return f'#include "{source}"\n'
+        return f"#include  <{source}>\n"
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
@@ -900,10 +1246,87 @@ class TestConfig:
             if field_name not in NON_COMPILATION_ARGUMENTS
         ]
 
-        self.variant_id = sha256(str(" | ".join(temp_str)).encode()).hexdigest()
+        # Header and source search dirs decide which copy of a given relative
+        # include a driver compiles against, so they are compilation inputs.
+        # Most of them live in class state (``add_include_dirs`` /
+        # ``add_src_include_dirs`` / ``add_helpers_tree``, and the in-tree
+        # ``INCLUDES`` built by ``setup_compilation_options``), which
+        # ``self.__dict__`` cannot see — so hashing instance fields alone gave
+        # two variants the same id while they compiled against different
+        # headers. That matters because ``prepare`` does not rebuild in CONSUME
+        # mode: it trusts this id to locate the ELF the producer pass built.
+        # Order is part of the value: these lists are precedence-ordered, and
+        # reordering them changes which header wins.
+        # ``INCLUDES`` is the merged view, and only exists once ``setup_build``
+        # has run; before that the registered extras live solely in
+        # ``EXTRA_INCLUDE_*``. Hash both, so a variant built before the merge
+        # and one built after cannot collide.
+        #
+        # Each group is fenced by a label rather than concatenated, because the
+        # *role* of a dir is as much a compilation input as the dir itself. A
+        # flat list loses that: the same dir registered with ``prepend=True``
+        # and ``prepend=False`` yields the same token sequence while deciding
+        # opposite precedence against the in-tree ``helpers/src``. Labels cannot
+        # be confused with flags, which all start with ``-I``.
+        #
+        # The two sides are not symmetric, and it is worth being precise about
+        # which mechanism carries which. Header extras are folded into
+        # ``INCLUDES`` by ``_apply_extra_includes`` as ``prepend + rest +
+        # append``, so once ``setup_build`` has run header role is carried by
+        # the *order* of ``INCLUDES`` — and the two header fences below are
+        # empty. They are non-empty only before that fold, which is the window
+        # where the extras are the sole record of what was registered. Src
+        # extras are never folded into a merged list, so for those the fences
+        # are the only thing that distinguishes prepend from append.
+        header_tokens = self._header_include_tokens()
+        header_prepend, header_append = TestConfig._extra_header_include_flag_lists(
+            header_tokens
+        )
+        src_include_prepend, src_include_append = self._extra_src_include_flag_lists()
+        search_dirs = [
+            "<<headers>>",
+            *header_tokens,
+            "<<headers-prepend>>",
+            *header_prepend,
+            "<<headers-append>>",
+            *header_append,
+            "<<src-prepend>>",
+            *src_include_prepend,
+            "<<src-append>>",
+            *src_include_append,
+        ]
+
+        self.variant_id = sha256(
+            str(" | ".join(temp_str + ["<<search-dirs>>"] + search_dirs)).encode()
+        ).hexdigest()
+
+    def resolve_shared_compile_options(self) -> tuple[str, str, str]:
+        """Flags for brisc/coverage. Process-wide ``INCLUDES`` only.
+
+        Shared artefacts are keyed by ``SHARED_DIR`` / ``.shared_complete``,
+        not ``variant_id``. Per-variant ``include_dirs`` must not leak in.
+        """
+        return self._compose_compile_options(list(TestConfig.INCLUDES))
+
+    def _header_include_tokens(self) -> List[str]:
+        """Header ``-I`` tokens this variant compiles with, in search order.
+
+        Per-variant dirs first, then the process-wide ``INCLUDES``.
+
+        ``generate_variant_hash`` reads the same helper on purpose. The variant
+        id has to describe what actually reaches the compiler, so if these two
+        ever disagree the cache key stops matching the binary — which is silent,
+        because ``prepare`` does not rebuild in CONSUME mode. Keep them sharing
+        one definition rather than two copies of the expression.
+        """
+        return TestConfig._as_include_flags(self.include_dirs) + list(
+            TestConfig.INCLUDES
+        )
 
     def resolve_compile_options(self) -> tuple[str, str, str]:
+        return self._compose_compile_options(self._header_include_tokens())
 
+    def _compose_compile_options(self, include_tokens: list) -> tuple[str, str, str]:
         if (
             TestConfig.OPTIONS_COMPILE is not None
             and TestConfig.MEMORY_LAYOUT_LD_SCRIPT is not None
@@ -918,9 +1341,8 @@ class TestConfig:
         MEMORY_LAYOUT_LD_SCRIPT = (
             f"{TestConfig.LINKER_SCRIPTS}/memory.{TestConfig.ARCH.value}.ld"
         )
-        OPTIONS_COMPILE = (
-            f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
-        )
+        include_flags = " ".join(shlex.quote(flag) for flag in include_tokens)
+        OPTIONS_COMPILE = f"{include_flags} {TestConfig.INITIAL_OPTIONS_COMPILE} "
 
         OPTIONS_COMPILE += (
             "-DLLK_BOOT_MODE_TRISC "
@@ -953,7 +1375,7 @@ class TestConfig:
 
         shared_obj_dir = TestConfig.SHARED_OBJ_DIR
         shared_elf_dir = TestConfig.SHARED_ELF_DIR
-        lock_file = "/tmp/tt-llk-build-shared.lock"
+        lock_file = TEMP_DIR / "tt-llk-build-shared.lock"
 
         done_marker = shared_obj_dir / ".shared_complete"
 
@@ -972,7 +1394,7 @@ class TestConfig:
                 return
 
             _, local_memory_layout_ld, local_non_coverage = (
-                self.resolve_compile_options()
+                self.resolve_shared_compile_options()
             )
 
             if TestConfig.WITH_COVERAGE:
@@ -984,10 +1406,10 @@ class TestConfig:
                 run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # Only compile BRISC with counter support when counters are enabled,
-                # otherwise BRISC arms counter hardware which adds monitoring overhead.
+                # BRISC only gets counter support when counters are enabled: the NC build
+                # then contains no counter code at all, so its codegen is unaffected.
                 perf_cnt_flag = (
-                    "-DPERF_COUNTERS_COMPILED "
+                    f"-DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP} "
                     if TestConfig.ENABLE_PERF_COUNTERS
                     else ""
                 )
@@ -1054,8 +1476,12 @@ class TestConfig:
                 f"ckernel::to_underlying(DataFormat::{fmt.math.name})"
                 for fmt in self.formats_config
             ]
-            sfpu_math_values = [
-                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_math.name})"
+            sfpu_src_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_src.name})"
+                for fmt in self.formats_config
+            ]
+            sfpu_dst_values = [
+                f"ckernel::to_underlying(DataFormat::{fmt.sfpu_dst.name})"
                 for fmt in self.formats_config
             ]
             pack_in_values = [
@@ -1084,15 +1510,16 @@ class TestConfig:
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_B_OUT_LIST = {{{', '.join(unpack_b_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> UNPACK_S_OUT_LIST = {{{', '.join(unpack_s_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> MATH_FORMAT_LIST = {{{', '.join(math_values)}}};",
-                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_MATH_FORMAT_LIST = {{{', '.join(sfpu_math_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_IN_LIST = {{{', '.join(sfpu_src_values)}}};",
+                    f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> SFPU_OUT_LIST = {{{', '.join(sfpu_dst_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_IN_LIST = {{{', '.join(pack_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_OUT_LIST = {{{', '.join(pack_out_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_S_IN_LIST = {{{', '.join(pack_s_in_values)}}};",
                     f"constexpr std::array<std::underlying_type_t<DataFormat>, L1_to_L1_ITERATIONS> PACK_S_OUT_LIST = {{{', '.join(pack_s_out_values)}}};",
                     "constexpr std::array<FormatConfig, L1_to_L1_ITERATIONS> formats_array = {",
-                    "{FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_B_IN_LIST[0], UNPACK_S_IN_LIST[0], UNPACK_A_OUT_LIST[0], UNPACK_B_OUT_LIST[0], UNPACK_S_OUT_LIST[0], MATH_FORMAT_LIST[0], SFPU_MATH_FORMAT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0], PACK_S_IN_LIST[0], PACK_S_OUT_LIST[0]),",
+                    "{FormatConfig(UNPACK_A_IN_LIST[0], UNPACK_B_IN_LIST[0], UNPACK_S_IN_LIST[0], UNPACK_A_OUT_LIST[0], UNPACK_B_OUT_LIST[0], UNPACK_S_OUT_LIST[0], MATH_FORMAT_LIST[0], SFPU_IN_LIST[0], SFPU_OUT_LIST[0], PACK_IN_LIST[0], PACK_OUT_LIST[0], PACK_S_IN_LIST[0], PACK_S_OUT_LIST[0]),",
                     "FormatConfig(",
-                    "UNPACK_A_IN_LIST[1], UNPACK_B_IN_LIST[1], UNPACK_S_IN_LIST[1], UNPACK_A_OUT_LIST[1], UNPACK_B_OUT_LIST[1], UNPACK_S_OUT_LIST[1], MATH_FORMAT_LIST[1], SFPU_MATH_FORMAT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1], PACK_S_IN_LIST[1], PACK_S_OUT_LIST[1])}};",
+                    "UNPACK_A_IN_LIST[1], UNPACK_B_IN_LIST[1], UNPACK_S_IN_LIST[1], UNPACK_A_OUT_LIST[1], UNPACK_B_OUT_LIST[1], UNPACK_S_OUT_LIST[1], MATH_FORMAT_LIST[1], SFPU_IN_LIST[1], SFPU_OUT_LIST[1], PACK_IN_LIST[1], PACK_OUT_LIST[1], PACK_S_IN_LIST[1], PACK_S_OUT_LIST[1])}};",
                 ]
             )
 
@@ -1110,12 +1537,13 @@ class TestConfig:
                     f"constexpr auto UNPACK_B_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_B_dst.name});",
                     f"constexpr auto UNPACK_S_OUT = ckernel::to_underlying(DataFormat::{formats_config.unpack_S_dst.name});",
                     f"constexpr auto MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.math.name});",
-                    f"constexpr auto SFPU_MATH_FORMAT = ckernel::to_underlying(DataFormat::{formats_config.sfpu_math.name});",
+                    f"constexpr auto SFPU_IN = ckernel::to_underlying(DataFormat::{formats_config.sfpu_src.name});",
+                    f"constexpr auto SFPU_OUT = ckernel::to_underlying(DataFormat::{formats_config.sfpu_dst.name});",
                     f"constexpr auto PACK_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_src.name});",
                     f"constexpr auto PACK_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_dst.name});",
                     f"constexpr auto PACK_S_IN = ckernel::to_underlying(DataFormat::{formats_config.pack_S_src.name});",
                     f"constexpr auto PACK_S_OUT = ckernel::to_underlying(DataFormat::{formats_config.pack_S_dst.name});",
-                    "constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_B_IN, UNPACK_S_IN, UNPACK_A_OUT, UNPACK_B_OUT, UNPACK_S_OUT, MATH_FORMAT, SFPU_MATH_FORMAT, PACK_IN, PACK_OUT, PACK_S_IN, PACK_S_OUT);",
+                    "constexpr FormatConfig formats = FormatConfig(UNPACK_A_IN, UNPACK_B_IN, UNPACK_S_IN, UNPACK_A_OUT, UNPACK_B_OUT, UNPACK_S_OUT, MATH_FORMAT, SFPU_IN, SFPU_OUT, PACK_IN, PACK_OUT, PACK_S_IN, PACK_S_OUT);",
                 ]
             )
 
@@ -1268,6 +1696,10 @@ class TestConfig:
                 else TestConfig.SHARED_OBJ_DIR
             )
 
+            src_include_prepend, src_include_append = (
+                self._extra_src_include_flag_lists()
+            )
+
             def build_kernel_part(name: str):
                 # COMPILE_FOR_TRISC is the single source of truth for the compute thread id on every
                 # arch (unpack=0/math=1/pack=2/sfpu=3). Quasar also gets -DLLK_TRISC_<NAME> below, but the
@@ -1290,12 +1722,17 @@ class TestConfig:
                     TestConfig.ENABLE_PERF_COUNTERS
                     and TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR
                 ):
-                    optional_kernel_flags += " -DPERF_COUNTERS_COMPILED"
+                    optional_kernel_flags += f" -DPERF_COUNTERS_COMPILED -DLLK_PERF_L1_MUX_GROUP={TestConfig.PERF_L1_MUX_GROUP}"
 
-                COVERAGES_DEPS = (
-                    f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
+                coverage_args = (
+                    [
+                        "-Wl,--start-group",
+                        str(shared_obj_dir / "coverage.o"),
+                        "-lgcov",
+                        "-Wl,--end-group",
+                    ]
                     if self.coverage_build == CoverageBuild.Yes
-                    else f""
+                    else []
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
@@ -1314,22 +1751,39 @@ class TestConfig:
                         f"-DDEVICE_PRINT_BUFFER_SIZE2={TestConfig.DEVICE_PRINT_BUFFER_SIZE2} "
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
-                compile_command = (
-                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
-                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
-                    f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
-                    f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
-                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3) that
-                    # -nostdlib drops; only referenced helpers are linked, so it's a no-op otherwise.
-                    f"-x c++ - -lc -lgcc -o {VARIANT_ELF_DIR / name}.elf"
+                compile_command = TestConfig._argv(
+                    [TestConfig.GXX],
+                    TestConfig.ARCH_COMPUTE,
+                    TestConfig.ARCH_SPECIFIC_OPTIONS,
+                    TestConfig.OPTIONS_ALL,
+                    [f"-I{TestConfig.TESTS_WORKING_DIR}"],
+                    src_include_prepend,
+                    [f"-I{TestConfig.RISCV_SOURCES}"],
+                    src_include_append,
+                    [f"-I{VARIANT_DIR}"],
+                    local_options_compile,
+                    optional_kernel_flags,
+                    f"-DLLK_TRISC_{trisc_define}",
+                    device_print_flags,
+                    TestConfig.OPTIONS_LINK,
+                    coverage_args,
+                    [
+                        f"-T{local_memory_layout_ld}",
+                        f"-T{TestConfig.LINKER_SCRIPTS / name}.ld",
+                        f"-T{TestConfig.LINKER_SCRIPTS / 'sections.ld'}",
+                    ],
+                    # -lgcc pulls in libgcc soft-float/integer helpers (e.g. __mulsf3)
+                    # that -nostdlib drops; only referenced helpers are linked.
+                    ["-x", "c++", "-", "-lc", "-lgcc", "-o"],
+                    [str(VARIANT_ELF_DIR / f"{name}.elf")],
                 )
 
-                logger.trace(compile_command)
+                logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
                 run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
                     compile_command,
                     TestConfig.TESTS_WORKING_DIR,
-                    (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
+                    (f"{self._kernel_source_include()}#include  <trisc.cpp>\n"),
                 )
 
             with ThreadPoolExecutor(
@@ -1354,7 +1808,15 @@ class TestConfig:
                     elf_path = VARIANT_ELF_DIR / f"{component}.elf"
                     meta_bin_path = PROFILER_VARIANT_META_DIR / f"{component}.meta.bin"
                     run_shell_command(
-                        f"{TestConfig.OBJCOPY} -O binary -j .profiler_meta {elf_path} {meta_bin_path}",
+                        [
+                            TestConfig.OBJCOPY,
+                            "-O",
+                            "binary",
+                            "-j",
+                            ".profiler_meta",
+                            str(elf_path),
+                            str(meta_bin_path),
+                        ],
                         TestConfig.TESTS_WORKING_DIR,
                     )
 

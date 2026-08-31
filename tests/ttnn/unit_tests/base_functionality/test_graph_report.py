@@ -2352,6 +2352,62 @@ class TestGraphReportImport:
         assert db_path.exists()
         assert db_path.name == "db.sqlite"
 
+    @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_loudbox")], indirect=True)
+    def test_import_normalizes_buffer_chunk_device_ids_from_submesh_capture(self, mesh_device, tmp_report_dir):
+        report_path = tmp_report_dir / "submesh_report.json"
+        db_dir = tmp_report_dir / "db"
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 0))
+
+        assert submesh.id() != 0, "Submesh must have a nonzero raw ID to make normalization observable"
+
+        with ttnn.graph.full_graph_capture(str(report_path)):
+            input_tensor = ttnn.from_torch(
+                torch.ones((1, 1, 32, 32), dtype=torch.bfloat16),
+                device=submesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            output_tensor = ttnn.relu(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.synchronize_device(submesh)
+
+        assert output_tensor is not None
+        with open(report_path) as f:
+            report = json.load(f)
+
+        assert report.get("per_operation_buffers"), "Capture must exercise the per-operation buffer path"
+        assert report.get("buffer_pages_by_address"), "Capture must contain nested detailed buffer snapshots"
+
+        raw_device_ids = {device["device_id"] for device in report["devices"]}
+        raw_page_device_ids = {
+            page["device_id"]
+            for snapshots in report["buffer_pages_by_address"].values()
+            for snapshot in snapshots
+            for page in snapshot["pages"]
+        }
+        assert submesh.id() in raw_device_ids
+        assert raw_page_device_ids == {submesh.id()}
+
+        device_id_remap = {raw: normalized for normalized, raw in enumerate(sorted(raw_device_ids))}
+        expected_page_device_ids = {device_id_remap[raw] for raw in raw_page_device_ids}
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            normalized_device_ids = {row[0] for row in conn.execute("SELECT DISTINCT device_id FROM devices")}
+            normalized_buffer_ids = {row[0] for row in conn.execute("SELECT DISTINCT device_id FROM buffers")}
+            chunk_device_ids = {row[0] for row in conn.execute("SELECT DISTINCT device_id FROM buffer_chunks")}
+            orphan_count = conn.execute(
+                "SELECT COUNT(*) "
+                "FROM buffer_chunks c "
+                "LEFT JOIN devices d ON c.device_id = d.device_id AND c.rank = d.rank "
+                "WHERE d.device_id IS NULL"
+            ).fetchone()[0]
+
+        assert normalized_device_ids == set(device_id_remap.values())
+        assert normalized_buffer_ids == expected_page_device_ids
+        assert chunk_device_ids == expected_page_device_ids
+        assert orphan_count == 0
+
     def test_import_populates_tables(self, device, tmp_report_dir):
         """Test that import populates all expected tables."""
         report_path = tmp_report_dir / "report.json"
@@ -2459,6 +2515,16 @@ class TestGraphReportImport:
         _ = ttnn.relu(tt_input)
         _ = ttnn.graph.end_graph_capture_to_file(report_path)
 
+        with open(report_path) as f:
+            report_json = json.load(f)
+        assert "metadata" in report_json
+        assert report_json["metadata"].get("git_sha")
+        assert len(report_json["metadata"]["git_sha"]) >= 40
+        assert report_json["metadata"].get("git_sha_short")
+        assert report_json["metadata"].get("version")
+        assert report_json["metadata"].get("build_type")
+        assert report_json["metadata"]["build_type"] != "Unknown"
+
         db_path = graph_report.import_report(report_path, db_dir)
 
         conn = sqlite3.connect(db_path)
@@ -2469,10 +2535,10 @@ class TestGraphReportImport:
 
         assert "git_sha" in rows and "git_url" in rows
         git_meta = graph_report.get_tt_metal_git_report_metadata()
-        assert rows["git_sha"] == git_meta["git_sha"]
+        assert rows["git_sha"] == report_json["metadata"]["git_sha"]
         assert rows["git_url"] == git_meta["git_url"]
         if git_meta["git_sha"]:
-            assert len(rows["git_sha"]) >= 7
+            assert len(rows["git_sha"]) >= 40
 
 
 class TestSanitizeGitRemoteUrl:
@@ -2616,10 +2682,11 @@ class TestBufferChunksSchemaAndAggregation:
         and checks that the aggregated row carries the expected math: chunk
         covers the page-address span, ``num_pages`` reflects input count."""
         report = self._minimal_report()
+        report["devices"] = [{"device_id": 7}]
         # Three contiguous L1 pages on one core at address 1000.
         report["buffer_pages"] = [
             {
-                "device_id": 0,
+                "device_id": 7,
                 "address": 1000,
                 "core_x": 0,
                 "core_y": 0,
@@ -3349,6 +3416,66 @@ class TestSafeArgStr:
 
         result = _safe_arg_str(ttnn.TILE_LAYOUT)
         assert "TILE" in result
+
+    def test_tensor_sequence_is_summarized_not_dumped(self, device):
+        """A list of ttnn.Tensors is summarized element-wise, never str()'d.
+
+        str() on the list would repr() each tensor, reading it back to host -- fatal inside a
+        device trace capture and a tensor-content dump in the report otherwise.
+        """
+        from ttnn.graph import _safe_arg_str
+
+        tensors = [
+            ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            for _ in range(2)
+        ]
+        result = _safe_arg_str(tensors)
+
+        assert result.startswith("[ttnn.Tensor(") and result.endswith(")]"), f"unexpected summary: {result}"
+        assert result.count("ttnn.Tensor(") == 2, f"expected 2 tensor summaries: {result}"
+        assert "shape=Shape([32, 32])" in result, f"tensor shape missing from summary: {result}"
+        # No raw tensor data: a dumped tensor renders its rows as "ttnn.Tensor([[".
+        assert "ttnn.Tensor([[" not in result, f"tensor contents dumped into the summary: {result}"
+
+    def test_nested_sequence_is_summarized_not_dumped(self, device):
+        """A tensor nested inside a sequence is summarized too, never str()'d.
+
+        The recursion matters as much as the top-level case: str() on the outer list reprs the
+        inner one, which reprs the tensor -- the same forbidden device read.
+        """
+        from ttnn.graph import _safe_arg_str
+
+        tensor = ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        result = _safe_arg_str([[tensor], (tensor,)])
+
+        assert result.count("ttnn.Tensor(") == 2, f"expected both nested tensors summarized: {result}"
+        assert "[[ttnn.Tensor(" in result, f"list nesting not preserved: {result}"
+        assert "(ttnn.Tensor(" in result, f"tuple nesting not preserved: {result}"
+        assert "ttnn.Tensor([[" not in result, f"tensor contents dumped into the summary: {result}"
+
+    def test_torch_tensor_sequence_is_summarized_not_dumped(self):
+        """A sequence of torch tensors is summarized: no contents in the report."""
+        from ttnn.graph import _safe_arg_str
+
+        result = _safe_arg_str([torch.rand(4, 4), torch.rand(4, 4)])
+
+        assert result.count("torch.Tensor(shape=[4, 4]") == 2, f"expected 2 torch summaries: {result}"
+        assert "tensor(" not in result, f"torch tensor contents dumped into the summary: {result}"
+
+    def test_long_tensor_sequence_is_elided(self, device):
+        """Past the element cap the tail is elided, and the marker says so.
+
+        The generator keys on that marker to refuse a partially-recorded sequence, so its exact
+        shape is part of the contract.
+        """
+        from ttnn.graph import _MAX_SEQUENCE_ELEMENTS, _safe_arg_str
+
+        tensor = ttnn.from_torch(torch.rand(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        count = _MAX_SEQUENCE_ELEMENTS + 3
+        result = _safe_arg_str([tensor] * count)
+
+        assert result.count("ttnn.Tensor(") == _MAX_SEQUENCE_ELEMENTS, f"wrong number summarized: {result[:200]}"
+        assert result.endswith("... +3 more]"), f"missing elision marker: {result[-40:]}"
 
 
 class TestRecordPythonOperation:

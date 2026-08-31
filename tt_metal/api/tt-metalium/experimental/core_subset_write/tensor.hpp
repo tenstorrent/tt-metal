@@ -5,8 +5,8 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 
 namespace tt::tt_metal::experimental::core_subset_write {

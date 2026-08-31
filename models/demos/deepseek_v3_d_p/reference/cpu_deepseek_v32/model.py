@@ -18,8 +18,7 @@ Contains:
     paths.
 
 This module is architecture only. CPU kernel equivalents and RoPE helpers live
-in ``utils.py``; weight init + pretrained HF loading live in ``weights.py``; the
-test harness in ``test_model.py``.
+in ``utils.py``; weight init + pretrained HF loading live in ``weights.py``.
 """
 
 import math

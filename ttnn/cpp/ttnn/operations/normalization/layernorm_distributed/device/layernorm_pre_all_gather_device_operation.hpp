@@ -70,6 +70,7 @@ Tensor layer_norm_pre_all_gather(
     const std::optional<tt::tt_metal::DataType>& dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const LayerNormProgramConfig& program_config,
-    const std::optional<bool>& use_2d_core_grid);
+    const std::optional<bool>& use_2d_core_grid,
+    bool fast_and_approximate_mode);
 
 }  // namespace ttnn::prim

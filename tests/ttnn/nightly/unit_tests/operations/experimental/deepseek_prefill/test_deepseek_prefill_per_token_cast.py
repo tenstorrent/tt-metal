@@ -18,6 +18,8 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
+from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 pytestmark = pytest.mark.use_module_device
 
@@ -28,9 +30,7 @@ E4M3_MAX = 448.0
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
     (30, 1152),  # partial tile-row + 9 scale blocks
-    (640, 7168),
-    (3200, 7168),
-    (6400, 7168),
+    (PREFILL_CHUNK_TOKENS_PER_CHIP, 7168),
     (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
 ]
 
@@ -106,6 +106,7 @@ def assert_quality(result, ref, *, pcc_threshold, rtol, atol, label=""):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 def test_cast_to_fp8_scale(device, dtype, input_layout):
@@ -130,6 +131,7 @@ def test_cast_to_fp8_scale(device, dtype, input_layout):
     assert_equal(scale, ref)
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
@@ -163,6 +165,7 @@ def test_cast_to_fp8_scale_values(device, dtype, shape, input_layout):
     assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} shape={shape}")
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", [(1, 512), (30, 512), (2, 3, 32, 512)])
@@ -242,9 +245,11 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_narrow_scales_to_bf16)
+@pytest.mark.parametrize("narrow_scales_to_bf16", [False, True], ids=["scales_kept_at_fp32", "scales_narrow_to_bf16"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("shape", SHAPES)
-def test_cast_back_dequant(device, out_dtype, shape):
+def test_cast_back_dequant(device, out_dtype, shape, narrow_scales_to_bf16):
     torch.manual_seed(0)
     torch_dtype = getattr(torch, out_dtype)
     ttnn_dtype = getattr(ttnn, out_dtype)
@@ -260,10 +265,15 @@ def test_cast_back_dequant(device, out_dtype, shape):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn_dtype)
+    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+        e4m3_tt, scale_tt, output_dtype=ttnn_dtype, narrow_scales_to_bf16=narrow_scales_to_bf16
+    )
     out = ttnn.to_torch(out_tt).float()
 
-    golden = input_e4m3.float() * input_scale.repeat_interleave(BLOCK_W, dim=-1)
+    # apples-to-apples: on the bf16 path the device narrows the scale to bf16 before the multiply,
+    # so the golden narrows it too
+    golden_scale = input_scale.to(torch.bfloat16).float() if narrow_scales_to_bf16 else input_scale
+    golden = input_e4m3.float() * golden_scale.repeat_interleave(BLOCK_W, dim=-1)
     if out_dtype == "bfloat16":
         golden = golden.to(torch_dtype).float()
 
@@ -273,13 +283,16 @@ def test_cast_back_dequant(device, out_dtype, shape):
 
     # Restrict to normal e4m3 values where relative tolerance is meaningful.
     normal = input_e4m3.float().abs() > 2.0**-6
+    # narrow_scales_to_bf16 runs the multiply in bf16/HiFi2 (vs fp32/HiFi4)
+    # which has a real precision cost, not a golden mismatch, so allow a slightly looser rtol.
+    rtol = 1.5e-2 if narrow_scales_to_bf16 else 1e-2
     assert_quality(
         out[normal],
         golden[normal],
         pcc_threshold=0.999,
-        rtol=1e-2,
+        rtol=rtol,
         atol=1e-3,
-        label=f"dequant {out_dtype} shape={shape}",
+        label=f"dequant {out_dtype} narrow_scales_to_bf16={narrow_scales_to_bf16} shape={shape}",
     )
 
 
@@ -288,6 +301,7 @@ def test_cast_back_dequant(device, out_dtype, shape):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_row_major_input)
 # Output layout is always ROW_MAJOR.
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
@@ -358,6 +372,7 @@ def _pack_scale_metadata(input_scale):
     return meta
 
 
+@pytest.mark.uncollect_if(pred=ci_pruning.bh_scales_not_from_metadata)
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("scales_from_metadata", [False, True])
 @pytest.mark.parametrize("label, counts", TOKEN_COUNT_AWARE_CASES, ids=[c[0] for c in TOKEN_COUNT_AWARE_CASES])

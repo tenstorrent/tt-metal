@@ -37,6 +37,7 @@
 #include "umd/device/utils/semver.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/firmware/firmware_utils.hpp>
 #include <umd/device/simulation/simulation_chip.hpp>
 #include <umd/device/pcie/pci_device.hpp>
 #include <umd/device/types/arch.hpp>
@@ -87,37 +88,32 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
-    // cluster descriptor is also configured (tt-run MP sweeps set both).
-    if (rtoptions.get_simulator_enabled()) {
-        auto soc_desc =
-            tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-        auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
-        if (arch == tt::ARCH::WORMHOLE_B0) {
-            return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
-        }
-        if (arch == tt::ARCH::BLACKHOLE) {
-            return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
-        }
-        if (arch == tt::ARCH::QUASAR) {
-            return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
-        }
-        return tt::tt_metal::ClusterType::INVALID;
-    }
-
     std::unique_ptr<umd::ClusterDescriptor> temp_cluster_desc = nullptr;
     if (cluster_desc == nullptr) {
+        // Descriptor-less simulator callers have no topology to classify. Preserve the legacy architecture-only
+        // simulator types for that fallback, but prefer a supplied/discovered descriptor below so direct simulation
+        // is classified the same way as silicon (for example, a discovered two-chip N300 remains an N300).
+        if (rtoptions.get_simulator_enabled()) {
+            auto soc_desc =
+                tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+            auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+            if (arch == tt::ARCH::WORMHOLE_B0) {
+                return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
+            }
+            if (arch == tt::ARCH::BLACKHOLE) {
+                return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
+            }
+            if (arch == tt::ARCH::QUASAR) {
+                return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
+            }
+            return tt::tt_metal::ClusterType::INVALID;
+        }
         temp_cluster_desc = rtoptions.get_mock_enabled() ? get_mock_cluster_desc(rtoptions)
                                                          : tt::umd::Cluster::create_cluster_descriptor();
         cluster_desc = temp_cluster_desc.get();
     }
     tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
-    for (const auto& chip_id : cluster_desc->get_all_chips()) {
-        if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
-            cluster_type = tt::tt_metal::ClusterType::TG;
-            break;
-        }
-    }
+
     const auto num_chips = cluster_desc->get_all_chips().size();
     TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
@@ -216,12 +212,10 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
     return (
         cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
         cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
-        cluster_type == tt::tt_metal::ClusterType::N300_2x2 || cluster_type == tt::tt_metal::ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::N300_2x2);
 }
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
-
-bool Cluster::is_noc_mapping_enabled() const { return this->noc_mapping_enabled_; }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     ZoneScoped;
@@ -262,7 +256,7 @@ void Cluster::detect_arch_and_target() {
 }
 
 // TODO: remove this when we deprecate TG
-bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
+bool Cluster::is_galaxy_cluster() const { return false; }
 
 bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
@@ -332,9 +326,10 @@ void Cluster::initialize_device_drivers() {
     umd::DeviceParams default_params;
     this->start_driver(default_params);
 
+    this->apply_tdp_limit_override();
+
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;
-    this->noc_mapping_enabled_ = false;
     if (this->target_type_ == tt::TargetDevice::Silicon) {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
@@ -342,8 +337,42 @@ void Cluster::initialize_device_drivers() {
             auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
             if (pci) {
                 this->iommu_enabled_ = pci->is_iommu_enabled();
-                this->noc_mapping_enabled_ = tt::umd::PCIDevice::is_mapping_buffer_to_noc_supported();
             }
+        }
+    }
+}
+
+void Cluster::apply_tdp_limit_override() {
+    const std::optional<uint32_t> tdp_limit_watts = this->rtoptions_.get_tdp_limit_watts();
+    if (!tdp_limit_watts.has_value() || this->target_type_ != TargetDevice::Silicon) {
+        return;
+    }
+
+    // The limit applies per ASIC, so it is set on every chip that this process drives over PCIe. It
+    // outlives this process: firmware drops it on chip reset, and nothing else restores it.
+    for (const ChipId mmio_device_id : this->driver_->get_target_mmio_device_ids()) {
+        try {
+            // Silicon only, so the chip is backed by a real TTDevice rather than a null mock one.
+            umd::TTDevice* tt_device = this->driver_->get_chip(mmio_device_id)->get_tt_device();
+            if (tdp_limit_watts.value() == llrt::TDP_LIMIT_RESTORE_DEFAULT_SENTINEL) {
+                umd::restore_default_tdp_limit(tt_device);
+            } else {
+                umd::set_tdp_limit(tt_device, tdp_limit_watts.value());
+            }
+            // Read back rather than echo: the board default is only known once firmware applies it.
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_TDP_LIMIT_WATTS: firmware TDP limit on chip {} is now {} W",
+                mmio_device_id,
+                tt_device->get_firmware_info_provider()->get_tdp_limit());
+        } catch (const std::exception& e) {
+            // Capping power is optional: an unsupported architecture, firmware too old to take the
+            // message, or a limit firmware rejects must not fail the run. UMD carries the detail.
+            log_warning(
+                tt::LogDevice,
+                "TT_METAL_TDP_LIMIT_WATTS: leaving the firmware TDP limit on chip {} as it is: {}",
+                mmio_device_id,
+                e.what());
         }
     }
 }
@@ -521,13 +550,7 @@ Cluster::~Cluster() {
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_user_chip_ethernet_coordinates() const {
-    auto user_chip_ethernet_coordinates = this->get_cluster_desc()->get_chip_locations();
-    if (this->is_galaxy_cluster()) {
-        std::erase_if(user_chip_ethernet_coordinates, [this](const auto& entry) {
-            return this->get_cluster_desc()->get_board_type(entry.first) != BoardType::GALAXY;
-        });
-    }
-    return user_chip_ethernet_coordinates;
+    return this->get_cluster_desc()->get_chip_locations();
 }
 
 std::unordered_map<ChipId, EthCoord> Cluster::get_all_chip_ethernet_coordinates() const {
@@ -545,26 +568,10 @@ ChipId Cluster::get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) c
 }
 
 size_t Cluster::number_of_user_devices() const {
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        const auto& chips = this->driver_->get_target_device_ids();
-        return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
-            return this->get_cluster_desc()->get_board_type(id) == BoardType::GALAXY;
-        });
-    }
     return this->driver_->get_target_device_ids().size();
 }
 
 std::set<ChipId> Cluster::user_exposed_chip_ids() const {
-    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
-        std::set<ChipId> galaxy_boards;
-        const auto& chips = this->driver_->get_target_device_ids();
-        for (const auto& id : chips) {
-            if (this->get_cluster_desc()->get_board_type(id) == BoardType::GALAXY) {
-                galaxy_boards.insert(id);
-            }
-        }
-        return galaxy_boards;
-    }
     return this->driver_->get_target_device_ids();
 }
 
@@ -771,11 +778,9 @@ uint32_t Cluster::get_arc_timer_heartbeat(const ChipId& chip_id) const {
     }
 
     auto* fw = tt_device->get_firmware_info_provider();
-    if (!fw) {
-        return 0;
-    }
 
-    return fw->get_heartbeat();  // ← THIS is the correct call path
+    const std::optional<uint32_t> heartbeat = fw->get_heartbeat();
+    return heartbeat.value_or(0);
 }
 
 bool Cluster::is_arc_telemetry_available(const ChipId& chip_id) const {
@@ -1054,25 +1059,6 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
         TT_THROW("Failed to get SysmemManager for device {}", device_id);
     }
     return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
-}
-
-void Cluster::verify_sw_fw_versions(
-    int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const {
-    umd::semver_t sw(umd::semver_t::from_wormhole_eth_firmware_tag(sw_version)),
-        fw_first_eth_core(umd::semver_t::from_wormhole_eth_firmware_tag(fw_versions.at(0)));
-    log_info(
-        tt::LogDevice,
-        "Software version {}, Ethernet FW version {} (Device {})",
-        sw.to_string(),
-        fw_first_eth_core.to_string(),
-        device_id);
-    for (std::uint32_t& fw_version : fw_versions) {
-        umd::semver_t fw(umd::semver_t::from_wormhole_eth_firmware_tag(fw_version));
-
-        TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
-        TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
-        TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
-    }
 }
 
 std::optional<tt::umd::semver_t> Cluster::get_ethernet_firmware_version() const {

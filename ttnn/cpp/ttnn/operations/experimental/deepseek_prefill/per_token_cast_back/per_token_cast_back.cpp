@@ -14,6 +14,7 @@ ttnn::Tensor per_token_cast_back(
     const std::optional<ttnn::Tensor>& input_scale,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    bool narrow_scales_to_bf16,
     bool token_count_aware,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
     const std::optional<ttnn::Tensor>& expert_token_counts,
@@ -31,7 +32,7 @@ ttnn::Tensor per_token_cast_back(
             !metadata.has_value() && !expert_region_offsets.has_value() && !expert_token_counts.has_value() &&
                 !global_expert_idx_table.has_value(),
             "per_token_cast_back: metadata / expert_* tensors are only valid when token_count_aware=true");
-        return ttnn::prim::per_token_cast_back(input_e4m3, *input_scale, dtype, mem_config);
+        return ttnn::prim::per_token_cast_back(input_e4m3, *input_scale, dtype, mem_config, narrow_scales_to_bf16);
     }
 
     // Token-count-aware path. Exactly one scale source: either a plain fp32 (M, H/128) scale tensor, or
@@ -50,6 +51,7 @@ ttnn::Tensor per_token_cast_back(
         scale_source,
         dtype,
         mem_config,
+        narrow_scales_to_bf16,
         /*token_count_aware=*/true,
         expert_region_offsets,
         expert_token_counts,

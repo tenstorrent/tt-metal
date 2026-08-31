@@ -56,11 +56,33 @@ parameters = {
             [0, 1, 2, 3],
         ],
         "largest": [True, False],
-        "k": [32],  # only k = 32 is supported for now
+        "k": [32],  # small-k suite; large k is swept by the "large_k" suite below
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
+    },
+    "large_k": {
+        # Large-k coverage (64 < k <= 2048). On Blackhole + bfloat16 + last-dim +
+        # largest these route through the ttnn.experimental.topk_large_indices
+        # composite (indices from the op, values gathered back from the
+        # original tensor — exact); everywhere else stock single-core would
+        # take seconds-to-minutes per vector, so those combinations are
+        # invalidated below rather than swept.
+        "input_shape": gen_shapes([1, 1, 1, 8192], [1, 1, 4, 131072], [1, 1, 1, 8192], 20)
+        + gen_shapes([1, 1, 1, 100000], [1, 1, 2, 100000], [1, 1, 1, 1], 2)
+        + gen_shapes([1, 1, 32, 8192], [1, 1, 64, 65536], [1, 1, 32, 8192], 6)
+        # Routed-envelope ceiling is 2^19: the value-recovery gather parks a
+        # full W * 2 B input row-stick in L1, so wider rows fall back to the
+        # stock single-core factory (seconds-to-minutes per vector here).
+        + gen_shapes([1, 1, 4, 262144], [1, 1, 8, 524288], [1, 1, 4, 262144], 4),
+        "dim": [-1],
+        "largest": [True],
+        "k": [96, 128, 256, 512, 1024, 2048],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 64], [6, 12, 256, 1024], [1, 1, 32, 64], 64)
@@ -101,6 +123,18 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if len(test_vector["input_shape"]) != 4:
         return True, "Input shape must be 4D"
+    if test_vector["k"] > 64:
+        # The large_k suite covers the Blackhole routed path
+        # (ttnn.experimental.topk_large_indices). The standard sweep matrix
+        # schedules every regular module on the wormhole-n150 lane
+        # (compute_sweep_matrix.py: compute_standard_matrix) and has no
+        # Blackhole lane, so these vectors are pre-staged as INVALID: on WH
+        # the stock single-core factory takes seconds-to-minutes per vector
+        # (recorded as hangs, triggering device resets). Routed-path CI
+        # coverage lives in tests/ttnn/unit_tests/operations/reduce/
+        # test_topk.py (Blackhole-gated). Flip this to arch-conditional
+        # sub-checks when a Blackhole sweeps lane exists.
+        return True, "large_k suite is Blackhole-only (routed path); no Blackhole sweep lane yet"
     if test_vector["dim"] != -1:
         return True, "Only the last dim is supported right now"
     if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
@@ -134,7 +168,20 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    input_shape = sanitize_shape(input_shape, "topk")
+    if k > 64:
+        # The large_k suite exists to cover the Blackhole routed path
+        # (ttnn.experimental.topk_large_indices). Elsewhere these vectors land
+        # on the stock linear single-core factory (seconds-to-minutes per
+        # vector against the 30s timeout, recorded as hangs). Generation-time
+        # invalidation cannot see the target arch (the generator is offline),
+        # so fail fast here instead.
+        assert "blackhole" in ttnn.get_arch_name().lower(), "large_k suite is Blackhole-only (routed path)"
+        # sanitize_shape rounds the last dim up to the next power of two,
+        # which would silently retarget the non-pow2 vectors (e.g. W=100000)
+        # onto already-covered pow2 widths. Non-pow2 width is one of the two
+        # structural reasons the routed path exists — run the declared shape.
+    else:
+        input_shape = sanitize_shape(input_shape, "topk")
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype

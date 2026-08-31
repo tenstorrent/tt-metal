@@ -4,10 +4,11 @@
 
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -37,93 +38,95 @@ std::vector<uint32_t> get_row_strides(const ttnn::Shape& shape) {
 
 }  // namespace detail
 
-tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreRowInvariant::create_descriptor(
+ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInvariant::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
-
-    auto* src_buffer = input_tensor.buffer();
-    auto* dst_buffer = output_tensor.buffer();
-
-    ProgramDescriptor desc;
+    const auto& input_mesh_tensor = input_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_rm_page_size = detail::page_size(input_tensor);
-
     uint32_t output_rm_page_size = detail::page_size(tensor_return_value);
 
-    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
-
     uint32_t num_rows = detail::num_pages(input_tensor);
+    uint32_t N = operation_attributes.dims.size();
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_pages_to_read * input_rm_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = input_rm_page_size,
-        }}},
-    });
+    // ---- Resource names ----
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName SRC_CB{"cb_src"};  // legacy c_0
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
 
-    uint32_t N = operation_attributes.dims.size();
+    // ---- Dataflow buffer (legacy c_0): reader produces, writer consumes ----
+    DataflowBufferSpec src_cb{
+        .unique_id = SRC_CB,
+        .entry_size = input_rm_page_size,
+        .num_entries = num_input_pages_to_read,
+        .data_format_metadata = cb_data_format,
+    };
 
-    std::vector<uint32_t> reader_compile_time_args = {};
-    KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
-        {"N", N}, {"page_size", input_rm_page_size}, {"num_rows", num_rows}};
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    // ---- Tensor parameters (both Case 1, via TensorAccessor) ----
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()};
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
-        "reader_permute_interleaved_rm_row_invariant.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // ---- Kernels ----
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+            "reader_permute_interleaved_rm_row_invariant.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC_CB, .accessor_name = "cb_src", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args = {{"N", N}, {"page_size", input_rm_page_size}, {"num_rows", num_rows}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_row", "end_row"}},
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+    };
 
-    std::vector<uint32_t> writer_compile_time_args = {};
-    KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
-        {"N", N}, {"page_size", output_rm_page_size}, {"num_rows", num_rows}};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+            "writer_permute_interleaved_rm_row_invariant.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC_CB, .accessor_name = "cb_src", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args = {{"N", N}, {"page_size", output_rm_page_size}, {"num_rows", num_rows}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_row", "end_row"}},
+        // rank-length shape/perm/stride arrays (count = N, a CTA) → runtime varargs.
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .advanced_options = {.num_runtime_varargs = 3 * N},
+    };
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
-        "writer_permute_interleaved_rm_row_invariant.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
+    // ---- Writer varargs (core-invariant): input_shape ++ perm ++ output_strides ----
     auto input_shape_view = input_tensor.logical_shape().view();
     auto output_strides = detail::get_row_strides(output_tensor.logical_shape());  // in anticipation of RM padding
+    std::vector<uint32_t> writer_varargs;
+    writer_varargs.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
+    writer_varargs.insert(writer_varargs.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_varargs.insert(writer_varargs.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_varargs.insert(writer_varargs.end(), output_strides.begin(), output_strides.end());
 
-    // Trailing writer args (everything after dst_addr/start/end) are the same for every core; build once.
-    std::vector<uint32_t> writer_trailing_args;
-    writer_trailing_args.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
-    writer_trailing_args.insert(writer_trailing_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_trailing_args.insert(
-        writer_trailing_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-    writer_trailing_args.insert(writer_trailing_args.end(), output_strides.begin(), output_strides.end());
+    // ---- Per-node runtime args (legacy node-first loop, bridged name-first) ----
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_row = 0;
     uint32_t num_rows_per_core = 0;
-    reader_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
     for (const auto& core : cores) {
         if (core_group_1.contains(core)) {
             num_rows_per_core = num_tiles_per_core_group_1;
@@ -134,37 +137,42 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreRowInvariant::c
             num_rows_per_core = 0;
         }
         uint32_t end_row = start_row + num_rows_per_core;
-        reader_desc.emplace_runtime_args(core, {src_buffer, start_row, end_row});
-
-        KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(dst_buffer);
-        writer_args.push_back(start_row);
-        writer_args.push_back(end_row);
-        writer_args.append(writer_trailing_args);
-        writer_desc.emplace_runtime_args(core, writer_args);
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", end_row}});
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"start_row", start_row}, {"end_row", end_row}});
+        writer_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
         start_row = end_row;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    // ---- Assemble ----
+    ProgramSpec spec;
+    spec.name = "permute_rm_row_invariant";
+    spec.kernels = {std::move(reader), std::move(writer)};
+    spec.dataflow_buffers = {std::move(src_cb)};
+    spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args.insert({INPUT, input_mesh_tensor});
+    run_args.tensor_args.insert({OUTPUT, output_mesh_tensor});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric::create_descriptor(
+ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlockedGeneric::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
+    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
-
-    auto* src_buffer = input_tensor.buffer();
-    auto* dst_buffer = output_tensor.buffer();
-
-    ProgramDescriptor desc;
+    const auto& input_mesh_tensor = input_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t w_block_size = constants::TILE_WIDTH;
@@ -174,9 +182,6 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
     uint32_t x_block_size = constants::TILE_HEIGHT;
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
-    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
-    constexpr uint8_t src1_cb_index = tt::CBIndex::c_2;
-    constexpr uint8_t src2_cb_index = tt::CBIndex::c_1;
     uint32_t num_input_pages_to_read = 2;
 
     // we are focused on reading one row at a time, in a pattern that allows us to write an entire output row at a time
@@ -207,133 +212,151 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_total);
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_pages_to_read * input_cb_page_size * x_block_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = input_cb_page_size,
-        }}},
-    });
+    // ---- Resource names ----
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName SRC_CB{"cb_in"};         // legacy c_0 (reader → compute)
+    const DFBSpecName TILIZE_CB{"cb_tilize"};  // legacy c_1 (compute self-loop)
+    const DFBSpecName OUT_CB{"cb_out"};        // legacy c_2 (compute → writer)
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_pages_to_read * output_cb_page_size * w_block_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src1_cb_index,
-            .data_format = cb_data_format,
-            .page_size = output_cb_page_size,
-        }}},
-    });
+    // ---- Dataflow buffers (entry_size/num_entries carried from legacy CB total_size/page_size) ----
+    DataflowBufferSpec src_cb{
+        .unique_id = SRC_CB,
+        .entry_size = input_cb_page_size,
+        .num_entries = num_input_pages_to_read * x_block_size,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec out_cb{
+        .unique_id = OUT_CB,
+        .entry_size = output_cb_page_size,
+        .num_entries = num_input_pages_to_read * w_block_size,
+        .data_format_metadata = cb_data_format,
+    };
+    DataflowBufferSpec tilize_cb{
+        .unique_id = TILIZE_CB,
+        .entry_size = x_block_size * w_block_size * input_tensor.element_size(),
+        .num_entries = num_input_pages_to_read,
+        .data_format_metadata = cb_data_format,
+    };
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_pages_to_read * x_block_size * w_block_size * input_tensor.element_size(),
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src2_cb_index,
-            .data_format = cb_data_format,
-            .page_size = x_block_size * w_block_size * input_tensor.element_size(),
-        }}},
-    });
+    // ---- Tensor parameters ----
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()};
 
-    std::vector<uint32_t> reader_compile_time_args = {};
+    // ---- Kernels ----
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+            "reader_permute_interleaved_rm_blocked_generic.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .compile_time_args =
+            {{"N", N},
+             {"page_size", input_cb_page_size},
+             {"num_rows", num_rows},
+             {"x_dim", x_dim},
+             {"num_blocks_total", num_blocks_total},
+             {"x_blocks", x_blocks},
+             {"w_blocks", w_blocks},
+             {"x_block_size", x_block_size},
+             {"w_block_size", w_block_size},
+             {"element_size", input_tensor.element_size()}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
+        .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
+        .advanced_options = {.num_runtime_varargs = 2 * N},
+    };
 
-    KernelDescriptor::NamedCompileTimeArgs reader_named_compile_time_args = {
-        {"N", N},
-        {"page_size", input_cb_page_size},
-        {"num_rows", num_rows},
-        {"x_dim", x_dim},
-        {"num_blocks_total", num_blocks_total},
-        {"x_blocks", x_blocks},
-        {"w_blocks", w_blocks},
-        {"x_block_size", x_block_size},
-        {"w_block_size", w_block_size},
-        {"element_size", input_tensor.element_size()},
-        {"input_tensor_page_size", static_cast<uint32_t>(src_buffer->aligned_page_size())}};
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
+            "writer_permute_interleaved_rm_blocked_generic.cpp",
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .compile_time_args =
+            {{"N", N},
+             {"output_page_size", output_cb_page_size},
+             {"num_rows", num_rows},
+             {"X", X},
+             {"X_stride", X_stride},
+             {"x_dim", x_dim},
+             {"W_stride", W_stride},
+             {"input_page_size", input_cb_page_size},
+             {"element_size", input_tensor.element_size()},
+             {"num_blocks_total", num_blocks_total},
+             {"x_blocks", x_blocks},
+             {"w_blocks", w_blocks},
+             {"x_block_size", x_block_size},
+             {"w_block_size", w_block_size},
+             {"W", W}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
+        .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
+        .advanced_options = {.num_runtime_varargs = 3 * N},
+    };
 
-    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
-        "reader_permute_interleaved_rm_blocked_generic.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.named_compile_time_args = std::move(reader_named_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    std::vector<uint32_t> writer_compile_time_args = {};
-
-    KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
-        {"N", N},
-        {"output_page_size", output_cb_page_size},
-        {"num_rows", num_rows},
-        {"X", X},
-        {"X_stride", X_stride},
-        {"x_dim", x_dim},
-        {"W_stride", W_stride},
-        {"input_page_size", input_cb_page_size},
-        {"element_size", input_tensor.element_size()},
-        {"num_blocks_total", num_blocks_total},
-        {"x_blocks", x_blocks},
-        {"w_blocks", w_blocks},
-        {"x_block_size", x_block_size},
-        {"w_block_size", w_block_size},
-        {"W", W},
-        {"output_tensor_page_size", static_cast<uint32_t>(dst_buffer->aligned_page_size())}};
-
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
-        "writer_permute_interleaved_rm_blocked_generic.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.named_compile_time_args = std::move(writer_named_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
-    KernelDescriptor::NamedCompileTimeArgs compute_named_compile_time_args = {
-        {"x_block_size", x_block_size}, {"w_block_size", w_block_size}};
     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32 ||
                             cb_data_format_output == tt::DataFormat::Int32 ||
                             cb_data_format_output == tt::DataFormat::UInt32;
+    // Style B compute config: build ComputeGen1Config directly, matching the legacy
+    // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
+    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
+    // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
+    // (via tilize) and TILIZE_CB (self-loop). UnpackToDest, not UnpackToSrc: SrcA/SrcB are
+    // only 19 bits wide, so unpacking Float32 there truncates it to tf32. MultiCoreTiledGeneric
+    // already sets UnpackToDest on the same two CBs.
+    // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
+    if (cb_data_format == tt::DataFormat::Float32) {
+        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
+    }
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = std::move(compute_kernel_args);
-    compute_desc.named_compile_time_args = std::move(compute_named_compile_time_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .fp32_dest_acc_en = fp32_dest_acc_en,
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/"
+            "transpose_xw_rm_single_tile_size.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {DFBBinding{.dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::CONSUMER},
+             // TILIZE_CB self-loop: produced (tilize) and consumed (transpose) by this kernel alone.
+             DFBBinding{
+                 .dfb_spec_name = TILIZE_CB, .accessor_name = "cb_tilize", .endpoint_type = DFBEndpointType::PRODUCER},
+             DFBBinding{
+                 .dfb_spec_name = TILIZE_CB, .accessor_name = "cb_tilize", .endpoint_type = DFBEndpointType::CONSUMER},
+             DFBBinding{
+                 .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .compile_time_args = {{"x_block_size", x_block_size}, {"w_block_size", w_block_size}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_blocks"}},
+        .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
     };
 
+    // ---- Varargs (core-invariant) ----
     auto input_shape_view = input_tensor.logical_shape().view();
+    std::vector<uint32_t> reader_varargs;  // input_shape ++ input_strides
+    reader_varargs.reserve(input_shape_view.size() + input_strides.size());
+    reader_varargs.insert(reader_varargs.end(), input_shape_view.begin(), input_shape_view.end());
+    reader_varargs.insert(reader_varargs.end(), input_strides.begin(), input_strides.end());
 
-    // Trailing args (everything after src_addr/start/end) are core-invariant; build once.
-    std::vector<uint32_t> reader_trailing_args;
-    reader_trailing_args.reserve(input_shape_view.size() + input_strides.size());
-    reader_trailing_args.insert(reader_trailing_args.end(), input_shape_view.begin(), input_shape_view.end());
-    reader_trailing_args.insert(reader_trailing_args.end(), input_strides.begin(), input_strides.end());
+    std::vector<uint32_t> writer_varargs;  // input_shape ++ perm ++ output_strides
+    writer_varargs.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
+    writer_varargs.insert(writer_varargs.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_varargs.insert(writer_varargs.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_varargs.insert(writer_varargs.end(), output_strides.begin(), output_strides.end());
 
-    std::vector<uint32_t> writer_trailing_args;
-    writer_trailing_args.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
-    writer_trailing_args.insert(writer_trailing_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_trailing_args.insert(
-        writer_trailing_args.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-    writer_trailing_args.insert(writer_trailing_args.end(), output_strides.begin(), output_strides.end());
+    // ---- Per-node runtime args ----
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
+
     auto cores = corerange_to_cores(all_cores, std::nullopt);
-
     uint32_t start_block = 0;
     uint32_t num_blocks_per_core = 0;
-    reader_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
-    compute_desc.runtime_args.reserve(cores.size());
     for (const auto& core : cores) {
         if (core_group_1.contains(core)) {
             num_blocks_per_core = num_tiles_per_core_group_1;
@@ -345,31 +368,32 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreBlockedGeneric:
         }
         uint32_t end_block = start_block + num_blocks_per_core;
 
-        KernelDescriptor::RTArgList reader_args;
-        reader_args.push_back(src_buffer);
-        reader_args.push_back(start_block);
-        reader_args.push_back(end_block);
-        reader_args.append(reader_trailing_args);
-        reader_desc.emplace_runtime_args(core, reader_args);
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"end_block", end_block}});
+        reader_run_args.advanced_options.runtime_varargs.emplace(core, reader_varargs);
 
-        KernelDescriptor::RTArgList writer_args;
-        writer_args.push_back(dst_buffer);
-        writer_args.push_back(start_block);
-        writer_args.push_back(end_block);
-        writer_args.append(writer_trailing_args);
-        writer_desc.emplace_runtime_args(core, writer_args);
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"end_block", end_block}});
+        writer_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
 
-        // Compute only consumes num_blocks_per_core in slot 0; the remaining two
-        // slots are unused/padding (preserve historical layout).
-        compute_desc.emplace_runtime_args(core, {num_blocks_per_core, 0u, 0u});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_blocks", num_blocks_per_core}});
         start_block = end_block;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    // ---- Assemble ----
+    ProgramSpec spec;
+    spec.name = "permute_rm_blocked_generic";
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    spec.dataflow_buffers = {std::move(src_cb), std::move(out_cb), std::move(tilize_cb)};
+    spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}};
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args.insert({INPUT, input_mesh_tensor});
+    run_args.tensor_args.insert({OUTPUT, output_mesh_tensor});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::data_movement

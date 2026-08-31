@@ -6,28 +6,24 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    // buffer
-    uint32_t dst_addr = get_arg_val<uint32_t>(i++);
-
     // output
-    uint32_t output_stick_size = get_arg_val<uint32_t>(i++);
+    uint32_t output_stick_size = get_arg(args::output_stick_size);
 
     // etc
-    uint32_t start_id = get_arg_val<uint32_t>(i++);
-    uint32_t num_sticks = get_arg_val<uint32_t>(i++);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_sticks = get_arg(args::num_sticks);
 
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_0;
-
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    // The aligned page size of a row-major stick rides the binding token, baked in when the program is
+    // built. A row of a different width is a different program-cache key, so the program is rebuilt
+    // rather than reused with a stale page size.
+    const auto s0 = TensorAccessor(tensor::s0);
 
     Noc noc;
-    DataflowBuffer dfb_out_obj(cb_id_out);
+    // The output stick is drained straight out of the buffer the reader staged it in.
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {

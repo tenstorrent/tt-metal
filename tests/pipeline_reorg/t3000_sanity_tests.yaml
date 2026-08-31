@@ -25,18 +25,7 @@
     source tests/scripts/t3000/run_t3000_unit_tests.sh
     run_t3000_ccl_tests
   skus:
-    wh_llmbox:
-      timeout: 10
+    wh_llmbox_civ2:
+      timeout: 15
   owner_id: U06MJ6CVCGZ # Yu Gao
   team: ttnn
-
-- name: t3k_fabric_tests
-  cmd: |
-    source tests/scripts/t3000/run_t3000_unit_tests.sh
-    run_t3000_ttfabric_tests
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U06US5C7M7X # Sean Nijjar
-  team: scaleout
-  upload_benchmarks: true
