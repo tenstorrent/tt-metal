@@ -20,13 +20,13 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/cluster.hpp
     api/tt-metalium/constants.hpp
     api/tt-metalium/core_coord.hpp
-    api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
     api/tt-metalium/device_types.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
+    api/tt-metalium/experimental/allocation_context.hpp
     api/tt-metalium/experimental/dispatch_telemetry.hpp
     api/tt-metalium/experimental/context/metal_env.hpp
     api/tt-metalium/experimental/core_subset_write/buffer_write.hpp
@@ -45,6 +45,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_types.hpp
     api/tt-metalium/experimental/fabric/mesh_graph.hpp
     api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp
+    api/tt-metalium/experimental/fabric/physical_descriptor_builder.hpp
     api/tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp
     api/tt-metalium/experimental/fabric/physical_system_descriptor.hpp
     api/tt-metalium/experimental/fabric/pipeline_builder.hpp
@@ -56,7 +57,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/forge_backdoor/global_semaphore.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
-    api/tt-metalium/experimental/internal/blitz_decode_pipeline.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
@@ -100,16 +100,16 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/tensor_apis_with_pad_values.hpp
     api/tt-metalium/experimental/tensor_host_pad_apis.hpp
     api/tt-metalium/experimental/tensor_serialization_support.hpp
-    api/tt-metalium/experimental/tensor/host_tensor.hpp
-    api/tt-metalium/experimental/tensor/mesh_tensor.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/page_config.hpp
-    api/tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp
-    api/tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp
-    api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
-    api/tt-metalium/experimental/tensor/tensor_apis.hpp
-    api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/tensor/host_tensor.hpp
+    api/tt-metalium/tensor/mesh_tensor.hpp
+    api/tt-metalium/tensor/spec/layout/alignment.hpp
+    api/tt-metalium/tensor/spec/layout/layout.hpp
+    api/tt-metalium/tensor/spec/layout/page_config.hpp
+    api/tt-metalium/tensor/spec/layout/tensor_layout.hpp
+    api/tt-metalium/tensor/spec/memory_config/memory_config.hpp
+    api/tt-metalium/tensor/spec/tensor_spec.hpp
+    api/tt-metalium/tensor/tensor_apis.hpp
+    api/tt-metalium/tensor/tensor_types.hpp
     api/tt-metalium/experimental/udm/mesh_builder.hpp
     api/tt-metalium/experimental/udm/mesh_circular_buffer.hpp
     api/tt-metalium/experimental/udm/mesh_kernel.hpp
@@ -126,8 +126,11 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/hal_types.hpp
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
-    api/tt-metalium/internal/cluster.hpp
-    api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
+    api/internal/blitz_decode_pipeline.hpp
+    api/internal/cluster.hpp
+    api/internal/cluster_noc_helpers.hpp
+    api/internal/disaggregation/kv_chunk_address_table.hpp
+    api/internal/fabric.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
     api/tt-metalium/maybe_remote.hpp
@@ -153,6 +156,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/shape.hpp
     api/tt-metalium/shape2d.hpp
     api/tt-metalium/shape_base.hpp
+    api/tt-metalium/shard_data_transfer.hpp
     api/tt-metalium/sub_device.hpp
     api/tt-metalium/sub_device_types.hpp
     api/tt-metalium/system_mesh.hpp
@@ -163,7 +167,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/tt_backend_api_types.hpp
     api/tt-metalium/tt_metal.hpp
     api/tt-metalium/tt_metal_profiler.hpp
-    api/tt-metalium/vector_aligned.hpp
     api/tt-metalium/work_split.hpp
 )
 

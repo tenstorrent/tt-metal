@@ -48,7 +48,9 @@ from tqdm.auto import tqdm
 import ttml
 import ttnn
 
+from ttml.common.utils import no_grad
 from ttml.models.qwen3.kv_cache import KVCache
+from utils.device_setup import setup_device, teardown_device
 from utils.memory import MemoryUsageTracker, finalize_memory
 from utils.tensor_utils import (
     create_input_tensor_from_torch,
@@ -253,6 +255,7 @@ def generate_hf(hf_model, tokenizer, all_prompt_tokens, max_tokens, temperature=
 # =====================================================================
 
 
+@no_grad()
 def generate_ttml(
     model,
     config,
@@ -276,7 +279,6 @@ def generate_ttml(
     them to full vocab before sampling or collection — this is simpler and
     avoids the distributed argmax+Gumbel approximation.
     """
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
 
     if isinstance(all_prompt_tokens[0], int):
@@ -286,14 +288,11 @@ def generate_ttml(
     per_device_batch = batch_size // dp_size if is_dp else batch_size
 
     orig_vocab = config.vocab_size
-    padded_vocab = ((orig_vocab + 31) // 32) * 32
 
     past_kv = KVCache(config.num_hidden_layers, max_seq_len) if kv_cache else None
     causal_mask = None if kv_cache else _causal_mask(max_seq_len, device)
 
     logits_mask = None
-    if not collect_logits:
-        logits_mask = _sample_logits_mask(orig_vocab, padded_vocab, device)
 
     current_tokens = [list(pt) for pt in all_prompt_tokens]
     generated = [[] for _ in range(batch_size)]
@@ -311,13 +310,11 @@ def generate_ttml(
 
         if is_dp:
             input_tensor = create_input_tensor_dp(padded.numpy(), device)
-            input_ids_np = padded.numpy()
         else:
             input_tensor = create_input_tensor_from_torch(padded, device)
-            input_ids_np = padded.numpy()
 
         # --- forward ---
-        logits = model(input_tensor, attn_mask, past_key_values=past_kv, input_ids_np=input_ids_np)
+        logits = model(input_tensor, attn_mask, past_key_values=past_kv)
 
         if track_memory and step == 0:
             MemoryUsageTracker.snapshot("GENERATION_STEP_0")
@@ -342,6 +339,9 @@ def generate_ttml(
                 logits_lists,
             )
         else:
+            if step == 0:
+                # logits is post-all_gather here, so dim 3 is the full padded vocab.
+                logits_mask = _sample_logits_mask(orig_vocab, int(logits.shape()[3]), device)
             tokens = _sample_on_device(
                 logits,
                 pred_positions,
@@ -531,9 +531,7 @@ def main():
         print(f"Prompt[{i}]: {p!r}  ->  {len(all_prompt_tokens[i])} tokens")
 
     # 3. Set up device
-    from utils.device_setup import setup_device
-
-    ctx, device = setup_device(dp_size, tp_size)
+    _ctx, device = setup_device(dp_size, tp_size)
 
     memory_guard = None
     if args.track_memory:
@@ -612,8 +610,14 @@ def main():
     if args.track_memory:
         finalize_memory(memory_guard)
 
-    ctx.close_device()
+    teardown_device()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # main() tears down on the success path; this covers the exception path,
+        # where that call is skipped. teardown_device() is idempotent, so the
+        # double call on success is a no-op.
+        teardown_device()

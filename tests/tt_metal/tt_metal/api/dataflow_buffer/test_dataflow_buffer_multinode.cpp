@@ -5,23 +5,24 @@
 // Multi-core and multi-DFB (concurrent/sequential) tests (Metal 2.0).
 
 #include "dfb_test_common.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
 
 // multi-core + concurrent/sequential multi-DFB harnesses (Metal 2.0)
 static void run_single_dfb_multicore_2_0(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t num_producers,
     uint32_t num_consumers,
     m2::DFBAccessPattern pap,
     m2::DFBAccessPattern cap,
     bool implicit_sync) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
-    IDevice* device = mesh_device->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = mesh_device.compute_with_storage_grid_size();
     if (grid.x * grid.y < 2) {
         GTEST_SKIP() << "Multi-core test requires >= 2 Tensix cores";
     }
@@ -46,8 +47,8 @@ static void run_single_dfb_multicore_2_0(
 
     // Each core owns num_entries slots → total = 2 * num_entries.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 2 * num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -87,7 +88,7 @@ static void run_single_dfb_multicore_2_0(
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -108,37 +109,36 @@ static void run_single_dfb_multicore_2_0(
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, 2 * num_entries * entry_size / sizeof(uint32_t));
-    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
-    m2_writeshard_barrier_uint32(device, in_tensor, input);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
     EXPECT_EQ(input, output) << "M2 multi-core DFB identity mismatch";
 }
 
 static void run_concurrent_dfbs_program_2_0(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t num_dfbs,
     uint32_t entry_size,
     uint32_t entries_per_dfb,
     bool implicit_sync) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Concurrent DFB tests require Quasar";
     }
     if (2 * num_dfbs > 6) {
         GTEST_SKIP() << "2*num_dfbs must fit in 6 Quasar DM threads";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     const m2::NodeCoord node{0, 0};
 
     // One big DRAM tensor sliced num_dfbs ways for input + same for output.
     const uint32_t total_entries = num_dfbs * entries_per_dfb;
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, total_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     // Build N DFBs + N producer kernels + N consumer kernels.
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -201,7 +201,7 @@ static void run_concurrent_dfbs_program_2_0(
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     m2::ProgramRunArgs params;
     for (const auto& name : kernel_names) {
@@ -215,13 +215,13 @@ static void run_concurrent_dfbs_program_2_0(
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, total_entries * entry_size / sizeof(uint32_t));
-    detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
-    m2_writeshard_barrier_uint32(device, in_tensor, input);
+    slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> output;
-    detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+    slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
     EXPECT_EQ(input, output) << "M2 concurrent DFBs mismatch";
 }
 
@@ -230,18 +230,17 @@ struct M2SeqDFBSpec {
 };
 
 static void run_sequential_4_dfbs_2_0(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const std::array<M2SeqDFBSpec, 4>& dfb_specs,
     uint32_t num_producers,
     uint32_t num_consumers,
     bool implicit_sync) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Sequential 4-DFB test requires Quasar";
     }
     if (num_producers + num_consumers > 6) {
         GTEST_SKIP() << "num_p + num_c must fit in 6 Quasar DM threads";
     }
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t entry_size = 1024;
     // num_entries must be divisible by both num_producers and num_consumers.
@@ -263,8 +262,8 @@ static void run_sequential_4_dfbs_2_0(
     in_tensors.reserve(4);
     out_tensors.reserve(4);
     for (uint32_t i = 0; i < 4; ++i) {
-        in_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec));
-        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, tensor_spec));
+        in_tensors.push_back(MeshTensor::allocate_on_device(mesh_device, tensor_spec));
+        out_tensors.push_back(MeshTensor::allocate_on_device(mesh_device, tensor_spec));
     }
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -339,7 +338,7 @@ static void run_sequential_4_dfbs_2_0(
         }},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     m2::ProgramRunArgs params;
     // Kernels with no runtime args still need a KernelRunArgs entry so the
@@ -359,15 +358,15 @@ static void run_sequential_4_dfbs_2_0(
     for (uint32_t i = 0; i < 4; ++i) {
         inputs[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(
             0, 100, num_entries * entry_size / sizeof(uint32_t));
-        detail::WriteToBuffer(*in_tensors[i].mesh_buffer().get_reference_buffer(), inputs[i]);
-        m2_writeshard_barrier_uint32(device, in_tensors[i], inputs[i]);
+        slow_dispatch::WriteToBuffer(in_tensors[i].mesh_buffer(), inputs[i]);
+        m2_writeshard_barrier_uint32(mesh_device, in_tensors[i], inputs[i]);
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     for (uint32_t i = 0; i < 4; ++i) {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*out_tensors[i].mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(out_tensors[i].mesh_buffer(), output);
         EXPECT_EQ(inputs[i], output) << "M2 sequential 4xDFB[" << i << "] output mismatch";
     }
 }
@@ -375,21 +374,21 @@ static void run_sequential_4_dfbs_2_0(
 // multi-core tests
 TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx1S_2_0) {
     run_single_dfb_multicore_2_0(
-        this->devices_.at(0), 1, 1, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
+        this->device(), 1, 1, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
 }
 TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_2Sx2S_2_0) {
     run_single_dfb_multicore_2_0(
-        this->devices_.at(0), 2, 2, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
+        this->device(), 2, 2, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::STRIDED, GetParam());
 }
 TEST_P(DFBImplicitSyncParamFixture_2_0, MultiCoreDMTest2Core_1Sx4A_2_0) {
     run_single_dfb_multicore_2_0(
-        this->devices_.at(0), 1, 4, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::ALL, GetParam());
+        this->device(), 1, 4, m2::DFBAccessPattern::STRIDED, m2::DFBAccessPattern::ALL, GetParam());
 }
 
 // concurrent / sequential multi-DFB tests
 TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest3xDFB_1Sx1S_2_0) {
     run_concurrent_dfbs_program_2_0(
-        this->devices_.at(0),
+        this->device(),
         /*num_dfbs=*/3,
         /*entry_size=*/1024,
         /*entries_per_dfb=*/16,
@@ -403,7 +402,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_3Sx3S_2_0) {
         M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
         M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
         M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED}};
-    run_sequential_4_dfbs_2_0(this->devices_.at(0), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
+    run_sequential_4_dfbs_2_0(this->device(), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
 }
 
 TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed_2_0) {
@@ -417,16 +416,14 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, DMTest4xDFB_Mixed_2_0) {
         M2SeqDFBSpec{m2::DFBAccessPattern::STRIDED},
         M2SeqDFBSpec{m2::DFBAccessPattern::ALL},
         M2SeqDFBSpec{m2::DFBAccessPattern::ALL}};
-    run_sequential_4_dfbs_2_0(this->devices_.at(0), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
+    run_sequential_4_dfbs_2_0(this->device(), dfbs, /*num_producers=*/3, /*num_consumers=*/3, GetParam());
 }
 
 TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     const bool implicit_sync = GetParam();
-    IDevice* device = mesh_device->get_devices()[0];
 
     constexpr uint32_t num_dfbs = 4;
     constexpr uint32_t entry_size = 1024;
@@ -444,7 +441,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     std::vector<MeshTensor> out_tensors;
     out_tensors.reserve(4);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        out_tensors.push_back(MeshTensor::allocate_on_device(*mesh_device, dram_spec));
+        out_tensors.push_back(MeshTensor::allocate_on_device(this->device(), dram_spec));
     }
 
     std::vector<m2::DataflowBufferSpec> dfbs;
@@ -526,7 +523,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
         }},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
 
     m2::ProgramRunArgs params;
     // Producer has no runtime args but still needs a KernelRunArgs entry to be
@@ -546,35 +543,33 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
     // finalize+allocate. No borrowed_from / ring tensor needed; the compute
     // kernel is TRISC-only and can't carry tensor bindings.
-    detail::CompileProgram(device, program);
+    program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(device);
+    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
 
     std::vector<std::vector<uint32_t>> inputs(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const uint32_t dfb_l1_addr =
             program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(DFB_NAMES[i]))->uniform_alloc_addr();
         inputs[i] = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_bytes / sizeof(uint32_t));
-        detail::WriteToDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, inputs[i]);
+        slow_dispatch::WriteToL1(this->device(), CoreCoord(0, 0), dfb_l1_addr, inputs[i]);
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*out_tensors[i].mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(out_tensors[i].mesh_buffer(), output);
         EXPECT_EQ(inputs[i], output) << "M2 concurrent Tensix→DM 4xDFB[" << i << "] mismatch";
     }
 }
 
 // homogeneous-grid multi-core group test
-TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
+    if (this->device().arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
-    IDevice* device = mesh_device->get_devices()[0];
-    CoreCoord grid = device->compute_with_storage_grid_size();
+    CoreCoord grid = this->device().compute_with_storage_grid_size();
     if (grid.x < 2 || grid.y < 2) {
         GTEST_SKIP() << "Homogeneous-grid test requires >= 2x2 Tensix grid";
     }
@@ -591,8 +586,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
 
     // Each core owns num_entries slots → 4 cores × num_entries pages total.
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, 4 * num_entries, DataType::UINT32);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(this->device(), tensor_spec);
 
     m2::DataflowBufferSpec dfb_spec{
         .unique_id = DFB,
@@ -627,7 +622,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
         }},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(this->device(), spec);
     program.impl().finalize_dataflow_buffer_configs();
 
     // Identical HW config across the 4 cores → must collapse into 1 DfbGroup.

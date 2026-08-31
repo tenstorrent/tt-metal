@@ -67,7 +67,13 @@ void kernel_main() {
 
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
     tt::tt_fabric::RoutingPlaneConnectionManager connections;
+#ifdef TEST_NON_DEFAULT_HANDSHAKE_NOC
+    // Exercise the explicit template path with the NoC opposite the helper's default.
+    constexpr uint8_t worker_handshake_noc = 1 - tt::tt_fabric::get_fabric_worker_noc();
+    open_connections<worker_handshake_noc>(connections, num_send_dir, rt_arg_idx);
+#else
     open_connections(connections, num_send_dir, rt_arg_idx);
+#endif
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
@@ -372,7 +378,11 @@ void kernel_main() {
     }
 
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+#ifdef TEST_NON_DEFAULT_HANDSHAKE_NOC
+    close_connections<worker_handshake_noc>(connections);
+#else
     close_connections(connections);
+#endif
 
     noc_async_write_barrier();
 

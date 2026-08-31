@@ -116,6 +116,7 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
+  pytest tests/ttnn/distributed/test_matmul_send_recv_pipeline.py ; fail+=$?
   # Regression test for async cpu() use-after-free (issue #43638)
   pytest tests/ttnn/unit_tests/base_functionality/test_device_synchronize.py::test_cpu_blocking_false_discarded_return_no_uaf -xv --count=3 ; fail+=$?
   # Record the end time
@@ -185,27 +186,7 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
-}
-
-run_t3000_grok_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_grok_tests"
-
-  pytest models/experimental/grok/tests/test_grok_rms_norm.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_attention.py ; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_mlp.py --timeout=500; fail+=$?
-  pytest models/experimental/grok/tests/test_grok_moe.py --timeout=600; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_grok_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
 run_t3000_deepseek_tests() {
@@ -301,17 +282,8 @@ run_t3000_tt_dit_tests() {
   #Clip Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
 
-  #Image DiTs VAE with one iteration pcc and perf test
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
-
-  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks
+  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks. TODO: DELETE!
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
-
-  #Mochi Transformer
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model[wormhole_b0-device_params0-no_load_cache-no_test_attention_mask-short_seq-2x4sp0tp1-True] ; fail+=$?
-
-  #Mochi VAE main component
-  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "resblock_forward and 1x8 and l768 and bf16" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -321,32 +293,6 @@ run_t3000_tt_dit_tests() {
     exit 1
   fi
 
-}
-
-run_t3000_mistral-small-3.1-24b-vision_unit_tests() {
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mistral-small-3.1-24b-vision_unit_tests"
-
-  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
-  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
-
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_conv2d.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_rms.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_mlp.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_attention.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_pixtral_transformer.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_patch_rot_emb.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_model.py ; fail+=$?
-  HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b pytest --timeout 600 models/tt_transformers/tests/multimodal/mistral_24b/test_vision_tower.py ; fail+=$?
-
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mistral-small-3.1-24b-vision_unit_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
 }
 
 run_t3000_tttv2_fast_unit_tests() {
@@ -453,9 +399,6 @@ run_t3000_tests() {
 
   # Run ttnn tests
   run_t3000_ttnn_tests
-
-  # Run grok tests
-  run_t3000_grok_tests
 
   # Run tt_dit tests
   run_t3000_tt_dit_tests

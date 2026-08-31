@@ -15,6 +15,11 @@
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
 
+// Must match write_chunk / the aggregator: the CB producer (read_chunk) splits each chunk into this many row-bands
+#ifndef IN0_SUB_CHUNKS
+#define IN0_SUB_CHUNKS 1
+#endif
+
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -72,8 +77,10 @@ void kernel_main() {
     const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_tensor_address);
 
     OpSignaler op_signaler;
+    bool writer_signals_mm = false;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
+        writer_signals_mm = get_arg_val<uint32_t>(arg_idx++) == 1;
     }
 
     uint32_t slices_expected = 0;
@@ -93,6 +100,13 @@ void kernel_main() {
             slices_expected = num_targets_forward_direction;
         }
         writes_expected = slices_expected - 1;
+    }
+
+    // Mirror the writer's split-forwarding: on an even ring the diametric slice arrives in halves from both links
+    bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    if (split_forwarding_enabled && direction == 1) {
+        slices_expected++;
+        writes_expected++;
     }
 
     uint32_t batch_input_tile_offset = input_worker_tile_offset;
@@ -131,53 +145,87 @@ void kernel_main() {
                     input_tensor_Ht,
                     output_tensor_Wt,
                     my_chip_id,
-                    false);
+                    false,
+                    mm_cores_y,
+                    IN0_SUB_CHUNKS);
             }
 
             // Receive remote chunks
             uint32_t slices_received = 0;
+            uint32_t slices_forwarded = 0;
             uint32_t last_input_chunk_start_tile = input_chunk_start_tile;
             while (slices_received < slices_expected) {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
+                uint32_t num_chunks = device_k_block_counts[actual_sender_chip_id];
+
+                bool should_forward = (topology == Topology::Linear && writes_expected > 0) ||
+                                      (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)));
+                // The diametric slice (last one received) arrives split across both links.
+                bool is_split_received_slice =
+                    split_forwarding_enabled && (slices_received == slices_expected - 1) && (num_chunks >= 2);
+                // The last slice we relay is sent on in halves, one per link.
+                bool is_split_forwarded_slice = split_forwarding_enabled && should_forward &&
+                                                (slices_forwarded == writes_expected - 1) && (num_chunks >= 2);
+                uint32_t first_half_chunks = num_chunks / 2;
 
                 input_chunk_start_tile = global_tile_index;
-                for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
-                    // Receive the next chunk of data
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
-                    sem_target++;
+                for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; chunk_idx++) {
+                    // For a split diametric slice each link delivers only its half
+                    bool receive_this_chunk =
+                        !is_split_received_slice ||
+                        (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
+                    if (receive_this_chunk) {
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
+                    }
 
-                    if ((topology == Topology::Linear && writes_expected > 0) ||
-                        (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
+                    if (should_forward) {
                         uint32_t actual_chunk_w = device_chunk_widths[actual_sender_chip_id][chunk_idx];
                         uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                             input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
-                        uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
-                        read_chunk(
-                            input_chunk_start_tile,
-                            batch_input_tile_offset,
-                            cb_output_id,
-                            tiles_in_current_chunk,
-                            actual_chunk_w,
-                            actual_chunk_h,
-                            padded_M_tiles / mm_cores_y,
-                            max_tiles_per_packet,
-                            ag_worker_id,
-                            ag_worker_cores,
-                            input_tensor_addrgen,
-                            input_tensor_page_size,
-                            output_tensor_addrgen,
-                            input_tensor_Wt,
-                            input_tensor_Ht,
-                            output_tensor_Wt,
-                            actual_sender_chip_id,
-                            true);
+                        // A split-forwarded slice is received whole but relayed in halves
+                        bool relay_this_chunk =
+                            !is_split_forwarded_slice ||
+                            (direction == 0 ? (chunk_idx < first_half_chunks) : (chunk_idx >= first_half_chunks));
+                        if (relay_this_chunk) {
+                            uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
+                            read_chunk(
+                                input_chunk_start_tile,
+                                batch_input_tile_offset,
+                                cb_output_id,
+                                tiles_in_current_chunk,
+                                actual_chunk_w,
+                                actual_chunk_h,
+                                padded_M_tiles / mm_cores_y,
+                                max_tiles_per_packet,
+                                ag_worker_id,
+                                ag_worker_cores,
+                                input_tensor_addrgen,
+                                input_tensor_page_size,
+                                output_tensor_addrgen,
+                                input_tensor_Wt,
+                                input_tensor_Ht,
+                                output_tensor_Wt,
+                                actual_sender_chip_id,
+                                true,
+                                mm_cores_y,
+                                IN0_SUB_CHUNKS);
+                        } else {
+                            advance_chunk_start_tile(
+                                input_chunk_start_tile, actual_chunk_w, actual_chunk_h, input_tensor_Wt);
+                        }
                         last_input_chunk_start_tile = input_chunk_start_tile;
                     }
                     if constexpr (fuse_op) {
-                        // Signal matmul to go
-                        op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                        if (!writer_signals_mm && receive_this_chunk) {
+                            //  Signal matmul to go
+                            op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                        }
                     }
+                }
+                if (should_forward) {
+                    slices_forwarded++;
                 }
                 slices_received++;
             }

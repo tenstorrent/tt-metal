@@ -2352,6 +2352,62 @@ class TestGraphReportImport:
         assert db_path.exists()
         assert db_path.name == "db.sqlite"
 
+    @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_loudbox")], indirect=True)
+    def test_import_normalizes_buffer_chunk_device_ids_from_submesh_capture(self, mesh_device, tmp_report_dir):
+        report_path = tmp_report_dir / "submesh_report.json"
+        db_dir = tmp_report_dir / "db"
+        submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 1), offset=ttnn.MeshCoordinate(0, 0))
+
+        assert submesh.id() != 0, "Submesh must have a nonzero raw ID to make normalization observable"
+
+        with ttnn.graph.full_graph_capture(str(report_path)):
+            input_tensor = ttnn.from_torch(
+                torch.ones((1, 1, 32, 32), dtype=torch.bfloat16),
+                device=submesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            output_tensor = ttnn.relu(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.synchronize_device(submesh)
+
+        assert output_tensor is not None
+        with open(report_path) as f:
+            report = json.load(f)
+
+        assert report.get("per_operation_buffers"), "Capture must exercise the per-operation buffer path"
+        assert report.get("buffer_pages_by_address"), "Capture must contain nested detailed buffer snapshots"
+
+        raw_device_ids = {device["device_id"] for device in report["devices"]}
+        raw_page_device_ids = {
+            page["device_id"]
+            for snapshots in report["buffer_pages_by_address"].values()
+            for snapshot in snapshots
+            for page in snapshot["pages"]
+        }
+        assert submesh.id() in raw_device_ids
+        assert raw_page_device_ids == {submesh.id()}
+
+        device_id_remap = {raw: normalized for normalized, raw in enumerate(sorted(raw_device_ids))}
+        expected_page_device_ids = {device_id_remap[raw] for raw in raw_page_device_ids}
+
+        db_path = graph_report.import_report(report_path, db_dir)
+        with sqlite3.connect(db_path) as conn:
+            normalized_device_ids = {row[0] for row in conn.execute("SELECT DISTINCT device_id FROM devices")}
+            normalized_buffer_ids = {row[0] for row in conn.execute("SELECT DISTINCT device_id FROM buffers")}
+            chunk_device_ids = {row[0] for row in conn.execute("SELECT DISTINCT device_id FROM buffer_chunks")}
+            orphan_count = conn.execute(
+                "SELECT COUNT(*) "
+                "FROM buffer_chunks c "
+                "LEFT JOIN devices d ON c.device_id = d.device_id AND c.rank = d.rank "
+                "WHERE d.device_id IS NULL"
+            ).fetchone()[0]
+
+        assert normalized_device_ids == set(device_id_remap.values())
+        assert normalized_buffer_ids == expected_page_device_ids
+        assert chunk_device_ids == expected_page_device_ids
+        assert orphan_count == 0
+
     def test_import_populates_tables(self, device, tmp_report_dir):
         """Test that import populates all expected tables."""
         report_path = tmp_report_dir / "report.json"
@@ -2616,10 +2672,11 @@ class TestBufferChunksSchemaAndAggregation:
         and checks that the aggregated row carries the expected math: chunk
         covers the page-address span, ``num_pages`` reflects input count."""
         report = self._minimal_report()
+        report["devices"] = [{"device_id": 7}]
         # Three contiguous L1 pages on one core at address 1000.
         report["buffer_pages"] = [
             {
-                "device_id": 0,
+                "device_id": 7,
                 "address": 1000,
                 "core_x": 0,
                 "core_y": 0,

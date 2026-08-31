@@ -720,11 +720,22 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::CompileTimeArgs compile_time_args,
                tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_compile_time_args,
                tt::tt_metal::KernelDescriptor::Defines defines,
-               tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
+               const nb::object& runtime_args,
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
                tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
+                // Accept RuntimeArgsWrapper, RuntimeArgsView, or the raw RuntimeArgs type, mirroring
+                // the .runtime_args property setter rather than relying on the generic sequence
+                // caster falling back to the wrapper's __iter__.
+                tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args_cpp;
+                if (nb::isinstance<RuntimeArgsWrapper>(runtime_args)) {
+                    runtime_args_cpp = nb::cast<RuntimeArgsWrapper&>(runtime_args).get();
+                } else if (nb::isinstance<RuntimeArgsView>(runtime_args)) {
+                    runtime_args_cpp = nb::cast<RuntimeArgsView&>(runtime_args).get_ref();
+                } else {
+                    runtime_args_cpp = nb::cast<tt::tt_metal::KernelDescriptor::RuntimeArgs>(runtime_args);
+                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -732,7 +743,7 @@ void py_module_types(nb::module_& mod) {
                     std::move(compile_time_args),
                     std::move(named_compile_time_args),
                     std::move(defines),
-                    std::move(runtime_args),
+                    std::move(runtime_args_cpp),
                     std::move(common_runtime_args),
                     ////////////////////////////////////////////////////////////
                     // Blaze-only experimental named args

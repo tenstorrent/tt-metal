@@ -88,3 +88,27 @@
       timeout: 60
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+
+- name: ResNet-50 device perf tests
+  cmd: |
+    pytest models/demos/vision/classification/resnet50/{arch_dir}/tests/test_perf_device_resnet50.py -m models_device_performance_bare_metal
+  model: resnet50
+  skus:
+    bh_p150b_civ2:
+      timeout: 7
+      arch_dir: blackhole
+    wh_n150:
+      timeout: 5
+      arch_dir: wormhole
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
+- name: ResNet-50 e2e model perf tests
+  cmd: |
+    pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m model_perf_t3000
+  model: resnet50
+  skus:
+    wh_llmbox_perf:
+      timeout: 8
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn

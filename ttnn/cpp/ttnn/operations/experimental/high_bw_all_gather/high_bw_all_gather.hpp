@@ -19,7 +19,9 @@ Tensor high_bw_all_gather(
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
-    std::optional<uint32_t> num_links = std::nullopt);
+    std::optional<uint32_t> num_links = std::nullopt,
+    std::optional<uint32_t> input_batch_index = std::nullopt,
+    std::optional<uint32_t> gathered_dim_size = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 

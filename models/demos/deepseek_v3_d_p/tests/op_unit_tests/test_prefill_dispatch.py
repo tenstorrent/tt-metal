@@ -43,6 +43,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_dispatch_metadata,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 # =====
 # mesh 4x2
@@ -503,7 +504,7 @@ def dispatch_shape_params():
     dispatch_shape_params(),
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     ALL_MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
@@ -529,6 +530,7 @@ def dispatch_shape_params():
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
+    device_params,
     model_name,
     seq_len_per_chip,
     emb_dim,
@@ -536,7 +538,6 @@ def test_ttnn_dispatch(
     num_experts_per_tok,
     dispatch_buffer_capacity_factor,
     num_links,
-    topology,
     use_predictable_data,
     input_layout,
     input_dtype,
@@ -547,6 +548,7 @@ def test_ttnn_dispatch(
     is_ci_env,
     is_ci_v2_env,
 ):
+    topology = per_axis_topology(device_params["fabric_config"])[0]
     run_dispatch(
         mesh_device,
         model_name,

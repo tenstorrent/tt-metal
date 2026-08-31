@@ -31,6 +31,7 @@ namespace sfpu {
  * @return sfpi::vFloat Result of base**pow
  *
  * Special Cases:
+ * - base = 0, pow > 0: Returns 0
  * - base = 0, pow < 0: Returns NaN (undefined)
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
@@ -119,12 +120,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
     auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
-    // Division by 0 when base is 0 and pow is negative => set to NaN
-    v_if((absbase == 0.f) && pow < 0.f) {
-        y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-    }
-    v_endif;
-
     v_if(base < 0.0f) {  // negative base
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
@@ -133,6 +128,24 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+            y = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+    }
+    v_endif;
+
+    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // Must follow the negative-base branch: SFPU `<` is sign-bit based, so
+    // v_if(base < 0) classes -0 as negative and would overwrite the 0 with the
+    // complex-result NaN; -0 is a zero, not a negative base.
+    // Fill 0 for every non-zero exponent, then narrow to the negative ones.
+    // v_and tightens the enclosing predicate in place, so it costs one compare
+    // where a second flat v_if would also save and restore the lane mask.
+    // pow == 0 fails the != 0 gate and keeps 1.
+    v_if(absbase == 0.f) {
+        v_if(pow != 0.f) {
+            y = 0.0f;
+            v_and(pow < 0.f);
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -252,12 +265,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
-    v_if(base == 0.f && pow < 0.f) {
-        y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
-    }
-    v_endif;
-
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
@@ -271,6 +278,28 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+            y = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
+    }
+    v_endif;
+
+    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // Must follow the negative-base branch: SFPU `<` is sign-bit based, so
+    // v_if(base < 0) classes -0 as negative and would overwrite the 0 with the
+    // complex-result NaN; -0 is a zero, not a negative base.
+    // SFPU `== 0` is bit-exact, so matching -0 needs an abs. Recompute it here
+    // rather than reusing abs_base: that live range would span the log2/exp2 body
+    // and spills this kernel.
+    // Fill 0 for every non-zero exponent, then narrow to the negative ones.
+    // v_and tightens the enclosing predicate in place, so it costs one compare
+    // where a second flat v_if would also save and restore the lane mask.
+    // pow == 0 fails the != 0 gate and keeps 1.
+    sfpi::vFloat abs_end = sfpi::abs(base);
+    v_if(abs_end == 0.f) {
+        v_if(pow != 0.f) {
+            y = 0.0f;
+            v_and(pow < 0.f);
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;

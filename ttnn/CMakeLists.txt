@@ -206,7 +206,7 @@ set_target_properties(
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
         INSTALL_RPATH
-            "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+            "$ORIGIN/build/lib;$ORIGIN"
         CXX_VISIBILITY_PRESET
             "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
         ADDITIONAL_CLEAN_FILES
@@ -295,7 +295,7 @@ if(WITH_PYTHON_BINDINGS)
             BUILD_RPATH
                 "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
             INSTALL_RPATH
-                "${PROJECT_BINARY_DIR}/lib;$ORIGIN/build/lib;$ORIGIN" # FIXME: Install RPATH should not have a build path!
+                "$ORIGIN/build/lib;$ORIGIN/../../build/lib;$ORIGIN" # $ORIGIN/../../build/lib resolves deps for the tt_pybinds copy installed into the source tree at ttnn/ttnn/_ttnn.so
             CXX_VISIBILITY_PRESET
                 "default" # FIXME: Export the symbols we want, and use hidden visibility instead of default
             ADDITIONAL_CLEAN_FILES

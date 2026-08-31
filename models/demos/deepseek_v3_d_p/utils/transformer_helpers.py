@@ -64,12 +64,8 @@ PROMPT_5K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_5k.json")
 PROMPT_25K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json")
 
 TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache")).resolve()
-ILLIAD_1024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2"
-ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
-ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
-ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
-LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
 LONGBOOK_QA_ENG_5120 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_5120_nopad"
+LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
 LONGBOOK_QA_ENG_56320 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_56320_nopad"
 CODE_DEBUG_5K_CHUNKED = TRACE_DIR_BASE / "code_debug_5k_chunked"
 
@@ -81,10 +77,6 @@ CODE_DEBUG_5K_CHUNKED = TRACE_DIR_BASE / "code_debug_5k_chunked"
 # back to the smallest native trace with the same (input_source, padding_side) whose
 # length is >= the requested isl, and the caller slices it (see slice_debug_trace).
 TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
-    ("json_prompts", 1024, "right"): ILLIAD_1024_TRACE,
-    ("json_prompts", 25600, "right"): ILLIAD_25024_TRACE,
-    ("abc_1k", 1024, "right"): ABC_1K_PAD_RIGHT_1024,
-    ("abc_1k", 1024, "left"): ABC_1K_PAD_LEFT_1024,
     ("longbook_qa_eng", 5120, "right"): LONGBOOK_QA_ENG_5120,
     ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
     ("longbook_qa_eng", 56320, "right"): LONGBOOK_QA_ENG_56320,
@@ -96,32 +88,18 @@ def _trace_dir_ready(path: Path) -> bool:
     return path.exists() and (path / "metadata.json").exists()
 
 
-def find_trace_dir(
-    input_source: str,
-    isl_total: int,
-    padding_side: str,
-    use_pretrained: bool,
-    n_routed_experts: int,
-) -> tuple[Path, int] | None:
-    """Return ``(trace_dir, trace_isl)`` for a test configuration, or ``None``.
+def find_trace_dir(input_source: str, isl_total: int, padding_side: str) -> tuple[Path, int] | None:
+    """Return ``(trace_dir, trace_isl)`` for a registered, on-disk trace, or ``None``.
 
     ``trace_isl`` is the trace's NATIVE sequence length. When it is larger than the
     requested ``isl_total`` the caller must slice the trace down to ``isl_total``
     (see :func:`slice_debug_trace`) — valid for causal, nopad prefill traces.
-
-    A trace is eligible only when:
-    - the model uses pretrained weights with 256 experts (traces were generated from
-      the full pretrained DeepSeek-R1 model)
-    - the directory exists and contains a metadata.json
 
     Resolution order:
     1. Exact ``(input_source, isl_total, padding_side)`` match (no slicing).
     2. Otherwise the smallest ready trace with the same ``(input_source, padding_side)``
        whose native isl is ``>= isl_total`` (caller slices the first ``isl_total`` tokens).
     """
-    if not use_pretrained or n_routed_experts != 256:
-        return None
-
     # 1. Exact native-length match — preferred, no slicing needed.
     exact = TRACE_LOOKUP.get((input_source, isl_total, padding_side))
     if exact is not None and _trace_dir_ready(exact):
@@ -502,7 +480,7 @@ def load_and_compute_layer_by_layer(
     from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
     from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-    from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
+    from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 
     if gate_fallback_mode is None:
         gate_fallback_mode = GateComputeMode.HOST_ALL
@@ -553,7 +531,7 @@ def load_and_compute_layer_by_layer(
     # --- Process Embeddings ---
     logger.info("Processing embeddings...")
     embed_sd = sub_state_dict(lazy_sd, f"{prefix}model.embed_tokens.")
-    embed_dequant = dequantize_state_dict(embed_sd, config)
+    embed_dequant = convert_state_dict(embed_sd, config)
 
     if compute_reference:
         embed_with_prefix = {f"embed_tokens.{k}": v for k, v in embed_dequant.items()}
@@ -594,7 +572,7 @@ def load_and_compute_layer_by_layer(
         logger.info(f"Processing layer {i}/{num_layers}...")
 
         layer_sd = sub_state_dict(lazy_sd, f"{prefix}model.layers.{i}.")
-        layer_dequant = dequantize_state_dict(layer_sd, config)
+        layer_dequant = convert_state_dict(layer_sd, config)
 
         if compute_reference:
             layer_with_prefix = {f"layers.{i}.{k}": v for k, v in layer_dequant.items()}
@@ -713,7 +691,7 @@ def load_and_compute_layer_by_layer(
     # --- Process Norm ---
     logger.info("Processing norm...")
     norm_sd = sub_state_dict(lazy_sd, f"{prefix}model.norm.")
-    norm_dequant = dequantize_state_dict(norm_sd, config)
+    norm_dequant = convert_state_dict(norm_sd, config)
 
     if compute_reference:
         norm_with_prefix = {f"norm.{k}": v for k, v in norm_dequant.items()}
@@ -742,7 +720,7 @@ def load_and_compute_layer_by_layer(
     # --- Process LM Head ---
     logger.info("Processing lm_head...")
     lm_head_sd = sub_state_dict(lazy_sd, f"{prefix}lm_head.")
-    lm_head_dequant = dequantize_state_dict(lm_head_sd, config)
+    lm_head_dequant = convert_state_dict(lm_head_sd, config)
 
     if compute_reference:
         # Apply lm_head projection: logits = h_ref @ lm_head_weight.T

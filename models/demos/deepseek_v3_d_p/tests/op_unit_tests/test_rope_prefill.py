@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.reference.modeling_deepseek import rotate_half
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, get_cos_sin_matrix
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -28,11 +29,7 @@ PCC_REQUIRED = 0.99
 )
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
+    [fabric2d_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq128k"])

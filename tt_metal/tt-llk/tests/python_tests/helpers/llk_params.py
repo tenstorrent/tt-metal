@@ -77,6 +77,9 @@ class MathOperation(Enum):
     Acosh = OpSpec("acosh", MathOpType.SFPU_UNARY)
     Celu = OpSpec("celu", MathOpType.SFPU_UNARY)
     Cos = OpSpec("cosine", MathOpType.SFPU_UNARY)
+    # Whole-tile column-wise cumulative sum; not element-wise, so its golden works on the
+    # tilized tensor rather than per datum.
+    Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
@@ -466,6 +469,18 @@ class ApproximationMode(Enum):
         return str(self.value).lower()
 
 
+class DstRoundingMode(Enum):
+    """Mirrors ckernel::DstRoundingMode — how a float32 SFPU result is narrowed
+    on store into a bf16 DEST."""
+
+    Default = "Default"
+    NearestEven = "NearestEven"
+
+    @property
+    def cpp_enum_value(self):
+        return f"ckernel::DstRoundingMode::{self.value}"
+
+
 class Transpose(Enum):
     Yes = True
     No = False
@@ -711,6 +726,7 @@ class PerfRunType(Enum):
     MATH_ISOLATE = 3
     PACK_ISOLATE = 4
     L1_CONGESTION = 5
+    SFPU_ISOLATE = 6
 
 
 # Single pytest case runs every PerfRunType so the module CSV has one
@@ -724,6 +740,11 @@ PERF_RUN_TYPES_QUASAR = [
         PerfRunType.PACK_ISOLATE,
         PerfRunType.L1_CONGESTION,
     ],
+]
+
+# 4-TRISC tests also measure SFPU_ISOLATE. Keep separate so 3-TRISC schemas stay unchanged.
+PERF_RUN_TYPES_QUASAR_4_TRISC = [
+    PERF_RUN_TYPES_QUASAR[0] + [PerfRunType.SFPU_ISOLATE],
 ]
 PERF_LOOP_FACTOR_QUASAR = 32
 
@@ -750,6 +771,24 @@ class ReluConfig(Enum):
     ZeroRelu = 1
 
 
+class SdpaOp(Enum):
+    """Selects which body of llk_sfpu/ckernel_sfpu_sdpa.h the sfpu_sdpa test drives."""
+
+    RecipLegacy = 0  # calculate_recip_first_column<true>, _reciprocal_compat_
+    RecipIter = 1  # calculate_recip_first_column<false>, sfpu_reciprocal_iter
+    ExpAccurate = 2  # calculate_exponential_first_column<true,  scale>
+    ExpPoly = 3  # calculate_exponential_first_column<false, scale>
+    Softplus = 4  # calculate_softplus_first_column
+    Correction = 5  # calculate_fused_max_sub_exp_add_tile
+
+
+class SdpaFwOp(Enum):
+    """Selects which body of llk_sfpu/ckernel_sfpu_sdpa_fw.h the sfpu_sdpa_fw test drives."""
+
+    Recip = 0  # calculate_recip_first_column, sfpu_reciprocal_iter<2> or <1> plus bf16 round
+    Exp = 1  # calculate_exponential_first_column<scale>, _ckernel_sfpu_exp_accurate_
+
+
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1
@@ -765,6 +804,14 @@ class TopKXLChunkBaseMode(Enum):
     Static = 0
     UpperStatic = 1
     Runtime = 2
+
+
+class TopKXLSortMode(Enum):
+    """Which local-sort entry point the topk_xl kernel calls."""
+
+    Dispatch = 0
+    Generic = 1
+    EarlyExitK64 = 2
 
 
 class VectorMode(Enum):

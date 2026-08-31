@@ -474,6 +474,8 @@ jobs:
           # decode trace) still returns deterministic, well-formed-but-garbage
           # tokens, so those checks pass while the model emits gibberish. Requiring
           # a verbatim echo of a simple sentence catches that class of bug directly.
+          # Thinking off per-request and a budget that fits it anyway: a <think> preamble
+          # would eat the tokens and fail the grep for reasons unrelated to coherence.
           SENTENCE="The quick brown fox jumps over the lazy dog."
           curl http://localhost:8000/v1/chat/completions \
             -H "Content-Type: application/json" \
@@ -486,7 +488,8 @@ jobs:
                   \"content\": \"Repeat the following sentence exactly, with no extra words, no quotes, and no commentary: $SENTENCE\"
                 }
               ],
-              \"max_tokens\": 32,
+              \"chat_template_kwargs\": {\"enable_thinking\": false},
+              \"max_tokens\": 512,
               \"temperature\": 0.0,
               \"stream\": false,
               \"ignore_eos\": false

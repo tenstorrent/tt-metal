@@ -14,11 +14,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/ring_buffer.h"  // DEBUG pool compute-stall: ring-buffer markers (remove after)
 
-#define DEBUG_PRINT 0  // [DEBUG scratch-pack experiment] (remove after)
-
-// [DEBUG] Pack-target selector for the ROW_MAJOR path (remove after):
 //   0 = production path: narrow pack_untilize straight into the real output CB (out_cb), then DPRINT it.
 //   1 = experiment:      full-tile (32x32) pack of the reduced DEST into the scratch CB, then DPRINT it
 //                        (out_cb still gets a balancing push with garbage).
@@ -28,13 +24,6 @@
 // too — compute PRODUCES the scratch CB and the DM reader CONSUMES it; they must be on/off together.
 #define PACK_TO_SCRATCH 1
 
-#if DEBUG_PRINT == 1
-#include "api/debug/dprint.h"
-#include "api/debug/dprint_pages.h"
-// NOTE: dprint_tensix.h pulls in ckernel_debug.h which does not exist on Quasar — omit it (we only
-// need DPRINT + print_bf16_pages here). (remove after)
-#endif
-
 #define ALWI inline __attribute__((always_inline))
 
 #define FACE_HEIGHT 16
@@ -43,11 +32,6 @@
 #define TILE_WIDTH 32
 
 void kernel_main() {
-#if DEBUG_PRINT == 1
-    PACK(DPRINT("POOL2D_ENTER (compute kernel_main reached)\n"));
-    UNPACK(DPRINT("POOL2D_ENTER_UNPACK\n"));
-    MATH(DPRINT("POOL2D_ENTER_MATH\n"));
-#endif
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
@@ -198,13 +182,6 @@ void kernel_main() {
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
-#if DEBUG_PRINT == 1
-    PACK(DPRINT(
-        "POOLCOMPUTE tiled={} nsticks={} in_nblocks_c={}\n",
-        (uint32_t)is_output_tiled,
-        num_out_sticks_this_core,
-        (uint32_t)in_nblocks_c));
-#endif
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {
         const bool reader0 = !(use_split_reader && (n & 0x1));
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
@@ -238,15 +215,8 @@ void kernel_main() {
                  (in_c % TILE_WIDTH == FACE_WIDTH || single_partial_fits_in_face))
                     ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
                     : number_of_tiles * num_faces_in_output_tile;
-            // [DEBUG pool compute stall] Which call blocks the WFD/UPTW deadlock? Newest ring marker per
-            // thread: 0xC0FFEE10 -> out_cb.reserve_back (output CB full); 0xC0FFEE11 -> tile_regs_acquire
-            // (dest register busy); 0xC0FFEE12 -> curr_in_cb.wait_front (input starved — reader can't fill);
-            // 0xC0FFEE13 -> tile_regs_wait (math never committed the reduce). n/c_i/chunk give the position.
 #if PACK_TO_SCRATCH == 0
             if constexpr (!is_output_tiled) {
-                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE10u));
-                PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)n));
-                PACK(WATCHER_RING_BUFFER_PUSH((uint32_t)c_i));
                 out_cb.reserve_back(output_faces);
             }
 #endif
@@ -258,28 +228,11 @@ void kernel_main() {
             //   (b) tiles_to_reduce changes across c-blocks (e.g. 4 then 2 for 6 tiles / 192c) -- UNPACK and
             //       MATH must both be re-programmed for the new count (PACK is re-init'd via
             //       pack_untilize_dest_init below).
-            tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
-            MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
+            tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+                curr_in_cb_id, curr_scalar_cb_id, tiles_to_reduce);
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
-                UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
                 curr_in_cb.wait_front(1);
-                // [DIAG] reduce-input geometry (Bug 1 straddle check): rd = strided-read base, esz = bytes
-                // per entry, t2r = tiles this reduce strides over. If the strided row walk for t2r tiles
-                // exceeds esz it reads into the next entry (wrong rows). First few sticks only (flood guard).
-                if (n < 4) {
-                    UNPACK(DPRINT(
-                        "POOLRED n={} chunk={} cb={} rd={} esz={} nent={} t2r={} intiles={}\n",
-                        (uint32_t)n,
-                        (uint32_t)chunk,
-                        (uint32_t)curr_in_cb_id,
-                        (uint32_t)curr_in_cb.get_read_ptr(),
-                        (uint32_t)curr_in_cb.get_entry_size(),
-                        (uint32_t)curr_in_cb.get_total_num_entries(),
-                        (uint32_t)tiles_to_reduce,
-                        (uint32_t)in_ntiles_c));
-                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -291,7 +244,6 @@ void kernel_main() {
                 curr_in_cb.pop_front(1);
             }
             tile_regs_commit();
-            PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE13u));
             tile_regs_wait();
             if constexpr (is_output_tiled) {
                 // TILED output: accumulate sticks and perform tilization when needed.
@@ -426,16 +378,6 @@ void kernel_main() {
                 if (first_c_block) {
                     curr_scratch_cb.reserve_back(scratch_npages);
                 }
-#if DEBUG_PRINT == 1
-                // Which scratch CB and where does compute pack THIS stick? Compare wptr to the reader's
-                // rdptr: same address + reader reads 0 => reduce produced 0 (input); differ => routing.
-                PACK(DPRINT(
-                    "PACKW n={} reader0={} scr_cb={} wptr={}\n",
-                    (uint32_t)n,
-                    (uint32_t)reader0,
-                    (uint32_t)curr_scratch_cb_id,
-                    (uint32_t)curr_scratch_cb.get_write_ptr()));
-#endif
                 // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
                 // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
                 // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
@@ -445,18 +387,6 @@ void kernel_main() {
                 // writes; cap = scratch CB byte capacity; npages/esz = its entry geometry. If
                 // ntiles*esz > cap (or ntiles exceeds what the scratch descriptor addresses) the pack tile
                 // increment crosses L1_LIMIT_ADDR -> fault. Printed BEFORE the pack so it flushes pre-fault.
-                if (n < 4) {
-                    PACK(DPRINT(
-                        "POOLPACK n={} scr_cb={} wptr={} cap={} npages={} esz={} ntiles={} intiles={}\n",
-                        (uint32_t)n,
-                        (uint32_t)curr_scratch_cb_id,
-                        (uint32_t)curr_scratch_cb.get_write_ptr(),
-                        (uint32_t)(curr_scratch_cb.get_total_num_entries() * curr_scratch_cb.get_entry_size()),
-                        (uint32_t)scratch_npages,
-                        (uint32_t)curr_scratch_cb.get_entry_size(),
-                        (uint32_t)(last_c_block ? partial_iter_output_tiles : max_tiles_per_iter),
-                        (uint32_t)in_ntiles_c));
-                }
                 // Pack this c-block into its channel slice of the shared full-width stick. full_ct_dim =
                 // in_ntiles_c makes the untilize row stride span the whole in_ntiles_c-tile-wide stick
                 // (llk_pack_untilize stride_offset_0 = num_faces_c_dim * FULL_CT_DIM); block_c_index places the
@@ -512,14 +442,6 @@ void kernel_main() {
                 }
                 tile_regs_release();
                 out_cb.push_back(output_faces);
-#endif
-#if DEBUG_PRINT == 1
-                PACK(DPRINT(
-                    "PACKDBG n={} c_i={} ofaces={} scratch={}\n",
-                    (uint32_t)n,
-                    (uint32_t)c_i,
-                    (uint32_t)output_faces,
-                    (uint32_t)PACK_TO_SCRATCH));
 #endif
             }
         }

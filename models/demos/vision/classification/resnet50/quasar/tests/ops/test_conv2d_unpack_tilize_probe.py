@@ -31,6 +31,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.timeout(1200)
@@ -38,6 +39,19 @@ import ttnn
 def test_quasar_conv2d_unpack_tilize_probe(mesh_device):
     device = mesh_device
     torch.manual_seed(0)
+
+    # WH-only HANG: TT_METAL_QSR_CONV_UNPACK_TILIZE selects the pool-style unpack_tilizeA_B+reduce probe kernel
+    # only on the Quasar path; on WH it is NOT selected and the conv falls through to the FUSED conv_bmm_tilize
+    # (confirmed in the stack: conv_bmm_tilize_metal2, MATH MWDD in matmul_block, PACK in
+    # program_packer_destination, SyncHalf, cb stuck; genuine, asserts-on). So on WH this hits the same
+    # fast_tilize->matmul cadence race (kRaceGuardSpin family) as relu_now_sfpu / stem_7x7 / unpack_to_dest.
+    # This is a Quasar-oriented diagnostic (the probe only means anything on Quasar), NOT the WH model path.
+    if is_wormhole_b0():
+        pytest.xfail(
+            "WH: the unpack-tilize probe kernel is Quasar-only; on WH the conv falls through to the fused "
+            "conv_bmm_tilize, hitting the fast_tilize->matmul cadence race (kRaceGuardSpin family). Quasar-only "
+            "diagnostic; not the WH model path."
+        )
 
     # Folded-stem conv1 params (verbatim from the model / test_conv2d_stem.py). Shape unchanged so the probe
     # processes enough blocks to reach where conv_tilize_only faults (~5 tilize_block blocks).

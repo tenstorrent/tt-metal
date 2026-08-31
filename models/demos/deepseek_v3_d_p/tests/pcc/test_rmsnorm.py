@@ -18,6 +18,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -30,15 +32,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            torus_x_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            id="torus-x-1x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -60,7 +56,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
 
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
-    per_device_width = emb_dim // num_devices
+    per_device_width = emb_dim // mesh_shape[1]
 
     # 4D shapes for distributed RMSNorm
     inp_shape_full = (1, 1, isl_per_chip, emb_dim)
@@ -69,9 +65,7 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     logger.debug(f"Full input: {inp_shape_full}, per-device: {inp_shape_per_device}")
 
-    # Determine topology from fabric config
-    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
-    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     logger.debug(f"Using topology: {topology}")
 
     signpost(f"RMSNorm PCC test - {mesh_shape=} {isl_per_chip=} {emb_dim=} {num_links=} {topology=}")
@@ -131,6 +125,9 @@ def test_rmsnorm_distributed(mesh_device, device_params, isl_per_chip, emb_dim, 
     # Compare output against PyTorch reference
     # ============================================
     logger.debug("Comparing distributed RMSNorm vs PyTorch reference")
+    # The 2x4 Fabric2D profile replicates the TP-sharded tensor across the two SP rows. The composer
+    # concatenates those replicas on dim 0, so validate every replica against the same reference.
+    torch_reference = torch_reference.expand(mesh_shape[0], -1, -1, -1)
     pcc_passed, pcc_message = assert_with_pcc(
         torch_reference.to(torch.float32),
         tt_distributed_torch.to(torch.float32),

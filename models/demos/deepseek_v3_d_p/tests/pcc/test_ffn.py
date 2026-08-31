@@ -16,6 +16,8 @@ from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -23,23 +25,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("batch_seq_len", [4096, 3200], ids=["4K", "3.2K"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
+    "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            torus_x_device_params(),
             1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (1, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-            1,
-            ttnn.Topology.Ring,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
-            id="ring-4",
+            id="torus-x-1x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -49,7 +42,6 @@ def test_ffn_pcc(
     device_params,
     batch_seq_len: int,
     num_links: int,
-    topology: ttnn.Topology,
 ):
     """
     Test TtFfn PCC against TorchExpert reference.
@@ -64,6 +56,7 @@ def test_ffn_pcc(
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
 
+    topology = per_axis_topology(device_params["fabric_config"])[1]
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
@@ -127,6 +120,9 @@ def test_ffn_pcc(
     logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
     logger.debug("Comparing outputs with PCC")
+    # The 2x4 Fabric2D profile replicates this TP-only FFN across both SP rows. The composer concatenates
+    # those replicas on the sequence dimension, so validate each replica against the same Torch output.
+    torch_output = torch_output.repeat(mesh_shape[0], 1)
     pcc_passed, pcc_message = assert_with_pcc(
         torch_output.to(torch.float32),
         tt_output_torch.to(torch.float32),

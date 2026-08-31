@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from .llk_params import (
     BroadcastType,
     DataCopyType,
     DestSync,
+    DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
     ImpliedMathFormat,
@@ -27,12 +29,15 @@ from .llk_params import (
     NarrowTile,
     PerfRunType,
     ReducePool,
+    SdpaFwOp,
+    SdpaOp,
     StableSort,
     StochasticRounding,
     Tilize,
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
+    TopKXLSortMode,
     Transpose,
     UnpackerEngine,
     VectorMode,
@@ -280,6 +285,22 @@ class SFPU_UNARY_SCALAR(TemplateParameter):
 
 
 @dataclass
+class SFPU_SHIFT_AMOUNT(TemplateParameter):
+    """Shift amount for the *unary* shift ops (LeftShift / RightShift).
+
+    Emitted as a macro rather than a constexpr because sfpu_operations.h selects on
+    ``#ifdef SFPU_SHIFT_AMOUNT``: the header is shared by every unary test, and only the shift
+    sweep sets this, so the others have to keep compiling without it. The binary shift ops take
+    their amount as a second operand and need none of this.
+    """
+
+    shift_amount: int = 3
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SFPU_SHIFT_AMOUNT {self.shift_amount}u"
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 
@@ -502,6 +523,45 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 
 @dataclass
+class SDPA_OP(TemplateParameter):
+    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
+
+
+@dataclass
+class SDPA_EXP_SCALE(TemplateParameter):
+    scale_bf16: int = 0x3F80  # bf16(1.0)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint16_t EXP_SCALE_BF16 = {self.scale_bf16}u;"
+
+
+@dataclass
+class SDPA_SOFTPLUS_PARAMS(TemplateParameter):
+    softplus_beta_bits: int = 0x3F800000  # 1.0f
+    softplus_beta_reciprocal_bits: int = 0x3F800000  # 1.0f
+    softplus_threshold_bits: int = 0x41A00000  # 20.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t SOFTPLUS_BETA_BITS = {self.softplus_beta_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_BETA_RECIPROCAL_BITS = {self.softplus_beta_reciprocal_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_THRESHOLD_BITS = {self.softplus_threshold_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class SDPA_FW_OP(TemplateParameter):
+    sdpa_fw_op: SdpaFwOp = SdpaFwOp.Recip
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SDPA_FW_OP = {self.sdpa_fw_op.value};"
+
+
+@dataclass
 class TOPK(TemplateParameter):
     topk_k: int = 0
     topk_matrix_width: int = 0
@@ -530,6 +590,147 @@ class TOPK(TemplateParameter):
 
 
 @dataclass
+class GENERALIZED_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the generalized_moe_gate test.
+
+    ``read_base``/``from_*``/``to_*`` are SFPU column offsets; a run occupies the pair ``{lo, hi}``.
+    ``row_src``/``row_dst``/``srcb`` name copy4rows' 4-row DEST blocks and its SrcB scratch window.
+    ``eps`` and ``scale`` are float bit patterns, as the LLK takes them.
+    ``sections`` is how many DEST sections the kernel runs; 2 puts the second in the upper
+    half under DstSync::Half and packs it to buffer_Res[4..7].
+    ``sigmoid`` selects the op's enable_sigmoid front-end: transpose, sigmoid, then a RELOAD
+    binary reading SrcA back out of DEST.
+    """
+
+    mode: int = 0
+    sub_op: int = 0
+    grouped: bool = False
+    topk: int = 8
+    softmax: bool = False
+    produce_run: bool = False
+    reload: bool = False
+    eps: int = 0
+    scale: int = 0
+    read_base: int = 0
+    from_lo: int = 0
+    from_hi: int = 2
+    to_lo: int = 0
+    to_hi: int = 2
+    field: int = 0
+    idx_offset: int = 0
+    row_src: int = 0
+    row_dst: int = 4
+    srcb: int = 16
+    second_copy: bool = False
+    pre_copy4rows: bool = False
+    row_src_2: int = 0
+    row_dst_2: int = 8
+    srcb_2: int = 20
+    d2b_dst: int = 0
+    b2d_base: int = 0
+    sections: int = 1
+    sigmoid: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int GMG_MODE = {self.mode};",
+            f"constexpr int GMG_SUB_OP = {self.sub_op};",
+            f"constexpr bool GMG_GROUPED = {str(self.grouped).lower()};",
+            f"constexpr std::uint32_t GMG_TOPK = {self.topk};",
+            f"constexpr bool GMG_SOFTMAX = {str(self.softmax).lower()};",
+            f"constexpr bool GMG_PRODUCE_RUN = {str(self.produce_run).lower()};",
+            f"constexpr bool GMG_RELOAD = {str(self.reload).lower()};",
+            f"constexpr std::uint32_t GMG_EPS = {self.eps};",
+            f"constexpr std::uint32_t GMG_SCALE = {self.scale};",
+            f"constexpr std::uint32_t GMG_READ_BASE = {self.read_base};",
+            f"constexpr std::uint32_t GMG_FROM_LO = {self.from_lo};",
+            f"constexpr std::uint32_t GMG_FROM_HI = {self.from_hi};",
+            f"constexpr std::uint32_t GMG_TO_LO = {self.to_lo};",
+            f"constexpr std::uint32_t GMG_TO_HI = {self.to_hi};",
+            f"constexpr std::uint32_t GMG_FIELD = {self.field};",
+            f"constexpr std::uint32_t GMG_IDX_OFFSET = {self.idx_offset};",
+            f"constexpr std::uint32_t GMG_ROW_SRC = {self.row_src};",
+            f"constexpr std::uint32_t GMG_ROW_DST = {self.row_dst};",
+            f"constexpr std::uint32_t GMG_SRCB = {self.srcb};",
+            f"constexpr bool GMG_SECOND_COPY = {str(self.second_copy).lower()};",
+            f"constexpr bool GMG_PRE_COPY4ROWS = {str(self.pre_copy4rows).lower()};",
+            f"constexpr std::uint32_t GMG_ROW_SRC_2 = {self.row_src_2};",
+            f"constexpr std::uint32_t GMG_ROW_DST_2 = {self.row_dst_2};",
+            f"constexpr std::uint32_t GMG_SRCB_2 = {self.srcb_2};",
+            f"constexpr std::uint32_t GMG_D2B_DST = {self.d2b_dst};",
+            f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
+            f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
+            f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class DEEPSEEK_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the deepseek_moe_gate test."""
+
+    dmg_mode: int = 0
+    dmg_sub_op: int = 0
+    dmg_sigmoid: bool = False
+    dmg_reload: bool = False
+    dmg_eps: int = 0
+    dmg_scale: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int DMG_MODE = {self.dmg_mode};",
+            f"constexpr int DMG_SUB_OP = {self.dmg_sub_op};",
+            f"constexpr bool DMG_SIGMOID = {str(self.dmg_sigmoid).lower()};",
+            f"constexpr bool DMG_RELOAD = {str(self.dmg_reload).lower()};",
+            f"constexpr std::uint32_t DMG_EPS = {self.dmg_eps};",
+            f"constexpr std::uint32_t DMG_SCALE = {self.dmg_scale};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class HADAMARD(TemplateParameter):
+    """Compile-time configuration for the H128 Hadamard test."""
+
+    hadamard_normalize: bool = True
+    h16_tile_index: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr bool HADAMARD_NORMALIZE = {str(self.hadamard_normalize).lower()};",
+            f"constexpr std::uint32_t HADAMARD_H16_TILE_INDEX = {self.h16_tile_index};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class ROPE(TemplateParameter):
+    ht: int = 1
+    wt: int = 1
+    x_base: int = 0
+    x_stride: int = 64
+    cos_base: int = 64
+    sin_base: int = 128
+    cs_stride: int = 64
+    has_scale: bool = False
+    scale_fp32: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr std::uint32_t ROPE_HT = {self.ht};",
+            f"constexpr std::uint32_t ROPE_WT = {self.wt};",
+            f"constexpr std::uint32_t ROPE_X_BASE = {self.x_base};",
+            f"constexpr std::uint32_t ROPE_X_STRIDE = {self.x_stride};",
+            f"constexpr std::uint32_t ROPE_COS_BASE = {self.cos_base};",
+            f"constexpr std::uint32_t ROPE_SIN_BASE = {self.sin_base};",
+            f"constexpr std::uint32_t ROPE_CS_STRIDE = {self.cs_stride};",
+            f"constexpr bool ROPE_HAS_SCALE = {str(self.has_scale).lower()};",
+            f"constexpr std::uint32_t ROPE_SCALE_FP32 = {hex(self.scale_fp32)};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
 class TOPK_XL(TemplateParameter):
     k: int = 512
     num_chunks: int = 1
@@ -543,6 +744,11 @@ class TOPK_XL(TemplateParameter):
     fused_reduce: bool = False
     chunk_base_mode: TopKXLChunkBaseMode = TopKXLChunkBaseMode.Static
     chunk_base: int = 0
+    fused_e2e: bool = False
+    seg_base: int = 0
+    sort_mode: TopKXLSortMode = TopKXLSortMode.Dispatch
+    lsb_row_major: bool = False
+    reinit_after_copy: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -558,6 +764,11 @@ class TOPK_XL(TemplateParameter):
             f"constexpr bool TOPK_XL_FUSED_REDUCE = {str(self.fused_reduce).lower()};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE_MODE = {self.chunk_base_mode.value};",
             f"constexpr std::uint32_t TOPK_XL_CHUNK_BASE = {self.chunk_base};",
+            f"constexpr bool TOPK_XL_FUSED_E2E = {str(self.fused_e2e).lower()};",
+            f"constexpr std::uint32_t TOPK_XL_SEG_BASE = {self.seg_base};",
+            f"constexpr std::uint32_t TOPK_XL_SORT_MODE = {self.sort_mode.value};",
+            f"constexpr bool TOPK_XL_LSB_ROW_MAJOR = {str(self.lsb_row_major).lower()};",
+            f"constexpr bool TOPK_XL_REINIT_AFTER_COPY = {str(self.reinit_after_copy).lower()};",
         ]
         return "\n".join(lines)
 
@@ -586,6 +797,113 @@ class IS_MAX_OP(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr bool IS_MAX_OP = {str(self.is_max_op).lower()};"
+
+
+@dataclass
+class SFPU_SCALE_EN(TemplateParameter):
+    """Compile-time SCALE_EN flag for SFPU kernels that optionally pre-scale their input.
+
+    Pairs with ``SFPU_UNARY_SCALAR``, which carries the scale itself. Kernels in the
+    exp family take the scale as a *bfloat16* bit pattern (e.g. 0x3F80 for 1.0f,
+    ``p_sfpu::kCONST_1_FP16B``), not an fp32 one.
+    """
+
+    scale_en: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_SCALE_EN = {str(self.scale_en).lower()};"
+
+
+@dataclass
+class SOFTMAX_K(TemplateParameter):
+    """Number of valid lanes ``k`` for the softmax_k SFPU entry (``_softmax_k_<k>``).
+
+    ``k`` counts values per row inside face 0's 16 columns; columns >= k must be
+    exactly 0.0 in DEST (the kernel's predication treats 0.0 as padding).
+    """
+
+    softmax_k: int = 16
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SOFTMAX_K = {self.softmax_k};"
+
+
+@dataclass
+class SAMPLING_OP(TemplateParameter):
+    """Select which ckernel_sfpu_sampling.h entry point the sampling test drives.
+
+    Emits ``#define SAMPLING_OP_<NAME>`` consumed by ``sfpu_sampling_test.cpp``.
+    """
+
+    sampling_op: str = "recip_scalar"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define SAMPLING_OP_{self.sampling_op.upper()}"
+
+
+@dataclass
+class SAMPLING_LEGACY_COMPAT(TemplateParameter):
+    """``legacy_compat`` template argument of ``calculate_sampling_recip_scalar``."""
+
+    legacy_compat: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SAMPLING_LEGACY_COMPAT = {str(self.legacy_compat).lower()};"
+
+
+@dataclass
+class MOE_GATE_TOPK(TemplateParameter):
+    """Compile-time configuration of the generic MoE-gate top-k SFPU entry.
+
+    Mirrors the first five template parameters of
+    ``ckernel::sfpu::_generic_moe_gate_topk_<normalize, num_selected_experts,
+    num_total_experts, zero_tail, full_sort, generate_indices = true>``. The
+    dataclass defaults are the compute-API wrapper's
+    (api/compute/experimental/generic_moe_gate.h), not the template's -- the only
+    template parameter carrying a C++ default is the sixth, ``generate_indices``.
+
+    ``generate_indices`` is deliberately not modelled: the driver instantiates with
+    five arguments, so it is pinned to true and the kernel always numbers the experts
+    itself. The caller-supplied index-mapping path (generate_indices = false) is
+    therefore untested.
+    """
+
+    num_selected_experts: int = 8
+    num_total_experts: int = 256
+    normalize: bool = False
+    zero_tail: bool = False
+    full_sort: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int MOE_GATE_NUM_SELECTED_EXPERTS = {self.num_selected_experts};",
+            f"constexpr int MOE_GATE_NUM_TOTAL_EXPERTS = {self.num_total_experts};",
+            f"constexpr bool MOE_GATE_NORMALIZE = {str(self.normalize).lower()};",
+            f"constexpr bool MOE_GATE_ZERO_TAIL = {str(self.zero_tail).lower()};",
+            f"constexpr bool MOE_GATE_FULL_SORT = {str(self.full_sort).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_NORMALIZE_PARAMS(TemplateParameter):
+    """``eps`` / ``scale`` for the MoE-gate normalize step, as raw fp32 bit patterns.
+
+    Both are decoded on device via ``Converter::as_float``, so emitting the bit
+    patterns keeps the kernel and the torch golden exactly aligned.
+    """
+
+    eps_bits: int = 0x00000000  # 0.0f
+    scale_bits: int = 0x3F800000  # 1.0f
+    extra_scale_bits: int = 0x3F800000  # 1.0f, identity for the do_extra_scale path
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t MOE_GATE_EPS_BITS = {self.eps_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_SCALE_BITS = {self.scale_bits}u;",
+            f"constexpr std::uint32_t MOE_GATE_EXTRA_SCALE_BITS = {self.extra_scale_bits}u;",
+        ]
+        return "\n".join(lines)
 
 
 # === RUNTIME PARAMETER IMPLEMENTATIONS ===
@@ -742,6 +1060,16 @@ class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
         return (
             f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
         )
+
+
+@dataclass
+class SFPU_DST_ROUNDING_MODE(TemplateParameter):
+    """Selects the bf16 narrowing mode for binary SFPU ADD/SUB results."""
+
+    dst_rounding: DstRoundingMode = DstRoundingMode.Default
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.dst_rounding.cpp_enum_value};"
 
 
 @dataclass
@@ -1198,3 +1526,55 @@ class TYPECAST_FORMATS(TemplateParameter):
             f"constexpr auto TYPECAST_OUT_FORMAT = DataFormat::{self.output_format.name};",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class ZERO_PAD_ROWS(TemplateParameter):
+    """SFPU row bounds for _zero_pad_tile_."""
+
+    valid_rows: int = 0
+    total_rows: int = 32
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+        )
+
+
+@dataclass
+class SPARSE_K_CONFIG(TemplateParameter):
+    sparse_k_iterations: int = 32
+    bank_mask: int = 0x3F
+    my_bank: int = 0
+    global_bank_shift: int = 14
+    within_bank_mask: int = 0x3FFF
+    out_shift: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"constexpr int SPARSE_K_ITERATIONS = {self.sparse_k_iterations};\n"
+            f"constexpr std::uint32_t SPARSE_K_BANK_MASK = {self.bank_mask}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_MY_BANK = {self.my_bank}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_GLOBAL_BANK_SHIFT = {self.global_bank_shift}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_WITHIN_BANK_MASK = {self.within_bank_mask}u;\n"
+            f"constexpr std::uint32_t SPARSE_K_OUT_SHIFT = {self.out_shift}u;"
+        )
+
+
+@dataclass
+class CLAMPED_SILU_PARAMS(TemplateParameter):
+    clamped_silu_op: str = "GATE"
+    scalar0: float = 1.0
+    scalar1: float = 1.0
+
+    @staticmethod
+    def _fp32_bits(value: float) -> int:
+        return struct.unpack("<I", struct.pack("<f", value))[0]
+
+    def convert_to_cpp(self) -> str:
+        return (
+            f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {self._fp32_bits(self.scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {self._fp32_bits(self.scalar1)}u;"
+        )

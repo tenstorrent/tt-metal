@@ -198,7 +198,9 @@ SECTIONS
 
 /* Begin the data area.  */
 #if defined(TYPE_FIRMWARE)
-  PROVIDE(__global_pointer$ = DATA_START + 0x7f0);
+  /* kernels get __global_pointer$ from the firmware ELF via --just-symbols, so it must be in the firmware's symbol
+     table even when the firmware itself never references it.  */
+  __global_pointer$ = DATA_START + 0x7f0;
   .data DATA_START :
 #define SECTION(NEW, PREV) NEW :
 #else

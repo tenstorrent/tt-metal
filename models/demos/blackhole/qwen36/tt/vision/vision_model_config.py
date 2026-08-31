@@ -205,6 +205,10 @@ def _grid_extent(tiles, max_extent):
 
 
 class VisionModelArgs(ModelArgs):
+    # Base __init__ checks the TEXT config's 4 KV heads; the vision tower's own 16 MHA heads
+    # (set below) shard exactly at TP=8, so only the base check needs relaxing.
+    SUPPORTS_KV_REPLICATION = True
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

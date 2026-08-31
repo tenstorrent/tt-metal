@@ -364,7 +364,7 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     const auto& init_barrier_semaphore = workload_descriptor.semaphores[0];
     const auto& final_barrier_semaphore = workload_descriptor.semaphores[1];
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     // Build a per-coord ProgramDescriptor.  Unlike pool/upsample, all_broadcast's

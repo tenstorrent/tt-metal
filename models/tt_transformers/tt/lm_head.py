@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 
@@ -138,6 +139,70 @@ class LMHead(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+    def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
+        """In-place replace every chunk of ``self.output_weights_dram_sharded``
+        on device (``weight`` is HF ``(1, 1, V, H)``, replicated, TILE, bf16,
+        DRAM-interleaved). Mirrors the constructor's host-side pad+transpose+split
+        but on device: optional ``ttnn.pad`` to ``padded_vocab_size``,
+        ``ttnn.transpose``, contiguous per-chunk ``ttnn.slice``, then
+        ``copy_to_buffer`` reshards into the DRAM-sharded dest (preserving
+        addresses). Single-device only; multi-device per-device gather not
+        implemented.
+
+        Tile-alignment caveat: ``ttnn.slice`` on TILE requires offsets aligned
+        to TILE_SIZE (32); the default Llama configs satisfy this, but assert it
+        rather than silently miscompile slices.
+        """
+        assert self.num_devices == 1, (
+            "LMHead.update for num_devices > 1 is not yet implemented; "
+            "the multi-device path needs a per-device interleaved gather."
+        )
+        tile_size = 32
+        assert all(s % tile_size == 0 for s in self.split_sizes_dram_sharded), (
+            f"LMHead.update requires every split in self.split_sizes_dram_sharded "
+            f"to be a multiple of TILE_SIZE={tile_size}, got "
+            f"{self.split_sizes_dram_sharded}; on-device ttnn.slice cannot produce "
+            "sub-tile-aligned chunks on TILE_LAYOUT."
+        )
+
+        padded = weight
+        if self.vocab_size < self.padded_vocab_size:
+            pad_amount = self.padded_vocab_size - self.vocab_size
+            padded = ttnn.pad(padded, [(0, 0), (0, 0), (0, pad_amount), (0, 0)], value=0.0)
+
+        permuted = ttnn.transpose(padded, -2, -1)
+
+        start = 0
+        for i, split_size in enumerate(self.split_sizes_dram_sharded):
+            end = start + split_size
+            chunk = ttnn.slice(permuted, (0, 0, 0, start), (1, 1, self.args.dim, end))
+            copy_to_buffer(chunk, self.output_weights_dram_sharded[i], self.dtype)
+            start = end
+
+    def _update_output_weights_ring_mm(self, weight: ttnn.Tensor) -> None:
+        """In-place replace every chunk of ``self.output_weights_ring_mm``. Not
+        yet implemented: the ring-mm path (distinct per-chunk split, power-of-two
+        column padding, prefetcher-derived DRAM grid) needs its own builder.
+        """
+        raise NotImplementedError("LMHead.update for output_weights_ring_mm (prefetcher path) is not yet implemented")
+
+    def update(self, *, weight: ttnn.Tensor) -> None:
+        """In-place replace the on-device LM-head weights via ``ttnn.copy``.
+
+        HF-format input (see ``LLAMA_WEIGHT_TRANSFER.md``): ``weight`` is
+        ``lm_head.weight``, shape ``(1, 1, vocab_size, hidden_size)``, bf16, TILE,
+        DRAM-interleaved, replicated.
+
+        Updates ``self.output_weights_dram_sharded`` on device (no host
+        roundtrip). When the prefetcher is enabled the ring-mm mirror must also
+        be synced; that path is not implemented. Every chunk keeps its device
+        allocation, so captured traces and the prefetcher's recorded addresses
+        stay valid.
+        """
+        self._update_output_weights_dram_sharded(weight)
+        if len(self.output_weights_ring_mm) > 0:
+            self._update_output_weights_ring_mm(weight)
 
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []

@@ -19,16 +19,54 @@
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
+
+class DataflowBuffer;
+template <>
+struct noc_traits_t<DataflowBuffer>;
 #endif
 
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
+#include "api/core_local_mem.h"
+#include <type_traits>
 
 #if __has_include("chlkc_descriptors.h")
 #include "chlkc_descriptors.h"
 #define DFB_DESCRIPTORS_DEFINED
 #endif
+
+// RAII scoped lock returned by DataflowBuffer::scoped_write_lock()/scoped_read_lock(). get_ptr() returns
+// the write pointer for a write-lock and the read pointer for a read-lock, wrapped in a CoreLocalMem object.
+// The CoreLocalMem object is mutable for a write-lock, const for a read-lock.
+template <bool IsWrite, typename ReleaseFunc>
+class DfbScopedLock {
+public:
+    inline __attribute__((always_inline)) DfbScopedLock(uint32_t pointer, ReleaseFunc release) :
+        pointer_(pointer), release_(release) {}
+    inline __attribute__((always_inline)) ~DfbScopedLock() { release_(); }
+
+    DfbScopedLock(const DfbScopedLock&) = delete;
+    DfbScopedLock(DfbScopedLock&&) = delete;
+    DfbScopedLock& operator=(const DfbScopedLock&) = delete;
+    DfbScopedLock& operator=(DfbScopedLock&&) = delete;
+
+    template <typename T = uint32_t>
+    [[nodiscard]] inline __attribute__((always_inline)) CoreLocalMem<std::conditional_t<IsWrite, T, const T>> get_ptr()
+        const {
+        return CoreLocalMem<std::conditional_t<IsWrite, T, const T>>(pointer_);
+    }
+
+private:
+    uint32_t pointer_;
+    ReleaseFunc release_;
+};
+
+template <bool IsWrite, typename ReleaseFunc>
+[[nodiscard]] inline __attribute__((always_inline)) DfbScopedLock<IsWrite, ReleaseFunc> make_dfb_scoped_lock(
+    uint32_t pointer, ReleaseFunc release) {
+    return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
+}
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
@@ -290,9 +328,12 @@ public:
 #endif
 
     // Peek current FIFO cursors (byte address / arch units). Use for local entry data access —
-    // prefer with scoped_lock when poking L1. Prefer noc.h for Class 1 transfers (pass the DFB).
-    uint32_t get_write_ptr() const { return get_write_ptr_impl(); }
-    uint32_t get_read_ptr() const { return get_read_ptr_impl(); }
+    // prefer holding a scoped_write_lock/scoped_read_lock when poking L1. Prefer noc.h for Class 1
+    // transfers (pass the DFB).
+    // On Quasar DM, this returns the uncached alias temporarily until we figure out a long term
+    // cache strategy.
+    uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
+    uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
 
 #ifndef ARCH_QUASAR
     // WH/BH only — mutate FIFO cursor state (rewind / jump / hold-wr style surgery).
@@ -301,9 +342,25 @@ public:
     void evil_set_read_ptr(uint32_t addr);
 #endif
 
-    [[nodiscard]] auto scoped_lock() {
-        // TODO: Register with the debugger to track the lock
-        return Lock([this]() { release_scoped_lock(); });
+    // Lock num_entries entries starting at the write_ptr (scoped_write_lock) or read_ptr (scoped_read_lock).
+    // Both:
+    //   - Flag any NOC write into the locked entries as WRITE_TO_LOCKED_DFB.
+    //   - On Quasar, invalidate the L2 cache range on acquire.
+    // In addition, scoped_write_lock also flushes on release.
+    //
+    // get_ptr() hands out the UNCACHED alias on Quasar DM, matching get_write_ptr()/get_read_ptr(), so
+    // CPU accesses through the lock reach TL1 directly.
+    [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
+        return make_dfb_scoped_lock<true>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<true>(region, num_entries);
+        });
+    }
+    [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
+        const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
+        return make_dfb_scoped_lock<false>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+            lock_release_impl<false>(region, num_entries);
+        });
     }
 
 private:
@@ -314,9 +371,32 @@ private:
     void finish_impl();
     uint32_t get_write_ptr_impl() const;
     uint32_t get_read_ptr_impl()  const;
+
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    static constexpr uint32_t L1_UNCACHED_OFFSET = MEM_L1_UNCACHED_BASE;
+#else
+    static constexpr uint32_t L1_UNCACHED_OFFSET = 0;
+#endif
+
+    // NOC APIs do not accept uncached addresses, but this is private so not exposed to kernels.
+    uint32_t get_noc_write_addr() const { return get_write_ptr_impl(); }
+    uint32_t get_noc_read_addr() const { return get_read_ptr_impl(); }
+
 #ifndef COMPILE_FOR_TRISC
+    friend struct noc_traits_t<DataflowBuffer>;
+
     void write_barrier_impl(const Noc &noc) const;
 #endif
+
+    struct ScopedLockRegion {
+        uint32_t start;  // first locked address = the write/read pointer at acquire
+        uint32_t base;   // wrap base  (Quasar tc_slot base; WH/BH ring base)
+        uint32_t limit;  // wrap limit (Quasar tc_slot limit; WH/BH fifo_limit)
+    };
+    template <bool is_write>
+    ScopedLockRegion lock_acquire_impl(uint16_t num_entries);
+    template <bool is_write>
+    void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
@@ -332,10 +412,6 @@ private:
     void commit_implicit_write();
 #endif // !COMPILE_FOR_TRISC
 #endif // ARCH_QUASAR
-
-    void release_scoped_lock() {
-        // TODO: Unregister with the debugger
-    }
 
     constexpr uint32_t address_units_to_bytes(uint32_t units) const {
         return units << cb_addr_shift;
@@ -384,20 +460,23 @@ struct noc_traits_t<DataflowBuffer> {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
-        return src.get_read_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return src.get_noc_read_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const DataflowBuffer& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 destination");
-        return dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        return dst.get_noc_write_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const DataflowBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
-        auto local_addr = dst.get_write_ptr() + args.offset_bytes;
+        // Use cached addresses for NOC APIs
+        auto local_addr = dst.get_noc_write_addr() + args.offset_bytes;
         return ::get_noc_multicast_addr(
             args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }

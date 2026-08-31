@@ -19,6 +19,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 
 # MLA KVPE head dim (kv_lora_rank=512 + qk_rope_head_dim=64). The op is a pure page copy, so a
@@ -252,7 +257,30 @@ def _update_kv(
     ttnn.deallocate(kv_t)
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (1, 4),
+            torus_x_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
+            id="torus-x-1x4",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 @pytest.mark.parametrize("dtype, layout", DTYPE_LAYOUT_CASES, ids=DTYPE_LAYOUT_IDS)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
@@ -265,6 +293,7 @@ def _update_kv(
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_single_iteration_prefill(
     mesh_device,
+    device_params,
     config_name,
     num_users,
     num_layers,
@@ -605,9 +634,9 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
     [
         pytest.param(
             (8, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_2D},
+            torus_xy_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

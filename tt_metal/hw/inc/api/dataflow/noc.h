@@ -9,6 +9,7 @@
 template <typename DSpecT>
 class TensorAccessor;
 
+struct UnicastEndpoint;
 struct MulticastEndpoint;
 class CircularBuffer;
 class DataflowBuffer;
@@ -24,6 +25,11 @@ template <typename T>
 struct noc_traits_t {
     static_assert(sizeof(T) == 0, "NoC transactions are not supported for this type");
 };
+
+template <>
+struct noc_traits_t<UnicastEndpoint>;
+template <>
+struct noc_traits_t<MulticastEndpoint>;
 
 /**
  * @brief Compile-time bit-flags that control optional NoC transaction behaviours.
@@ -94,16 +100,39 @@ private:
     template <AddressType address_type>
     using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uintptr_t, uint64_t>;
 
+    // NOC APIs cannot accept uncached addresses. On Quasar DM, dfb.get_read/write_ptr() and a DFB scoped
+    // lock's get_ptr() hand out the UNCACHED L1 alias, so any such address arriving here is mapped back to
+    // its cached view before it reaches a NOC API.
+    static FORCE_INLINE uint32_t l1_cached_view(uint32_t addr) {
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        return (addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + MEM_L1_SIZE) ? addr - MEM_L1_UNCACHED_BASE
+                                                                                           : addr;
+#else
+        return addr;
+#endif
+    }
+
+    friend struct noc_traits_t<UnicastEndpoint>;
+    friend struct noc_traits_t<MulticastEndpoint>;
+
     template <AddressType address_type, typename Src>
     auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
-        return addr_underlying_t<address_type>{
-            noc_traits_t<Src>::template src_addr<address_type>(src, *this, src_args)};
+        auto addr = noc_traits_t<Src>::template src_addr<address_type>(src, *this, src_args);
+        if constexpr (address_type == AddressType::LOCAL_L1) {
+            return addr_underlying_t<address_type>{l1_cached_view(static_cast<uint32_t>(addr))};
+        } else {
+            return addr_underlying_t<address_type>{addr};
+        }
     }
 
     template <AddressType address_type, typename Dst>
     auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
-        return addr_underlying_t<address_type>{
-            noc_traits_t<Dst>::template dst_addr<address_type>(dst, *this, dst_args)};
+        auto addr = noc_traits_t<Dst>::template dst_addr<address_type>(dst, *this, dst_args);
+        if constexpr (address_type == AddressType::LOCAL_L1) {
+            return addr_underlying_t<address_type>{l1_cached_view(static_cast<uint32_t>(addr))};
+        } else {
+            return addr_underlying_t<address_type>{addr};
+        }
     }
 
     template <AddressType address_type, typename Dst>
@@ -554,6 +583,11 @@ public:
         static_assert(!std::is_same_v<Dst, MulticastEndpoint>);  // Can be removed when #30023 is resolved
         WAYPOINT("NWIW");
         auto dst_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+        const uint32_t vc =
+            has_flag(opts, NocOptions::CUSTOM_VC) ? static_cast<uint32_t>(noc_opts.vc) : NOC_UNICAST_WRITE_VC;
+        // Inline dword write: 4-byte immediate value, no L1 source buffer.
+        RECORD_NOC_EVENT_WITH_ADDR(
+            NocEventType::WRITE_INLINE, 0, dst_addr, 4, vc, has_flag(opts, NocOptions::POSTED), noc_id_);
         DEBUG_SANITIZE_NOC_ADDR(noc_id_, dst_addr, 4);
         DEBUG_SANITIZE_NO_DRAM_ADDR(noc_id_, dst_addr, 4);
 
@@ -567,9 +601,6 @@ public:
         }
 #endif
 
-        const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
-                                ? static_cast<uint32_t>(noc_opts.vc)
-                                : NOC_UNICAST_WRITE_VC;
         noc_fast_write_dw_inline<noc_mode, dst_type>(
             noc_id_,
             write_at_cmd_buf,

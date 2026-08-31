@@ -11,7 +11,7 @@ Centralizes what used to be copy-pasted across the per-test files:
                                        FP8 (or bf16) safetensors checkpoint
 * ``compute_pcc`` / ``compare_tensors`` — single PCC implementation
 * ``get_pcc_threshold(request)``   — per-test threshold from ``pcc_thresholds.json``
-* ``parametrize_mesh_tp()``        — the env-driven (1,4)/(1,1) mesh + FABRIC_1D idiom
+* ``parametrize_mesh_tp()``        — the env-driven (1,8)/(1,4)/(1,1) mesh + FABRIC_1D idiom
 * ``tp_composer`` / ``replicate_to_device`` — shared TP tensor helpers
 
 Heavy imports (ttnn weight loaders, ``Qwen36ModelArgs``) are kept lazy / local so
@@ -192,17 +192,31 @@ def validated_on_wormhole():
 # --------------------------------------------------------------------------- #
 # Mesh / device helpers
 # --------------------------------------------------------------------------- #
-def _resolve_mesh_shape(max_tp=4):
-    return {"P150": (1, 1), "P150x4": (1, 4), "N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8)}.get(
-        os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), max_tp))
-    )
+def _resolve_mesh_shape(max_tp=8):
+    # MESH_DEVICE wins outright. The device-count fallback is computed lazily (not as a
+    # ``dict.get`` default, which Python evaluates eagerly) so an explicit MESH_DEVICE never
+    # touches ttnn.get_device_ids() -- that call raises on clusters whose ClusterType lookup
+    # fails, which would otherwise break collection even for a fully-specified mesh.
+    shape = {
+        "P150": (1, 1),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+    }.get(os.environ.get("MESH_DEVICE"))
+    if shape is not None:
+        return shape
+    return (1, min(len(ttnn.get_device_ids()), max_tp))
 
 
-def parametrize_mesh_tp(max_tp=4):
+def parametrize_mesh_tp(max_tp=8):
     """Parametrize a TP test over the env-selected mesh shape + FABRIC_1D.
 
     Mirrors the idiom the qwen TP tests used inline: ``MESH_DEVICE=P150`` -> (1,1),
-    ``P150x4`` -> (1,4); otherwise (1, min(num_devices, max_tp)). The mesh shape
+    ``P150x4`` -> (1,4), ``P150x8`` -> (1,8); otherwise (1, min(num_devices, max_tp)).
+    The mesh shape
     gets an explicit ``RxC`` id so node names (and ``pcc_thresholds.json`` mesh
     keys) are readable.
     """
@@ -236,7 +250,7 @@ def parametrize_batch(batches=(1, 8, 32)):
     return pytest.mark.parametrize("B", [pytest.param(b, id=f"B{b}") for b in batches])
 
 
-def parametrize_mesh_only(max_tp=4):
+def parametrize_mesh_only(max_tp=8):
     """Parametrize over just the env-selected mesh shape (no device_params / fabric).
 
     For mesh tests that don't run fabric CCL ops (e.g. pure weight-loading checks),

@@ -143,8 +143,6 @@ jobs:
 
             # Source T3K test scripts if needed (for run_t3000_* functions)
             if [[ "$CMD" == *"run_t3000"* ]]; then
-              source tests/scripts/t3000/run_t3000_demo_tests.sh
-              source tests/scripts/t3000/run_t3000_perf_tests.sh
               source tests/scripts/t3000/run_t3000_integration_tests.sh
             fi
 

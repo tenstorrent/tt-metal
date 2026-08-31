@@ -431,6 +431,14 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
             i,
             sender_channels_producer_terminate_connection_address[i],
             eth_word_l1_alignment);
+        // Load-bearing: the producer reads this block as a whole SenderChannelProducerCursor in a
+        // single NOC read at connection open, so it must be aligned, not merely 4B aligned.
+        TT_FATAL(
+            (sender_channels_buffer_index_semaphore_address[i] % eth_word_l1_alignment == 0),
+            "sender_channels_buffer_index_semaphore_address[{}] {} must be aligned to {} bytes",
+            i,
+            sender_channels_buffer_index_semaphore_address[i],
+            eth_word_l1_alignment);
     }
     TT_FATAL(
         std::unordered_set<size_t>(

@@ -44,6 +44,14 @@ struct HighBwAllGatherParams {
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
+
+    // Optional runtime controls for gathering one slot of a persistent cache into a maximum-capacity
+    // output buffer. `gathered_dim_size` is the global (post-gather) valid extent along dim; each rank's
+    // local prefix occupies that rank's fixed worst-case output slot, and the allocation remains full size.
+    // Their values are hash-excluded and patch only indexed kernel runtime arguments, so slots/prefixes
+    // reuse one cached program.
+    std::optional<uint32_t> input_batch_index;
+    std::optional<uint32_t> gathered_dim_size;
 };
 
 struct HighBwAllGatherInputs {

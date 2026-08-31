@@ -21,6 +21,8 @@ on:
           - qwen2.5-7b
           # qwen2.5-72b: disabled — ci-token-matching hanging on CI
           - qwen2.5-vl-32b
+          - qwen3-0.6b
+          - qwen3-1.7b
           - qwq-32b
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
@@ -30,6 +32,19 @@ on:
           - gemma-4-e2b
           - gemma-4-e4b
           - panoptic-deeplab
+          - mistral-small-3.1-24b
+          - sd35
+          - mochi
+          - vggnet
+          - bert-tiny
+          - bert-large
+          - distilbert
+          - squeezebert
+          - mnist-mlp
+          - efficientdet-d0
+          - mobilenetv3
+          - ssd512
+          - yunet
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -114,6 +129,7 @@ jobs:
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -127,8 +143,9 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
     needs: [check-harbor, build-artifact, resolve-skus]
-    # id-token: write is required by the nested exabox multihost job (ttop OIDC). Job-level
-    # permissions replace inherited defaults, so restate the reads the container legs need too.
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
+    # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
+    # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
     permissions:
       contents: read
       packages: read

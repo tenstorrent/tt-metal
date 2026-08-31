@@ -506,10 +506,14 @@ class ModelArgs:
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.5-9B": "models/tt_transformers/model_params/Qwen3.5-9B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
         }.items()
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
+
+    # Opt-in: False so TP > n_kv_heads stays a hard error unless a subclass implements KV replication.
+    SUPPORTS_KV_REPLICATION = False
 
     def __init__(
         self,
@@ -703,15 +707,17 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            # KV heads must line up with the mesh width in ONE of two ways: either they shard
-            # (n_kv_heads % TP == 0, the usual case), or TP is a whole multiple of them and each
-            # device REPLICATES a KV head (TP > n_kv_heads, e.g. Qwen3.6-27B's 4 KV heads on a T3K's
-            # 8 devices). The replication direction requires the model's own attention to expand the
-            # k/v projections — the generic tt_transformers attention below does not, so a model
-            # relying on it must still satisfy the sharding direction.
-            assert (
-                self.n_kv_heads % self.cluster_shape[1] == 0 or self.cluster_shape[1] % self.n_kv_heads == 0
-            ), f"n_kv_heads and num_devices must divide one way or the other: {self.n_kv_heads} vs {self.cluster_shape[1]}"
+            # KV heads normally split one-or-more per device. SUPPORTS_KV_REPLICATION models
+            # instead replicate a head across the devices holding its GQA query group, so they
+            # only need TP to be a whole multiple of n_kv_heads (e.g. 4 KV heads on TP=8 -> each
+            # head shared by a device pair). n_local_kv_heads is then 1, hence the max() below.
+            if self.SUPPORTS_KV_REPLICATION and self.cluster_shape[1] > self.n_kv_heads:
+                assert self.cluster_shape[1] % self.n_kv_heads == 0, (
+                    f"with KV replication, num_devices must be a multiple of n_kv_heads: "
+                    f"{self.cluster_shape[1]} % {self.n_kv_heads}"
+                )
+            else:
+                assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             # max(1, ...) for the replication case, where the floor division is 0.
@@ -2429,6 +2435,7 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
+                "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2467,6 +2474,10 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "LFM2.5-VL-1.6B": {"N150": 128, "N300": 128, "T3K": 128, "TG": None, "P150x4": 128},
+                "Qwen3.5-27B": {"P150x4": 2, "P150x8": 2},
+                "Qwen3.6-27B": {"P150x4": 2, "P150x8": 2},
+                "Qwen3.8-27B": {"P150x4": 2, "P150x8": 2},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -2790,15 +2801,14 @@ class ModelArgs:
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
 
-        if self.num_devices > 0:
-            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
-            # Only enable this optimization on the non-multi-step sampling path.
-            # The [1, 1] mesh path splits logits before TopK today and would need
-            # matching input padding in `TTSampling.sample()` to safely use it.
-            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
-                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+        if self.num_devices > 0 and self.cluster_shape != [1, 1]:
+            self.pad_logits_to_power_of_2 = should_pad_sampling_logits_to_power_of_2(
+                self.base_model_name, self.padded_vocab_size, self.num_devices
             )
         else:
+            # Off on [1, 1]: an A/B on the multi-step split path (PR #53167)
+            # measured no end-to-end decode benefit from padding the topk chunks
+            # to a power of two, so the flag stays multi-device only.
             self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
@@ -3626,6 +3636,8 @@ class ModelArgs:
             "gemma-3-4b": "google/gemma-3-4b-it",
             "gemma-3-27b": "google/gemma-3-27b-it",
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
+            "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
+            "Qwen3.8-27B": "Qwen/Qwen3.8-27B",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -4443,16 +4455,32 @@ class HfModelWrapper:
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        logits, new_cache, hidden_states = self.model.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            use_cache=True,
-            past_key_values=self.past_key_values,
-            return_dict=False,
-            output_hidden_states=True,
-        )
+
+        # In prefill mode the reference must match the TT model, which returns the last decoder
+        # layer's output *before* the final norm. HF's output_hidden_states does not expose that
+        # tensor: the tuple is (embeddings, out_0, ..., out_{N-2}, norm(out_{N-1})), so hidden_states[-2]
+        # is the embeddings for a 1-layer model and the second-to-last layer otherwise. Capture the
+        # input to the final norm via a forward pre-hook to get the true pre-norm last-layer output.
+        captured = {}
+        handle = None
+        if mode != "decode":
+            handle = self.model.model.norm.register_forward_pre_hook(
+                lambda module, args: captured.__setitem__("pre_norm", args[0])
+            )
+        try:
+            logits, new_cache, hidden_states = self.model.forward(
+                inputs_embeds=inputs_embeds,
+                position_ids=position_ids,
+                use_cache=True,
+                past_key_values=self.past_key_values,
+                return_dict=False,
+                output_hidden_states=True,
+            )
+        finally:
+            if handle is not None:
+                handle.remove()
         self.past_key_values = new_cache
-        return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
+        return logits if mode == "decode" else captured["pre_norm"]
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

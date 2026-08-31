@@ -181,8 +181,8 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 # regressions and unexpected speedups that should trigger baseline review.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_683_850),
-    ("bounded_cache", 2, 102400, 56320, 1536, 316_890),
+    ("prefill", 640, 51200, None, 1536, 1_652_800),
+    ("bounded_cache", 2, 102400, 56320, 1536, 310_724),
 ]
 
 
@@ -453,10 +453,33 @@ def test_topk_large_indices_valid_length_program_cache_reuse_while_growing(devic
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("k", [512, 1024, 2048])
+def test_topk_large_indices_short_valid_length_emits_sentinels(device, k):
+    # Sparse MLA keeps a fixed maximum top-k shape while its cache is shorter than k.  The valid
+    # prefix supplies the real indices and the remaining output slots must be the sparse-SDPA sentinel.
+    valid_length = 496
+    # Keep one full output-width of finite stale data beyond the requested top-k, so every k exercises
+    # that the runtime prefix bound—not just the sentinel padding—excludes the physical tail.
+    n = 2 * k
+    torch_input = _make_bf16_exact_input(num_rows=1, n=n)
+    tt_indices = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, valid_length=valid_length)
+    _, valid_indices = torch.topk(
+        torch_input[:, :valid_length].float(), valid_length, dim=-1, largest=True, sorted=True
+    )
+    expected = torch.cat(
+        [
+            valid_indices,
+            torch.full((1, k - valid_length), 0xFFFFFFFF, dtype=torch.int64),
+        ],
+        dim=-1,
+    )
+    _assert_indices(tt_indices, expected, [1, k])
+
+
 @pytest.mark.parametrize(
     "k,n,valid_length",
     [
-        (512, 1024, 496),  # valid_length < k
+        (512, 1024, 0),  # valid_length must be positive
         (512, 1024, 2048),  # valid_length > n
     ],
 )

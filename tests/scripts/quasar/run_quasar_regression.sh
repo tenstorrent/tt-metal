@@ -40,7 +40,8 @@ config, env, runner, and gtest_repeat settings.
 
 YAML entries default to runner: gtest (binary under build/test/tt_metal/<group>).
 Set runner: pytest for Python tests (group is a .py path relative to TT_METAL_HOME;
-filter is the pytest node id after ::). back2back is not supported for pytest.
+filter is the pytest node id after ::). Omit filter (or use "") to run all tests in the
+gtest binary / pytest file. back2back is not supported for pytest.
 
 Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
@@ -174,7 +175,19 @@ SEP=$'\x1f'   # field separator for test entry records
 ENV_SEP='|'  # separator between env KEY=value pairs (yq join() does not interpret \u escapes)
 EMPTY_ENV='-'  # TSV placeholder for empty env (bash read collapses consecutive tab fields)
 EMPTY_GTEST_REPEAT='-'  # TSV placeholder for empty gtest_repeat (same issue as env)
+EMPTY_FILTER='-'  # TSV placeholder for omitted/empty filter (run all tests)
 VALID_RUNNERS=("gtest" "pytest")
+
+# yq @tsv RFC4180-quotes fields that contain tabs/quotes/commas/newlines; bash read does not
+# unquote. Undo that so env values like JSON survive the round-trip.
+tsv_unquote() {
+    local s="$1"
+    if [[ ${#s} -ge 2 && "${s:0:1}" == '"' && "${s: -1}" == '"' ]]; then
+        s="${s:1:${#s}-2}"
+        s="${s//\"\"/\"}"
+    fi
+    printf '%s' "$s"
+}
 
 is_valid_runner() {
     local runner="$1"
@@ -187,6 +200,14 @@ is_valid_runner() {
 declare -a test_entries=()
 while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runner; do
     [[ -z "$group" ]] && continue
+    group="$(tsv_unquote "$group")"
+    filter="$(tsv_unquote "$filter")"
+    configs="$(tsv_unquote "$configs")"
+    envvars="$(tsv_unquote "$envvars")"
+    gtest_repeat="$(tsv_unquote "$gtest_repeat")"
+    back2back="$(tsv_unquote "$back2back")"
+    runner="$(tsv_unquote "$runner")"
+    [[ "$filter" == "$EMPTY_FILTER" ]] && filter=""
     [[ "$gtest_repeat" == "$EMPTY_GTEST_REPEAT" ]] && gtest_repeat=""
     if ! is_valid_runner "$runner"; then
         echo "ERROR: invalid runner '$runner' for test '$filter' in group '$group'"
@@ -212,7 +233,7 @@ while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runn
         fi
         test_entries+=("${group}${SEP}${filter}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}${SEP}${back2back}${SEP}${runner}")
     done
-done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, .filter, .config, ((.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|") | sub("^$"; "-"))), ((.gtest_repeat // "" | tostring) | sub("^$"; "-")), (.back2back // false | tostring), (.runner // "gtest")] | @tsv' "$TESTS_FILE")
+done < <(yq -r 'to_entries[] | .key as $group | .value[] | [$group, ((.filter // "" | tostring) | sub("^$"; "-")), .config, ((.env // {} | to_entries | map(.key + "=" + (.value | tostring)) | join("|") | sub("^$"; "-"))), ((.gtest_repeat // "" | tostring) | sub("^$"; "-")), (.back2back // false | tostring), (.runner // "gtest")] | @tsv' "$TESTS_FILE")
 
 total_tests=${#test_entries[@]}
 
@@ -508,6 +529,10 @@ record_gtest_result() {
     local config="$1" group="$2" label="$3" elapsed="$4" rc="$5" json_file="$6"
     shift 6
     local filters=("$@")
+    local named_filters=() f
+    for f in "${filters[@]}"; do
+        [[ -n "$f" ]] && named_filters+=("$f")
+    done
 
     local inv_passed=0 inv_failed=0 inv_skipped=0
 
@@ -553,9 +578,8 @@ record_gtest_result() {
         if [[ $count -eq 0 ]]; then
             local no_match_status=SKIP
             [[ $rc -ne 0 ]] && no_match_status=FAIL
-            if [[ ${#filters[@]} -gt 0 ]]; then
-                local f
-                for f in "${filters[@]}"; do
+            if [[ ${#named_filters[@]} -gt 0 ]]; then
+                for f in "${named_filters[@]}"; do
                     record_one_result "$no_match_status" "[$config] $group --gtest_filter=$f" "$(fmt_duration "$elapsed"), no tests ran"
                 done
             else
@@ -565,9 +589,8 @@ record_gtest_result() {
     else
         local status=PASS
         [[ $rc -ne 0 ]] && status=FAIL
-        if [[ ${#filters[@]} -gt 0 ]]; then
-            local f
-            for f in "${filters[@]}"; do
+        if [[ ${#named_filters[@]} -gt 0 ]]; then
+            for f in "${named_filters[@]}"; do
                 record_one_result "$status" "[$config] $group --gtest_filter=$f" "$(fmt_duration "$elapsed")"
             done
         else
@@ -592,6 +615,10 @@ record_pytest_result() {
     local config="$1" group="$2" label="$3" elapsed="$4" rc="$5" junit_file="$6"
     shift 6
     local filters=("$@")
+    local named_filters=() f
+    for f in "${filters[@]}"; do
+        [[ -n "$f" ]] && named_filters+=("$f")
+    done
 
     local inv_passed=0 inv_failed=0 inv_skipped=0
 
@@ -640,9 +667,8 @@ record_pytest_result() {
         if [[ $count -eq 0 ]]; then
             local no_match_status=SKIP
             [[ $rc -ne 0 ]] && no_match_status=FAIL
-            if [[ ${#filters[@]} -gt 0 ]]; then
-                local f
-                for f in "${filters[@]}"; do
+            if [[ ${#named_filters[@]} -gt 0 ]]; then
+                for f in "${named_filters[@]}"; do
                     record_one_result "$no_match_status" "[$config] pytest $group::$f" "$(fmt_duration "$elapsed"), no tests ran"
                 done
             else
@@ -652,9 +678,8 @@ record_pytest_result() {
     else
         local status=PASS
         [[ $rc -ne 0 ]] && status=FAIL
-        if [[ ${#filters[@]} -gt 0 ]]; then
-            local f
-            for f in "${filters[@]}"; do
+        if [[ ${#named_filters[@]} -gt 0 ]]; then
+            for f in "${named_filters[@]}"; do
                 record_one_result "$status" "[$config] pytest $group::$f" "$(fmt_duration "$elapsed")"
             done
         else
@@ -765,7 +790,10 @@ format_test_label() {
     if [[ "$runner" == "pytest" ]]; then
         label="[$config] pytest $(pytest_node_id "$group" "$filter_summary")"
     else
-        label="[$config] $group --gtest_filter=$filter_summary"
+        label="[$config] $group"
+        if [[ -n "$filter_summary" ]]; then
+            label="$label --gtest_filter=$filter_summary"
+        fi
         if [[ -n "$gtest_repeat" ]]; then
             label="$label --gtest_repeat=$gtest_repeat"
         fi
@@ -832,11 +860,19 @@ run_test_invocation() {
             # collects correctly even when cwd is not TT_METAL_HOME.
             node_ids+=("$(pytest_node_id "$pyfile" "$f")")
         done
+        # No filters (or a single empty filter) -> run the whole file.
+        if [[ ${#node_ids[@]} -eq 0 ]]; then
+            node_ids+=("$pyfile")
+        fi
         cmd_display="pytest ${node_ids[*]}"
         echo "  CMD: $cmd_display"
     else
         combined_filter="$(combine_gtest_filters "${filters[@]}")"
-        cmd_display="$BUILD_DIR/test/tt_metal/$group --gtest_filter=$combined_filter${gtest_repeat_args[*]:+ ${gtest_repeat_args[*]}}"
+        cmd_display="$BUILD_DIR/test/tt_metal/$group"
+        if [[ -n "$combined_filter" ]]; then
+            cmd_display+=" --gtest_filter=$combined_filter"
+        fi
+        cmd_display+="${gtest_repeat_args[*]:+ ${gtest_repeat_args[*]}}"
         echo "  CMD: $cmd_display"
     fi
 
@@ -850,8 +886,10 @@ run_test_invocation() {
     local log_stem
     local group_stem
     group_stem="$(sanitize_name "$group")"
-    if [[ ${#filters[@]} -eq 1 ]]; then
+    if [[ ${#filters[@]} -eq 1 && -n "${filters[0]}" ]]; then
         log_stem="$(sanitize_name "${filters[0]}")"
+    elif [[ ${#filters[@]} -le 1 ]]; then
+        log_stem="all"
     else
         log_stem="back2back_${run_num}"
     fi
@@ -893,7 +931,10 @@ run_test_invocation() {
                 emu_run_cmd+=(--junitxml="$result_file")
             fi
         else
-            emu_run_cmd=("$BUILD_DIR/test/tt_metal/$group" --gtest_filter="$combined_filter")
+            emu_run_cmd=("$BUILD_DIR/test/tt_metal/$group")
+            if [[ -n "$combined_filter" ]]; then
+                emu_run_cmd+=(--gtest_filter="$combined_filter")
+            fi
             emu_run_cmd+=("${gtest_repeat_args[@]}")
             if [[ -n "$result_file" ]]; then
                 emu_run_cmd+=("--gtest_output=json:${result_file}")
@@ -951,11 +992,34 @@ clear_back2back_batch() {
 flush_back2back_batch() {
     [[ ${#batch_filters[@]} -eq 0 ]] && return
 
+    # Mixing empty (run-all) and named filters in one gtest invocation is illegal:
+    # combine_gtest_filters would drop or corrupt the empty entries (e.g. "" + "*Foo*"
+    # becomes just "*Foo*"), so "run everything" would silently not happen.
+    local has_empty=false has_named=false f
+    for f in "${batch_filters[@]}"; do
+        if [[ -z "$f" ]]; then
+            has_empty=true
+        else
+            has_named=true
+        fi
+    done
+    if [[ "$has_empty" == true && "$has_named" == true ]]; then
+        echo "ERROR: back2back batch for group '$batch_group' (config '$batch_config') mixes empty filter (run all) with named filters:"
+        for f in "${batch_filters[@]}"; do
+            if [[ -z "$f" ]]; then
+                echo "  - (empty / run all)"
+            else
+                echo "  - $f"
+            fi
+        done
+        echo "       Give every entry a filter, or keep run-all entries in their own non-mixed batch."
+        exit 1
+    fi
+
     run_num=$((run_num + 1))
     local label
     if [[ "$batch_runner" == "pytest" && ${#batch_filters[@]} -gt 1 ]]; then
         local -a nodes=()
-        local f
         for f in "${batch_filters[@]}"; do
             nodes+=("$(pytest_node_id "$batch_group" "$f")")
         done

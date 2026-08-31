@@ -49,7 +49,7 @@ using tt::data_movement::common::tt_memmove;
 #include <cstdint>
 
 // Include SDPA LLK APIs for srcB reuse pattern and sdpa_tail reduction
-#include "models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h"
+#include "api/compute/experimental/sdpa.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -61,16 +61,16 @@ namespace deepseek_b1_ops {
 
 /** Per-round configuration for sending packets. */
 struct SdpaRoundConfig {
-    uint32_t cb_l;
-    uint32_t cb_ms;
-    uint32_t dst_mesh_id;
-    uint32_t dst_chip_id;
-    uint32_t dst_base_addr;
-    uint32_t sem_addr;
-    uint32_t fwd_slot_addr;
-    uint32_t fwd_sem_addr;
-    uint32_t base_slot_idx;
-    uint32_t header_addr;
+    std::uint32_t cb_l;
+    std::uint32_t cb_ms;
+    std::uint32_t dst_mesh_id;
+    std::uint32_t dst_chip_id;
+    std::uint32_t dst_base_addr;
+    std::uint32_t sem_addr;
+    std::uint32_t fwd_slot_addr;
+    std::uint32_t fwd_sem_addr;
+    std::uint32_t base_slot_idx;
+    std::uint32_t header_addr;
 };
 
 /**
@@ -78,39 +78,39 @@ struct SdpaRoundConfig {
  * Template parameters encode size constants for zero-overhead abstraction.
  */
 template <
-    uint32_t l1_alignment,
-    uint32_t slot_size,
-    uint32_t ms_tile_size_bytes,
-    uint32_t l_chunk_size_bytes,
-    uint32_t num_l_chunks,
-    uint32_t tiles_per_l_chunk>
+    std::uint32_t l1_alignment,
+    std::uint32_t slot_size,
+    std::uint32_t ms_tile_size_bytes,
+    std::uint32_t l_chunk_size_bytes,
+    std::uint32_t num_l_chunks,
+    std::uint32_t tiles_per_l_chunk>
 struct SdpaChunkSender {
     static constexpr bool use_posted_forwarder_writes = true;
 
     // Core coordinates (constant across rounds)
-    uint32_t current_core_x;
-    uint32_t current_core_y;
-    uint32_t fwd_core_x;
-    uint32_t fwd_core_y;
+    std::uint32_t current_core_x;
+    std::uint32_t current_core_y;
+    std::uint32_t fwd_core_x;
+    std::uint32_t fwd_core_y;
 
     // Round configuration (set by setup_round)
     SdpaRoundConfig cfg;
 
     // Precomputed NOC addresses (computed once per round in setup_round)
-    uint64_t dst_base_noc;       // Fabric destination payload base for L chunks
-    uint64_t sem_noc;            // Fabric destination semaphore
-    uint64_t fwd_sem_noc;        // Forwarder semaphore
+    std::uint64_t dst_base_noc;  // Fabric destination payload base for L chunks
+    std::uint64_t sem_noc;       // Fabric destination semaphore
+    std::uint64_t fwd_sem_noc;   // Forwarder semaphore
     volatile PACKET_HEADER_TYPE* header;
 
     // Derived constants
-    static constexpr uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
+    static constexpr std::uint32_t total_l_bytes = num_l_chunks * l_chunk_size_bytes;
     static constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-    static constexpr uint32_t aligned_ms_payload_bytes = align(ms_tile_size_bytes, l1_alignment);
-    static constexpr uint32_t aligned_l_chunk_payload_bytes = align(l_chunk_size_bytes, l1_alignment);
+    static constexpr std::uint32_t aligned_ms_payload_bytes = align(ms_tile_size_bytes, l1_alignment);
+    static constexpr std::uint32_t aligned_l_chunk_payload_bytes = align(l_chunk_size_bytes, l1_alignment);
 
     // Slot indices: MS = slot 0, L_chunk_i = slot (1 + i)
-    static constexpr uint32_t MS_SLOT_OFFSET = 0;
-    static constexpr uint32_t L_SLOT_OFFSET = 1;
+    static constexpr std::uint32_t MS_SLOT_OFFSET = 0;
+    static constexpr std::uint32_t L_SLOT_OFFSET = 1;
 
     FORCE_INLINE void setup_forwarder_write_state() const {
         // Only the forwarder core coordinate is fixed across rounds; the destination L1 address is still per-slot.
@@ -131,7 +131,7 @@ struct SdpaChunkSender {
         fabric_set_single_hop_unicast_route_from_direction(
             header, next_hop_direction, cfg.dst_chip_id, cfg.dst_mesh_id);
 
-        constexpr uint32_t ATOMIC_INC_VAL = 1;
+        constexpr std::uint32_t ATOMIC_INC_VAL = 1;
         constexpr bool FLUSH_WRITES = false;
         header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_base_noc, sem_noc, ATOMIC_INC_VAL, FLUSH_WRITES},
@@ -139,11 +139,11 @@ struct SdpaChunkSender {
     }
 
     FORCE_INLINE void send_packet(
-        uint64_t dst_noc,
-        uint32_t fwd_slot_addr,
-        uint32_t fwd_slot_idx,
-        uint32_t src_addr,
-        uint32_t payload_size) const {
+        std::uint64_t dst_noc,
+        std::uint32_t fwd_slot_addr,
+        std::uint32_t fwd_slot_idx,
+        std::uint32_t src_addr,
+        std::uint32_t payload_size) const {
         header->set_fused_unicast_write_atomic_inc_write_noc_address(dst_noc);
         ncrisc_noc_write_with_state<
             noc_mode,
@@ -165,7 +165,7 @@ struct SdpaChunkSender {
         noc_semaphore_inc(fwd_sem_noc, 1u << fwd_slot_idx);
     }
 
-    FORCE_INLINE void send_ms(uint32_t src_addr) const {
+    FORCE_INLINE void send_ms(std::uint32_t src_addr) const {
         if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
             header->set_payload_size_bytes(aligned_ms_payload_bytes);
         }
@@ -173,16 +173,16 @@ struct SdpaChunkSender {
     }
 
     template <bool streaming>
-    FORCE_INLINE void send_l_chunks(uint32_t src_addr) const {
+    FORCE_INLINE void send_l_chunks(std::uint32_t src_addr) const {
         if constexpr (aligned_ms_payload_bytes != aligned_l_chunk_payload_bytes) {
             header->set_payload_size_bytes(aligned_l_chunk_payload_bytes);
         }
 
-        uint64_t current_dst_noc = dst_base_noc;
-        uint32_t current_fwd_slot_addr = cfg.fwd_slot_addr + (L_SLOT_OFFSET * slot_size);
-        uint32_t current_fwd_slot_idx = cfg.base_slot_idx + L_SLOT_OFFSET;
-        uint32_t current_src_addr = src_addr;
-        for (uint32_t i = 0; i < num_l_chunks; i++) {
+        std::uint64_t current_dst_noc = dst_base_noc;
+        std::uint32_t current_fwd_slot_addr = cfg.fwd_slot_addr + (L_SLOT_OFFSET * slot_size);
+        std::uint32_t current_fwd_slot_idx = cfg.base_slot_idx + L_SLOT_OFFSET;
+        std::uint32_t current_src_addr = src_addr;
+        for (std::uint32_t i = 0; i < num_l_chunks; i++) {
             if constexpr (streaming) {
                 cb_wait_front(cfg.cb_l, (i + 1) * tiles_per_l_chunk);
             }
@@ -224,19 +224,19 @@ template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
     bool untilize,
-    uint32_t block_size,
-    uint32_t scale_fp32,
-    uint32_t num_l_chunks,
+    std::uint32_t block_size,
+    std::uint32_t scale_fp32,
+    std::uint32_t num_l_chunks,
     VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming(
-    uint32_t cb_worker_max_sum,
-    uint32_t cb_prev_max_sum,
-    uint32_t cb_cur_max_sum,
-    uint32_t cb_l1,
-    uint32_t cb_l2,
-    uint32_t cb_l_out) {
+    std::uint32_t cb_worker_max_sum,
+    std::uint32_t cb_prev_max_sum,
+    std::uint32_t cb_cur_max_sum,
+    std::uint32_t cb_l1,
+    std::uint32_t cb_l2,
+    std::uint32_t cb_l_out) {
     constexpr bool dense = untilize;
-    constexpr uint32_t total_size = num_l_chunks * block_size;
+    constexpr std::uint32_t total_size = num_l_chunks * block_size;
     ckernel::sdpa_tail_ms_reduce<
         SDPA_EXP_APPROX_MODE,
         normalize,
@@ -259,11 +259,11 @@ ALWI void sdpa_tail_streaming(
     } else {
         bool acquire_regs = !normalize;
         pack_block_contiguous_init(cb_l_out);
-        for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+        for (std::uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
             cb_wait_front(cb_l1, (chunk + 1) * block_size);
             cb_wait_front(cb_l2, (chunk + 1) * block_size);
             cb_reserve_back(cb_l_out, block_size);
-            uint32_t tile_index = chunk * block_size;
+            std::uint32_t tile_index = chunk * block_size;
             ckernel::sdpa_tail_l_block<block_size, 1, untilize, dense, false>(
                 cb_l1, cb_l2, cb_l_out, tile_index, 0, acquire_regs);
             acquire_regs = true;
@@ -277,12 +277,12 @@ ALWI void sdpa_tail_streaming(
 }
 
 ALWI void sdpa_forward_data(
-    uint32_t cb_prev_max_sum,
-    uint32_t cb_cur_max_sum,
-    uint32_t num_l_chunks,
-    uint32_t cb_l1,
-    uint32_t cb_l_out,
-    uint32_t block_size) {
+    std::uint32_t cb_prev_max_sum,
+    std::uint32_t cb_cur_max_sum,
+    std::uint32_t num_l_chunks,
+    std::uint32_t cb_l1,
+    std::uint32_t cb_l_out,
+    std::uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
     // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
     PACK((llk_pack_init<ckernel::PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(
@@ -300,13 +300,13 @@ ALWI void sdpa_forward_data(
 
     cb_push_back(cb_cur_max_sum, 1);
     pack_block_contiguous_init(cb_l_out);
-    for (uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
+    for (std::uint32_t chunk = 0; chunk < num_l_chunks; chunk++) {
         cb_wait_front(cb_l1, (chunk + 1) * block_size);
         cb_reserve_back(cb_l_out, block_size);
 
-        uint32_t tile_index = chunk * block_size;
+        std::uint32_t tile_index = chunk * block_size;
         tile_regs_acquire();
-        for (uint32_t i = 0; i < block_size; i++) {
+        for (std::uint32_t i = 0; i < block_size; i++) {
             copy_tile(cb_l1, tile_index + i, i);
         }
         tile_regs_commit();
@@ -321,17 +321,17 @@ template <
     bool SDPA_EXP_APPROX_MODE,
     bool normalize,
     bool untilize,
-    uint32_t block_size,
-    uint32_t scale_fp32,
-    uint32_t num_l_chunks,
+    std::uint32_t block_size,
+    std::uint32_t scale_fp32,
+    std::uint32_t num_l_chunks,
     VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming_conditional(
-    uint32_t cb_worker_max_sum,
-    uint32_t cb_prev_max_sum,
-    uint32_t cb_cur_max_sum,
-    uint32_t cb_l1,
-    uint32_t cb_l2,
-    uint32_t cb_l_out,
+    std::uint32_t cb_worker_max_sum,
+    std::uint32_t cb_prev_max_sum,
+    std::uint32_t cb_cur_max_sum,
+    std::uint32_t cb_l1,
+    std::uint32_t cb_l2,
+    std::uint32_t cb_l_out,
     bool neighbor_valid,
     bool local_valid,
     bool swap_reduction_order) {
@@ -423,74 +423,74 @@ struct SdpaReduceWorker {
 
     // Reader CTArgs (NCRISC)
     template <
-        uint32_t cbLocalL,
-        uint32_t cbLocalMs,
-        uint32_t cbNeighborL,
-        uint32_t cbNeighborMs,
-        uint32_t msTileSizeBytes,
-        uint32_t lChunkSizeBytes,
-        uint32_t numLChunks,
-        uint32_t tilesPerLChunk,
-        uint32_t positionEnabled,
-        uint32_t perDeviceChunkSize>
+        std::uint32_t cbLocalL,
+        std::uint32_t cbLocalMs,
+        std::uint32_t cbNeighborL,
+        std::uint32_t cbNeighborMs,
+        std::uint32_t msTileSizeBytes,
+        std::uint32_t lChunkSizeBytes,
+        std::uint32_t numLChunks,
+        std::uint32_t tilesPerLChunk,
+        std::uint32_t positionEnabled,
+        std::uint32_t perDeviceChunkSize>
     struct ReaderCTArgs {
-        static constexpr uint32_t cb_local_l = cbLocalL;
-        static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_neighbor_l = cbNeighborL;
-        static constexpr uint32_t cb_neighbor_ms = cbNeighborMs;
-        static constexpr uint32_t ms_tile_size_bytes = msTileSizeBytes;
-        static constexpr uint32_t l_chunk_size_bytes = lChunkSizeBytes;
-        static constexpr uint32_t num_l_chunks = numLChunks;
-        static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t position_enabled = positionEnabled;
-        static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
+        static constexpr std::uint32_t cb_local_l = cbLocalL;
+        static constexpr std::uint32_t cb_local_ms = cbLocalMs;
+        static constexpr std::uint32_t cb_neighbor_l = cbNeighborL;
+        static constexpr std::uint32_t cb_neighbor_ms = cbNeighborMs;
+        static constexpr std::uint32_t ms_tile_size_bytes = msTileSizeBytes;
+        static constexpr std::uint32_t l_chunk_size_bytes = lChunkSizeBytes;
+        static constexpr std::uint32_t num_l_chunks = numLChunks;
+        static constexpr std::uint32_t tiles_per_l_chunk = tilesPerLChunk;
+        static constexpr std::uint32_t position_enabled = positionEnabled;
+        static constexpr std::uint32_t per_device_chunk_size = perDeviceChunkSize;
         // Derived constants
-        static constexpr uint32_t out_tiles = numLChunks * tilesPerLChunk;
-        static constexpr uint32_t total_l_bytes = numLChunks * lChunkSizeBytes;
-        static constexpr uint32_t MS_SEM_THRESHOLD = 1;
-        static constexpr uint32_t L_SEM_BASE_THRESHOLD = 2;
+        static constexpr std::uint32_t out_tiles = numLChunks * tilesPerLChunk;
+        static constexpr std::uint32_t total_l_bytes = numLChunks * lChunkSizeBytes;
+        static constexpr std::uint32_t MS_SEM_THRESHOLD = 1;
+        static constexpr std::uint32_t L_SEM_BASE_THRESHOLD = 2;
     };
 
     // Writer CTArgs (BRISC)
     template <
-        uint32_t cbLocalL,
-        uint32_t cbLocalMs,
-        uint32_t cbR1ResultL,
-        uint32_t cbR1ResultMs,
-        uint32_t l1Alignment,
-        uint32_t pageSizeBytes,
-        uint32_t slotSize,
-        uint32_t msTileSizeBytes,
-        uint32_t lChunkSizeBytes,
-        uint32_t numLChunks,
-        uint32_t tilesPerLChunk,
-        uint32_t cbLOut,
-        uint32_t scatterNumTiles,
-        uint32_t scatterSrcTileSize,
-        uint32_t scatterDstTileSize,
-        uint32_t scatterFaceSize,
-        uint32_t scatterRowFaceSize,
-        uint32_t scatterNumRows,
-        uint32_t scatterArrivalEnabled = 0>
+        std::uint32_t cbLocalL,
+        std::uint32_t cbLocalMs,
+        std::uint32_t cbR1ResultL,
+        std::uint32_t cbR1ResultMs,
+        std::uint32_t l1Alignment,
+        std::uint32_t pageSizeBytes,
+        std::uint32_t slotSize,
+        std::uint32_t msTileSizeBytes,
+        std::uint32_t lChunkSizeBytes,
+        std::uint32_t numLChunks,
+        std::uint32_t tilesPerLChunk,
+        std::uint32_t cbLOut,
+        std::uint32_t scatterNumTiles,
+        std::uint32_t scatterSrcTileSize,
+        std::uint32_t scatterDstTileSize,
+        std::uint32_t scatterFaceSize,
+        std::uint32_t scatterRowFaceSize,
+        std::uint32_t scatterNumRows,
+        std::uint32_t scatterArrivalEnabled = 0>
     struct WriterCTArgs {
-        static constexpr uint32_t cb_local_l = cbLocalL;
-        static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_r1_result_l = cbR1ResultL;
-        static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
-        static constexpr uint32_t l1_alignment = l1Alignment;
-        static constexpr uint32_t page_size_bytes = pageSizeBytes;
-        static constexpr uint32_t slot_size = slotSize;
-        static constexpr uint32_t ms_tile_size_bytes = msTileSizeBytes;
-        static constexpr uint32_t l_chunk_size_bytes = lChunkSizeBytes;
-        static constexpr uint32_t num_l_chunks = numLChunks;
-        static constexpr uint32_t tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t cb_l_out = cbLOut;
-        static constexpr uint32_t scatter_num_tiles = scatterNumTiles;
-        static constexpr uint32_t scatter_src_tile_size = scatterSrcTileSize;
-        static constexpr uint32_t scatter_dst_tile_size = scatterDstTileSize;
-        static constexpr uint32_t scatter_face_size = scatterFaceSize;
-        static constexpr uint32_t scatter_row_face_size = scatterRowFaceSize;
-        static constexpr uint32_t scatter_num_rows = scatterNumRows;
+        static constexpr std::uint32_t cb_local_l = cbLocalL;
+        static constexpr std::uint32_t cb_local_ms = cbLocalMs;
+        static constexpr std::uint32_t cb_r1_result_l = cbR1ResultL;
+        static constexpr std::uint32_t cb_r1_result_ms = cbR1ResultMs;
+        static constexpr std::uint32_t l1_alignment = l1Alignment;
+        static constexpr std::uint32_t page_size_bytes = pageSizeBytes;
+        static constexpr std::uint32_t slot_size = slotSize;
+        static constexpr std::uint32_t ms_tile_size_bytes = msTileSizeBytes;
+        static constexpr std::uint32_t l_chunk_size_bytes = lChunkSizeBytes;
+        static constexpr std::uint32_t num_l_chunks = numLChunks;
+        static constexpr std::uint32_t tiles_per_l_chunk = tilesPerLChunk;
+        static constexpr std::uint32_t cb_l_out = cbLOut;
+        static constexpr std::uint32_t scatter_num_tiles = scatterNumTiles;
+        static constexpr std::uint32_t scatter_src_tile_size = scatterSrcTileSize;
+        static constexpr std::uint32_t scatter_dst_tile_size = scatterDstTileSize;
+        static constexpr std::uint32_t scatter_face_size = scatterFaceSize;
+        static constexpr std::uint32_t scatter_row_face_size = scatterRowFaceSize;
+        static constexpr std::uint32_t scatter_num_rows = scatterNumRows;
         // Optional scatter arrival semaphore: when enabled, signals each destination core
         // after scatter write completes (used by fused ops to synchronize downstream stages)
         static constexpr bool scatter_arrival_enabled = scatterArrivalEnabled != 0;
@@ -498,43 +498,43 @@ struct SdpaReduceWorker {
 
     // Compute CTArgs (TRISC)
     template <
-        uint32_t cbLocalL,
-        uint32_t cbLocalMs,
-        uint32_t cbNeighborL,
-        uint32_t cbNeighborMs,
-        uint32_t cbR1ResultL,
-        uint32_t cbR1ResultMs,
-        uint32_t cbLOut,
-        uint32_t scaleFp32,
-        uint32_t tilesPerLChunk,
-        uint32_t numLChunks,
-        uint32_t computeBlockSize,
-        uint32_t positionEnabled,
-        uint32_t perDeviceChunkSize,
-        uint32_t finalReduction>
+        std::uint32_t cbLocalL,
+        std::uint32_t cbLocalMs,
+        std::uint32_t cbNeighborL,
+        std::uint32_t cbNeighborMs,
+        std::uint32_t cbR1ResultL,
+        std::uint32_t cbR1ResultMs,
+        std::uint32_t cbLOut,
+        std::uint32_t scaleFp32,
+        std::uint32_t tilesPerLChunk,
+        std::uint32_t numLChunks,
+        std::uint32_t computeBlockSize,
+        std::uint32_t positionEnabled,
+        std::uint32_t perDeviceChunkSize,
+        std::uint32_t finalReduction>
     struct ComputeCTArgs {
-        static constexpr uint32_t cb_local_l = cbLocalL;
-        static constexpr uint32_t cb_local_ms = cbLocalMs;
-        static constexpr uint32_t cb_neighbor_l = cbNeighborL;
-        static constexpr uint32_t cb_neighbor_ms = cbNeighborMs;
-        static constexpr uint32_t cb_r1_result_l = cbR1ResultL;
-        static constexpr uint32_t cb_r1_result_ms = cbR1ResultMs;
-        static constexpr uint32_t cb_l_out = cbLOut;
-        static constexpr uint32_t scale_fp32 = scaleFp32;
-        static constexpr uint32_t transport_tiles_per_l_chunk = tilesPerLChunk;
-        static constexpr uint32_t transport_num_l_chunks = numLChunks;
-        static constexpr uint32_t position_enabled = positionEnabled;
-        static constexpr uint32_t per_device_chunk_size = perDeviceChunkSize;
+        static constexpr std::uint32_t cb_local_l = cbLocalL;
+        static constexpr std::uint32_t cb_local_ms = cbLocalMs;
+        static constexpr std::uint32_t cb_neighbor_l = cbNeighborL;
+        static constexpr std::uint32_t cb_neighbor_ms = cbNeighborMs;
+        static constexpr std::uint32_t cb_r1_result_l = cbR1ResultL;
+        static constexpr std::uint32_t cb_r1_result_ms = cbR1ResultMs;
+        static constexpr std::uint32_t cb_l_out = cbLOut;
+        static constexpr std::uint32_t scale_fp32 = scaleFp32;
+        static constexpr std::uint32_t transport_tiles_per_l_chunk = tilesPerLChunk;
+        static constexpr std::uint32_t transport_num_l_chunks = numLChunks;
+        static constexpr std::uint32_t position_enabled = positionEnabled;
+        static constexpr std::uint32_t per_device_chunk_size = perDeviceChunkSize;
         static constexpr bool final_reduction = finalReduction;
-        static constexpr uint32_t total_l_tiles = transport_num_l_chunks * transport_tiles_per_l_chunk;
+        static constexpr std::uint32_t total_l_tiles = transport_num_l_chunks * transport_tiles_per_l_chunk;
         // Blackhole's non-dense SDPA srcB-reuse path tops out at 8 logical 8x32 tiles per block.
-        static constexpr uint32_t max_compute_block_size = 8;
+        static constexpr std::uint32_t max_compute_block_size = 8;
         // SDPA uses "block_size" terminology on the compute path.
-        static constexpr uint32_t block_size = computeBlockSize;
+        static constexpr std::uint32_t block_size = computeBlockSize;
         static_assert(block_size > 0, "compute block_size must be > 0");
         static_assert(block_size <= max_compute_block_size, "compute block_size exceeds supported maximum");
         static_assert(total_l_tiles % block_size == 0, "total_l_tiles must be divisible by compute block_size");
-        static constexpr uint32_t num_l_blocks = total_l_tiles / block_size;
+        static constexpr std::uint32_t num_l_blocks = total_l_tiles / block_size;
     };
 
     // ========================================================================
@@ -543,51 +543,51 @@ struct SdpaReduceWorker {
 
     // Reader args (NCRISC): semaphore and buffer addresses for neighbor data
     struct ReaderArgs {
-        uint32_t r1_neighbor_sem_addr;
-        uint32_t r2_neighbor_sem_addr;
-        uint32_t r1_recv_buffer_addr;
-        uint32_t r2_recv_buffer_addr;
+        std::uint32_t r1_neighbor_sem_addr;
+        std::uint32_t r2_neighbor_sem_addr;
+        std::uint32_t r1_recv_buffer_addr;
+        std::uint32_t r2_recv_buffer_addr;
         // Position args (only meaningful when position_enabled CTArg is set)
-        uint32_t global_pos;
-        uint32_t r1_neighbor_device_idx;
-        uint32_t r2_neighbor_device_idx;
-        uint32_t r2_neighbor_r1_neighbor_idx;
+        std::uint32_t global_pos;
+        std::uint32_t r1_neighbor_device_idx;
+        std::uint32_t r2_neighbor_device_idx;
+        std::uint32_t r2_neighbor_r1_neighbor_idx;
     };
 
     // Writer args (BRISC): fabric destinations, core coordinates, forwarder config
     struct WriterArgs {
-        uint32_t r1_dst_mesh_id;
-        uint32_t r1_dst_chip_id;
-        uint32_t r1_neighbor_dst_addr;
-        uint32_t r1_neighbor_sem_addr;
-        uint32_t r2_dst_mesh_id;
-        uint32_t r2_dst_chip_id;
-        uint32_t r2_neighbor_dst_addr;
-        uint32_t r2_neighbor_sem_addr;
-        uint32_t current_core_x;
-        uint32_t current_core_y;
-        uint32_t fwd_core_x;
-        uint32_t fwd_core_y;
-        uint32_t r1_fwd_slot_addr;
-        uint32_t r1_fwd_sem_addr;
-        uint32_t r1_base_slot_idx;
-        uint32_t r2_fwd_slot_addr;
-        uint32_t r2_fwd_sem_addr;
-        uint32_t r2_base_slot_idx;
-        uint32_t scatter_dest_l1_addr;
-        uint32_t scatter_dest_coords_addr;
-        uint32_t scatter_arrival_sem_addr;
+        std::uint32_t r1_dst_mesh_id;
+        std::uint32_t r1_dst_chip_id;
+        std::uint32_t r1_neighbor_dst_addr;
+        std::uint32_t r1_neighbor_sem_addr;
+        std::uint32_t r2_dst_mesh_id;
+        std::uint32_t r2_dst_chip_id;
+        std::uint32_t r2_neighbor_dst_addr;
+        std::uint32_t r2_neighbor_sem_addr;
+        std::uint32_t current_core_x;
+        std::uint32_t current_core_y;
+        std::uint32_t fwd_core_x;
+        std::uint32_t fwd_core_y;
+        std::uint32_t r1_fwd_slot_addr;
+        std::uint32_t r1_fwd_sem_addr;
+        std::uint32_t r1_base_slot_idx;
+        std::uint32_t r2_fwd_slot_addr;
+        std::uint32_t r2_fwd_sem_addr;
+        std::uint32_t r2_base_slot_idx;
+        std::uint32_t scatter_dest_l1_addr;
+        std::uint32_t scatter_dest_coords_addr;
+        std::uint32_t scatter_arrival_sem_addr;
     };
 
     // Compute args (TRISC): position validity for SDPA reduction
     struct ComputeArgs {
-        uint32_t global_pos;
-        uint32_t device_idx;
-        uint32_t r1_neighbor_device_idx;
-        uint32_t r2_neighbor_device_idx;
-        uint32_t r2_neighbor_r1_neighbor_idx;
-        uint32_t swap_r1_reduction_order;
-        uint32_t swap_r2_reduction_order;
+        std::uint32_t global_pos;
+        std::uint32_t device_idx;
+        std::uint32_t r1_neighbor_device_idx;
+        std::uint32_t r2_neighbor_device_idx;
+        std::uint32_t r2_neighbor_r1_neighbor_idx;
+        std::uint32_t swap_r1_reduction_order;
+        std::uint32_t swap_r2_reduction_order;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -608,7 +608,7 @@ struct SdpaReduceWorker {
 #endif
         }
 
-        void set_global_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t global_pos) {
+        void set_global_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] std::uint32_t global_pos) {
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
             args.global_pos = global_pos;
 #endif
@@ -620,7 +620,7 @@ struct SdpaReduceWorker {
         // NCRISC (Reader) - prepares MS/L data for compute
         // ==================================================================
         FORCE_INLINE void prepare_ms_for_compute(
-            uint32_t cb_ms, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t recv_buffer_addr) {
+            std::uint32_t cb_ms, volatile tt_l1_ptr std::uint32_t* sem_ptr, std::uint32_t recv_buffer_addr) {
             // The pointer doesn't matter for NCRISC, just need to reserve and push
             cb_reserve_back(cb_ms, 1);
             noc_semaphore_wait_min(sem_ptr, CTArgs::MS_SEM_THRESHOLD);
@@ -628,7 +628,7 @@ struct SdpaReduceWorker {
         }
 
         FORCE_INLINE void prepare_l_chunk_for_compute(
-            uint32_t cb_l, volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t l_chunk_idx) {
+            std::uint32_t cb_l, volatile tt_l1_ptr std::uint32_t* sem_ptr, std::uint32_t l_chunk_idx) {
             // The pointer doesn't matter for NCRISC, just need to reserve and push
             cb_reserve_back(cb_l, CTArgs::tiles_per_l_chunk);
             noc_semaphore_wait_min(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + l_chunk_idx);
@@ -636,10 +636,10 @@ struct SdpaReduceWorker {
         }
 
         FORCE_INLINE void prepare_data_for_compute(
-            uint32_t cb_l, uint32_t cb_ms, uint32_t sem_addr, uint32_t recv_buffer_addr) {
-            volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+            std::uint32_t cb_l, std::uint32_t cb_ms, std::uint32_t sem_addr, std::uint32_t recv_buffer_addr) {
+            volatile tt_l1_ptr std::uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(sem_addr);
             prepare_ms_for_compute(cb_ms, sem_ptr, recv_buffer_addr);
-            for (uint32_t i = 0; i < CTArgs::num_l_chunks; i++) {
+            for (std::uint32_t i = 0; i < CTArgs::num_l_chunks; i++) {
                 prepare_l_chunk_for_compute(cb_l, sem_ptr, i);
             }
             noc_semaphore_set(sem_ptr, 0);
@@ -650,8 +650,8 @@ struct SdpaReduceWorker {
             bool r1_neighbor_valid = true;
 
             if constexpr (CTArgs::position_enabled) {
-                uint32_t position_id = args.global_pos;
-                constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
+                std::uint32_t position_id = args.global_pos;
+                constexpr std::uint32_t chunk = CTArgs::per_device_chunk_size;
                 r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
                 r2_neighbor_r1_valid = (position_id >= args.r2_neighbor_device_idx * chunk) ||
                                        (position_id >= args.r2_neighbor_r1_neighbor_idx * chunk);
@@ -681,15 +681,15 @@ struct SdpaReduceWorker {
 
             // Clear the semaphores if the neighbor is not valid
             if (!r1_neighbor_valid) {
-                volatile tt_l1_ptr uint32_t* sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_neighbor_sem_addr);
+                volatile tt_l1_ptr std::uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.r1_neighbor_sem_addr);
                 noc_semaphore_wait(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + CTArgs::num_l_chunks - 1);
                 noc_semaphore_set(sem_ptr, 0);
             }
 
             if (!r2_neighbor_r1_valid) {
-                volatile tt_l1_ptr uint32_t* sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r2_neighbor_sem_addr);
+                volatile tt_l1_ptr std::uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.r2_neighbor_sem_addr);
                 noc_semaphore_wait(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + CTArgs::num_l_chunks - 1);
                 noc_semaphore_set(sem_ptr, 0);
             }
@@ -726,7 +726,7 @@ struct SdpaReduceWorker {
                  args.r1_fwd_slot_addr,
                  args.r1_fwd_sem_addr,
                  args.r1_base_slot_idx,
-                 reinterpret_cast<uint32_t>(header)});
+                 reinterpret_cast<std::uint32_t>(header)});
             sender.send_all();
 
             // ROUND 2: Send R1 result to R2 neighbor (streaming)
@@ -740,33 +740,35 @@ struct SdpaReduceWorker {
                  args.r2_fwd_slot_addr,
                  args.r2_fwd_sem_addr,
                  args.r2_base_slot_idx,
-                 reinterpret_cast<uint32_t>(header)});
+                 reinterpret_cast<std::uint32_t>(header)});
             sender.send_streaming();
 
             noc_async_full_barrier();
 
             // SCATTER PHASE: Distribute output rows to destination cores
             if constexpr (CTArgs::scatter_num_rows > 0) {
-                tt_l1_ptr uint32_t* scatter_dest_coords = (tt_l1_ptr uint32_t*)(args.scatter_dest_coords_addr);
-                uint32_t scatter_dest_noc_x[CTArgs::scatter_num_rows];
-                uint32_t scatter_dest_noc_y[CTArgs::scatter_num_rows];
-                for (uint32_t i = 0; i < CTArgs::scatter_num_rows; i++) {
+                tt_l1_ptr std::uint32_t* scatter_dest_coords =
+                    (tt_l1_ptr std::uint32_t*)(args.scatter_dest_coords_addr);
+                std::uint32_t scatter_dest_noc_x[CTArgs::scatter_num_rows];
+                std::uint32_t scatter_dest_noc_y[CTArgs::scatter_num_rows];
+                for (std::uint32_t i = 0; i < CTArgs::scatter_num_rows; i++) {
                     scatter_dest_noc_x[i] = scatter_dest_coords[i * 2];
                     scatter_dest_noc_y[i] = scatter_dest_coords[i * 2 + 1];
                 }
 
-                constexpr uint32_t scatter_payload_bytes = CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
+                constexpr std::uint32_t scatter_payload_bytes =
+                    CTArgs::scatter_num_tiles * CTArgs::scatter_dst_tile_size;
                 static_assert(scatter_payload_bytes <= NOC_MAX_BURST_SIZE);
                 constexpr bool posted = CTArgs::scatter_arrival_enabled;
-                uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
+                std::uint32_t src_addr = get_read_ptr(CTArgs::cb_l_out);
 
-                uint64_t dest_noc_addr =
+                std::uint64_t dest_noc_addr =
                     get_noc_addr(scatter_dest_noc_x[0], scatter_dest_noc_y[0], args.scatter_dest_l1_addr);
                 unified_kernels::unicast_write_set_state<posted, true, true, true, false, write_cmd_buf>(
                     src_addr, dest_noc_addr, scatter_payload_bytes);
 
                 if constexpr (CTArgs::scatter_arrival_enabled) {
-                    uint64_t sem_addr =
+                    std::uint64_t sem_addr =
                         get_noc_addr(scatter_dest_noc_x[0], scatter_dest_noc_y[0], args.scatter_arrival_sem_addr);
                     unified_kernels::unicast_atomic_inc_set_state<false, true, true, false, write_at_cmd_buf>(
                         sem_addr, 1);
@@ -781,8 +783,8 @@ struct SdpaReduceWorker {
                 }
                 src_addr += scatter_payload_bytes;
 
-                for (uint32_t row = 1; row < CTArgs::scatter_num_rows; row++) {
-                    uint64_t dest_noc_addr =
+                for (std::uint32_t row = 1; row < CTArgs::scatter_num_rows; row++) {
+                    std::uint64_t dest_noc_addr =
                         get_noc_addr(scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_dest_l1_addr);
                     unified_kernels::unicast_write_set_state<posted, true, true, false, false, write_cmd_buf>(
                         src_addr, dest_noc_addr, scatter_payload_bytes);
@@ -792,7 +794,7 @@ struct SdpaReduceWorker {
                     // Signal scatter arrival on destination core (used by fused ops
                     // to synchronize downstream stages like matmul1)
                     if constexpr (CTArgs::scatter_arrival_enabled) {
-                        uint64_t sem_addr = get_noc_addr(
+                        std::uint64_t sem_addr = get_noc_addr(
                             scatter_dest_noc_x[row], scatter_dest_noc_y[row], args.scatter_arrival_sem_addr);
                         unified_kernels::unicast_atomic_inc_set_state<false, true, false, false, write_at_cmd_buf>(
                             sem_addr, 1);
@@ -817,7 +819,7 @@ struct SdpaReduceWorker {
         void compute_impl([[maybe_unused]] const ComputeArgs& args) {
             constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
-            reconfig_data_format<SrcOrder::Regular, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
+            reconfig_full_operand(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);
             exp_tile_init<EXP_APPROX_MODE>();
 
@@ -827,10 +829,10 @@ struct SdpaReduceWorker {
             bool swap_r1_reduction_order = false;
             bool swap_r2_reduction_order = false;
 
-            [[maybe_unused]] uint32_t device_idx = 0;
-            [[maybe_unused]] uint32_t r1_neighbor_device_idx = 0;
-            [[maybe_unused]] uint32_t r2_neighbor_device_idx = 0;
-            [[maybe_unused]] uint32_t position_id = 0;
+            [[maybe_unused]] std::uint32_t device_idx = 0;
+            [[maybe_unused]] std::uint32_t r1_neighbor_device_idx = 0;
+            [[maybe_unused]] std::uint32_t r2_neighbor_device_idx = 0;
+            [[maybe_unused]] std::uint32_t position_id = 0;
 
             if constexpr (CTArgs::position_enabled) {
                 device_idx = args.device_idx;
@@ -839,7 +841,7 @@ struct SdpaReduceWorker {
 
                 position_id = args.global_pos;
 
-                constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
+                constexpr std::uint32_t chunk = CTArgs::per_device_chunk_size;
                 local_valid = (position_id >= device_idx * chunk);
                 r1_neighbor_valid = (position_id >= r1_neighbor_device_idx * chunk);
                 r2_neighbor_valid = (position_id >= r2_neighbor_device_idx * chunk) ||
@@ -848,8 +850,8 @@ struct SdpaReduceWorker {
                 swap_r2_reduction_order = args.swap_r2_reduction_order;
             }
 
-            uint32_t neighbor_cb_base_rd_ptr = 0;
-            uint32_t neighbor_cb_page_size = 0;
+            std::uint32_t neighbor_cb_base_rd_ptr = 0;
+            std::uint32_t neighbor_cb_page_size = 0;
             UNPACK(({
                 neighbor_cb_base_rd_ptr = unified_kernels::get_local_cb_rd_ptr(CTArgs::cb_neighbor_l);
                 neighbor_cb_page_size = unified_kernels::get_local_cb_page_size(CTArgs::cb_neighbor_l);

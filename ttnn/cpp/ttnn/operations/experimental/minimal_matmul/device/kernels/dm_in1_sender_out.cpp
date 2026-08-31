@@ -100,7 +100,14 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in1_shape(K_tiles, N_tiles, padded_K_tiles, padded_N_tiles);
+#ifdef MM_WINDOW_BLOCKS
+    // The output tensor holds only the window, so its height is the host-computed
+    // grid.y * MM_WINDOW_BLOCKS * M_block_tiles rather than the full M. Both the row bound and the
+    // row stride come from it. Width is untouched — windowing is purely along M.
+    const TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
+#else
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+#endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -161,8 +168,31 @@ void kernel_main() {
     srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
 #endif
     OpSignaler srs_fuse_signaler;
+    uint32_t mm_progress_counters_base = 0;
+#ifdef MM_WINDOW_BLOCKS
+    uint32_t M_window_start_tile = 0;
+    uint32_t rs_credit_counters_base = 0;
+    uint32_t num_rs_readers = 0;
+#endif
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
+        mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+#ifdef MM_WINDOW_BLOCKS
+        M_window_start_tile = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+        rs_credit_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+        num_rs_readers = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+        if constexpr (is_output_writer) {
+            // Clear stale credits from whatever used this L1 before us. Safe against the readers:
+            // their first credit only lands after they have consumed M block 0, which cannot happen
+            // until we have written it, long after this point.
+            volatile tt_l1_ptr uint32_t* credits =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_credit_counters_base);
+            for (uint32_t r = 0; r < num_rs_readers; r++) {
+                credits[r] = 0;
+            }
+        }
+#endif
     }
 #endif
 
@@ -181,6 +211,30 @@ void kernel_main() {
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+#ifdef MM_WINDOW_BLOCKS
+        // Fold this block's rows into window slot m_block_iter % MM_WINDOW_BLOCKS. Done here, at the
+        // single place m_tile is derived, so every downstream use (including the deferred write,
+        // which captures m_tile a block later) is already windowed.
+        if constexpr (is_output_writer) {
+            // Recycling this slot overwrites the block MM_WINDOW_BLOCKS earlier, so first wait until
+            // EVERY RS reader has finished reading it. The minimum is what matters, not a total: the
+            // readers stripe disjoint tiles and drift apart, so a fast one must not speak for a slow
+            // one.
+            if (m_block_iter >= MM_WINDOW_BLOCKS) {
+                const uint32_t blocks_released_needed = m_block_iter - MM_WINDOW_BLOCKS + 1;
+                volatile tt_l1_ptr uint32_t* credits =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_credit_counters_base);
+                for (uint32_t r = 0; r < num_rs_readers; r++) {
+                    if (credits[r] < blocks_released_needed) {
+                        noc_semaphore_wait_min(&credits[r], blocks_released_needed);
+                    }
+                }
+            }
+            const uint32_t rows_in_block = m_tile_end - m_tile;
+            m_tile = M_window_start_tile + (m_block_iter % MM_WINDOW_BLOCKS) * M_block_tiles;
+            m_tile_end = m_tile + rows_in_block;
+        }
+#endif
 #ifdef FUSE_AG
         if constexpr (is_injector_core) {
             fused_op_receiver.reset();
@@ -318,7 +372,7 @@ void kernel_main() {
                     // at the moment all cores are expected to be done writing their corresponding blocks.
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
                         noc.async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
                 }
 #endif
@@ -431,7 +485,7 @@ void kernel_main() {
 #ifdef SRS_FUSE_OP_SIGNALER
                     if (is_last_block) {
                         noc.async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
 #endif
                 }

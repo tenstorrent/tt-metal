@@ -169,8 +169,8 @@ KernelHandle CreateQuasarDataMovementKernel(
         QUASAR_NUM_USER_DM_CORES_PER_CLUSTER);
     const std::set<DataMovementProcessor> dm_processors = GetProcessorsPerClusterQuasar<DataMovementProcessor>(
         program, core_ranges, config.num_threads_per_cluster, HalProgrammableCoreType::TENSIX);
-    std::shared_ptr<Kernel> kernel =
-        std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config, dm_processors);
+    std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(
+        program.impl().get_context_id(), kernel_src, core_ranges, config, dm_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -181,7 +181,7 @@ KernelHandle CreateKernel(
     const QuasarDataMovementConfig& config) {
     const CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
     return CreateQuasarDataMovementKernel(
-        program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
+        program, KernelSource::from_path(program.impl().get_context_id(), file_name), core_ranges, config);
 }
 
 KernelHandle CreateQuasarComputeKernel(
@@ -198,8 +198,8 @@ KernelHandle CreateQuasarComputeKernel(
         core_ranges,
         config.num_threads_per_cluster * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE,
         HalProgrammableCoreType::TENSIX);
-    std::shared_ptr<Kernel> kernel =
-        std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config, compute_processors);
+    std::shared_ptr<Kernel> kernel = std::make_shared<QuasarComputeKernel>(
+        program.impl().get_context_id(), kernel_src, core_ranges, config, compute_processors);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -209,7 +209,8 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const QuasarComputeConfig& config) {
     const CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    return CreateQuasarComputeKernel(program, KernelSource(file_name, KernelSource::FILE_PATH), core_ranges, config);
+    return CreateQuasarComputeKernel(
+        program, KernelSource::from_path(program.impl().get_context_id(), file_name), core_ranges, config);
 }
 
 }  // namespace tt::tt_metal::experimental::quasar

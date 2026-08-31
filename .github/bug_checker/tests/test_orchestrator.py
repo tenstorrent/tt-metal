@@ -10,6 +10,7 @@ import pytest
 
 from bug_checker.github_client import PRInfo
 from bug_checker.orchestrator import BugCheckFailed, _filter_diff_for_rule, run_bug_check
+from bug_checker.output import RERUN_FOOTER
 from bug_checker.rules import Rule
 
 
@@ -132,7 +133,7 @@ def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select,
     )
 
     with patch("bug_checker.orchestrator.print_failure") as mock_print_failure:
-        with pytest.raises(BugCheckFailed):
+        with pytest.raises(BugCheckFailed):  # allow-pytest.raises: not a device error
             run_bug_check(pr, post_comments=True)
 
     mock_print_failure.assert_called_once_with(
@@ -145,3 +146,28 @@ def test_run_bug_check_fails_closed_when_llm_rule_errors(mock_load, mock_select,
     assert "Bug Checker Failed" in body
     assert "`test-rule`" in body
     assert "exits non-zero" in body
+
+
+@patch("bug_checker.orchestrator.post_pr_comment")
+@patch("bug_checker.orchestrator.select_rules")
+@patch("bug_checker.orchestrator.load_rules")
+def test_run_bug_check_no_matched_rules_comment_has_rerun_footer(mock_load, mock_select, mock_post):
+    mock_load.return_value = [_rule(["foo/**"])]
+    mock_select.return_value = []
+
+    pr = PRInfo(
+        number=99,
+        title="Test PR",
+        base_sha="aaa",
+        head_sha="bbb",
+        diff="",
+        changed_files=["docs/readme.md"],
+        labels=[],
+    )
+
+    result = run_bug_check(pr, post_comments=True)
+    assert result == []
+    mock_post.assert_called_once()
+    body = mock_post.call_args[1]["body"]
+    assert "No rules matched the files in this PR" in body
+    assert body.endswith(RERUN_FOOTER)

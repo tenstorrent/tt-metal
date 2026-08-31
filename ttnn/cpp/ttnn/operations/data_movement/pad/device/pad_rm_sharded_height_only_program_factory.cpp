@@ -409,4 +409,18 @@ ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
     return desc;
 }
 
+void PadRmShardedHeightOnlyProgramFactory::override_runtime_arguments(
+    Program& program,
+    const PadParams& /*operation_attributes*/,
+    const PadInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // create_descriptor pushes the input CB, then the output CB, then the unbound pad-value CB; mirror
+    // that order positionally so only those two base addresses are re-pointed.
+    ProgramDescriptor cb_addr_only;
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_args.input.buffer()});
+    cb_addr_only.cbs.push_back(CBDescriptor{.buffer = tensor_return_value.buffer()});
+    apply_descriptor_runtime_args(program, cb_addr_only);  // override-rebuild-ok: cb-addr-only
+}
+
 }  // namespace ttnn::prim

@@ -103,6 +103,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
     # De-interleave [q,gate] per head → contiguous q/gate slices (avoids ~5.3ms relayout).
     qg_deint = fused_qkv
+
     if fused_qkv:
         if qg_deint:
             fused = tpc.prepare_attn_qkv_deint(
@@ -149,6 +150,8 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             cache_path=c("wqkv" + tag + rp),
             dtype=ttnn.bfloat8_b,
         )
+        # k_proj/v_proj are the KV-replicated weights: shard_w splits tp*head_dim rows evenly, so
+        # each device lands on its GQA-assigned head instead of a fraction of one.
         tw["wk"] = tpc.shard_w(
             k_proj,
             mesh,
@@ -190,6 +193,7 @@ class TPAttention:
         self.tw = tw
         self.tt_ccl = tt_ccl
         self.B = args.max_batch_size
+        self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
         self.NH = args.n_local_heads
         self.NKV = args.n_local_kv_heads
         self.HD = args.head_dim
@@ -420,6 +424,7 @@ class TPAttention:
                         weight.shape[-2],
                         weight.shape[-1],
                         max_cols=getattr(self.args, "decode_grid_w", 8),
+                        tuning=getattr(self.args, "prefill_tuning", None),
                     )
                     ck = self.compute_cfg
                 # MODEL-GATED (27B on Wormhole). Emit bf8 so the row-parallel reduce-scatter that
@@ -774,8 +779,39 @@ class TPAttention:
             **_ccl_kw,
         )
 
-    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None):
-        tw, B, NH, NKV, HD = self.tw, self.B, self.NH, self.NKV, self.HD
+    def _kv_shard_cfg(self, B):
+        """Height shard for paged_update_cache (one user per core), sized to the ACTIVE width B.
+        Returns the precomputed max-batch config unchanged when B==self.B (byte-identical prod path);
+        builds a width-B config (B cores) for bucketed decode. Mirrors model_config.kv_update_shard_cfg."""
+        if B == self.B:
+            return self.args.kv_update_shard_cfg
+        cfg = self._kv_shard_cfg_cache.get(B)
+        if cfg is None:
+            cols = next(c for c in range(min(8, B), 0, -1) if B % c == 0)
+            cfg = ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, self.HD),
+                core_grid=ttnn.CoreGrid(x=cols, y=B // cols),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self._kv_shard_cfg_cache[B] = cfg
+        return cfg
+
+    def forward_decode(self, x, cur_pos_tt, cos_tt, sin_tt, page_table=None, kv_update_positions=None):
+        """kv_update_positions: optional list of [B] int32 position tensors (-1 skips
+        a row) run as SEQUENTIAL paged_update_cache calls instead of one batched
+        call. Required when rows ALIAS pages (speculative batch-alias verify:
+        several rows of one user target the same cache tile): the update kernel
+        read-modify-writes the WHOLE destination tile, so concurrent same-tile
+        writers lose all but the last row. Each masked call updates at most one
+        row per tile; the op barrier serializes successive calls."""
+        tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
+        # Active decode width, taken from the input (x is [1,1,B,dim_frac]). Normally == self.B.
+        # BUCKETED decode: a request feeds B<self.B users; every shape/reshape/rope/head-split and
+        # the KV-update shard config below run at this width, and the paged SDPA reads only these B
+        # users' pages via the width-B page_table. The B==self.B path is byte-identical to before.
+        B = x.shape[-2]
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
         if not use_paged and self.k_caches is None:
@@ -918,9 +954,10 @@ class TPAttention:
                 else:
                     v_sh = ttnn.to_memory_config(v, self.args.kv_cache_write_v_shard_cfg)
                     ttnn.deallocate(v)
-                ttnn.experimental.paged_fused_update_cache(
-                    keys, k_sh, values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table
-                )
+                for _upd in kv_update_positions if kv_update_positions is not None else (cur_pos_tt,):
+                    ttnn.experimental.paged_fused_update_cache(
+                        keys, k_sh, values, v_sh, update_idxs_tensor=_upd, page_table=page_table
+                    )
             else:
                 if k.memory_config() == self.args.kv_update_shard_cfg:
                     k_sh = k  # permuted RoPE already emitted K here (see the fused branch above)
@@ -945,8 +982,9 @@ class TPAttention:
                 # bf8 cache passes every prefill-only profile, every module test and the 64k demo while
                 # failing 5 of 20 test_model_tp cases (every one that decodes after a prefill).
                 # Enabling a bf8 KV cache needs a C++ change to paged_update_cache, not a Python cast.
-                ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
-                ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
+                for _upd in kv_update_positions if kv_update_positions is not None else (cur_pos_tt,):
+                    ttnn.experimental.paged_update_cache(keys, k_sh, update_idxs_tensor=_upd, page_table=page_table)
+                    ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=_upd, page_table=page_table)
             ttnn.deallocate(k_sh)
             ttnn.deallocate(v_sh)
             attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(

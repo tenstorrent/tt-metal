@@ -42,13 +42,6 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
-#include "api/debug/dprint.h"       // DEBUG: matmul layer3 hang localization (remove after)
-#include "api/debug/ring_buffer.h"  // DEBUG mcast2d compute-stall: ring-buffer markers (remove after)
-// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
-// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
-// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMPM markers here no-ops.
-#undef DPRINT
-#define DPRINT(...) ((void)0)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -56,17 +49,17 @@
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
  */
-template <std::uint32_t in0_block_num_tiles, std::uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(std::uint32_t in0_transpose_cb_id, std::uint32_t in0_cb_id) {
+template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
+FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
     DataflowBuffer in0_transpose_cb(in0_transpose_cb_id);
     DataflowBuffer in0_cb(in0_cb_id);
-    constexpr std::uint32_t num_blocks = in0_block_num_tiles / block_size;
-    constexpr std::uint32_t last_block_size = in0_block_num_tiles % block_size;
+    constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
+    constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
-    for (std::uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         in0_transpose_cb.wait_front(block_size);
         tile_regs_acquire();
-        for (std::uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
+        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
@@ -74,7 +67,7 @@ FORCE_INLINE void transpose_tile_block(std::uint32_t in0_transpose_cb_id, std::u
 
         in0_cb.reserve_back(block_size);
         tile_regs_wait();
-        for (std::uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
+        for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             pack_tile(tile_idx, in0_cb_id);
         }
         tile_regs_release();
@@ -84,7 +77,7 @@ FORCE_INLINE void transpose_tile_block(std::uint32_t in0_transpose_cb_id, std::u
     if constexpr (last_block_size > 0) {
         in0_transpose_cb.wait_front(last_block_size);
         tile_regs_acquire();
-        for (std::uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
+        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             transpose_tile(in0_transpose_cb_id, tile_idx, tile_idx);
         }
         tile_regs_commit();
@@ -92,7 +85,7 @@ FORCE_INLINE void transpose_tile_block(std::uint32_t in0_transpose_cb_id, std::u
 
         in0_cb.reserve_back(last_block_size);
         tile_regs_wait();
-        for (std::uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
+        for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             pack_tile(tile_idx, in0_cb_id);
         }
         tile_regs_release();
@@ -101,14 +94,14 @@ FORCE_INLINE void transpose_tile_block(std::uint32_t in0_transpose_cb_id, std::u
 }
 
 FORCE_INLINE void reload_from_cb_to_dst(
-    std::uint32_t in0_cb_id,
-    std::uint32_t in1_cb_id,
-    std::uint32_t mm_partials_cb_id,
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t mm_partials_cb_id,
     bool in1_transpose_tile,
-    std::uint32_t out_subblock_num_tiles,
-    std::uint32_t out_subblock_w,
-    std::uint32_t out_subblock_h,
-    std::uint32_t in0_block_w) {
+    uint32_t out_subblock_num_tiles,
+    uint32_t out_subblock_w,
+    uint32_t out_subblock_h,
+    uint32_t in0_block_w) {
     DataflowBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
 #ifndef ARCH_QUASAR
@@ -121,8 +114,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
 #endif
     mm_partials_cb.wait_front(out_subblock_num_tiles);
 
-    std::uint32_t start_dst_index = 0;
-    std::uint32_t start_tile_index = 0;
+    uint32_t start_dst_index = 0;
+    uint32_t start_tile_index = 0;
     copy_block(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
     mm_partials_cb.pop_front(out_subblock_num_tiles);
@@ -131,27 +124,27 @@ FORCE_INLINE void reload_from_cb_to_dst(
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <std::uint32_t out_subblock_w, std::uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w>
 inline void reblock_and_untilize(
-    std::uint32_t num_out_subblocks_in_col,
-    std::uint32_t out_subblock_num_tiles,
-    std::uint32_t out_subblock_h,
-    std::uint32_t interm_cb_id,
-    std::uint32_t out_cb_id) {
+    uint32_t num_out_subblocks_in_col,
+    uint32_t out_subblock_num_tiles,
+    uint32_t out_subblock_h,
+    uint32_t interm_cb_id,
+    uint32_t out_cb_id) {
     DataflowBuffer interm_cb(interm_cb_id);
     DataflowBuffer out_cb(out_cb_id);
-    std::uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
+    uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
-    std::uint32_t within_block_index = 0;
-    for (std::uint32_t h = 0; h < out_subblock_h; h++) {
-        std::uint32_t block_offset = 0;
+    uint32_t within_block_index = 0;
+    for (uint32_t h = 0; h < out_subblock_h; h++) {
+        uint32_t block_offset = 0;
 
         out_cb.reserve_back(out_block_w);
-        for (std::uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
+        for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             tile_regs_acquire();
-            for (std::uint32_t w = 0; w < out_subblock_w; w++) {
-                std::uint32_t tile_index = block_offset + within_block_index + w;
+            for (uint32_t w = 0; w < out_subblock_w; w++) {
+                uint32_t tile_index = block_offset + within_block_index + w;
                 copy_tile(interm_cb_id, tile_index, w);
             }
             tile_regs_commit();
@@ -168,7 +161,6 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
-    DPRINT("MMC start\n");  // DEBUG: stem conv1 Program-B hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg(args::is_worker_core) == 1;
@@ -178,31 +170,28 @@ void kernel_main() {
     }
 #endif
 
-    constexpr std::uint32_t in0_block_w = get_arg(args::in0_block_w);  // inner block size in tiles
-    constexpr std::uint32_t in0_num_subblocks =
+    constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);  // inner block size in tiles
+    constexpr uint32_t in0_num_subblocks =
         get_arg(args::in0_num_subblocks);  // outer row block size (in inner row blocks)
-    constexpr std::uint32_t in0_block_num_tiles =
+    constexpr uint32_t in0_block_num_tiles =
         get_arg(args::in0_block_num_tiles);  // out_subblock_h*in0_block_w*in0_num_subblocks;
-    constexpr std::uint32_t in0_subblock_num_tiles =
-        get_arg(args::in0_subblock_num_tiles);  // out_subblock_h*in0_block_w
-    constexpr std::uint32_t in1_num_subblocks =
+    constexpr uint32_t in0_subblock_num_tiles = get_arg(args::in0_subblock_num_tiles);  // out_subblock_h*in0_block_w
+    constexpr uint32_t in1_num_subblocks =
         get_arg(args::in1_num_subblocks);  // outer column block size (in inner column blocks)
-    constexpr std::uint32_t in1_block_num_tiles =
-        get_arg(args::in1_block_num_tiles);                            // out_subblock_w*in0_block_w* in1_num_subblocks;
-    constexpr std::uint32_t in1_block_w = get_arg(args::in1_block_w);  // out_subblock_w*in1_num_subblocks
-    constexpr std::uint32_t num_blocks_inner_dim =
-        get_arg(args::num_blocks_inner_dim);  // outer inner dim (in inner dim blocks)
-    constexpr std::uint32_t num_blocks_w_dim =
-        get_arg(args::num_blocks_w_dim);  // outer inner dim (in inner dim blocks)
-    constexpr std::uint32_t num_blocks_h_dim =
-        get_arg(args::num_blocks_h_dim);                                     // outer inner dim (in inner dim blocks)
-    constexpr std::uint32_t out_subblock_h = get_arg(args::out_subblock_h);  // inner row block size in tiles
-    constexpr std::uint32_t out_subblock_w = get_arg(args::out_subblock_w);  // inner column block size in tiles
-    constexpr std::uint32_t out_subblock_num_tiles =
-        get_arg(args::out_subblock_num_tiles);             // out_subblock_h * out_subblock_w;
-    constexpr std::uint32_t batch = get_arg(args::batch);  // batch dim
-    constexpr std::uint32_t out_block_num_tiles = get_arg(args::out_block_num_tiles);  // number of tiles in out_block
-    constexpr bool untilize_out = get_arg(args::untilize_out);                         // untilize output
+    constexpr uint32_t in1_block_num_tiles =
+        get_arg(args::in1_block_num_tiles);                       // out_subblock_w*in0_block_w* in1_num_subblocks;
+    constexpr uint32_t in1_block_w = get_arg(args::in1_block_w);  // out_subblock_w*in1_num_subblocks
+    constexpr uint32_t num_blocks_inner_dim =
+        get_arg(args::num_blocks_inner_dim);                                // outer inner dim (in inner dim blocks)
+    constexpr uint32_t num_blocks_w_dim = get_arg(args::num_blocks_w_dim);  // outer inner dim (in inner dim blocks)
+    constexpr uint32_t num_blocks_h_dim = get_arg(args::num_blocks_h_dim);  // outer inner dim (in inner dim blocks)
+    constexpr uint32_t out_subblock_h = get_arg(args::out_subblock_h);      // inner row block size in tiles
+    constexpr uint32_t out_subblock_w = get_arg(args::out_subblock_w);      // inner column block size in tiles
+    constexpr uint32_t out_subblock_num_tiles =
+        get_arg(args::out_subblock_num_tiles);                                    // out_subblock_h * out_subblock_w;
+    constexpr uint32_t batch = get_arg(args::batch);                              // batch dim
+    constexpr uint32_t out_block_num_tiles = get_arg(args::out_block_num_tiles);  // number of tiles in out_block
+    constexpr bool untilize_out = get_arg(args::untilize_out);                    // untilize output
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_arg(args::get_batch_from_reader);
     // in0_transpose_tile is carried as the preprocessor define IN0_TRANSPOSE_TILE (not a CTA) so that
@@ -215,23 +204,23 @@ void kernel_main() {
     constexpr bool in0_transpose_tile = false;
 #endif
 
-    constexpr std::uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
+    constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
     // CB-index named CTAs become dfb:: tokens. When in0_transpose_tile is set, in0 matmul input comes
     // from the transposed DFB (dfb::cb_in0_transposed), which is only bound on that compile-time path.
 #ifdef IN0_TRANSPOSE_TILE_PATH
-    constexpr std::uint32_t in0_cb_id = dfb::cb_in0_transposed;
+    constexpr uint32_t in0_cb_id = dfb::cb_in0_transposed;
 #else
-    constexpr std::uint32_t in0_cb_id = dfb::cb_in0;
+    constexpr uint32_t in0_cb_id = dfb::cb_in0;
 #endif
-    constexpr std::uint32_t in1_cb_id = dfb::cb_in1;
-    constexpr std::uint32_t out_cb_id = dfb::cb_out;
-    constexpr std::uint32_t mm_partials_cb_id = dfb::cb_intermed0;
-    constexpr std::uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
+    constexpr uint32_t in1_cb_id = dfb::cb_in1;
+    constexpr uint32_t out_cb_id = dfb::cb_out;
+    constexpr uint32_t mm_partials_cb_id = dfb::cb_intermed0;
+    constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
     // When in0 needs to be transposed, the original data is read from cb_in0 (in0_transpose_cb_id),
     // transposed, and the result is written to cb_in0_transposed (in0_cb_id), which is then used
     // as input for the matmul call.
-    constexpr std::uint32_t in0_transpose_cb_id = dfb::cb_in0;
+    constexpr uint32_t in0_transpose_cb_id = dfb::cb_in0;
 
     DataflowBuffer in0_cb(in0_cb_id);
     DataflowBuffer in1_cb(in1_cb_id);
@@ -239,14 +228,14 @@ void kernel_main() {
     DataflowBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
 #ifdef FUSE_BIAS
-    constexpr std::uint32_t bias_cb_id = dfb::cb_bias;
-    constexpr std::uint32_t bias_ntiles = get_arg(args::bias_ntiles);
-    constexpr std::uint32_t mm_out_cb_id = mm_partials_cb_id;
+    constexpr uint32_t bias_cb_id = dfb::cb_bias;
+    constexpr uint32_t bias_ntiles = get_arg(args::bias_ntiles);
+    constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
     DataflowBuffer bias_cb(bias_cb_id);
 #else
-    constexpr std::uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
+    constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
     DataflowBuffer mm_out_cb(mm_out_cb_id);
 
@@ -257,55 +246,59 @@ void kernel_main() {
     // call on the last in1 subblock to last_subblock_w_valid lanes. When no padding occurs this
     // equals out_subblock_w and the original full-width path is preserved.
 #ifdef MATMUL_DRAM_SHARDED
-    constexpr std::uint32_t last_subblock_w_valid = get_arg(args::last_subblock_w_valid);
+    constexpr uint32_t last_subblock_w_valid = get_arg(args::last_subblock_w_valid);
 #else
-    constexpr std::uint32_t last_subblock_w_valid = out_subblock_w;
+    constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
-    constexpr std::uint32_t activation_param0 = get_arg(args::activation_param0);
-    constexpr std::uint32_t activation_param1 = get_arg(args::activation_param1);
-    constexpr std::uint32_t activation_param2 = get_arg(args::activation_param2);
+    constexpr uint32_t activation_param0 = get_arg(args::activation_param0);
+    constexpr uint32_t activation_param1 = get_arg(args::activation_param1);
+    constexpr uint32_t activation_param2 = get_arg(args::activation_param2);
 
     ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
 #endif
 
 #ifdef IN1_TRANSPOSE_TILE
-    constexpr std::uint32_t in1_transpose_tile = true;
+    constexpr uint32_t in1_transpose_tile = true;
 #else
-    constexpr std::uint32_t in1_transpose_tile = false;
+    constexpr uint32_t in1_transpose_tile = false;
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-    for (std::uint32_t b = 0; b < batch; b++) {
+    for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
-            // This reader-to-compute is_batch_valid handoff is unresolved. The DM-side reader
-            // kernels are live and write one mailbox slot per compute thread, but this kernel had
-            // all three threads read ThreadId::BriscThreadId -- a slot that does not exist on
-            // Quasar (the enum only covers the 4 Tensix compute roles). Mailbox addressing is also
-            // asymmetric (mailbox_write takes the destination slot, mailbox_read the source slot),
-            // and ckernel::mailbox_write builds TRISC-local addresses, so a DM core cannot use
-            // that helper; the DM writer instead targets the queue's NEO-cluster address
-            // directly -- a plain MMIO store or a NOC write are both valid for that --
-            // impersonating a writer slot agreed with the reader. (DM->TRISC mailbox delivery
-            // currently fails due to a separate HW bug under investigation, not because of an
-            // addressing restriction on DM cores.) That is an ops-owned fix, not something to
-            // guess at here, so this path is kept unreachable rather than silently compiling
-            // unverified synchronization.
+            // Check whether this batch is valid
+#ifndef ARCH_QUASAR
+            bool is_batch_valid = false;
+            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#else
+            // Quasar: ckernel::ThreadId has no BRISC (WH/BH-only); the is_batch_valid writer is a DM RISC
+            // (DM2-7), read via mailbox_read((uint8_t)<dm_thread>). That DM->TRISC handoff is not yet wired
+            // on Quasar (prior bring-up saw the compute read its own slot -> 0x19 loopback), so rather than
+            // silently marking every batch valid (wrong output for a real sparsity caller), fail loudly at
+            // JIT if anyone enables batch-sparsity on Quasar. Wire the DM-thread read here once the DM/LLK
+            // team confirms the correct DM thread id and that the handoff works.
             static_assert(
                 !get_batch_from_reader,
-                "get_batch_from_reader mailbox synchronization (reader/writer -> compute is_batch_valid "
-                "handoff) is unresolved -- fix the mailbox sync before enabling this path");
+                "get_batch_from_reader (batch sparsity) is unsupported on Quasar: it needs the DM->TRISC "
+                "is_batch_valid mailbox handoff, which is not wired yet. Do not enable it on Quasar.");
+            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#endif
+            if (!is_batch_valid) {
+                continue;
+            }
         }
 
-        for (std::uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            for (std::uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                DPRINT("MMC bhbw {} {}\n", bh, bw);  // DEBUG: stem conv1 Program-B hang
+        for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -319,7 +312,7 @@ void kernel_main() {
                     PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                 }
 
-                for (std::uint32_t block = 0; block < num_blocks_inner_dim; block++) {
+                for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -344,22 +337,14 @@ void kernel_main() {
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
-                    // Newest ring marker per stuck core: 0xC0FFEE00 -> stuck at in0 wait (in0 data not
-                    // delivered); 0xC0FFEE01 -> passed in0, stuck at in1 wait; 0xC0FFEE02 -> passed BOTH
                     // input waits, so the stall is later (partials reserve/wait, pack, or dest).
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE00u));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((std::uint32_t)block));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((std::uint32_t)in0_block_num_tiles));
                     in0_cb.wait_front(in0_block_num_tiles);
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE01u));
-                    UNPACK(WATCHER_RING_BUFFER_PUSH((std::uint32_t)in1_block_num_tiles));
                     in1_cb.wait_front(in1_block_num_tiles);
-                    UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE02u));
 
                     int in0_index_subblock_offset = 0;
-                    for (std::uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
-                        for (std::uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                             // When last_subblock_padded is true the last in1 subblock has
                             // (out_subblock_w - last_subblock_w_valid) padded lanes whose cb_in1 tiles were
                             // never pushed by the reader. Narrow matmul_block so the unpacker only touches
@@ -367,10 +352,9 @@ void kernel_main() {
                             // operation wrote there and the output writer (BRISC) drops those columns.
                             const bool is_last_in1_subblock_padded =
                                 last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
-                            const std::uint32_t effective_subblock_w =
+                            const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
-                            DPRINT("MMC sb{} preacq\n", in0_subblock);  // DEBUG #48552 subblock stall localize
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -386,12 +370,12 @@ void kernel_main() {
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
-                            std::uint32_t dst_index =
+                            uint32_t dst_index =
                                 0;  // start at 0, each call to matmul_block internally increments dst_index
-                            std::uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            std::uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
+                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
+                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                             // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (std::uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
+                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
@@ -411,13 +395,11 @@ void kernel_main() {
                                                            // (should be called in1_block_w)
                             }
 
-#endif                                                                  // SKIP_COMPUTE
-                            DPRINT("MMC sb{} mmdone\n", in0_subblock);  // DEBUG #48552 matmul_block loop done
+#endif  // SKIP_COMPUTE
 
                             if (last_out) {
                                 tile_regs_commit();
                                 mm_out_cb.reserve_back(out_subblock_num_tiles);
-                                DPRINT("MMC sb{} resv_ok\n", in0_subblock);  // DEBUG #48552 out reserve returned
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
                                 apply_activation_from_pack<
@@ -444,7 +426,7 @@ void kernel_main() {
                                 PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif
-                                std::uint32_t start_dst_index = 0;
+                                uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
@@ -453,11 +435,7 @@ void kernel_main() {
                             } else {
                                 tile_regs_commit();
                                 // [DEBUG mm_partials TILE_COUNTERS localization] which producer step faults?
-                                // 0xC0FFEE03 = pre-reserve (+block idx next); 04 = reserved; 05 = packed; 06 = pushed.
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE03u));
-                                PACK(WATCHER_RING_BUFFER_PUSH((std::uint32_t)block));
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE04u));
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -472,42 +450,75 @@ void kernel_main() {
                                 }
 #endif
 
-                                std::uint32_t start_dst_index = 0;
+                                uint32_t start_dst_index = 0;
                                 pack_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE05u));
 
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
-                                PACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE06u));
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
                         }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
                     }
-                    DPRINT("MMC pack blk={}\n", block);  // DEBUG: all subblock matmul+pack done for this block
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                     if (block < num_blocks_inner_dim - 1) {
-                        // Wait/pop in subblock-sized steps so the step size
-                        // matches the bias section's wait_front(out_subblock_num_tiles),
-                        // satisfying the CB API requirement that all wait_front
-                        // increments on a given CB are identical.
-                        for (std::uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                        // [#48552] TEN-4746: a bare wait_front->pop_front on mm_partials traps the Quasar unpacker
+                        // (POP_TILES races past WAIT_TILES -> TILE_COUNTERS 0x10000). Interpose a REAL unpack TDMA
+                        // (dummy copy_tile of tile 0) between wait and pop -- NOP/DMANOP/TTI_NOP are INSUFFICIENT
+                        // (LLK-team guidance + abhullar/pop-wait-fix 69014037a + our TTI_NOP-fails/DPRINT-works
+                        // bisection). NB the old "wait_front increments must be identical" rationale for the
+                        // stepped loop is FALSE (only num_entries<=capacity is enforced) but the loop is harmless.
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
+                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            tile_regs_acquire();
+                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+#endif
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                     }
-                    // never reload when with bias, bias uses intermediate buffer
+                    // never reload when with bias, bias uses interm buffer
                     enable_reload = false;
 #else
                     // Last iteration does spill and reload to output buffer
                     if (block < num_blocks_inner_dim - 2) {
-                        for (std::uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                        // [#48552] TEN-4746 interpose (see the FUSE_BIAS drain above): REAL unpack TDMA
+                        // (dummy copy_tile of tile 0) between the bare wait_front/pop_front on mm_partials.
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
+                        copy_tile_to_dst_init_short(mm_partials_cb_id);
+#endif
+                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_cb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            tile_regs_acquire();
+                            copy_tile(mm_partials_cb_id, /*in_tile_index=*/0, /*dst_tile_index=*/0);
+                            tile_regs_commit();
+                            tile_regs_wait();
+                            tile_regs_release();
+#endif
                             mm_partials_cb.pop_front(out_subblock_num_tiles);
                         }
+#ifdef ARCH_QUASAR
+                        reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
+                        matmul_block_init(
+                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+#endif
                     }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
@@ -521,11 +532,9 @@ void kernel_main() {
 
                     in0_cb.pop_front(in0_block_num_tiles);
                     in1_cb.pop_front(in1_block_num_tiles);
-                    DPRINT("MMC blk_done blk={}\n", block);  // DEBUG: in0/in1 popped, inner-dim block complete
                 }
 
 #ifdef FUSE_BIAS
-                DPRINT("MMC bias\n");  // DEBUG: inner-dim block loop done, entering bias+activation epilogue
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
@@ -538,18 +547,18 @@ void kernel_main() {
 #endif
                 reconfig_data_format(in1_cb_id, mm_partials_cb_id, in0_cb_id, bias_cb_id);
                 if constexpr (row_broadcast_bias) {
-                    add_bcast_rows_init(mm_partials_cb_id, bias_cb_id);
+                    add_bcast_rows_init_short(mm_partials_cb_id, bias_cb_id);
                 } else {
-                    add_init(mm_partials_cb_id, bias_cb_id);
+                    add_tiles_init(mm_partials_cb_id, bias_cb_id);
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the CB for reuse across bh/batch iterations.
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_cb.wait_front(bias_ntiles);
                 }
-                for (std::uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
-                    for (std::uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                    for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                         // See matmul stage: the last in1 subblock has padded lanes whose bias tile was
                         // never pushed by the reader. Redirect those out-of-range bias_tile_idx reads to
                         // tile 0 of cb_bias to keep them in-bounds; the resulting padded output columns
@@ -559,10 +568,10 @@ void kernel_main() {
                         // Redundant wait since we know data was just pushed
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
-                        for (std::uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
-                            std::uint32_t bias_tile_idx = in1_index_subblock_offset;
-                            for (std::uint32_t k = 0; k < out_subblock_w; k++, i++) {
-                                const std::uint32_t safe_bias_tile_idx =
+                        for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+                            uint32_t bias_tile_idx = in1_index_subblock_offset;
+                            for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                                const uint32_t safe_bias_tile_idx =
                                     (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
                                         ? 0u              // Padded output columns with tile 0 of cb_bias added are
                                         : bias_tile_idx;  // dropped by the writer.
@@ -592,7 +601,7 @@ void kernel_main() {
                         PACK(TT_SETC16(
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
-                        for (std::uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             ActivationApplyHelper<activation_type, activation_param0, activation_param1>::apply(i);
                         }
 
@@ -600,7 +609,7 @@ void kernel_main() {
 #else
                         tile_regs_wait();
 #endif
-                        for (std::uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                        for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
                         tile_regs_release();
@@ -628,7 +637,7 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
-                    for (std::uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
+                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
                             in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_cb_id, out_cb_id);
                     }
@@ -662,5 +671,4 @@ void kernel_main() {
     // "MMC end") — finish() across UNPACK/MATH/PACK isn't well-defined for a role that doesn't drive that CB's
     // balance, and untilize_mode_out_cb.finish() waits on the output writer. Credit drain-on-exit is kept only
     // on the DM producer/consumer kernels.
-    DPRINT("MMC end\n");  // DEBUG: stem conv1 Program-B hang
 }

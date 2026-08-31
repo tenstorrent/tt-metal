@@ -26,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -97,6 +98,29 @@ void write_file(const string& path, const string& content) {
     if (!f) {
         throw std::runtime_error("Failed to write file: " + path);
     }
+}
+
+// Writes the named compile-time-arg map header, which build.cpp force-includes (-include) in place
+// of a -DKERNEL_COMPILE_TIME_ARG_MAP define; see NAMED_CT_ARG_MAP_HEADER for why the map cannot ride
+// on the command line. Emitted for any kernel with named CT args, Metal 2.0 or legacy, blaze or not.
+// Returns true if a header was written.
+//
+// Written here rather than in the build step so it lands in the kernel's generated-files directory
+// alongside the other generated headers, which is what the remote JIT path uploads to the compile
+// server (Program's read_directory_files) and what preprocess-and-ship inlines into the .ii. Every
+// caller of jit_build_genfiles_* runs it immediately before jit_build(), so the file is in place for
+// the local compile too.
+bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings& settings) {
+    std::unordered_map<std::string, uint32_t> named_args;
+    settings.process_named_compile_time_args(
+        [&named_args](const std::unordered_map<std::string, uint32_t>& args) { named_args = args; });
+    if (named_args.empty()) {
+        return false;
+    }
+    write_file(
+        out_dir + string(jit_build::utils::NAMED_CT_ARG_MAP_HEADER),
+        jit_build::utils::format_named_ct_arg_map_header(named_args));
+    return true;
 }
 
 // METAL 2.0 only:
@@ -275,10 +299,17 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         });
     sort(cta_entries.begin(), cta_entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
 
+    // Metal 2.0 CTA-vararg prefix length in positional KERNEL_COMPILE_TIME_ARGS.
+    // Values live in kernel_compile_time_args[0..N); TensorBinding payloads follow.
+    const uint32_t cta_vararg_size = settings.get_compile_time_vararg_count();
+
     ostringstream content;
     content << "// AUTO-GENERATED — do not edit.\n\n"
                "#pragma once\n\n"
-               "#include \"experimental/kernel_args.h\"\n\n";
+               "#include <array>\n"
+               "#include \"experimental/kernel_args.h\"\n"
+               "#include \"api/compile_time_args.h\"\n"
+               "#include \"api/debug/assert.h\"\n\n";
 
     // Named args namespace: emit only when the kernel has at least one named arg or CTA.
     // A kernel with only varargs (and no named anything) still needs the vararg helpers below,
@@ -312,7 +343,7 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
         content << "}  // namespace args\n\n";
     }
 
-    // Vararg helpers — always emitted.
+    // Runtime / common-runtime vararg helpers — always emitted.
     // The starting offset (named_arg_count) is baked in so kernel code uses 0-based
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
@@ -324,6 +355,37 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
             << crta_layout.vararg_section_offset << " + idx); }\n";
+
+    // Compile-time vararg helpers — always emitted (separate from RTA/CRTA varargs).
+    // Three accessors:
+    //   1. get_num_compile_time_varargs() — baked prefix length
+    //   2. get_compile_time_vararg<idx>() — template index (with bounds check)
+    //   3. get_compile_time_vararg(idx) — function-parameter index
+    content << fmt::format(
+        R"(
+FORCE_INLINE constexpr uint32_t get_num_compile_time_varargs() {{
+    return {0}u;
+}}
+template <uint32_t idx>
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg() {{
+    static_assert(idx < get_num_compile_time_varargs(), "Compile-time vararg index out of range");
+    return kernel_compile_time_args[idx];
+}}
+// Called when an OOB access to vararg CTA is attempted. Meant to trigger the assertion
+// failure as an indirection: the ASSERT macro may expand to inline asm, which cannot be
+// present in a C++17 constexpr function. This is a workaround and can be inlined once we
+// migrate to C++20.
+inline void assert_compile_time_vararg_index_out_of_range() {{
+    ASSERT(false);  // Attempt to access out of bound vararg CTA.
+}}
+FORCE_INLINE constexpr uint32_t get_compile_time_vararg(uint32_t idx) {{
+    if (idx >= get_num_compile_time_varargs()) {{
+        assert_compile_time_vararg_index_out_of_range();
+    }}
+    return kernel_compile_time_args[idx];
+}}
+)",
+        cta_vararg_size);
 
     write_file(path, content.str());
 }
@@ -475,6 +537,9 @@ void jit_build_genfiles_kernel_include(
         kernel_header_content =
             string("#include \"kernel_bindings_generated.h\"\n#include \"kernel_args_generated.h\"\n");
     }
+    // No #include line: this one is force-included by the compile recipe so the map is defined
+    // before any header that reads it (api/compile_time_args.h) can be pulled in.
+    write_named_ct_arg_map_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953
@@ -507,6 +572,9 @@ void jit_build_genfiles_triscs_src(
         write_kernel_bindings_generated_header(out_dir, settings);
         write_kernel_args_generated_header(out_dir, settings);
     }
+    // No prolog #include: force-included by the compile recipe instead, so the map is defined ahead
+    // of any header that reads it (api/compile_time_args.h).
+    write_named_ct_arg_map_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
     // Blaze-only experimental named args
     // Removal is tracked by issue #50953

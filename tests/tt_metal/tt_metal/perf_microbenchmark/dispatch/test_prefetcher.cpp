@@ -1592,12 +1592,13 @@ public:
         helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 0);
         helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ + 4, 0);
         helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 3) + 1, 0);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 0);
+        const uint32_t num_banks_minus_one = std::max(num_banks_, 2u) - 1;  // 1-bank sim would give 0 pages
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 0);
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 0);
         helper.add_paged_dram_read(worker_range, 0, 0, 128, 128, 32);
         helper.add_paged_dram_read(worker_range, 4, dram_alignment, 2048, num_banks_ * 2, 1536);
         helper.add_paged_dram_read(worker_range, 5, dram_alignment, 2048, (num_banks_ * 2) + 1, 256);
-        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_ - 1, 640);
+        helper.add_paged_dram_read(worker_range, 3, tt::align(128, dram_alignment), 6144, num_banks_minus_one, 640);
         // Large pages
         helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE / 2 + dram_alignment, 2, 128);
         helper.add_paged_dram_read(worker_range, 0, 0, DEFAULT_SCRATCH_DB_SIZE, 2, 0);
@@ -2484,8 +2485,16 @@ protected:
                     device_data.relevel(tt::CoreType::WORKER);
 
                     // Size and Clamp
-                    uint32_t xfer_size_bytes =
-                        payload_generator_->get_random_size(dispatch_buffer_page_size_, 1, remaining_bytes);
+                    // The payload is staged as a vector<uint32_t>, so a size that is not a whole number of words
+                    // rounds down -- and a size below one word rounds down to no payload at all, which reaches the
+                    // dispatcher as a packed write of size 0 and one zero-length NOC write per sub-command. Draw whole
+                    // words, and skip the command when less than a word is left to send.
+                    constexpr uint32_t payload_unit = sizeof(uint32_t);
+                    uint32_t xfer_size_bytes = payload_generator_->get_random_size(
+                        dispatch_buffer_page_size_ / payload_unit, payload_unit, remaining_bytes);
+                    if (xfer_size_bytes < payload_unit) {
+                        return std::nullopt;
+                    }
 
                     bool no_stride = payload_generator_->get_rand_bool();
 
@@ -2512,6 +2521,7 @@ protected:
                     uint32_t addr = device_data.get_result_data_addr(fw, 0);
                     // Generate Payload
                     std::vector<uint32_t> payload = payload_generator_->generate_payload_with_core(fw, xfer_size_bytes);
+                    TT_FATAL(!payload.empty(), "Generated payload size is 0, xfer_size_bytes: {}", xfer_size_bytes);
                     // Update expected device_data for all cores
                     Common::DeviceDataUpdater::update_packed_write(payload, device_data, worker_cores, l1_alignment_);
 
@@ -2594,7 +2604,6 @@ public:
                     break;
                 }
                 case CQ_PREFETCH_CMD_RELAY_INLINE: {
-                    // worker_range() collapses mcast to unicast on single-core arches (Quasar) to stay within grid.
                     const CoreRange multi_worker_range = this->worker_range(worker_core, /*multi_core=*/true);
                     auto result = gen_random_inline_cmd(device_data, multi_worker_range, noc_xy, remaining_bytes);
                     if (result.has_value()) {
@@ -2861,8 +2870,7 @@ public:
         const bool fd_kernels_on_same_core = (phys_prefetch == phys_disp);
 
         // prefetch_sync_sem: dispatch signals prefetch when a stall round-trip is done.
-        const uint32_t pf_sync_sem =
-            tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
+        const uint32_t pf_sync_sem = tt_metal::CreateSemaphore(program, {prefetch_logical}, 0u, cq_core_type);
         uint32_t di_sync_sem = pf_sync_sem;
         if (!fd_kernels_on_same_core) {
             di_sync_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
@@ -2874,8 +2882,7 @@ public:
         // dispatch (init=0, the received-pages count).
         const uint32_t pf_downstream_cb_sem =
             tt_metal::CreateSemaphore(program, {prefetch_logical}, dispatch_buffer_pages, cq_core_type);
-        const uint32_t di_dispatch_cb_sem =
-            tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
+        const uint32_t di_dispatch_cb_sem = tt_metal::CreateSemaphore(program, {dispatch_logical}, 0u, cq_core_type);
         if (!fd_kernels_on_same_core) {
             TT_FATAL(
                 pf_downstream_cb_sem == di_dispatch_cb_sem,

@@ -14,23 +14,7 @@ from helpers.compressed_utils import (
     run_compressed,
 )
 from helpers.param_config import parametrize
-from helpers.test_config import TestConfig
 from helpers.tile_constants import DEFAULT_TILE_C_DIM
-
-# This suite's LLKs are still vendored under models/demos/deepseek_v3_b1, so the compile needs that
-# llk_lib on the include path. Only llk_lib: those headers pull in nothing from the vendored llk_api.
-# The face-granular op no longer needs any of this -- it moved to tt-llk's experimental/.
-VENDORED_LLK_LIB = "-I../../../models/demos/deepseek_v3_b1/kernel_includes/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib"
-
-
-@pytest.fixture(autouse=True)
-def compressed_mm_include_paths():
-    added = VENDORED_LLK_LIB not in TestConfig.INCLUDES
-    if added:
-        TestConfig.INCLUDES.append(VENDORED_LLK_LIB)
-    yield
-    if added:
-        TestConfig.INCLUDES.remove(VENDORED_LLK_LIB)
 
 
 def promote_assignment(assignment, ct):

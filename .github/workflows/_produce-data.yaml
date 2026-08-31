@@ -64,6 +64,7 @@ on:
       - "Blackhole sanity tests"
       - "(Blackhole) e2e tests"
       - "(Blackhole) Demo tests"
+      - "Blaze Models Prefill tests"
       - "PR Gate"
       - "Merge Gate"
       - "Nightly tt-metal L2 tests"

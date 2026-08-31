@@ -556,7 +556,7 @@ def test_moreh_group_norm_backward_callback(
     ],
     ids=["input_grad", "gamma_grad"],
 )
-def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outputs, device):
+def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outputs, device, expect_error):
     torch.manual_seed(2024)
 
     N, C, H, W = 2, 4, 23, 23
@@ -584,7 +584,7 @@ def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outp
     if are_required_outputs[1]:
         npu_gamma_grad = to_ttnn(torch.empty(gamma_beta_shape, dtype=torch.bfloat16), device=device)
 
-    with pytest.raises(RuntimeError, match="mean must have logical volume"):
+    with expect_error(RuntimeError, "mean must have logical volume"):
         ttnn.operations.moreh.group_norm_backward(
             npu_output_grad,
             npu_input,
@@ -597,3 +597,25 @@ def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outp
             gamma_grad=npu_gamma_grad,
             beta_grad=None,
         )
+
+
+# Companion to test_moreh_layer_norm_backward_large_algorithm. This op already reaches the large
+# input_grad algorithm through the [512, 512] parametrization above, but never with a mask buffer bound,
+# because that shape is tile-aligned. Keeping the same tile count and only breaking the alignment
+# (500 instead of 512) reaches the one remaining uncovered combination: large algorithm with mask_h_w
+# live. num_inner_tiles = (C/num_groups) * Ht * Wt = 4 * 16 * 16 = 1024, well past the L1 budget.
+@pytest.mark.parametrize("N", [2])
+@pytest.mark.parametrize("C_num_groups", [[4, 1]])
+@pytest.mark.parametrize("HW", [[500, 500]])
+@pytest.mark.parametrize("eps", [1e-05])
+@pytest.mark.parametrize("affine", [False, True])
+@pytest.mark.parametrize("input_requires_grad", [True])
+@pytest.mark.parametrize("gamma_requires_grad", [False, True])
+@pytest.mark.parametrize("beta_requires_grad", [False])
+def test_moreh_group_norm_backward_large_algorithm(
+    N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+):
+    torch.manual_seed(2024)
+    run_test_moreh_group_norm_backward(
+        N, C_num_groups, HW, eps, affine, input_requires_grad, gamma_requires_grad, beta_requires_grad, device
+    )

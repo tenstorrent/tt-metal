@@ -31,9 +31,9 @@ KernelHandle create_dispatch_engine_kernel(
         config.num_threads_per_cluster == 1,
         "CreateDispatchEngineKernel requires num_threads_per_cluster=1");
     const CoreRangeSet core_ranges = CoreRangeSet(core);
-    const KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    const KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
     std::shared_ptr<Kernel> kernel = std::make_shared<experimental::quasar::DispatchEngineKernel>(
-        kernel_src, core_ranges, config, dm_processor);
+        program.impl().get_context_id(), kernel_src, core_ranges, config, dm_processor);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DISPATCH);
 }
 

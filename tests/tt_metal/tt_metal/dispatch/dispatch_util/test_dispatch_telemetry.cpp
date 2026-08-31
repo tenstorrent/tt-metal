@@ -778,12 +778,12 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
     num_programs++;
 
     constexpr uint32_t num_traced_programs = 16;
-    auto trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    auto trace_id = mesh_device->begin_mesh_trace(cq);
     for (uint32_t i = 0; i < num_traced_programs; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         num_programs++;
     }
-    mesh_device->end_mesh_trace(cq.id(), trace_id);
+    mesh_device->end_mesh_trace(cq, trace_id);
 
     auto trace = mesh_device->get_mesh_trace(trace_id);
     ASSERT_NE(trace, nullptr);
@@ -792,7 +792,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
     const auto& trace_descriptor = trace->desc->descriptors.begin()->second;
     ASSERT_EQ(trace_descriptor.num_traced_programs_needing_go_signal_multicast, num_traced_programs);
 
-    mesh_device->replay_mesh_trace(cq.id(), trace_id, true);
+    mesh_device->replay_mesh_trace(cq, trace_id, true);
 
     auto info = telemetry.read_info();
     ASSERT_TRUE(info.has_value());

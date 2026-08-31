@@ -5,6 +5,7 @@
 tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head.
 Hybrid state: KV cache (8 attn layers) + recurrent state (24 DeltaNet layers).
 """
+
 import math
 import os
 
@@ -38,11 +39,12 @@ class Qwen36Model:
             self.tt_ccl = None
         self.configuration = args  # Generator reads model.configuration.max_seq_len
         self.sampling_dp = 1
-        # Rope is host-recomputed each step (not advanced on-device) → force the trace to refresh decode inputs (else stale rope).
+        # RoPE is host-recomputed each step, so refresh all decode trace inputs.
         self._tt_vllm_always_refresh_decode_trace_inputs = True
-        # Reuses the vocab-sharded lm_head as the sampler's shard: needs divisible vocab; 64K = top-k limit.
+        # On-device sampling: allowlist 1x4/1x8 TP only — vocab/TP must fit Top-K's 64K shard limit (TP=2 does not).
+        mesh_shape = tuple(int(dim) for dim in mesh_device.shape)
         self._supports_on_device_sampling = (
-            self.num_devices > 1
+            mesh_shape in ((1, 4), (1, 8))
             and args.vocab_size % self.num_devices == 0
             and (args.vocab_size // self.num_devices <= 64 * 1024)
         )
@@ -51,6 +53,11 @@ class Qwen36Model:
 
             # vocab/num_devices isn't a power of 2; the multi-device TopK kernel needs it padded.
             args.pad_logits_to_power_of_2 = True
+            # force_argmax (the cheap 1-all-gather greedy path) is enabled on the base
+            # SAMPLING_AG_CONFIG in model_config.py and runs IN-TRACE (faster than eager). Decode
+            # bucketing is made compatible with the in-trace sampler by namespacing the sampling
+            # trace per bucket width (SamplingGenerator.set_trace_bucket, driven from
+            # qwen36_vllm.decode_forward) — see generator._validate_trace_inputs.
             self.sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=self.tt_ccl)
         else:
             self.sampling = None
@@ -121,16 +128,20 @@ class Qwen36Model:
                 f"LM-head vocab {lm_head_weight.shape[-1]} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
+        # QWEN36_LM_HEAD_BF4=1: bfloat4_b under a distinct .bfp4 cache name (does not touch BF8).
+        lm_head_dtype = ttnn.bfloat4_b if os.environ.get("QWEN36_LM_HEAD_BF4", "0") == "1" else ttnn.bfloat8_b
+        lm_tag = ".bfp4" if lm_head_dtype == ttnn.bfloat4_b else ""
         if self._lmhead_vocab_sharded:
             # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
             lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-            lm_cache = tensor_cache_path / "output.weight.vshard" if tensor_cache_path else None
+            lm_cache = tensor_cache_path / f"output.weight.vshard{lm_tag}" if tensor_cache_path else None
         else:
             lm_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.num_devices > 1 else None
-            lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
+            lm_cache = tensor_cache_path / f"output.weight{lm_tag}" if tensor_cache_path else None
+        logger.info(f"LM head dtype={lm_head_dtype} cache={lm_cache}")
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
-            dtype=ttnn.bfloat8_b,
+            dtype=lm_head_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -3605,20 +3616,26 @@ class Qwen36Model:
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         """Convert decode output to host torch. Host-sampling returns logits [B,S,vocab];
-        on-device sampling (is_tokens) returns sampled token ids. Log-probs out of scope.
+        on-device sampling returns sampled token ids or sampled-token log-probs.
         """
-        assert not is_log_probs, "on-device log-probs unsupported"
-        if is_tokens:
-            # Sampled ids are identical across devices; read one, flatten, take B.
+        if is_tokens or is_log_probs:
+            # Sampled ids and old-path sampled-token log-probs are replicated across devices.
             if self.num_devices > 1:
                 return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(-1)[:B]
             return ttnn.to_torch(tt_out).reshape(-1)[:B]
         if self.num_devices > 1:
             # TP: read one replica (get_device_tensors[0]), not ConcatMeshToTensor (~4x readback).
             full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-            return full.reshape(-1, self.args.vocab_size)[: B * S].view(B, S, -1)
-        out = ttnn.to_torch(tt_out).float()
-        return out[:B, :S, : self.args.vocab_size].view(B, S, -1)
+        else:
+            full = ttnn.to_torch(tt_out).float()
+        rows = full.reshape(-1, self.args.vocab_size)
+        required_rows = B * S
+        if rows.shape[0] < required_rows:
+            # Decode bucketing returns only the active prefix. The shared
+            # generator requests the fixed serving width, so add neutral rows
+            # instead of splitting each vocabulary row during ``view(B, S, -1)``.
+            rows = torch.nn.functional.pad(rows, (0, 0, 0, required_rows - rows.shape[0]))
+        return rows[:required_rows].view(B, S, self.args.vocab_size)
 
     def _save_deltanet_states(self):
         """Snapshot GDN state to host (guard across decode-trace capture's double forward)."""

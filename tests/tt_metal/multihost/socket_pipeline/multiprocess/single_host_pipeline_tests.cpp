@@ -154,7 +154,7 @@ void run_single_host_loopback_pipeline(
         mesh_device.get(), recv_socket_2, send_socket_2, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
     tt::tt_metal::socket_forward(
         mesh_device.get(), recv_socket_3, send_socket_3, XFER_SIZE, latency_measurement_address, NUM_ITERATIONS);
-    Synchronize(mesh_device.get(), std::nullopt);
+    Synchronize(*mesh_device, std::nullopt);
 
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto start_device_id = mesh_device->get_device(start_device_coord)->id();
@@ -264,7 +264,7 @@ void run_single_host_rate_pipeline(
         mesh_device.get(), recv_socket_1, send_socket_1, num_elems * sizeof(uint32_t), WARMUP_ITERATIONS);
     tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket_2, send_socket_2, XFER_SIZE, WARMUP_ITERATIONS);
     tt::tt_metal::recv_async_rate(mesh_device.get(), recv_socket_end, XFER_SIZE, WARMUP_ITERATIONS, false);
-    Synchronize(mesh_device.get(), std::nullopt);
+    Synchronize(*mesh_device, std::nullopt);
     log_info(tt::LogTest, "Warmup complete ({} iterations)", WARMUP_ITERATIONS);
 
     // Host-side timing: record start time just before launching timed kernels
@@ -280,7 +280,7 @@ void run_single_host_rate_pipeline(
     tt::tt_metal::socket_forward_rate(mesh_device.get(), recv_socket_2, send_socket_2, XFER_SIZE, num_iterations);
     tt::tt_metal::recv_async_rate(
         mesh_device.get(), recv_socket_end, XFER_SIZE, num_iterations, enable_correctness_check);
-    Synchronize(mesh_device.get(), std::nullopt);
+    Synchronize(*mesh_device, std::nullopt);
 
     // Host-side timing: record end time after all kernels complete
     auto end_time = std::chrono::duration_cast<std::chrono::microseconds>(

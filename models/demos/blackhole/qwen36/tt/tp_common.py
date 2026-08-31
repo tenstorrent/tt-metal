@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5 on Blackhole (9B single-device + 27B TP=4).
+"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
 
 Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
@@ -223,6 +223,41 @@ def rope_permuted_enabled(args):
 def prefill_grid_default():
     """BH P150: (8,10); WH: (8,8). y capped at 10 on BH (grid_x=10 breaks matmul)."""
     return (8, 10) if is_blackhole() else (8, 8)
+
+
+# Max grid COLUMNS a tuned prefill config may use. A Blackhole galaxy reports a 12-wide worker
+# grid, but harvested P150s expose only 11, so tuning to 12 would not port. 11 x 10 = 110 cores.
+PREFILL_MAX_COLS_PORTABLE = 11
+
+# Why TP=8 wants different values (measured at S=2048, 27B, 1x8 Ring):
+#   * widest_cols -- `_best_prefill_cols` ranks candidate widths by (out_subblock_w, cols), i.e.
+#     subblock first. At TP=8 the halved N makes wide grids yield a small per_core_N and hence a
+#     narrow subblock, so that ranking retreats to fewer columns and leaves cores idle. Measured
+#     device time is monotonically decreasing in column count instead: attn_wo went 1944us @ 60
+#     cores -> 700us @ 110, and mlp_gate 2943us @ 60 -> 1935us @ 110. So take the width.
+#   * in0_block_w_divisor -- `min(cap, k_tiles // grid_x)` is a function of the per-device K, which
+#     halves. attn_wo/gdn_out go k_tiles 48 -> 24 and `24 // 11 = 2`, but in0_block_w only has to
+#     DIVIDE k_tiles, so a larger block is legal and much faster (attn_wo @ 11 cols, from the sweep:
+#     bw2 786us, bw4 719us, bw6 700us, bw8 705us).
+#
+# in0_block_w_cap is L1-BOUND, NOT just a legality bound. in0_block_w sizes the in0 circular
+# buffer, and `_wo_proj` / the MLP prefill arm write their OUTPUT to L1 (attention/tp.py:246,
+# mlp.py:284) -- so the CBs and a resident L1 output tensor compete for the same 1536 KB. Measured
+# on the real model: cap=8 overflows and test_model_tp_long_prefill dies with
+#   "Statically allocated circular buffers in program N clash with L1 buffers on core range
+#    [0-0 - 10-8]. L1 buffer allocated at 1314560 and static circular buffer region ends at 1372032"
+# from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
+# tenant is the op under test, so it reports a win that the full model has no room for. Any future
+# raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+_PREFILL_TUNING = {
+    4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
+    8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
+}
+
+
+def prefill_tuning(num_devices):
+    """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values."""
+    return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
 
 
 def _roundup(a, b):
@@ -569,7 +604,15 @@ def create_prefill_mlp_matmul_program_config_full_grid(
 
 
 def create_prefill_matmul_program_config(
-    m, k, n, grid_size=None, fused_activation=None, out_block_w=None, halve_out_block=False, max_subblock_hw=None
+    m,
+    k,
+    n,
+    grid_size=None,
+    fused_activation=None,
+    out_block_w=None,
+    halve_out_block=False,
+    max_subblock_hw=None,
+    tuning=None,
 ):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
@@ -584,9 +627,13 @@ def create_prefill_matmul_program_config(
     max_subblock_hw: out_subblock_h*out_subblock_w ceiling. Defaults to the conservative
     DST_TILES_FP32_ACC (4), which is correct for the fp32-dest-acc COMPUTE_HIFI2 most callers pass.
     Callers using a compute config with fp32_dest_acc_en=False may pass DST_TILES (8) to get the
-    wider output subblock their DST budget actually allows — see _get_out_subblock_w."""
+    wider output subblock their DST budget actually allows — see _get_out_subblock_w.
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior. Governs
+    in0_block_w sizing (TP-degree dependent), independent of the WH-specific out_block_w knobs above —
+    the two axes may be combined (e.g. TP=8 tuning + halve_out_block on Wormhole)."""
     if grid_size is None:
         grid_size = prefill_grid_default()
+    tuning = tuning or _PREFILL_TUNING[4]
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
@@ -596,7 +643,13 @@ def create_prefill_matmul_program_config(
     )
 
     k_tiles = math.ceil(k / TILE_SIZE)
-    in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
+    cap = tuning["in0_block_w_cap"]
+    if tuning["in0_block_w_divisor"]:
+        # in0_block_w only has to divide k_tiles (no K tail in the 2D mcast kernel), so take the
+        # largest legal block rather than scaling with grid width -- see _PREFILL_TUNING.
+        in0_block_w = _find_largest_divisor(k_tiles, cap)
+    else:
+        in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
     if halve_out_block and out_block_w is None:
         out_block_w = _safe_half_out_block_w(per_core_N, out_subblock_w)
@@ -670,6 +723,27 @@ def prefill_out_memory_config(seq_len, out_width, elem_bytes=2, budget=8 << 20):
     return ttnn.DRAM_MEMORY_CONFIG if seq_len * out_width * elem_bytes > budget else ttnn.L1_MEMORY_CONFIG
 
 
+def _widest_prefill_cols(n, max_cols, subblock_slack=1):
+    """Widest grid whose output subblock stays within `subblock_slack` of the best achievable.
+
+    The TP=8 counterpart to `_best_prefill_cols`. More columns is usually a win at TP=8 (the halved
+    per-device N leaves cores idle), but NOT when the extra width collapses the subblock: measured
+    at S=2048, mlp_gate (N=2176 -> 68 tiles) goes cols 9 -> 11, per_core_N 8 -> 7, and 7 is prime so
+    out_subblock_w drops 4 -> 1 -- a 2058us -> 2118us REGRESSION, i.e. the subblock-first ranking
+    was right for that shape. Guarding on the subblock keeps the wide grid exactly where it pays:
+
+        matmul     default        this rule       measured
+        attn_wo    c10_bw2_sw4    c11_bw4_sw3     803.5 -> 718.7us
+        gdn_out    c10_bw2_sw4    c11_bw4_sw3     802.3 -> 719.9us
+        mlp_down   c10_bw4_sw4    c11_bw4_sw3    1787.4 -> 1724.9us
+        mlp_gate   c9_bw4_sw4     c9_bw4_sw4     2058.1us (unchanged -- already optimal)
+    """
+    n_tiles = math.ceil(n / TILE_SIZE)
+    sw = {cols: _get_out_subblock_w(math.ceil(n_tiles / cols), 1) for cols in range(1, max_cols + 1)}
+    floor = max(sw.values()) - subblock_slack
+    return max((cols for cols, w in sw.items() if w >= floor), default=1)
+
+
 def _best_prefill_cols(n, max_cols):
     """Grid width (<=max_cols) maximizing the output subblock, tie-broken to more cores — avoids the
     1x1-subblock stall (e.g. gate/up N=4352 -> 7-wide -> 1x4) the default full width can force."""
@@ -684,7 +758,7 @@ def _best_prefill_cols(n, max_cols):
 
 
 def create_prefill_mlp_matmul_program_config(
-    m, k, n, fused_activation=None, max_cols=None, halve_out_block=False, max_subblock_hw=None
+    m, k, n, fused_activation=None, max_cols=None, halve_out_block=False, max_subblock_hw=None, tuning=None
 ):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
@@ -696,11 +770,25 @@ def create_prefill_mlp_matmul_program_config(
     — pass on grids already at their physical core-count max (WH) where the full per_core_N-wide
     output/intermediate CB overflows L1.
     max_subblock_hw: see create_prefill_matmul_program_config. NOTE this is deliberately NOT fed into
-    _best_prefill_cols below: the grid-width choice stays on the conservative cap so raising the
+    the column-width selection below: the grid-width choice stays on its own heuristic so raising the
     subblock ceiling cannot silently move the grid too (an unswept axis). It only widens the subblock
-    at the column count production already uses."""
+    at whatever column count is chosen.
+    tuning: a `_PREFILL_TUNING` entry. With `widest_cols` (TP=8) the subblock-first width heuristic
+    (_best_prefill_cols) is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" --
+    measured device time at TP=8 falls monotonically with column count, so trading cores for a wider
+    subblock loses. None (the default, TP=4) keeps the original _best_prefill_cols behavior. Orthogonal
+    to halve_out_block/max_subblock_hw, which govern the WH out-block sizing regardless of column
+    selection -- the two may be combined."""
     grid = prefill_grid_default()
-    cols = _best_prefill_cols(n, max_cols or grid[0])
+    resolved_tuning = tuning or _PREFILL_TUNING[4]
+    limit = max_cols or grid[0]
+    if resolved_tuning["widest_cols"]:
+        # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never
+        # exceed the output tile count -- columns beyond it get per_core_N=1 with nothing to compute,
+        # paying mcast cost for no work.
+        cols = _widest_prefill_cols(n, max(1, min(limit, PREFILL_MAX_COLS_PORTABLE, math.ceil(n / TILE_SIZE))))
+    else:
+        cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
         m,
         k,
@@ -709,6 +797,7 @@ def create_prefill_mlp_matmul_program_config(
         fused_activation=fused_activation,
         halve_out_block=halve_out_block,
         max_subblock_hw=max_subblock_hw,
+        tuning=tuning,
     )
 
 
@@ -725,6 +814,18 @@ def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloa
         memory_config=memory_config,
         cache_file_name=cache_path,
     )
+
+
+def agmm_k_block_size(k_local, default=8):
+    """Largest power-of-2 K_block_size <= `default` that divides K_tiles/device (AGMM Ring has no tail).
+
+    TP=4: 1280->40 tiles->8; TP=8: 640->20 tiles->4. Odd divisors (e.g. 5|20) are unsafe on Ring.
+    """
+    k_tiles = k_local // TILE_SIZE
+    b = 1 << (min(default, max(1, k_tiles)).bit_length() - 1)
+    while b > 1 and k_tiles % b:
+        b //= 2
+    return b
 
 
 def all_gather_matmul_prefill(
@@ -753,7 +854,7 @@ def all_gather_matmul_prefill(
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
-        K_block_size=8,
+        K_block_size=agmm_k_block_size(K_local),
         N_block_size=8,
         subblock_h=1,
         subblock_w=4,
@@ -856,7 +957,7 @@ def all_gather_swiglu_prefill(
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=8,
-        K_block_size=8,
+        K_block_size=agmm_k_block_size(K_local),
         N_block_size=16,
         subblock_h=1,
         subblock_w=4,

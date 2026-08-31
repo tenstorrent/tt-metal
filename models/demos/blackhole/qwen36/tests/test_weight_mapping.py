@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for Qwen3.5-9B HF -> internal weight remapping."""
+
 import pytest
+import torch
 
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
-from models.demos.blackhole.qwen36.tt.weight_mapping import remap_qwen36_state_dict
+from models.demos.blackhole.qwen36.tt.tp_common import replicate_kv_weight
+from models.demos.blackhole.qwen36.tt.weight_mapping import remap_mtp_state_dict, remap_qwen36_state_dict
 
 HIDDEN_SIZE = 4096
 NUM_LAYERS = 32
@@ -164,3 +167,87 @@ class TestAllLayersPresent:
         expected = [3, 7, 11, 15, 19, 23, 27, 31]
         for i in expected:
             assert f"layers.{i}.self_attn.q_proj.weight" in remapped, f"Layer {i} should be full attention"
+
+
+class TestMTPMapping:
+    """MTP key handling — synthetic tensors, no checkpoint / device needed."""
+
+    def _synthetic(self):
+        return {
+            "mtp.fc.weight": torch.zeros(4, 8),
+            "mtp.pre_fc_norm_hidden.weight": torch.zeros(4),
+            "mtp.layers.0.self_attn.q_proj.weight": torch.zeros(6, 4),
+            "lm_head.weight": torch.zeros(16, 4),
+            "model.language_model.norm.weight": torch.zeros(4),
+        }
+
+    def test_default_drops_mtp(self):
+        remapped = remap_qwen36_state_dict(self._synthetic())
+        assert not any(k.startswith("mtp.") for k in remapped)
+        assert "output.weight" in remapped and "norm.weight" in remapped
+
+    def test_include_mtp_keeps_raw_namespace(self):
+        remapped = remap_qwen36_state_dict(self._synthetic(), include_mtp=True)
+        assert "mtp.fc.weight" in remapped
+        assert "mtp.layers.0.self_attn.q_proj.weight" in remapped
+        # Backbone remap unchanged by the flag.
+        assert "output.weight" in remapped and "norm.weight" in remapped
+
+    def test_remap_mtp_strips_prefix_and_filters(self):
+        mtp = remap_mtp_state_dict(self._synthetic())
+        assert set(mtp) == {"fc.weight", "pre_fc_norm_hidden.weight", "layers.0.self_attn.q_proj.weight"}
+        assert mtp["fc.weight"].shape == (4, 8)
+
+
+class TestReplicateKVWeight:
+    """KV-head replication for TP > n_kv_heads (27B: 4 KV heads on TP=8).
+
+    No fixtures / no checkpoint / no device — pure host tensor reshaping, so this runs
+    anywhere. Guards the invariant the TP attention loader depends on: device ``d`` must
+    receive exactly the KV head that its GQA query group attends to.
+    """
+
+    # Qwen3.6-27B full-attention geometry.
+    N_HEADS = 24
+    N_KV_HEADS = 4
+    HEAD_DIM = 256
+    IN_DIM = 512  # narrowed from 5120; the helper is agnostic to the input width
+
+    def _kv_weight(self):
+        """[n_kv_heads*head_dim, in] where every row of head h holds the value h."""
+        return torch.cat([torch.full((self.HEAD_DIM, self.IN_DIM), float(h)) for h in range(self.N_KV_HEADS)], dim=0)
+
+    def _heads_per_device(self, replicated, tp):
+        """The KV head index each device ends up with."""
+        rows = max(1, self.N_KV_HEADS // tp) * self.HEAD_DIM
+        return [int(replicated[d * rows : (d + 1) * rows].unique().item()) for d in range(tp)]
+
+    @pytest.mark.parametrize("tp", [1, 2, 4])
+    def test_noop_when_tp_fits_kv_heads(self, tp):
+        """tp <= n_kv_heads needs no replication — must return the very same object, so
+        TP<=4 weight prep stays bit-identical."""
+        w = self._kv_weight()
+        assert replicate_kv_weight(w, self.N_KV_HEADS, tp, self.HEAD_DIM) is w
+
+    def test_tp8_shape(self):
+        out = replicate_kv_weight(self._kv_weight(), self.N_KV_HEADS, 8, self.HEAD_DIM)
+        assert out.shape == (8 * self.HEAD_DIM, self.IN_DIM)
+
+    def test_tp8_pairs_devices_on_one_head(self):
+        out = replicate_kv_weight(self._kv_weight(), self.N_KV_HEADS, 8, self.HEAD_DIM)
+        assert self._heads_per_device(out, 8) == [0, 0, 1, 1, 2, 2, 3, 3]
+
+    @pytest.mark.parametrize("tp", [4, 8])
+    def test_matches_gqa_query_grouping(self, tp):
+        """The head each device gets must be the one its local query heads map to under
+        GQA — otherwise attention silently reads the wrong K/V."""
+        out = replicate_kv_weight(self._kv_weight(), self.N_KV_HEADS, tp, self.HEAD_DIM)
+        q_per_device = self.N_HEADS // tp
+        heads_per_kv = self.N_HEADS // self.N_KV_HEADS
+        expected = [(d * q_per_device) // heads_per_kv for d in range(tp)]
+        assert self._heads_per_device(out, tp) == expected
+
+    def test_every_head_still_reachable(self):
+        """Replication must not drop a head: all n_kv_heads appear across the mesh."""
+        out = replicate_kv_weight(self._kv_weight(), self.N_KV_HEADS, 8, self.HEAD_DIM)
+        assert sorted(set(self._heads_per_device(out, 8))) == list(range(self.N_KV_HEADS))

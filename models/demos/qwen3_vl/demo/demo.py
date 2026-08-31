@@ -294,7 +294,11 @@ def test_demo(
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
-    sampling_params = request.config.getoption("--sampling_params") or sampling_params
+    cli_sampling_params = request.config.getoption("--sampling_params")
+    if cli_sampling_params:
+        # Merge onto the parametrized defaults so a partial override (e.g. only
+        # temperature) keeps the remaining keys the demo indexes unconditionally.
+        sampling_params = {**sampling_params, **cli_sampling_params}
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,

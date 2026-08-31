@@ -43,13 +43,15 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         return opt.has_value() ? std::optional<Tensor>(opt.value()) : std::nullopt;
     };
 
+    // Delegate to the matmul validator. The fused-concat checks (two sources concatenable on K,
+    // K's sum to the weight K) are driven by the presence of optional_input_tensor below.
     matmul_device_operation_t::validate_on_program_cache_miss(
         attributes.matmul_struct,
         matmul_device_operation_t::tensor_args_t{
             .input_tensor = tensor_args.input_tensor,
             .weight_tensor = tensor_args.weight_tensor,
             .bias_tensor = to_mutable_opt(tensor_args.bias),
-            .optional_input_tensor = std::nullopt,
+            .optional_input_tensor = to_mutable_opt(tensor_args.mm_optional_input_tensor),
             .fused_ternary_input_a = std::nullopt,
             .fused_ternary_input_b = std::nullopt,
         });
@@ -172,6 +174,49 @@ MinimalMatmulStridedReduceScatterAsync::compute_output_specs(
         tt::tt_metal::TensorLayout(
             mm_output_spec.data_type(), mm_output_spec.page_config(), attributes.rs_output_mem_config));
 
+    // --- L1 handoff (step 1): block-shard the MM output across the matmul core grid so the RS reader
+    // consumes it straight out of L1 instead of round-tripping through DRAM.
+    //
+    // Opt-in only. Without a window the resident shard is Mt_per_core * Nt_per_core tiles on every
+    // matmul core, which for a large M crowds out the L1 that later programs need for their own
+    // circular buffers — and past roughly Mt/gy * Nt/gx > bank capacity does not fit at all. A caller
+    // that asked for a DRAM MM output therefore keeps getting one. Opting in means either requesting
+    // an L1 MM output outright, or setting mm_window_blocks, which bounds the shard to W M blocks and
+    // is only meaningful in L1.
+    const bool caller_requested_l1_mm_output =
+        attributes.matmul_struct.output_mem_config.has_value() &&
+        attributes.matmul_struct.output_mem_config->buffer_type() == BufferType::L1;
+    const bool use_l1_handoff = attributes.mm_window_blocks.has_value() || caller_requested_l1_mm_output;
+    if (use_l1_handoff && attributes.matmul_struct.config.has_value() &&
+        attributes.matmul_struct.config->compute_with_storage_grid_size.x > 0) {
+        const auto grid = attributes.matmul_struct.config->compute_with_storage_grid_size;
+        const uint32_t gx = grid.x;
+        const uint32_t gy = grid.y;
+        const uint32_t Mt = mm_output_shape[-2] / tt::constants::TILE_HEIGHT;
+        const uint32_t Nt = mm_output_shape[-1] / tt::constants::TILE_WIDTH;
+        const uint32_t Mt_per_core = (Mt + gy - 1) / gy;
+        const uint32_t Nt_per_core = (Nt + gx - 1) / gx;
+
+        // With mm_window_blocks=W the shard holds only W M blocks instead of all Mt_per_core rows,
+        // and the matmul recycles slot m % W. The tensor then covers gy*W*mm_block_ht rows rather
+        // than M, so it is no longer the full matmul result — see the attribute's doc comment.
+        uint32_t shard_ht = Mt_per_core;
+        auto windowed_shape = mm_output_shape;
+        if (attributes.mm_window_blocks.has_value()) {
+            const uint32_t mm_block_ht = attributes.matmul_struct.config->M_block_size;
+            shard_ht = attributes.mm_window_blocks.value() * mm_block_ht;
+            windowed_shape[-2] = gy * shard_ht * tt::constants::TILE_HEIGHT;
+        }
+
+        const auto mm_shard_spec = tt::tt_metal::ShardSpec(
+            CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(gx - 1, gy - 1))),
+            {shard_ht * tt::constants::TILE_HEIGHT, Nt_per_core * tt::constants::TILE_WIDTH});
+        const auto mm_l1_sharded = MemoryConfig{TensorMemoryLayout::BLOCK_SHARDED, BufferType::L1, mm_shard_spec};
+        mm_output_spec = tt::tt_metal::TensorSpec(
+            windowed_shape,
+            tt::tt_metal::TensorLayout(mm_output_spec.data_type(), mm_output_spec.page_config(), mm_l1_sharded));
+    }
+
     return {mm_output_spec, rs_intermediate_spec, rs_output_spec};
 }
 
@@ -228,7 +273,11 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
-    std::optional<tt::tt_metal::DataType> dtype) {
+    std::optional<tt::tt_metal::DataType> dtype,
+    const std::optional<const Tensor>& mm_progress_counters,
+    std::optional<uint32_t> mm_window_blocks,
+    const std::optional<const Tensor>& mm_credit_counters,
+    const std::optional<const Tensor>& mm_optional_input_tensor) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -264,6 +313,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* num_workers_per_link */ num_workers_per_link,
         /* num_buffers_per_channel */ num_buffers_per_channel,
         /* chunk_width_in_mm_blocks */ chunk_width_in_mm_blocks,
+        /* mm_window_blocks */ mm_window_blocks,
         /* reduce_scatter_core_grid_offset */ reduce_scatter_core_grid_offset};
 
     auto tensor_args = OperationType::tensor_args_t{
@@ -273,7 +323,10 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         optional_rs_output_tensor,
         bias,
         addcmul_input_tensor1,
-        addcmul_input_tensor2};
+        addcmul_input_tensor2,
+        mm_progress_counters,
+        mm_credit_counters,
+        mm_optional_input_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

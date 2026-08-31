@@ -6,7 +6,7 @@
 The RUNNER owns the control flow; this module provides the generic (model-free) pieces and the model
 runtime owns the table build. The split for a migration bring-up:
 
-    1. deliver_device_map_and_gather_stage_layout(...)   # ALL RANKS: deliver local FNID->UMD map to
+    1. deliver_device_map_and_gather_stage_layouts(...)  # ALL RANKS: deliver local FNID->UMD map to
                                                           #   the co-located worker + all-gather barrier
     2. runtime.build_kv_chunk_table(kv_cache, path, ...) # RANK 0: model builds + serializes the table
                                                           #   (via serialize_kv_chunk_table here)
@@ -29,10 +29,40 @@ import sys
 import time
 import zlib
 from ctypes import c_int32
+from typing import NamedTuple
 
 from loguru import logger
 
 import ttnn
+
+_DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
+
+
+class KvCacheStage(NamedTuple):
+    """One migratable device cache on THIS rank -- one per config of the model's table, in config
+    order, since caches need not share a layer-index space.
+
+    ``first_layer``/``count`` are the layers this stage OWNS, in THIS cache's index space. Every cache
+    must be allocated to its own stage, so its physical slot 0 is ``first_layer`` and it holds exactly
+    ``count`` slots per user -- the address walk assumes that.
+
+    Field names match the keys :func:`allgather_kv_stage_layout` gathers them into.
+    """
+
+    base_addr: int
+    first_layer: int
+    count: int
+
+
+def migration_file_export_enabled() -> bool:
+    """True when PREFILL_MIGRATION_EXPORT_TO_FILE=1: drop the device map and KV chunk table on
+    the filesystem for the KV manager (tt-d-gen), instead of pushing them over the co-located
+    worker's shmem queues (no MigrationLayerClient, no SET_TABLE/WORKER_READY)."""
+    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
+
+
+def migration_device_map_file_path() -> str:
+    return os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", _DEFAULT_DEVICE_MAP_FILE)
 
 
 def _disaggregation():
@@ -42,8 +72,12 @@ def _disaggregation():
 
 
 def _serialize_table_to_path(table, path: str) -> None:
-    """Serialize a KvChunkAddressTable to a protobuf file for the worker's SET_TABLE."""
-    _disaggregation().export_to_protobuf_file(table, path)
+    """Serialize a KvChunkAddressTable to a protobuf file for the worker's SET_TABLE. Atomic, like the
+    two device-map writers: a reader polls for this path's existence and deserializes the instant it
+    appears, so writing in place hands it a truncated protobuf whenever the poll lands mid-write."""
+    tmp = f"{path}.tmp"
+    _disaggregation().export_to_protobuf_file(table, tmp)
+    os.replace(tmp, path)
 
 
 def _resolve_queue_names() -> tuple[str, str, str]:
@@ -275,16 +309,34 @@ def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
     return path
 
 
-def deliver_device_map_and_gather_stage_layout(
-    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, rank
-):
+def export_device_map_to_file(mesh_device, mesh_shape, path: str) -> str:
+    """Write this rank's local device map (``fabric_mesh_id fabric_chip_id umd_chip_id`` per line)
+    to a host-local text file, atomically (temp file + rename)."""
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as map_file:
+        map_file.writelines(f"{mesh_id} {chip_id} {umd_id}\n" for mesh_id, chip_id, umd_id in device_map)
+    os.replace(tmp, path)
+    logger.info(f"[migration] device map ({len(device_map)} chips) exported to {path}")
+    return path
+
+
+def export_device_map_file_and_gather_stage_layouts(mesh_device, stages, mesh_shape, device_map_path: str):
+    """ALL RANKS: file-export counterpart of :func:`deliver_device_map_and_gather_stage_layouts` —
+    drop the local FNID->UMD map to a host-local text file instead of pushing it to a co-located
+    worker, then join the same collective all-gather. Returns one gathered layout per stage."""
+    export_device_map_to_file(mesh_device, mesh_shape, device_map_path)
+    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
+
+
+def deliver_device_map_and_gather_stage_layouts(mesh_device, stages, mesh_shape, rank):
     """ALL RANKS run this (the runner drives it for every rank). Deliver THIS rank's local FNID->UMD
     device map to its co-located worker, then join the collective all-gather that merges every stage
-    into one table. Returns the gathered ``stage_layout`` (the runner passes it to rank 0's
-    ``runtime.build_kv_chunk_table``; non-rank-0 callers just needed to join the collective).
+    into one table. Returns the gathered layouts, one per stage (the runner passes them to rank
+    0's ``runtime.build_kv_chunk_table``; non-rank-0 callers just needed to join the collective).
 
-    ``kv_base_addr`` is this stage's KV base address, supplied by the model via
-    ``runtime.kv_migration_base_address`` -- the engine never introspects the cache struct itself.
+    ``stages`` are this rank's per-cache :class:`KvCacheStage` descriptions, supplied by the model via
+    ``runtime.kv_migration_stages`` -- the engine never introspects the cache struct itself.
 
     The delivery happens BEFORE the gather so every rank's map is in place before rank 0 SET_TABLEs;
     the all-gather doubles as the barrier that guarantees it. The gather is an MPI collective -- EVERY
@@ -292,7 +344,7 @@ def deliver_device_map_and_gather_stage_layout(
     """
     device_map = _build_device_map(mesh_device, mesh_shape)
     _deliver_local_device_map(device_map, rank)
-    return allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers)
+    return allgather_kv_stage_layouts(mesh_device, stages, mesh_shape)
 
 
 def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeout_ms: int = 120_000):
@@ -301,7 +353,7 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
 
     The table is built + serialized by the model runtime (``runtime.build_kv_chunk_table`` — the model
     owns the cache layout / block-cyclic address math), and the runner runs the all-ranks device-map
-    delivery + all-gather barrier (``deliver_device_map_and_gather_stage_layout``) FIRST, so by the
+    delivery + all-gather barrier (``deliver_device_map_and_gather_stage_layouts``) FIRST, so by the
     time this attaches the endpoint ``MigrationLayerClient`` on the master cmd/table/resp queues and
     SET_TABLEs, every rank's local device map has landed and the worker can reach WORKER_READY.
     """
@@ -328,6 +380,16 @@ def _host_tag_int():
     hosts, so one tag per owning rank correctly groups every FNID to its worker.
     """
     return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
+
+
+def allgather_kv_stage_layouts(mesh_device, stages, mesh_shape):
+    """COLLECTIVE (all ranks): :func:`allgather_kv_stage_layout` once per stage, in config order. EVERY
+    rank must pass the same stages in the same order -- each costs a fixed sequence of allgathers, so an
+    asymmetric list desynchronizes the communicator."""
+    return [
+        allgather_kv_stage_layout(mesh_device, stage.base_addr, mesh_shape, stage.first_layer, stage.count)
+        for stage in stages
+    ]
 
 
 def allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers):

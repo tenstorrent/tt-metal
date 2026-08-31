@@ -241,25 +241,6 @@ public:
             };
         }
 
-        // Quasar dispatch-engine cores run DM-only firmware (COMPILE_FOR_DM), but the on-device
-        // DevicePrintMemoryLayout still reserves the TRISC sub-buffer first, so the DM print buffer
-        // (the one get_device_print_buffer() returns) lives at structure_address +
-        // kQuasarDprintComputeSubbufferSize. Only the DM sub-buffer is populated; mirror the DM half of
-        // the Quasar TENSIX split above.
-        if (programmable_core_type == HalProgrammableCoreType::DISPATCH) {
-            const uint16_t dm_count = static_cast<uint16_t>(hal.get_processor_types_count(
-                programmable_core_type, static_cast<uint32_t>(HalProcessorClassType::DM)));
-            TT_FATAL(
-                static_cast<uint32_t>(kQuasarDprintComputeSubbufferSize) + kQuasarDprintDmSubbufferSize ==
-                    structure_size,
-                "Quasar DISPATCH DPRINT buffer split (compute {} + DM {}) doesn't match region size {}",
-                kQuasarDprintComputeSubbufferSize,
-                kQuasarDprintDmSubbufferSize,
-                structure_size);
-            return {make_buffer(
-                structure_address + kQuasarDprintComputeSubbufferSize, kQuasarDprintDmSubbufferSize, dm_count, 0)};
-        }
-
         const uint16_t num_processors = static_cast<uint16_t>(hal.get_num_risc_processors(programmable_core_type));
         return {make_buffer(structure_address, static_cast<uint16_t>(structure_size), num_processors, 0)};
     }

@@ -150,7 +150,7 @@ public:
         uint32_t addr = static_cast<uint32_t>(get_address());
         uint32_t num_bytes = static_cast<uint32_t>(num_elements * sizeof(T));
         RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_LOCK, addr, num_bytes);
-        return Lock([this, addr, num_bytes]() {
+        return Lock([addr, num_bytes]() {
             RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::MEM_UNLOCK, addr, num_bytes);
         });
     }

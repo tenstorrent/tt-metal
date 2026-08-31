@@ -17,7 +17,7 @@
 model:
   variant: deepseek_v3_d_p  # PREFILL_MODEL           (default: deepseek_v3_d_p) registry key in adapter.py
   num_layers: 61            # PREFILL_NUM_LAYERS      (default: 61)    [MATCH RUNNER] per-layer ack count
-  max_seq_len: 61440        # PREFILL_MAX_SEQ_LEN     (default: 61440) [MATCH RUNNER] per-user cache tokens
+  max_seq_len: 56320        # PREFILL_MAX_SEQ_LEN     (default: 56320) [MATCH RUNNER] per-user cache tokens
   chunk_size: 5120          # PREFILL_CHUNK_SIZE      (default: 5120)  [MATCH RUNNER] tokens per push
 
 # ---------------------------------------------------------------------------
@@ -46,9 +46,20 @@ workload:
 
 # ---------------------------------------------------------------------------
 # Real KV migration issued BY the producer (opt-in). Needs a live migration_endpoint the runner already
-# drove to WORKER_READY. The producer migrates + writes the DONE sentinel; the RUNNER validates KV.
+# drove to WORKER_READY. migration_driver migrates, writes the DONE sentinel, and — in loopback — reads the
+# destination slots back itself (--verify-migration, see the env: block below). The runner validates
+# nothing: it publishes the KV-chunk table + device map, and every read-back happens in this process.
 migration:
   issue: false              # PREFILL_PRODUCER_ISSUE_MIGRATION (default: false) attach client + migrate
+  # NO host list here. Multi-host is a LAUNCH concern, so it is an argument to the launcher script, not a
+  # manifest field:
+  #     ./models/demos/common/prefill/runners/run_migration_driver.sh <this file> "$HOSTSP" [tcp_iface]
+  # That places one driver process per host, rank 0 first and on the host you launch from; rank 0 runs the
+  # whole thing while the others are read-back-only validators, and the per-rank verdicts are allgathered.
+  # It exists because read_dram_umd is HOST-LOCAL — one process can only read the chips in its own machine,
+  # so on an N-host pipeline runner it verifies 1/N of the layers and skips the rest. Needed only when the
+  # RUNNER spans more than one host; a 1-galaxy run can invoke the module directly.
+  # Multi-host also requires table_path on SHARED storage and device_map_path HOST-LOCAL (see both below).
   dest_endpoint_id: 1       # PREFILL_MIGRATION_DEST_ENDPOINT_ID (default: 1) own id => loopback; other => x-ep
   dst_slot_offset: 2        # PREFILL_MIGRATION_DST_SLOT_OFFSET (default: num_users) dst = src + offset
   # pairs -> PREFILL_MIGRATION_PAIRS (default: unset => use dst_slot_offset). Arbitrary any-src -> any-dst;
@@ -64,13 +75,36 @@ migration:
   table_queue: /mig_ep1_table # PREFILL_MIGRATION_TABLE_QUEUE (default: /prefill_mig_tbl_1) [MATCH ENDPOINT]
   resp_queue: /mig_ep1_resp # PREFILL_MIGRATION_RESP_QUEUE  (default: /prefill_mig_rsp_1) [MATCH ENDPOINT]
   table_path: /tmp/prefill_kv_chunk_table.pb    # PREFILL_MIGRATION_TABLE_PATH [MATCH RUNNER] KV addr table
+                            # On a multi-host run this MUST be on SHARED storage:
+                            # rank 0 writes it and every validator reads it from its own host. The driver
+                            # exits with an error if it points at /tmp, /dev/shm, /run or /var/tmp.
   device_map_path: /tmp/prefill_kv_device_map.json # PREFILL_MIGRATION_DEVICE_MAP_PATH [MATCH RUNNER] (check_pcc)
+                            # The OPPOSITE of the table: keep it HOST-LOCAL. Every runner rank serializes
+                            # its OWN host's fnid -> unique_id map under this name, which is what makes each
+                            # driver rank resolve exactly its own host's layers. On shared storage the ranks
+                            # race serialize_device_map's `<path>.tmp` -> os.replace and one dies with
+                            # FileNotFoundError while the survivor leaves the wrong host's map.
 
 # ---------------------------------------------------------------------------
 # Escape hatch: any raw PREFILL_* key (wins over the typed blocks). Also the home for flags with no typed
 # field of their own:
 env:
   PREFILL_SEND_SHUTDOWN: "0"            # (default: 0) "1" => close the stream with an all -1 sentinel so the
-                                        # runner drains + tears down after the run (sent last, after KV read).
-                                        # Set to "1" for runner-side migration validation unless shutdown is external.
-  PREFILL_STANDALONE_CHUNKED_PCC: "0.93" # (default: 0.93) producer-side check_pcc pass/fail threshold.
+                                        # runner drains + tears down after the run. Sent LAST, after both the
+                                        # KV read-back and --verify-migration, so it never pulls the mesh out
+                                        # from under a UMD read. Leave "0" only if shutdown is external —
+                                        # otherwise the runner's unbounded loop sits in recv until SIGTERM.
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.93" # (default: 0.93) producer-side check_pcc pass/fail threshold. Also the
+                                        # threshold for --verify-migration dst-golden.
+  # migration_driver only, and deliberately NOT typed fields in the `migration:` block above — set them here,
+  # export them, or pass --verify-migration / --verify-migration-layers.
+  PREFILL_VERIFY_MIGRATION: "dst-bytes" # (default: dst-bytes) destination read-back after the migrate, LOOPBACK
+                                        # only: off | dst-bytes (dst == src, golden-free, model-agnostic) |
+                                        # dst-golden (dst PCC'd vs the src's golden) | both. Feeds the exit code.
+  # PREFILL_VERIFY_MIGRATION_LAYERS: "0,30,60"  # (default: every migrated layer) spot-check subset. dst-bytes
+                                        # reads BOTH slots, so a full-depth pair is expensive; a subset makes a
+                                        # PASS a sample, not a proof, and restricts the check to config 0.
+  # The MPI NIC is not env config either: it is run_migration_driver.sh's 3rd argument (default
+  # ens5f0np0, the same default run_pipeline_prefill.sh uses). It MUST match the interface the RUNNER was
+  # launched with -- these hosts are multi-homed (docker0 carries the SAME address everywhere), and a
+  # mismatch hangs MPI_Init with every rank silent after "applied manifest".

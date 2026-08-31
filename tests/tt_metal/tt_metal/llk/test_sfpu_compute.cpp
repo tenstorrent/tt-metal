@@ -11,6 +11,7 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -105,6 +106,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
 const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_name = {
     {"div_binary", {{"SFPU_OP_INIT_0", "div_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "div_binary_tile(0, 1, 0);"}}},
     {"mul_float", {{"SFPU_OP_INIT_0", "mul_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "mul_binary_tile(0, 1, 0);"}}},
+    {"atan2", {{"SFPU_OP_INIT_0", "atan2_binary_tile_init();"}, {"SFPU_OP_CHAIN_0", "atan2_binary_tile(0, 1, 0);"}}},
     // add_int: Int8 L1 inputs are promoted to sign-magnitude Int32 in DEST via copy_tile + fp32_dest_acc;
     // add_int_tile<Int32> (sign-mag on Quasar via ARCH_QUASAR) then adds in sign-mag space. Result in DST[0].
     {"add_int",
@@ -221,6 +223,10 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs, c
     }
     if (op_name == "mul_float") {
         return bfloat16(static_cast<float>(lhs) * static_cast<float>(rhs));
+    }
+    if (op_name == "atan2") {
+        // Compute API convention: the first operand is y and the second is x.
+        return bfloat16(std::atan2(static_cast<float>(lhs), static_cast<float>(rhs)));
     }
     if (op_name == "binary_max") {
         return bfloat16(std::max(static_cast<float>(lhs), static_cast<float>(rhs)));
@@ -341,6 +347,11 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto lhs = generate_div_operand(numel, seed);
         auto rhs = generate_div_operand(numel, seed + 1);
         return {lhs, rhs};
+    }
+    if (op_name == "atan2") {
+        return {
+            generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed),
+            generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed + 1)};
     }
     if (op_name == "binary_max" || op_name == "binary_min") {
         auto lhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed);
@@ -967,13 +978,12 @@ std::vector<uint32_t> sfpu_quasar_run(
     const experimental::ProgramRunArgs& params,
     const std::vector<std::pair<std::shared_ptr<tt::tt_metal::Buffer>, const std::vector<uint32_t>*>>& inputs,
     const std::shared_ptr<tt::tt_metal::Buffer>& out_buf) {
-    auto* device = mesh_device->get_devices()[0];
     auto program = experimental::MakeProgramFromSpec(*mesh_device, spec);
     experimental::SetProgramRunArgs(program, params);
     for (const auto& [buf, data] : inputs) {
         tt_metal::detail::WriteToBuffer(buf, *data);
     }
-    tt_metal::detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
     std::vector<uint32_t> dest;
     tt_metal::detail::ReadFromBuffer(out_buf, dest);
     return dest;
@@ -1045,6 +1055,8 @@ bool run_sfpu_binary_two_input_buffer(
         }
     } else if (test_config.sfpu_op == "binary_max" || test_config.sfpu_op == "binary_min") {
         sfpu_defines["SFPU_OP_BINARY_MAX_MIN_INCLUDE"] = "1";
+    } else if (test_config.sfpu_op == "atan2") {
+        sfpu_defines["SFPU_OP_BINARY_ATAN2_INCLUDE"] = "1";
     } else {
         sfpu_defines["SFPU_OP_BINARY_DIV_INCLUDE"] = "1";
     }
@@ -1868,6 +1880,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         std::make_tuple(1, "div_binary"),
         std::make_tuple(1, "mul_float"),
+        std::make_tuple(1, "atan2"),
         std::make_tuple(1, "add_int"),
         std::make_tuple(1, "mul_int"),
         std::make_tuple(1, "gt_int"),

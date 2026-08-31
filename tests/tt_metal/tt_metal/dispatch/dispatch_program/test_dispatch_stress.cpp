@@ -136,7 +136,6 @@ TEST(DispatchStress, TensixRunManyTimes) {
 
         // Run the test on each device
         for (auto& device : devices_) {
-            log_info(LogTest, "Running on device {}", device->get_devices()[0]->id());
             RunTest(device);
         }
 

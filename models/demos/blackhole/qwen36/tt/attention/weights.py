@@ -16,6 +16,10 @@ class AttentionWeights:
 
 
 def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> AttentionWeights:
+    # On a multi-device mesh, weights replicate (the MTP drafter head runs this
+    # single-device attention fully replicated on TP). No-op on one device.
+    mesh_kwargs = dict(mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)) if mesh_device.get_num_devices() > 1 else {}
+
     def load_2d(name):
         t = state_dict[f"{name}.weight"].T.contiguous()
         return ttnn.as_tensor(
@@ -25,6 +29,7 @@ def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> A
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"self_attn.{name}.weight") if tensor_cache_path else None,
+            **mesh_kwargs,
         )
 
     def load_norm(name):
@@ -36,6 +41,7 @@ def load_attention_weights(mesh_device, state_dict, tensor_cache_path=None) -> A
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=(tensor_cache_path / f"self_attn.{name}.weight_offset") if tensor_cache_path else None,
+            **mesh_kwargs,
         )
 
     return AttentionWeights(

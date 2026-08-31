@@ -17,6 +17,9 @@ struct LayerNormPreAllGatherParams {
     DeviceComputeKernelConfig compute_kernel_config;
     LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
+    // Float32 only: false (default) keeps the stats accurate on the SFPU, true takes the faster
+    // FPU path that rounds inputs to tf32.
+    bool fast_and_approximate_mode = false;
 };
 
 struct LayerNormPreAllGatherInputs {

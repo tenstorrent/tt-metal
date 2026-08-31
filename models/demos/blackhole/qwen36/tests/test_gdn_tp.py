@@ -41,6 +41,9 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
 )
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    recurrent_gated_delta_rule_decode_ttnn,
+)
 
 
 def _pf_in(mesh_device, args, t):
@@ -122,6 +125,77 @@ def test_gdn_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     out2_t = ttnn.to_torch(out2, mesh_composer=tp_composer(mesh_device))
     assert not torch.isnan(out2_t).any() and out2_t.abs().max() > 0
     logger.info("PASSED: GDN TP decode (pos0 PCC + pos1 shape/NaN)")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("high_precision", [pytest.param(True, id="fp32"), pytest.param(False, id="bf16")])
+def test_gdn_tp_decode_recurrence_state(mesh_device, high_precision, reset_seeds, ensure_gc, request):
+    """Multi-step T=1 decode: output AND recurrent state vs a torch reference each step.
+
+    ``test_gdn_tp`` validates pos0 only, where the recurrent state is zero and the
+    state-decay multiply (h * exp(g), fused as an EXP pre-activation on the multiply)
+    is invisible. This test drives ``recurrent_gated_delta_rule_decode_ttnn`` — the
+    exact T=1 function ``forward_decode`` dispatches to — for several steps from a
+    NONZERO initial state, checking both the step output and the carried state, so a
+    broken decay (or an ignored fused activation) collapses the PCC immediately.
+    fp32 mirrors the TP default (``high_precision=True``); bf16 covers the
+    ``QWEN35_GDN_DECODE_BF16=1`` fallback.
+    """
+    B, H, K, V = 2, 8, 128, 128
+    steps = 4
+    # One threshold per node via pcc_thresholds.json; fp32/bf16 defaults differ (bf16
+    # accumulates state quantization error over the 4 steps).
+    thr = get_pcc_threshold(request, default=0.9999 if high_precision else 0.99)
+
+    # Pre-quantize inputs to bf16 so device and reference consume identical values —
+    # the remaining error is device math, not input rounding.
+    def _bf16(t):
+        return t.to(torch.bfloat16).float()
+
+    q = _bf16(torch.randn(steps, B, H, K))
+    k = _bf16(torch.randn(steps, B, H, K))
+    v = _bf16(torch.randn(steps, B, H, V))
+    beta = _bf16(torch.sigmoid(torch.randn(steps, B, H)))
+    g = _bf16(-F.softplus(torch.randn(steps, B, H)))  # log-decay <= 0, exp(g) in (0,1]
+    h0 = _bf16(torch.randn(B, H, K, V))  # nonzero: decay must actually act on it
+
+    state_dtype = ttnn.float32 if high_precision else ttnn.bfloat16
+    h_tt = replicate_to_device(mesh_device, h0, dtype=state_dtype)
+    h_ref = h0.clone()
+
+    def _first_shard(t):
+        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+    for s in range(steps):
+        o_tt, h_tt = recurrent_gated_delta_rule_decode_ttnn(
+            replicate_to_device(mesh_device, q[s].reshape(B, 1, H, K)),
+            replicate_to_device(mesh_device, k[s].reshape(B, 1, H, K)),
+            replicate_to_device(mesh_device, v[s].reshape(B, 1, H, V)),
+            replicate_to_device(mesh_device, beta[s].reshape(B, 1, H)),
+            replicate_to_device(mesh_device, g[s].reshape(B, 1, H)),
+            initial_state=h_tt,
+            device=mesh_device,
+            high_precision=high_precision,
+        )
+
+        # ---- torch reference: mirrors the ttnn function step-for-step ----
+        qh = F.normalize(q[s], dim=-1) * (K**-0.5)  # [B,H,K]
+        kh = F.normalize(k[s], dim=-1)
+        h_ref = h_ref * torch.exp(g[s])[..., None, None]  # decay BEFORE read
+        v_read = kh.unsqueeze(-2) @ h_ref  # [B,H,1,V]
+        delta = v[s].unsqueeze(-2) - v_read
+        h_ref = h_ref + beta[s][..., None, None] * (kh.unsqueeze(-1) @ delta)
+        o_ref = (qh.unsqueeze(-2) @ h_ref).reshape(B, H, V)
+
+        o_t = _first_shard(o_tt).reshape(B, H, V)
+        pcc_o = compute_pcc(o_ref, o_t)
+        pcc_h = compute_pcc(h_ref, _first_shard(h_tt))
+        logger.info(f"step {s}: out PCC={pcc_o:.6f} state PCC={pcc_h:.6f}")
+        assert pcc_o >= thr, f"step {s} output PCC {pcc_o:.6f} < {thr}"
+        assert pcc_h >= thr, f"step {s} state PCC {pcc_h:.6f} < {thr}"
+
+    logger.info(f"PASSED: GDN TP decode recurrence ({steps} steps, {'fp32' if high_precision else 'bf16'})")
 
 
 @torch.no_grad()

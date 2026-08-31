@@ -20,6 +20,9 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 class Qwen36ModelArgs(ModelArgs):
     """Qwen3.5-9B ModelArgs for Blackhole P150."""
 
+    # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
+    SUPPORTS_KV_REPLICATION = True
+
     def __init__(
         self,
         mesh_device=None,
@@ -77,6 +80,12 @@ class Qwen36ModelArgs(ModelArgs):
         self.attention_type_list = getattr(text_config, "layer_types", None) or (
             ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8
         )
+
+        # MTP (multi-token prediction) head, present on the 3.8 checkpoints. The backbone
+        # never reads mtp.* weights; tt/mtp.py loads them from safetensors when spec decode
+        # is enabled. mtp_use_dedicated_embeddings=False => the head shares embed + lm_head.
+        self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
 
         # Derived
         self.linear_q_dim = self.linear_num_key_heads * self.linear_key_head_dim
@@ -350,8 +359,14 @@ class Qwen36ModelArgs(ModelArgs):
         # that tradeoff without T3K L1-budget measurements of its own. Don't revert this to
         # is_blackhole() without measuring T3K's actual grid/L1 headroom first.
         self._prefill_grid = tpc.prefill_grid_default()
+        self.prefill_tuning = tpc.prefill_tuning(tp)
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
-            seq_len, k, n, grid_size=self._prefill_grid, halve_out_block=tpc.wh_9b_n300(self)
+            seq_len,
+            k,
+            n,
+            grid_size=self._prefill_grid,
+            halve_out_block=tpc.wh_9b_n300(self),
+            tuning=self.prefill_tuning,
         )
         # WORMHOLE ONLY: dedicated one-K-pass factory for the GDN in-projection, paired with
         # COMPUTE_HIFI2_NO_FP32_ACC (gdn/tp.py's _col_proj passes both together — the blocking is only

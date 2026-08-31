@@ -83,6 +83,9 @@ void kernel_main() {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
+                // Hoist the (run-invariant) divisions out of the tile advance.
+                const auto steps_worker = decompose_tile_advance(
+                    effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
 
                 // Same slice_idx pattern as the reader, but starting at i=1 (skipping
                 // the read-only i=0 pass that the compute kernel does not participate in).
@@ -106,8 +109,7 @@ void kernel_main() {
                             tile_row_in_mm_M_unit_block,
                             chunk_col_in_tiles,
                             mm_core_idx,
-                            effective_worker_id,
-                            effective_subchunk_size,
+                            steps_worker,
                             effective_chunk_width_in_tiles,
                             current_mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(

@@ -29,6 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+#include "hostdev/debug_ring_buffer_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -70,6 +71,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
 #elif defined(COMPILE_FOR_DRISC)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::COUNT);
+#elif defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcessorTypes::COUNT);
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
@@ -161,7 +164,12 @@ struct kernel_config_msg_t {
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2[3];  // CODEGEN:skip
+    volatile uint8_t pad2;     // CODEGEN:skip — align cross_node_dfb_offset
+    // Byte offset of CrossNodeDFB kernel-config region from kernel_config_base.
+    // CROSS_NODE_DFB_OFFSET_NONE (0xFF) means no CrossNodeDFBs on this launch.
+    // Valid offsets are L1-aligned and therefore never equal 0xFF. Region layout:
+    //   word[0] = num_slots; then dense [config_page_addr, entry_size, relay_dfb_id] slots.
+    volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
     volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
@@ -196,6 +204,7 @@ static_assert(offsetof(kernel_config_msg_t, kernel_config_base) % sizeof(uint32_
 static_assert(offsetof(kernel_config_msg_t, sem_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, cross_node_dfb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
@@ -301,12 +310,8 @@ struct debug_pause_msg_t {
 // Needs to be 32b-divisible, since the host clears pause flags from host using read_core()/write_core().
 static_assert(sizeof(debug_pause_msg_t) % sizeof(uint32_t) == 0);
 
-constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
-constexpr static int DEBUG_RING_BUFFER_SIZE = DEBUG_RING_BUFFER_ELEMENTS * sizeof(uint32_t);
 struct debug_ring_buf_msg_t {
-    int16_t current_ptr;
-    uint16_t wrapped;
-    uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
+    uint8_t data[debug_ring_buf_size];
 };
 
 struct debug_stack_usage_per_cpu_t {
@@ -440,6 +445,9 @@ static_assert(decltype(DevicePrintMemoryLayout::buffer)::processor_count == PROC
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
+// debug_ring_buf is a byte array reinterpreted as 4-byte fields, and on Blackhole its head is the
+// target of an atomic, which traps if misaligned.
+static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 

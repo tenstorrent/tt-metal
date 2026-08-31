@@ -251,7 +251,9 @@ class Qwen36DecoderLayer:
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
         valid_len=None,
+        valid_masks=None,
         gdn_collect=False,
+        kv_update_positions=None,
     ):
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
@@ -336,7 +338,12 @@ class Qwen36DecoderLayer:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)
                 else:
                     attn_output = self.attention.forward_decode(
-                        attn_input, position_tensor, cos, sin, page_table=page_table
+                        attn_input,
+                        position_tensor,
+                        cos,
+                        sin,
+                        page_table=page_table,
+                        kv_update_positions=kv_update_positions,
                     )
             else:
                 # GDN carries its recurrent/conv state internally (capture_state on
@@ -350,7 +357,11 @@ class Qwen36DecoderLayer:
                         )
                     else:
                         attn_output = self.attention.forward_prefill(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                            attn_input,
+                            chunk_size=chunk_size,
+                            valid_len=valid_len,
+                            capture_state=True,
+                            valid_masks=valid_masks,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)

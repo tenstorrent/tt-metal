@@ -10,14 +10,8 @@ on:
         type: choice
         options:
           - all
-          - sentence_bert
-          - sd35
-          - flux1
-          - motif
           - wan22
-          - mochi
           - deepseek_v3
-          - qwenimage
       platform:
         required: false
         type: choice
@@ -54,6 +48,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -66,6 +61,7 @@ jobs:
       build-inplace-wheel: true
   galaxy-demo-tests:
     needs: [check-harbor, build-artifact]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
