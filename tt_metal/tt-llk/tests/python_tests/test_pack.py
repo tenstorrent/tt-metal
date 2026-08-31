@@ -152,10 +152,13 @@ def test_pack(
             + str(relu_type)
         )
 
+    # Perf folds RELU_CONFIG into the ELF under --speed-of-light. Compile-producer
+    # replaces PackGolden with zeros, so a threshold from torch.mean(golden) hashes a
+    # different variant than compile-consumer (missing unpack.elf / riscv-tt-elf-size).
     tensor_average = (
-        torch.mean(golden_tensor).item()
-        if not formats.output_format.is_integer()
-        else 0.0
+        0.0
+        if is_perf or formats.output_format.is_integer()
+        else torch.mean(golden_tensor).item()
     )
 
     relu_config = PackGolden.generate_relu_config(
