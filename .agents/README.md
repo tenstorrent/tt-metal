@@ -9,9 +9,19 @@ It has three parts:
 ```text
 .agents/
   prompts/model_bringup_multigoal/   # the eleven stage goals, one prompt file each
+  prompts/diffusion_bringup_multigoal/  # the ten stage goals for diffusion models
   skills/                            # the knowledge the agent works from
-  scripts/multigoal                  # the runner that chains the stages together
+  scripts/multigoal                  # runner (Codex app-server backend)
+  scripts/multigoal-claude           # runner (Claude Code backend), same flags
 ```
+
+Two interchangeable runners drive the same prompts and skills: `scripts/multigoal`
+(the Codex app-server backend) and `scripts/multigoal-claude` (the Claude Code
+port). They share the runner-side logic: manifest, stage checks, resume, and gate
+policy. Pick whichever agent backend you have. The Claude runner adds
+`--model`, `--effort`, `--permission-mode`, `--claude-bin`, and
+`--claude-config-dir`, and has no objective length cap. Everything below applies
+to both unless noted.
 
 ## Quick Start
 
@@ -36,6 +46,21 @@ That runs all eleven stages back to back. Expect a full bringup to take several
 hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
 underscores.
+
+To use the Claude Code backend instead, swap the runner. It needs no extra
+Python packages, only the `claude` CLI on `PATH` and authenticated:
+
+```bash
+python .agents/scripts/multigoal-claude \
+  --replace HF_MODEL=org/Your-Model-Here \
+  --replace MODEL_DIR=models/autoports/org_your_model_here \
+  .agents/prompts/model_bringup_multigoal/*.txt
+```
+
+The Claude runner strips `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` from the
+agent environment so an ambient key cannot silently move a multi-hour run onto
+metered billing ahead of the subscription login. Point it at a specific login
+with `--claude-config-dir`.
 
 ## How It Works
 
@@ -155,6 +180,40 @@ One sharp edge worth knowing: the agent backend caps a goal's objective at
 prompt up front so a too-long prompt fails at launch rather than hours in, and
 `scripts/check_agent_prompt_lengths.py` (wired into pre-commit) measures the
 same invariant when editing prompts.
+
+## Other Tracks
+
+`prompts/model_bringup_multigoal/` is for autoregressive LLM decoders. Two other
+pipelines share the same runners, prompts format, and gate convention:
+
+- **`prompts/diffusion_bringup_multigoal/`** brings up a diffusion model
+  (image, video, or audio DiT plus VAE plus text encoder) in `models/tt_dit/`.
+  Diffusion has no KV cache, no paged decode, and no token loop, so the LLM
+  stages do not apply. Ten stages: one DiT block, full DiT, text encoder, video
+  VAE, audio VAE, scheduler, full pipeline, multichip, optimize, datatype sweep.
+  Its own skills are the `diffusion-*` ones plus `$functional-dit-block`,
+  `$adaln-conditioning`, `$multiaxis-rope`, `$text-encoder-port`, `$vae-port`,
+  and `$denoise-loop-scheduler`. See that directory's `README.md`.
+- **`prompts/forge_goals/`** starts a decoder bringup from compiler output
+  instead of from scratch: `01-forge-functional-decoder-from-emit.txt` from a
+  pre-generated EmitPy emit, and `02-forge-functional-decoder-from-ir.txt` from a
+  TTNN IR (`.mlir`) dump via `$forge-functional-decoder-from-ir`. Both are
+  drop-in replacements for stage 01.
+
+### Gates shipped inactive
+
+Two check scripts are present but named `*.check.sh.disabled` so the runner does
+not pick them up. Each needs something before it can be trusted. Drop the
+`.disabled` suffix to activate.
+
+- `03-optimized-decoder.check.sh.disabled` requires the stage to have run
+  `$shard-advise` and captured `report.json` plus `final_ir.mlir`. Activating it
+  makes the sharding advisor mandatory, which needs the separate tt-mlir setup in
+  `skills/shard-advise/SETUP.md`.
+- `08-datatype-sweep.check.sh.disabled` expects the sweep to run *after* the TTI
+  release stage: it requires `doc/tti_release/post_release_sweep_benchmark.json`.
+  In the stage order above the sweep runs at 08 and release at 11, so that
+  handoff does not exist yet. Reorder the stages or relax the check first.
 
 ## Extending It
 
