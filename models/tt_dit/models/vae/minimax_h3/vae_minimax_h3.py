@@ -466,10 +466,10 @@ class MiniMaxH3Vae(Module):
         profile = self._profile
 
         def prepare(unit: torch.Tensor) -> torch.Tensor:
-            x = unit.permute(0, 2, 3, 4, 1).contiguous()
-            if x.shape[-1] < in_channels:
-                x = torch.nn.functional.pad(x, (0, in_channels - x.shape[-1]))
-            return x
+            # Channel-last only -- the pad to `in_channels` happens on device, below. Padding here
+            # would inflate the upload >10x (3 -> 32 channels of fp32) and the host_prep with it;
+            # the device pad is bit-exact against the host pad and nearly free next to the DMA.
+            return unit.permute(0, 2, 3, 4, 1).contiguous()
 
         results: list[torch.Tensor] = []
         for start in range(0, len(units), wave_size):
@@ -491,6 +491,15 @@ class MiniMaxH3Vae(Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
+            if batch.shape[-1] < in_channels:
+                # Zero-pad the channel axis to conv_in's tile alignment on device (the padded
+                # weight channels are zeros, so any fill works; zero matches the host pad
+                # bit-for-bit). Same move as pipeline_wan_i2v's conditioning upload.
+                padded_device = ttnn.pad(
+                    x_device, [(0, 0), (0, 0), (0, 0), (0, 0), (0, in_channels - batch.shape[-1])], value=0.0
+                )
+                ttnn.deallocate(x_device)
+                x_device = padded_device
             profile["upload"] += time.perf_counter() - mark
             profile["upload_mb"] = profile.get("upload_mb", 0.0) + batch.numel() * batch.element_size() / 1e6
 
