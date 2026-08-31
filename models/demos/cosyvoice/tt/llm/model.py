@@ -350,38 +350,47 @@ class TtTransformerLM:
             win_size=cfg.get("win_size", 10),
             tau_r=cfg.get("tau_r", 0.1),
         )
-        for i in range(cap):
-            logp = torch.log_softmax(logits, dim=-1)
-            if i < min_len:
-                # EOS is suppressed until the utterance is long enough for the text
-                logp[self.eos_token] = -float("inf")
-            token = sample(logp) if sample is not None else ras_sampling(logp, out, **cfg_kw)
-            if token == self.eos_token:
-                break
-            out.append(token)
-            if on_token is not None:
-                on_token(token, len(out) - 1)
+        # **`try`/`finally`, because a leaked trace does not just leak.** If
+        # anything in this loop raises -- a sampler edge case, an `on_token`
+        # callback, a device error -- an unreleased trace stays live on the device
+        # for whatever runs next. This port has measured what that costs twice
+        # over: work that allocates beside a live trace can have its buffers
+        # silently corrupted, and at whole-utterance scale it hangs the board
+        # outright on Wormhole. So the release is unconditional, and the caches
+        # are freed on the same terms.
+        try:
+            for i in range(cap):
+                logp = torch.log_softmax(logits, dim=-1)
+                if i < min_len:
+                    # EOS is suppressed until the utterance is long enough for the text
+                    logp[self.eos_token] = -float("inf")
+                token = sample(logp) if sample is not None else ras_sampling(logp, out, **cfg_kw)
+                if token == self.eos_token:
+                    break
+                out.append(token)
+                if on_token is not None:
+                    on_token(token, len(out) - 1)
 
-            # Logits are read in the SAME iteration that produces them, rather than
-            # carried to the next. The traced path writes into one persistent output
-            # buffer, so holding a reference across a step is a lifetime question
-            # that does not need to exist.
-            row = self.speech_embedding_host[token].reshape(1, 1, -1)
+                # Logits are read in the SAME iteration that produces them, rather than
+                # carried to the next. The traced path writes into one persistent output
+                # buffer, so holding a reference across a step is a lifetime question
+                # that does not need to exist.
+                row = self.speech_embedding_host[token].reshape(1, 1, -1)
+                if traced is not None:
+                    ys = traced.step(row, prefix_len + len(out))
+                    ttnn.synchronize_device(self.device)
+                    logits = self.logits_for_last(ys)
+                else:
+                    ys, caches = self.decode_step(token, caches, max_len, prefix_len + len(out))
+                    logits = self.logits_for_last(ys)
+                    ttnn.deallocate(ys)
+        finally:
             if traced is not None:
-                ys = traced.step(row, prefix_len + len(out))
-                ttnn.synchronize_device(self.device)
-                logits = self.logits_for_last(ys)
+                # `ys` is the trace's persistent output buffer -- released with
+                # the trace, not separately.
+                traced.release()
             else:
-                ys, caches = self.decode_step(token, caches, max_len, prefix_len + len(out))
-                logits = self.logits_for_last(ys)
-                ttnn.deallocate(ys)
-
-        if traced is not None:
-            # `ys` is the trace's persistent output buffer -- released with the
-            # trace, not separately.
-            traced.release()
-        else:
-            TtARDecoder.free_caches(caches)
+                TtARDecoder.free_caches(caches)
         return out
 
     # ----------------------------------------------------------------------
