@@ -39,6 +39,7 @@ struct MatmulDecodeParams {
     std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec> packed_weight = std::nullopt;
     bool all_gather = false;
     uint32_t ring_size = 1;
+    bool ring_gather = false;
 };
 
 struct MatmulDecodeInputs {

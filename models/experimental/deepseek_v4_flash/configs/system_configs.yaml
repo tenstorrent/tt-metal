@@ -137,12 +137,19 @@ profiles:
       #            hang rather than merely slow down
       # env: DEEPSEEK_V4_FUSE_QA_KV (0/1/auto)
       fuse_qa_kv_proj: false
-      # Keep that fused q_a/kv projection weight resident in L1 (~55 KB/core at
-      # bf4) instead of re-copying it from DRAM per call. Only reachable when
-      # fuse_qa_kv_proj resolves true. Note it competes with SDPA's static
-      # reduction CBs, so raising sdpa_max_cores_per_head_batch may need this off.
-      # env: DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1
+      # Keep the q_a and kv projection weights resident in L1 instead of
+      # re-copying them from DRAM per call. Applies to the fused concatenated
+      # weight when fuse_qa_kv_proj is on, and to each unfused projection when
+      # it is off (including TP-sharded q_a/kv). Note it competes with SDPA's
+      # static reduction CBs, so raising sdpa_max_cores_per_head_batch may need
+      # this off. env: DEEPSEEK_V4_KEEP_WEIGHTS_IN_L1
       keep_qa_kv_weights_in_l1: false
+      # How q_a and kv are partitioned when tp_size > 1. Ignored at TP1.
+      #   fused_replicated_full — one concatenated matmul, replicated on every rank
+      #   balanced              — each projection N-sharded, then all-gather
+      #   fused_balanced / fused_replicated / dedicated / replicated — see attention.py
+      # env: DEEPSEEK_V4_QKV_TP_STRATEGY
+      qkv_tp_strategy: fused_replicated_full
 
     decode:
       # On-device weight precision for the whole stack.
@@ -209,18 +216,19 @@ profiles:
   # ------------------------------------------------------------------------- #
   # galaxy32 -- 32x Blackhole (Galaxy). STARTING POINT, NOT A MEASURED TUNE.
   #
-  # Important: with the pipeline-parallel-only implementation, 32 chips does not
-  # by itself improve tok/s/user -- per-token latency is the sum of all 43
-  # layers' compute wherever those layers live, and 4x more chips means ~1-2
-  # layers per chip plus ~31 socket hops instead of ~5 layers and 7 hops. What
-  # 32 chips does buy immediately is capacity: ~4x the DRAM for KV cache, hence
-  # the much larger context and user counts below.
+  # The 32-chip decode demo / CLI default to eight 1x4 tensor-parallel stages
+  # (tp_size=4). Under that layout, q_a and kv stay unfused: each is N-sharded
+  # across the four ranks, all-gathered, and left resident in L1 (see
+  # ``attention`` below). Expert-parallel sharding of the 256 routed experts
+  # (64 per chip of a stage) is still not here; when it is, it belongs as an
+  # ``expert_parallel`` block rather than as new hardcoded constants.
   #
-  # Turning the extra chips into per-user speed needs intra-stage tensor/expert
-  # parallelism (8 pipeline stages x 4-chip submeshes with the 256 experts
-  # sharded 64-per-chip), which is not implemented yet. When it is, it belongs
-  # here as a `tensor_parallel` / `expert_parallel` block rather than as new
-  # hardcoded constants.
+  # Pipeline-parallel-only (tp_size=1) still does not by itself improve
+  # tok/s/user -- per-token latency is the sum of all 43 layers' compute
+  # wherever those layers live, and 4x more chips means ~1-2 layers per chip
+  # plus ~31 socket hops instead of ~5 layers and 7 hops. What 32 chips does
+  # buy immediately is capacity: ~4x the DRAM for KV cache, hence the much
+  # larger context and user counts below.
   # ------------------------------------------------------------------------- #
   galaxy32:
     extends: base
@@ -241,13 +249,24 @@ profiles:
       # Each chip holds far fewer layers, so its DRAM read stream per step is
       # shorter and a deeper ring has more slack to hide the hops. Retune with
       # tools/analyze_profile.py: too deep starves the activation multicast.
-      num_prefetch_pages: 24
+      num_prefetch_pages: 16
 
     moe:
       # Same per-chip L1 budget as the 8-chip system (L1 is per chip), so the
       # same block size. Once experts are sharded across a stage this can rise:
       # 64 resident experts per chip means fewer hits per chip per token.
       experts_block_size: 2
+
+    attention:
+      # Unfused q_a and kv, each N-sharded across the stage's 4 TP ranks
+      # (q_a [4096, 256] on 8x8 cores, kv [4096, 128] on 16x4, both 64 B cores)
+      # with an all-gather before the replicated RMSNorm. Prefetched through
+      # HC_FN_GCB (8-tile page); they cannot join the shared 32-tile decode ring.
+      # Fusion is off: a concatenated 1536-wide matmul cannot share a
+      # page size with the decode GCB.
+      fuse_qa_kv_proj: false
+      qkv_tp_strategy: balanced
+      keep_qa_kv_weights_in_l1: false
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.

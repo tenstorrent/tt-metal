@@ -18,7 +18,8 @@ Tensor matmul_decode(
     uint32_t global_cb_k_blocks,
     const std::optional<PackedWeightSpec>& packed_weight,
     bool all_gather,
-    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords) {
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords,
+    bool ring_gather) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -29,7 +30,8 @@ Tensor matmul_decode(
         global_cb_k_blocks,
         packed_weight,
         all_gather,
-        mesh_coords);
+        mesh_coords,
+        ring_gather);
 }
 
 }  // namespace ttnn::experimental

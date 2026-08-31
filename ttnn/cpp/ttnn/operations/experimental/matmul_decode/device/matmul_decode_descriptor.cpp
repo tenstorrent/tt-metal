@@ -37,6 +37,7 @@ RealOp::operation_attributes_t to_real_attributes(const MatmulDecodeParams& p) {
         p.packed_weight,
         p.all_gather,
         p.ring_size,
+        p.ring_gather,
     };
 }
 
