@@ -61,7 +61,7 @@ class MistralSmall4Config:
     KV_LORA_RANK = 256
     QK_NOPE_HEAD_DIM = 64
     QK_ROPE_HEAD_DIM = 64
-    QK_HEAD_DIM = 128  # qk_nope_head_dim + qk_rope_head_dim; == head_dim
+    QK_HEAD_DIM = QK_NOPE_HEAD_DIM + QK_ROPE_HEAD_DIM  # == head_dim
     V_HEAD_DIM = 128
 
     # Norm / RoPE
