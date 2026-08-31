@@ -89,7 +89,31 @@ class StreamConfig:
 
 @dataclass
 class StreamState:
-    """Everything carried between chunks. All device tensors."""
+    """Everything carried between chunks, held **on the host** between them.
+
+    Each field is a `(torch tensor, ttnn dtype)` pair rather than a device tensor, and
+    that is a correctness requirement rather than a memory one.
+
+    **A device buffer carried across a chunk boundary can be corrupted by a trace.**
+    When the caller is interleaving -- running this synthesizer from inside the AR
+    decode loop, which is the whole point of `StreamSession` -- there is a captured
+    trace executing between one chunk and the next, and TTNN says plainly what that
+    costs: *"Allocating device buffers is unsafe due to the existence of an active
+    trace. These buffers may be corrupted once a trace is executed."*
+
+    It was measured, not inferred. Interleaved synthesis produced a first chunk that
+    matched the non-interleaved reference to PCC `0.99999994`, and a second chunk whose
+    mel was *bit-identical* (PCC `1.0`) but whose waveform scored PCC `0.011` and peaked
+    at `10.9` against a correct `0.001`. Identical mel and destroyed audio localises it
+    exactly: not the flow decoder, not the vocoder's arithmetic, but the four tensors
+    this class carries between the two.
+
+    Parking them on the host costs a round trip of about 50 KB per seam -- the two
+    excitation caches are `source_cache_len` samples and the two mel caches a few tens
+    of frames -- against a chunk that takes hundreds of milliseconds. `to_torch` and
+    `from_torch` at the same dtype are lossless, so the non-interleaved path is
+    numerically unchanged; `test_device_streamed_matches_non_streamed` gates that.
+    """
 
     mel_overlap: object | None = None  # [1, mel_overlap_len, 80]
     hift_mel: object | None = None  # [1, mel_cache_len, 80]
@@ -98,9 +122,7 @@ class StreamState:
     emitted: list = field(default_factory=list)
 
     def free(self):
-        for t in (self.mel_overlap, self.hift_mel, self.hift_source, self.hift_speech):
-            if t is not None:
-                ttnn.deallocate(t)
+        """Nothing device-side is held, so this only drops the host references."""
         self.mel_overlap = self.hift_mel = self.hift_source = self.hift_speech = None
 
 
@@ -130,6 +152,23 @@ class TtStreamingSynthesizer:
 
     def _dev(self, v, dtype=None):
         return ttnn.from_torch(v, dtype=dtype or self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+    # ----------------------------------------------------------------------
+    @staticmethod
+    def _park(t):
+        """Read a carried tensor back to the host and free its device buffer.
+
+        See `StreamState` for why nothing device-side survives a chunk boundary. The
+        dtype travels with the data so the return trip is lossless.
+        """
+        parked = (ttnn.to_torch(t), t.dtype)
+        ttnn.deallocate(t)
+        return parked
+
+    def _unpark(self, parked):
+        """Put a parked tensor back on device, in the dtype it left in."""
+        host, dtype = parked
+        return ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
 
     # ----------------------------------------------------------------------
     @staticmethod
@@ -165,18 +204,20 @@ class TtStreamingSynthesizer:
         cfg = self.cfg
 
         if state.mel_overlap is not None:
-            faded = self._fade(mel, state.mel_overlap, self._mel_in, self._mel_out, cfg.mel_overlap_len)
+            prev = self._unpark(state.mel_overlap)
+            faded = self._fade(mel, prev, self._mel_in, self._mel_out, cfg.mel_overlap_len)
             ttnn.deallocate(mel)
-            ttnn.deallocate(state.mel_overlap)
+            ttnn.deallocate(prev)
             state.mel_overlap = None
             mel = faded
 
         # Prepend the vocoder's mel context. Without it the left edge of every
         # chunk is decoded with the wrong receptive-field content.
         if state.hift_mel is not None:
-            joined = ttnn.concat([state.hift_mel, mel], dim=1)
+            prev = self._unpark(state.hift_mel)
+            joined = ttnn.concat([prev, mel], dim=1)
             ttnn.deallocate(mel)
-            ttnn.deallocate(state.hift_mel)
+            ttnn.deallocate(prev)
             state.hift_mel = None
             mel = joined
             mel_frames += cfg.mel_cache_len
@@ -184,32 +225,34 @@ class TtStreamingSynthesizer:
         if not finalize:
             # Hold back the last mel_overlap_len frames for the next chunk's fade.
             keep = mel_frames - cfg.mel_overlap_len
-            state.mel_overlap = self._tail(mel, cfg.mel_overlap_len)
+            state.mel_overlap = self._park(self._tail(mel, cfg.mel_overlap_len))
             trimmed = self._head(mel, keep)
             ttnn.deallocate(mel)
             mel, mel_frames = trimmed, keep
 
         phase, noise_unit = rng(mel_frames)
+        cache_source = self._unpark(state.hift_source) if state.hift_source is not None else None
         wav, n_samples, source = self.hift.inference(
             mel,
             mel_frames,
             phase_vec=self._dev(phase, ttnn.float32),
             sine_noise_unit=self._dev(noise_unit, ttnn.float32),
-            cache_source=state.hift_source,
+            cache_source=cache_source,
         )
-        if state.hift_source is not None:
-            ttnn.deallocate(state.hift_source)
-            state.hift_source = None
+        if cache_source is not None:
+            ttnn.deallocate(cache_source)
+        state.hift_source = None
         # The mel context for the next chunk is the tail of the mel that was just
         # vocoded -- after the overlap trim, not before -- so it has to be taken
         # here, while `mel` is still alive.
-        next_mel = None if finalize else self._tail(mel, cfg.mel_cache_len)
+        next_mel = None if finalize else self._park(self._tail(mel, cfg.mel_cache_len))
         ttnn.deallocate(mel)
 
         if state.hift_speech is not None:
-            faded = self._fade(wav, state.hift_speech, self._sp_in, self._sp_out, cfg.source_cache_len)
+            prev = self._unpark(state.hift_speech)
+            faded = self._fade(wav, prev, self._sp_in, self._sp_out, cfg.source_cache_len)
             ttnn.deallocate(wav)
-            ttnn.deallocate(state.hift_speech)
+            ttnn.deallocate(prev)
             state.hift_speech = None
             wav = faded
 
@@ -220,9 +263,9 @@ class TtStreamingSynthesizer:
         # Carry the tails; emit everything before them. The held-back speech tail is
         # not lost -- it is what the next chunk crossfades into.
         state.hift_mel = next_mel
-        state.hift_source = self._tail(source, cfg.source_cache_len)
+        state.hift_source = self._park(self._tail(source, cfg.source_cache_len))
         ttnn.deallocate(source)
-        state.hift_speech = self._tail(wav, cfg.source_cache_len)
+        state.hift_speech = self._park(self._tail(wav, cfg.source_cache_len))
         emit = self._head(wav, n_samples - cfg.source_cache_len)
         ttnn.deallocate(wav)
         return emit, n_samples - cfg.source_cache_len
