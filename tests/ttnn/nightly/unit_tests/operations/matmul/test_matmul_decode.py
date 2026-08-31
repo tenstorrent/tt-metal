@@ -77,7 +77,8 @@ def find_subblock(per_core_m, per_core_n):
         (32),
     ],
 )
-def test_matmul_decode(device, m, k, n, num_inputA_cores):
+@pytest.mark.parametrize("ring_gather", [False, True])
+def test_matmul_decode(device, m, k, n, num_inputA_cores, ring_gather):
     torch.manual_seed(0)
     num_inputB_cores = n // 64
     if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
@@ -182,7 +183,7 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
     # Run both ops back-to-back (twice) so a profiler trace captures each for comparison.
     signpost("matmul_decode")
     for _ in range(2):
-        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b)
+        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, ring_gather=ring_gather)
     signpost("ttnn_matmul_gather_in0")
     for _ in range(2):
         mm_output_tensor = ttnn.matmul(
@@ -215,7 +216,8 @@ def test_matmul_decode(device, m, k, n, num_inputA_cores):
         (32),
     ],
 )
-def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks, num_inputA_cores):
+@pytest.mark.parametrize("ring_gather", [False, True])
+def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks, num_inputA_cores, ring_gather):
     torch.manual_seed(0)
     tile_height = get_tile_height(m)
     inputA_tile_size = ttnn.Tile((tile_height, 32))
@@ -286,7 +288,11 @@ def test_matmul_decode_partial_width_sharded(device, m, k, n, k_blocks, n_blocks
         ttnn.ShardSpec(output_core_range_set, [m_padded, n // n_blocks], ttnn.ShardOrientation.ROW_MAJOR),
     )
     output_tensor = ttnn.experimental.matmul_decode(
-        input_tensor_a, input_tensor_b, partial_width_sharded=True, output_mem_config=output_mem_config
+        input_tensor_a,
+        input_tensor_b,
+        partial_width_sharded=True,
+        output_mem_config=output_mem_config,
+        ring_gather=ring_gather,
     )
 
     assert output_tensor.shape == (m, n)
@@ -724,9 +730,314 @@ def test_matmul_decode_batched_width_sharded(device, d0, d1, m, k, n, b_blocks, 
     assert_with_pcc(ref, out, 0.99)
 
 
+# Unique (K, N, layout) used by deepseek_v4_flash decode matmuls. Duplicates are
+# omitted: CSA compressor.gate == q_a_proj, HCA compressor.gate == kv_proj,
+# shared_up_proj == shared_gate_proj, attn_hc.fn == ffn_hc.fn. Packed-L1 cuts that
+# keep the same (K, N) as DECODE_LAYOUTS (e.g. full-width kv / shared_gate) are
+# not listed separately; router_gate and hc.fn exist only on the packed path.
+# See decode_prefetch.DECODE_LAYOUTS and l1_placement._COMMON / _COMPRESSOR.
+_DEEPSEEK_V4_FLASH_MATMUL_DECODE_SHAPES = [
+    pytest.param(1, 4096, 1024, 2, 32, 1, 1, id="q_a_proj"),
+    pytest.param(1, 1024, 32768, 1, 64, 1, 1, id="q_b_proj"),
+    pytest.param(1, 4096, 512, 4, 16, 1, 1, id="kv_proj"),
+    pytest.param(1, 4096, 1536, 4, 16, 1, 1, id="qa_kv_proj"),
+    pytest.param(1, 8192, 4096, 1, 64, 1, 1, id="o_b_proj"),
+    pytest.param(1, 4096, 1024, 1, 8, 8, 8, id="o_a_proj"),
+    pytest.param(1, 4096, 2048, 2, 32, 1, 1, id="shared_gate_up"),
+    pytest.param(1, 2048, 4096, 1, 64, 1, 1, id="shared_down"),
+    pytest.param(1, 4096, 256, 1, 8, 1, 1, id="router_gate"),
+    pytest.param(1, 16384, 32, 32, 1, 1, 1, id="hc_fn"),
+]
+
+# Column-parallel TP4 of the same projections: local N = TP1 N / 4, then
+# all-gather restores N_full so a profiler capture can compare TP1 compute
+# against TP4 compute + collective. n_blocks follows LinearDecode's 64-col
+# shards (capped at 64 cores for q_b). Balanced q_a/kv keep the galaxy32
+# partial-K layout (64 B cores: q_a 8x8, kv 16x4); fused all-gather only covers full-width.
+# Omitted: o_a (batched factory has no all-gather), hc.fn (N=32 is one tile).
+_TP4 = 4
+_DEEPSEEK_V4_FLASH_MATMUL_DECODE_TP4_SHAPES = [
+    pytest.param(1, 4096, 256, 8, 8, 1, 1, id="q_a_proj_tp4"),
+    pytest.param(1, 1024, 8192, 1, 64, 1, 1, id="q_b_proj_tp4"),
+    pytest.param(1, 4096, 128, 16, 4, 1, 1, id="kv_proj_tp4"),
+    pytest.param(1, 4096, 384, 1, 6, 1, 1, id="qa_kv_proj_tp4"),
+    pytest.param(1, 8192, 1024, 1, 16, 1, 1, id="o_b_proj_tp4"),
+    pytest.param(1, 4096, 512, 1, 8, 1, 1, id="shared_gate_up_tp4"),
+    pytest.param(1, 2048, 1024, 1, 16, 1, 1, id="shared_down_tp4"),
+    pytest.param(1, 4096, 64, 1, 1, 1, 1, id="router_gate_tp4"),
+]
+
+
+@pytest.mark.parametrize("m, k, n, k_blocks, n_blocks, batch, b_blocks", _DEEPSEEK_V4_FLASH_MATMUL_DECODE_SHAPES)
+def test_matmul_decode_deepseek_v4_flash_shapes(device, m, k, n, k_blocks, n_blocks, batch, b_blocks, request):
+    """Single-device matmul_decode on every unique DeepSeek-V4-Flash decode shape.
+
+    Activations are bf16 with the decode tile height; weights are bf4, matching the
+    model. Full-width, partial-K, and batched (o_a) layouts each follow the same
+    sharding the corresponding LinearDecode / BatchedLinearDecode path uses.
+    """
+    torch.manual_seed(0)
+    num_inputA_cores = 32
+    if k % (num_inputA_cores * 32) != 0:
+        num_inputA_cores = k // 32
+        assert k % (num_inputA_cores * 32) == 0
+
+    tile_height = get_tile_height(m)
+    inputA_tile_size = ttnn.Tile((tile_height, 32))
+    m_padded = ((m + tile_height - 1) // tile_height) * tile_height
+    is_batched = batch > 1
+    is_partial = (not is_batched) and k_blocks > 1
+
+    if is_batched:
+        num_inputB_cores = b_blocks * n_blocks
+        bc, nc = batch // b_blocks, n // n_blocks
+    elif is_partial:
+        num_inputB_cores = k_blocks * n_blocks
+        kc, nc = k // k_blocks, n // n_blocks
+    else:
+        num_inputB_cores = n_blocks
+        nc = n // n_blocks
+
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y < max(num_inputA_cores, num_inputB_cores):
+        pytest.skip(
+            f"Skipping test as device grid {grid.x}x{grid.y} is smaller than "
+            f"{max(num_inputA_cores, num_inputB_cores)} cores"
+        )
+
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, device)
+    if is_batched:
+        try:
+            input_b_core_range_set = _rectangle_core_range_set(n_blocks, b_blocks, device)
+        except ValueError as exc:
+            pytest.skip(str(exc))
+        torch_a = torch.randn((batch, m, k), dtype=torch.bfloat16)
+        torch_b = torch.randn((batch, k, n), dtype=torch.bfloat16)
+        ref = torch.matmul(torch_a.to(torch.float32), torch_b.to(torch.float32))
+        torch_a_device = torch_a.reshape(1, batch, m, k)
+        torch_b_device = torch_b.reshape(b_blocks, bc, k, n).permute(1, 2, 0, 3).reshape(1, 1, bc * k, b_blocks * n)
+        in0_shard_shape = (batch * m_padded, k // num_inputA_cores)
+        in1_shard_shape = (bc * k, nc)
+        expected_shape = (1, batch, m, n)
+    else:
+        input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, device)
+        torch_a = torch.randn((m, k), dtype=torch.bfloat16)
+        torch_b = torch.randn((k, n), dtype=torch.bfloat16)
+        ref = torch_a.to(torch.float32) @ torch_b.to(torch.float32)
+        torch_a_device = torch_a
+        if is_partial:
+            torch_b_device = torch.permute(torch_b.reshape(k_blocks, kc, n), (1, 0, 2)).reshape(kc, n * k_blocks)
+            in1_shard_shape = (kc, nc)
+        else:
+            torch_b_device = torch_b
+            in1_shard_shape = (k, nc)
+        in0_shard_shape = (m_padded, k // num_inputA_cores)
+        expected_shape = (m, n)
+
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        in0_shard_shape,
+        core_grid=input_a_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        in1_shard_shape,
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_a_device,
+        layout=ttnn.TILE_LAYOUT,
+        tile=inputA_tile_size,
+        device=device,
+        memory_config=in0_memory_config,
+        dtype=ttnn.bfloat16,
+    )
+    # DRAM then L1: bf4 tilize into a sharded L1 config can fail to allocate on the
+    # largest decode weights (q_b / o_b) if the host path stages a second copy.
+    input_tensor_b = ttnn.to_memory_config(
+        ttnn.from_torch(
+            torch_b_device,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat4_b,
+        ),
+        in1_memory_config,
+    )
+
+    decode_kwargs = {}
+    if is_partial:
+        output_core_range_set = num_cores_to_rectangle_core_range_set(n_blocks, device)
+        decode_kwargs["partial_width_sharded"] = True
+        decode_kwargs["output_mem_config"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(output_core_range_set, [m_padded, n // n_blocks], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+    elif not is_batched:
+        decode_kwargs["output_mem_config"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(input_b_core_range_set, [m_padded, nc], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    # Twice so a profiler trace captures a warm run; signposts split the
+    # parametrized cases when they share one capture. Use idlist[0] (the
+    # pytest.param id) — the full callspec.id also includes auto-generated
+    # mesh/fabric fragments that Tracy truncates.
+    signpost(request.node.callspec._idlist[0])
+    for _ in range(2):
+        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, **decode_kwargs)
+    signpost("stop")
+    assert tuple(output_tensor.shape) == expected_shape
+    out = ttnn.to_torch(output_tensor).float()
+    if is_batched:
+        out = out.reshape(batch, m, n)
+    assert_with_pcc(ref, out, 0.988)
+
+
 def _1x4_line_submesh(mesh_device):
     """Carve a 1x4 ethernet line out of the opened 8x4 galaxy mesh."""
     return mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("m, k, n, k_blocks, n_blocks, batch, b_blocks", _DEEPSEEK_V4_FLASH_MATMUL_DECODE_TP4_SHAPES)
+def test_matmul_decode_deepseek_v4_flash_shapes_tp4(mesh_device, m, k, n, k_blocks, n_blocks, batch, b_blocks, request):
+    """TP4 column-parallel matmul_decode + all-gather on DeepSeek-V4-Flash shapes.
+
+    Each rank owns N columns of the TP1 weight; a fused (full-width) or explicit
+    (partial-K) all-gather concatenates them back to N_full. Same dtypes and
+    signposts as ``test_matmul_decode_deepseek_v4_flash_shapes`` so a profiler
+    capture can compare TP1 vs TP4.
+    """
+    torch.manual_seed(0)
+    assert batch == 1 and b_blocks == 1, "TP4 all-gather path is not batched"
+    mesh_device = _1x4_line_submesh(mesh_device)
+    ring_size = mesh_device.get_num_devices()
+    assert ring_size == _TP4
+    n_local = n
+    n_full = n_local * ring_size
+    is_partial = k_blocks > 1
+    fused_all_gather = not is_partial
+
+    num_inputA_cores = 32
+    if k % (num_inputA_cores * 32) != 0:
+        num_inputA_cores = k // 32
+        assert k % (num_inputA_cores * 32) == 0
+
+    tile_height = get_tile_height(m)
+    inputA_tile_size = ttnn.Tile((tile_height, 32))
+    m_padded = ((m + tile_height - 1) // tile_height) * tile_height
+
+    if is_partial:
+        num_inputB_cores = k_blocks * n_blocks
+        kc, nc = k // k_blocks, n_local // n_blocks
+        output_num_cores = n_blocks
+    else:
+        num_inputB_cores = n_blocks
+        nc = n_local // n_blocks
+        output_num_cores = n_blocks
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    if grid.x * grid.y < max(num_inputA_cores, num_inputB_cores):
+        pytest.skip(
+            f"Skipping test as device grid {grid.x}x{grid.y} is smaller than "
+            f"{max(num_inputA_cores, num_inputB_cores)} cores"
+        )
+
+    torch_a = torch.randn((m, k), dtype=torch.bfloat16)
+    torch_b_full = torch.randn((k, n_full), dtype=torch.bfloat16)
+    ref = torch_a.to(torch.float32) @ torch_b_full.to(torch.float32)
+
+    input_a_core_range_set = num_cores_to_rectangle_core_range_set(num_inputA_cores, mesh_device)
+    input_b_core_range_set = num_cores_to_rectangle_core_range_set(num_inputB_cores, mesh_device)
+    output_core_range_set = num_cores_to_rectangle_core_range_set(output_num_cores, mesh_device)
+
+    if is_partial:
+        torch_b_device = (
+            torch_b_full.reshape(k_blocks, kc, ring_size, n_local)
+            .permute(1, 2, 0, 3)
+            .reshape(kc, ring_size * k_blocks * n_local)
+        )
+        in1_shard_shape = (kc, nc)
+    else:
+        torch_b_device = torch_b_full
+        in1_shard_shape = (k, nc)
+
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        (m_padded, k // num_inputA_cores),
+        core_grid=input_a_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    in1_memory_config = ttnn.create_sharded_memory_config(
+        in1_shard_shape,
+        core_grid=input_b_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=inputA_tile_size,
+        device=mesh_device,
+        memory_config=in0_memory_config,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    input_tensor_b = ttnn.to_memory_config(
+        ttnn.from_torch(
+            torch_b_device,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat4_b,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        ),
+        in1_memory_config,
+    )
+
+    decode_kwargs = {"all_gather": fused_all_gather}
+    if is_partial:
+        decode_kwargs["partial_width_sharded"] = True
+        decode_kwargs["output_mem_config"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(output_core_range_set, [m_padded, nc], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    signpost(request.node.callspec._idlist[0])
+    for _ in range(2):
+        output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b, **decode_kwargs)
+        if not fused_all_gather:
+            all_gather_memory_config = ttnn.create_sharded_memory_config(
+                (m_padded, n_full // output_num_cores),
+                core_grid=output_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            output_tensor = ttnn.all_gather(
+                output_tensor,
+                dim=-1,
+                memory_config=all_gather_memory_config,
+            )
+    signpost("stop")
+
+    assert tuple(output_tensor.shape)[-2:] == (m, n_full)
+    device_outputs = ttnn.get_device_tensors(output_tensor)
+    assert len(device_outputs) == ring_size
+    for device_output in device_outputs:
+        actual = ttnn.to_torch(device_output).float()
+        assert_with_pcc(ref, actual, 0.988)
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)

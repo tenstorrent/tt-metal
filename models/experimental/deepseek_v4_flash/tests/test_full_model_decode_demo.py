@@ -14,10 +14,11 @@ The test has two deployment variants:
 
 * ``pp8_tp1``: eight single-chip pipeline stages (the existing 8-chip path).
 * ``pp8_tp4``: eight 1x4 tensor-parallel stages on a 32-chip Galaxy. Attention
-  uses head-sharded SDPA, sequential local-group O_A and row-parallel O_B; MoE
-  shards the intermediate dimension and all-reduces its output. The DRISC
-  prefetcher stays on (same as TP1) for every projection that still fits the
-  shared GCB.
+  uses unfused q_a/kv, each N-sharded across the 4 ranks then all-gathered,
+  with those weights left in L1; head-sharded SDPA, sequential local-group
+  O_A and row-parallel O_B. MoE shards the intermediate dimension and
+  all-reduces its output. The DRISC prefetcher stays on (same as TP1) for
+  every projection that still fits the shared GCB.
 
 All weights live on device in ``bfloat4_b``. Set ``DEEPSEEK_V4_CACHE_DIR`` to
 reuse the converted ttnn weight tiles across runs, and optionally cap the stack
@@ -267,6 +268,18 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
         assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
         assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
+        if tp_size > 1:
+            attn = model.layers[0].self_attn
+            assert attn.qkv_tp_strategy == "balanced", "galaxy32 TP4 keeps q_a and kv unfused and N-sharded"
+            assert not attn.fused_qa_kv
+            assert attn.q_a_proj.use_prefetcher
+            assert attn.kv_proj.use_prefetcher
+            assert not attn.q_a_proj.keep_weights_in_l1
+            assert not attn.kv_proj.keep_weights_in_l1
+            for proj, k_blocks, n_blocks in ((attn.q_a_proj, 8, 8), (attn.kv_proj, 16, 4)):
+                assert proj.partial_width_sharded
+                assert proj.k_blocks == k_blocks
+                assert proj.n_blocks == n_blocks
         logger.info(
             f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"
         )

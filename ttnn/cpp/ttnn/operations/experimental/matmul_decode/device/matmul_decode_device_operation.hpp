@@ -57,6 +57,9 @@ struct MatmulDecodeDeviceOperation {
         // derived from A's mesh (not a user argument).
         bool all_gather = false;
         uint32_t ring_size = 1;
+        // Gather in0 over a pipelined closed ring on S ∪ C instead of the two-hub gather.
+        // Full- and partial-width L1-resident paths only; ignored unless requested.
+        bool ring_gather = false;
         // Optional subset of mesh coordinates on which to dispatch the
         // matmul. Output storage is still allocated on the complete mesh so a
         // later point-to-point broadcast can populate the inactive ranks.
@@ -134,5 +137,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     uint32_t global_cb_k_blocks = 1,
     const std::optional<ttnn::operations::experimental::matmul_decode::PackedWeightSpec>& packed_weight = std::nullopt,
     bool all_gather = false,
-    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
+    bool ring_gather = false);
 }  // namespace ttnn::prim

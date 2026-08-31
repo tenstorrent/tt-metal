@@ -32,6 +32,9 @@ using PackedWeightSpec = ttnn::operations::experimental::matmul_decode::PackedWe
 // `all_gather`: when true, fabric all-gather of the local N-shard is fused into the same program
 // so every device receives `[..., M, N_local * ring_size]`. The ring is the full mesh of A.
 // Requires a multi-device mesh; mutually exclusive with `global_cb` and the batched factory.
+// `ring_gather`: when true, gather in0 over a pipelined closed ring on S ∪ C instead of the
+// two-hub gather. Full- and partial-width L1-resident paths only (plain or packed_weight);
+// mutually exclusive with `global_cb` and the batched factory. Defaults to false.
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -42,6 +45,7 @@ Tensor matmul_decode(
     uint32_t global_cb_k_blocks = 1,
     const std::optional<PackedWeightSpec>& packed_weight = std::nullopt,
     bool all_gather = false,
-    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt);
+    const std::optional<std::vector<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt,
+    bool ring_gather = false);
 
 }  // namespace ttnn::experimental

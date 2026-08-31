@@ -6,8 +6,14 @@ import torch
 from .common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, width_sharded_l1_config, _signpost
 from .decode_prefetch import (
     DECODE_LAYOUTS,
+    HC_FN_GCB,
+    HC_FN_GCB_PAGES,
+    balanced_qkv_layout,
     check_decode_layout,
     decode_prefetch_page_bytes,
+    ensure_named_gcb,
+    hc_fn_page_bytes,
+    hc_fn_ring_specs,
     make_decode_prefetch_buffers,
 )
 from .layers import (
@@ -955,13 +961,17 @@ class DeepSeekV4Attention(DeepSeekV4Module):
     reference, not by the attention block.
 
     ``tp_size > 1`` expects a 1xTP mesh and replicated hidden/KV inputs.
-    ``qkv_tp_strategy`` controls the two small input projections. The default
-    fuses them into one replicated full-width matmul; balanced N-sharding and
-    dedicated q_a/KV ranks remain available for measured comparisons. Query
-    heads and complete output groups are sharded across the mesh. By default,
-    each local output group uses an ordinary matmul and ``o_b`` is row-parallel:
-    it consumes those local groups directly and all-reduces the full-hidden
-    partials. Column-parallel ``o_b`` remains available as an alternative.
+    ``qkv_tp_strategy`` controls the two small input projections (from the
+    constructor, else ``attention.qkv_tp_strategy`` in the system profile).
+    Galaxy32 uses ``balanced``: q_a and kv stay separate, each N-sharded across
+    the TP ranks, then all-gathered, with the per-rank weights left in L1.
+    ``fused_replicated_full`` (one concatenated matmul, replicated) remains the
+    profile default elsewhere; dedicated ranks are still available for
+    comparisons. Query heads and complete output groups are sharded across the
+    mesh. By default, each local output group uses an ordinary matmul and
+    ``o_b`` is row-parallel: it consumes those local groups directly and
+    all-reduces the full-hidden partials. Column-parallel ``o_b`` remains
+    available as an alternative.
 
     ``use_prefetcher=True`` switches the decode projections that still fit the shared
     64-receiver GCB (q_b, row-parallel o_b, the compressor's kv/gate pair) onto
@@ -999,7 +1009,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         system_config=None,
         packed_weights=None,
         tp_size: int = 1,
-        qkv_tp_strategy: str = "fused_replicated_full",
+        qkv_tp_strategy: Optional[str] = None,
         o_b_tp_strategy: str = "row",
         o_a_tp_strategy: str = "sequential",
     ):
@@ -1041,6 +1051,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         self.row_parallel_o_b = self.o_b_tp_strategy == "row"
         self.o_a_tp_strategy = o_a_tp_strategy if tp_size > 1 else "batched"
         self.sequential_o_a = self.o_a_tp_strategy == "sequential"
+        if qkv_tp_strategy is None:
+            qkv_tp_strategy = sys_cfg.attention.qkv_tp_strategy
         if qkv_tp_strategy not in (
             "fused_balanced",
             "fused_replicated_full",
@@ -1087,20 +1099,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         def projection(name):
             # A restricted matmul cannot consume a mesh-wide prefetch request:
             # pages sent to inactive ranks would never be acknowledged. q_a/kv
-            # therefore use their ordinary transient L1 weight path under TP.
-            # Column-parallel o_b and balanced q_a/kv cut N, so their B-core
-            # count no longer matches the shared 64-receiver GCB. Row-parallel
-            # o_b only cuts K and stays on 64 cores, so it can share that buffer.
+            # therefore use their ordinary L1 weight path under dedicated-rank TP.
+            # Column-parallel o_b cuts N, so its B-core count no longer matches
+            # the shared 64-receiver GCB. Balanced q_a/kv also cannot join that
+            # ring (16- and 8-tile slabs vs a 32-tile page) -- they stream through
+            # HC_FN_GCB instead, which is the same 64 receivers as hc.fn. Row-parallel
+            # o_b only cuts K and stays on 64 cores, so it can share the decode buffer.
             restricted_projection = self.dedicated_qkv_ranks and name in ("q_a_proj", "kv_proj")
-            local_receiver_grid = tp_size > 1 and (
-                (name == "o_b_proj" and not self.row_parallel_o_b)
-                or (self.balanced_qkv and name in ("q_a_proj", "kv_proj"))
-            )
+            local_receiver_grid = tp_size > 1 and (name == "o_b_proj" and not self.row_parallel_o_b)
+            balanced_qkv = self.balanced_qkv and name in ("q_a_proj", "kv_proj")
             projection_uses_prefetcher = use_prefetcher and not (restricted_projection or local_receiver_grid)
             prefetch = {"use_prefetcher": projection_uses_prefetcher}
             if projection_uses_prefetcher:
-                prefetch["global_cb"] = prefetch_buffers[name]
-                prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
+                if balanced_qkv:
+                    prefetch["global_cb"] = ensure_named_gcb(
+                        prefetch_buffers,
+                        HC_FN_GCB,
+                        device,
+                        hc_fn_ring_specs(),
+                        weight_dtype,
+                        num_pages=HC_FN_GCB_PAGES,
+                    )
+                    prefetch["global_cb_page_bytes"] = hc_fn_page_bytes(weight_dtype)
+                else:
+                    prefetch["global_cb"] = prefetch_buffers[name]
+                    prefetch["global_cb_page_bytes"] = decode_prefetch_page_bytes(weight_dtype)
             packed = {}
             if self.packed_weights is not None:
                 tensor, packed_layout, packed_slot = self.packed_weights
@@ -1119,20 +1142,33 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             if shard_projection and tp_size > 1:
                 # Cut the full [K, N] host tensor into contiguous output ranges.
                 # For q_b these are query-head ranges; for o_b they are hidden
-                # features. Balanced q_a/KV use a full-K layout because folding
-                # the global partial-K weight before mesh sharding would mix
+                # features. Balanced q_a/KV keep a partial-K layout (64 B cores on
+                # the local N) so LinearDecode folds each rank independently
+                # before the mesh shard -- folding the global N first would mix
                 # output ranges from different ranks.
-                layout["N"] //= tp_size
-                if name in ("q_a_proj", "kv_proj"):
-                    layout.pop("partial_width_sharded", None)
-                    layout.pop("k_blocks", None)
-                    layout["n_blocks"] = layout["N"] // ttnn.TILE_SIZE
+                if balanced_qkv:
+                    layout = balanced_qkv_layout(name, tp_size)
+                else:
+                    layout["N"] //= tp_size
                 mapper = ttnn.ShardTensorToMesh(device, dim=-1)
                 cache_name = f"{name}.tp{tp_size}.{self.qkv_tp_strategy}"
+                if name in ("q_a_proj", "kv_proj"):
+                    cache_name += f".k{layout['k_blocks']}n{layout['n_blocks']}"
             elif name == "o_b_proj" and self.row_parallel_o_b:
                 layout["K"] //= tp_size
                 mapper = ttnn.ShardTensorToMesh(device, dim=-2)
                 cache_name = f"{name}.tp{tp_size}.row"
+            # Resident L1 for the unfused q_a/kv pair when the profile asks for
+            # it and they are *not* prefetched. Packed weights are already L1-resident;
+            # the prefetcher streams into in1 and never holds an L1 tensor.
+            resident = {}
+            if (
+                sys_cfg.attention.keep_qa_kv_weights_in_l1
+                and name in ("q_a_proj", "kv_proj")
+                and not projection_uses_prefetcher
+                and not packed
+            ):
+                resident["keep_weights_in_l1"] = True
             return LinearDecode(
                 weights[f"{name}.weight"],
                 device,
@@ -1142,6 +1178,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 **layout,
                 **prefetch,
                 **packed,
+                **resident,
             )
 
         # q_a and kv both read the block's hidden, so one matmul over their concatenated
@@ -1351,12 +1388,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         On the L1 path this copies DRAM -> L1 width-sharded and so is bounded by L1: o_a_proj
         and o_b_proj are left out because their weights do not fit alongside the others.
 
-        On the prefetcher path it instead queues each projection configured for the shared
-        GCB. Column-parallel o_b, balanced q_a/kv, and sequential o_a keep a local receiver
-        grid and stay on the transient L1 path because they cannot consume the global
-        64-receiver buffer. Requires an open prefetcher session (see the class docstring),
-        and every queued request must be consumed by a matching ``decode``: queueing without
-        the follow-up matmul leaves pages nobody drains.
+        On the prefetcher path it instead queues each projection configured for a GCB.
+        Shared-ring weights (q_b, compressor, o_a/o_b, ...) use one FIFO. Balanced
+        q_a/kv share :data:`HC_FN_GCB` with the hyper-connections (a second FIFO);
+        they are still queued here in decode order so that ring stays in step with
+        attn_hc (before this) and ffn_hc (after this). Column-parallel o_b and
+        sequential o_a keep a local receiver grid and stay on the transient L1 path.
 
         Projections on the shared GCB use one FIFO, so they are queued here in the order
         ``decode`` calls them -- which puts the compressor between kv_proj and o_a_proj, since
