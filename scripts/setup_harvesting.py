@@ -334,7 +334,7 @@ def _ensure_protoc_in_venv(venv_path):
         with zipfile.ZipFile(zip_path) as zf:
             zf.extract("bin/protoc", tmpdir)
             extracted = os.path.join(tmpdir, "bin", "protoc")
-            os.chmod(extracted, 0o755)
+            os.chmod(extracted, 0o700)
             shutil.copy2(extracted, protoc_bin)
 
     print(f"✓ protoc {_PROTOC_VERSION} installed into venv")
