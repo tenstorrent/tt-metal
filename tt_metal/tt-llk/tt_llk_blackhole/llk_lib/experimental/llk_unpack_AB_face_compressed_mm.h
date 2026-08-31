@@ -311,6 +311,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         TT_SETADC_THREAD_OVERRIDE(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, p_setadc::THREAD_OVRD_PACK, bfp4_y);
     };
 
+    // A table entry is a whole instruction word and the entries are not all the same instruction
+    // (MOP and REPLAY), so these have no intrinsic form: the opcode is data here.
     auto emit_word = [](std::uint32_t meta)
     {
         std::uint32_t idx0 = (meta >> (0 * meta_stride_bits)) & meta_index_mask;
