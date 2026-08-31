@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.attention.operations import (
     prefill_tilize_memcfg,
 )
 from models.demos.gemma4.tt.ccl import ccl_async_enabled, default_ccl_topology
+from models.demos.gemma4.tt.compute_config import prefill_sdpa_mode
 from models.demos.gemma4.tt.dram_sharded import can_dram_shard
 
 
@@ -39,6 +40,27 @@ class _FakeMesh:
 
     def get_num_devices(self):
         return self._n
+
+
+class _FakeDevice:
+    def __init__(self, arch):
+        self._arch = arch
+
+    def arch(self):
+        return self._arch
+
+
+def test_prefill_sdpa_mode_is_model_aware_on_wormhole(monkeypatch):
+    monkeypatch.delenv("GEMMA4_PREFILL_SDPA_FIDELITY", raising=False)
+    wh = _FakeDevice(ttnn.device.Arch.WORMHOLE_B0)
+    assert prefill_sdpa_mode(wh, hidden_size=5376) == "hifi4_nodest"
+    assert prefill_sdpa_mode(wh, hidden_size=3840) == "hifi4"
+
+
+def test_prefill_sdpa_mode_explicit_override_wins(monkeypatch):
+    monkeypatch.setenv("GEMMA4_PREFILL_SDPA_FIDELITY", "HiFi3")
+    wh = _FakeDevice(ttnn.device.Arch.WORMHOLE_B0)
+    assert prefill_sdpa_mode(wh, hidden_size=5376) == "hifi3"
 
 
 def test_ccl_topology_linear_on_4_device_mesh(monkeypatch):

@@ -596,7 +596,7 @@ def _prefill_forward_single(
         # rows [hist, hist+seq_len) are query positions [chunk_offset,
         # chunk_offset+seq_len) with their full window covered. The current
         # chunk's last ``sliding_window`` K/V become next chunk's tail.
-        sdpa_ckc = prefill_sdpa_compute_kernel_config(tt_q.device())
+        sdpa_ckc = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=config.hidden_size)
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
         if sliding_tail_in is not None:
@@ -729,16 +729,33 @@ def _prefill_forward_single(
             scale=1.0,
             base_offset=chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset,
             num_kv_heads=nkv_local,
+            hidden_size=config.hidden_size,
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
-        tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
+        tt_sdpa = chunked_prefill_sdpa_sliding(
+            tt_q,
+            tt_k,
+            tt_v,
+            sliding_window,
+            config.head_dim,
+            scale=1.0,
+            hidden_size=config.hidden_size,
+        )
     elif long_seq and not config.is_sliding and page_table is not None and kv_cache is not None:
         # Full-attention long context (incl. KV-shared layers whose kv_cache is
         # the source layer's already-filled pool).
         k_cache, v_cache = kv_cache
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = chunked_prefill_sdpa(
-            tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0, num_kv_heads=nkv_local
+            tt_q,
+            k_cache,
+            v_cache,
+            page_table,
+            user_id,
+            config.head_dim,
+            scale=1.0,
+            num_kv_heads=nkv_local,
+            hidden_size=config.hidden_size,
         )
     elif long_seq:
         raise RuntimeError(
@@ -752,7 +769,7 @@ def _prefill_forward_single(
         # fp32 dest-acc is safe on the prefill SDPA op (unlike the decode op, where
         # it halves dest for head_dim=512). Fidelity policy and the #38306 caveat
         # live in prefill_sdpa_compute_kernel_config.
-        sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
+        sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=config.hidden_size)
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
@@ -994,7 +1011,7 @@ def prefill_forward(
     tt_v = _ensure_dram_interleaved(tt_v)
     # Fidelity policy and the #38306 caveat live in
     # prefill_sdpa_compute_kernel_config.
-    sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
+    sdpa_compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=config.hidden_size)
     tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,

@@ -7,7 +7,9 @@ GeLU: ``ttnn.GeluVariant.Accurate`` (exact SFPU path). Prefer this over
 ``Tanh`` / FastLut for accuracy; HF uses ``gelu_pytorch_tanh``, but Accurate
 gives higher PCC on device.
 
-SDPA uses HiFi4 + fp32_dest_acc (prefill) via the helpers below. Linear matmul
+Prefill SDPA uses HiFi4 + fp32_dest_acc by default. Wormhole 31B disables
+destination accumulation because the head_dim=512 SDPA program otherwise
+overlaps its dynamic L1 allocation at a 2048-token prefill. Linear matmul
 fidelity overrides are intentionally omitted: HiFi4+fp32 on MLP/QKV/O caused
 unicode garbage on LB 12B decode.
 """
@@ -42,12 +44,25 @@ def sdpa_fp32_dest_acc_en(default: bool = True) -> bool:
     return default
 
 
-def prefill_sdpa_compute_kernel_config(device):
-    """Prefill SDPA config, defaulting to main's validated HiFi4+FP32 policy.
+def prefill_sdpa_mode(device, hidden_size=None) -> str:
+    """Resolve the prefill SDPA mode, honoring an explicit environment override."""
+    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY")
+    if mode is not None:
+        return mode.lower()
+    is_wh = device.arch() == ttnn.device.Arch.WORMHOLE_B0
+    return "hifi4_nodest" if is_wh and hidden_size is not None and int(hidden_size) >= 5376 else "hifi4"
 
-    Alternative measured configurations remain explicit deployment opt-ins.
+
+def prefill_sdpa_compute_kernel_config(device, hidden_size=None):
+    """Return the model-aware prefill SDPA compute config.
+
+    HiFi4+FP32 remains the default except for 31B on Wormhole. There, the
+    head_dim=512, 2048-token SDPA's static circular buffers overlap a live L1
+    allocation with FP32 destination accumulation enabled. HiFi4 without
+    destination accumulation is both functional and the measured 31B optimum.
+    An explicit ``GEMMA4_PREFILL_SDPA_FIDELITY`` always wins.
     """
-    mode = os.environ.get("GEMMA4_PREFILL_SDPA_FIDELITY", "hifi4").lower()
+    mode = prefill_sdpa_mode(device, hidden_size)
     if mode == "hifi4_nodest":
         fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
     elif mode == "hifi3":

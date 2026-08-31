@@ -422,7 +422,16 @@ def prefill_sdpa_program_config(head_dim, seq_len, sliding_window=None):
 
 
 def chunked_prefill_sdpa(
-    tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0, num_kv_heads=None
+    tt_q,
+    k_cache,
+    v_cache,
+    page_table,
+    user_id,
+    head_dim,
+    scale=1.0,
+    base_offset=0,
+    num_kv_heads=None,
+    hidden_size=None,
 ):
     """Chunked causal prefill SDPA over a paged KV cache.
 
@@ -495,7 +504,7 @@ def chunked_prefill_sdpa(
     # Shared prefill SDPA fidelity/dest-acc policy — see
     # prefill_sdpa_compute_kernel_config for the #47311 / #38306 tradeoff and the
     # GEMMA4_PREFILL_SDPA_FIDELITY knob.
-    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
+    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=hidden_size)
 
     # Page table row for this user: [1, num_pages], int32, ROW_MAJOR.
     num_pages = page_table.shape[-1]
@@ -576,7 +585,7 @@ def chunked_prefill_sdpa(
     return out
 
 
-def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, scale=1.0):
+def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, scale=1.0, hidden_size=None):
     """Chunked causal+sliding-window prefill SDPA for sliding-window layers.
 
     The chunked SDPA op is causal-only and the non-chunked op requires Q.s==K.s
@@ -606,7 +615,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
     stride = PREFILL_SLIDING_CHUNK_SIZE
     # Shared prefill SDPA fidelity/dest-acc policy — see
     # prefill_sdpa_compute_kernel_config.
-    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device())
+    compute_kernel_config = prefill_sdpa_compute_kernel_config(tt_q.device(), hidden_size=hidden_size)
 
     outs = []
     start = 0
@@ -798,9 +807,9 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
 
 
-def prefill_sdpa_compute_kernel_config(device):
+def prefill_sdpa_compute_kernel_config(device, hidden_size=None):
     """Compatibility wrapper for the centralized Gemma4 compute policy."""
-    return _prefill_sdpa_compute_kernel_config(device)
+    return _prefill_sdpa_compute_kernel_config(device, hidden_size=hidden_size)
 
 
 def effective_block_size(k_cache, head_dim: int, num_kv_heads: int) -> int:
