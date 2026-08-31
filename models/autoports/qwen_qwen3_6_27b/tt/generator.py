@@ -13,7 +13,7 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, LINEAR_PREFILL_CHUNK_SIZE, MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE, default_snapshot
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model
 from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.readiness_check.contract import Generator as ReadinessGenerator
@@ -501,6 +501,37 @@ class Qwen36Generator(ReadinessGenerator):
         self.trace_counters["replays"] += 1
         return self._to_host_logits(self._compat_logits).reshape(self.model.batch, -1)
 
+    def prefill_logits(self, prompt_token_ids: List[int]) -> torch.Tensor:
+        """Prefill one unpadded prompt and return every position's logits.
+
+        The readiness check owns no cache geometry, so the generator allocates
+        and resets its own here. `return_all_logits` keeps the full sequence
+        dimension, and this is the batch-1 API for the same reason `generate`
+        is: the fixed-slot low-level path is what serves mixed batches.
+        """
+        if self.model.batch != 1:
+            raise ValueError("prefill_logits is the batch-1 API; use prefill_forward for mixed batches")
+        prompt_len = len(prompt_token_ids)
+        if prompt_len < 1:
+            raise ValueError("prefill_logits requires a non-empty prompt")
+        if prompt_len > self.model.PREFILL_STACK_CHUNK_SIZE:
+            raise ValueError(
+                "prefill_logits returns every position's logits, which is supported through "
+                f"{self.model.PREFILL_STACK_CHUNK_SIZE} tokens; got {prompt_len}"
+            )
+        self.reset()
+        tokens = torch.tensor([prompt_token_ids], dtype=torch.long)
+        logits = self.prefill_forward(
+            tokens,
+            page_table=self._page_table,
+            kv_cache=self.kv_cache,
+            prompt_lens=[prompt_len],
+            return_all_logits=True,
+        )
+        # prefill_forward returns [batch, physical_len, vocab]; the physical
+        # extent equals the logical one here because nothing padded it.
+        return logits[:, :prompt_len, :]
+
     def generate(
         self,
         prompt_token_ids: List[int],
@@ -624,9 +655,7 @@ class Qwen36Generator(ReadinessGenerator):
 
 
 def build_generator(model_dir, mesh_device, **kwargs):
-    snapshot = Path(
-        kwargs.pop("snapshot", default_snapshot())
-    )
+    snapshot = Path(kwargs.pop("snapshot", default_snapshot()))
     host_sampling_compatibility = kwargs.pop("host_sampling_compatibility", False)
     force_argmax_greedy = kwargs.pop("force_argmax_greedy", False)
     pad_sampling_logits_to_power_of_2 = kwargs.pop("pad_sampling_logits_to_power_of_2", True)

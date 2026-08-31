@@ -1,5 +1,6 @@
 import ast
 import inspect
+import json
 from pathlib import Path
 
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import LINEAR_PREFILL_CHUNK_SIZE
@@ -112,8 +113,18 @@ def test_adapter_has_no_independent_sampling_implementation():
 
 
 def test_plugin_registration_targets_autoport():
-    platform = Path("../vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py").read_text()
-    assert "models.autoports.qwen_qwen3_6_27b.tt.generator_vllm:Qwen36ForCausalLM" in platform
+    """The bundle must claim this architecture for the autoport, not the demo.
+
+    This used to read a patched `platform.py` out of a sibling vLLM checkout.
+    The plugin is now a standalone repo installed as a package, so there is no
+    such path, and the registration moved into an in-repo bundle that the plugin
+    discovers through EXTRA_MODELS_DIR. Assert against the bundle, which is the
+    artifact this repo actually ships.
+    """
+    bundle = Path(__file__).resolve().parents[2] / "vllm_bundles" / "qwen36_autoport" / "vllm_metadata.json"
+    metadata = json.loads(bundle.read_text())
+    assert metadata["arch"] == "Qwen3_5ForConditionalGeneration"
+    assert metadata["main_class"] == "models.autoports.qwen_qwen3_6_27b.tt.generator_vllm:Qwen36ForCausalLM"
 
 
 def test_compact_sampling_params_scatter_to_persistent_slots():

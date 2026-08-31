@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-import os
 import random
 import secrets
 from dataclasses import dataclass, fields, replace
@@ -1009,7 +1008,6 @@ class SeedManager:
             def _position(_slot):
                 return int(positions)
 
-        counters_before = list(self.seed_counters)
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
@@ -1019,15 +1017,6 @@ class SeedManager:
             if position is None or position < 0:
                 continue
             self.seed_counters[slot] = max(0, position + offset)
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "SeedManager align counters",
-            user_ids=_compact_debug_list(user_ids),
-            positions=_compact_debug_list(positions),
-            requested_seeds=_compact_debug_list(seeds),
-            counters_before=_compact_debug_list(counters_before),
-            counters_after=_compact_debug_list(self.seed_counters),
-        )
 
     def has_active_request_seed(self) -> bool:
         return self._active_request_seed

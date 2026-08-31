@@ -141,6 +141,30 @@ class TTSampling(LightweightModule):
             and is_default_value(temp, 1.0)
         )
 
+    @staticmethod
+    def _plan_local_topk_chunks(per_device_vocab_size: int, num_chunks: int) -> tuple[int, int]:
+        """Return ``(physical_chunk_width, padded_width)`` for local TopK reduction.
+
+        The optimized TopK factory requires a power-of-two width strictly below
+        uint16 max.  Splitting a large local vocabulary into equal physical
+        chunks keeps every first-stage reduction on that factory; original
+        indices are carried by ``indices_tensor`` through the final merge.
+        """
+        if num_chunks == 1:
+            return per_device_vocab_size, per_device_vocab_size
+        if num_chunks < 1 or not is_power_of_2(num_chunks):
+            raise ValueError(f"local_topk_num_chunks must be a positive power of two, got {num_chunks}")
+        padded_width = upper_power_of_2(per_device_vocab_size)
+        if padded_width % num_chunks != 0:
+            raise ValueError(f"Cannot split padded local vocabulary width {padded_width} into {num_chunks} chunks")
+        chunk_width = padded_width // num_chunks
+        if not is_power_of_2(chunk_width) or chunk_width >= torch.iinfo(torch.uint16).max:
+            raise ValueError(
+                f"TopK chunk width must be a power of two below uint16 max, got {chunk_width} "
+                f"for local width {per_device_vocab_size} and {num_chunks} chunks"
+            )
+        return chunk_width, padded_width
+
     @property
     def force_argmax_sampling(self) -> bool:
         return self._force_argmax_sampling
