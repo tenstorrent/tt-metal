@@ -1276,6 +1276,18 @@ struct PerfDebugProfiler::EthTrackState {
         int64_t corr_edge = 0;  // (init-fit linear) - (measured), cycles: what the child LOST vs the model
         bool have = false;
         uint32_t fails = 0;
+        // ---- Tracy ribbon: one record per successful round, drawn at teardown on the SECOND-channel
+        // lanes (emission is deferred so nothing pushes into the handler while the live consumer owns it).
+        // The three receiver markers make the story same-lane, i.e. independent of any anchor: MEASURED is
+        // the raw echo, PRED_INIT_FIT walks away at the fixed-rate error, PRED_TRACKED uses the correction
+        // published BEFORE its round -- causal, so the estimator never grades its own round.
+        struct DrawRec {
+            uint64_t t0 = 0, t1 = 0, t2 = 0;
+            int64_t pred_init = 0, pred_tracked = 0;
+        };
+        std::vector<DrawRec> draws;
+        uint32_t snd_nx = 0, snd_ny = 0, rcv_nx = 0, rcv_ny = 0;  // second-channel NOC0 coords
+        bool lanes_ok = false;  // both second-channel tiles anchored -> the ribbon can render
     };
     std::vector<Edge> edges;
     std::unordered_map<uint32_t, size_t> parent_edge;  // chip -> index into edges
@@ -1352,6 +1364,43 @@ void PerfDebugProfiler::start_eth_tracker(const std::shared_ptr<distributed::Mes
         ed.snd_chip = e.sender_chip;
         ed.rcv_chip = e.receiver_chip;
         ed.rl = eth_sync::start_resident_link(e.snd_dev, snd2, e.rcv_dev, rcv2, rcfg);
+        // RIBBON LANES: eth tiles share a rate but not an origin (an eth tile on this box banked ~53 min
+        // more than its chip's worker), so without their own per-core anchors the second-channel rows
+        // would inherit the chip anchor and render minutes off the timeline. Anchored HERE, before the
+        // first round, by the same bracket-read helper the init pass runs on the first-channel tiles.
+        // devices_ is not populated yet at this point in start(), so the frequency comes from the helper's
+        // own per-core fit, exactly where root_freq_ghz_ itself comes from.
+        if (tracy_ != nullptr) {
+            const CoreCoord sn2 = cluster.get_physical_coordinate_from_logical_coordinates(
+                e.snd_dev->id(), snd2, CoreType::ETH, /*no_warn=*/true);
+            const CoreCoord rn2 = cluster.get_physical_coordinate_from_logical_coordinates(
+                e.rcv_dev->id(), rcv2, CoreType::ETH, /*no_warn=*/true);
+            ed.snd_nx = static_cast<uint32_t>(sn2.x);
+            ed.snd_ny = static_cast<uint32_t>(sn2.y);
+            ed.rcv_nx = static_cast<uint32_t>(rn2.x);
+            ed.rcv_ny = static_cast<uint32_t>(rn2.y);
+            const PerfDebugSync sa2 = sync_device_clock(cluster, ed.snd_chip, ed.rl.snd_v);
+            const PerfDebugSync ra2 = sync_device_clock(cluster, ed.rcv_chip, ed.rl.rcv_v);
+            if (sa2.valid && ra2.valid && sa2.frequency > 0.0 && ra2.frequency > 0.0) {
+                tracy_->AddCore(
+                    ed.snd_chip,
+                    ed.snd_nx,
+                    ed.snd_ny,
+                    sa2.host_anchor,
+                    static_cast<double>(sa2.device_at_anchor),
+                    sa2.frequency);
+                tracy_->AddCore(
+                    ed.rcv_chip,
+                    ed.rcv_nx,
+                    ed.rcv_ny,
+                    ra2.host_anchor,
+                    static_cast<double>(ra2.device_at_anchor),
+                    ra2.frequency);
+                tracy_->RegisterEthCore(ed.snd_chip, ed.snd_nx, ed.snd_ny);
+                tracy_->RegisterEthCore(ed.rcv_chip, ed.rcv_nx, ed.rcv_ny);
+                ed.lanes_ok = true;
+            }
+        }
         st->edges.push_back(std::move(ed));
         st->parent_edge[chip] = st->edges.size() - 1;
     }
@@ -1386,8 +1435,32 @@ void PerfDebugProfiler::start_eth_tracker(const std::shared_ptr<distributed::Mes
                 }
                 const double dt = static_cast<double>(static_cast<int64_t>(r.solution.mid_ref - ed.ref0));
                 const double linear = static_cast<double>(ed.off0) + dt * (ed.rate0 - 1.0);
+                const int64_t corr_prev = ed.corr_edge;  // as published BEFORE this round: the causal estimate
                 ed.corr_edge = static_cast<int64_t>(std::llround(linear - static_cast<double>(r.solution.offset)));
                 ed.have = true;
+                if (ed.lanes_ok && !r.trips.empty() && ed.draws.size() < 200000) {
+                    // The min-RTT trip is the one the solve trusted; render that one, one per round.
+                    size_t bi = 0;
+                    uint64_t best = ~0ull;
+                    for (size_t i = 0; i < r.trips.size(); i++) {
+                        const uint64_t w = r.trips[i].t2 - r.trips[i].t0;
+                        if (w < best) {
+                            best = w;
+                            bi = i;
+                        }
+                    }
+                    const auto& tr = r.trips[bi];
+                    const uint64_t mid = (tr.t0 + tr.t2) / 2;
+                    const double dm = static_cast<double>(static_cast<int64_t>(mid - ed.ref0));
+                    EthTrackState::Edge::DrawRec dr;
+                    dr.t0 = tr.t0;
+                    dr.t1 = tr.t1;
+                    dr.t2 = tr.t2;
+                    dr.pred_init = static_cast<int64_t>(mid) + ed.off0 +
+                                   static_cast<int64_t>(std::llround(dm * (ed.rate0 - 1.0)));
+                    dr.pred_tracked = dr.pred_init - corr_prev;
+                    ed.draws.push_back(dr);
+                }
             }
             // Compose per-device RELATIVE corrections down the tree (root = 0). Unlike the host corrector''s
             // device-vs-host values, RELATIVE deviations wander in BOTH directions, and the setter''s ratchet
@@ -1453,6 +1526,77 @@ void PerfDebugProfiler::stop_eth_tracker() {
     }
     for (auto& ed : eth_track_->edges) {
         eth_sync::stop_resident_link(ed.rl);
+    }
+    // ---- DRAW THE TRACKING RIBBON ----
+    // Deferred to here on purpose: the receiver and its consumers shut down before this call, so nothing
+    // else is pushing into the handler. Timestamps are raw device cycles, exactly like the init/close eth
+    // lanes; each lane's events are sorted before emission (the tracked marker can sit on either side of
+    // the echo, and Tracy wants non-decreasing arrival per lane).
+    if (tracy_ != nullptr) {
+        const double freq = root_freq_ghz_ > 0.0 ? root_freq_ghz_ : 1.35;
+        static constexpr std::string_view kTrkRtt = "ETH_TRACK_RTT";
+        static constexpr std::string_view kTrkEcho = "ETH_TRACK_ECHO_MEASURED";
+        static constexpr std::string_view kTrkInit = "ETH_TRACK_PRED_INIT_FIT";
+        static constexpr std::string_view kTrkLive = "ETH_TRACK_PRED_TRACKED";
+        for (const auto& ed : eth_track_->edges) {
+            if (!ed.lanes_ok || ed.draws.empty()) {
+                continue;
+            }
+            // Rounds are sequential and the sender clock is monotonic, so zone order is already correct.
+            for (const auto& dr : ed.draws) {
+                perf_debug::WorkerZonePacket z;
+                z.chip_id = ed.snd_chip;
+                z.core_virtual_x = ed.snd_nx;
+                z.core_virtual_y = ed.snd_ny;
+                z.core_noc0_x = ed.snd_nx;
+                z.core_noc0_y = ed.snd_ny;
+                z.risc = 0;
+                z.timer_id = 0;
+                z.name = kTrkRtt;
+                z.start = dr.t0;
+                z.end = dr.t2;
+                z.color = 0x1ABC9Cu;  // teal: the resident heartbeat, distinct from init green / close red
+                tracy_->HandleWorkerZone(z);
+            }
+            std::vector<std::pair<uint64_t, std::string_view>> ev;
+            ev.reserve(ed.draws.size() * 3);
+            for (const auto& dr : ed.draws) {
+                ev.emplace_back(dr.t1, kTrkEcho);
+                ev.emplace_back(static_cast<uint64_t>(dr.pred_init), kTrkInit);
+                ev.emplace_back(static_cast<uint64_t>(dr.pred_tracked), kTrkLive);
+            }
+            std::sort(ev.begin(), ev.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& [ts, nm] : ev) {
+                perf_debug::WorkerEventPacket pe;
+                pe.chip_id = ed.rcv_chip;
+                pe.core_virtual_x = ed.rcv_nx;
+                pe.core_virtual_y = ed.rcv_ny;
+                pe.core_noc0_x = ed.rcv_nx;
+                pe.core_noc0_y = ed.rcv_ny;
+                pe.risc = 0;
+                pe.id = 0;
+                pe.name = nm;
+                pe.timestamp = ts;
+                pe.num_values = 0;
+                tracy_->HandleWorkerEvent(pe);
+            }
+            const auto& last = ed.draws.back();
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] ETH TRACKER ribbon {} -> {}: {} round(s) drawn on second-channel eth "
+                "NOC0 ({},{}) -> ({},{}); at the LAST round the init-fit marker sits {:+.3f} us from the "
+                "measured echo where the causally-tracked marker sits {:+.1f} ns -- the growing same-lane gap "
+                "between ETH_TRACK_PRED_INIT_FIT and ETH_TRACK_ECHO_MEASURED is the error tracking removed",
+                ed.snd_chip,
+                ed.rcv_chip,
+                ed.draws.size(),
+                ed.snd_nx,
+                ed.snd_ny,
+                ed.rcv_nx,
+                ed.rcv_ny,
+                static_cast<double>(last.pred_init - static_cast<int64_t>(last.t1)) / freq / 1000.0,
+                static_cast<double>(last.pred_tracked - static_cast<int64_t>(last.t1)) / freq);
+        }
     }
     delete eth_track_;
     eth_track_ = nullptr;
@@ -1615,14 +1759,19 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
             static constexpr std::string_view kCloseRtt = "ETH_SYNC_CLOSE_RTT";
             static constexpr std::string_view kMeasured = "ETH_SYNC_ECHO_MEASURED";
             static constexpr std::string_view kPredicted = "ETH_SYNC_ECHO_PREDICTED";
+            static constexpr std::string_view kTracked = "ETH_SYNC_ECHO_TRACKED";
             constexpr size_t kMaxDraw = 64;
             const size_t n = std::min(r.trips.size(), kMaxDraw);
+            // Third marker: the init prediction MOVED BY THE FROZEN CORRECTIONS -- the same (corr_s - corr_r)
+            // the hosted number above adds. A tracker-off run has zero corrections, so it lands exactly on
+            // PREDICTED; a tracked run shows it back at the measured echo while PREDICTED stays away.
+            const int64_t chost = corr_s - corr_r;
 
             // Tracy wants non-decreasing arrival per lane, and the predicted marker can fall on either side
             // of the measured one depending on the sign of the drift -- so order them explicitly rather
             // than assuming. Interleaving them unsorted is what would corrupt the lane.
             std::vector<std::pair<uint64_t, std::string_view>> echo;
-            echo.reserve(n * 2);
+            echo.reserve(n * 3);
             for (size_t i = 0; i < n; i++) {
                 const uint64_t mid = (r.trips[i].t0 + r.trips[i].t2) / 2;
                 const double d = static_cast<double>(static_cast<int64_t>(mid - e.ref_mid));
@@ -1631,6 +1780,7 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
                     static_cast<int64_t>(mid) + e.offset + static_cast<int64_t>(std::llround(d * (e.rate - 1.0))));
                 echo.emplace_back(r.trips[i].t1, kMeasured);
                 echo.emplace_back(t1_pred, kPredicted);
+                echo.emplace_back(static_cast<uint64_t>(static_cast<int64_t>(t1_pred) + chost), kTracked);
             }
             std::sort(echo.begin(), echo.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
             for (const auto& [ts, nm] : echo) {
