@@ -84,7 +84,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
         return create_descriptor_ring_gather_full(
             operation_attributes, tensor_args, tensor_return_value, mesh_dispatch_coordinate);
     }
-    log_info(tt::LogOp, "matmul_decode FullWidthSharded: in0 gather = hub (global_cb / prefetcher path)");
     (void)mesh_dispatch_coordinate;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
