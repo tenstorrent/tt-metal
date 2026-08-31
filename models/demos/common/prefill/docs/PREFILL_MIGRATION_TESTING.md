@@ -6,7 +6,10 @@ underneath; this document is the layer beneath that. It is also the path to take
 model, because the gates isolate failures that the harness necessarily reports as one.
 
 Assumes the model is already integrated — adapter registered, golden trace staged, weight cache populated
-(`ADDING_A_PREFILL_MODEL.md`, alongside this file).
+(`ADDING_A_PREFILL_MODEL.md`, alongside this file). Why migration exists, what the source table is, and
+how the runner publishes it are [`KV_MIGRATION_SPEC.md`](KV_MIGRATION_SPEC.md) (prefill first principles;
+the decode counterpart is tt-blaze `docs/kv_migration_first_principles.md`). File-export into tt-d-gen
+`kv_manager` is that same spec, §10. This file is how to *run* the gates.
 
 | Gate | What it exercises | Needs |
 |------|-------------------|-------|

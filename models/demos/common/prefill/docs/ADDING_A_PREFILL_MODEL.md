@@ -142,7 +142,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 
     # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
     #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
-    #     the runtime), not inline here. ---
+    #     the runtime), not inline here. What the source table is, how it is published, and how it
+    #     must agree with decode are docs/KV_MIGRATION_SPEC.md (alongside this file). ---
     def build_kv_chunk_table(self, kv_cache, path: str) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
@@ -247,3 +248,4 @@ migration endpoint up; see `deepseek_v3_d_p/tt/runners/kv_migration_setup.py`).
 - [ ] Registered in `ADAPTER_PATHS` (`models/demos/common/prefill/adapter.py`).
 - [ ] Weight cache populated; golden trace staged.
 - [ ] Request-mode producer PCC run passes (`PREFILL_PRODUCER_CHECK_PCC=1`); request + (if applicable) migration paths exercised.
+- [ ] (Migration) KV-chunk table matches the decode `KvMigrationSpec` (`docs/KV_MIGRATION_SPEC.md`): same `config_idx` order, blob geometry, layer ownership, and window extents.
