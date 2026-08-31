@@ -1298,6 +1298,39 @@ void PerfDebugProfiler::check_sync_drift_at_close() {
         const int64_t predicted = e.offset + static_cast<int64_t>(std::llround(dt_cycles * (e.rate - 1.0)));
         const int64_t err_cycles = r.solution.offset - predicted;
 
+        // ---- HOST-ASSISTED PREDICTION -------------------------------------------------------------------
+        //
+        // The prediction above extrapolates the init eth fit with a FIXED rate, so it cannot know about a
+        // rate that moved mid-session -- and it does move (observed -1.65 -> -1.75 ppm across one capture),
+        // which is most of why this check sits at microseconds even with the clock pinned.
+        //
+        // The host path already measures what each device's clock actually did, live: the drift corrector's
+        // per-device correction IS that clock's deviation from its own linear model. Both predictions assume
+        // linearity, so the DIFFERENCE of the two devices' corrections is exactly the non-linear part the eth
+        // extrapolation is missing:
+        //
+        //   offset_actual = offset_linear + (corr_sender - corr_receiver)
+        //
+        // This costs nothing -- the corrections are already being computed for zone placement -- and it needs
+        // no eth traffic, so it works on a fabric-enabled run where the links cannot be re-measured.
+        const int64_t corr_s = perf_debug::get_zone_ts_correction(e.sender_chip);
+        const int64_t corr_r = perf_debug::get_zone_ts_correction(e.receiver_chip);
+        const int64_t predicted_hosted = predicted + (corr_s - corr_r);
+        const int64_t err_hosted = r.solution.offset - predicted_hosted;
+        if (corr_s != 0 || corr_r != 0) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] eth sync CLOSE-CHECK {} -> {}: host-assisted prediction is {:+.3f} us "
+                "off vs {:+.3f} us for the fixed-rate extrapolation (corrections {:+} / {:+} cycles) -- the "
+                "host path supplies the rate change the eth fit could not know about",
+                e.sender_chip,
+                e.receiver_chip,
+                static_cast<double>(err_hosted) / freq / 1000.0,
+                static_cast<double>(err_cycles) / freq / 1000.0,
+                corr_s,
+                corr_r);
+        }
+
         // ---- INDEPENDENT CROSS-CHECK: host MMIO vs the eth link, on the SAME two cores ----------------
         //
         // Every other number here grades one estimator with itself, so a shared systematic error cancels.
