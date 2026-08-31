@@ -152,7 +152,7 @@ def test_batch_greater_than_one_is_rejected_at_state_setup(device: ttnn.Device, 
         layer.allocate_state(batch_size=2)
 
 
-def test_segmented_prefill_cache_continuity(device: ttnn.Device) -> None:
+def test_segmented_prefill_rebinds_cache_hit_runtime_inputs(device: ttnn.Device, isolated_program_cache: None) -> None:
     config = make_config()
     weights = random_weights(config)
     hidden = torch.randn(
@@ -167,7 +167,16 @@ def test_segmented_prefill_cache_continuity(device: ttnn.Device) -> None:
     layer = ttKDA(device, config, weights)
     state = layer.allocate_state()
     actual_first, state = _forward(layer, hidden[:, :32], state)
+    cache_entries_after_first = device.num_program_cache_entries()
+    assert (
+        cache_entries_after_first > 0
+    ), "KDA forward populated no program cache entries; the cache-hit assertion below would be vacuous"
     actual_second, state = _forward(layer, hidden[:, 32:], state)
+    cache_entries_after_second = device.num_program_cache_entries()
+    assert cache_entries_after_second == cache_entries_after_first, (
+        "second same-shape prefill segment must hit cached programs, entries grew "
+        f"{cache_entries_after_first} -> {cache_entries_after_second}"
+    )
     actual_recurrent = ttnn.to_torch(state.recurrent)
     actual_convolution = ttnn.to_torch(state.convolution)
     golden_convolution = torch.cat(
