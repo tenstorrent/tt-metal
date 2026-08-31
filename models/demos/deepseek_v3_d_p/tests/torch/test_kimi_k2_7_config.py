@@ -5,12 +5,13 @@
 """
 Host-side consistency checks for ``KimiK27Config``. No TTNN, no device code, no weights.
 
-``KimiK27Config`` inherits every value from ``KimiK26Config`` because K2.7-Code is architecturally
-identical to K2.6. That reuse is the whole reason the K2.7 migration was cheap -- and it is trusted
-rather than checked, which is what these two tests fix. K3 has had this guard since it was added
+``KimiK27Config`` is a standalone class: every constant is hand-transcribed from K2.7-Code's own
+checkpoint rather than inherited from ``KimiK26Config``. That keeps the two generations independent,
+but it also means nothing structural guarantees the numbers are right -- these two tests are the only
+thing that does. K3 has had this guard since it was added
 (``test_kimi_k3_mla_reference.test_k3_constants_match_the_vendored_checkpoint_config``); K2.x never
-did, so a divergence would have surfaced as an unattributable device PCC miss instead of a one-line
-host failure.
+did, so a mistyped digit would have surfaced as an unattributable device PCC miss instead of a
+one-line host failure.
 
 Two distinct failure modes, hence two tests:
 
@@ -24,13 +25,14 @@ Two distinct failure modes, hence two tests:
     would fail. That is also why ``KimiK27Adapter.hf_model_default`` still resolves to
     ``reference/kimi_k2_6`` -- that dir carries the vendored *modeling* code, which is genuinely
     shared, and only this config file needed a K2.7 copy.
-  * **the inheritance premise breaking** -- if a future K2.7 checkpoint revision changes a dimension,
-    inheriting K2.6's numbers becomes wrong. ``test_..._staged_checkpoint`` pins it against the real
-    staged K2.7 checkpoint. Skips cleanly when that is not mounted, so it is advisory on a dev box
-    and load-bearing in CI.
+  * **the checkpoint moving under us** -- if a future K2.7 revision changes a dimension, the vendored
+    copy and the transcription both go stale together and leg one would still pass.
+    ``test_..._staged_checkpoint`` pins them against the real staged checkpoint. Skips cleanly when
+    that is not mounted, so it is advisory on a dev box and load-bearing in CI.
 
-If the second test ever fails, the fix is to override the moved fields on ``KimiK27Config`` -- which
-is precisely why it exists as a subclass rather than a bare alias.
+If the second test fails, re-vendor ``reference/kimi_k2_7/config.json`` and update the moved fields on
+``KimiK27Config``. Because it is standalone, that touches K2.7 only -- ``KimiK26Config`` and anything
+still on K2.6 are unaffected.
 """
 
 import json
@@ -119,10 +121,10 @@ def test_k2_7_constants_match_the_vendored_config():
 def test_k2_7_constants_match_the_staged_checkpoint():
     """Every ``KimiK27Config`` constant equals the staged K2.7-Code checkpoint's value.
 
-    This is the test that guards the migration's central premise: that K2.7 can inherit K2.6's
-    numbers. Skips when the checkpoint is not mounted rather than failing, so it does not punish a
-    dev box -- but on any machine that runs the prefill suite the mount is present by definition,
-    since the weight cache lives on it.
+    This is the test that guards the transcription against the real checkpoint, so it catches an
+    upstream revision that the vendored copy has not caught up with. Skips when the checkpoint is not
+    mounted rather than failing, so it does not punish a dev box -- but on any machine that runs the
+    prefill suite the mount is present by definition, since the weight cache lives on it.
     """
     root = Path(os.environ.get(K2_7_CHECKPOINT_ENV) or K2_7_CHECKPOINT_DEFAULT)
     config_path = root / "config.json"
