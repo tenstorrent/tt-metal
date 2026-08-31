@@ -1,0 +1,13 @@
+arch 2
+kernel_config_base 32240
+image_bytes 25616
+rta_offset 0
+kernel_text_offset 128
+launch_addr 8208
+go_msg_index_addr 9408
+reset_go_bytes 4 0 0 0 224
+go_addr 9360
+eth_l1_unreserved 57856
+launch_msg_rd_ptr_addr 8204
+launch_bytes 144 192 140 0 0 32 241 3 0 240 125 0 0 0 0 0 0 0 0 0 0 128 0 0 0 128 0 128 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0 0 128 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 40 7 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 32 0 0 0 0 0 1 0 0 0 97 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+go_bytes 4 0 0 0 128

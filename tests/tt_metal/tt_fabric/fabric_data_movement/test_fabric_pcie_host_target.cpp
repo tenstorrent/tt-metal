@@ -375,4 +375,116 @@ TEST_F(Fabric1DFixture, TestDirectPcieWriteFromMmioChip) {
     }
 }
 
+// CONTROL for TestFabricWriteReachesHostMemory.
+//
+// That test blames the PCIe destination, but it never established that this test
+// harness delivers ANYTHING. A broken route, hop count or connection arg would
+// produce the identical symptom (sends complete, nothing arrives) and the PCIe
+// conclusion would be wrong. So: same sender, same route, same everything --
+// destination changed to ordinary L1 on the MMIO chip.
+//
+//   lands   -> harness is sound, the PCIe destination really is the fault
+//   nothing -> the harness is broken and the PCIe conclusion is unfounded
+TEST_F(Fabric1DFixture, TestFabricWriteReachesRemoteL1_Control) {
+    if (!slow_dispatch_) {
+        GTEST_SKIP() << "IDLE_ETH launch needs TT_METAL_SLOW_DISPATCH_MODE";
+    }
+    const auto& devices = this->get_devices();
+    ASSERT_GE(devices.size(), 2u);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    tt::tt_metal::IDevice* sender = nullptr;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> sender_mesh;
+    for (const auto& d : devices) {
+        auto* dev = d->get_devices()[0];
+        if (cluster.get_associated_mmio_device(dev->id()) != dev->id()) {
+            sender = dev;
+            sender_mesh = d;
+            break;
+        }
+    }
+    if (sender == nullptr) {
+        GTEST_SKIP() << "no remote chip";
+    }
+    const auto mmio_id = cluster.get_associated_mmio_device(sender->id());
+    tt::tt_metal::IDevice* receiver = nullptr;
+    for (const auto& d : devices) {
+        if (d->get_devices()[0]->id() == mmio_id) {
+            receiver = d->get_devices()[0];
+        }
+    }
+    ASSERT_NE(receiver, nullptr);
+
+    auto s_eth = sender->get_inactive_ethernet_cores();
+    auto r_eth = receiver->get_inactive_ethernet_cores();
+    if (s_eth.empty() || r_eth.empty()) {
+        GTEST_SKIP() << "need an idle eth core on both chips";
+    }
+    const tt::tt_metal::CoreCoord send_core = *s_eth.begin();
+    const tt::tt_metal::CoreCoord recv_core = *r_eth.begin();
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const uint32_t l1 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    // Clear the landing spot on the receiver.
+    std::vector<uint32_t> clear(8, 0xDEADBEEFu);
+    tt::tt_metal::detail::WriteToDeviceL1(receiver, recv_core, l1 + 256, clear, CoreType::ETH);
+
+    // Ordinary L1 destination: translated coords of the receiver's eth core.
+    const auto& rsoc = cluster.get_soc_desc(mmio_id);
+    const auto rt = rsoc.translate_coord_to(
+        tt::umd::CoreCoord(recv_core.x, recv_core.y, CoreType::ETH, CoordSystem::LOGICAL), CoordSystem::TRANSLATED);
+    constexpr uint32_t kLocalBits = 36, kNodeIdBits = 6, kCoordOff = 4;
+    const uint32_t xy = ((uint32_t)rt.y << ((kLocalBits % 32) + kNodeIdBits)) | ((uint32_t)rt.x << (kLocalBits % 32));
+    const uint64_t dest_l1 = ((uint64_t)xy << (kLocalBits - kCoordOff)) | (uint64_t)(l1 + 256);
+    log_info(
+        tt::LogTest,
+        "control: receiver eth {} translated ({},{}) dest=0x{:016x}",
+        recv_core.str(),
+        rt.x,
+        rt.y,
+        dest_l1);
+
+    auto program = tt::tt_metal::CreateProgram();
+    auto kernel = tt::tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_fabric_pcie_target.cpp",
+        send_core,
+        tt::tt_metal::EthernetConfig{
+            .eth_mode = tt::tt_metal::Eth::IDLE, .processor = tt::tt_metal::DataMovementProcessor::RISCV_0});
+
+    auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto src_node = cp.get_fabric_node_id_from_physical_chip_id(sender->id());
+    const auto dst_node = cp.get_fabric_node_id_from_physical_chip_id(receiver->id());
+
+    std::vector<uint32_t> rt_args = {
+        static_cast<uint32_t>(dest_l1 & 0xFFFFFFFFull),
+        static_cast<uint32_t>(dest_l1 >> 32),
+        l1,
+        kPayloadBytes,
+        kNumSends,
+        kSendIntervalCycles,
+        1u};
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        src_node, dst_node, /*link_idx=*/0, program, send_core, rt_args, CoreType::ETH);
+    tt::tt_metal::SetRuntimeArgs(program, kernel, send_core, rt_args);
+
+    this->RunProgramNonblocking(sender_mesh, program);
+    std::this_thread::sleep_for(std::chrono::seconds(8));
+
+    std::vector<uint32_t> got(2, 0);
+    tt::tt_metal::detail::ReadFromDeviceL1(receiver, recv_core, l1 + 256, 8, got, CoreType::ETH);
+    log_info(tt::LogTest, "control: receiver L1 = 0x{:08x} seq={}", got[0], got[1]);
+
+    std::vector<uint32_t> dbg(4, 0);
+    tt::tt_metal::detail::ReadFromDeviceL1(sender, send_core, l1 + 64, 16, dbg, CoreType::ETH);
+    log_info(tt::LogTest, "control: sender markers alive=0x{:08x} sends_done={}", dbg[0], dbg[1]);
+
+    EXPECT_EQ(got[0] & 0xFFFFFF00u, kSentinelBase)
+        << "fabric did not deliver even to ORDINARY L1 -- this harness is broken, and the "
+           "PCIe conclusion in TestFabricWriteReachesHostMemory is unfounded.";
+    this->WaitForSingleProgramDone(sender_mesh, program);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -174,3 +174,11 @@ tray_to_pcie_device_mapping.yaml
 # model bringup manifests and tensor artifacts
 bringup/artifacts
 model_tracer/traced_operations
+
+# Vivado journals -- generated, never wanted in-tree
+vivado*.jou
+vivado_*.backup.jou
+
+# Measurement run logs are reproducible; the replay artifact is not, so keep that one.
+runs/*
+!runs/artifact-wh/
