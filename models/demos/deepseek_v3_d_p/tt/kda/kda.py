@@ -42,6 +42,13 @@ def _largest_divisor_at_most(value: int, limit: int) -> int:
     return 1
 
 
+def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int) -> int:
+    """Resolve a configured ceiling to an exact TP-local channel divisor."""
+    return ttnn.TILE_SIZE * _largest_divisor_at_most(
+        channels // ttnn.TILE_SIZE, configured_chunk_size // ttnn.TILE_SIZE
+    )
+
+
 def _output_projection_program_config(
     sequence: int,
     input_width: int,
@@ -134,6 +141,7 @@ class ttKDA:
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
         self.recurrence_config = program_config.recurrence
+        self.qkv_channel_chunk_size = program_config.qkv_channel_chunk_size
         self.output_projection_out_block_w = program_config.output_projection_out_block_w
         output_grid = mesh_device.compute_with_storage_grid_size()
         self.output_projection_grid = (output_grid.x, output_grid.y)
@@ -315,11 +323,8 @@ class ttKDA:
                 (qkv_row_major.shape[0], sequence, channels),
             )
             # Retained by real-K3 T=5120 component A/B: 74.36-75.76% faster at direct Q/K/V PCC >=0.999989.
-        # Cap blocks at the operation's measured production size while keeping the
-        # chunk an exact divisor for smaller synthetic and TP-local channel counts.
-        channel_chunk_size = ttnn.TILE_SIZE * _largest_divisor_at_most(
-            channels // ttnn.TILE_SIZE, 768 // ttnn.TILE_SIZE
-        )
+        # Resolve the configured ceiling to an exact divisor for this TP-local channel count.
+        channel_chunk_size = _effective_qkv_channel_chunk_size(channels, self.qkv_channel_chunk_size)
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
             state_row_major,
