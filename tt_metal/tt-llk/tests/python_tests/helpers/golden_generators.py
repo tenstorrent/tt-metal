@@ -188,14 +188,11 @@ def sfpu_dest_format(
     output_format: DataFormat,
     dest_acc: DestAccumulation,
 ) -> DataFormat:
-    """The format Dest holds, which is what an SFPU golden's precision actually follows.
+    """The format Dest holds, which is what an SFPU golden's precision follows.
 
-    One derivation for every SFPU family: UnarySFPUGolden applies it inline,
-    BinarySFPUGolden and TernarySFPUGolden delegate here, and sfpu_domains.nan_survives_to_l1()
-    applies the same rule internally. test_sfpu_domains pins them to each other so a change to
-    any one fails rather than drifting -- which matters because a disagreement would put a
-    golden's NaN substitution on a different set of cells than the gate deciding where the
-    probe may be asserted at all.
+    One derivation for all three families and for sfpu_domains.nan_survives_to_l1();
+    test_sfpu_domains pins them together, since disagreement would put a golden's NaN
+    substitution on different cells than the gate that decides where a probe is assertable.
     """
     if dest_acc == DestAccumulation.Yes:
         return DataFormat.Float32
@@ -4350,33 +4347,20 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     _LOGSIGMOID_EXP_BRANCH = 4.0
 
     def _logsigmoid(self, t1, t2):
-        """logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1 and exp(-x) = t2.
+        """logsigmoid(x) = -softplus(-x), with x = t1 and exp(-x) = t2.
 
-        Three branches in `calculate_logsigmoid`, and the golden models exactly one of them:
+        Of `calculate_logsigmoid`'s three branches the golden models only x > 4, where the
+        kernel returns `-t2`: it is the only branch whose result depends on operand B, so torch
+        there cannot tell a kernel that used the operand from one that ignored it -- and torch's
+        -log1p(exp(-x)) differs from the kernel's -exp(-x) by up to 0.9% just above the
+        threshold, which would read as a failure rather than as the documented approximation.
+        The other two stay on torch: the passthrough below -4 agrees to 4e-5, and the
+        ninth-degree polynomial in between would mean transcribing coefficients with no
+        host-side home to import from.
 
-          x < -4    passthrough, the kernel returns x unchanged (there is no `else` arm, so
-                    `result` keeps the value it was seeded with). torch gives
-                    logsigmoid(-8) = -8.000335 against the kernel's -8, which is 4e-5
-                    relative and well inside the tolerance, so this stays on torch.
-          -4 <= x <= 4
-                    a ninth-degree polynomial. Modelling it would mean transcribing nine
-                    coefficients that have no host-side home to import from, which is the
-                    drift bug sfpu_dispatch_constants exists to prevent. Matched under PCC,
-                    as it always has been.
-          x > 4     the kernel returns `-t2`, and this one *is* modelled -- because it is the
-                    only branch whose result depends on operand B at all. A golden that reads
-                    only t1 here cannot tell the difference between a kernel that used the
-                    operand it was handed and one that ignored it, which is precisely the
-                    coverage this branch was missing. It also cannot be left on torch: the
-                    kernel's -exp(-x) differs from -log1p(exp(-x)) by up to 0.9% relative just
-                    above the threshold, so a mathematical golden would report the kernel's
-                    own documented approximation as a failure.
-
-        The caller is responsible for supplying t2 = exp(-t1); see
-        _logsigmoid_stimuli_specs, which builds both operands from one position ramp so they
-        cannot drift apart. test_sfpu_domains pins the approximation quality separately, so
-        modelling the branch does not quietly stop asserting that -exp(-x) is a logsigmoid at
-        all.
+        The caller supplies t2 = exp(-t1) -- see _logsigmoid_stimuli_specs, which builds both
+        operands from one ramp. test_sfpu_domains pins the approximation separately, so
+        modelling the branch does not stop asserting that -exp(-x) is a logsigmoid.
         """
         x = t1.to(torch.float32)
         if float(x) > self._LOGSIGMOID_EXP_BRANCH:
@@ -5413,16 +5397,13 @@ class Top32RmGolden:
 class WhereGolden:
     """Golden for the TTNNWhere kernel: an element-wise select, not an arithmetic op.
 
-    The result is always one of the two input data verbatim, so unlike the addc kernels there
-    is no evaluation to model -- no Dest-width rounding to apply and no NaN this op could
-    invent. Its sign, when it returns one, is the operand's, exactly as BinarySFPUGolden treats
-    an SFPSWAP-selected max/min.
+    The result is an input datum verbatim, so there is no evaluation to model and no NaN this op
+    could invent -- any sign it returns is the operand's, as with an SFPSWAP-selected max/min.
 
-    What still has to be modelled is the *pack*: a pipeline too narrow to hold a NaN gets a
-    signed infinity substituted for it (SFPSTORE: "NaN is also converted to infinity"), so a
-    where(true, NaN, y) lands in L1 as +inf. Supply *input_format*, *output_format* and
-    *dest_acc* to get that; without them the golden reports the NaN and a cat-B probe reads the
-    packer's substitution as a kernel defect.
+    The *pack* still needs modelling: a pipeline too narrow to hold a NaN gets a signed infinity
+    substituted (SFPSTORE: "NaN is also converted to infinity"), so where(true, NaN, y) lands in
+    L1 as +inf. Supply *input_format*, *output_format* and *dest_acc* for that; without them a
+    cat-B probe reads the packer's substitution as a kernel defect.
     """
 
     def __call__(
@@ -5475,30 +5456,23 @@ class TernarySFPUGolden:
         lerp:       out = a + c * (b - a)
         snake_beta: out = a + sin(b * a)^2 / c    (a=x, b=alpha, c=beta)
 
-    Known limitation: this reference is not bit-exact about *intermediate rounding*. The
-    kernels branch on is_fp32_dest_acc_en for it (addcmul emits an SFP_STOCH_RND fp32->fp16b
-    before the store; addcdiv/lerp round via float32_to_bf16_rne; snake_beta drops to a
-    lower-degree sin polynomial when it is off), so both dest_acc arms are checked against one
-    fp32 evaluation and are distinguished only by the (looser, for Bfp8_b) PCC/atol tolerance.
-    Tightening that is tracked as follow-up.
+    Known limitation: not bit-exact about *intermediate rounding*, which the kernels branch on
+    is_fp32_dest_acc_en for. Both dest_acc arms are checked against one fp32 evaluation and are
+    distinguished only by tolerance. Tightening that is tracked as follow-up.
 
-    What it *does* model, once *input_format* and *dest_acc* are supplied, is the two steps
-    that are sub-ULP on a finite value and decisive on a non-finite one: the store into a Dest
-    whose width dest_acc selects, and the pack out of it, where a pipeline too narrow to hold a
-    NaN gets a signed infinity substituted instead (SFPSTORE: "NaN is also converted to
-    infinity"). Without them a cat-B probe reads the packer's substituted infinity as the
-    kernel having computed one -- the same defect BinarySFPUGolden carried, and the reason the
-    binary suite's "0/0 returns inf where IEEE says nan" xfails were retracted rather than
-    fixed in a kernel.
+    Given *input_format* and *dest_acc* it does model the two steps that are sub-ULP on a finite
+    value and decisive on a non-finite one: the store into a Dest whose width dest_acc selects,
+    and the pack out of it, where a NaN too wide for the pipeline becomes a signed infinity
+    (SFPSTORE: "NaN is also converted to infinity"). Without them a cat-B probe reads that
+    substitution as the kernel having computed an infinity -- the defect behind the binary
+    suite's retracted "0/0 returns inf where IEEE says nan" xfails.
     """
 
-    # Every ternary op builds its result through the datapath -- there is no SFPSWAP select
-    # among them, so no NaN any of them returns is "the operand's" in the sense
-    # BinarySFPUGolden._NAN_SIGN_SELECTED_OPS carves out for max/min. `SFPMAD.md` scopes its
-    # NaN-sign wording to "if a NaN is emitted" without distinguishing a computed NaN from one
-    # that arrived on an input, so on Wormhole the sign of any of them "might or might not be
-    # set" and on Blackhole it is the canonical 0x7fc00000. The golden therefore exports no
-    # sign at all rather than the host libm's invented one.
+    # No ternary op selects among its operands, so every NaN they return is built through the
+    # datapath rather than being "the operand's" the way SFPSWAP max/min is. `SFPMAD.md` scopes
+    # its NaN-sign wording to "if a NaN is emitted" without distinguishing computed from
+    # arrived, leaving the sign open on Wormhole and canonical on Blackhole -- so the golden
+    # exports no sign at all rather than the host libm's invented one.
 
     def __call__(
         self,
@@ -5553,18 +5527,13 @@ class TernarySFPUGolden:
             else None
         )
 
-        # What the unpacker hands the SFPU, not what the test drew. A block-float operand's
-        # 16 datums share one exponent, so an operand carrying a spread of magnitudes loses the
-        # low ones on the way in -- and each of the three operands is quantized independently,
-        # against its own blocks. Without this the device computes on quantized values while
-        # the reference computes on the unrounded bf16 originals, and the comparison is not a
-        # correctness statement about the kernel at all. The same step UnarySFPUGolden takes at
-        # the same point, and the binary suite's driver takes before broadcast; it is a no-op on
-        # every non-block-float format, including the None of the unmodelled path.
-        #
-        # It belongs *here* rather than in the caller because it models the unpack, which
-        # precedes the op: the Dest-width truncation below and the pack modelling further down
-        # are the other two steps of the same datapath.
+        # What the unpacker hands the SFPU, not what the test drew: a block-float operand's 16
+        # datums share one exponent, so a spread of magnitudes loses its low end on the way in,
+        # per operand. Without this the device computes on quantized values and the reference on
+        # the unrounded originals, which is no correctness statement at all. Here rather than in
+        # the caller because it models the unpack -- the first of the same three datapath steps
+        # the Dest truncation and the pack modelling below complete. A no-op on every
+        # non-block-float format, the unmodelled path's None included.
         a, b, c = (
             quantize_input_to_unpack_format(operand, input_format)
             .flatten()
@@ -5573,12 +5542,10 @@ class TernarySFPUGolden:
         )
 
         if model_dest and dest_acc == DestAccumulation.No and input_format.is_32_bit():
-            # A 32-bit operand landing in a 16-bit Dest drops its low mantissa bits on the way
-            # in, before the op ever sees it -- the ternary kernel copies all three operands
-            # into Dest tiles before the SFPU reads any of them. Unreachable from the current
-            # suite, which skips fp32 at dest_acc=No, and kept because the model would be
-            # silently wrong in a new way the day that skip is lifted. Same helper the unary
-            # and binary goldens use, so the three cannot drift on the width.
+            # A 32-bit operand loses its low mantissa bits landing in a 16-bit Dest, before
+            # the op sees it: the kernel copies all three into Dest tiles first. Unreachable
+            # while the suite skips fp32 at dest_acc=No, kept so lifting that skip does not
+            # make the model silently wrong. Same helper the unary and binary goldens use.
             a, b, c = (truncate_to_dest_width(t, dst_format) for t in (a, b, c))
 
         if operation == MathOperation.SfpuAddcmul:
