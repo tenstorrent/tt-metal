@@ -1,0 +1,17 @@
+/goal Use $denoise-loop-scheduler and $tt-device-usage for the $DIFFUSION_MODEL scheduler under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the scheduler state for the repo-local tt_dit diffusion pipeline. Work only on the self-contained host scheduler and the denoise-loop driver under models/tt_dit/pipelines/<model>/, with tests under models/tt_dit/tests/models/<model>/; do not begin the end-to-end pipeline wiring, multichip, or optimize work in this goal. The scheduler has no runtime dependency on the diffusers modeling code.
+
+Goal completion requirements:
+- models/tt_dit/pipelines/<model>/ contains a self-contained scheduler (rectified-flow / flow-matching / DDIM / EDM as the model uses) plus the denoise-loop driver skeleton (the per-step DiT call is wired in the pipeline stage). The scheduler records its EXACT conventions in doc/scheduler/DESIGN.md: velocity sign (x0 = x_t +/- sigma * v), timestep convention (t = sigma vs 1 - sigma, 1000x vs [0,1] scale), the sigma grid construction (linspace bounds, terminal 0, shift, dedup), whether the x0 sigma comes from the timestep or the sigma grid, and eta (many "euler ancestral" configs actually run eta=0 / deterministic).
+- If the model runs MULTIPLE schedules per request (e.g. one per modality with a different shift), each is held as a separate scheduler instance; every shift instance is validated. Confirm whether the model is guidance-distilled — if so there is NO CFG (single forward per step, no unconditional branch, no negative prompt); do not add CFG that isn't there.
+- Scheduler parity vs the diffusers reference is BIT-EXACT (host math) for schedule construction (sigmas/timesteps) and a full-trajectory step comparison, for every modality shift. Reference-dependent tests SKIP when diffusers is unimportable.
+- Self-consistency tests independent of diffusers exist (schedule invariants, scale_noise endpoints, determinism) so CI passes without the reference on PYTHONPATH.
+- A full denoise-loop latent-trajectory PCC vs a reference run (latent after N steps) and a degeneracy check (no NaN/frozen latents) pass. Verify the step writes only the GENERATED rows so clean conditioning anchors persist across steps.
+- capability_contract.json records denoise steps (and per-modality shift/steps) and any hard-limit reduction with evidence. doc/scheduler/DESIGN.md and work_log.md record conventions, bit-exact parity evidence, trajectory PCC, determinism, commands, and exact artifacts.
+- The scheduler is host tensor math and stays trace-safe (stable input buffers, tensor timesteps) for later $tt-enable-tracing; no torch/from_torch/to_torch leaks into any device forward it drives.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

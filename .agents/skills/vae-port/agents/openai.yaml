@@ -1,0 +1,7 @@
+interface:
+  display_name: "VAE Port"
+  short_description: "Port a diffusion VAE decoder/encoder to TTNN"
+  default_prompt: "Use $vae-port to bring up a diffusion model's VAE (decoder-first) in tt_dit — reusing the conv/audio/ViT primitives, folding weight_norm, handling causal/tiled decode — and validate reconstruction PCC >= 0.99 against the diffusers reference on real weights with per-primitive micro-tests."
+
+policy:
+  allow_implicit_invocation: true

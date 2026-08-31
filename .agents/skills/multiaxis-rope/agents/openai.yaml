@@ -1,0 +1,7 @@
+interface:
+  display_name: "Multi-Axis RoPE"
+  short_description: "Device multi-axis (2D/3D) rotary embedding matching the reference"
+  default_prompt: "Use $multiaxis-rope to implement and validate a multi-axis rotary position embedding on device (matching the diffusers/HF reference convention, partial-rotary channel accounting, and rotate_half vs interleaved), with an isolated micro-test at PCC >= 0.999."
+
+policy:
+  allow_implicit_invocation: true

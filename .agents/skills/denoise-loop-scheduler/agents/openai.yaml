@@ -1,0 +1,7 @@
+interface:
+  display_name: "Denoise Loop & Scheduler"
+  short_description: "Diffusion scheduler + iterative denoise loop on TTNN"
+  default_prompt: "Use $denoise-loop-scheduler to port a diffusion scheduler (rectified-flow/DDIM/EDM) and build the trace-safe multi-step denoise loop, validating scheduler parity (bit-exact vs the diffusers reference) and full-trajectory latent PCC."
+
+policy:
+  allow_implicit_invocation: true

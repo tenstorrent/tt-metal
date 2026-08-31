@@ -1,0 +1,17 @@
+/goal Use $text-encoder-port and $tt-device-usage for the $DIFFUSION_MODEL conditioning encoder under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the text-encoder state for the repo-local tt_dit diffusion pipeline. Work only on the on-device conditioning text (or text-vision) encoder that produces the hidden states the DiT consumes, under models/tt_dit/encoders/<enc>/ with a model-specific wrapper + test under models/tt_dit/tests/models/<model>/; do not begin VAE, scheduler, multichip, or pipeline work in this goal. Reuse an existing tt_dit encoder (clip/t5/gemma/qwen25vl/qwen3vl) where possible; only write a new one if none matches.
+
+Goal completion requirements:
+- The encoder produces the exact conditioning hidden states the pipeline feeds to the DiT context_embedder: correct submodule (often model.language_model, not the full CausalLM/VLM), correct hidden-state layer index, tokenization (chat template / special tokens), and output shape/dtype. Verify the layer-tap off-by-one: HF hidden_states[k] is layers[k-1] output; use activation_layers=(k-1,) and confirm it is the RAW pre-final-norm state; truncate to the needed layers.
+- Real-weight PCC >= 0.99 vs <HFModel>.model(input_ids, output_hidden_states=True).hidden_states[k] on the target device, plus a random-weight CI variant (pcc ~0.98). Reference-dependent tests SKIP when the HF model is unimportable.
+- Config threading is explicit: thread decoupled head_dim, rope_theta, mrope_section, and any size-specific rope/attention params (an un-threaded rope_theta alone can collapse PCC), defaulting to the old expressions for back-compat. Reuse the encoder q/k/v fusion (mind GQA + decoupled head_dim). Strip/drop the shipped checkpoint's encoder prefix, vision tower, and lm_head; partial-load the needed shards.
+- If the encoder is large (tens of GB, won't fit one ASIC), run it multichip with the encoder's TP (+ optional FSDP) config on the available mesh, using init_device_compute_kernel_config(arch(), ...) rather than Wormhole-specific compute configs. Record mesh/parallel config and peak DRAM/ASIC (OOM headroom).
+- If a SHARED encoder was edited, it stays back-compatible with the other model that uses it; state how back-compat was verified.
+- doc/text_encoder/DESIGN.md and work_log.md record the layer-tap verification, config-threading fix, mesh/parallel config, peak DRAM/ASIC, PCC, commands, and exact artifacts. capability_contract.json records max prompt tokens and the conditioning output shape/dtype, with evidence for any hard-limit reduction.
+- Runtime is free of torch, ttnn.from_torch, ttnn.to_torch, or host fallback outside from_state_dict/setup and the test boundary. Watcher-clean evidence (or a documented false-positive).
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

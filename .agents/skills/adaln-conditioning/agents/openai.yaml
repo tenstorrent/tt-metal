@@ -1,0 +1,7 @@
+interface:
+  display_name: "AdaLN Conditioning"
+  short_description: "Timestep/AdaLN modulation for diffusion transformers"
+  default_prompt: "Use $adaln-conditioning to implement and validate a DiT block's AdaLN timestep/modality modulation on device (timestep sinusoidal + MLP embedding, scale_shift_table or per-row table gather, addcmul modulate/gate), with isolated PCC >= 0.999 checks against the diffusers reference."
+
+policy:
+  allow_implicit_invocation: true

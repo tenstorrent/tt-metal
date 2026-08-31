@@ -1,0 +1,16 @@
+/goal Use $vae-port and $tt-device-usage for the $DIFFUSION_MODEL video VAE under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the video-vae state for the repo-local tt_dit diffusion pipeline. Work only on the video/3D VAE under models/tt_dit/models/vae/decoder_<model>.py (and encoder_<model>.py only if the model conditions on an input image/frame) with a test under models/tt_dit/tests/models/<model>/; do not begin audio-VAE, scheduler, multichip, or pipeline work in this goal. For text-conditioned generation bring up the DECODER first; defer the encoder unless conditioning needs it.
+
+Goal completion requirements:
+- models/tt_dit/models/vae/decoder_<model>.py implements the causal Conv3d decoder (latents -> frames): conv stack, GroupNorm (temporal axis folded into batch — preserve the folded layout), activation (SiLU/Snake/SnakeBeta), residual/AMP blocks, upsampling, and the tiling/temporal-chunk math reproduced from the reference. Subclass layers.module.Module with a state-dict adapter; reuse layers/conv3d.py, GroupNorm, and the existing vae_ltx/vae_wan2_1 templates. If post_quant_conv is 1x1x1, port it as a Linear. A ViT-style decoder reuses the DiT attention/rope/swiglu primitives — watch residual-gate/bias/QK-norm/rope-theta differences.
+- Full-decoder reconstruction PCC >= 0.99 (relative_rmse <= 0.05) vs the diffusers reference on REAL weights (local partial-load), plus per-primitive micro-tests (conv/resnet/AMP block, up/downsample, one ViT block) at PCC >= 0.999. Compare the RAW decoder output in the module test — the per-channel latents_mean/std un-normalization lives at the pipeline boundary.
+- Precision recipe: bf16 weights+activations with fp32 accumulation (HiFi4, fp32_dest_acc_en, packer_l1_acc); SDPA rejects fp32 — cast Q/K/V to bf16 for the op and cast context back. conv3d supports zeros/replicate pad, NOT reflect — pre-pad reflect explicitly. Record the recipe and any op fallback.
+- The tiling/temporal-chunk geometry is reproduced and validated: the decoder's frame-count contract (e.g. 17n+5 -> 5n+2, token_drop) is documented so the pipeline avoids degenerate zero-output-chunk configs. Record it in capability_contract.json (num_frames constraint, latent shape, resolution) with evidence for any hard-limit reduction.
+- doc/video_vae/DESIGN.md and work_log.md record commands, reconstruction PCC/RMSE, precision recipe, op fallbacks, the tiling path exercised, and exact artifacts. Reference-dependent tests SKIP when diffusers is unimportable; do NOT upgrade the shared diffusers pin.
+- Runtime is free of torch, ttnn.from_torch, ttnn.to_torch, or host fallback outside from_state_dict/setup and the test boundary. Watcher-clean evidence (or a documented false-positive).
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

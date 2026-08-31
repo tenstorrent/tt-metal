@@ -1,0 +1,7 @@
+interface:
+  display_name: "Diffusion Full Pipeline"
+  short_description: "Assemble encoder+DiT+scheduler+VAE into an end-to-end diffusion pipeline"
+  default_prompt: "Use $diffusion-full-pipeline to wire a diffusion model's validated components (text encoder, DiT, scheduler, VAE decoders) into an end-to-end generation pipeline on device — managing mesh lifecycle (no per-stage submesh churn) and DRAM residency staging — and produce a saved, non-degenerate artifact with verification stats."
+
+policy:
+  allow_implicit_invocation: true

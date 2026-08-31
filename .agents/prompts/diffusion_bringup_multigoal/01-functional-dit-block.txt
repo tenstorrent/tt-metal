@@ -1,0 +1,17 @@
+/goal Use $functional-dit-block, $adaln-conditioning, $multiaxis-rope, and $tt-device-usage for $DIFFUSION_MODEL under the $diffusion-model-bringup contract in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the functional-dit-block state for the repo-local tt_dit diffusion pipeline. Work only on ONE DiT block (plus any token-refiner block) under models/tt_dit/models/transformers/<model>/; do not begin full-DiT assembly, text-encoder, VAE, scheduler, or pipeline work in this goal. Bring the block up on a single 1x1 mesh; parallelism is a later stage.
+
+Goal completion requirements:
+- models/tt_dit/models/transformers/<model>/transformer_<model>.py (+ attention_<model>.py, rope_<model>.py) implement one DiT block: pre-norm + AdaLN/timestep modulation, self-attention with QK-norm and multi-axis RoPE, SwiGLU/GELU FFN, gated residuals; plus any token-refiner block kind the model uses. Subclass layers.module.Module, implement _prepare_torch_state (rename diffusers keys) and load via load_torch_state_dict; reuse tt_dit primitives (Linear swiglu, RMSNorm, FeedForward, ttnn SDPA is_causal=False).
+- HF-diffusers-vs-TTNN PCC >= 0.99 (relative_rmse <= 0.05) per block kind on a 1x1 mesh via utils.check.assert_quality, with SYNTHETIC weights shared between ref and TT for CI, plus at least one REAL-weight run (partial safetensors load of one block).
+- Isolated micro-tests, each PCC >= 0.999: multi-axis RoPE application (varied per-axis position_ids; pass-through channels verified untouched); the modulation/adaLN gather (all shift/scale/gate params); and the sinusoidal + MLP timestep embedding.
+- Record in doc/functional_dit_block/DESIGN.md and work_log.md: modulation scheme (table-gather vs scale_shift_table), QK-norm placement (per-head vs whole-row), rope convention (rotate_half vs interleaved), rotary_dim vs head_dim, the device rope path chosen (and why), SwiGLU value/gate ordering, bias flags, precision escalations (HiFi4/fp32), commands, PCC/RMSE, and quirks. An ungated refiner block may need a looser RMSE bound with PCC still >= 0.99 — document it as the small-init QK-norm artifact, not a bug.
+- Seed models/tt_dit/models/transformers/<model>/doc/capability_contract.json with the patchify/packed-sequence contract and latent shapes this block assumes; note any hard-limit reduction with byte/probe evidence.
+- Reference-dependent tests SKIP (not error) when the diffusers model is unimportable; do NOT upgrade the shared diffusers pin (use a PYTHONPATH source clone if needed).
+- Runtime is free of torch, ttnn.from_torch, ttnn.to_torch, or host fallback outside from_state_dict/setup and the test boundary. Watcher-enabled run recorded, or a documented known false-positive.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
