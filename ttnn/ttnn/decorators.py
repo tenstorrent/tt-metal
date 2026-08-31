@@ -994,7 +994,11 @@ class Operation:
                             f"Pre-operation hook {hook} returned {hook_return_value} but must return None"
                         )
 
-                if ttnn.tracer.is_tracing_enabled():
+                if ttnn.CONFIG.enable_logging and ttnn.CONFIG.enable_graph_report:
+                    if not ttnn.tracer.is_tracing_enabled():
+                        ttnn.tracer.enable_tracing()
+
+                if ttnn.tracer.ENABLE_TRACER:
                     decorated_function = ttnn.tracer.trace_ttnn_operation(
                         self.python_fully_qualified_name, decorated_function
                     )

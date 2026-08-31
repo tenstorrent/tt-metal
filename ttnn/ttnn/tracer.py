@@ -484,10 +484,8 @@ def is_tracing_enabled():
 @contextmanager
 def trace():
     enable_tracing()
-    try:
-        yield
-    finally:
-        disable_tracing()
+    yield
+    disable_tracing()
 
 
 def get_module_input_nodes(module_operation):
