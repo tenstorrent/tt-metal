@@ -41,11 +41,21 @@ DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
 RECT_DEST_BLOCKS = ((2, 4), (4, 2))
 
 
+def _mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
+    """Half-dest occupancy: 2×2, 1×(cap/2), (cap/2)×1 when they fit."""
+    half = max_tiles // 2
+    pairs = ((2, 2), (1, half), (half, 1))
+    return [
+        (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
+    ]
+
+
 def dest_corner_mn(max_tiles: int) -> List[tuple]:
-    """1×1, 1×max, max×1, largest square, and 2×4 / 4×2 when they fit dest."""
+    """1×1, dest-fill vectors/square, 2×4 / 4×2, and half-dest mid-fill when they fit."""
     square = int(max_tiles**0.5)
     corners = [(1, 1), (1, max_tiles), (max_tiles, 1), (square, square)]
     corners.extend((rt, ct) for rt, ct in RECT_DEST_BLOCKS if rt * ct <= max_tiles)
+    corners.extend(_mid_fill_rt_ct_pairs(max_tiles))
     return list(dict.fromkeys(corners))
 
 
