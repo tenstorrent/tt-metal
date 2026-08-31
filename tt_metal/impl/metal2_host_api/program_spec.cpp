@@ -2837,7 +2837,6 @@ experimental::quasar::QuasarComputeConfig MakeGen2ComputeConfig(
         .dst_full_sync_en = !gen2.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .math_approx_mode = (gen2.sfpu_precision_mode == Precision::Approximate),
-        .enable_2x_src_format = gen2.enable_2x_src_register,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = to_defines_map(kernel_spec.compiler_options.defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),

@@ -3,6 +3,8 @@
 # Top-level files
 /* @tenstorrent/metalium-developers-infra
 METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
+.agents/ @yieldthought @tchedaTT
+.agents/requirements.txt @tenstorrent/metalium-developers-infra @yieldthought @tchedaTT
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
@@ -92,6 +94,7 @@ tools/bringup/ @ctr-martemovTT
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT
 tools/**/scaleout/**/CMakeLists.txt @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/metalium-developers-infra
+tools/scaleout/sweep_rank_binding_solutions.py @Riddy21 @p1-0tr
 tools/scaleout/exabox/ @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT
 tools/scaleout/exabox/run_fabric_tests.sh @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @nnyamagoudar-TT
 
@@ -119,6 +122,7 @@ tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr
 tt_metal/fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
+tt_metal/hal.cpp @ruizhangTT
 tt_metal/hostdevcommon/ @tenstorrent/metalium-runtime # this should go away
 tt_metal/hostdevcommon/**/CMakeLists.txt @tenstorrent/metalium-runtime @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @nathan-TT @kstevensTT
@@ -276,6 +280,7 @@ tests/tt_metal/tt_metal/deployment/ @rdjogoTT @ctr-nradojevicTT @ctr-adjokicTT
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
 # nanobind
+ttnn/ttnn/distributed/ttrun.py @Riddy21 @p1-0tr
 ttnn/**/*nanobind* @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 ttnn/ttnn/_experimental/moe_compute_utils.py @tenstorrent/metalium-developers-ops-data-movement
 ttnn/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads
