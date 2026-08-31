@@ -12,6 +12,16 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "perf: mark explicit KDA performance tests")
 
 
+@pytest.fixture
+def isolated_program_cache(device):
+    """Give one cache-sensitive test an enabled, empty program cache."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+
 @pytest.fixture(scope="session")
 def kimi_k3_checkpoint_dir() -> Path:
     """Return the explicitly selected pinned Kimi-K3 checkpoint subset."""
