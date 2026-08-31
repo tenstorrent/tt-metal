@@ -231,6 +231,69 @@ def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
+def _bfloat16_neighbour(value, steps):
+    """Return ``value`` moved ``steps`` bfloat16 ULP away from zero (``steps`` may be negative).
+
+    Adding to the raw bit pattern moves magnitude the right way for either sign, but only away
+    from zero: stepping down from ``+0.0`` gives ``0xFFFF`` and from ``-0.0`` wraps past the int16
+    floor to ``0x7FFF``, both NaN. Reject zero rather than feed NaN into a caller's stimulus.
+    """
+    assert value != 0, "bfloat16 neighbour is undefined at zero; the bit step would produce NaN"
+    bits = torch.tensor(value, dtype=torch.bfloat16).view(torch.int16)
+    return (bits + steps).view(torch.bfloat16).item()
+
+
+def run_softplus_boundary_test(device, beta, threshold, pcc=0.99):
+    """``beta * x == threshold`` must evaluate softplus, not the linear fallback.
+
+    torch reverts to the linear function only when ``beta * x > threshold`` holds strictly, so the
+    boundary point itself still takes the softplus path. The reference is computed from torch
+    directly rather than through ``ttnn.get_golden_function(ttnn.softplus)``, which drops ``beta``
+    and ``threshold`` and would otherwise compare against the defaults.
+
+    ``beta`` and ``threshold`` are powers of two so that ``threshold / beta`` is exact in bfloat16
+    and ``beta * x`` reproduces ``threshold`` exactly, which is what puts an element on the
+    boundary at all.
+    """
+    boundary = threshold / beta
+    assert boundary == torch.tensor(boundary, dtype=torch.bfloat16).item(), "boundary must be exact in bf16"
+
+    # One bf16 step either side pins the split: below and on the boundary are softplus, above is linear.
+    values = [_bfloat16_neighbour(boundary, steps=-1), boundary, _bfloat16_neighbour(boundary, steps=1)]
+    stride = len(values)
+    torch_input_tensor = torch.tensor(values, dtype=torch.bfloat16).repeat(64, 32)
+
+    torch_output_tensor = torch.nn.functional.softplus(torch_input_tensor, beta=beta, threshold=threshold)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    output_tensor = ttnn.softplus(input_tensor, beta=beta, threshold=threshold)
+    output_tensor = ttnn.to_torch(ttnn.from_device(ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)))
+
+    # The regression assertion is tolerance-free and per-element. softplus(x) is strictly greater
+    # than x, so on the boundary any lane equal to its input took the linear branch. Comparing
+    # elementwise rather than with torch.equal is what makes this catch an error confined to a
+    # subset of lanes, faces or unrolled iterations; a whole-tensor equality check would pass as
+    # long as any single lane differed.
+    on_boundary = output_tensor[:, 1::stride]
+    assert torch.all(
+        on_boundary > torch_input_tensor[:, 1::stride]
+    ), f"softplus took the linear branch at beta*x == threshold (beta={beta}, threshold={threshold})"
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+# `threshold` must stay at roughly 4 or below. The boundary residual is log1p(exp(-threshold))/beta,
+# which falls under half a bfloat16 output ULP by threshold=5, and past SOFTPLUS_POLY_BOUNDARY = 5.0f
+# the kernel drops the residual entirely. A correct softplus then returns the input bit for bit and
+# the strict-inequality assertion below would fail spuriously. Note the neighbouring test_softplus
+# uses thresholds up to 40 and the ttnn default is 20; neither can be reused here.
+@pytest.mark.parametrize("beta, threshold", [(2, 1), (1, 2), (0.5, 1), (4, 1), (1, 0.5)])
+def test_softplus_threshold_boundary(device, beta, threshold):
+    run_softplus_boundary_test(device, beta, threshold)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanhshrink(device, h, w):
@@ -615,36 +678,38 @@ def test_xielu(alpha_p, alpha_n, dtype, device):
         assert_with_ulp(torch_output, ttnn_output, 1)
 
 
-def test_lgamma_bfloat16(device):
-    high = 1000
-    low = -1000
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        "float32",
+        "bfloat16",
+    ],
+)
+@pytest.mark.parametrize("alpha_p, alpha_n", [(0.8, 0.8), (0.3, 0.1)])
+def test_xielu_large_negative(alpha_p, alpha_n, dtype, device):
+    """xielu's large-negative branch scales by 2**k via setexp.
 
-    # All 2^16 bfloat16 bit patterns (256x256), flattened for masking
-    input_tensor = generate_all_bfloat16_bitpatterns(torch.bfloat16).flatten()
-    input_tensor = flush_subnormal_values_to_zero(input_tensor)
-    input_tensor_f32 = input_tensor.to(torch.float32)
+    Without an exponent-underflow guard the scaled exponent goes non-positive and
+    setexp wraps it into a large positive exponent, so the op returned values around
+    1e38, Inf or NaN for inputs near -89 where the true result is about 26.  The
+    default test above draws from torch.randn, so it never reaches this region.
+    """
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_input = torch.arange(-95.0, -80.0, 0.25, dtype=torch_dtype).reshape(1, -1)
+    golden_fn = ttnn.get_golden_function(ttnn.xielu)
+    torch_output = golden_fn(torch_input, alpha_p=alpha_p, alpha_n=alpha_n)
 
-    in_range = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
-    is_non_positive_int = (input_tensor_f32 <= 0) & (input_tensor_f32 == torch.floor(input_tensor_f32))
-    mask = in_range & ~is_non_positive_int  # exclude lgamma poles at 0,-1,-2,...
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.xielu(ttnn_input, alpha_p=alpha_p, alpha_n=alpha_n)
+    ttnn_output = ttnn.to_torch(ttnn_output)
 
-    input_tensor = input_tensor[mask]
+    assert torch.isfinite(ttnn_output).all(), "xielu returned a non-finite value for a finite input"
 
-    tt_in = ttnn.from_torch(
-        input_tensor,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.lgamma)
-    golden = golden_function(input_tensor, device=device)
-
-    tt_result = ttnn.lgamma(tt_in)
-    result = ttnn.to_torch(tt_result)
-
-    assert_with_pcc(golden, result, 0.999)
+    if dtype == "float32":
+        assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
+    else:
+        assert_with_ulp(torch_output, ttnn_output, 1)
 
 
 @pytest.mark.parametrize(

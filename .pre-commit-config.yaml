@@ -61,6 +61,11 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
+    - id: check-agent-prompt-lengths
+      name: check .agents/prompts goal objective lengths (<=4000 chars substituted)
+      entry: python3 scripts/check_agent_prompt_lengths.py
+      language: system
+      files: ^\.agents/prompts/
     - id: validate-metalium-includes
       name: validate-metalium-includes
       entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
@@ -73,6 +78,15 @@ repos:
       entry: python3 scripts/validate_no_global_torch_imports.py
       language: system
       pass_filenames: false
+- repo: local
+  hooks:
+    - id: check-kernel-cb-ptrs
+      name: Forbid get_read_ptr on cb_reserve_back'd CBs (issue #39432)
+      entry: python3 scripts/check_kernel_cb_ptrs.py
+      language: system
+      pass_filenames: true
+      types_or: [c++, c]
+      files: /kernels?/.*\.(cpp|cc|h|hpp)$
 - repo: local
   hooks:
     - id: block-ttnn-pybind-changes

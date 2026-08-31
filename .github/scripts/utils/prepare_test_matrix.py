@@ -30,9 +30,11 @@ exit 0); otherwise comma-separated logical SKUs intersected with coverage.
 `weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
 it is copied into each output matrix entry.
 
+`ttsim_lib` is likewise copied through, and the distinct values are emitted as the JSON-array
+`sim-libs` output so a caller can run one fetch-ttsim leg per simulator binary it needs.
+
 Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
-    python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
     python prepare_test_matrix.py tests/pipeline_reorg/blackhole_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml --event merge_group
 """
 
@@ -286,6 +288,10 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
+            # Simulator SKUs name the libttsim binary they run on; carrying it here lets the
+            # impl's fetch-ttsim job download only the libs this matrix actually needs.
+            if "ttsim_lib" in sku_entry:
+                entry["ttsim_lib"] = sku_entry["ttsim_lib"]
             # Exabox multihost SKUs: runs_on contains an exabox-multihost* label
             # (e.g. exabox-multihost-ci-sc4). The multihost-ci runner hook provisions
             # workers from container.image. A legacy `allocation` block also marks
@@ -297,26 +303,35 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
             filtered_tests.append(entry)
 
-    if not filtered_tests:
-        print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'. Failing pipeline.")
+    if not tests:
+        return []
+    elif not filtered_tests:
+        print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
         sys.exit(1)
 
     return filtered_tests
 
 
 def write_matrix_output(filtered_matrix):
-    """Print and optionally write matrix to GITHUB_OUTPUT."""
+    """Print and optionally write matrix + sim-libs to GITHUB_OUTPUT."""
     print(f"\nFiltered test matrix ({len(filtered_matrix)} tests):")
     json_output_pretty = json.dumps(filtered_matrix, indent=2)
     print(json_output_pretty)
 
     json_output_compact = json.dumps(filtered_matrix)
+    # Simulator binaries this matrix needs, as a JSON array so the caller can feed it straight
+    # to a fetch-ttsim matrix. "[]" when the matrix has no sim SKUs, which is also how impls
+    # tell whether to run that job at all.
+    sim_libs = json.dumps(sorted({entry["ttsim_lib"] for entry in filtered_matrix if entry.get("ttsim_lib")}))
+
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a") as f:
             f.write(f"matrix<<EOF\n{json_output_compact}\nEOF\n")
+            f.write(f"sim-libs={sim_libs}\n")
     else:
         print(f"\nmatrix={json_output_compact}")
+        print(f"sim-libs={sim_libs}")
 
 
 def main(argv=None):
@@ -381,6 +396,10 @@ def main(argv=None):
     filtered_matrix = build_test_matrix(
         tests, enabled_skus, sku_config, event=args.event, allow_missing_cmd=args.allow_missing_cmd
     )
+
+    if not filtered_matrix:
+        print(f"::warning::No tests present in test YAML '{args.tests_yaml_path}'.")
+
     write_matrix_output(filtered_matrix)
     return 0
 

@@ -46,19 +46,8 @@ constexpr bool is_fp32_output_format() {
 
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_tilize() {
-#ifdef ARCH_QUASAR
-    // Quasar has no fast-tilize LLK (and per the LLK team it never will) — only regular tilize.
-    // Always take the regular tilize_init/tilize_block/tilize_uninit path below.
-    return false;
-#else
-    // Float32 OUTPUT is unsupported: fast-tilize's pack path uses Read_32b=0
-    // (bf16-stride stepping through DEST), which truncates fp32 DEST to bf16.
-    // That truncation is acceptable for bf16/bfp output but destroys precision
-    // for fp32 output, producing garbage results in downstream fp32 consumers
-    // (see attn_matmul_fp32 regression).
     return block_width_tiles < 256 && dfb_has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
-#endif
 }
 
 // =============================================================================
@@ -77,7 +66,8 @@ template <
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
-    static_assert(input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
+    static_assert(
+        input_dfb != output_dfb, "Tilize cannot be done in-place: input_dfb and output_dfb must be different");
     static_assert(input_dfb < 32, "Invalid input_dfb: must be less than 32");
     static_assert(output_dfb < 32, "Invalid output_dfb: must be less than 32");
 
@@ -89,7 +79,8 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
     // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
     constexpr bool lossless_fp32_override =
         (fp32_mode == tilize_config::Fp32Mode::Lossless) && is_fp32_input_format<input_dfb>();
-    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
+    constexpr bool use_fast =
+        can_use_fast_tilize<block_width_tiles, input_dfb, output_dfb>() && !lossless_fp32_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =
@@ -115,10 +106,10 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         // Reconfigure srcA for unpack
         reconfig_data_format_srca(input_dfb);
 
-#ifndef ARCH_BLACKHOLE
+#ifdef ARCH_WORMHOLE
         if constexpr (use_fast) {
             // WH fast-tilize uses both SrcA and SrcB; reconfigure SrcB to match input.
-            // BH fast-tilize only uses SrcA — SrcB must not be touched so matmul
+            // BH/Quasar fast-tilize only uses SrcA — SrcB must not be touched so matmul
             // weights stay configured correctly.
             reconfig_data_format_srcb(input_dfb);
         }
@@ -141,20 +132,25 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
             } else
 #endif
             {
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
                 fast_tilize_init(input_dfb, block_width_tiles, output_dfb);
-#else
-                // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
-                // Trap (watcher/runtime assert) in case this path is ever reached.
-                ASSERT(false);
-#endif
             }
         } else {
             tilize_init(input_dfb, block_width_tiles, output_dfb);
         }
     }
 
-    // Validate DFB capacity
+    // Construct DataflowBuffer objects for sync operations.
+    //
+    // The constructor runs dfb_ensure_ready(), which blocks until this buffer's producer has
+    // published its tile-counter state (buf_capacity et al.). The capacity ASSERTs below read
+    // buf_capacity through get_dfb_num_pages(), so they must come AFTER construction: placed before
+    // it, they race the producer's publish and can read a stale/zero capacity, tripping a false
+    // assert that only surfaces under timing shifts (e.g. multicore, or an extra unpack-thread init).
+    DataflowBuffer in_dfb(input_dfb);
+    DataflowBuffer out_dfb(output_dfb);
+
+    // Validate DFB capacity — race-free here because the DataflowBuffer constructors above ran
+    // dfb_ensure_ready(), guaranteeing the producer has programmed the tile counters.
     if (asymmetric_dfb_pages) {
         uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= max_in));
@@ -162,10 +158,6 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= block_width_tiles));
     }
     PACK(ASSERT(get_dfb_num_pages(output_dfb) >= block_width_tiles));
-
-    // Construct DataflowBuffer objects for sync operations
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
 
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
@@ -190,13 +182,7 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         out_dfb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
             fast_tilize_block(input_dfb, block_width_tiles, output_dfb);
-#else
-            // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
-            // Trap (watcher/runtime assert) in case this path is ever reached.
-            ASSERT(false);
-#endif
         } else {
             tilize_block(input_dfb, block_width_tiles, output_dfb);
         }
@@ -214,13 +200,7 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         init_uninit_mode == tilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == tilize_config::InitUninitMode::UninitOnly) {
         if constexpr (use_fast) {
-#ifndef ARCH_QUASAR  // Quasar has no fast tilize (use_fast is always false here); keep the name out of the parse
             fast_tilize_uninit(input_dfb, output_dfb, block_width_tiles);
-#else
-            // Unreachable: can_use_fast_tilize() returns false on Quasar so use_fast is always false.
-            // Trap (watcher/runtime assert) in case this path is ever reached.
-            ASSERT(false);
-#endif
         } else {
             tilize_uninit(input_dfb, output_dfb);
         }

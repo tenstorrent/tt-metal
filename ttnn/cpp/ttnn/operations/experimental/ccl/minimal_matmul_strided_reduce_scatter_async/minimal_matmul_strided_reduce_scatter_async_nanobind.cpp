@@ -36,7 +36,13 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             [1] reduce-scatter output (final result)
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): multi-device input activations tensor
+            * :attr:`input_tensor` (ttnn.Tensor | list[ttnn.Tensor]): input activations. Pass a single
+              tensor for a standard matmul, or exactly 2 tensors [prefix, suffix] for fused concat over
+              in0's K (concat-free, no host concat). Concatenation is on the channel (K, last) axis ONLY —
+              the two must be identical on every other axis. Any per-segment channel count is allowed
+              (the seam lands on the prefix's padded-K tile boundary); the weight must be per-segment
+              tile-padded (see prepare_weight_for_concatenated_input in models/tt_dit/utils/tensor.py)
+              so that prefix_padded_K + suffix_padded_K == weight_padded_K.
             * :attr:`weight_tensor` (ttnn.Tensor): multi-device weight tensor
             * :attr:`dim` (int): scatter dimension for reduce-scatter
             * :attr:`multi_device_global_semaphore`: global semaphores for reduce-scatter
@@ -44,7 +50,14 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
 
         Keyword Args:
             * :attr:`num_links` (int): Number of links for reduce-scatter. Defaults to 1.
-            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the matmul output.
+            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the matmul
+              output. When omitted, the matmul output inherits the INPUT tensor's memory config. An L1
+              buffer type — explicit or inherited — opts into the L1 hand-off: the MM output is then
+              block-sharded over the matmul core grid so the RS reader consumes it without a DRAM
+              round-trip. An L1 MM output REQUIRES :attr:`mm_window_blocks` and both caller-owned counter
+              tensors (:attr:`mm_progress_counters`, :attr:`mm_credit_counters`); the call is rejected at
+              validation otherwise. Pass ``mm_window_blocks=2`` (measured perf-neutral vs full residency),
+              or ``ceil(Mt_per_core / M_block_size)`` to keep the whole MM output resident.
             * :attr:`rs_output_mem_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the RS output.
             * :attr:`rs_intermediate_mem_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the RS intermediate.
             * :attr:`topology` (ttnn.Topology): Communication topology. Defaults to Ring.
@@ -66,20 +79,23 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`mm_progress_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the MM->RS
               per-core progress counters: a uint32 ROW_MAJOR tensor of shape [num_cores, slots], L1
               HEIGHT_SHARDED with shard [1, slots] over a core grid covering the RS worker cores, where
-              slots >= the device compute grid area. Share one such tensor across every MMRS call (see
-              CCLManager.get_mm_progress_counters_buffer); otherwise each compiled program allocates its
-              own and permanently lowers the device's L1 floor.
+              slots >= the device compute grid area. REQUIRED whenever :attr:`mm_window_blocks` is set
+              (the op rejects the call otherwise): a per-program allocation would permanently lower the
+              device's L1 floor. Share one such tensor across every MMRS call (see
+              CCLManager.get_mm_progress_counters_buffer).
             * :attr:`mm_window_blocks` (Optional[int]): Keep only this many M blocks of the matmul output
-              resident in L1 per core, recycling slot ``m % mm_window_blocks``, instead of the whole
-              output. Lets M grow past the point where the resident shard crowds out the circular
-              buffers. The returned matmul output is then smaller than [M, N] and does NOT hold the
-              full matmul result, so leave this unset if you need to read it.
+              resident in L1 per core (>= 1), recycling slot ``m % mm_window_blocks``, instead of the
+              whole output. Lets M grow past the point where the resident shard crowds out the circular
+              buffers. REQUIRED whenever the MM output is in L1 (explicit L1 memory_config_mm, or
+              inherited from an L1 input). The returned matmul output is then smaller than [M, N] and
+              does NOT hold the full matmul result, so route the output through DRAM instead if you
+              need to read it.
             * :attr:`mm_credit_counters` (Optional[ttnn.Tensor]): Caller-owned scratch for the RS->MM
               window credits: a uint32 ROW_MAJOR tensor, L1 HEIGHT_SHARDED with shard [1, slots] over a
               core grid covering the matmul cores, where slots >= the number of RS readers
-              (2 * num_links * num_workers_per_link). Only used when mm_window_blocks is set. Share one
-              across every MMRS call (see CCLManager.get_mm_credit_counters_buffer) for the same reason
-              as mm_progress_counters.
+              (2 * num_links * num_workers_per_link). REQUIRED whenever :attr:`mm_window_blocks` is set
+              (the op rejects the call otherwise), for the same reason as mm_progress_counters. Share one
+              across every MMRS call (see CCLManager.get_mm_credit_counters_buffer).
 
         )doc",
         &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,

@@ -718,6 +718,137 @@ def test_softmax_large_kernel_block_size(device, Wt):
     )
 
 
+def _run_softmax_non_divisible_width(device, Wt, fp32_acc_en, numeric_stable):
+    torch.manual_seed(0)
+
+    W = Wt * 32
+    shape = (1, 1, 64, W)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_output = F.softmax(torch_input, dim=-1, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_acc_en,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_output = ttnn.softmax(ttnn_input, dim=-1, compute_kernel_config=compute_config, numeric_stable=numeric_stable)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
+
+
+@pytest.mark.parametrize(
+    "Wt",
+    [
+        5,
+        7,
+        11,
+        13,
+        47,
+    ],
+)
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("numeric_stable", [True, False])
+def test_softmax_non_divisible_width(device, Wt, fp32_acc_en, numeric_stable):
+    _run_softmax_non_divisible_width(device, Wt, fp32_acc_en, numeric_stable)
+
+
+@pytest.mark.parametrize(
+    "Wt",
+    [
+        # Wide enough for the large-kernel path; Wt % 80 (capped CB length) is not a
+        # multiple of block_size either.
+        637,
+        703,
+        1001,
+    ],
+)
+def test_softmax_large_non_divisible_width(device, Wt):
+    _run_softmax_non_divisible_width(device, Wt, fp32_acc_en=True, numeric_stable=True)
+
+
+@pytest.mark.parametrize(
+    "batch, causal, Wt",
+    [
+        # broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
+        (64, False, 5),
+        (64, False, 7),
+        (64, False, 13),
+        (64, False, 47),
+        # causal mask: re-read for every row rather than once per batch, square Wt*32 mask
+        (16, True, 5),
+        (16, True, 7),
+        (16, True, 13),
+        # wide enough to select the streaming large kernel, which pads c_4 per pass
+        (1, False, 637),
+        (1, False, 1001),
+    ],
+)
+@pytest.mark.parametrize("fp32_acc_en", [True, False])
+@pytest.mark.parametrize("numeric_stable", [True, False])
+def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, fp32_acc_en, numeric_stable):
+    """Issue #39050: the fused scale/mask path streams the attention mask (c_4) in blocks of the
+    fixed block_size. Its CB is sized round_up(Wt, block_size), so a row of Wt tiles leaves the fifo
+    mid-cycle and a missing realignment shows up as a wrapped mask read on a later row."""
+    torch.manual_seed(0)
+
+    W = Wt * 32
+    scale = 0.75
+    mask_shape = (batch, 1, W, W) if causal else (batch, 1, 32, W)
+
+    torch_input = torch.randn((batch, 1, W if causal else 64, W), dtype=torch.bfloat16)
+    attention_mask = torch.zeros(mask_shape, dtype=torch.bfloat16)
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = float("-inf")
+
+    # a broadcast mask only contributes its first row to every input row
+    golden_mask = attention_mask if causal else attention_mask[:, :, :1, :]
+    torch_output = F.softmax(torch_input * scale + golden_mask, dim=-1, dtype=torch.bfloat16)
+
+    compute_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=fp32_acc_en,
+    )
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    if causal:
+        # scale_mask_softmax rejects a square mask; the causal path is reachable in place only
+        ttnn_output = ttnn.scale_mask_softmax_in_place(
+            ttnn_input,
+            scale,
+            ttnn_mask,
+            is_causal_mask=True,
+            compute_kernel_config=compute_config,
+            numeric_stable=numeric_stable,
+        )
+    else:
+        ttnn_output = ttnn.scale_mask_softmax(
+            ttnn_input,
+            scale,
+            ttnn_mask,
+            compute_kernel_config=compute_config,
+            numeric_stable=numeric_stable,
+        )
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
+
+
 def test_softmax_4096x4096_fp32(device):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand((1, 1, 4096, 4096), dtype=torch.float32)

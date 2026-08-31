@@ -174,30 +174,51 @@ void DispatchSKernel::GenerateStaticConfigs() {
     // DEVICE_PRINT L1 buffers. Only enable the DRAM-aggregation work on cq_id 0 so the buffers
     // aren't drained twice (which would race the host's rpos updates and reorder/drop messages).
     if (cq_id_ == 0 && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
-        descriptor_.metal_context().dprint_server() && device_->arch() != tt::ARCH::QUASAR) {
-        auto print_cores = descriptor_.metal_context().dprint_server()->get_print_cores(device_->id());
+        descriptor_.metal_context().dprint_server()) {
+        auto* dprint_server = descriptor_.metal_context().dprint_server().get();
+        auto print_cores = dprint_server->get_print_cores(device_->id());
         if (!print_cores.empty()) {
             const auto& hal = descriptor_.hal();
-            const uint32_t num_print_cores = static_cast<uint32_t>(print_cores.size());
+
+            // A core can expose more than one DEVICE_PRINT buffer. So the dispatcher's NOC location count is the
+            // buffer count, not the print-core count.
+            uint32_t num_noc_locations = 0;
+            for (const auto& core_desc : print_cores) {
+                num_noc_locations +=
+                    static_cast<uint32_t>(dprint_server->get_core_buffers(device_->id(), core_desc).size());
+            }
 
             // Overlay constraint: noc_locations and l1_cache share the same L1 bytes (the kernel
             // copies noc_locations into LDM at init then reuses the L1 region as l1_cache). The
             // initial noc_locations data must fit within the overlaid l1_cache region.
             const uint32_t noc_locations_size =
-                static_cast<uint32_t>(sizeof(device_print_dispatch::NocLocationInputInfo)) * num_print_cores;
+                static_cast<uint32_t>(sizeof(device_print_dispatch::NocLocationInputInfo)) * num_noc_locations;
             const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
+
+            // The kernel indexes NOC locations with uint8_t (DevicePrintDispatch's
+            // noc_locations_to_process), so it cannot address more than 256 of them.
+            constexpr uint32_t max_addressable_noc_locations = 256;
 
             // Check if there is enough space in the buffer
             if (noc_locations_size > l1_cache_size) {
                 log_warning(
                     tt::LogMetal,
                     "DPRINT dispatch_s DRAM aggregation disabled on device {}: l1_cache ({} bytes) is too "
-                    "small to hold noc_locations for {} print cores ({} bytes). Falling back to per-core L1 "
+                    "small to hold noc_locations for {} print buffers ({} bytes). Falling back to per-core L1 "
                     "polling; raise TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES to re-enable.",
                     device_->id(),
                     l1_cache_size,
-                    num_print_cores,
+                    num_noc_locations,
                     noc_locations_size);
+            } else if (num_noc_locations > max_addressable_noc_locations) {
+                log_warning(
+                    tt::LogMetal,
+                    "DPRINT dispatch_s DRAM aggregation disabled on device {}: {} print buffers exceed the maximum "
+                    "of {} the dispatch_s kernel can index. Falling back to per-core L1 polling; narrow "
+                    "TT_METAL_DPRINT_CORES to re-enable.",
+                    device_->id(),
+                    num_noc_locations,
+                    max_addressable_noc_locations);
             } else {
                 const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
                 const uint64_t dram_base = hal.get_dev_addr(HalDramMemAddrType::DEVICE_PRINT_DISPATCH);
@@ -214,7 +235,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
                 static_config_.device_print_dispatch_enabled = 1;
                 static_config_.device_print_noc_locations_addr =
                     my_dispatch_constants.device_print_dispatch_noc_locations_addr(cq_id_);
-                static_config_.device_print_noc_locations_count = num_print_cores;
+                static_config_.device_print_noc_locations_count = num_noc_locations;
                 static_config_.device_print_l1_cache_addr =
                     my_dispatch_constants.device_print_dispatch_l1_cache_addr(cq_id_);
                 static_config_.device_print_l1_cache_size = l1_cache_size;

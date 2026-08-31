@@ -55,6 +55,7 @@ set(UNIT_TESTS_API_SOURCES
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
+    test_cross_node_dfb.cpp
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
@@ -68,6 +69,7 @@ set(UNIT_TESTS_API_SOURCES
     test_semaphores.cpp
     test_shape_base.cpp
     test_shape.cpp
+    test_shard_grid_validation.cpp
     test_sharded_l1_buffer.cpp
     test_simple_dram_buffer.cpp
     test_tensor_accessor_default_page_size.cpp
@@ -77,6 +79,7 @@ set(UNIT_TESTS_API_SOURCES
     test_tilize_untilize.cpp
     test_worker_config_buffer.cpp
     test_blockfloat_common.cpp
+    test_mx_common.cpp
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp

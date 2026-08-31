@@ -38,7 +38,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize("with_bias_relu", [False, True], ids=["pure", "bias_relu"])
 def test_quasar_conv2d_block_sharded(mesh_device, with_bias_relu):

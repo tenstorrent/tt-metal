@@ -126,3 +126,13 @@ ttnn.attach_golden_function(ttnn.interleaved_to_sharded, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.reshard, _nop_golden_function)
 ttnn.attach_golden_function(ttnn.tilize, _nop_golden_function)
+
+
+def _slice_write_golden_function(input_tensor, output_tensor, start, end, step, *args, **kwargs):
+    slices = tuple(slice(int(begin), int(stop), int(stride)) for begin, stop, stride in zip(start, end, step))
+    # Mutate the destination golden so callers retaining output_tensor observe each write.
+    output_tensor[slices] = input_tensor
+    return output_tensor
+
+
+ttnn.attach_golden_function(ttnn.experimental.slice_write, _slice_write_golden_function)

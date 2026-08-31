@@ -31,6 +31,7 @@
 #include <type_traits>
 #include <ranges>
 #include <optional>
+#include <tuple>
 #include <cstdlib>
 
 using namespace tt::constants;
@@ -265,7 +266,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     std::optional<uint32_t> mm_cores_y,
     std::optional<uint32_t> mm_block_ht,
     std::optional<uint32_t> mm_block_wt,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    const MMSignalAggregatorMode mm_signal_aggregator_mode) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -296,8 +298,51 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();
 
-    // Experimental (env-gated): have the AG writer signal the *remote* device's matmul directly over fabric
-    const bool writer_signals_mm = fuse_op;
+    // Option W: the AG writer signals the remote device's matmul through per-direction aggregator cores, which cost
+    // num_directions_per_link worker cores on top of the mux/workers. Without them the reader signals the matmul.
+    const uint32_t num_mux_worker_cores = num_links * num_cores_per_link;
+    bool writer_signals_mm = false;
+    std::optional<ttnn::ccl::WorkerCoreSelection> aggregator_core_selection;
+    if (fuse_op) {
+        // Ask for the aggregator-inclusive set and check what comes back: core_grid_offset can shift the trailing
+        // cores off the worker grid, where kernels cannot be placed.
+        auto selection = ttnn::ccl::try_choose_worker_cores(
+            1, num_mux_worker_cores + num_directions_per_link, mesh_device, std::nullopt, core_grid_offset);
+        const bool aggregators_fit = selection.all_placeable();
+        switch (mm_signal_aggregator_mode) {
+            case MMSignalAggregatorMode::On:
+                TT_FATAL(
+                    aggregators_fit,
+                    "strided AG: matmul-signal aggregators need {} worker cores ({} mux/worker + {} aggregator), but "
+                    "at core grid offset {} the last {} of them fall outside the worker grid",
+                    num_mux_worker_cores + num_directions_per_link,
+                    num_mux_worker_cores,
+                    num_directions_per_link,
+                    core_grid_offset.str(),
+                    selection.unplaceable_cores.size());
+                writer_signals_mm = true;
+                break;
+            case MMSignalAggregatorMode::Off: break;
+            case MMSignalAggregatorMode::Auto:
+                writer_signals_mm = aggregators_fit;
+                if (!aggregators_fit) {
+                    log_warning(
+                        tt::LogOp,
+                        "strided AG: matmul-signal aggregators need {} worker cores ({} mux/worker + {} aggregator), "
+                        "but at core grid offset {} the last {} of them fall outside the worker grid; falling back to "
+                        "reader-signaled matmul. Pass mm_signal_aggregator_mode=On to require the aggregators instead.",
+                        num_mux_worker_cores + num_directions_per_link,
+                        num_mux_worker_cores,
+                        num_directions_per_link,
+                        core_grid_offset.str(),
+                        selection.unplaceable_cores.size());
+                }
+                break;
+        }
+        if (writer_signals_mm) {
+            aggregator_core_selection = std::move(selection);
+        }
+    }
     const uint32_t num_ag_workers = num_links * num_workers_per_direction;
 
     // Need a separate signaler for the sender workers, to handle the first tensor slice that is locally available
@@ -319,9 +364,16 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
 
     // Option W: carve `num_directions_per_link` extra trailing cores as per-direction matmul-signal aggregators
     const uint32_t num_agg_cores = writer_signals_mm ? num_directions_per_link : 0;
-    const uint32_t total_worker_cores = num_links * num_cores_per_link + num_agg_cores;
-    const auto [all_core_range, all_cores] =
-        ttnn::ccl::choose_worker_cores(1, total_worker_cores, mesh_device, std::nullopt, core_grid_offset);
+    const uint32_t total_worker_cores = num_mux_worker_cores + num_agg_cores;
+    CoreRangeSet all_core_range;
+    std::vector<CoreCoord> all_cores;
+    if (aggregator_core_selection.has_value()) {
+        all_core_range = std::move(aggregator_core_selection->core_range_set);
+        all_cores = std::move(aggregator_core_selection->cores);
+    } else {
+        std::tie(all_core_range, all_cores) =
+            ttnn::ccl::choose_worker_cores(1, total_worker_cores, mesh_device, std::nullopt, core_grid_offset);
+    }
     std::set<CoreRange> sender_worker_core_ranges;
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -426,6 +478,12 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
     // Streaming matmul signal: deliver each chunk's M-rows as IN0_SUB_CHUNKS row-bands, one aggregator inc per band
     const char* in0_sub_chunks_env = std::getenv("IN0_SUB_CHUNKS");
     const std::string in0_sub_chunks_str = (in0_sub_chunks_env != nullptr) ? in0_sub_chunks_env : "1";
+    // Only the aggregator emits one matmul signal per band; the reader-signaled path emits one per chunk, which the
+    // matmul's per-band waits would outrun.
+    TT_FATAL(
+        !fuse_op || writer_signals_mm || in0_sub_chunks_str == "1",
+        "strided AG: IN0_SUB_CHUNKS={} requires the matmul-signal aggregators, which are not in use",
+        in0_sub_chunks_str);
     reader_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
     writer_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
     agg_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;

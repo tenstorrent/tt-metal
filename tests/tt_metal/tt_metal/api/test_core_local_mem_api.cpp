@@ -80,15 +80,15 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
 
     uint64_t cycles_elapsed = 0;
-    auto* device = mesh_device->get_devices()[0];
-    auto virtual_core = device->worker_core_from_logical_core(core);
-    mc.get_cluster().read_core(&cycles_elapsed, sizeof(uint64_t), tt_cxy_pair(device->id(), virtual_core), cycles_addr);
+    auto virtual_core = mesh_device->worker_core_from_logical_core(core);
+    const auto device_id = mesh_device->get_device_ids()[0];
+    mc.get_cluster().read_core(&cycles_elapsed, sizeof(uint64_t), tt_cxy_pair(device_id, virtual_core), cycles_addr);
 
     uint64_t cycles_elapsed_legacy_api = 0;
     mc.get_cluster().read_core(
         &cycles_elapsed_legacy_api,
         sizeof(uint64_t),
-        tt_cxy_pair(device->id(), virtual_core),
+        tt_cxy_pair(device_id, virtual_core),
         cycles_addr + sizeof(uint64_t));
 
     uint64_t total_bytes = (uint64_t)num_bytes * num_iterations;
@@ -114,11 +114,11 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     std::vector<uint32_t> data(num_bytes / sizeof(uint32_t), 0);
     std::vector<uint32_t> expected_data(num_bytes / sizeof(uint32_t));
     std::iota(expected_data.begin(), expected_data.end(), pattern);
-    mc.get_cluster().read_core(data.data(), num_bytes, tt_cxy_pair(device->id(), virtual_core), src_addr);
+    mc.get_cluster().read_core(data.data(), num_bytes, tt_cxy_pair(device_id, virtual_core), src_addr);
     ASSERT_EQ(data, expected_data);
 
     // Verify neighbor core received the data
-    mc.get_cluster().read_core(data.data(), num_bytes, tt_cxy_pair(device->id(), neighbor_virtual_core), src_addr);
+    mc.get_cluster().read_core(data.data(), num_bytes, tt_cxy_pair(device_id, neighbor_virtual_core), src_addr);
     ASSERT_EQ(data, expected_data);
 }
 

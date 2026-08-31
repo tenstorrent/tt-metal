@@ -24,9 +24,14 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import CHUNK_TOKENS, GALAXY_SP, SCENARIOS
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
@@ -251,28 +256,21 @@ GLM_SEQUENCE_TO_HEAD = CollectivePath(
 def ccl_mesh_param(collective_axis: int):
     """`pytest.param(mesh_shape, device_params, marks, id)` for the box + collective axis (collection time).
 
-    Galaxy (32): the production 8x4. LoudBox (8): an SP=8 line proxy (one line of 8 mirrors a Galaxy SP
-    row) for SP collectives, or a 2x4 mesh preserving TP=4 for TP collectives.
+    Galaxy (32): the production 8x4 TorusXY profile. LoudBox (8): the existing SP=8 proxy migrated
+    to TorusY for SP-axis collectives, or the existing 2x4 Fabric2D proxy for TP collectives.
     """
     num_devices = detect_num_devices()
-    canonical_fabric = {  # matches the deepseek conftest FABRIC_2D params (fabric router + reliability mode)
-        "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
-        "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-    }
-    fabric_2d = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_2D, **canonical_fabric}
+    fabric_2d = fabric2d_device_params(trace_region_size=100000)
+    torus_xy = torus_xy_device_params(trace_region_size=100000)
     if num_devices == 32:
-        system, mesh_shape, mesh_topology, device_params = "galaxy", (8, 4), "mesh-8x4", fabric_2d
+        system, mesh_shape, mesh_topology, device_params = "galaxy_torus_xy", (8, 4), "mesh-8x4", torus_xy
     elif num_devices == 8:
-        system = "loudbox_proxy"
         if collective_axis == SP_AXIS:
-            # SP=8 line proxy for a Galaxy SP row. Production runs the SP all-gather on Topology.Linear
-            # (mla.py:259), so the proxy mirrors that with a FABRIC_1D line — not a ring, which would model a
-            # transport Galaxy does not use today. FABRIC_1D isolates the single axis, so it omits the 2D
-            # fabric-router config.
-            mesh_shape, mesh_topology = (8, 1), "line"
-            device_params = {"trace_region_size": 100000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+            system, mesh_shape, mesh_topology = "loudbox_torus_y", (8, 1), "ring"
+            device_params = torus_y_device_params(trace_region_size=100000)
         else:
-            mesh_shape, mesh_topology, device_params = (2, 4), "mesh-2x4", fabric_2d
+            system, device_params = "loudbox_fabric2d", fabric_2d
+            mesh_shape, mesh_topology = (2, 4), "mesh-2x4"
     else:
         reason = f"CCL perf supports Galaxy (32 chips) or LoudBox (8), found {num_devices}"
         return pytest.param((1, 1), fabric_2d, marks=pytest.mark.skip(reason=reason), id="unsupported")
@@ -285,10 +283,10 @@ def ccl_mesh_param(collective_axis: int):
     )
 
 
-def resolve_runtime_system(mesh_device, path: CollectivePath, topology=ttnn.Topology.Linear) -> RuntimeSystem:
+def resolve_runtime_system(mesh_device, path: CollectivePath, fabric_config) -> RuntimeSystem:
     """Fabric roofline inputs for the live mesh: topology, link count, per-direction bandwidth."""
     mesh_shape = tuple(mesh_device.shape)
-    # Production uses Linear; perf tests may override this to compare the same workload on Ring.
+    topology = per_axis_topology(fabric_config)[path.collective_axis]
     default_gbps = _GALAXY_LINK_GBPS_PER_DIRECTION if math.prod(mesh_shape) == 32 else _LOUDBOX_LINK_GBPS_PER_DIRECTION
     link_gbps = float(os.environ.get("MLA_CCL_LINK_GBPS_PER_DIRECTION", default_gbps))
     return RuntimeSystem(mesh_shape, topology, NUM_LINKS, link_gbps)
@@ -609,10 +607,10 @@ def _workload(scenario):
     )
 
 
-def _run(mesh_device, path, scenario, topology=ttnn.Topology.Linear):
+def _run(mesh_device, device_params, path, scenario):
     assert mesh_device.arch() == ttnn.Arch.BLACKHOLE, "bandwidth assumptions apply to Blackhole only"
     workload = _workload(scenario)
-    system = resolve_runtime_system(mesh_device, path, topology)
+    system = resolve_runtime_system(mesh_device, path, device_params["fabric_config"])
     measurement = run_collective(mesh_device, path, workload, system)
     traffic = collective_roofline(path, workload, mesh_device, system)
     report(path, scenario, mesh_device, measurement, traffic)
@@ -624,33 +622,28 @@ def _run(mesh_device, path, scenario, topology=ttnn.Topology.Linear):
     [ccl_mesh_param(SP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_kvpe_all_gather_perf(mesh_device, scenario):
+def test_kvpe_all_gather_perf(mesh_device, device_params, scenario):
     """Profile the SP all-gather used for the GLM KVPE prefix."""
-    _run(mesh_device, KVPE_ALL_GATHER, scenario)
-
-
-RESHARD_TOPOLOGIES = (ttnn.Topology.Linear, ttnn.Topology.Ring)
+    _run(mesh_device, device_params, KVPE_ALL_GATHER, scenario)
 
 
 @pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
-@pytest.mark.parametrize("topology", RESHARD_TOPOLOGIES, ids=["linear", "ring"])
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [ccl_mesh_param(TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_head_to_sequence_reshard_perf(mesh_device, scenario, topology):
+def test_glm_head_to_sequence_reshard_perf(mesh_device, device_params, scenario):
     """Profile GLM's head-sharded to sequence-sharded TP redistribution."""
-    _run(mesh_device, GLM_HEAD_TO_SEQUENCE, scenario, topology)
+    _run(mesh_device, device_params, GLM_HEAD_TO_SEQUENCE, scenario)
 
 
 @pytest.mark.parametrize("scenario", _NON_LOOP_SCENARIOS, ids=_scenario_id)
-@pytest.mark.parametrize("topology", RESHARD_TOPOLOGIES, ids=["linear", "ring"])
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [ccl_mesh_param(TP_AXIS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_glm_sequence_to_head_reshard_perf(mesh_device, scenario, topology):
+def test_glm_sequence_to_head_reshard_perf(mesh_device, device_params, scenario):
     """Profile GLM's sequence-sharded to head-sharded TP redistribution."""
-    _run(mesh_device, GLM_SEQUENCE_TO_HEAD, scenario, topology)
+    _run(mesh_device, device_params, GLM_SEQUENCE_TO_HEAD, scenario)

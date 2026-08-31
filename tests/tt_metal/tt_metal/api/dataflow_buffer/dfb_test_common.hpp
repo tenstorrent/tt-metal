@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
@@ -59,7 +60,8 @@ struct LiveTcSnapshot {
     std::vector<uint32_t> space_available;
 };
 
-inline LiveTcSnapshot read_live_tcs(IDevice* device, const CoreCoord& logical_core, uint32_t neo_id) {
+inline LiveTcSnapshot read_live_tcs(
+    distributed::MeshDevice& unit_mesh, const CoreCoord& logical_core, uint32_t neo_id) {
     const auto& hal = MetalContext::instance().hal();
     const uint32_t base = hal.get_neo_tile_counters_base_addr() + neo_id * hal.get_neo_tile_counters_stride();
     const uint32_t size = hal.get_neo_tile_counters_size();
@@ -68,21 +70,21 @@ inline LiveTcSnapshot read_live_tcs(IDevice* device, const CoreCoord& logical_co
     // Same offset as NEO_REGS_*_SPACE_AVAILABLE.
     constexpr uint32_t space_available_offset = 0x0000000Cu;
     const uint32_t num_counters = size != 0 ? static_cast<uint32_t>(::dfb::NUM_TILE_COUNTERS_PER_TENSIX) : 0u;
-    const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
+    const CoreCoord virtual_core = unit_mesh.worker_core_from_logical_core(logical_core);
 
     LiveTcSnapshot snap;
     snap.capacity.reserve(num_counters);
     snap.tiles_available.reserve(num_counters);
     snap.space_available.reserve(num_counters);
     auto& cluster = MetalContext::instance().get_cluster();
+    const auto device_id = unit_mesh.get_device_ids()[0];
     for (uint32_t i = 0; i < num_counters; i++) {
         const uint32_t tc_base = base + i * size;
-        snap.capacity.push_back(
-            cluster.read_core(device->id(), virtual_core, tc_base + cap_offset, sizeof(uint32_t))[0]);
+        snap.capacity.push_back(cluster.read_core(device_id, virtual_core, tc_base + cap_offset, sizeof(uint32_t))[0]);
         snap.tiles_available.push_back(
-            cluster.read_core(device->id(), virtual_core, tc_base + tiles_available_offset, sizeof(uint32_t))[0]);
+            cluster.read_core(device_id, virtual_core, tc_base + tiles_available_offset, sizeof(uint32_t))[0]);
         snap.space_available.push_back(
-            cluster.read_core(device->id(), virtual_core, tc_base + space_available_offset, sizeof(uint32_t))[0]);
+            cluster.read_core(device_id, virtual_core, tc_base + space_available_offset, sizeof(uint32_t))[0]);
     }
     return snap;
 }
@@ -94,8 +96,8 @@ enum class DFBPorCType : uint8_t { DM, TENSIX };
 enum class M2PorCType : uint8_t { DM, TENSIX };
 
 // ---- parameterized fixtures (legacy + Metal 2.0) ----
-class DFBImplicitSyncParamFixture : public MeshDeviceFixture, public ::testing::WithParamInterface<bool> {};
-class DFBImplicitSyncParamFixture_2_0 : public MeshDeviceFixture, public ::testing::WithParamInterface<bool> {};
+class DFBImplicitSyncParamFixture : public UnitMeshFixture, public ::testing::WithParamInterface<bool> {};
+class DFBImplicitSyncParamFixture_2_0 : public UnitMeshFixture, public ::testing::WithParamInterface<bool> {};
 
 // ---- shared kernel / tensor factory helpers (Metal 2.0) ----
 // Default dtype UINT32 keeps the legacy two-argument call sites (entry_size, total_entries)
@@ -112,13 +114,14 @@ inline TensorSpec make_flat_dram_tensor_spec(
 }
 
 template <typename T>
-inline void m2_writeshard_barrier_uint32(IDevice* device, const MeshTensor& in_tensor, const std::vector<T>& input) {
-    if (device->arch() != ARCH::QUASAR) {
+inline void m2_writeshard_barrier_uint32(
+    distributed::MeshDevice& unit_mesh, const MeshTensor& in_tensor, const std::vector<T>& input) {
+    if (unit_mesh.arch() != ARCH::QUASAR) {
         return;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::vector<T> rdback;
-    detail::ReadFromBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), rdback);
+    slow_dispatch::ReadFromBuffer(in_tensor.mesh_buffer(), rdback);
     tt_driver_atomics::mfence();
     ASSERT_EQ(rdback, input) << "M2: WriteShard did not complete before LaunchProgram (Quasar emu #38042)";
 }
@@ -228,22 +231,20 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 }
 
 // ---- shared skip macros + ring-size helper (used by base + overrides) ----
-#define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                   \
-    if (devices_.at(0)->arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) { \
-        GTEST_SKIP();                                                                           \
+#define DFB_SKIP_IF_UNSUPPORTED(num_p, num_c)                                                  \
+    if (this->device().arch() != ARCH::QUASAR && (GetParam() || (num_p) > 1 || (num_c) > 1)) { \
+        GTEST_SKIP();                                                                          \
     }
 
 // ---- single-DFB program driver ----
 
-inline void run_single_dfb_program_2_0(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const M2SingleDFBParams& p) {
+inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, const M2SingleDFBParams& p) {
     // The DFB 2.0 host/device path is arch-abstracted: on WH/BH a DFB has no tile-counter
     // registers so it lowers to a 4-word circular-buffer config, and the _2_0 kernels' explicit
     // path is arch-agnostic (only the implicit async_read/write<TXN_ID> path is #ifdef ARCH_QUASAR).
     // So the simple 1x1 explicit-sync cases run on WH/BH too; only implicit-sync and multi-core
     // are Quasar-only (mirrors the legacy DFB_SKIP_IF_UNSUPPORTED gate).
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR &&
-        (p.implicit_sync || p.num_producers > 1 || p.num_consumers > 1)) {
+    if (mesh_device.arch() != ARCH::QUASAR && (p.implicit_sync || p.num_producers > 1 || p.num_consumers > 1)) {
         GTEST_SKIP() << "M2 non-Quasar: only 1x1 explicit-sync DFB runs on WH/BH "
                         "(implicit-sync + multi-core are Quasar-only)";
     }
@@ -262,7 +263,6 @@ inline void run_single_dfb_program_2_0(
         GTEST_SKIP() << "ALL DM consumer with implicit_sync not supported (legacy parity)";
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     const m2::NodeCoord node{0, 0};
     const uint32_t entries_per_core = p.num_entries_in_buffer.value_or(p.num_entries);
     const bool is_all = (p.cap == m2::DFBAccessPattern::ALL);
@@ -279,10 +279,10 @@ inline void run_single_dfb_program_2_0(
     std::optional<MeshTensor> in_tensor;
     std::optional<MeshTensor> out_tensor;
     if (p.producer_type == M2PorCType::DM) {
-        in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+        in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
     }
     if (p.consumer_type == M2PorCType::DM) {
-        out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+        out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
     }
 
     m2::DataflowBufferSpec dfb_spec{
@@ -348,7 +348,7 @@ inline void run_single_dfb_program_2_0(
     // a Gen2 config, so mirror the legacy driver -- DM producer -> RISCV_0, DM consumer ->
     // RISCV_1/NOC_1, Tensix -> ComputeGen1. The make_*_kernel helpers default to Gen2; override
     // to Gen1 on WH/BH here (only 1x1 explicit-sync cases reach WH/BH per the skip gate above).
-    if (mesh_device->get_devices()[0]->arch() == ARCH::QUASAR) {
+    if (mesh_device.arch() == ARCH::QUASAR) {
         // Gen2 implicit-sync opt-out (#45160): only DM endpoints carry the per-kernel flag; for
         // ImplicitSyncFalse it keeps the host from programming implicit ISR/txn metadata over the
         // kernels' explicit credit-flow path. Tensix endpoints have no DM side.
@@ -392,7 +392,7 @@ inline void run_single_dfb_program_2_0(
         .work_units = {wu},
     };
 
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     m2::ProgramRunArgs params;
     if (p.producer_type == M2PorCType::DM) {
@@ -425,8 +425,8 @@ inline void run_single_dfb_program_2_0(
     const uint32_t total_words = p.entry_size * entries_per_core / sizeof(uint32_t);
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, total_words);
     if (in_tensor) {
-        detail::WriteToBuffer(*in_tensor->mesh_buffer().get_reference_buffer(), input);
-        m2_writeshard_barrier_uint32(device, *in_tensor, input);
+        slow_dispatch::WriteToBuffer(in_tensor->mesh_buffer(), input);
+        m2_writeshard_barrier_uint32(mesh_device, *in_tensor, input);
     }
 
     // For Tensix producer: host-prefill the DFB L1 ring with the input data so the
@@ -444,7 +444,7 @@ inline void run_single_dfb_program_2_0(
     //            transpose of the input.
     if (p.producer_type == M2PorCType::TENSIX) {
         const uint32_t dfb_l1_addr =
-            static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
+            static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
         const uint32_t wpe = p.entry_size / sizeof(uint32_t);
         const uint32_t ring_words = p.num_entries * wpe;
         std::vector<uint32_t> slice(ring_words, 0u);
@@ -464,15 +464,15 @@ inline void run_single_dfb_program_2_0(
                     input.begin() + page_id * wpe, input.begin() + (page_id + 1) * wpe, slice.begin() + dst_slot * wpe);
             }
         }
-        detail::WriteToDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, slice);
+        slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, slice);
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     // Verify (DM consumer only — Tensix consumer doesn't write DRAM).
     if (p.consumer_type == M2PorCType::DM) {
         std::vector<uint32_t> output;
-        detail::ReadFromBuffer(*out_tensor->mesh_buffer().get_reference_buffer(), output);
+        slow_dispatch::ReadFromBuffer(out_tensor->mesh_buffer(), output);
         // For Tensix→DM ring-pressure with STRIDED, each consumer reads ring slot
         // (c % num_entries), so expected output is the corresponding input slice.
         if (p.producer_type == M2PorCType::TENSIX && entries_per_core > p.num_entries &&

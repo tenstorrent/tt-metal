@@ -75,6 +75,7 @@ permissions:
   pull-requests: write
   checks: write
   packages: write
+  actions: read
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
@@ -144,6 +145,9 @@ jobs:
       publish-package: true
       tracy: false
       skip-tt-train: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
       # so git describe still yields a real version. Depth stays at the default.
       checkout-filter: tree:0
@@ -161,6 +165,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      run-clang-tidy: ${{ steps.find-changes.outputs.run-clang-tidy }}
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
@@ -185,26 +190,60 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
-  runtime-smoke-tests:
-    needs: [asan-build, find-changed-files]
+  build-runtime-smoke-image:
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-metalium
+
+  runtime-smoke-tests:
+    needs: [asan-build, build-docker-images, find-changed-files, build-runtime-smoke-image]
+    # Gate on asan-build rather than on nothing having failed. A skipped image
+    # build (forks) or a failed one (a registry or buildx blip) must still let
+    # smoke run on the artifact path: it is in optional-jobs, and
+    # workflow-status counts a skipped optional job as success, so skipping here
+    # would take hardware coverage out of the gate without failing it.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.cmake-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
+      # Empty on forks, where smoke falls back to downloading the artifact.
+      prebuilt-image: ${{ needs.build-runtime-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
+      # github_hosted_cpu runs on ubuntu-latest (external runner) — no harbor access.
+      # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from
+      # asan-build (same as build-docs below).
+      cpu-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-metalium
       test-category: pr_gate
       per-test-timeout: 15 # max minutes for any SKU timeout in the smoke tests yaml
       upload-coverage: false
       enable-kernel-ccache: true
-  ttnn-smoke-tests:
-    needs: [asan-build, find-changed-files]
+  # A second image because the tag reflects build-args, and smoke installs a
+  # different package set per product. The two builds run in parallel, so this
+  # costs no extra time on the critical path.
+  build-ttnn-smoke-image:
+    needs: [asan-build, build-docker-images, find-changed-files]
     if: ${{
       github.ref_name == 'main' ||
       needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -212,9 +251,37 @@ jobs:
       needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
       needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
+      base-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-packages
+      build-args: PRODUCT=tt-nn
+
+  ttnn-smoke-tests:
+    needs: [asan-build, build-docker-images, find-changed-files, build-ttnn-smoke-image]
+    # Gate on asan-build rather than on nothing having failed. A skipped image
+    # build (forks) or a failed one (a registry or buildx blip) must still let
+    # smoke run on the artifact path: it is in optional-jobs, and
+    # workflow-status counts a skipped optional job as success, so skipping here
+    # would take hardware coverage out of the gate without failing it.
+    if: ${{ !cancelled() && needs.asan-build.result == 'success' && (
+      github.ref_name == 'main' ||
+      needs.find-changed-files.outputs.cmake-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+      needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true')
+      }}
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
     with:
+      # Empty on forks, where smoke falls back to downloading the artifact.
+      prebuilt-image: ${{ needs.build-ttnn-smoke-image.outputs.image }}
       docker-image: ${{ needs.asan-build.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       product: tt-nn
@@ -294,12 +361,13 @@ jobs:
 
   # Full clang-tidy scan (same checks enforced at merge gate).
   # force-scan=true → single full-scan job (avoids 4-way per-target split with high setup overhead).
-  # Gated on any-code-changed so docs/workflow-only PRs are skipped entirely.
+  # Gated on run-clang-tidy so docs-only PRs and workflow-only PRs that cannot
+  # affect the scan (see find-changed-files.sh's explicit key-workflow list) are skipped entirely.
   code-analysis:
     needs: [build-docker-images, find-changed-files]
     if: >-
       ${{
-        needs.find-changed-files.outputs.any-code-changed == 'true' &&
+        needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
         ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml
