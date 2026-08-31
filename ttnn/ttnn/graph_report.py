@@ -236,7 +236,9 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.5 - sub-device topology snapshotted per manager (covers sub-devices that ran no operation);
 #       sub_device_managers / sub_devices lose physical_device_id, which a mesh-wide manager
 #       partition does not have (it stays on operation_executions, where the chip is meaningful)
-DATABASE_SCHEMA_VERSION = "3.5"
+# 3.6 - drop operation_executions.program_id; runtime_id and global_call_count are the correlation
+#       keys into profiler data, and program_id joined to nothing in the report
+DATABASE_SCHEMA_VERSION = "3.6"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
@@ -577,7 +579,6 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             physical_device_id int,
             runtime_id int,
             global_call_count int,
-            program_id int,
             command_queue_id int,
             rank int NOT NULL DEFAULT 0,
             UNIQUE(execution_id, rank)
@@ -1354,7 +1355,6 @@ def import_graph(
                         physical_device_id,
                         int(execution_params["runtime_id"]),
                         int(execution_params["global_call_count"]),
-                        int(execution_params["program_id"]),
                         int(execution_params["command_queue_id"]),
                         rank,
                     )
@@ -1824,7 +1824,7 @@ def import_graph(
         )
     if operation_executions_batch:
         cursor.executemany(
-            """INSERT OR REPLACE INTO operation_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT OR REPLACE INTO operation_executions VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             operation_executions_batch,
         )
     if execution_sub_devices_batch:

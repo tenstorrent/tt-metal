@@ -50,7 +50,6 @@ struct ProgramExecutionPlacement {
     tt::tt_metal::CoreRangeSet worker_core_ranges;
     uint64_t runtime_id = 0;
     uint32_t global_call_count = 0;
-    uint64_t program_id = 0;
     uint8_t command_queue_id = 0;
 };
 

@@ -163,7 +163,6 @@ class TestSubDeviceExecutionImport:
                     "worker_core_ranges": json.dumps(cls.BUSY_SUB_DEVICE_RANGES),
                     "runtime_id": 3,
                     "global_call_count": (3 << 10) | 17,
-                    "program_id": 42,
                     "command_queue_id": 0,
                 },
                 "connections": [],
@@ -203,12 +202,12 @@ class TestSubDeviceExecutionImport:
 
             execution = cursor.execute(
                 "SELECT o.name, e.operation_id, e.device_id, e.physical_device_id, e.runtime_id, "
-                "e.global_call_count, e.program_id, e.command_queue_id, x.sub_device_manager_id, x.sub_device_id "
+                "e.global_call_count, e.command_queue_id, x.sub_device_manager_id, x.sub_device_id "
                 "FROM operation_executions e "
                 "JOIN operations o ON o.operation_id = e.operation_id AND o.rank = e.rank "
                 "JOIN execution_sub_devices x ON x.execution_id = e.execution_id AND x.rank = e.rank"
             ).fetchone()
-            assert execution == ("ttnn.add", 1, 0, 17, 3, (3 << 10) | 17, 42, 0, 7, 1)
+            assert execution == ("ttnn.add", 1, 0, 17, 3, (3 << 10) | 17, 0, 7, 1)
             assert cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = 1").fetchone() == (
                 "SubDeviceId(0)",
             )
@@ -286,7 +285,6 @@ class TestSubDeviceExecutionImport:
                         "worker_core_ranges": "[]",
                         "runtime_id": 3,
                         "global_call_count": (3 << 10) | physical_device_id,
-                        "program_id": 42,
                         "command_queue_id": 0,
                     },
                     "connections": [],
@@ -340,7 +338,7 @@ class TestSubDeviceExecutionImport:
             ):
                 assert cursor.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
             assert cursor.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'").fetchone() == (
-                "3.5",
+                "3.6",
             )
         finally:
             conn.close()

@@ -41,7 +41,6 @@ constexpr auto kWorkerCoreRanges = "worker_core_ranges";
 constexpr auto kSubDevices = "sub_devices";
 constexpr auto kRuntimeId = "runtime_id";
 constexpr auto kGlobalCallCount = "global_call_count";
-constexpr auto kProgramId = "program_id";
 constexpr auto kCommandQueueId = "command_queue_id";
 constexpr auto kProgramFactoryType = "program_factory_type";
 constexpr auto kProgramFactoryIndex = "program_factory_index";

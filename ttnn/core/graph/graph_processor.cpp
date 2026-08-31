@@ -11,9 +11,6 @@
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
 #include <tt_metal/impl/version.hpp>
-// ProgramImpl::determine_sub_device_ids / get_id are public; going through Program::impl() keeps
-// sub-device placement capture off tt_metal's public API surface.
-#include <tt_metal/impl/program/program_impl.hpp>
 #include <boost/algorithm/string/replace.hpp>
 #include <cstdlib>
 
@@ -74,7 +71,6 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
         ttnn::graph::kSubDeviceId,
         ttnn::graph::kRuntimeId,
         ttnn::graph::kGlobalCallCount,
-        ttnn::graph::kProgramId,
         ttnn::graph::kCommandQueueId,
         ttnn::graph::kProgramFactoryIndex,
     };
@@ -545,7 +541,6 @@ void GraphProcessor::track_program_execution(const ProgramExecutionPlacement& pl
                 {kWorkerCoreRanges, ranges.dump()},
                 {kRuntimeId, std::to_string(placement.runtime_id)},
                 {kGlobalCallCount, std::to_string(placement.global_call_count)},
-                {kProgramId, std::to_string(placement.program_id)},
                 {kCommandQueueId, std::to_string(placement.command_queue_id)},
             },
         // Leaf node: the parent op links to it, it links to nothing. Pointing back at the parent
@@ -605,19 +600,16 @@ void track_mesh_workload_execution(
         }
     }
 
-    for (auto& [device_range, program] : workload.get_programs()) {
-        // Mirrors MeshWorkloadImpl::determine_sub_device_ids, resolved per program so this stays on
-        // ProgramImpl's already-public API instead of widening MeshWorkload's.
-        const auto& sub_device_ids = program.impl().determine_sub_device_ids(mesh_device);
-        // Same invariant FDMeshCommandQueue::enqueue_mesh_workload enforces, which has already run
-        // by the time we get here.
-        TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
-        const auto sub_device_id = sub_device_ids.front();
-        const auto worker_core_ranges =
-            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
-        const auto program_id = program.impl().get_id();
+    // Same invariant FDMeshCommandQueue::enqueue_mesh_workload enforces, which has already run by
+    // the time we get here.
+    const auto sub_device_ids = workload.determine_sub_device_ids(mesh_device);
+    TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
+    const auto sub_device_id = *sub_device_ids.begin();
+    const auto worker_core_ranges =
+        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
 
-        for (const auto* physical_device : mesh_device->get_view().get_devices(device_range)) {
+    for (const auto& program_entry : workload.get_programs()) {
+        for (const auto* physical_device : mesh_device->get_view().get_devices(program_entry.first)) {
             const ProgramExecutionPlacement placement{
                 .device_id = mesh_device_id,
                 .physical_device_id = static_cast<uint32_t>(physical_device->id()),
@@ -627,7 +619,6 @@ void track_mesh_workload_execution(
                 .runtime_id = runtime_id,
                 .global_call_count = tt::tt_metal::detail::EncodePerDeviceProgramID(
                     static_cast<uint32_t>(runtime_id), physical_device->id(), false),
-                .program_id = program_id,
                 .command_queue_id = command_queue_id,
             };
             for (auto* processor : processors) {

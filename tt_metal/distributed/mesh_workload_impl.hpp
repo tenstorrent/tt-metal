@@ -78,6 +78,7 @@ private:
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
+    friend class MeshWorkload;
     friend FDMeshCommandQueue;
     friend class tt::tt_metal::Program;
 
