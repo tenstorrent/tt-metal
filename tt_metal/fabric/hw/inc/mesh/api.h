@@ -1198,17 +1198,40 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 #if defined(FABRIC_2D)
 namespace detail {
 
-struct PreparedMulticastRouteFanout {
+struct PreparedMulticastBranchFanout {
     volatile PACKET_HEADER_TYPE* packet_header;
     uint8_t root_outputs;
 };
 
-// Acquires the route's single shared header and encodes a same-mesh multicast tree once, anchored at
-// the manager's source chip. Inter-mesh multicast retains its explicit anchor in the lower-level API.
-FORCE_INLINE PreparedMulticastRouteFanout prepare_multicast_route_fanout(
+// One call represents one branch of the existing client decomposition: E-only, W-only, N with
+// optional E/W teeth, or S with optional E/W teeth. Z is never specified by the client; an express
+// reverse tree may select it in addition to, or instead of, the branch's cardinal root output.
+FORCE_INLINE bool is_valid_multicast_branch(const MeshMcastRange& branch) {
+    const bool has_vertical_trunk = branch.n != 0 || branch.s != 0;
+    if (has_vertical_trunk) {
+        return (branch.n != 0) != (branch.s != 0);
+    }
+    return (branch.e != 0) != (branch.w != 0);
+}
+
+FORCE_INLINE uint8_t multicast_branch_allowed_root_outputs(const MeshMcastRange& branch) {
+    if (branch.n != 0) {
+        return Routing2DCodec::ACTION_NORTH | Routing2DCodec::ACTION_Z;
+    }
+    if (branch.s != 0) {
+        return Routing2DCodec::ACTION_SOUTH | Routing2DCodec::ACTION_Z;
+    }
+    return branch.e != 0 ? Routing2DCodec::ACTION_EAST : Routing2DCodec::ACTION_WEST;
+}
+
+// Acquires one shared header and encodes one same-mesh multicast branch, anchored at the manager's
+// source chip. Inter-mesh multicast retains its explicit anchor in the lower-level API.
+FORCE_INLINE PreparedMulticastBranchFanout prepare_multicast_branch_fanout(
     uint8_t route_id,
     const tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
-    const MeshMcastRange& ranges) {
+    const MeshMcastRange& branch) {
+    ASSERT(is_valid_multicast_branch(branch));
+
     auto [packet_header, num_headers] = PacketHeaderPool::header_table[route_id];
     ASSERT(num_headers == 1);
 
@@ -1216,21 +1239,23 @@ FORCE_INLINE PreparedMulticastRouteFanout prepare_multicast_route_fanout(
         packet_header,
         connection_manager.my_chip_id,
         connection_manager.my_mesh_id,
-        ranges.e,
-        ranges.w,
-        ranges.n,
-        ranges.s,
+        branch.e,
+        branch.w,
+        branch.n,
+        branch.s,
         FABRIC_2D_MESH_Y_SIZE,
         FABRIC_2D_MESH_X_SIZE);
     const uint8_t root_outputs = root_action & Routing2DCodec::ACTION_ETH_MASK;
     ASSERT(root_outputs != 0);
+    const uint8_t allowed_root_outputs = multicast_branch_allowed_root_outputs(branch);
+    ASSERT((root_outputs | allowed_root_outputs) == allowed_root_outputs);
     return {packet_header, root_outputs};
 }
 
 template <bool SendPayload>
-FORCE_INLINE void submit_multicast_route_fanout_impl(
+FORCE_INLINE void submit_multicast_branch_fanout_impl(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
-    const PreparedMulticastRouteFanout& fanout,
+    const PreparedMulticastBranchFanout& fanout,
     [[maybe_unused]] uint32_t src_addr = 0,
     [[maybe_unused]] uint32_t size = 0) {
     uint8_t pending_outputs = fanout.root_outputs;
@@ -1253,26 +1278,27 @@ FORCE_INLINE void submit_multicast_route_fanout_impl(
     ASSERT(pending_outputs == 0);
 }
 
-FORCE_INLINE void submit_multicast_route_fanout_with_payload(
+FORCE_INLINE void submit_multicast_branch_fanout_with_payload(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
-    const PreparedMulticastRouteFanout& fanout,
+    const PreparedMulticastBranchFanout& fanout,
     uint32_t src_addr,
     uint32_t size) {
-    submit_multicast_route_fanout_impl<true>(connection_manager, fanout, src_addr, size);
+    submit_multicast_branch_fanout_impl<true>(connection_manager, fanout, src_addr, size);
 }
 
-FORCE_INLINE void submit_multicast_route_fanout_header_only(
-    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager, const PreparedMulticastRouteFanout& fanout) {
-    submit_multicast_route_fanout_impl<false>(connection_manager, fanout);
+FORCE_INLINE void submit_multicast_branch_fanout_header_only(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager, const PreparedMulticastBranchFanout& fanout) {
+    submit_multicast_branch_fanout_impl<false>(connection_manager, fanout);
 }
 
 }  // namespace detail
 
 // clang-format off
 /**
- * Issues one multicast write across the root's output connections. The complete route is encoded
- * once into one shared header, then that immutable header is submitted through every selected output.
- * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ * Issues one branch of a client-split multicast. The branch tree is encoded once into one shared
+ * header, then that immutable header is submitted through every root output selected by the reverse
+ * tree, including an express Z output when needed. The operation is same-mesh and anchored at the
+ * manager's source chip.
  *
  * Requires one direction-tagged connection per root output and exactly one header in the route.
  * Missing connections fail-stop rather than delivering to only part of the range.
@@ -1286,7 +1312,7 @@ FORCE_INLINE void submit_multicast_route_fanout_header_only(
  * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
  * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
  * | route_id                   | Route holding the shared packet header  | uint8_t                                    | True     |
- * | ranges                     | Multicast extents (E/W/N/S)             | const MeshMcastRange&                      | True     |
+ * | branch                     | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                | True     |
  * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
  * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
  * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
@@ -1295,20 +1321,21 @@ FORCE_INLINE void submit_multicast_route_fanout_header_only(
 FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    const MeshMcastRange& ranges,
+    const MeshMcastRange& branch,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
-    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    detail::submit_multicast_route_fanout_with_payload(connection_manager, fanout, src_addr, size);
+    detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 
 // clang-format off
 /**
- * Issues one multicast atomic increment across the root's output connections. The complete route and
- * atomic command are populated once in one shared header, then submitted through every selected output.
- * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ * Issues an atomic increment for one branch of a client-split multicast. The branch tree and command
+ * are populated once in one shared header, then submitted through every root output selected by the
+ * reverse tree, including an express Z output when needed. The operation is same-mesh and anchored at
+ * the manager's source chip.
  *
  * Requires one direction-tagged connection per root output and exactly one header in the route.
  * Missing connections fail-stop rather than delivering to only part of the range.
@@ -1322,25 +1349,26 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
  * | route_id                              | Route holding the shared packet header  | uint8_t                                        | True     |
- * | ranges                                | Multicast extents (E/W/N/S)             | const MeshMcastRange&                          | True     |
+ * | branch                                | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                    | True     |
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
  */
 // clang-format on
 FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    const MeshMcastRange& ranges,
+    const MeshMcastRange& branch,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
-    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
-    detail::submit_multicast_route_fanout_header_only(connection_manager, fanout);
+    detail::submit_multicast_branch_fanout_header_only(connection_manager, fanout);
 }
 
 // clang-format off
 /**
- * Issues one fused multicast write and atomic increment across the root's output connections. The
- * complete route and fused command are populated once in one shared header.
- * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ * Issues a fused write and atomic increment for one branch of a client-split multicast. The branch
+ * tree and command are populated once in one shared header, then submitted through every root output
+ * selected by the reverse tree, including an express Z output when needed. The operation is same-mesh
+ * and anchored at the manager's source chip.
  *
  * Requires one direction-tagged connection per root output and exactly one header in the route.
  * Missing connections fail-stop rather than delivering to only part of the range.
@@ -1354,7 +1382,7 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_atomic_inc(
  * |---------------------------------------------|----------------------------------------|--------------------------------------------------------|----------|
  * | connection_manager                          | Routing plane connection manager       | RoutingPlaneConnectionManager&                         | True     |
  * | route_id                                    | Route holding the shared packet header | uint8_t                                                | True     |
- * | ranges                                      | Multicast extents (E/W/N/S)            | const MeshMcastRange&                                  | True     |
+ * | branch                                      | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                            | True     |
  * | src_addr                                    | Source L1 address                      | uint32_t                                               | True     |
  * | size                                        | Payload size in bytes                  | uint32_t                                               | True     |
  * | noc_fused_unicast_atomic_inc_command_header | Fused command header                   | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader  | True     |
@@ -1363,20 +1391,21 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_atomic_inc(
 FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    const MeshMcastRange& ranges,
+    const MeshMcastRange& branch,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
-    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
-    detail::submit_multicast_route_fanout_with_payload(connection_manager, fanout, src_addr, size);
+    detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 
 // clang-format off
 /**
- * Issues one fused two-chunk multicast scatter write and atomic increment across the root's output
- * connections. The complete route and fused command are populated once in one shared header.
- * The operation is same-mesh and the extents are anchored at the manager's source chip.
+ * Issues a fused two-chunk scatter write and atomic increment for one branch of a client-split
+ * multicast. The branch tree and command are populated once in one shared header, then submitted
+ * through every root output selected by the reverse tree, including an express Z output when needed.
+ * The operation is same-mesh and anchored at the manager's source chip.
  *
  * Requires one direction-tagged connection per root output and exactly one header in the route.
  * Missing connections fail-stop rather than delivering to only part of the range.
@@ -1390,7 +1419,7 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_i
  * |---------------------------------------------------|----------------------------------------|---------------------------------------------------------------|----------|
  * | connection_manager                                | Routing plane connection manager       | RoutingPlaneConnectionManager&                                | True     |
  * | route_id                                          | Route holding the shared packet header | uint8_t                                                       | True     |
- * | ranges                                            | Multicast extents (E/W/N/S)            | const MeshMcastRange&                                         | True     |
+ * | branch                                            | One E, W, N-with-teeth, or S-with-teeth branch | const MeshMcastRange&                                   | True     |
  * | src_addr                                          | Source L1 address                      | uint32_t                                                      | True     |
  * | size                                              | Payload size in bytes                  | uint32_t                                                      | True     |
  * | noc_unicast_scatter_atomic_inc_fused_command_header | Fused scatter and atomic header       | tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader   | True     |
@@ -1399,14 +1428,14 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_i
 FORCE_INLINE void fabric_multicast_source_inject_noc_fused_scatter_write_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    const MeshMcastRange& ranges,
+    const MeshMcastRange& branch,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header) {
-    const auto fanout = detail::prepare_multicast_route_fanout(route_id, connection_manager, ranges);
+    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
         noc_unicast_scatter_atomic_inc_fused_command_header, size);
-    detail::submit_multicast_route_fanout_with_payload(connection_manager, fanout, src_addr, size);
+    detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 #endif
 
