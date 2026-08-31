@@ -824,10 +824,34 @@ uint32_t eth_sync_samples() {
 // init while the first zone is not timestamped until 20-30 s of bring-up later.
 // CAUTION: pinning likely bypasses the arbiter, so thermal and power protection may not apply. Off by
 // default, and released unconditionally at stop().
+// DEFAULT ON, as of the measurement below. Unset = AUTO: pin each chip at the aiclk it is already running
+// at (the cluster is open by now, so that is the boosted maximum), which adapts to any part instead of
+// hardcoding this one's 1350. "0" turns it off; an explicit number pins at that many MHz.
+//
+// WHY IT IS ON BY DEFAULT. A capture's zone placement decays at decay_rate * (time since the anchor was
+// fitted). Governed, that rate is 5.4-7.7 us/s; pinned it is ~0.05 us/s. Measured over a 20.7 s capture on
+// bh-31, worst anchor staleness across 4 devices:
+//
+//   governed   -207 us          (device 0: -122 us)
+//   pinned       -2.5 us        (device 0:   -2.2 us, and uniform across all four devices)
+//
+// ~180x, and it matches the ratio of the two decay rates, so the mechanism is understood rather than
+// merely observed. Nothing else moved this number: re-anchoring after bring-up removes the bring-up gap
+// but not the decay during the capture, and a faster fit does not help because the error is not fit noise.
+//
+// THE RISK, stated because it is not hypothetical: FORCE_AICLK (ARC 0x33) very likely bypasses the clock
+// arbiter, so thermal and power governance may not apply while it is held. On the runs measured here TDP sat
+// at 61-65 W of 150 and therm_trip stayed 0, i.e. nowhere near a limit -- but that is an idle-ish
+// microbenchmark, not a hot multi-second model. The clock is released at stop() and the release is verified
+// by reading aiclk back. Set TT_METAL_PERF_DEBUG_FORCE_AICLK=0 to disable.
+constexpr uint32_t kForceAiclkAuto = 0xFFFFFFFFu;
 uint32_t force_aiclk_mhz() {
     static const uint32_t v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_FORCE_AICLK");
-        return (s != nullptr && *s != '\0') ? (uint32_t)std::strtoul(s, nullptr, 10) : 0u;
+        if (s == nullptr || *s == '\0') {
+            return kForceAiclkAuto;
+        }
+        return (uint32_t)std::strtoul(s, nullptr, 10);
     }();
     return v;
 }
@@ -986,6 +1010,75 @@ void PerfDebugProfiler::host_reanchor_after_boot(const std::shared_ptr<distribut
 //
 // Host fits use spacing 0 (back-to-back, ~360 us baseline) so they are taken as close in time to the eth
 // measurement as possible, and at the highest rate the read path allows.
+// PERIODIC RE-ANCHOR. A one-shot anchor is wrong by decay * (time since it was fitted): at the 5-8 us/s
+// measured on this part that is tens of us across a 20 s capture, which is what the close-time ANCHOR
+// STALENESS numbers were reporting. Re-fitting cannot move a Tracy context anchor (baked at creation), so
+// the fresh fit is published as a per-device CORRECTION that the consumer adds to each zone timestamp.
+//
+// Rate is the whole point: error is bounded by decay / rate. At 7.7 us/s, 1 Hz bounds it to ~8 us, 10 Hz to
+// ~0.8 us, 100 Hz to ~80 ns -- the floor being the ~50 ns two independent paths agree to (PATH TRACKING).
+//
+// Host MMIO only: no eth core, no program launch, so this is legal while fabric is up and while a capture is
+// in flight. OFF by default -- it adds MMIO traffic concurrent with the drainers, which is exactly the
+// contention the knee work is sensitive to, so it should be measured before it is trusted.
+void PerfDebugProfiler::start_drift_corrector(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRIFT_HZ");
+    if (s == nullptr || *s == '\0' || *s == '0' || devices_.empty()) {
+        return;
+    }
+    const double hz = std::strtod(s, nullptr);
+    if (!(hz > 0.0)) {
+        return;
+    }
+    const auto period = std::chrono::microseconds(static_cast<int64_t>(1e6 / hz));
+    const auto context_id = mesh_device->impl().get_context_id();
+    drift_stop_.store(false);
+    drift_thread_ = std::thread([this, context_id, period]() {
+        auto& cluster = MetalContext::instance(context_id).get_cluster();
+#ifdef TRACY_ENABLE
+        const double npt_raw = TracyGetTimerMul();
+#else
+        const double npt_raw = 1.0;
+#endif
+        const double npt = npt_raw > 0.0 ? npt_raw : 1.0;
+        while (!drift_stop_.load(std::memory_order_relaxed)) {
+            for (const auto& ctx : devices_) {
+                if (drift_stop_.load(std::memory_order_relaxed)) {
+                    break;
+                }
+                if (!ctx.anchor_valid || ctx.core_virt.empty() || ctx.freq_ghz <= 0.0) {
+                    continue;
+                }
+                const CoreCoord w{ctx.core_virt[0].first, ctx.core_virt[0].second};
+                // spacing 0: back-to-back samples, the shortest fit the read path allows, so the correction
+                // is as close in time to the zones it will be applied to as possible.
+                const PerfDebugSync s2 = sync_device_clock(cluster, ctx.chip_id, w, /*spacing_us=*/0);
+                if (!s2.valid) {
+                    continue;
+                }
+                const double dt_ns = static_cast<double>(s2.host_anchor - ctx.anchor_host) * npt;
+                const double predicted = static_cast<double>(ctx.anchor_dev) + dt_ns * ctx.freq_ghz;
+                // correction = predicted - actual: what the clock has LOST, added back onto timestamps.
+                const double corr = predicted - static_cast<double>(s2.device_at_anchor);
+                perf_debug::set_zone_ts_correction(ctx.chip_id, static_cast<int64_t>(corr));
+            }
+            std::this_thread::sleep_for(period);
+        }
+    });
+    log_info(
+        tt::LogMetal,
+        "[perf-debug profiler] DRIFT CORRECTOR: re-anchoring every {:.1f} ms (host MMIO only); zone "
+        "placement error should be bounded by decay/rate rather than by capture length",
+        1000.0 / hz);
+}
+
+void PerfDebugProfiler::stop_drift_corrector() {
+    drift_stop_.store(true);
+    if (drift_thread_.joinable()) {
+        drift_thread_.join();
+    }
+}
+
 void PerfDebugProfiler::cross_path_tracking_test() {
     const char* on = std::getenv("TT_METAL_PERF_DEBUG_TRACK_TEST");
     if (on == nullptr || *on == '\0' || *on == '0' || link_syncs_.empty()) {
@@ -1116,16 +1209,25 @@ void PerfDebugProfiler::check_anchor_staleness_at_close() {
         const double predicted = static_cast<double>(ctx.anchor_dev) + dt_ns * ctx.freq_ghz;
         const double err_cycles = static_cast<double>(s.device_at_anchor) - predicted;
         const double err_us = err_cycles / ctx.freq_ghz / 1000.0;
+        // What Tracy actually renders is raw + correction, so the error that SURVIVES is err + correction.
+        // With the corrector running, that is the drift accumulated since its last refresh -- i.e. bounded by
+        // the refresh period rather than by the capture length. With it off the correction is 0 and the two
+        // numbers agree, which is the check reducing to its old self.
+        const int64_t applied = perf_debug::get_zone_ts_correction(ctx.chip_id);
+        const double residual_us = (err_cycles + static_cast<double>(applied)) / ctx.freq_ghz / 1000.0;
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] ANCHOR STALENESS device {}: {:+.3f} us after {:.1f} s ({:+.0f} cycles) -- "
-            "how far the anchor rendering this device's zones has drifted from a fresh fit",
+            "[perf-debug profiler] ANCHOR STALENESS device {}: anchor has drifted {:+.3f} us after {:.1f} s "
+            "({:+.0f} cycles); live correction {:+.0f} cycles; RENDERED error {:+.3f} us <- this is what a "
+            "zone's placement is actually off by",
             ctx.chip_id,
             err_us,
             dt_ns / 1e9,
-            err_cycles);
-        if (std::abs(err_us) > std::abs(worst_us)) {
-            worst_us = err_us;
+            err_cycles,
+            static_cast<double>(applied),
+            residual_us);
+        if (std::abs(residual_us) > std::abs(worst_us)) {
+            worst_us = residual_us;
             worst_chip = ctx.chip_id;
         }
         ++checked;
@@ -1133,8 +1235,8 @@ void PerfDebugProfiler::check_anchor_staleness_at_close() {
     if (checked != 0) {
         log_info(
             tt::LogMetal,
-            "[perf-debug profiler] ANCHOR STALENESS: worst {:+.3f} us on device {} over {} device(s) -- this "
-            "bounds where a zone near the END of the capture is placed against the host timeline",
+            "[perf-debug profiler] ANCHOR STALENESS: worst RENDERED error {:+.3f} us on device {} over {} "
+            "device(s) -- this bounds where a zone near the END of the capture is placed",
             worst_us,
             worst_chip,
             checked);
@@ -1957,15 +2059,29 @@ bool PerfDebugProfiler::eth_sync_anchor_for(
 }
 
 void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    if (force_aiclk_mhz() != 0) {
+    if (force_aiclk_mhz() != 0) {  // 0 = explicitly disabled
         auto& cl = MetalContext::instance(mesh_device->impl().get_context_id()).get_cluster();
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
             if (!mesh_device->is_local(coord)) {
                 continue;
             }
             const int cid = mesh_device->get_device(coord)->id();
+            // AUTO: pin at whatever this chip is running at now. The cluster is open, so that is its boosted
+            // maximum -- pinning at the current value cannot ask for a frequency the part does not support.
+            uint32_t mhz = force_aiclk_mhz();
+            if (mhz == kForceAiclkAuto) {
+                mhz = static_cast<uint32_t>(cl.get_device_aiclk(cid));
+                if (mhz == 0) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] FORCE_AICLK auto: chip {} reports aiclk 0; leaving the clock "
+                        "governed (zone placement will decay ~5-8 us/s instead of ~0.05)",
+                        cid);
+                    continue;
+                }
+            }
             try {
-                cl.get_driver()->get_chip(cid)->arc_msg(0x33, true, {force_aiclk_mhz()});
+                cl.get_driver()->get_chip(cid)->arc_msg(0x33, true, {mhz});
                 forced_aiclk_chips_.push_back(cid);
             } catch (const std::exception& e) {
                 log_warning(
@@ -2301,6 +2417,7 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
     // Runs after the eth re-anchor and is skipped by it when that one succeeded (it sets the same anchors).
     // Independent of it: this one is the path that survives fabric.
     host_reanchor_after_boot(mesh_device);
+    start_drift_corrector(mesh_device);
     // After every device has its anchor: the eth samples are rendered through those anchors, so drawing
     // them any earlier would map them with an anchor that does not exist yet.
     emit_eth_sync_lanes();
@@ -4430,6 +4547,7 @@ void PerfDebugProfiler::stop() {
             zm.foreign_sections);
     }
     // Last, with the drainers quiesced so the links are quiet and nothing else is competing for the NoC.
+    stop_drift_corrector();
     cross_path_tracking_test();
     check_sync_drift_at_close();
     check_anchor_staleness_at_close();

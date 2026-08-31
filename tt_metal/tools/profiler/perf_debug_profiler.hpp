@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <atomic>
+#include <thread>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -272,6 +273,12 @@ private:
     // Repeatedly measures the eth-derived and host-derived inter-device offset and reports whether their
     // DIFFERENCE holds constant. The constant intra-chip domain gap cancels, so a trend is real divergence.
     void cross_path_tracking_test();
+    // Background re-anchor: refits each device against the host every N ms and publishes the resulting
+    // correction so zones are placed with a CURRENT anchor instead of the one fitted at bring-up.
+    void start_drift_corrector(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+    void stop_drift_corrector();
+    std::thread drift_thread_;
+    std::atomic<bool> drift_stop_{false};
 
     // Chips whose AI clock this profiler pinned, so stop() can release exactly those.
     std::vector<int> forced_aiclk_chips_;

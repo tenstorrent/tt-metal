@@ -26,6 +26,22 @@ class PerfDebugTracyHandler;
 
 namespace perf_debug {
 
+// LIVE DRIFT CORRECTION, applied to every zone timestamp at push time.
+//
+// Tracy bakes a context's anchor at creation, so a later AddDevice cannot move it. But the device clock keeps
+// losing time against that anchor -- measured at 5-8 us/s -- so a one-shot anchor is wrong by
+// decay * (time since anchor): tens of us across a 20 s capture. The only place left to fix it is the
+// timestamp handed to Tracy: add back whatever the clock has lost since the anchor was fitted.
+//
+// MONOTONIC BY CONTRACT. The correction may only ever grow. Device clocks lose time and never gain it
+// (13/13 observed steps negative), so a ratchet matches the physics AND keeps adjusted timestamps
+// non-decreasing per lane, which Tracy requires. A correction allowed to fall could place a later zone
+// behind an earlier one whenever they are closer together than the change.
+void set_zone_ts_correction(uint32_t dev, int64_t cycles);
+// The correction currently being applied, so the close-check can report the error that SURVIVES it.
+int64_t get_zone_ts_correction(uint32_t dev);
+
+
 class PerfDebugTracyConsumer {
 public:
     explicit PerfDebugTracyConsumer(PerfDebugTracyHandler* handler);
