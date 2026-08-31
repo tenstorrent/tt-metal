@@ -237,9 +237,9 @@ def _build_relative_masks(context_window, brick):
         for relative_height in range(spans[1][0], spans[1][1] + 1):
             for relative_width in range(spans[2][0], spans[2][1] + 1):
                 relative = (relative_time, relative_height, relative_width)
-                index = ((relative_time - spans[0][0]) * extents[1] + (relative_height - spans[1][0])) * extents[2] + (
-                    relative_width - spans[2][0]
-                )
+                linear_brick_index = (
+                    (relative_time - spans[0][0]) * extents[1] + (relative_height - spans[1][0])
+                ) * extents[2] + (relative_width - spans[2][0])
                 for row in range(SITES_PER_BRICK):
                     query_offset = _site_in_brick(row, brick)
                     for column in range(SITES_PER_BRICK):
@@ -251,7 +251,7 @@ def _build_relative_masks(context_window, brick):
                                 visible = False
                                 break
                         if not visible:
-                            masks[0, 0, row, index * SITES_PER_BRICK + column] = float("-inf")
+                            masks[0, 0, row, linear_brick_index * SITES_PER_BRICK + column] = float("-inf")
     return masks
 
 
@@ -567,6 +567,14 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
             if brick_width % 2:
                 continue
             brick = (brick_time, brick_height, brick_width)
+            # A brick deeper than the volume on any axis is degenerate: it pads that axis out past
+            # its own extent, so every brick is mostly ghost sites and the axis contributes a single
+            # slot to the gather -- which this objective then scores as excellent. On a 12-frame
+            # volume the search picked (16, 1, 2), gathering 77 bricks against the 147 a real brick
+            # needs, and the op wedged. No effect at 1080p, where (2, 8, 2) is well inside
+            # (84, 272, 480); this only rules out choices that were never meaningful.
+            if any(extent > limit for extent, limit in zip(brick, volume)):
+                continue
             halo = halo_sites(min(context_window[2], volume[2]), brick_width)
             if halo > width_local:
                 continue
@@ -625,6 +633,31 @@ def _tp_trace(device, message: str) -> None:
     logger.info(f"[tp-trace] {message}")
 
 
+# The widest stick ``neighbor_pad_async`` actually moves, in bytes. MEASURED, not documented by
+# the op: at a 16 KB stick the first 4352 bytes of each halo column arrive and the rest is zeros
+# and uninitialised DRAM, silently -- no error, no hang, right shape. 4 KB passes, 8 KB does not
+# (models/tt_dit/tests/unit/test_halo_exchange_geometry.py::test_halo_exchange_moves_whole_sticks
+# is the sweep). The end symptom off this is catastrophically low PCC ( ~%)
+MAX_HALO_STICK_BYTES = 4096
+
+
+def _halo_split(stick_elements: int, element_bytes: int) -> int:
+    """How many sub-columns to cut one halo stick into so the exchange stays inside the bound.
+
+    Splits without moving a byte, the inverse of the W-fold in ``widened``: a ``[.., w, s]``
+    buffer is contiguous, so ``[.., w * parts, s / parts]`` is the SAME memory, and padding
+    ``parts``-scaled columns pads exactly the same halo. Halving keeps ``parts`` a divisor.
+
+    Returns 1 whenever the stick already fits, so a configuration that was inside the bound keeps
+    the exact call it had. Production under TP4 is one such: 32 sites x 64 channels x 2 B is 4 KB
+    on the nose, which is why only the non-TP paths -- every stage-5 gate -- ever saw this.
+    """
+    parts = 1
+    while stick_elements // parts * element_bytes > MAX_HALO_STICK_BYTES and (stick_elements // parts) % 2 == 0:
+        parts *= 2
+    return parts
+
+
 def _halo_exchange(ccl_manager, tensor, *, dims, pad_left, pad_right, axes, neighbor_sems, num_links):
     """neighbor_pad with the TOPOLOGY PINNED, independent of the manager's setting.
 
@@ -641,6 +674,12 @@ def _halo_exchange(ccl_manager, tensor, *, dims, pad_left, pad_right, axes, neig
     DIFFVAE_NA_HALO_TOPOLOGY=ring hands it back the manager's topology, to retest in one run once
     neighbor_pad is fixed.
     """
+    stick_bytes = int(tensor.shape[-1]) * tensor.element_size()
+    assert stick_bytes <= MAX_HALO_STICK_BYTES, (
+        f"a {stick_bytes}-byte halo stick exceeds the {MAX_HALO_STICK_BYTES} B neighbor_pad moves "
+        f"intact; it would return the right shape with the tail of every halo column unwritten. "
+        f"Split the trailing dim into sub-columns of the same memory first -- see _halo_split"
+    )
     topology = ccl_manager.topology if os.environ.get("DIFFVAE_NA_HALO_TOPOLOGY") == "ring" else ttnn.Topology.Linear
     barrier = ccl_manager.get_barrier_semaphore(axes[0])
     buffer = ccl_manager.get_np_ping_pong_buffer(
@@ -771,23 +810,26 @@ def neighborhood_attention_3d_bricked_w_sharded(
     def widened_bricked(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
         """K/V halo in bricked order: ``neighbor_pad`` on ``W_br``, no 7-D permute.
 
-        Last dim is ``32 * channels`` -- one brick of sites folded into the stick -- so the
-        exchange is already a 4 KB stick at one head (vs the 128 B that hung and needed a W-fold
-        in natural order). Halo is 3 bricks rather than 6 sites at 1080p.
+        Last dim is ``32 * channels`` -- one brick of sites folded into the stick -- so no W-fold
+        is needed to clear the 128 B width that hangs in natural order. Halo is 3 bricks rather
+        than 6 sites at 1080p.
+
+        But that stick has an UPPER bound too, and it is low: see ``_halo_split`` below.
         """
         t_br, h_br, w_br = brick_grid(owned_volume, brick)
         halo_br = halo // brick[2]
-        _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels})")
+        parts = _halo_split(SITES_PER_BRICK * channels, tensor.element_size())
+        _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels}, parts={parts})")
         with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
         with _deep_prof(device, f"{lane}: halo-exchange", category=decode_tree.ALLGATHER):
-            grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br, SITES_PER_BRICK * channels))
+            grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
             exchanged = _halo_exchange(
                 ccl_manager,
                 grid5,
                 dims=[3],
-                pad_left=[halo_br],
-                pad_right=[halo_br],
+                pad_left=[halo_br * parts],
+                pad_right=[halo_br * parts],
                 axes=[sp_axis],
                 neighbor_sems=[semaphore],
                 num_links=[num_links],

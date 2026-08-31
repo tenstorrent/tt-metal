@@ -423,6 +423,12 @@ def test_interior_table_matches_generated_masks(mesh_device, owned_width, brick)
             context_window,
             stride,
             brick,
+            # Must match what the op is handed below. The table carries one row per query CHUNK,
+            # so letting the planner default this while the op gets an explicit (possibly forced,
+            # via DIFFVAE_NA_CHUNK_BRICKS) chunk builds a table of the wrong length -- 288 rows
+            # against the 72 the op expects at chunk (2,1,2) -- and fails op validation before any
+            # kernel runs. The other call sites here pass it to both or to neither.
+            query_chunk_bricks=_query_chunk_bricks(stride, brick),
             shard_extent=resident,
             shard_origin=(0, 0, origin_width),
         )

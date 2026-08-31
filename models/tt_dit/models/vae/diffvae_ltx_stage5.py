@@ -687,6 +687,28 @@ def log_dram(mesh_device, label: str) -> None:
     )
 
 
+def _release_intermediates(tensors: Sequence[ttnn.Tensor], *, keep: ttnn.Tensor) -> None:
+    """Free every distinct buffer among ``tensors`` except the one ``keep`` is using.
+
+    ``ttnn.reshape`` hands back a NEW Python object that may be a VIEW over its input's buffer,
+    and ``ttnn.deallocate`` defaults to ``force=True``. So the ``a is not b`` guard used elsewhere
+    in this file is not enough: two distinct objects can name one buffer, and the guard then frees
+    memory a live tensor is still reading, or frees the same buffer twice. In _brick_activation
+    that returned a stage-5 activation whose sites were half the bricked volume and half whatever
+    the next allocation had written over it -- end-to-end PCC 2%, and invisible to a unit test
+    because nothing allocated afterwards. Compare BUFFERS, which is what is being freed.
+    """
+    seen = {keep.buffer_address()} if keep.is_allocated() else set()
+    for tensor in tensors:
+        if not tensor.is_allocated():
+            continue
+        address = tensor.buffer_address()
+        if address in seen:
+            continue
+        seen.add(address)
+        ttnn.deallocate(tensor)
+
+
 def _reshape_row_major(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
     """Reshape and leave the result in ROW_MAJOR, for consumers that want it that way.
 
@@ -1056,16 +1078,17 @@ class _NeighborhoodAttention3D(Module):
         flat_seq = self.kernel.prefers_flat_seq and self.tp_proj and heads == 1
         if brick is not None:
             # Already bricked: RoPE output is (1, 1, sites*heads, hd); fold back to (B, heads, sites, hd).
-            # Under TP (one head) those shapes already match, and ttnn.reshape of a matching TILE
-            # tensor is a new wrapper over the same buffer -- deallocating the input then hands
-            # attention a tensor whose device is None (the crash on the first hoisted run).
+            # A RELABEL, not a copy -- the executor reads the same site-major buffer back out as
+            # (B, 1, sites, heads*hd). So nothing is freed here: ttnn.reshape hands back a new
+            # wrapper over the SAME buffer, and deallocating the input takes the reshape's memory
+            # with it (under TP the shapes already match, where it took the tensor's device too and
+            # crashed outright; above one head it silently returned half-overwritten activations).
             def to_bricked_seq(x: ttnn.Tensor) -> ttnn.Tensor:
                 target = (grid.batch, heads, sites_local, cfg.head_dim)
                 if tuple(x.shape) == target:
                     return x
                 out = ttnn.reshape(x, target)
-                if out is not x:
-                    ttnn.deallocate(x)
+                _release_intermediates((x,), keep=out)
                 return out
 
             prep = to_bricked_seq
@@ -1538,20 +1561,14 @@ class DiffVAEStage5(Module):
         channels = int(x.shape[-1])
         batch = int(x.shape[1])
         rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if rm is not x:
-            ttnn.deallocate(x)
         vol = ttnn.reshape(rm, (batch, volume[0], volume[1], volume[2], channels))
-        if vol is not rm:
-            ttnn.deallocate(rm)
         grid5 = to_bricked_grid(vol, volume=volume, brick=brick)
-        if grid5 is not vol:
-            ttnn.deallocate(vol)
         flat = ttnn.reshape(grid5, (1, batch, brick_count(volume, brick) * SITES_PER_BRICK, channels))
         out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
-        if out is not flat:
-            ttnn.deallocate(flat)
-        if flat is not grid5 and grid5 is not out:
-            ttnn.deallocate(grid5)
+        # Freed together, at the end, by buffer rather than by object: vol is a view of rm and
+        # flat is one of grid5, so freeing them as they are superseded frees memory that the next
+        # step still reads. See _release_intermediates.
+        _release_intermediates((x, rm, vol, grid5, flat), keep=out)
         return out
 
     def _unbrick_activation(

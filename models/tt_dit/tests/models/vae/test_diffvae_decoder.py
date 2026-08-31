@@ -228,3 +228,63 @@ def test_decode_matches_upstream(*, decoder):
         torch.save(pixels.cpu(), out)
         print(f"\nwrote device pixels {tuple(pixels.shape)} to {out}")
     assert_quality(expected, pixels, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
+# latent_t 2 puts stage 5 at t=11, exactly the window extent -- every brick then reads as clamped
+# (brick_window_is_unclamped returns false when window >= volume on an axis), which is a different
+# path from production's t=84. latent_t 4 gives t=21, comfortably clear of it. Covering both is
+# what distinguishes "broken at degenerate t" from "broken generally".
+@pytest.mark.parametrize("latent_t", [2, 4], ids=["t_at_window", "t_clear_of_window"])
+@pytest.mark.diffvae_gate
+def test_decode_stage5_bricked_matches_replicated(*, mesh_device, sp_axis, latent_t):
+    """Full decode with stage 5 on the BRICKED backend matches the replicated decode.
+
+    The end-to-end companion to test_stage5_parity_w_sharded_bricked. Same shape as
+    test_decode_stage5_wsp_matches_replicated -- deterministic stages replicated and identical in
+    both arms, only stage 5 differs -- but exercising ``bricked_sp_w_sharded``: halo exchange
+    instead of a full-W all-gather, the bricked layout, and the in-kernel neighborhood gather.
+
+    sp_axis is fixed to 1. The bricked path halo-exchanges whole bricks and needs a local width of
+    at least ``halo_sites(11, 2) == 6``; only the size-8 axis leaves enough width here, and sharding
+    the size-4 axis would give a local width the brick chooser rejects outright.
+
+    Note this decodes the same (2, 8, 8) latent as the other decoder tests, which puts stage 5 at
+    W = 64 and so a local width of 8 -- just above the halo. A smaller latent will not build a plan.
+    """
+
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    config = decoder_config(CHECKPOINT)
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], latent_t, 8, 8)
+
+    replicated = DiffVAEDecoder(config, mesh_device=mesh_device)
+    replicated.load_checkpoint(CHECKPOINT)
+    pixels_rep = replicated.decode(latent, seed=0)
+
+    # Ring collectives, matching the runner and the FABRIC_1D_RING fabric above. The halo exchange
+    # stays Linear regardless: _halo_exchange in neighborhood_attention.py pins it, because
+    # neighbor_pad_async deadlocks on Ring. _gate_ccl would give Linear for everything, which is a
+    # configuration no production path runs.
+    from models.tt_dit.parallel.manager import CCLManager
+
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Ring)
+    bricked = DiffVAEDecoder(
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        stage5_na3d_backend="bricked_sp_w_sharded",
+        stage5_sp_axis=sp_axis,
+    )
+    bricked.load_checkpoint(CHECKPOINT)
+    pixels_bricked = bricked.decode(latent, seed=0)
+
+    assert tuple(pixels_bricked.shape) == tuple(
+        pixels_rep.shape
+    ), f"{tuple(pixels_bricked.shape)} != {tuple(pixels_rep.shape)}"
+    assert_quality(pixels_rep, pixels_bricked, pcc=0.999)

@@ -605,3 +605,182 @@ def test_stage5_gna_parity_w_sharded(*, mesh_device, device_params, sp_axis, gri
     a, b = a - a.mean(), b - b.mean()
     measured = (a @ b / (a.norm() * b.norm())).item()
     logger.info(f"[GNA] stride {stride}: end-to-end stage-5 pixel PCC vs ltx_core = {measured:.6f}")
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+@pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
+@pytest.mark.parametrize("pcc", [0.999], ids=["pcc999"])
+@pytest.mark.diffvae_gate
+def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis, pcc):
+    """Stage 5 on the BRICKED W-sharded backend against the ltx_core reference.
+
+    Until this existed, no committed gate covered ``bricked_sp_w_sharded`` at all: every gate here
+    and in test_diffvae_decoder.py hardcodes ``op_sp_w_sharded``, so the bricked op's only oracle was
+    models/tt_dit/tests/unit/test_neighborhood_sdpa.py on a 16x24x24 volume. That leaves the shipped
+    stage-5 executor -- halo exchange, bricked layout, in-kernel gather, the uploaded relative mask
+    table -- with no upstream reference and no PCC ledger entry.
+
+    W is 64 rather than the 32 the op_sp_w_sharded tests use, and that is load-bearing: the bricked
+    path halo-exchanges whole bricks, ``halo_sites(11, 2) == 6``, and ``_choose_sharded_brick`` skips
+    every candidate whose halo exceeds the local width. At w=32 on sp=8 the local width is 4, no
+    brick qualifies, and the plan cannot be built. 64 gives a local width of 8.
+
+    Stride is left at the default (1,1,1) -- exact NA, the shipped architecture. The GNA strides are
+    covered for the reference backend by test_stage5_gna_parity_w_sharded; a bricked stride sweep
+    belongs with that one, not in a correctness gate.
+    """
+
+    # W=256 gives a local width of 32 -- 16 brick-columns against the 3 each neighbour needs, a
+    # ratio of 0.19 against production's 0.10. W=64 (local width 8, i.e. 4 brick-columns against 3)
+    # clears the brick chooser's halo check but wedges the halo exchange; see
+    # tests/unit/test_halo_exchange_geometry.py, which bounds that limit directly.
+    grid = Grid(batch=1, t=12, h=32, w=256)
+    sp = int(list(mesh_device.shape)[sp_axis])
+    assert grid.w % sp == 0, f"W={grid.w} not divisible by sp={sp}"
+    local_width = grid.w // sp
+    assert local_width >= 6, f"local width {local_width} cannot hold an 11-window halo of 6 sites"
+
+    config = DiffVAEStage5Config()
+    dtype = ttnn.bfloat16
+
+    reference = TorchStage5(config)
+    reference.eval()
+    randomize(reference, seed=1234)
+    state = checkpoint_state(reference)
+
+    # Ring for the collectives, which is what the runner ships and what the fabric is built as
+    # (FABRIC_1D_RING above). The halo exchange is NOT ring: _halo_exchange in
+    # neighborhood_attention.py pins it to Topology.Linear because neighbor_pad_async deadlocks on
+    # Ring. That pin is unconditional, so nothing here needs to arrange it -- but the collectives
+    # around it must be ring, or this gate runs a Linear-everything configuration on a ring fabric
+    # that no production path uses.
+    from models.tt_dit.parallel.manager import CCLManager
+
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Ring)
+    model = DiffVAEStage5(
+        config,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        ccl_manager=ccl_manager,
+        na3d_backend="bricked_sp_w_sharded",
+        sp_axis=sp_axis,
+    )
+    model.load_torch_state_dict(state)
+
+    context, x_t, timestep = make_inputs(config, grid, seed=99)
+    _, ref_pixels = reference.forward_diff_step(reference.build_buffer(context, x_t), timestep)
+
+    tt_context = ttnn.from_torch(
+        flat(context, config.context_channels).contiguous(),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+    )
+    tt_t = tt_timestep(timestep, mesh_device)
+    tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
+
+    assert_quality(ref_pixels, tt_pixels, pcc=pcc)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+@pytest.mark.parametrize("sp_axis", [1], ids=["sp_cols"])
+@pytest.mark.parametrize("pcc", [0.999], ids=["pcc999"])
+@pytest.mark.parametrize(
+    "grid",
+    # PRODUCTION STAGE-5 WIDTH ONLY -- not a production grid, and not a pixel width. Stage 5 never
+    # sees 1920: it attends over a grid of patch_size=4 patches, and the deterministic stages
+    # upsample the latent by 8 before it. The 1080p run's own numbers:
+    #
+    #   latent (1,128,19,34,60) --[det stages, x8]--> stage-5 (84,272,480)
+    #                           --[unpatchify, x4]--> pixels (1,3,145,1088,1920)
+    #
+    #   60 * 8 = 480 (this W)      480 * 4 = 1920 (the pixel width)
+    #
+    # W=480 on an 8-way shard is what matters here: local width 60 against a 6-site halo, the 0.10
+    # ratio the 1080p decode runs. Every other bricked test in this repo sits at local width 4-8,
+    # where the halo is most of the shard.
+    #
+    # H does not participate: sp_axis=1 shards W alone, so H changes volume and nothing else. 64
+    # keeps the reference affordable; 272 is the true 1080p height, for anything that scales with
+    # volume rather than shape. T=24 is NOT production (that is 84, banded) -- it is the smallest
+    # value comfortably clear of the 11-site window, below which every brick reads as clamped
+    # (brick_window_is_unclamped short-circuits when window >= volume on an axis).
+    #
+    # Reference cost measured on this host at 64 threads, ~133 us/site: w480_h64 is ~2 min,
+    # w480_h272 is ~10 min. Select with -k if the long one is not wanted.
+    [Grid(batch=1, t=24, h=64, w=480), Grid(batch=1, t=24, h=272, w=480)],
+    ids=["w480_h64", "w480_h272"],
+)
+@pytest.mark.parametrize(
+    # op_sp_w_sharded is the CONTROL, not a second subject: it is the shipped default with its own
+    # upstream evidence, so if it scores here and bricked does not, the difference is the backend
+    # and not the grid, the harness or the reference. Running them as one parametrisation is what
+    # makes that a matched comparison rather than two numbers from different tests.
+    "backend",
+    ["op_sp_w_sharded", "bricked_sp_w_sharded"],
+    ids=["reference_backend", "bricked"],
+)
+@pytest.mark.diffvae_gate
+def test_stage5_bricked_matches_upstream_at_production_width(
+    *, mesh_device, device_params, sp_axis, grid, pcc, backend
+):
+    """``bricked_sp_w_sharded`` against the ltx_core reference at production shard width.
+
+    The bricked backend's correctness evidence is otherwise thin and none of it is independent at
+    this geometry: test_neighborhood_sdpa.py covers volumes around 16x24x24;
+    test_decode_wsp_shard_equivalence compares bricked against bricked, so both arms can be wrong
+    together; and test_decode_wsp_timing runs the real 145-frame geometry while asserting nothing.
+
+    ltx_core is the reference rather than op_sp_w_sharded deliberately. A device-vs-device check
+    says the two disagree without saying which is wrong; upstream names the culprit.
+    """
+
+    from models.tt_dit.parallel.manager import CCLManager
+
+    sp = int(list(mesh_device.shape)[sp_axis])
+    assert grid.w % sp == 0, f"W={grid.w} not divisible by sp={sp}"
+    local_width = grid.w // sp
+    assert local_width >= 12, f"local width {local_width} is not a production-like shard"
+
+    config = DiffVAEStage5Config()
+    dtype = ttnn.bfloat16
+
+    reference = TorchStage5(config)
+    reference.eval()
+    randomize(reference, seed=1234)
+    state = checkpoint_state(reference)
+
+    context, x_t, timestep = make_inputs(config, grid, seed=99)
+    _, ref_pixels = reference.forward_diff_step(reference.build_buffer(context, x_t), timestep)
+
+    # Ring collectives, as the runner ships. The halo exchange inside the bricked backend is pinned
+    # to Linear by _halo_exchange regardless -- neighbor_pad_async deadlocks on Ring.
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Ring)
+    model = DiffVAEStage5(
+        config,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        ccl_manager=ccl_manager,
+        na3d_backend=backend,
+        sp_axis=sp_axis,
+    )
+    model.load_torch_state_dict(state)
+
+    tt_context = ttnn.from_torch(
+        flat(context, config.context_channels).contiguous(),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+    )
+    tt_t = tt_timestep(timestep, mesh_device)
+    tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
+
+    assert_quality(ref_pixels, tt_pixels, pcc=pcc)
