@@ -7,6 +7,8 @@
 #include <concepts>
 #include <exception>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "ttnn/tensor/tensor.hpp"
@@ -73,7 +75,7 @@ auto compute_program_hash(
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
 template <typename WorkloadFactory, typename device_operation_t>
-static auto create_mesh_workload_from_workload_factory(
+auto create_mesh_workload_from_workload_factory(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const typename device_operation_t::tensor_args_t& tensor_args,
@@ -459,6 +461,22 @@ void launch_operation_with_adapter(
             create_and_cache_mesh_workload<mesh_device_operation_t>(
                 operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_key);
         }
+    }
+
+    // Stash factory identity after adapter work so nested function_end events cannot consume it.
+    if (ttnn::graph::GraphProcessor::has_active_instance()) {
+        // Prefer the cached index; select only when the miss was not inserted (NO_DISPATCH).
+        const std::size_t program_factory_index =
+            (is_program_cache_enabled && program_cache.contains(program_key))
+                ? program_cache.get(program_key).program_factory_index
+                : mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args).index();
+        auto program_factory =
+            map_index_to_variant(program_factory_index, typename mesh_device_operation_t::program_factory_t{});
+        const std::string_view factory_type = std::visit(
+            [](auto&& alt) -> std::string_view { return ttsl::long_type_name<std::decay_t<decltype(alt)>>; },
+            program_factory);
+        ttnn::graph::GraphProcessor::set_pending_program_factory(
+            std::string(factory_type), program_factory_index, program_cache_hit);
     }
 }
 

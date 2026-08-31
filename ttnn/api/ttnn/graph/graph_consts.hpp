@@ -42,6 +42,9 @@ constexpr auto kRuntimeId = "runtime_id";
 constexpr auto kGlobalCallCount = "global_call_count";
 constexpr auto kProgramId = "program_id";
 constexpr auto kCommandQueueId = "command_queue_id";
+constexpr auto kProgramFactoryType = "program_factory_type";
+constexpr auto kProgramFactoryIndex = "program_factory_index";
+constexpr auto kProgramCacheHit = "program_cache_hit";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";
@@ -75,6 +78,11 @@ constexpr auto kReportTimestampNs = "capture_timestamp_ns";
 constexpr auto kReportTotalDurationNs = "total_duration_ns";
 constexpr auto kReportRank = "rank";
 constexpr auto kReportWorldSize = "world_size";
+constexpr auto kReportGitSha = "git_sha";
+constexpr auto kReportGitShaShort = "git_sha_short";
+constexpr auto kReportGitVersion = "version";
+constexpr auto kReportBuildType = "build_type";
+constexpr auto kReportGitDirty = "dirty";
 
 // device info keys
 constexpr auto kDeviceNumYCores = "num_y_cores";

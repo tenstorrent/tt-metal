@@ -37,6 +37,9 @@ from models.common.modules.rmsnorm.rmsnorm_1d import (
 )
 from models.common.utility_functions import comp_allclose, comp_pcc
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # ============================================================================
 # Weight Caching - Avoid expensive weight loading per test
 # ============================================================================

@@ -32,7 +32,8 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
+from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor
+from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Real (pre-pad) prompt lengths. prepare_input pads each up to compress_rate*sp, so the ragged ones
@@ -299,7 +300,7 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_c
 
     tt_model = TtHCA.from_reference(mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology)
 
-    hidden_padded, seq_len_actual = TtHCA.prepare_input(hidden, sp_factor, compress_rate)
+    hidden_padded, seq_len_actual = TtHCACompressor.prepare_input(hidden, sp_factor, compress_rate)
     logger.debug(f"mesh={tuple(mesh_device.shape)} S_real={seq_len_actual} S_pad={hidden_padded.shape[1]}")
     ms = tuple(mesh_device.shape)
     tt_input = ttnn.from_torch(

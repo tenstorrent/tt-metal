@@ -11,9 +11,12 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <stack>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <any>
@@ -195,12 +198,22 @@ public:
 
     static nlohmann::json end_graph_capture_to_file(const std::filesystem::path& report_path);
 
+    static bool has_active_instance();
+    static void set_pending_program_factory(std::string type, std::size_t index, bool cache_hit);
+
     // Detailed buffer tracing control
     static void enable_detailed_buffer_tracing();
     static void disable_detailed_buffer_tracing();
     static bool is_detailed_buffer_tracing_enabled();
 
 private:
+    struct PendingProgramFactory {
+        std::string type;
+        std::size_t index = 0;
+        bool cache_hit = false;
+    };
+    static thread_local std::optional<PendingProgramFactory> pending_program_factory_;
+
     static std::atomic<bool> capture_detailed_buffer_tracing_;
 };
 
