@@ -438,8 +438,9 @@ def _sdpa_chunks_for_seq_len(seq_len, batch_size=None, sequence_parallel=False, 
             if data_parallel:
                 # Query head-fold: Sq=4096, Sk=8192, B6. q128/k2048 uses 4 k-chunks.
                 return 128, 2048
-            # Dense-mask S8192 needs the lower-L1 k256 configuration.
-            return 512, 256
+            # Single-chip S8192. q128/k256 is the plan that fits L1 on one
+            # Wormhole chip. A larger q chunk overflows L1.
+            return 128, 256
         # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
         # ~0.27ms under the B32-inherited 256x512). B32 keeps 256x512.
         # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512, same as B8).
@@ -520,7 +521,9 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
 
     # Numerics defaults
     if config.attention_scale is None:
-        to_set["attention_scale"] = config.head_dim**-0.5
+        # encoder.py folds 1/sqrt(head_dim) into the Q weight at S8192. SDPA then
+        # runs with scale 1.0, or the path applies the scale twice.
+        to_set["attention_scale"] = 1.0 if config.qkv_scale_prefolded else config.head_dim**-0.5
     if config.qkv_dtype is None:
         to_set["qkv_dtype"] = ttnn.bfloat16
     if config.score_dtype is None:
