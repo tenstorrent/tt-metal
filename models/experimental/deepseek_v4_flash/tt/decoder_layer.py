@@ -113,6 +113,9 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             cache=cache.sub("attn_hc"),
             packed_weights=packed_bundle,
             packed_name="attn_hc.fn",
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype,
         )
         self.ffn_hc = DeepSeekV4HyperConnection(
             config,
@@ -121,19 +124,25 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             cache=cache.sub("ffn_hc"),
             packed_weights=packed_bundle,
             packed_name="ffn_hc.fn",
+            use_prefetcher=use_prefetcher,
+            prefetch_buffers=prefetch_buffers,
+            weight_dtype=weight_dtype,
         )
         _profile(self.device)
 
     def prefetch_weights(self):
         """Stage this layer's prefetched weights ahead of the :meth:`decode` that uses them.
 
-        Attention first (its own four projections and its compressor's pair), then the MoE
-        block's shared expert -- the order :meth:`decode` runs them, which is what the single
-        GCB every layer on the device shares requires of its one FIFO. The routed experts and
-        the hyper-connections have no prefetched weights. The requests queued here must be
-        consumed by this layer's own decode before any later layer queues its own.
+        Hyper-connection ``fn`` first (private GCB, consumed before attention), then
+        attention (its own four projections and its compressor's pair), then the FFN
+        hyper-connection, then the MoE shared expert. Attention and MoE share one GCB
+        and must stay in that FIFO order; each HC streams through its own buffer.
+        The requests queued here must be consumed by this layer's own decode before
+        any later layer queues its own.
         """
+        self.attn_hc.prefetch_weights()
         self.self_attn.prefetch_weights()
+        self.ffn_hc.prefetch_weights()
         self.mlp.prefetch_weights()
 
     def _mix(

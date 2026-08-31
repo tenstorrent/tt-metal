@@ -58,6 +58,7 @@ def matmul_decode(
     global_cb_k_blocks: int = 1,
     all_gather: bool = False,
     ring_size: int = 1,
+    ring_gather: bool = False,
 ) -> "OpDescriptor":
     """Create a ``matmul_decode`` op descriptor.
 
@@ -83,6 +84,8 @@ def matmul_decode(
         global_cb_k_blocks: GCB pages per receiver slab (see ``ttnn.experimental.matmul_decode``).
         all_gather: Fuse a fabric all-gather of the local N-shard. ``ring_size`` must match
             the input mesh when this is set.
+        ring_gather: Gather in0 over a pipelined closed ring instead of the two-hub gather.
+            Full- and partial-width L1-resident paths only. Defaults to False.
 
     Returns:
         OpDescriptor with the matmul_decode program descriptor and IO tensors.
@@ -107,6 +110,7 @@ def matmul_decode(
     attrs.global_cb_k_blocks = global_cb_k_blocks
     attrs.all_gather = all_gather
     attrs.ring_size = ring_size
+    attrs.ring_gather = ring_gather
 
     tensor_args = _prim.MatmulDecodeInputs(input_tensor_a, input_tensor_b)
 

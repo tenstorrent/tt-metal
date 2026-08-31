@@ -177,7 +177,11 @@ def rectangular_core_range_set(num_cores: int, device) -> ttnn.CoreRangeSet:
 
 
 def with_shard_height(memory_config: ttnn.MemoryConfig, shard_height: int) -> ttnn.MemoryConfig:
-    """Return a copy of ``memory_config`` with its shard height replaced by ``shard_height``."""
+    """Return a copy of ``memory_config`` with its shard height replaced by ``shard_height``.
+
+    Core grid, shard width, layout, and buffer type are preserved so a retile does not
+    rebuild a different width-sharded core map.
+    """
     shard_spec = memory_config.shard_spec
     if shard_spec is None:
         raise ValueError("memory_config has no shard_spec to override")
@@ -187,6 +191,12 @@ def with_shard_height(memory_config: ttnn.MemoryConfig, shard_height: int) -> tt
         shard_spec.orientation,
     )
     return ttnn.MemoryConfig(memory_config.memory_layout, memory_config.buffer_type, new_shard_spec)
+
+
+def with_tile_height(memory_config: ttnn.MemoryConfig, height: int, tile_height: int) -> ttnn.MemoryConfig:
+    """Return a copy of ``memory_config`` whose shard height is ``height`` padded to ``tile_height``."""
+    height_padded = ((height + tile_height - 1) // tile_height) * tile_height
+    return with_shard_height(memory_config, height_padded)
 
 
 def width_sharded_l1_config(
