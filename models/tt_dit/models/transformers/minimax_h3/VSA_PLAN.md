@@ -14,9 +14,9 @@
 | R5 traced block | ✅ | 15s/768p block traced+untraced, full gate branch, finite output |
 | R6b/c production | ✅ | 15s/768p PCC 99.41%, 1280x768/39f 99.31% (zero gate), 99.35% (random gate) |
 | R5 model+pipeline plumbing | ✅ code, model tests pending | pack/unpack gathers in model forward; `_prepare_vsa` + tiled metadata in pipeline |
-| R6a/R6d model level | tests written, running | `test_vsa_transformer_minimax_h3.py` |
+| R6a/R6d model level | ✅ | sparsity0 vs dense PCC 99.9998% (video+audio); striped≡identity 99.9998% |
 | Full pipeline run w/ VSA | ⬜ untested | plumbing in place (`MiniMaxH3Pipeline(vsa_config=...)`); needs a real-checkpoint generation run |
-| R6a "config off bit-identical" | by construction + dense regression test | every change branches on `vsa_config`/geometry being set |
+| R6a "config off bit-identical" | ✅ | every change branches on `vsa_config`; dense block test re-passes at 99.9995% |
 
 Residual PCC vs the fp32 torch oracle (~99.3-99.5% on random data) is dominated by near-tie
 top-k selection across the bf16/fp32 boundary — index sets are compared as sets with ties
