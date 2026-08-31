@@ -823,7 +823,7 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 10
+      timeout: 4
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   sp_config: sc1
@@ -865,7 +865,7 @@
   test_group: sdpa_perf
   skus:
     bh_sc1_high_power:
-      timeout: 20
+      timeout: 6
   owner_id: U07N3CUUN05 # Iva Potkonjak
   team: ttnn
   sp_config: sc1
