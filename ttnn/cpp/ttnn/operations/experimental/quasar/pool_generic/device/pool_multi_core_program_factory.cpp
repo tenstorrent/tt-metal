@@ -568,7 +568,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         return_indices,
         in_h,
         in_w,
-        output_layout);
+        output_layout,
+        // The QSR force-4 pack cap was RETIRED upstream (#52966 / PR #54284): the 0x19 fault was
+        // root-caused to a CSR timeout, not a pack-bounds limit, so up to 8 tiles per reduction is
+        // now correct. Equal-width c-blocks are instead guaranteed by largest_uniform_block_width()
+        // below. Kept plumbed (defaulted false) so the cap can be re-armed from one call site.
+        /*force_max_tiles_per_reduction_4=*/false,
+        // Per-core output stick counts, so get_factory_parameters can TT_FATAL when the SPMD
+        // compute thread count does not divide a core's stick share in (in_cb_0, in_cb_1) pairs.
+        shard_boundaries);
 
     // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
     // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).

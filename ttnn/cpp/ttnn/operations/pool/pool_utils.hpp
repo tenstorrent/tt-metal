@@ -181,7 +181,9 @@ FactoryParameters get_factory_parameters(
     bool return_indices,
     uint32_t in_h,
     uint32_t in_w,
-    const Layout& output_layout);
+    const Layout& output_layout,
+    bool force_max_tiles_per_reduction_4 = false,
+    const std::vector<sliding_window::ShardBoundary>& shard_boundaries = {});
 
 pool_op_l1_usage calculate_L1_usage(
     DataType input_dtype,
