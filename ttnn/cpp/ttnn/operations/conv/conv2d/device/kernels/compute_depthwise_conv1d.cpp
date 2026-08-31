@@ -271,16 +271,11 @@ void kernel_main() {
     // height block (in-place) or at a dedicated scratch CB for multiple blocks.
     constexpr uint32_t partials_cb_id = get_compile_time_arg_val(11);
 
-    // SFPU tap accumulation only when both operands are genuinely fp32 -- derived purely from the
-    // per-CB unpack format, no new compile-time arg or host flag. Gating on format (not just
-    // DST_ACCUM_MODE) keeps every bf16/bf8 caller, LTX included, bit-exact and on the faster FPU path.
-    // The scratch check is structurally redundant today (ACT_TILIZED and the dest-reuse scratch both
-    // take the output data format in the CB table), but keeps this gate correct if that ever diverges:
-    // the SFPU path reads the scratch through `copy_tile` and needs it delivered UnpackToDestFp32.
-    constexpr bool fp32_operands = DST_ACCUM_MODE &&
-                                   unpack_src_format[tilized_in0_cb_id] == static_cast<uint8_t>(DataFormat::Float32) &&
-                                   unpack_src_format[in1_cb_id] == static_cast<uint8_t>(DataFormat::Float32) &&
-                                   unpack_src_format[partials_cb_id] == static_cast<uint8_t>(DataFormat::Float32);
+    // SFPU tap accumulation, selected by the host (use_fp32_sfpu_depthwise in the factory). The same
+    // host condition delivers ACT/ACT_TILIZED/WEIGHTS/scratch UnpackToDestFp32, so dispatch and CB
+    // modes can never disagree; when false (any non-fp32 operand or output), every caller stays
+    // bit-exact on the stock FPU path.
+    constexpr bool fp32_operands = get_compile_time_arg_val(12) == 1;
 
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_in1(in1_cb_id);

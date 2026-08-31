@@ -1052,10 +1052,16 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         const uint32_t dest_reuse_scratch_cb_id =
             get_cb_info_by_name(cb_info, use_partials_scratch ? Conv2dCb::MATMUL_PARTIALS : Conv2dCb::OUT).index;
 
-        // Only when both operands really are fp32: the JIT honors the mode only for Float32-format
-        // CBs (get_unpack_dst_formats), so flagging anything else would be a silent no-op.
-        if (fp32_dest_acc_en && a.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-            b.dtype() == tt::tt_metal::DataType::FLOAT32) {
+        // Single source of truth for the fp32-exact depthwise contract: this drives both the
+        // unpack-to-dest overrides below and the kernel's SFPU dispatch (compile arg 12), so the
+        // two can never disagree. All three formats must be fp32 -- ACT_TILIZED and the scratch
+        // take the output format, and the JIT honors the mode only for Float32-format CBs
+        // (get_unpack_dst_formats). Mixed-dtype calls keep the stock FPU path.
+        const bool use_fp32_sfpu_depthwise =
+            fp32_dest_acc_en && a.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+            b.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+            get_cb_info_by_name(cb_info, Conv2dCb::OUT).data_format == tt::DataFormat::Float32;
+        if (use_fp32_sfpu_depthwise) {
             depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
             // ACT is included as well as ACT_TILIZED: the tilize step unpacks ACT through SrcA, which
             // rounds fp32 to TF32 *before* ACT_TILIZED is ever written, so overriding only the
@@ -1082,6 +1088,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             filter_w,                                                   // 9: kernel_width
             coalesce_1d_depthwise_kw_reads,                             // 10: coalesced activation block
             dest_reuse_scratch_cb_id,                                   // 11: dest-reuse read-back scratch
+            (uint32_t)use_fp32_sfpu_depthwise,                          // 12: SFPU fp32-exact dispatch
         };
     } else {
         compute_kernel_args = {
