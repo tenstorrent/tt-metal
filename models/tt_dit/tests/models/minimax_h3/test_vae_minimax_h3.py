@@ -146,6 +146,68 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_late
     _assert_same(expected, actual, pcc=0.99)  # ttnn.group_norm has no fp32 path: bf16 floor
 
 
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_fl2va_conditioning_rows_proxy(mesh_device):
+    """E2E proxy for the fl2va conditioning stage: the packed rows the pipeline prepends.
+
+    Runs `encode_keyframes` exactly as production does -- raw uint8 pixels into a pixel_norm
+    device VAE -- against the same helper on the diffusers reference with normalized fp32,
+    i.e. the released model's path. The seed-42 posterior draw is shared, so everything from
+    pixels to packed rows (tiling, sampling, the fp16 round trip, latent normalization,
+    packing) must agree. This is the gate the full fl2va e2e would provide for the encode
+    stage, without a mesh-sized generation or media on disk."""
+    from PIL import Image
+
+    from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD, encode_keyframes
+
+    weights_dir = _weights_dir()
+    reference, config = _build_reference(weights_dir)
+    torch.manual_seed(7)
+    latents_mean = tuple(config.latents_mean) or tuple(float(v) for v in torch.randn(config.latent_channels))
+    latents_std = tuple(config.latents_std) or tuple(float(v) + 2.0 for v in torch.rand(config.latent_channels))
+
+    image = Image.fromarray(torch.randint(0, 256, (768, 1344, 3), dtype=torch.uint8).numpy())
+
+    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    tt_vae.load_encoder_state(dict(reference.state_dict()))
+    rows_device = encode_keyframes([image], tt_vae.encode_clip, latents_mean, latents_std, raw_pixels=True)
+
+    with torch.no_grad():
+        rows_reference = encode_keyframes([image], reference._encode_clip, latents_mean, latents_std)
+
+    assert rows_device.shape == rows_reference.shape, f"{rows_device.shape} vs {rows_reference.shape}"
+    _assert_same(rows_reference, rows_device, pcc=0.99)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_encode_video_uint8_pixel_norm(mesh_device):
+    """E2E proxy for the ref2va video-reference encode: chunked `encode` on raw uint8.
+
+    22 frames (17 + 5) pad to two 17-frame clips, so this exercises what the single-clip
+    gate cannot: the uint8 final-frame repeat, per-clip tiling across a multi-clip stream,
+    the folded conv_in's `255 * mean` causal front-pad on every clip, the stitch, and the
+    trailing `token_drop`. Reference is the diffusers chunked `_encode` on normalized fp32."""
+    from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD
+
+    weights_dir = _weights_dir()
+    reference, config = _build_reference(weights_dir)
+    torch.manual_seed(8)
+
+    pixels_uint8 = torch.randint(0, 256, (1, 3, 22, 256, 384), dtype=torch.uint8)
+    mean = torch.tensor(MINIMAX_H3_PIXEL_MEAN).view(1, -1, 1, 1, 1)
+    std = torch.tensor(MINIMAX_H3_PIXEL_STD).view(1, -1, 1, 1, 1)
+    normalized = (pixels_uint8.float().div(255.0) - mean) / std
+    with torch.no_grad():
+        expected = reference._encode(normalized)
+
+    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    tt_vae.load_encoder_state(dict(reference.state_dict()))
+    actual = tt_vae.encode(pixels_uint8)
+
+    assert actual.shape == expected.shape, f"{actual.shape} vs {expected.shape}"
+    _assert_same(expected, actual, pcc=0.99)
+
+
 @pytest.mark.parametrize(
     ("num_frames", "temporal_taps", "expected_latent_frames"),
     [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
