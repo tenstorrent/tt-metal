@@ -169,16 +169,11 @@ void kernel_main() {
     uint32_t last_tile_height =
         num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
 
-    // [threading] The divided stick loop below deals sticks in (in_cb_0, in_cb_1) pairs per thread,
-    // so the per-core stick count must be divisible by 2*num_threads: that guarantees both an exact
-    // per-thread split AND an even per-thread share (an odd share makes every thread consume one
-    // extra in_cb_0 entry than exists -> deadlock). NOT always true (cliff cores can get any stick
-    // count), and it cannot be a static_assert: out_nhw_this_core is a per-core RUNTIME arg. Fail
-    // loudly (watcher assert names this line) instead of silently deadlocking or corrupting.
-    ASSERT(get_num_threads() == 1 || (num_out_sticks_this_core % (2 * get_num_threads())) == 0);
-
-    DPRINT("num_out_sticks_this_core: {}\n", num_out_sticks_this_core);
-    DPRINT("get_num_threads(): {}\n", get_num_threads());
+    // Sticks are dealt whole to (reader thread, NEO) lanes; the per-core count must divide evenly.
+    // Runtime check (out_nhw_this_core is a per-core RUNTIME arg); the factory TT_FATALs first.
+    ASSERT(num_out_sticks_this_core % get_num_threads() == 0);
+    // Live thread-count probe for the perf harness A/B guard (inert unless TT_METAL_DPRINT_CORES set).
+    DPRINT("qpool num_threads: {}\n", get_num_threads());
 
     uint32_t tilize_stick_counter = 0;
     uint32_t tilize_stick_total = 0;
