@@ -106,8 +106,7 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
         compute_kernel_config.dst_full_sync_en);
 }
 
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
-    tt::ARCH arch, const ComputeKernelConfig& config) {
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config) {
     // Translate the universal TTNN ComputeKernelConfig (legacy scalar vocabulary) into the
     // Metal 2.0 vocabulary. Two representation changes are worth calling out:
     //   - double_buffer_dest is the logical inverse of the legacy dst_full_sync_en.
@@ -115,22 +114,14 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     const tt::tt_metal::Precision sfpu_precision_mode =
         config.math_approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise;
 
-    if (arch == tt::ARCH::QUASAR) {
-        return tt::tt_metal::experimental::ComputeGen2Config{
-            .fpu_math_fidelity = config.math_fidelity,
-            .sfpu_precision_mode = sfpu_precision_mode,
-            .enable_32_bit_dest = config.fp32_dest_acc_en,
-            .double_buffer_dest = !config.dst_full_sync_en,
-            // Per-DFB unpack_modes is left default for the program factory to set.
-        };
-    }
-    return tt::tt_metal::experimental::ComputeGen1Config{
+    return tt::tt_metal::experimental::ComputeHardwareConfig{
         .fpu_math_fidelity = config.math_fidelity,
         .sfpu_precision_mode = sfpu_precision_mode,
-        // bfp_pack_precision_mode is left default (rarely set non-default).
         .enable_32_bit_dest = config.fp32_dest_acc_en,
         .double_buffer_dest = !config.dst_full_sync_en,
         // Per-DFB unpack_modes is left default for the program factory to set.
+        // bfp_pack_precision_mode is left default (Approximate). Unused on Gen2.
+        .gen1_specific = tt::tt_metal::experimental::ComputeHardwareConfig::Compute1XXConfig{},
     };
 }
 
