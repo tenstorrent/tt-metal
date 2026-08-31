@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Contract and focused device tests for Gemma 4 global KV migration."""
+"""Contract and focused device tests for Gemma 4 mixed KV migration."""
 
 import pytest
 import torch
@@ -10,8 +10,8 @@ try:
     from ttnn.device import is_blackhole
 
     import ttnn
+    from models.demos.gemma4.tt.attention.global_migration import HEAD_DIM as GLOBAL_HEAD_DIM
     from models.demos.gemma4.tt.attention.global_migration import (
-        HEAD_DIM,
         ROTARY_DIM,
         ROW_DIM,
         allocate_global_migration_cache,
@@ -21,9 +21,18 @@ try:
         pack_global_kv_reference,
         write_global_kv_chunk,
     )
+    from models.demos.gemma4.tt.attention.sliding_migration import HEAD_DIM as SLIDING_HEAD_DIM
+    from models.demos.gemma4.tt.attention.sliding_migration import (
+        allocate_sliding_migration_cache,
+        pack_sliding_k_reference,
+        sliding_k_perm,
+        sliding_layer_indices,
+        write_sliding_kv_chunk,
+    )
     from models.demos.gemma4.tt.runners.kv_chunk_table import (
-        CHUNK_SIZE_BYTES,
         CONFIG_NAMES,
+        GLOBAL_CHUNK_SIZE_BYTES,
+        SLIDING_CHUNK_SIZE_BYTES,
         build_kv_chunk_address_table,
         iter_source_chunk_locations,
     )
@@ -32,59 +41,109 @@ except Exception as exc:  # pragma: no cover - depends on a built ttnn package
     pytest.skip(f"Gemma 4 migration tests require built ttnn: {exc}", allow_module_level=True)
 
 
-def test_global_layer_ids_and_config_order_are_locked():
+GLOBAL_LAYERS = tuple(range(5, 60, 6))
+SLIDING_LAYERS = tuple(layer for layer in range(60) if layer not in GLOBAL_LAYERS)
+
+
+def test_layer_ids_and_36_config_order_are_locked():
     pattern = tuple(["sliding_attention"] * 5 + ["full_attention"]) * 10
-    assert global_layer_indices(pattern) == tuple(range(5, 60, 6))
-    assert CONFIG_NAMES == ("kv_h0", "kv_h1", "kv_h2", "kv_h3")
-    assert CHUNK_SIZE_BYTES == 20 * 1088 == 21760
+    assert global_layer_indices(pattern) == GLOBAL_LAYERS
+    assert sliding_layer_indices(pattern) == SLIDING_LAYERS
+    assert CONFIG_NAMES[:4] == tuple(f"{head:02d}_kv_h{head}" for head in range(4))
+    assert CONFIG_NAMES[4:20] == tuple(f"{4 + head:02d}_k_h{head}" for head in range(16))
+    assert CONFIG_NAMES[20:] == tuple(f"{20 + head:02d}_v_h{head}" for head in range(16))
+    assert GLOBAL_CHUNK_SIZE_BYTES == 20 * 1088 == 21760
+    assert SLIDING_CHUNK_SIZE_BYTES == 8 * 1088 == 8704
 
 
-def test_512_128_column_permutations_match_decode_contract():
-    perm = interleave_perm()
+def test_global_and_sliding_k_permutations_match_decode_contract():
+    global_perm = interleave_perm()
     k_cols, v_cols = merged_kv_perms()
-
-    assert perm[:8].tolist() == [0, 256, 1, 257, 2, 258, 3, 259]
-    assert k_cols.tolist() == perm[:ROTARY_DIM].tolist()
+    assert global_perm[:8].tolist() == [0, 256, 1, 257, 2, 258, 3, 259]
+    assert k_cols.tolist() == global_perm[:ROTARY_DIM].tolist()
     assert v_cols[:8].tolist() == list(range(64, 72))
-    assert v_cols[184:200].tolist() == list(range(248, 256)) + list(range(320, 328))
     assert v_cols[-8:].tolist() == list(range(312, 320))
-    assert sorted(v_cols.tolist()) == list(range(HEAD_DIM))
+    assert sorted(v_cols.tolist()) == list(range(GLOBAL_HEAD_DIM))
+
+    local_perm = sliding_k_perm()
+    assert local_perm[:8].tolist() == [0, 128, 1, 129, 2, 130, 3, 131]
+    assert sorted(local_perm.tolist()) == list(range(SLIDING_HEAD_DIM))
 
 
-def test_reference_pack_selects_exact_k_and_v_channels():
-    k = torch.arange(HEAD_DIM, dtype=torch.float32).reshape(1, 1, 1, HEAD_DIM)
-    v = (10_000 + torch.arange(HEAD_DIM, dtype=torch.float32)).reshape(1, 1, 1, HEAD_DIM)
-    packed = pack_global_kv_reference(k, v)
+def test_reference_packs_select_exact_channels():
+    global_k = torch.arange(GLOBAL_HEAD_DIM, dtype=torch.float32).reshape(1, 1, 1, GLOBAL_HEAD_DIM)
+    global_v = (10_000 + torch.arange(GLOBAL_HEAD_DIM, dtype=torch.float32)).reshape(1, 1, 1, GLOBAL_HEAD_DIM)
+    packed = pack_global_kv_reference(global_k, global_v)
     k_cols, v_cols = merged_kv_perms()
-
     assert packed.shape[-1] == ROW_DIM
-    torch.testing.assert_close(packed[..., :ROTARY_DIM], k[..., k_cols])
-    torch.testing.assert_close(packed[..., ROTARY_DIM:], v[..., v_cols])
+    torch.testing.assert_close(packed[..., :ROTARY_DIM], global_k[..., k_cols])
+    torch.testing.assert_close(packed[..., ROTARY_DIM:], global_v[..., v_cols])
+
+    local_k = torch.arange(SLIDING_HEAD_DIM, dtype=torch.float32)
+    torch.testing.assert_close(pack_sliding_k_reference(local_k), local_k[sliding_k_perm()])
 
 
-def test_source_bank_walk_compacts_global_layers_but_keeps_semantic_ids():
-    entries = list(
+def test_source_bank_walk_accounts_for_compact_layers_and_local_heads():
+    global_entries = list(
         iter_source_chunk_locations(
             seq_len=8192,
             chunk_size=8192,
             sp=8,
             num_users=2,
-            global_layers=tuple(range(5, 60, 6)),
+            semantic_layers=GLOBAL_LAYERS,
             num_banks=12,
+            chunk_size_bytes=GLOBAL_CHUNK_SIZE_BYTES,
         )
     )
-    # 8 CP rows * 2 users * 10 global layers * (1024 local tokens / 32).
-    assert len(entries) == 8 * 2 * 10 * 32
-    cp0 = [entry for entry in entries if entry[0] == 0]
+    assert len(global_entries) == 8 * 2 * 10 * 32
+    cp0 = [entry for entry in global_entries if entry[0] == 0]
     assert cp0[0][:5] == (0, 0, 5, 0, 0)
     assert cp0[31][:5] == (0, 0, 5, 992, 7)
     assert cp0[32][:4] == (0, 0, 11, 0)
     assert cp0[320][:4] == (0, 1, 5, 0)
-    assert {entry[2] for entry in entries} == set(range(5, 60, 6))
-    assert not ({entry[2] for entry in entries} & {0, 1, 2, 3, 4, 6})
+
+    head0 = next(
+        iter_source_chunk_locations(
+            seq_len=8192,
+            chunk_size=8192,
+            sp=8,
+            num_users=1,
+            semantic_layers=SLIDING_LAYERS,
+            num_banks=8,
+            chunk_size_bytes=SLIDING_CHUNK_SIZE_BYTES,
+            heads_per_device=4,
+            local_head=0,
+        )
+    )
+    head3 = next(
+        iter_source_chunk_locations(
+            seq_len=8192,
+            chunk_size=8192,
+            sp=8,
+            num_users=1,
+            semantic_layers=SLIDING_LAYERS,
+            num_banks=8,
+            chunk_size_bytes=SLIDING_CHUNK_SIZE_BYTES,
+            heads_per_device=4,
+            local_head=3,
+        )
+    )
+    assert head0[4:] == (0, 0)
+    assert head3[4:] == (0, 12 * SLIDING_CHUNK_SIZE_BYTES)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def _to_cp_tp(mesh_device, tensor):
+    return ttnn.from_torch(
+        tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1)),
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -93,35 +152,32 @@ def test_source_bank_walk_compacts_global_layers_but_keeps_semantic_ids():
 )
 @pytest.mark.skipif(not is_blackhole(), reason="Gemma 4 CP8/TP4 migration staging targets Blackhole")
 @pytest.mark.timeout(0)
-def test_device_pack_and_compact_cache_write(mesh_device, device_params):
+def test_device_global_and_sliding_packs_with_ragged_tail(mesh_device, device_params):
     del device_params
     seq_len = 256
-    torch.manual_seed(0)
-    k = torch.randn(1, 4, seq_len, HEAD_DIM)
-    v = torch.randn(1, 4, seq_len, HEAD_DIM)
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(8, 4), dims=(2, 1))
-    tt_k = ttnn.from_torch(
-        k,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mapper,
-    )
-    tt_v = ttnn.from_torch(
-        v,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mapper,
-    )
-    cache = allocate_global_migration_cache(mesh_device, num_users=1, num_layers=1, max_seq_len=seq_len)
     valid_global = seq_len - 11
+    torch.manual_seed(0)
+
+    global_k = torch.randn(1, 4, seq_len, GLOBAL_HEAD_DIM)
+    global_v = torch.randn(1, 4, seq_len, GLOBAL_HEAD_DIM)
+    global_cache = allocate_global_migration_cache(mesh_device, num_users=1, num_layers=1, max_seq_len=seq_len)
     write_global_kv_chunk(
-        cache,
-        tt_k,
-        tt_v,
+        global_cache,
+        _to_cp_tp(mesh_device, global_k),
+        _to_cp_tp(mesh_device, global_v),
+        slot_idx=0,
+        layer_idx=0,
+        kv_actual=0,
+        valid_global=valid_global,
+    )
+
+    sliding_k = torch.randn(1, 16, seq_len, SLIDING_HEAD_DIM)
+    sliding_v = torch.randn(1, 16, seq_len, SLIDING_HEAD_DIM)
+    sliding_cache = allocate_sliding_migration_cache(mesh_device, num_users=1, num_layers=1, max_seq_len=seq_len)
+    write_sliding_kv_chunk(
+        sliding_cache,
+        _to_cp_tp(mesh_device, sliding_k),
+        _to_cp_tp(mesh_device, sliding_v),
         slot_idx=0,
         layer_idx=0,
         kv_actual=0,
@@ -129,17 +185,33 @@ def test_device_pack_and_compact_cache_write(mesh_device, device_params):
     )
     ttnn.synchronize_device(mesh_device)
 
-    expected = pack_global_kv_reference(k, v)
-    expected[:, :, valid_global:] = 0
-    shards = ttnn.get_device_tensors(cache.kv)
-    for cp_row in range(8):
-        for head in range(4):
-            actual = ttnn.to_torch(shards[cp_row * 4 + head]).float()[0, 0]
-            wanted = expected[0, head, cp_row * 32 : (cp_row + 1) * 32]
-            assert_with_pcc(wanted, actual, 0.999)
+    expected_global = pack_global_kv_reference(global_k, global_v)
+    expected_global[:, :, valid_global:] = 0
+    expected_sliding_k = pack_sliding_k_reference(sliding_k)
+    expected_sliding_v = sliding_v.clone()
+    expected_sliding_k[:, :, valid_global:] = 0
+    expected_sliding_v[:, :, valid_global:] = 0
+
+    cp = int(mesh_device.shape[0])
+    tokens_per_cp = seq_len // cp
+    global_shards = ttnn.get_device_tensors(global_cache.kv)
+    sliding_k_shards = ttnn.get_device_tensors(sliding_cache.k)
+    sliding_v_shards = ttnn.get_device_tensors(sliding_cache.v)
+    for cp_row in range(cp):
+        token_slice = slice(cp_row * tokens_per_cp, (cp_row + 1) * tokens_per_cp)
+        for tp_col in range(4):
+            shard_idx = cp_row * 4 + tp_col
+            actual_global = ttnn.to_torch(global_shards[shard_idx]).float()[0, 0]
+            assert_with_pcc(expected_global[0, tp_col, token_slice], actual_global, 0.999)
+            for local_head in range(4):
+                global_head = tp_col * 4 + local_head
+                actual_k = ttnn.to_torch(sliding_k_shards[shard_idx]).float()[0, local_head]
+                actual_v = ttnn.to_torch(sliding_v_shards[shard_idx]).float()[0, local_head]
+                assert_with_pcc(expected_sliding_k[0, global_head, token_slice], actual_k, 0.999)
+                assert_with_pcc(expected_sliding_v[0, global_head, token_slice], actual_v, 0.999)
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
@@ -148,23 +220,31 @@ def test_device_pack_and_compact_cache_write(mesh_device, device_params):
 )
 @pytest.mark.skipif(not is_blackhole(), reason="Gemma 4 CP8/TP4 migration staging targets Blackhole")
 @pytest.mark.timeout(0)
-def test_source_table_authors_only_semantic_global_rows(mesh_device, device_params):
+def test_source_table_authors_the_correct_layer_family(mesh_device, device_params):
     del device_params
-    globals_ = tuple(range(5, 60, 6))
-    cache = allocate_global_migration_cache(mesh_device, num_users=1, num_layers=len(globals_), max_seq_len=256)
+    seq_len = 256
+    global_cache = allocate_global_migration_cache(
+        mesh_device, num_users=1, num_layers=len(GLOBAL_LAYERS), max_seq_len=seq_len
+    )
+    sliding_cache = allocate_sliding_migration_cache(
+        mesh_device, num_users=1, num_layers=len(SLIDING_LAYERS), max_seq_len=seq_len
+    )
     table = build_kv_chunk_address_table(
         mesh_device=mesh_device,
-        cache=cache,
-        seq_len=256,
-        mesh_shape=(8, 4),
+        global_cache=global_cache,
+        sliding_cache=sliding_cache,
+        seq_len=seq_len,
+        sliding_seq_len=seq_len,
+        mesh_shape=(2, 4),
         sp_axis=0,
         num_users=1,
-        chunk_size=256,
-        global_layers=globals_,
+        chunk_size=seq_len,
+        global_layers=GLOBAL_LAYERS,
     )
-    assert table.num_configs() == 4
+    assert table.num_configs() == 36
     for config_id in range(4):
-        assert table.lookup(5, 0, 0, config_id).size_bytes == CHUNK_SIZE_BYTES
-        assert table.lookup(59, 224, 0, config_id).size_bytes == CHUNK_SIZE_BYTES
+        assert table.lookup(5, 0, 0, config_id).size_bytes == GLOBAL_CHUNK_SIZE_BYTES
         assert table.lookup(0, 0, 0, config_id).size_bytes == 0
-        assert table.lookup(6, 0, 0, config_id).size_bytes == 0
+    for config_id in range(4, 36):
+        assert table.lookup(0, 0, 0, config_id).size_bytes == SLIDING_CHUNK_SIZE_BYTES
+        assert table.lookup(5, 0, 0, config_id).size_bytes == 0

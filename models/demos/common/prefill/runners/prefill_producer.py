@@ -197,6 +197,16 @@ def _load_env_config() -> None:
 _load_env_config()
 
 
+def _effective_model_cache_len() -> int:
+    """Smallest durable cache extent that every migrated layer can accept."""
+    if ADAPTER.name == "gemma4_31b":
+        return min(
+            MAX_SEQ_LEN,
+            int(os.environ.get("PREFILL_GEMMA4_SLIDING_CACHE_LEN", str(MAX_SEQ_LEN))),
+        )
+    return MAX_SEQ_LEN
+
+
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
     """Pack one chunk's PrefillMetadata (3 little-endian uint32s)."""
     return struct.pack("<III", slot_id, actual_start, actual_end)
@@ -485,7 +495,7 @@ class ProducerConfig:
 
 def _config_from_env() -> ProducerConfig:
     """Build a ProducerConfig from the flat PREFILL_PRODUCER_* env vars (every knob independent)."""
-    max_chunks = MAX_SEQ_LEN // CHUNK_SIZE  # a request can't exceed the per-user cache
+    max_chunks = _effective_model_cache_len() // CHUNK_SIZE
     chunk_bounds = [int(x) for x in os.environ.get("PREFILL_PRODUCER_CHUNKS", "11").split(",")]
     chunks_max = min(chunk_bounds[-1], max_chunks)
     chunks_min = min(chunk_bounds[0], chunks_max)
@@ -785,42 +795,86 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
 
 
 def _read_slot_kv_and_check_pcc_gemma4(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    """Validate Gemma 4's four decode-ordered global KV configs."""
+    """Validate Gemma 4's 36-config global + sliding migration contract."""
     from pathlib import Path
 
     from safetensors import safe_open
 
     from models.demos.gemma4.tt.attention.global_migration import ROW_DIM, TOKENS_PER_CHUNK, pack_global_kv_reference
+    from models.demos.gemma4.tt.attention.sliding_migration import HEAD_DIM as SLIDING_HEAD_DIM
+    from models.demos.gemma4.tt.attention.sliding_migration import pack_sliding_k_reference
+    from models.demos.gemma4.tt.runners.kv_chunk_table import CONFIG_NAMES
     from tests.ttnn.utils_for_testing import comp_pcc
 
-    expected_names = tuple(f"kv_h{head}" for head in range(4))
     actual_names = tuple(table.config_name(i) for i in range(table.num_configs()))
-    if actual_names != expected_names:
-        raise ValueError(f"Gemma 4 migration configs must be {expected_names}, got {actual_names}")
+    if actual_names != CONFIG_NAMES:
+        raise ValueError(f"Gemma 4 migration configs must be {CONFIG_NAMES}, got {actual_names}")
 
     read_len = ((real_len + TOKENS_PER_CHUNK - 1) // TOKENS_PER_CHUNK) * TOKENS_PER_CHUNK
     kv_dir = Path(trace_dir) / "kv_cache"
-    minimum = 1.0
-    for layer in range(5, NUM_LAYERS, 6):
-        device = torch.stack(
-            [
-                _read_kv_slice(table, device_map, head, layer, slot_id, read_len, ROW_DIM, _decode_bfp8_chunk)
-                for head in range(4)
-            ],
-            dim=0,
-        )[:, :real_len]
+    minimum = {"global": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
+    for layer in range(NUM_LAYERS):
         with safe_open(str(kv_dir / f"layer_{layer}.safetensors"), framework="pt") as handle:
             golden_k = handle.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :]
             golden_v = handle.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
-        golden = pack_global_kv_reference(golden_k, golden_v)
-        pcc = float(comp_pcc(golden, device, 0.0)[1])
-        minimum = min(minimum, pcc)
-        logger.info(f"  layer {layer:>2}: merged_global={pcc:.5f}")
 
+        if layer % 6 == 5:
+            device = torch.stack(
+                [
+                    _read_kv_slice(table, device_map, head, layer, slot_id, read_len, ROW_DIM, _decode_bfp8_chunk)
+                    for head in range(4)
+                ],
+                dim=0,
+            )[:, :real_len]
+            pcc = float(comp_pcc(pack_global_kv_reference(golden_k, golden_v), device, 0.0)[1])
+            minimum["global"] = min(minimum["global"], pcc)
+            logger.info(f"  layer {layer:>2}: merged_global={pcc:.5f}")
+        else:
+            device_k = torch.stack(
+                [
+                    _read_kv_slice(
+                        table,
+                        device_map,
+                        4 + head,
+                        layer,
+                        slot_id,
+                        read_len,
+                        SLIDING_HEAD_DIM,
+                        _decode_bfp8_chunk,
+                    )
+                    for head in range(16)
+                ],
+                dim=0,
+            )[:, :real_len]
+            device_v = torch.stack(
+                [
+                    _read_kv_slice(
+                        table,
+                        device_map,
+                        20 + head,
+                        layer,
+                        slot_id,
+                        read_len,
+                        SLIDING_HEAD_DIM,
+                        _decode_bfp8_chunk,
+                    )
+                    for head in range(16)
+                ],
+                dim=0,
+            )[:, :real_len]
+            pcc_k = float(comp_pcc(pack_sliding_k_reference(golden_k), device_k, 0.0)[1])
+            pcc_v = float(comp_pcc(golden_v, device_v, 0.0)[1])
+            minimum["sliding_k"] = min(minimum["sliding_k"], pcc_k)
+            minimum["sliding_v"] = min(minimum["sliding_v"], pcc_v)
+            logger.info(f"  layer {layer:>2}: sliding K={pcc_k:.5f} V={pcc_v:.5f}")
+
+    min_pcc = min(minimum.values())
     logger.info(
-        f"[producer] slot {slot_id} Gemma 4 global KV PCC over [0,{real_len}) " f"across 10 layers -> min {minimum:.6f}"
+        f"[producer] slot {slot_id} Gemma 4 KV PCC over [0,{real_len}) across 60 layers -> "
+        f"global={minimum['global']:.5f} sliding_K={minimum['sliding_k']:.5f} "
+        f"sliding_V={minimum['sliding_v']:.5f} (min {min_pcc:.6f})"
     )
-    return minimum
+    return min_pcc
 
 
 def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
@@ -1184,14 +1238,15 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
             "and its golden defines a single turn, so a resumed turn would read past its pool and mismatch "
             "the golden. Use one shared trace (unset SLOT_TRACES) for multi-turn runs."
         )
-    max_chunks = MAX_SEQ_LEN // CHUNK_SIZE
+    effective_cache_len = _effective_model_cache_len()
+    max_chunks = effective_cache_len // CHUNK_SIZE
 
     if not spec:
         trace = resolve_trace_dir(default)
         slot_traces = {s: trace for s in range(cfg.num_users)}
         # A resumed turn slices the pool from its prefix onward, so multi-turn needs a pool covering the
         # whole per-user cache, not just one request's depth (else push_chunk's payload-size assert fires).
-        pool_tokens = MAX_SEQ_LEN if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
+        pool_tokens = effective_cache_len if cfg.multi_turn_prob > 0 else cfg.chunks_max * CHUNK_SIZE
         return slot_traces, None, {trace: _load_token_pool(trace, pool_tokens)}
 
     entries = [e.strip() for e in spec.split(",") if e.strip()]
@@ -1210,7 +1265,8 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
         if chunks > max_chunks:
             logger.warning(
                 f"[producer] prompt {trace} is {real_len} tok ({chunks} chunks) > per-user cache "
-                f"{max_chunks} chunks (MAX_SEQ_LEN={MAX_SEQ_LEN}); clamping to {max_chunks} chunks."
+                f"{max_chunks} chunks (effective cache length={effective_cache_len}); "
+                f"clamping to {max_chunks} chunks."
             )
             chunks = max_chunks
             real_len = min(real_len, max_chunks * CHUNK_SIZE)

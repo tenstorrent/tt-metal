@@ -319,8 +319,10 @@ class TtPrefillRuntime:
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
-            cache=self._resolve_kv(kv_caches).migration,
+            global_cache=self._resolve_kv(kv_caches).migration,
+            sliding_cache=self._resolve_kv(kv_caches).sliding_migration,
             seq_len=self.config.max_seq_len,
+            sliding_seq_len=self._resolve_kv(kv_caches).sliding_migration.max_seq_len,
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
             num_users=self.config.num_users,
