@@ -18,7 +18,7 @@ rank_bindings:
   - {rank: 7, mesh_id: 7, mesh_host_rank: 0, env_overrides: {}}
 mesh_graph_desc_path: models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_8galaxy_connected_mesh_graph_descriptor.textproto
 global_env:
-  PREFILL_FABRIC_MODE: "2d_torus_xy"
+  PREFILL_FABRIC_MODE: "2d"
   PREFILL_MAX_SEQ_LEN: "56320"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   PREFILL_GATE_FALLBACK_MODE: "DEVICE_FP32"

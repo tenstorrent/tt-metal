@@ -1,19 +1,23 @@
-# CONNECTED 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill, FABRIC_2D variant.
+# CONNECTED 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill, X-axis sub-torus.
 #
 # Four 8x4 BH-galaxy meshes chained mesh 0 <-> 1 <-> 2 <-> 3 by inter-galaxy fabric links, one per
-# pipeline boundary (rank r sends to rank r+1).
+# pipeline boundary (rank r sends to rank r+1). Mirrors the decode superpod MGD's connection format
+# (consecutive mesh_ids, count:8 RELAXED, discovery / no pinnings) but with the prefill 8x4 geometry.
 #
 # Host order matters: discovery maps mesh 0 -> first --host, mesh 1 -> second, etc., and the chained
 # connections require consecutive hosts to be physically cabled. List the --host slots in the order
-# the galaxies are cabled in the superpod chain.
+# the galaxies are cabled in the superpod chain (verify with the UMD topology tool if a boundary's
+# fabric fails to train).
 #
-# dim_types [LINE, LINE]: no row/column wrap, so this pairs with PREFILL_FABRIC_MODE=2d. GLM-5.2's MoE
-# all_to_all deadlocks in warmup under the torus modes on multi-galaxy pipeline prefill, which is why
-# the wrap is dropped here rather than declared and left unused.
+# dim_types [LINE, RING]: the column (tp) axis wraps into a ring, the row (sp) axis does not. Must pair
+# with PREFILL_FABRIC_MODE=2d_torus_x in the rank binding -- a Ring collective on an axis the fabric
+# does not wrap hangs at fabric bring-up. The second wrap axis (torus_xy) overflows the Blackhole
+# active_erisc router stack at compile on 2+ meshes, so only the X wrap is usable here.
+
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, LINE ] }
+  device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: RELAXED }
 }
