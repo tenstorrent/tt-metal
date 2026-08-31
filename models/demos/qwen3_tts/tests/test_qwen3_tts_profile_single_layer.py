@@ -315,7 +315,8 @@ def test_cp_layer_prefill(device, code_predictor):
     x = _hidden(device, seq_len, cfg.hidden_size)
     cos, sin, trans = _rope(device, seq_len, cfg.head_dim, cfg.rope_theta)
     kv_caches = create_kv_cache_list(device, cfg, max_batch_size=1, max_seq_len=DEMO_CP_KV_MAX)
-    mask = _cp_prefill_mask(device, cfg.num_attention_heads, seq_len, DEMO_CP_KV_MAX)
+    # Per-chip head count (TP=1: full heads; TP=2: heads/2). Must match scores.
+    mask = _cp_prefill_mask(device, code_predictor.num_heads, seq_len, DEMO_CP_KV_MAX)
     lw = code_predictor.layers_w[0]
 
     def _fwd():
@@ -351,7 +352,7 @@ def test_cp_layer_decode(device, code_predictor):
         device, DEMO_CP_DECODE_SEQ, cfg.head_dim, cfg.rope_theta, positions=torch.tensor([start_pos])
     )
     kv_caches = create_kv_cache_list(device, cfg, max_batch_size=1, max_seq_len=DEMO_CP_KV_MAX)
-    mask = _cp_decode_mask(device, cfg.num_attention_heads, DEMO_CP_KV_MAX, valid=start_pos + 1)
+    mask = _cp_decode_mask(device, code_predictor.num_heads, DEMO_CP_KV_MAX, valid=start_pos + 1)
     lw = code_predictor.layers_w[0]
 
     def _fwd():
