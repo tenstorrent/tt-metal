@@ -27,9 +27,6 @@ struct CombineFabric2dParams {
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    // Accepted only as false: unrouted output slots are left as-allocated, as production leaves them
-    // when asked not to zero.
-    bool init_zeros = false;
 };
 
 struct CombineFabric2dInputs {

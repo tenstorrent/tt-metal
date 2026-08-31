@@ -37,7 +37,7 @@ void validate_control_tensor(
         "combine_fabric2d: {} must be INT32 or UINT32, got {}",
         tensor_name,
         t.dtype());
-    const auto shape = t.logical_shape();
+    const auto& shape = t.logical_shape();
     TT_FATAL(
         shape[-1] == static_cast<int32_t>(num_routed_experts),
         "combine_fabric2d: {} last dim is {} but num_routed_experts is {}",
@@ -62,10 +62,6 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.device != nullptr, "combine_fabric2d requires a mesh device in attributes");
     TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
     TT_FATAL(
-        !args.init_zeros,
-        "combine_fabric2d: init_zeros=true is not implemented. Output slots with no expert contribution are "
-        "left as allocated, exactly as the production op leaves them with init_zeros=false.");
-    TT_FATAL(
         !args.output_mem_config.is_sharded(),
         "combine_fabric2d: output memory config must be interleaved, not sharded");
 
@@ -76,8 +72,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         args.device->shape());
     const uint32_t extent = args.device->shape()[static_cast<int32_t>(args.axis)];
     TT_FATAL(
-        extent >= 3,
-        "combine_fabric2d: axis {} extent {} needs 3+ chips for two distinct neighbours",
+        extent >= 4,
+        "combine_fabric2d: axis {} extent {} needs 4+ chips: two distinct neighbours, and an even count",
         args.axis,
         extent);
     TT_FATAL(
@@ -167,6 +163,14 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
         "= {}",
         num_routed_experts,
         experts_per_group);
+    // A control-table row is the L1 stride the reader copies each row in at, and a DRAM read needs a
+    // 64-byte-aligned L1 destination.
+    TT_FATAL(
+        (num_routed_experts * sizeof(uint32_t)) % 64 == 0,
+        "combine_fabric2d: num_routed_experts {} must be a multiple of 16 so that a control-table row ({} B) "
+        "is 64-byte aligned",
+        num_routed_experts,
+        num_routed_experts * sizeof(uint32_t));
     validate_control_tensor(tensor_args.expert_token_counts, 1, num_routed_experts, "expert_token_counts");
     validate_control_tensor(tensor_args.expert_region_offsets, 1, num_routed_experts, "expert_region_offsets");
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
@@ -209,8 +213,7 @@ ttnn::Tensor combine_fabric2d(
     uint32_t axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
-    const tt::tt_metal::MemoryConfig& memory_config,
-    bool init_zeros) {
+    const tt::tt_metal::MemoryConfig& memory_config) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -222,8 +225,7 @@ ttnn::Tensor combine_fabric2d(
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .output_mem_config = memory_config,
-            .init_zeros = init_zeros},
+            .output_mem_config = memory_config},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

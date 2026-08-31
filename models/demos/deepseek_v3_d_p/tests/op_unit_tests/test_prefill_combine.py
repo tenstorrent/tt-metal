@@ -302,7 +302,6 @@ def run_combine(
             cluster_axis=sp_axis,
             num_links=num_links,
             topology=topology,
-            init_zeros=False,
         )
 
         tt_output = tt_combine(

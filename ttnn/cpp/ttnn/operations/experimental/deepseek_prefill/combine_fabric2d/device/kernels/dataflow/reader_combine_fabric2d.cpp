@@ -30,10 +30,11 @@
 // The ring is hand-rolled rather than a metal CB because the packet headers live at fixed offsets from the
 // L1 allocator base — where a CB would be allocated — and a sender on another chip addresses them there.
 //
-// Two monotonic single-writer counters, each bumped by a NoC atomic to our OWN core (the proven idiom for
-// cross-RISC visibility on one core; a plain store can sit in a write buffer where the other RISC will not
-// see it). `filled` is ours, `freed` is the sender's, and each side keeps its own local count and works
-// on the difference, so there is no read-modify-write to race.
+// Two monotonic single-writer counters, each bumped by a NoC atomic to our OWN core. `filled` is ours,
+// `freed` is the sender's, and each side keeps its own local count and works on the difference, so there is
+// no read-modify-write to race. The atomic is what makes a bump visible to the other RISC; the slot metadata
+// it announces rides on plain stores, ordered ahead of it in the same store stream, exactly as cb_push_back
+// announces tile data.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -507,4 +508,6 @@ void kernel_main() {
     // this again: we only got past the last chunk by reading its sentinel, so everything it owes us has
     // arrived, and its drain targets a sink address rather than this semaphore.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
+    // Do not exit with `filled` increments still in the NIU.
+    noc_async_atomic_barrier();
 }

@@ -184,7 +184,6 @@ class TtCombine2dModule(LightweightModule):
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-        init_zeros: bool = False,
     ):
         """
         Initialize the fabric2d combine module.
@@ -199,8 +198,6 @@ class TtCombine2dModule(LightweightModule):
                 pair is one stream, so the op runs 2 * num_links streams per chip.
             topology: Fabric topology for the ring.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
-            init_zeros: Whether to zero-initialize the output buffer. combine_fabric2d has no
-                zero-init path, so this must stay False.
 
         Note there is no dispatch_group_size: combine_fabric2d derives the ring from cluster_axis
         and the mesh shape, and no fp8_output, because the op has no fp8 stage on the way out.
@@ -214,7 +211,6 @@ class TtCombine2dModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
         self.memory_config = memory_config
-        self.init_zeros = init_zeros
 
     def forward(
         self,
@@ -259,5 +255,4 @@ class TtCombine2dModule(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
             memory_config=self.memory_config,
-            init_zeros=self.init_zeros,
         )

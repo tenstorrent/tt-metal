@@ -94,10 +94,9 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
     fabric.wait_for_empty_write_slot();
     fabric.send_payload_without_header_non_blocking_from_address(ct.ring_addr + slot * ct.slot_stride(), payload_bytes);
     // No flush per token: a slot's header is untouched until the ring wraps and the payload is flushed once
-    // per batch below, which is what lets token N+1 issue while N is still draining. This leans on the NoC
-    // keeping the payload write ordered ahead of the EDM slot-credit write that
-    // post_send_payload_increment_pointers issues on the sync cmd buf; the production idiom flush-blocks here
-    // instead. A torn packet would surface as a wrong output token.
+    // per batch below, which is what lets token N+1 issue while N is still draining. Payload and credit go
+    // out on different cmd bufs but share a source NIU, destination node and VC, so the NoC keeps the credit
+    // behind the payload. This is the same non-blocking send all_gather and reduce_scatter take.
     fabric.send_payload_flush_non_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
 
     if (forwarding) {
@@ -188,6 +187,11 @@ void kernel_main() {
     // Both ring counters back to zero for the next launch, which starts its own counts at zero. Safe here
     // and only here: the reader's last act was publishing the CMD_END slot this kernel has just drained, so
     // nothing is still reading or bumping either of them.
+    //
+    // `freed` is bumped by a NoC atomic, which completes on the atomic response and so is not covered by
+    // noc_async_writes_flushed above. Without this the reset can be overtaken and the launch end with
+    // freed == processed, leaving the next launch to evaluate claimed - freed as a negative wrap.
+    noc_async_atomic_barrier();
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.filled_addr), 0);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr), 0);
 }
