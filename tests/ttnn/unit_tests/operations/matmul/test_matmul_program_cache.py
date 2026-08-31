@@ -103,3 +103,201 @@ def test_matmul_cache_miss_different_dtype(device, isolate_program_cache):
     assert (
         count == 2
     ), f"different dtype (bfloat16 vs float32) must produce 2 distinct cache entries, got {count} (dtype not keyed)"
+
+
+# ---------------------------------------------------------------------------
+# Cache-hit address patching (smuggled-pointer regression net)
+#
+# Every buffer address a matmul descriptor factory puts in a runtime arg is
+# declared as a tensor binding (KernelDescriptor::emplace_runtime_args); the arg
+# vectors hold a 0 placeholder in that slot. The framework patches bindings on a
+# program-cache hit, so a slot that lost its binding would keep the placeholder
+# (address 0) or a stale address from the cache-miss call. These tests force the
+# second call's tensors to land at DIFFERENT addresses than the first, so a
+# missing binding shows up as wrong data instead of passing by luck.
+# ---------------------------------------------------------------------------
+
+L1_WIDTH_SHARDED_3_CORES = ttnn.MemoryConfig(
+    memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    buffer_type=ttnn.BufferType.L1,
+    shard_spec=ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+        (32, 32),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    ),
+)
+
+DRAM_WIDTH_SHARDED_3_CORES = ttnn.MemoryConfig(
+    memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    buffer_type=ttnn.BufferType.DRAM,
+    shard_spec=ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+        (96, 32),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    ),
+)
+
+ADDRESS_PATCH_CASES = [
+    # (m, k, n, program_config, has_bias, in0_mem, in1_mem, out_mem)
+    (64, 32, 64, None, True, None, None, None),
+    (
+        32,
+        32,
+        64,
+        ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(2, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        ),
+        True,
+        None,
+        None,
+        None,
+    ),
+    (
+        64,
+        32,
+        32,
+        ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(2, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+        ),
+        True,
+        None,
+        None,
+        None,
+    ),
+    (
+        64,
+        32,
+        64,
+        ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(2, 2),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            transpose_mcast=False,
+            fused_activation=None,
+        ),
+        True,
+        None,
+        None,
+        None,
+    ),
+    (
+        32,
+        96,
+        32,
+        ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fused_activation=None,
+        ),
+        False,
+        L1_WIDTH_SHARDED_3_CORES,
+        DRAM_WIDTH_SHARDED_3_CORES,
+        ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        ),
+    ),
+]
+
+ADDRESS_PATCH_IDS = ["default", "mcast_1d_in0", "mcast_1d_in1", "mcast_2d", "dram_sharded"]
+
+
+@pytest.mark.parametrize(
+    "m, k, n, program_config, has_bias, in0_mem, in1_mem, out_mem",
+    ADDRESS_PATCH_CASES,
+    ids=ADDRESS_PATCH_IDS,
+)
+def test_matmul_cache_hit_patches_addresses(
+    device, isolate_program_cache, m, k, n, program_config, has_bias, in0_mem, in1_mem, out_mem
+):
+    """Second (cache-hit) call with freshly-allocated tensors at new addresses must still be correct."""
+    torch.manual_seed(0)
+
+    def make_operands(seed):
+        torch.manual_seed(seed)
+        a = torch.randn((1, 1, m, k), dtype=torch.float32)
+        b = torch.randn((1, 1, k, n), dtype=torch.float32)
+        bias = torch.randn((1, 1, 1, n), dtype=torch.float32) if has_bias else None
+        ref = torch.matmul(a, b)
+        if has_bias:
+            ref = ref + bias
+        tt_a = ttnn.from_torch(
+            a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in0_mem or ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_b = ttnn.from_torch(
+            b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_mem or ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_bias = (
+            ttnn.from_torch(
+                bias,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if has_bias
+            else None
+        )
+        return ref, tt_a, tt_b, tt_bias
+
+    def run(tt_a, tt_b, tt_bias):
+        kwargs = {}
+        if program_config is not None:
+            kwargs["program_config"] = program_config
+        if out_mem is not None:
+            kwargs["memory_config"] = out_mem
+        if tt_bias is not None:
+            return ttnn.linear(tt_a, tt_b, bias=tt_bias, **kwargs)
+        return ttnn.matmul(tt_a, tt_b, **kwargs)
+
+    # Only the matmul calls are measured; from_torch/to_torch may run device ops of their own.
+    # The first operand set stays alive so the second set is forced to different addresses.
+    ref1, a1, b1, bias1 = make_operands(0)
+    with device.cache_entries_counter.measure():
+        out1 = run(a1, b1, bias1)
+    torch_out1 = ttnn.to_torch(out1).to(torch.float32)
+
+    ref2, a2, b2, bias2 = make_operands(42)
+    moved = [a1.buffer_address() != a2.buffer_address(), b1.buffer_address() != b2.buffer_address()]
+    if has_bias:
+        moved.append(bias1.buffer_address() != bias2.buffer_address())
+    assert all(moved), f"operands did not move; the test cannot detect a stale address (moved={moved})"
+
+    with device.cache_entries_counter.measure():
+        out2 = run(a2, b2, bias2)
+    assert out1.buffer_address() != out2.buffer_address(), "output did not move"
+    torch_out2 = ttnn.to_torch(out2).to(torch.float32)
+
+    assert_with_pcc(ref1, torch_out1, 0.99)
+    assert_with_pcc(ref2, torch_out2, 0.99)
+
+    count = device.cache_entries_counter.total
+    assert count == 1, f"identical config twice must reuse 1 cache entry, got {count} (the hit path was not exercised)"

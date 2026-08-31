@@ -1240,7 +1240,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         } else if (in1_idx == 0) {
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
+                0u,                                                        // in0_tensor_addr placeholder
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
@@ -1292,7 +1292,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
-                    (std::uint32_t)in1_tensor.address(),
+                    0u,                                                        // in1_tensor_addr placeholder
                     (std::uint32_t)in1_tensor_start_tile_id_stride * in1_idx,  // in1_tensor_start_tile_id
                     // in1 mcast args
                     (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
@@ -1305,7 +1305,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_tensor.address(),
+                    0u,                                                                 // out_tensor_addr placeholder
                     ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
@@ -1449,7 +1449,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_tensor.address(),                                // out_tensor_addr
+                    0u,                                                                 // out_tensor_addr placeholder
                     ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 

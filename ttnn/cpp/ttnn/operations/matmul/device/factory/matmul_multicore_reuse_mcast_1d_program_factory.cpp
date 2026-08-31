@@ -1110,8 +1110,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             }
 
             // Bias base address; patched on program-cache hit by override_mcast_in0_program_parameters (idx 18).
-            mm_in1_sender_writer_args.push_back(
-                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
+            mm_in1_sender_writer_args.push_back(bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
@@ -1932,7 +1931,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
             if (bias_tensor.has_value()) {
                 // Bias base address; patched on program-cache hit by override_mcast_in1_program_parameters (idx 18).
-                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());  // smuggled-rta-ok
+                mm_in1_sender_writer_args.push_back((std::uint32_t)bias_tensor->address());
                 mm_in1_sender_writer_args.push_back(
                     (std::uint32_t)per_core_N * output_idx_x);  // in3_tensor_start_tile_id
             } else {
@@ -3968,7 +3967,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         else if (core == start_core) {
             std::vector<uint32_t> mm_in0_sender_args = {
                 // in0 tensor args
-                (std::uint32_t)in0_tensor.address(),
+                0u,                                                             // in0_tensor_addr placeholder
                 (std::uint32_t)in0_tensor_start_tile_id_stride * output_idx_y,  // in0_tensor_start_tile_id
                 // in0 mcast args
                 (std::uint32_t)start_core_noc.x,  // in0_mcast_dest_noc_start_x
@@ -4007,7 +4006,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             std::vector<uint32_t> mm_in1_sender_writer_args = {
                 // READER
                 // in1 tensor args
-                (std::uint32_t)in1_tensor.address(),
+                0u,                                                             // in1_tensor_addr placeholder
                 (std::uint32_t)in1_tensor_start_tile_id_stride * output_idx_x,  // in1_tensor_start_tile_id
                 // in1 mcast args
                 (std::uint32_t)0,  // in1_mcast_dest_noc_start_x
@@ -4020,7 +4019,7 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_tensor.address(),
+                0u,  // out_tensor_addr placeholder
                 ((std::uint32_t)output_idx_x * per_core_N) +
                     (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
@@ -4053,9 +4052,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
                 mm_in1_sender_writer_args.push_back(0);
             }
 
-            // Bias base address placeholder; rebound to a tensor binding via in1_sender_variant[18] below.
-            mm_in1_sender_writer_args.push_back(
-                bias_tensor.has_value() ? (std::uint32_t)bias_tensor->address() : 0);  // smuggled-rta-ok
+            // in3 (bias) address placeholder; rebound to a tensor binding via in1_sender_variant[18] below.
+            mm_in1_sender_writer_args.push_back(0u);
             mm_in1_sender_writer_args.push_back(
                 bias_tensor.has_value() ? (std::uint32_t)per_core_N * output_idx_x : 0);  // in3_tensor_start_tile_id
             if (!output_is_sharded) {
