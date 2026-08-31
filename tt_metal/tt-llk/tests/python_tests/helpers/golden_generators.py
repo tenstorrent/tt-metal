@@ -5553,9 +5553,24 @@ class TernarySFPUGolden:
             else None
         )
 
-        a = operand_a.flatten().to(torch.float32)
-        b = operand_b.flatten().to(torch.float32)
-        c = operand_c.flatten().to(torch.float32)
+        # What the unpacker hands the SFPU, not what the test drew. A block-float operand's
+        # 16 datums share one exponent, so an operand carrying a spread of magnitudes loses the
+        # low ones on the way in -- and each of the three operands is quantized independently,
+        # against its own blocks. Without this the device computes on quantized values while
+        # the reference computes on the unrounded bf16 originals, and the comparison is not a
+        # correctness statement about the kernel at all. The same step UnarySFPUGolden takes at
+        # the same point, and the binary suite's driver takes before broadcast; it is a no-op on
+        # every non-block-float format, including the None of the unmodelled path.
+        #
+        # It belongs *here* rather than in the caller because it models the unpack, which
+        # precedes the op: the Dest-width truncation below and the pack modelling further down
+        # are the other two steps of the same datapath.
+        a, b, c = (
+            quantize_input_to_unpack_format(operand, input_format)
+            .flatten()
+            .to(torch.float32)
+            for operand in (operand_a, operand_b, operand_c)
+        )
 
         if model_dest and dest_acc == DestAccumulation.No and input_format.is_32_bit():
             # A 32-bit operand landing in a 16-bit Dest drops its low mantissa bits on the way

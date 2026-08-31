@@ -385,6 +385,42 @@ def _ternary_edge_class_values(
     return [v for v in vals if math.isfinite(v)]
 
 
+def _producer_probe_values(mathop, formats, dest_acc, specials):
+    """Any non-empty probe list for this compile key, or [] if the op has no edge at all here.
+
+    For the compile-producer pass only. Both `operand` and `edge_class` are runtime() axes, so
+    conftest._collapse_runtime_only_variants keeps one item per compile key -- the first, which
+    is operand A -- and *that* item builds the ELF the other five share. A skip there leaves
+    them running against a binary that was never built, which presents as TENSIX TIMED OUT
+    rather than as a skip.
+
+    So the fallback has to drop *both* runtime axes, not just the class. Dropping the class
+    alone is not enough, and the Float16_b / dest_acc=Yes cell is why: cat B is off there, and
+    with it operands A and B have no edge of either class, while operand C still has its pole --
+    3 values for addcdiv and snake_beta, 4 for lerp -- which the consumer will execute. Asking
+    only about operand A returns nothing and the producer skips anyway.
+
+    Any non-empty list compiles the right kernel: the ELF depends on the compile-time axes
+    (op, formats, dest_acc) and never on which values go in which tensor, and the producer
+    builds and then skips before the stimulus reaches a device (TestConfig.run()), so the values
+    are never asserted against a golden. The consumer still partitions by operand and class and
+    still skips. An op with nothing on any operand -- addcmul on that same cell -- returns []
+    and skips correctly, because there the consumer skips all six too.
+    """
+    for candidate in _TERNARY_OPERANDS:
+        vals = edge_values(
+            mathop,
+            formats.input_format,
+            formats.output_format,
+            operand=candidate,
+            specials=specials,
+            dest_acc=dest_acc,
+        )
+        if vals:
+            return vals
+    return []
+
+
 # The cells this sweep's format axis can reach, so the divergence sets below are derived from
 # the same gates the stimulus is, rather than transcribed.
 _TERNARY_EDGE_CELLS = tuple(
@@ -511,22 +547,9 @@ def test_sfpu_ternary_operand_edges(
     )
 
     if not vals and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
-        # The compile-producer pass must not skip on a runtime-only axis. `operand` and
-        # `edge_class` are both runtime(), so conftest._collapse_runtime_only_variants keeps
-        # one item per compile key and *that* item builds the ELF the other five share; a skip
-        # here leaves them running against a binary that was never built, which presents as
-        # TENSIX TIMED OUT rather than as a skip. The ELF depends only on the compile-time axes
-        # (op, formats, dest_acc), never on which values go in the tensor, so any non-empty
-        # list compiles the right kernel -- take the unpartitioned one. The consumer still
-        # partitions and still skips.
-        vals = edge_values(
-            mathop,
-            formats.input_format,
-            formats.output_format,
-            operand=operand,
-            specials=specials,
-            dest_acc=dest_acc,
-        )
+        # The compile-producer pass must not skip on a runtime-only axis: it would starve the
+        # shared ELF. Unpartitioned and un-operanded, for the reasons in the helper.
+        vals = _producer_probe_values(mathop, formats, dest_acc, specials)
 
     if not vals:
         pytest.skip(
@@ -900,18 +923,19 @@ _WHERE_MIXED_NONZERO = (1.0, 2.0, -1.0, -2.0)
 
 
 def _where_mixed_condition(size, dtype, generator):
-    """Exactly half zeros, the rest a signed spread of small non-zero magnitudes."""
-    draw = torch.rand(size, generator=generator, dtype=torch.float32)
-    # Eight uniform buckets: the low four are the false branch, the high four index the
-    # spread. Bucketing rather than thresholding twice keeps the split exact at 50% and the
-    # spread uniform within its half, from one draw.
-    bucket = (draw * 8.0).floor().clamp(max=7.0)
-    nonzero = torch.tensor(_WHERE_MIXED_NONZERO, dtype=torch.float32)
-    return torch.where(
-        bucket < 4.0,
-        torch.zeros_like(draw),
-        nonzero[(bucket - 4.0).long()],
-    ).to(dtype)
+    """Half zeros exactly, the rest a signed spread of small non-zero magnitudes."""
+    # Half the slots are built as zero and half as the spread, then shuffled: the callable is
+    # invoked once per face, so this makes the split exactly half on *every* face. Drawing each
+    # element independently -- bucketing one uniform draw, which is what this used to do -- puts
+    # the split at half only in expectation, and a face is then free to come out any ratio at
+    # all, up to and including the all-true tensor this variant exists to avoid.
+    half = size // 2
+    spread = torch.tensor(_WHERE_MIXED_NONZERO, dtype=torch.float32)
+    values = torch.zeros(size, dtype=torch.float32)
+    values[half:] = spread.repeat((size - half + len(spread) - 1) // len(spread))[
+        : size - half
+    ]
+    return values[torch.randperm(size, generator=generator)].to(dtype)
 
 
 @parametrize(
@@ -969,12 +993,14 @@ def test_ttnn_where(
     else:
         # The failure this variant was in is silent -- a condition that is all-true still
         # passes, against a golden that is also all-true -- so assert the stimulus itself
-        # rather than trusting the spec to have produced it. Wide bounds: the claim is "both
-        # branches are exercised", not a distribution.
+        # rather than trusting the spec to have produced it. _where_mixed_condition splits
+        # every face exactly in half and none of the three formats perturb the values it
+        # emits, so the bound can be the exact one: anything else means the spec stopped
+        # reaching the tensor, which is the regression worth catching.
         frac_true = float((src_A.flatten().to(torch.float32) != 0.0).float().mean())
-        assert 0.2 < frac_true < 0.8, (
-            f"the 'mixed' condition is {frac_true:.1%} true — this variant is a duplicate "
-            "of all_ones/all_zeros and asserts nothing about the select"
+        assert frac_true == 0.5, (
+            f"the 'mixed' condition is {frac_true:.1%} true, not the half it is built to be "
+            "-- this variant is drifting towards a duplicate of all_ones/all_zeros"
         )
 
     _run_ttnn_where(formats, dest_acc, mathop, src_A, src_B, src_C)
@@ -1094,6 +1120,16 @@ def test_ttnn_where_specials(request, formats, dest_acc, mathop, operand):
         # the finiteness filter is here to keep the two zeros, which are cat B's and are the
         # condition operand's most interesting probe.
     ]
+
+    if not vals and TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        # `operand` is runtime() here too, so the same starvation is available: the producer
+        # keeps operand A alone and the consumer runs all three. Today every operand of `where`
+        # empties on exactly the same cells -- cat B is its only source of probes and cat B is
+        # a per-pipeline fact -- so the skip is uniform and this guard never fires. It is here
+        # so that the day a per-operand entry lands in the registry (a knee on the condition,
+        # say), the sweep gains coverage rather than a timeout.
+        vals = _producer_probe_values(mathop, formats, dest_acc, specials)
+
     if not vals:
         pytest.skip(
             reason=f"cat B is off for {mathop.name} on this pipeline, and where has no "

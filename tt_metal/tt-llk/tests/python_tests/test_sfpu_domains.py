@@ -869,8 +869,9 @@ def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
 # `python -m helpers.sfpu_domains --report` at the time the class was last worked on, so raising
 # one is the natural last step of enrolling an op.
 #
-# Cat G is 0 on purpose and is the honest state: nothing delivers a -0.0 to a pole yet. It is
-# in the table so that the day something does, the floor is the thing that gets raised.
+# Cat G's floor moved off zero once boundary_probes() started emitting a -0.0 for the ops with a
+# zero pole. The count is exactly those ops, so an op joins by registering a zero singularity
+# rather than by a test edit -- which is the reason this is a floor and not an exact count.
 _COVERAGE_FLOORS = {
     "A": 23,
     "B": 88,

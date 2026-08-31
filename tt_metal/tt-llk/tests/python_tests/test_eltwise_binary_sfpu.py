@@ -1426,7 +1426,7 @@ _INT_EXTREMES_OUT_OF_RANGE: Dict[MathOperation, str] = {
 # Remainder is unaffected: both it and Python `%` follow the divisor, and it passes signed.
 _INT_EXTREMES_NON_NEGATIVE = frozenset({MathOperation.SfpuFmodInt32})
 
-# A composite and a prime to pair the knees against# A composite and a prime to pair the knees against, so gcd and lcm results are not all
+# A composite and a prime to pair the knees against, so gcd and lcm results are not all
 # trivially 1 or equal. The knees themselves -- 0 and 1 -- come from _OP_EDGE_POINTS via
 # op_edge_points(), not from a list here: an op joins this probe by gaining a table entry, and
 # the coverage ledger then derives cat D from the same place rather than from a list it cannot
