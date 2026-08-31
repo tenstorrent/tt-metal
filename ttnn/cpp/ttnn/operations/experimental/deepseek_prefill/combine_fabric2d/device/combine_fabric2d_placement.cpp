@@ -44,7 +44,7 @@ StreamPlacements decide_device_placement(
             num_links);
         for (uint32_t k = 0; k < num_links; k++) {
             const auto stream = make_stream_id(k, delta == 1);
-            const CoreCoord worker{worker_column(stream), 0};
+            const tt::tt_metal::CoreCoord worker{worker_column(stream), 0};
             placements.emplace(
                 stream,
                 StreamPlacement{

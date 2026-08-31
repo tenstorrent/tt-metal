@@ -21,8 +21,8 @@ constexpr StreamId make_stream_id(uint32_t link_idx, bool is_cw) { return link_i
 constexpr uint32_t stream_count(uint32_t num_links) { return num_links * 2; }
 
 struct StreamPlacement {
-    CoreCoord worker_logical;                     // where this stream's kernels go
-    CoreCoord worker_virtual;                     // what a sender on another chip addresses
+    tt::tt_metal::CoreCoord worker_logical;       // where this stream's kernels go
+    tt::tt_metal::CoreCoord worker_virtual;       // what a sender on another chip addresses
     ttnn::MeshCoordinate downstream_coord{0, 0};  // chip across the cable
     tt::tt_fabric::FabricNodeId downstream_node{tt::tt_fabric::MeshId{0}, 0};
 };
