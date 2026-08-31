@@ -7,7 +7,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
@@ -130,53 +129,9 @@ PrepareChunkRecurrenceOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
 
-    constexpr std::size_t input_count = 5;
-    auto fallback = to_profiler_model<tensor_return_value_t>(zero_estimate(input_count, outputs.size()));
-    if (in.q.storage_type() != StorageType::DEVICE || !in.q.is_allocated() || in.q.device() == nullptr) {
-        log_warning(tt::LogOp, "KDA prepare_chunk_recurrence performance model expected an allocated device input");
-        return fallback;
-    }
-
-    auto* device = in.q.device();
-    if (device->arch() != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "KDA prepare_chunk_recurrence performance model supports Blackhole only");
-        return fallback;
-    }
-
     const auto work = prepare_chunk_recurrence_work(attrs.num_heads, attrs.num_chunks, attrs.key_dim, attrs.value_dim);
-    if (!work) {
-        return fallback;
-    }
-
-    const std::array<const Tensor*, input_count> input_tensors = {&in.q, &in.k, &in.v, &in.g, &in.beta};
-    std::array<KdaTensorTraffic, input_count> input_traffic;
-    for (std::size_t index = 0; index < input_tensors.size(); ++index) {
-        const auto traffic = tensor_traffic(*input_tensors[index]);
-        if (!traffic) {
-            return fallback;
-        }
-        input_traffic[index] = *traffic;
-    }
-
-    std::vector<KdaTensorTraffic> output_traffic;
-    output_traffic.reserve(outputs.size());
-    for (const auto& output : outputs) {
-        const auto traffic = tensor_traffic(output);
-        if (!traffic) {
-            return fallback;
-        }
-        output_traffic.push_back(*traffic);
-    }
-
-    const auto grid = device->compute_with_storage_grid_size();
-    const auto estimate_result = estimate(
-        *work,
-        input_traffic,
-        output_traffic,
-        static_cast<uint64_t>(grid.x) * grid.y,
-        device->get_clock_rate_mhz(),
-        attrs.compute_kernel_config.math_fidelity);
-    return to_profiler_model<tensor_return_value_t>(estimate_result);
+    const std::array<const Tensor*, 5> inputs = {&in.q, &in.k, &in.v, &in.g, &in.beta};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> prepare_chunk_recurrence(

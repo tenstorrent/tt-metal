@@ -6,7 +6,6 @@
 #include <array>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-logger/tt-logger.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
@@ -128,56 +127,11 @@ QkvCausalConv1dSiluOperation::create_op_performance_model(
     const operation_attributes_t& attrs, const tensor_args_t& in, tensor_return_value_t& outputs) {
     using namespace kda_performance_model;
 
-    constexpr std::size_t input_count = 6;
-    auto fallback = to_profiler_model<tensor_return_value_t>(zero_estimate(input_count, outputs.size()));
-    if (in.input.storage_type() != StorageType::DEVICE || !in.input.is_allocated() || in.input.device() == nullptr) {
-        log_warning(tt::LogOp, "KDA qkv_causal_conv1d_silu performance model expected an allocated device input");
-        return fallback;
-    }
-
-    auto* device = in.input.device();
-    if (device->arch() != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "KDA qkv_causal_conv1d_silu performance model supports Blackhole only");
-        return fallback;
-    }
-
     const auto& input_shape = in.input.logical_shape();
     const auto work =
         qkv_causal_conv1d_silu_work(input_shape[0], attrs.sequence, attrs.q_width, attrs.k_width, attrs.v_width);
-    if (!work) {
-        return fallback;
-    }
-
-    const std::array<const Tensor*, input_count> input_tensors = {
-        &in.input, &in.history, &in.tap0, &in.tap1, &in.tap2, &in.tap3};
-    std::array<KdaTensorTraffic, input_count> input_traffic;
-    for (std::size_t index = 0; index < input_tensors.size(); ++index) {
-        const auto traffic = tensor_traffic(*input_tensors[index]);
-        if (!traffic) {
-            return fallback;
-        }
-        input_traffic[index] = *traffic;
-    }
-
-    std::vector<KdaTensorTraffic> output_traffic;
-    output_traffic.reserve(outputs.size());
-    for (const auto& output : outputs) {
-        const auto traffic = tensor_traffic(output);
-        if (!traffic) {
-            return fallback;
-        }
-        output_traffic.push_back(*traffic);
-    }
-
-    const auto grid = device->compute_with_storage_grid_size();
-    const auto estimate_result = estimate(
-        *work,
-        input_traffic,
-        output_traffic,
-        static_cast<uint64_t>(grid.x) * grid.y,
-        device->get_clock_rate_mhz(),
-        attrs.compute_kernel_config.math_fidelity);
-    return to_profiler_model<tensor_return_value_t>(estimate_result);
+    const std::array<const Tensor*, 6> inputs = {&in.input, &in.history, &in.tap0, &in.tap1, &in.tap2, &in.tap3};
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> qkv_causal_conv1d_silu(

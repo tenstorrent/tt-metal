@@ -3,13 +3,14 @@
 
 #include "kda_performance_model.hpp"
 
+#include <algorithm>
 #include <initializer_list>
 #include <limits>
 #include <string_view>
 #include <unordered_set>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace ttnn::experimental::prim::kda_performance_model {
 namespace {
@@ -25,319 +26,327 @@ constexpr uint64_t MATRIX_FLOPS_PER_CORE_CYCLE = 4096;
 // https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/ideal_performance.md
 constexpr uint64_t DRAM_BYTES_PER_NS = 512;
 
-std::optional<Wide> checked_sum(std::initializer_list<std::optional<Wide>> terms) {
+Wide checked_sum(std::string_view operation, std::string_view quantity, std::initializer_list<Wide> terms) {
     Wide result = 0;
-    for (const auto& term : terms) {
-        if (!term || *term > WIDE_MAX - result) {
-            return std::nullopt;
-        }
-        result += *term;
+    for (const Wide term : terms) {
+        TT_FATAL(term <= WIDE_MAX - result, "KDA {} performance-model {} overflowed while adding", operation, quantity);
+        result += term;
     }
     return result;
 }
 
-std::optional<Wide> checked_product(std::initializer_list<std::optional<Wide>> factors) {
+Wide checked_product(std::string_view operation, std::string_view quantity, std::initializer_list<Wide> factors) {
     Wide result = 1;
-    for (const auto& factor : factors) {
-        if (!factor || (result != 0 && *factor > WIDE_MAX / result)) {
-            return std::nullopt;
-        }
-        result *= *factor;
+    for (const Wide factor : factors) {
+        TT_FATAL(
+            result == 0 || factor <= WIDE_MAX / result,
+            "KDA {} performance-model {} overflowed while multiplying",
+            operation,
+            quantity);
+        result *= factor;
     }
     return result;
 }
 
-std::optional<uint64_t> narrow_u64(Wide value) {
-    if (value > U64_MAX) {
-        return std::nullopt;
-    }
+uint64_t narrow_u64(std::string_view operation, std::string_view quantity, Wide value) {
+    TT_FATAL(value <= U64_MAX, "KDA {} performance-model {} does not fit uint64", operation, quantity);
     return static_cast<uint64_t>(value);
 }
 
-std::optional<KdaWork> make_work(
-    std::string_view operation,
-    std::optional<Wide> dense_flops,
-    std::optional<Wide> multiply_results,
-    std::optional<Wide> add_results,
-    std::optional<Wide> reduction_input_elements,
-    std::optional<Wide> omitted_sfpu_results) {
-    if (!dense_flops || !multiply_results || !add_results || !reduction_input_elements || !omitted_sfpu_results) {
-        log_warning(
-            tt::LogOp, "KDA {} performance-model work arithmetic overflowed; returning a zero estimate", operation);
-        return std::nullopt;
-    }
-    const auto dense = narrow_u64(*dense_flops);
-    const auto multiply = narrow_u64(*multiply_results);
-    const auto add = narrow_u64(*add_results);
-    const auto reduction = narrow_u64(*reduction_input_elements);
-    const auto omitted = narrow_u64(*omitted_sfpu_results);
-    if (!dense || !multiply || !add || !reduction || !omitted) {
-        log_warning(
-            tt::LogOp, "KDA {} performance-model work does not fit uint64; returning a zero estimate", operation);
-        return std::nullopt;
-    }
-    return KdaWork{
-        .dense_flops = *dense,
-        .multiply_results = *multiply,
-        .add_results = *add,
-        .reduction_input_elements = *reduction,
-        .omitted_sfpu_results = *omitted,
-    };
+int narrow_profiler_int(std::string_view quantity, Wide value) {
+    TT_FATAL(value <= PROFILER_INT_MAX, "KDA performance-model {} does not fit profiler int", quantity);
+    return static_cast<int>(value);
 }
 
-std::optional<uint64_t> fidelity_factor(tt::tt_metal::MathFidelity fidelity) {
+uint64_t fidelity_factor(tt::tt_metal::MathFidelity fidelity) {
     switch (fidelity) {
         case tt::tt_metal::MathFidelity::LoFi: return 1;
         case tt::tt_metal::MathFidelity::HiFi2: return 2;
         case tt::tt_metal::MathFidelity::HiFi3: return 3;
         case tt::tt_metal::MathFidelity::HiFi4: return 4;
-        case tt::tt_metal::MathFidelity::Invalid: return std::nullopt;
+        case tt::tt_metal::MathFidelity::Invalid:
+            TT_FATAL(false, "KDA performance model received invalid math fidelity");
     }
-    return std::nullopt;
+    TT_FATAL(false, "KDA performance model received unsupported math fidelity");
+    return 0;
 }
 
 Wide ceil_div(Wide numerator, Wide denominator) {
+    TT_FATAL(denominator > 0, "KDA performance-model divisor must be positive");
     return numerator / denominator + static_cast<Wide>(numerator % denominator != 0);
 }
 
-bool fits_profiler_int(Wide value) { return value <= PROFILER_INT_MAX; }
+Wide physical_bytes(const Tensor& tensor, std::string_view role) {
+    return checked_product("tensor traffic", role, {Wide{tensor.physical_volume()}, Wide{tensor.element_size()}});
+}
+
+void validate_tensor(const Tensor& tensor, tt::tt_metal::IDevice* device, std::string_view role) {
+    TT_FATAL(
+        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() && tensor.buffer() != nullptr,
+        "KDA performance model requires allocated device {} tensors",
+        role);
+    TT_FATAL(tensor.device() == device, "KDA performance model requires all {} tensors on the same device", role);
+}
 
 }  // namespace
 
-std::optional<KdaWork> sigmoid_gated_rms_norm_work(
-    uint64_t batch, uint64_t num_heads, uint64_t sequence, uint64_t value_dim) {
-    const auto rows = checked_product({Wide{batch}, Wide{num_heads}, Wide{sequence}});
-    const auto elements = checked_product({rows, Wide{value_dim}});
-    return make_work(
-        "sigmoid_gated_rms_norm",
-        Wide{0},
-        checked_product({Wide{4}, elements}),
-        rows,
-        elements,
-        checked_sum({rows, elements}));
+KdaFpuWork sigmoid_gated_rms_norm_work(uint64_t batch, uint64_t num_heads, uint64_t sequence, uint64_t value_dim) {
+    constexpr std::string_view operation = "sigmoid_gated_rms_norm";
+    TT_FATAL(value_dim > 0, "KDA {} performance model requires positive value_dim", operation);
+    const Wide rows = checked_product(operation, "rows", {Wide{batch}, Wide{num_heads}, Wide{sequence}});
+    const Wide elements = checked_product(operation, "elements", {rows, Wide{value_dim}});
+    return KdaFpuWork{
+        .fpu_multiply_ops = narrow_u64(
+            operation,
+            "FPU multiply operations",
+            checked_product(operation, "FPU multiply operations", {Wide{4}, elements})),
+        .fpu_add_ops = narrow_u64(operation, "FPU add operations", rows),
+        .fpu_reduction_ops = narrow_u64(
+            operation,
+            "FPU reduction operations",
+            checked_product(operation, "FPU reduction operations", {rows, Wide{value_dim - 1}})),
+    };
 }
 
-std::optional<KdaWork> qkv_causal_conv1d_silu_work(
+KdaFpuWork qkv_causal_conv1d_silu_work(
     uint64_t batch, uint64_t sequence, uint64_t q_width, uint64_t k_width, uint64_t v_width) {
-    const auto width = checked_sum({Wide{q_width}, Wide{k_width}, Wide{v_width}});
-    const auto elements = checked_product({Wide{batch}, Wide{sequence}, width});
-    return make_work(
-        "qkv_causal_conv1d_silu",
-        Wide{0},
-        checked_product({Wide{4}, elements}),
-        checked_product({Wide{3}, elements}),
-        Wide{0},
-        elements);
+    constexpr std::string_view operation = "qkv_causal_conv1d_silu";
+    const Wide width = checked_sum(operation, "width", {Wide{q_width}, Wide{k_width}, Wide{v_width}});
+    const Wide elements = checked_product(operation, "elements", {Wide{batch}, Wide{sequence}, width});
+    return KdaFpuWork{
+        .fpu_multiply_ops = narrow_u64(
+            operation,
+            "FPU multiply operations",
+            checked_product(operation, "FPU multiply operations", {Wide{4}, elements})),
+        .fpu_add_ops = narrow_u64(
+            operation, "FPU add operations", checked_product(operation, "FPU add operations", {Wide{3}, elements})),
+    };
 }
 
-std::optional<KdaWork> reduce_affine_transforms_work(
+KdaFpuWork reduce_affine_transforms_work(
     uint64_t batch_heads, uint64_t groups_per_head, uint64_t key_dim, uint64_t value_dim) {
-    const auto compositions =
-        checked_product({Wide{batch_heads}, Wide{groups_per_head == 0 ? 0 : groups_per_head - 1}});
-    const auto key_squared = checked_product({Wide{key_dim}, Wide{key_dim}});
-    const auto dense_per_composition = checked_sum(
-        {checked_product({Wide{2}, key_squared, Wide{key_dim}}),
-         checked_product({Wide{2}, key_squared, Wide{value_dim}})});
-    return make_work(
-        "reduce_affine_transforms",
-        checked_product({compositions, dense_per_composition}),
-        Wide{0},
-        checked_product({compositions, Wide{key_dim}, Wide{value_dim}}),
-        Wide{0},
-        Wide{0});
+    constexpr std::string_view operation = "reduce_affine_transforms";
+    TT_FATAL(groups_per_head > 0, "KDA {} performance model requires positive groups_per_head", operation);
+    const Wide compositions =
+        checked_product(operation, "compositions", {Wide{batch_heads}, Wide{groups_per_head - 1}});
+    const Wide key_squared = checked_product(operation, "key squared", {Wide{key_dim}, Wide{key_dim}});
+    const Wide matrix_flops_per_composition = checked_sum(
+        operation,
+        "matrix FLOPs per composition",
+        {checked_product(operation, "matrix FLOPs per composition", {Wide{2}, key_squared, Wide{key_dim}}),
+         checked_product(operation, "matrix FLOPs per composition", {Wide{2}, key_squared, Wide{value_dim}})});
+    return KdaFpuWork{
+        .fpu_matrix_flops = narrow_u64(
+            operation,
+            "matrix FLOPs",
+            checked_product(operation, "matrix FLOPs", {compositions, matrix_flops_per_composition})),
+        .fpu_add_ops = narrow_u64(
+            operation,
+            "FPU add operations",
+            checked_product(operation, "FPU add operations", {compositions, Wide{key_dim}, Wide{value_dim}})),
+    };
 }
 
-std::optional<KdaWork> affine_exclusive_scan_work(
+KdaFpuWork affine_exclusive_scan_work(
     uint64_t batch_heads, uint64_t groups_per_head, uint64_t key_dim, uint64_t value_dim) {
-    const auto transitions = checked_product({Wide{batch_heads}, Wide{groups_per_head == 0 ? 0 : groups_per_head - 1}});
-    return make_work(
-        "affine_exclusive_scan",
-        checked_product({transitions, Wide{2}, Wide{key_dim}, Wide{key_dim}, Wide{value_dim}}),
-        Wide{0},
-        checked_product({transitions, Wide{key_dim}, Wide{value_dim}}),
-        Wide{0},
-        Wide{0});
+    constexpr std::string_view operation = "affine_exclusive_scan";
+    TT_FATAL(groups_per_head > 0, "KDA {} performance model requires positive groups_per_head", operation);
+    const Wide transitions = checked_product(operation, "transitions", {Wide{batch_heads}, Wide{groups_per_head - 1}});
+    return KdaFpuWork{
+        .fpu_matrix_flops = narrow_u64(
+            operation,
+            "matrix FLOPs",
+            checked_product(
+                operation, "matrix FLOPs", {transitions, Wide{2}, Wide{key_dim}, Wide{key_dim}, Wide{value_dim}})),
+        .fpu_add_ops = narrow_u64(
+            operation,
+            "FPU add operations",
+            checked_product(operation, "FPU add operations", {transitions, Wide{key_dim}, Wide{value_dim}})),
+    };
 }
 
-std::optional<KdaWork> prepare_chunk_recurrence_work(
+KdaFpuWork prepare_chunk_recurrence_work(
     uint64_t num_heads, uint64_t num_chunks, uint64_t key_dim, uint64_t value_dim) {
+    constexpr std::string_view operation = "prepare_chunk_recurrence";
+    TT_FATAL(key_dim > 0, "KDA {} performance model requires positive key_dim", operation);
     constexpr Wide chunk = tt::constants::TILE_HEIGHT;
     constexpr Wide inverse_flops = chunk * (chunk - 1) * (chunk + 1) / 3;
-    const auto instances = checked_product({Wide{num_heads}, Wide{num_chunks}});
-    const auto multiply_per_instance =
-        checked_sum({checked_product({Wide{10}, chunk, Wide{key_dim}}), checked_product({chunk, Wide{value_dim}})});
-    const auto add_per_instance = checked_sum(
-        {checked_product({Wide{2}, chunk}),
-         checked_product({chunk - 1, Wide{key_dim}}),
-         checked_product({chunk, Wide{key_dim}}),
-         checked_product({chunk, chunk})});
-    const auto dense_per_instance =
-        checked_sum({checked_product({Wide{4}, chunk, chunk, Wide{key_dim}}), inverse_flops});
-    const auto omitted_per_instance = checked_sum(
-        {checked_product({Wide{2}, chunk}), checked_product({Wide{3}, chunk, Wide{key_dim}}), Wide{key_dim}});
-    return make_work(
-        "prepare_chunk_recurrence",
-        checked_product({instances, dense_per_instance}),
-        checked_product({instances, multiply_per_instance}),
-        checked_product({instances, add_per_instance}),
-        checked_product({instances, Wide{2}, chunk, Wide{key_dim}}),
-        checked_product({instances, omitted_per_instance}));
-}
-
-std::optional<KdaWork> recurrent_chunk_scan_work(
-    uint64_t batch_heads, uint64_t num_chunks, uint64_t key_dim, uint64_t value_dim) {
-    constexpr Wide chunk = tt::constants::TILE_HEIGHT;
-    const auto instances = checked_product({Wide{batch_heads}, Wide{num_chunks}});
-    const auto dense_per_instance = checked_sum(
-        {checked_product({Wide{6}, chunk, Wide{key_dim}, Wide{value_dim}}),
-         checked_product({Wide{4}, chunk, chunk, Wide{value_dim}})});
-    const auto add_per_instance = checked_sum(
-        {checked_product({Wide{2}, chunk, Wide{value_dim}}), checked_product({Wide{key_dim}, Wide{value_dim}})});
-    return make_work(
-        "recurrent_chunk_scan",
-        checked_product({instances, dense_per_instance}),
-        checked_product({instances, Wide{key_dim}, Wide{value_dim}}),
-        checked_product({instances, add_per_instance}),
-        Wide{0},
-        Wide{0});
-}
-
-std::optional<KdaWork> summarize_chunk_recurrence_work(
-    uint64_t batch_heads, uint64_t num_chunks, uint64_t key_dim, uint64_t value_dim) {
-    constexpr Wide chunk = tt::constants::TILE_HEIGHT;
-    const auto instances = checked_product({Wide{batch_heads}, Wide{num_chunks}});
-    const auto dense_per_instance = checked_sum(
-        {checked_product({Wide{8}, chunk, Wide{key_dim}, Wide{value_dim}}),
-         checked_product({Wide{4}, chunk, chunk, Wide{value_dim}})});
-    const auto add_per_instance = checked_sum(
-        {checked_product({Wide{2}, chunk, Wide{value_dim}}),
-         checked_product({Wide{2}, Wide{key_dim}, Wide{value_dim}})});
-    return make_work(
-        "summarize_chunk_recurrence",
-        checked_product({instances, dense_per_instance}),
-        checked_product({instances, Wide{2}, Wide{key_dim}, Wide{value_dim}}),
-        checked_sum(
-            {checked_product({instances, add_per_instance}),
-             checked_product({Wide{batch_heads}, Wide{key_dim}, Wide{value_dim}})}),
-        Wide{0},
-        Wide{0});
-}
-
-std::optional<KdaTensorTraffic> tensor_traffic(const Tensor& tensor) {
-    if (tensor.storage_type() != StorageType::DEVICE || tensor.buffer() == nullptr) {
-        log_warning(tt::LogOp, "KDA performance model expected an allocated device tensor; returning a zero estimate");
-        return std::nullopt;
-    }
-    const auto byte_product = checked_product({Wide{tensor.physical_volume()}, Wide{tensor.element_size()}});
-    const auto bytes = byte_product ? narrow_u64(*byte_product) : std::nullopt;
-    if (!bytes) {
-        log_warning(tt::LogOp, "KDA performance-model physical byte count overflowed; returning a zero estimate");
-        return std::nullopt;
-    }
-    return KdaTensorTraffic{
-        .buffer_address = tensor.buffer()->address(),
-        .physical_bytes = *bytes,
-        .is_dram = tensor.memory_config().is_dram(),
+    const Wide instances = checked_product(operation, "instances", {Wide{num_heads}, Wide{num_chunks}});
+    const Wide multiply_per_instance = checked_sum(
+        operation,
+        "FPU multiply operations per instance",
+        {checked_product(operation, "FPU multiply operations per instance", {Wide{10}, chunk, Wide{key_dim}}),
+         checked_product(operation, "FPU multiply operations per instance", {chunk, Wide{value_dim}})});
+    const Wide add_per_instance = checked_sum(
+        operation,
+        "FPU add operations per instance",
+        {checked_product(operation, "FPU add operations per instance", {Wide{2}, chunk}),
+         checked_product(operation, "FPU add operations per instance", {chunk - 1, Wide{key_dim}}),
+         checked_product(operation, "FPU add operations per instance", {chunk, Wide{key_dim}}),
+         checked_product(operation, "FPU add operations per instance", {chunk, chunk})});
+    const Wide matrix_flops_per_instance = checked_sum(
+        operation,
+        "matrix FLOPs per instance",
+        {checked_product(operation, "matrix FLOPs per instance", {Wide{4}, chunk, chunk, Wide{key_dim}}),
+         inverse_flops});
+    return KdaFpuWork{
+        .fpu_matrix_flops = narrow_u64(
+            operation,
+            "matrix FLOPs",
+            checked_product(operation, "matrix FLOPs", {instances, matrix_flops_per_instance})),
+        .fpu_multiply_ops = narrow_u64(
+            operation,
+            "FPU multiply operations",
+            checked_product(operation, "FPU multiply operations", {instances, multiply_per_instance})),
+        .fpu_add_ops = narrow_u64(
+            operation,
+            "FPU add operations",
+            checked_product(operation, "FPU add operations", {instances, add_per_instance})),
+        .fpu_reduction_ops = narrow_u64(
+            operation,
+            "FPU reduction operations",
+            checked_product(operation, "FPU reduction operations", {instances, Wide{2}, chunk, Wide{key_dim - 1}})),
     };
 }
 
-KdaEstimate zero_estimate(std::size_t input_count, std::size_t output_count) {
-    return KdaEstimate{
-        .input_bytes = std::vector<uint64_t>(input_count, 0),
-        .output_bytes = std::vector<uint64_t>(output_count, 0),
+KdaFpuWork recurrent_chunk_scan_work(uint64_t batch_heads, uint64_t num_chunks, uint64_t key_dim, uint64_t value_dim) {
+    constexpr std::string_view operation = "recurrent_chunk_scan";
+    constexpr Wide chunk = tt::constants::TILE_HEIGHT;
+    const Wide instances = checked_product(operation, "instances", {Wide{batch_heads}, Wide{num_chunks}});
+    const Wide matrix_flops_per_instance = checked_sum(
+        operation,
+        "matrix FLOPs per instance",
+        {checked_product(operation, "matrix FLOPs per instance", {Wide{6}, chunk, Wide{key_dim}, Wide{value_dim}}),
+         checked_product(operation, "matrix FLOPs per instance", {Wide{4}, chunk, chunk, Wide{value_dim}})});
+    const Wide add_per_instance = checked_sum(
+        operation,
+        "FPU add operations per instance",
+        {checked_product(operation, "FPU add operations per instance", {Wide{2}, chunk, Wide{value_dim}}),
+         checked_product(operation, "FPU add operations per instance", {Wide{key_dim}, Wide{value_dim}})});
+    return KdaFpuWork{
+        .fpu_matrix_flops = narrow_u64(
+            operation,
+            "matrix FLOPs",
+            checked_product(operation, "matrix FLOPs", {instances, matrix_flops_per_instance})),
+        .fpu_multiply_ops = narrow_u64(
+            operation,
+            "FPU multiply operations",
+            checked_product(operation, "FPU multiply operations", {instances, Wide{key_dim}, Wide{value_dim}})),
+        .fpu_add_ops = narrow_u64(
+            operation,
+            "FPU add operations",
+            checked_product(operation, "FPU add operations", {instances, add_per_instance})),
     };
 }
 
-KdaEstimate estimate(
-    const KdaWork& work,
-    std::span<const KdaTensorTraffic> inputs,
-    std::span<const KdaTensorTraffic> outputs,
-    uint64_t core_count,
-    uint64_t clock_mhz,
+KdaFpuWork summarize_chunk_recurrence_work(
+    uint64_t batch_heads, uint64_t num_chunks, uint64_t key_dim, uint64_t value_dim) {
+    constexpr std::string_view operation = "summarize_chunk_recurrence";
+    constexpr Wide chunk = tt::constants::TILE_HEIGHT;
+    const Wide instances = checked_product(operation, "instances", {Wide{batch_heads}, Wide{num_chunks}});
+    const Wide matrix_flops_per_instance = checked_sum(
+        operation,
+        "matrix FLOPs per instance",
+        {checked_product(operation, "matrix FLOPs per instance", {Wide{8}, chunk, Wide{key_dim}, Wide{value_dim}}),
+         checked_product(operation, "matrix FLOPs per instance", {Wide{4}, chunk, chunk, Wide{value_dim}})});
+    const Wide add_per_instance = checked_sum(
+        operation,
+        "FPU add operations per instance",
+        {checked_product(operation, "FPU add operations per instance", {Wide{2}, chunk, Wide{value_dim}}),
+         checked_product(operation, "FPU add operations per instance", {Wide{2}, Wide{key_dim}, Wide{value_dim}})});
+    const Wide total_add_ops = checked_sum(
+        operation,
+        "FPU add operations",
+        {checked_product(operation, "FPU add operations", {instances, add_per_instance}),
+         checked_product(operation, "FPU add operations", {Wide{batch_heads}, Wide{key_dim}, Wide{value_dim}})});
+    return KdaFpuWork{
+        .fpu_matrix_flops = narrow_u64(
+            operation,
+            "matrix FLOPs",
+            checked_product(operation, "matrix FLOPs", {instances, matrix_flops_per_instance})),
+        .fpu_multiply_ops = narrow_u64(
+            operation,
+            "FPU multiply operations",
+            checked_product(
+                operation, "FPU multiply operations", {instances, Wide{2}, Wide{key_dim}, Wide{value_dim}})),
+        .fpu_add_ops = narrow_u64(operation, "FPU add operations", total_add_ops),
+    };
+}
+
+KdaProfilerModel make_profiler_model(
+    const KdaFpuWork& work,
+    std::span<const Tensor* const> inputs,
+    const std::vector<Tensor>& outputs,
     tt::tt_metal::MathFidelity math_fidelity) {
-    KdaEstimate result = zero_estimate(inputs.size(), outputs.size());
-    const auto factor = fidelity_factor(math_fidelity);
-    if (core_count == 0 || clock_mhz == 0 || !factor) {
-        log_warning(
-            tt::LogOp,
-            "KDA performance model received zero cores, zero clock, or invalid fidelity; returning a zero estimate");
-        return result;
-    }
+    TT_FATAL(!inputs.empty(), "KDA performance model requires at least one input tensor");
+    TT_FATAL(inputs.front() != nullptr, "KDA performance model received a null input tensor");
+    const Tensor& first_input = *inputs.front();
+    TT_FATAL(
+        first_input.storage_type() == StorageType::DEVICE && first_input.is_allocated() &&
+            first_input.buffer() != nullptr && first_input.device() != nullptr,
+        "KDA performance model requires allocated device input tensors");
 
-    const auto cycle_numerator = checked_sum(
-        {checked_product({Wide{work.dense_flops}, Wide{*factor}}),
-         checked_product({Wide{32}, Wide{work.multiply_results}, Wide{*factor}}),
-         checked_product({Wide{32}, Wide{work.add_results}}),
-         checked_product({Wide{16}, Wide{work.reduction_input_elements}, Wide{*factor}})});
-    const auto cycle_denominator = checked_product({Wide{MATRIX_FLOPS_PER_CORE_CYCLE}, Wide{core_count}});
-    if (!cycle_numerator || !cycle_denominator) {
-        log_warning(tt::LogOp, "KDA performance-model cycle arithmetic overflowed; returning a zero estimate");
-        return result;
-    }
-    const Wide ideal_fpu_cycles = ceil_div(*cycle_numerator, *cycle_denominator);
-    const auto fpu_time_numerator = checked_product({ideal_fpu_cycles, Wide{1000}});
-    if (!fpu_time_numerator) {
-        log_warning(tt::LogOp, "KDA performance-model time arithmetic overflowed; returning a zero estimate");
-        return result;
-    }
-    const Wide ideal_fpu_ns = ceil_div(*fpu_time_numerator, clock_mhz);
+    auto* device = first_input.device();
+    TT_FATAL(device->arch() == tt::ARCH::BLACKHOLE, "KDA performance model supports Blackhole only");
+
+    KdaProfilerModel result;
+    result.inputs_bytes.assign(inputs.size(), 0);
+    result.outputs_bytes.assign(outputs.size(), 0);
 
     Wide mandatory_dram_bytes = 0;
-    std::unordered_set<uint64_t> input_addresses;
-    std::unordered_set<uint64_t> output_addresses;
+    std::unordered_set<const void*> input_buffers;
     for (std::size_t index = 0; index < inputs.size(); ++index) {
-        const auto& tensor = inputs[index];
-        if (tensor.is_dram) {
-            if (tensor.physical_bytes > PROFILER_INT_MAX) {
-                log_warning(tt::LogOp, "KDA performance-model input byte count does not fit profiler int");
-                return zero_estimate(inputs.size(), outputs.size());
-            }
-            result.input_bytes[index] = tensor.physical_bytes;
-            if (input_addresses.insert(tensor.buffer_address).second) {
-                const auto total = checked_sum({mandatory_dram_bytes, Wide{tensor.physical_bytes}});
-                if (!total) {
-                    log_warning(tt::LogOp, "KDA performance-model DRAM input bytes overflowed");
-                    return zero_estimate(inputs.size(), outputs.size());
-                }
-                mandatory_dram_bytes = *total;
-            }
+        TT_FATAL(inputs[index] != nullptr, "KDA performance model received a null input tensor");
+        const Tensor& input = *inputs[index];
+        validate_tensor(input, device, "input");
+        TT_FATAL(
+            input_buffers.insert(static_cast<const void*>(input.buffer())).second,
+            "KDA performance model does not support aliased inputs");
+        if (input.memory_config().is_dram()) {
+            const Wide bytes = physical_bytes(input, "input bytes");
+            result.inputs_bytes[index] = narrow_profiler_int("input bytes", bytes);
+            mandatory_dram_bytes = checked_sum("tensor traffic", "mandatory DRAM bytes", {mandatory_dram_bytes, bytes});
         }
     }
+
     for (std::size_t index = 0; index < outputs.size(); ++index) {
-        const auto& tensor = outputs[index];
-        if (tensor.is_dram) {
-            if (tensor.physical_bytes > PROFILER_INT_MAX) {
-                log_warning(tt::LogOp, "KDA performance-model output byte count does not fit profiler int");
-                return zero_estimate(inputs.size(), outputs.size());
-            }
-            result.output_bytes[index] = tensor.physical_bytes;
-            if (output_addresses.insert(tensor.buffer_address).second) {
-                const auto total = checked_sum({mandatory_dram_bytes, Wide{tensor.physical_bytes}});
-                if (!total) {
-                    log_warning(tt::LogOp, "KDA performance-model DRAM output bytes overflowed");
-                    return zero_estimate(inputs.size(), outputs.size());
-                }
-                mandatory_dram_bytes = *total;
-            }
+        const Tensor& output = outputs[index];
+        validate_tensor(output, device, "output");
+        if (output.memory_config().is_dram()) {
+            const Wide bytes = physical_bytes(output, "output bytes");
+            result.outputs_bytes[index] = narrow_profiler_int("output bytes", bytes);
+            mandatory_dram_bytes = checked_sum("tensor traffic", "mandatory DRAM bytes", {mandatory_dram_bytes, bytes});
         }
     }
 
-    const Wide ideal_dram_ns = ceil_div(mandatory_dram_bytes, DRAM_BYTES_PER_NS);
-    const Wide ideal_ns = std::max(ideal_fpu_ns, ideal_dram_ns);
-    if (!fits_profiler_int(ideal_fpu_cycles) || !fits_profiler_int(ideal_fpu_ns) || !fits_profiler_int(ideal_dram_ns) ||
-        !fits_profiler_int(ideal_ns) || mandatory_dram_bytes > U64_MAX) {
-        log_warning(
-            tt::LogOp, "KDA performance-model estimate does not fit profiler fields; returning a zero estimate");
-        return zero_estimate(inputs.size(), outputs.size());
-    }
+    const uint64_t factor = fidelity_factor(math_fidelity);
+    const auto grid = device->compute_with_storage_grid_size();
+    const Wide core_count = checked_product("device", "compute core count", {Wide{grid.x}, Wide{grid.y}});
+    TT_FATAL(core_count > 0, "KDA performance model requires at least one compute core");
+    const int clock_mhz = device->get_clock_rate_mhz();
+    TT_FATAL(clock_mhz > 0, "KDA performance model requires a positive device clock");
 
-    result.valid = true;
-    result.ideal_fpu_cycles = static_cast<uint64_t>(ideal_fpu_cycles);
-    result.ideal_fpu_ns = static_cast<uint64_t>(ideal_fpu_ns);
-    result.mandatory_dram_bytes = static_cast<uint64_t>(mandatory_dram_bytes);
-    result.ideal_dram_ns = static_cast<uint64_t>(ideal_dram_ns);
-    result.ideal_ns = static_cast<uint64_t>(ideal_ns);
-    result.omitted_sfpu_results = work.omitted_sfpu_results;
+    const Wide cycle_numerator = checked_sum(
+        "FPU estimate",
+        "cycle numerator",
+        {checked_product("FPU estimate", "matrix cycle numerator", {Wide{work.fpu_matrix_flops}, Wide{factor}}),
+         checked_product(
+             "FPU estimate", "multiply cycle numerator", {Wide{32}, Wide{work.fpu_multiply_ops}, Wide{factor}}),
+         checked_product("FPU estimate", "add cycle numerator", {Wide{32}, Wide{work.fpu_add_ops}}),
+         checked_product(
+             "FPU estimate", "reduction cycle numerator", {Wide{16}, Wide{work.fpu_reduction_ops}, Wide{factor}})});
+    const Wide cycle_denominator =
+        checked_product("FPU estimate", "cycle denominator", {Wide{MATRIX_FLOPS_PER_CORE_CYCLE}, core_count});
+    const Wide ideal_fpu_cycles = ceil_div(cycle_numerator, cycle_denominator);
+    const Wide ideal_fpu_ns =
+        ceil_div(checked_product("FPU estimate", "time numerator", {ideal_fpu_cycles, Wide{1000}}), Wide{clock_mhz});
+    const Wide ideal_dram_ns = ceil_div(mandatory_dram_bytes, Wide{DRAM_BYTES_PER_NS});
+    const Wide ideal_ns = std::max(ideal_fpu_ns, ideal_dram_ns);
+
+    result.ideal_compute_cycles = narrow_profiler_int("ideal compute cycles", std::max(Wide{1}, ideal_fpu_cycles));
+    result.ideal_compute_ns = narrow_profiler_int("ideal compute ns", std::max(Wide{1}, ideal_fpu_ns));
+    result.ideal_bandwidth_ns = narrow_profiler_int("ideal bandwidth ns", std::max(Wide{1}, ideal_dram_ns));
+    result.ideal_ns = narrow_profiler_int("ideal ns", std::max(Wide{1}, ideal_ns));
     return result;
 }
 
