@@ -360,7 +360,7 @@ models:
   unit_tier1:
     wh_llmbox: 150
     wh_n150: 110
-    wh_galaxy: 240
+    wh_galaxy: 260
     wh_galaxy_perf: 60
     bh_p150: 20
     bh_quietbox_2: 390
