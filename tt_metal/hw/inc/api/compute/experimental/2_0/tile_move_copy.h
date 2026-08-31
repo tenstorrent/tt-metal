@@ -27,8 +27,15 @@ namespace experimental {
  * (deduced from the argument). The op forwards LLKOperand<F,S>::descriptor to the LLK as an NTTP (folds);
  * the register format is derived INSIDE the LLK. It reprograms the unpacker + math datacopy for the operand's
  * format WITHOUT touching the packer dst-offset registers (those come from compute_kernel_hw_startup) -- on
- * Blackhole the legacy copy_tile_init IS exactly this short re-init form. No CB id, no register format on the
- * API surface. Legacy ckernel::copy_tile_init is untouched.
+ * Blackhole this matches the legacy copy_init unpacker + math datacopy re-init. No CB id, no register format on
+ * the API surface. Legacy ckernel::copy_tile_init is untouched.
+ *
+ * LIMITATION (compile-time enforced): fp8 source formats (Fp8_e4m3 / Lf8 e5m2) are NOT supported yet. Legacy
+ * copy_init additionally programs the Src zero-substitution flag by format -- flushing fp8 zeros whose SrcA
+ * residual would otherwise read back nonzero. That flag config is not wired into the 2.0 path yet (and cannot
+ * be validated through the current golden harness, since it affects the DST value an SFPU op reads, not the
+ * packed L1 output). Until it is, fp8 datacopy must use the legacy CB-id copy path; a static_assert here
+ * rejects an fp8 LLKOperand rather than silently producing wrong near-zero fp8 results.
  *
  * | Template | Format | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |  | True |
  * | Template | Shape  | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |  | True |
@@ -39,6 +46,10 @@ ALWI void copy_tile_init(LLKOperand<Format, Shape> /*src*/) {
     static_assert(
         is_legal_tile_shape(Shape),
         "copy_tile_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
+    static_assert(
+        Format != DataFormat::Fp8_e4m3 && Format != DataFormat::Lf8,
+        "copy_tile_init: fp8 source (Fp8_e4m3/Lf8) is not supported in the 2.0 datacopy path yet -- it requires "
+        "the legacy copy_init src zero-flag flush, which is not wired in here. Use the legacy CB-id copy path.");
     UNPACK((llk_unpack_A_init<
             LLKOperand<Format, Shape>::descriptor,
             DST_ACCUM_MODE,
