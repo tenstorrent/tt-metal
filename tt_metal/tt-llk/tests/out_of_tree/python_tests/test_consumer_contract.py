@@ -26,6 +26,7 @@ Two layers:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -320,20 +321,54 @@ def test_no_consumer_module_reaches_past_the_facade():
 # --------------------------------------------------------------------------- #
 
 
-def test_plugin_supplies_the_pytest_hooks():
-    """The consumer loads hooks from the plugin, never from in-tree conftest."""
-    import helpers.llk_pytest_plugin as plugin
+def test_facade_plugin_registers_the_harness_hooks_exactly_once(pytestconfig):
+    """``tt_llk_harness.plugin`` must forward, and forward once.
 
-    for marker in (
-        "blackhole_only",
-        "quasar_only",
-        "skip_for_blackhole",
-        "skip_for_coverage",
-        "skip_for_quasar",
-        "skip_for_wormhole",
-        "wormhole_only",
-    ):
-        assert hasattr(plugin, marker), f"arch marker {marker} is part of the contract"
+    This suite names only the facade in ``pytest_plugins``; the implementation
+    module has to end up registered anyway, because it owns the hooks. Two
+    things can go wrong and neither shows up as an import error:
+
+    * the forwarding stops working, and the consumer silently runs with no
+      ``--compile-producer``, no arch markers and no artefact wiring;
+    * the facade starts re-exporting the hook functions instead of forwarding
+      to the module, so pytest registers the same hooks under two plugin names
+      and every hook runs twice.
+
+    Checking the plugin manager catches both. An earlier version of this test
+    asserted that the arch markers existed on the implementation module, which
+    could never fail: the facade imports those same names eagerly, so a missing
+    one aborts collection long before any test runs.
+    """
+    manager = pytestconfig.pluginmanager
+
+    implementation = manager.get_plugin("helpers.llk_pytest_plugin")
+    assert implementation is not None, (
+        "tt_llk_harness.plugin did not forward to the harness hooks; a consumer "
+        "naming only the facade would run without them"
+    )
+
+    # Count hook *implementations*, not registered module objects: a re-export
+    # puts the same function on a second module, which an identity check over
+    # registered plugins would miss, but ``__module__`` still points here.
+    #
+    # For ``pytest_addoption`` specifically pytest gets there first — a
+    # duplicate aborts the session with "option names ... already added" — so
+    # this assertion is the backstop for re-exported hooks that do not collide
+    # that loudly, ``pytest_configure`` among them.
+    implementations = [
+        impl
+        for impl in manager.hook.pytest_addoption.get_hookimpls()
+        if getattr(impl.function, "__module__", "") == "helpers.llk_pytest_plugin"
+    ]
+    assert len(implementations) == 1, (
+        f"the harness contributes {len(implementations)} pytest_addoption "
+        "implementations; hooks registered twice run twice. The facade must "
+        "forward via pytest_plugins, not re-export the hook functions."
+    )
+
+    # Proves pytest_addoption actually ran through that registration: this
+    # option exists only because the harness plugin added it.
+    assert pytestconfig.getoption("--compile-producer") is not None
 
 
 def test_suite_local_package_imports_without_sys_path_edits():
@@ -524,13 +559,15 @@ def test_per_variant_include_dirs_override_suite_wide_ones():
         f"probe went dead:\n{message}"
     )
     # A consumer debugging its own kernel needs the compiler's diagnostics, not
-    # a bare non-zero exit. Asserted here rather than in a second test: an
-    # identical TestConfig hashes to the same variant, so a duplicate would
-    # depend on artefact state left by this one.
-    assert "error:" in message, "compiler diagnostics must be surfaced"
-    assert (
-        "out_of_tree_contract_test.cpp" in message
-    ), "the failing driver must be named"
+    # a bare non-zero exit. Match the *shape* of a gcc diagnostic rather than
+    # the bare filename: RuntimeError from run_shell_command echoes the whole
+    # argv, which already contains ``-I<artefact dir>/out_of_tree_contract_test.cpp/...``,
+    # so a substring check on the name would pass on the echo alone and prove
+    # nothing about stderr.
+    assert re.search(r"out_of_tree_contract_test\.cpp:\d+:\d+: error:", message), (
+        "the compiler's own diagnostic (file:line:col: error:) is not in the "
+        f"failure; only the echoed command would be:\n{message}"
+    )
 
 
 def test_missing_test_name_is_rejected():

@@ -52,7 +52,7 @@ EXPECTED_FIXTURE_NODE_IDS = frozenset(
         "test_plugin_name_constant_matches_the_module_that_exists",
         "test_version_gate_accepts_compatible_and_rejects_the_rest",
         "test_no_consumer_module_reaches_past_the_facade",
-        "test_plugin_supplies_the_pytest_hooks",
+        "test_facade_plugin_registers_the_harness_hooks_exactly_once",
         "test_suite_local_package_imports_without_sys_path_edits",
         "test_helpers_resolves_to_the_harness_not_a_local_shadow",
         "test_out_of_tree_golden_registers",

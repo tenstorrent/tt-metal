@@ -37,6 +37,17 @@ SEARCH_DIR_STATE = (
 
 DRIVER = "sources/eltwise_unary_datacopy_test.cpp"
 
+# Both regimes matter: before ``setup_build`` header extras live in
+# ``EXTRA_INCLUDE_*`` and the hash's group fences separate them; after it they
+# are folded into ``INCLUDES`` by order and the fences are empty.
+_IN_TREE_REGIMES = pytest.mark.parametrize(
+    "in_tree",
+    [
+        pytest.param(True, id="after-setup-build"),
+        pytest.param(False, id="before-setup-build"),
+    ],
+)
+
 
 @pytest.fixture
 def isolated_search_dirs():
@@ -90,13 +101,7 @@ def clear_search_dirs(in_tree: bool = False) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "in_tree",
-    [
-        pytest.param(True, id="after-setup-build"),
-        pytest.param(False, id="before-setup-build"),
-    ],
-)
+@_IN_TREE_REGIMES
 def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_tree):
     """Search dirs live in class state, so ``self.__dict__`` cannot see them.
 
@@ -123,13 +128,7 @@ def test_registered_search_dirs_change_the_variant_id(isolated_search_dirs, in_t
     assert len(set(ids)) == len(ids), f"variant ids collided: {ids}"
 
 
-@pytest.mark.parametrize(
-    "in_tree",
-    [
-        pytest.param(True, id="after-setup-build"),
-        pytest.param(False, id="before-setup-build"),
-    ],
-)
+@_IN_TREE_REGIMES
 def test_search_dir_precedence_changes_the_variant_id(isolated_search_dirs, in_tree):
     """Registration order is a compilation input: it decides which copy wins."""
     clear_search_dirs(in_tree)
@@ -152,13 +151,7 @@ def test_search_dir_precedence_changes_the_variant_id(isolated_search_dirs, in_t
         pytest.param(TestConfig.add_src_include_dirs, id="src-dirs"),
     ],
 )
-@pytest.mark.parametrize(
-    "in_tree",
-    [
-        pytest.param(True, id="after-setup-build"),
-        pytest.param(False, id="before-setup-build"),
-    ],
-)
+@_IN_TREE_REGIMES
 def test_search_dir_role_changes_the_variant_id(
     isolated_search_dirs, register, in_tree
 ):
