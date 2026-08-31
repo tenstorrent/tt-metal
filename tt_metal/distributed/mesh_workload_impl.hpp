@@ -54,7 +54,7 @@ private:
     void set_finalized(uint32_t max_program_kernels_sizeB);
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
-    ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
+    ProgramConfig& get_program_config(uint32_t index);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     const std::vector<uint64_t>& get_cross_node_program_ids();
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);

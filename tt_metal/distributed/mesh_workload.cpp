@@ -357,10 +357,13 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
-ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
+ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
+    TT_FATAL(!programs_.empty(), "Program Configs can only be queried if a MeshWorkload is populated.");
+    const bool requires_finalized_config =
+        MetalContext::instance().rtoptions().get_fast_dispatch() && !is_service_workload_.value_or(false);
     TT_FATAL(
-        !using_fast_dispatch or (!programs_.empty() and is_finalized()),
-        "Program Configs can only be queried if a MeshWorkload is populated and finalized.");
+        !requires_finalized_config || is_finalized(),
+        "Program Configs can only be queried before finalization for slow-dispatch workloads.");
     return programs_.begin()->second.impl().get_program_config(index);
 }
 
@@ -369,10 +372,9 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(
-                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
-                           .sem_offset;
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .sem_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_sem_size(
@@ -395,10 +397,9 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr + get_program_config(
-                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
-                           tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch())
-                           .cb_offset;
+    return base_addr +
+           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
+               .cb_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_cb_size(

@@ -762,29 +762,26 @@ void generate_runtime_args_cmds(
         std::is_same_v<PackedSubCmd, CQDispatchWritePackedMulticastSubCmd>);
 
     const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
-    thread_local static auto get_runtime_payload_sizeB =
-        [](uint32_t num_packed_cmds,
-           uint32_t runtime_args_len,
-           bool is_unicast,
-           bool no_stride,
-           uint32_t l1_alignment) {
+    thread_local static auto get_runtime_payload_sizeB = [](uint32_t num_packed_cmds,
+                                                            uint32_t runtime_args_len,
+                                                            bool is_unicast,
+                                                            bool no_stride,
+                                                            uint32_t l1_alignment) {
+        uint32_t sub_cmd_sizeB =
+            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
+        uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
+        uint32_t aligned_runtime_data_sizeB =
+            (no_stride ? 1 : num_packed_cmds) * tt::align(runtime_args_len * sizeof(uint32_t), l1_alignment);
+        return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+    };
+    thread_local static auto get_runtime_args_data_offset =
+        [](uint32_t num_packed_cmds, uint32_t /*runtime_args_len*/, bool is_unicast, uint32_t l1_alignment) {
             uint32_t sub_cmd_sizeB =
                 is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
             uint32_t dispatch_cmd_sizeB =
                 sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
-            uint32_t aligned_runtime_data_sizeB =
-                (no_stride ? 1 : num_packed_cmds) * tt::align(runtime_args_len * sizeof(uint32_t), l1_alignment);
-            return dispatch_cmd_sizeB + aligned_runtime_data_sizeB;
+            return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
         };
-    thread_local static auto get_runtime_args_data_offset = [](uint32_t num_packed_cmds,
-                                                               uint32_t /*runtime_args_len*/,
-                                                               bool is_unicast,
-                                                               uint32_t l1_alignment) {
-        uint32_t sub_cmd_sizeB =
-            is_unicast ? sizeof(CQDispatchWritePackedUnicastSubCmd) : sizeof(CQDispatchWritePackedMulticastSubCmd);
-        uint32_t dispatch_cmd_sizeB = sizeof(CQDispatchCmd) + tt::align(num_packed_cmds * sub_cmd_sizeB, l1_alignment);
-        return sizeof(CQPrefetchCmd) + dispatch_cmd_sizeB;
-    };
 
     constexpr bool unicast = std::is_same_v<PackedSubCmd, CQDispatchWritePackedUnicastSubCmd>;
 
@@ -3662,6 +3659,13 @@ uint32_t program_base_addr_on_core(
     distributed::MeshWorkloadImpl& mesh_workload,
     distributed::MeshDevice* mesh_device,
     HalProgrammableCoreType programmable_core_type) {
+    auto* cq = mesh_workload.get_last_used_command_queue();
+    if (cq == nullptr) {
+        return MetalContext::instance(extract_context_id(mesh_device))
+            .hal()
+            .get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    }
+
     const auto& sub_device_ids =
         mesh_workload.determine_sub_device_ids(mesh_device, *mesh_device->get_active_sub_device_manager_id());
     // TODO: This restriction can be lifted once this function is changed to return a vector of addresses
@@ -3669,11 +3673,7 @@ uint32_t program_base_addr_on_core(
     TT_FATAL(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = **sub_device_ids.begin();
-    auto* cq = mesh_workload.get_last_used_command_queue();
-    return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
-              : MetalContext::instance(extract_context_id(mesh_device))
-                    .hal()
-                    .get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
+    return cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type);
 }
 
 void reset_config_buf_mgrs_and_expected_workers(

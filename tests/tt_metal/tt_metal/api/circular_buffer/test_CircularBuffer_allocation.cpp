@@ -538,8 +538,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address =
-                        program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                    auto address = workload.get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
 
@@ -569,8 +568,7 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferPageSize) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    auto address =
-                        program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, tt::CoreType::WORKER);
+                    auto address = workload.get_cb_base_addr(device, core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
                         device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
 
