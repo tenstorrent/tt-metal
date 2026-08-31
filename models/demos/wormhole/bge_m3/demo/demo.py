@@ -380,11 +380,11 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
         hf_model_name=resolved_model_name,
     )
 
-    encoded_input = model_args.encode_prompts(inputs)
+    # The TT model reads the 4D additive encoder mask here.
+    encoded_input = model_args.encode_prompts(inputs, attention_mask_4d=True)
     input_ids = encoded_input["input_ids"]
     attention_mask = encoded_input["attention_mask"]
-    # 2D padding mask for the HF reference + pooling; the 4D mask above is the
-    # additive encoder mask consumed by the TT model.
+    # The HF reference and the pooling helpers read the 2D padding mask.
     pad_mask = encoded_input.get("tokenizer_attention_mask", input_ids.ne(int(model_args.pad_token_id)).long())
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
     seq_len = input_ids.shape[1]
@@ -443,9 +443,8 @@ def run_bge_vllm_demo(device, inputs, model_name, sequence_length, model_locatio
 
     encoded_input = model_args.encode_prompts(inputs)
     input_ids = encoded_input["input_ids"]
-    # 2D padding mask: the HF reference, _mean_pool, and the vLLM generator
-    # (which builds its own internal additive mask) all expect [B, S], not the
-    # 4D additive encoder mask that encode_prompts returns by default.
+    # The HF reference, _mean_pool, and the vLLM generator each read the 2D
+    # padding mask. The generator builds its own additive mask.
     pad_mask = encoded_input.get("tokenizer_attention_mask", input_ids.ne(int(model_args.pad_token_id)).long())
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
 

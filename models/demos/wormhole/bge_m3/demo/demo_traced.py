@@ -129,9 +129,9 @@ def main() -> None:
         mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0) if args.data_parallel else None
 
         logger.info(f"Encoding {len(prompts)} prompts to [{args.batch}, {args.seq_len}]")
-        # The data-parallel path takes compact [B, 1] valid lengths. Ask for the
-        # 2D keep-mask so encode_prompts does not build the dense [B, 1, S, S]
-        # mask, which costs about 1.5 GiB at B12/S8192.
+        # The data-parallel path takes compact [B, 1] valid lengths, so it keeps
+        # the 2D keep-mask. The single-device path feeds the raw model and asks
+        # for the 4D additive mask.
         encoded = model_args.encode_prompts(
             prompts,
             prompt_length=args.seq_len,
@@ -164,7 +164,7 @@ def main() -> None:
             # input tensors that the trace reads, so the trace stays valid.
             logger.info(f"Replaying the trace for {len(PROMPTS)} prompts")
             for index, prompt in enumerate(PROMPTS):
-                encoded = model_args.encode_prompts([prompt], prompt_length=args.seq_len)
+                encoded = model_args.encode_prompts([prompt], prompt_length=args.seq_len, attention_mask_4d=True)
                 for key, tensor in staged.items():
                     layout = ttnn.TILE_LAYOUT if key == "attention_mask" else ttnn.ROW_MAJOR_LAYOUT
                     dtype = model_args.attention_mask_dtype if key == "attention_mask" else ttnn.uint32

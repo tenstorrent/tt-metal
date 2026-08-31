@@ -239,19 +239,23 @@ class ModelArgs:
         prompts: list[str] | str,
         prompt_length: int | None = None,
         *,
-        attention_mask_4d: bool = True,
+        attention_mask_4d: bool = False,
         inputs_mesh_mapper: ttnn.TensorToMesh | None = None,
     ) -> ttnn.Tensor:
         """Tokenize ``prompts`` and build BGE-M3 model inputs.
 
-        ``attention_mask_4d`` (default True) controls the shape of the
+        ``attention_mask_4d`` (default False) controls the shape of the
         returned ``attention_mask``:
-          * True — SDPA-ready 4D additive mask ``[B, 1, S, S]`` (model
-            consumes it directly without rebuilding from a 2D keep-mask).
-          * False — raw 2D boolean keep-mask ``[B, S]`` (HF convention,
-            same as ``tokenizer_attention_mask``). Use this when callers
-            expect a 2D mask, e.g. ``BgeM3ForEmbedding._pad_inputs`` /
-            pooling helpers.
+          * False — raw 2D keep-mask ``[B, S]``, the HF convention and the
+            same tensor as ``tokenizer_attention_mask``.
+          * True — SDPA-ready 4D additive mask ``[B, 1, S, S]``, which the
+            model consumes without rebuilding it from the 2D keep-mask.
+            This mask costs about 1.5 GiB at B12/S8192, so ask for it only
+            when the caller feeds the raw model.
+
+        The data-parallel path does not take either mask. It takes compact
+        ``[B, 1]`` valid lengths, which a caller builds by summing
+        ``tokenizer_attention_mask`` along dim 1.
 
         ``tokenizer_attention_mask`` is always populated with the raw 2D
         keep-mask regardless of this flag.
