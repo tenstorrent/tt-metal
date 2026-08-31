@@ -25,89 +25,11 @@ namespace ttnn::prim {
 
 namespace {
 
-// One set of buffers, sized for a single block width.
-//
-// The work split gives cores one of two block widths (the full width, and a narrower cliff-row
-// width), and a block's width fixes the size of the buffers that carry it. That size is a
-// *correctness* property, not a performance one: the reader fills a whole block through one raw
-// linear write starting at `get_write_ptr()`, and `cb_push_back` requires the producer to write
-// contiguously — it only wraps when the write pointer lands exactly on `fifo_limit`
-// ("producer always writes into contiguous memory, it cannot wrap"). A buffer whose size is not
-// an exact multiple of the block pushed into it therefore overruns into its neighbour rather than
-// wrapping. So each block width gets its **own** set of buffers, with its own indices, sized for
-// that width — rather than one set of indices re-used at different sizes on disjoint cores.
-//
-// The two sets live on disjoint core ranges, so L1 usage is unchanged: a core allocates only the
-// set belonging to its own block width.
-struct BlockBufferSet {
-    uint8_t staging_index;  // per-row DRAM-alignment staging buffer (reader-private scratchpad)
-    uint8_t input_index;    // row-major block the reader fills and compute tilizes
-    uint8_t output_index;   // tilized block compute produces and the writer drains
-    uint32_t block_tiles;   // block width in tiles — the page count of input/output
-    CoreRangeSet core_ranges;
-
-    bool empty() const { return core_ranges.empty(); }
-};
-
-// Union of two core ranges, either of which may be empty.
-CoreRangeSet union_of(const CoreRangeSet& a, const CoreRangeSet& b) {
-    if (a.empty()) {
-        return b;
-    }
-    if (b.empty()) {
-        return a;
-    }
-    return a.merge(b);
-}
-
-// Append the three CBDescriptors for one buffer set.
-void push_buffer_set(
-    ProgramDescriptor& desc,
-    const BlockBufferSet& set,
-    uint32_t input_single_tile_size,
-    uint32_t output_single_tile_size,
-    tt::DataFormat input_cb_data_format,
-    tt::DataFormat output_cb_data_format,
-    uint32_t dram_alignment) {
-    // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
-    // L1 destination have different alignment offsets: the reader rounds the source address
-    // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
-    // into this buffer, then copies the correctly-offset slice into the input buffer.
-    //   row_bytes  = TILE_WIDTH * elt_size * block_tiles  (one row of a block)
-    //              = input_single_tile_size / TILE_HEIGHT * block_tiles
-    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
-    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
-    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
-    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
-    uint32_t temp_cb_size = input_row_bytes * set.block_tiles + 2 * dram_alignment;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = temp_cb_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = set.staging_index,
-            .data_format = input_cb_data_format,
-            .page_size = temp_cb_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = set.block_tiles * input_single_tile_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = set.input_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = set.block_tiles * output_single_tile_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = set.output_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
-}
+using ttnn::operations::data_movement::BlockBufferSet;
+using ttnn::operations::data_movement::BlockPlan;
+using ttnn::operations::data_movement::buffer_set_for_core;
+using ttnn::operations::data_movement::make_block_plan;
+using ttnn::operations::data_movement::push_buffer_set;
 
 }  // namespace
 
@@ -131,36 +53,14 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
 
-    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
-    uint32_t num_tiles_per_col = output.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1.
-    uint32_t staging_bytes_per_tile = input_single_tile_size / TILE_HEIGHT;
-    uint32_t fixed_staging_bytes = 2 * dram_alignment;
-    uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
-    uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
-    uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
 
-    auto
-        [ncores,
-         all_cores,
-         core_range,
-         cliff_row_core_range,
-         cliff_col_core_range,
-         cliff_col_row_core_range,
-         nblocks_per_core,
-         single_block_size,
-         single_block_size_cliff_row,
-         single_block_size_cliff_col,
-         has_cliff_row,
-         has_cliff_col,
-         full_cores_per_row,
-         full_cores_per_col,
-         single_sub_block_size] =
-            ttnn::split_blocks_for_tilize_wh(
-                available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+    const BlockPlan plan = make_block_plan(
+        a, output, input_single_tile_size, output_single_tile_size, TILE_HEIGHT, TILE_WIDTH, sub_core_grids);
+    const BlockBufferSet& full_set = plan.full;
+    const BlockBufferSet& cliffrow_set = plan.cliffrow;
+    const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
+        plan.split;
 
     if (single_sub_block_size > 0 && single_block_size % single_sub_block_size) {
         TT_FATAL(false, "single_block_size is not divided by single_sub_block_size");
@@ -178,32 +78,6 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
 
     ProgramDescriptor desc;
 
-    // The work split hands out exactly two block widths, so the op needs exactly two buffer sets:
-    //
-    //   full     — `single_sub_block_size` tiles wide: the full-block cores, plus the cliff-*column*
-    //              cores (a short column still processes full-width blocks).
-    //   cliffrow — `single_block_size_cliff_row` tiles wide: the cores holding the narrow block at
-    //              the end of a row, plus the corner core that is both cliff-row and cliff-column.
-    //
-    // Each set gets its own indices and its own sizes, so no index is ever re-used at two
-    // different sizes. Either set may be empty for a given shape.
-    const BlockBufferSet full_set{
-        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-        .input_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-        .output_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-        .block_tiles = single_sub_block_size,
-        .core_ranges = union_of(core_range, has_cliff_col ? cliff_col_core_range : CoreRangeSet{}),
-    };
-    const BlockBufferSet cliffrow_set{
-        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-        .input_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-        .output_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-        .block_tiles = single_block_size_cliff_row,
-        .core_ranges = has_cliff_row
-                           ? union_of(cliff_row_core_range, has_cliff_col ? cliff_col_row_core_range : CoreRangeSet{})
-                           : CoreRangeSet{},
-    };
-
     for (const BlockBufferSet* set : {&full_set, &cliffrow_set}) {
         if (set->empty()) {
             continue;
@@ -219,7 +93,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
             output_single_tile_size,
             input_cb_data_format,
             output_cb_data_format,
-            dram_alignment);
+            dram_alignment,
+            TILE_HEIGHT);
     }
 
     // reader
@@ -389,8 +264,8 @@ ProgramDescriptor TilizeWithValPaddingMultiCoreBlockInterleavedFactory::create_d
         // is in. The assertion then checks the one thing that must hold: the set's buffers are
         // sized for exactly the sub-block width being passed here, which is what keeps the
         // reader's raw block write inside its buffer.
-        const bool is_cliff_row_core = !cliffrow_set.empty() && cliffrow_set.core_ranges.contains(core);
-        const BlockBufferSet& set = is_cliff_row_core ? cliffrow_set : full_set;
+        const BlockBufferSet& set = buffer_set_for_core(plan, core);
+        const bool is_cliff_row_core = &set == &cliffrow_set;
         KernelDescriptor& reader_desc = is_cliff_row_core ? cliffrow_reader_desc : full_reader_desc;
         KernelDescriptor& writer_desc = is_cliff_row_core ? cliffrow_writer_desc : full_writer_desc;
         TT_FATAL(

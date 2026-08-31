@@ -24,176 +24,17 @@ namespace ttnn::prim {
 
 namespace {
 
-// One set of buffers, sized for a single block width.
-//
-// The work split gives cores one of two block widths (the full width, and a narrower cliff-row
-// width), and a block's width fixes the size of the buffers that carry it. That size is a
-// *correctness* property, not a performance one: the reader fills a whole block through one raw
-// linear write starting at `get_write_ptr()`, and `cb_push_back` requires the producer to write
-// contiguously — it only wraps when the write pointer lands exactly on `fifo_limit`
-// ("producer always writes into contiguous memory, it cannot wrap"). A buffer whose size is not
-// an exact multiple of the block pushed into it therefore overruns into its neighbour rather than
-// wrapping. So each block width gets its **own** set of buffers, with its own indices, sized for
-// that width — rather than one set of indices re-used at different sizes on disjoint cores.
-//
-// The two sets live on disjoint core ranges, so L1 usage is unchanged: a core allocates only the
-// set belonging to its own block width.
-struct BlockBufferSet {
-    uint8_t staging_index;  // per-row DRAM-alignment staging buffer (reader-private scratchpad)
-    uint8_t input_index;    // row-major block the reader fills and compute tilizes
-    uint8_t output_index;   // tilized block compute produces and the writer drains
-    uint32_t block_tiles;   // block width in tiles — the page count of input/output
-    CoreRangeSet core_ranges;
+// Runtime-arg widths of this factory's DM kernels, used by the cache-hit hook to confirm it is
+// patching a reader/writer and not something else. Keep in step with the emplace_runtime_args
+// calls below.
+constexpr size_t kReaderRuntimeArgCount = 9;
+constexpr size_t kWriterRuntimeArgCount = 4;
 
-    bool empty() const { return core_ranges.empty(); }
-};
-
-// Append the three CBDescriptors for one buffer set.
-void push_buffer_set(
-    ProgramDescriptor& desc,
-    const BlockBufferSet& set,
-    uint32_t input_single_tile_size,
-    uint32_t output_single_tile_size,
-    tt::DataFormat input_cb_data_format,
-    tt::DataFormat output_cb_data_format,
-    uint32_t dram_alignment,
-    uint32_t tile_height,
-    const TileDescriptor& tile_descriptor) {
-    // The staging buffer is used by the reader when the DRAM source row and the L1 destination
-    // have different alignment offsets: the reader rounds the source address down to a
-    // dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment) into
-    // this buffer, then copies the correctly-offset slice into the input buffer.
-    //   row_bytes  = tile_width * elt_size * block_tiles  (one row of a block)
-    //              = input_single_tile_size / tile_height * block_tiles
-    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
-    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
-    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
-    uint32_t input_row_bytes = input_single_tile_size / tile_height;
-    uint32_t temp_cb_size = input_row_bytes * set.block_tiles + 2 * dram_alignment;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = temp_cb_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = set.staging_index,
-            .data_format = input_cb_data_format,
-            .page_size = temp_cb_size,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = set.block_tiles * input_single_tile_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = set.input_index,
-            .data_format = input_cb_data_format,
-            .page_size = input_single_tile_size,
-            .tile = tile_descriptor,
-        }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = set.block_tiles * output_single_tile_size,
-        .core_ranges = set.core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = set.output_index,
-            .data_format = output_cb_data_format,
-            .page_size = output_single_tile_size,
-            .tile = tile_descriptor,
-        }}},
-    });
-}
-
-// Union of two core ranges, either of which may be empty.
-CoreRangeSet union_of(const CoreRangeSet& a, const CoreRangeSet& b) {
-    if (a.empty()) {
-        return b;
-    }
-    if (b.empty()) {
-        return a;
-    }
-    return a.merge(b);
-}
-
-// The work split plus the two buffer sets derived from it.
-//
-// `create_descriptor` needs the whole split; the two buffer sets are derived from it here so the
-// sizes, the indices, and the core ranges they are built from all come from one place.
-//
-// Call this only on a cache miss. It is **not** reproducible on a later cache hit: the block-size
-// limit folds in `get_max_l1_space`, which reads live L1 occupancy
-// (`lowest_occupied_compute_l1_address`), and the program cache does not key on that. Two calls
-// with identical attributes and tensor specs can therefore split differently. Anything the
-// cache-hit hook needs must be recorded in the program at miss time, not recomputed.
-struct BlockPlan {
-    ttnn::BlockSplitWH split;
-    BlockBufferSet full;
-    BlockBufferSet cliffrow;
-
-    // Reader/writer kernels are emitted as one (reader, writer) pair per non-empty set, in
-    // full-then-cliffrow order, ahead of the compute kernels.
-    uint32_t num_dm_pairs() const { return (full.empty() ? 0u : 1u) + (cliffrow.empty() ? 0u : 1u); }
-};
-
-BlockPlan make_block_plan(const TilizeParams& operation_attributes, const Tensor& a, const Tensor& output) {
-    const uint32_t tile_width = operation_attributes.tile.get_width();
-    const uint32_t tile_height = operation_attributes.tile.get_height();
-    const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
-
-    const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    const uint32_t input_single_tile_size = operation_attributes.tile.get_tile_size(input_cb_data_format);
-    const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const uint32_t output_single_tile_size = operation_attributes.tile.get_tile_size(output_cb_data_format);
-
-    IDevice* device = a.device();
-    const CoreCoord grid_size = device->compute_with_storage_grid_size();
-    const CoreRangeSet default_grid(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
-    CoreRangeSet available_grid =
-        operation_attributes.sub_core_grids.has_value() ? operation_attributes.sub_core_grids.value() : default_grid;
-
-    const uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
-    const uint32_t num_tiles_per_col = output.padded_shape()[-2] / tile_height;
-    const uint32_t num_tiles_per_row = output.padded_shape()[-1] / tile_width;
-    const uint32_t num_blocks = (output.padded_shape()[-1] * output.padded_shape()[-2]) / tile_hw;
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1.
-    const uint32_t staging_bytes_per_tile = input_single_tile_size / tile_height;
-    const uint32_t fixed_staging_bytes = 2 * dram_alignment;
-    const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;
-    const uint32_t bytes_per_tile_pair = input_single_tile_size + output_single_tile_size + staging_bytes_per_tile;
-    const uint32_t cb_block_size_limit = (bytes_per_tile_pair == 0) ? 0 : budget_for_tiles / bytes_per_tile_pair;
-
-    BlockPlan plan;
-    plan.split = ttnn::split_blocks_for_tilize_wh(
-        available_grid, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
-
-    // The work split hands out exactly two block widths, so the op needs exactly two buffer sets:
-    //
-    //   full     — `single_sub_block_size` tiles wide: the full-block cores, plus the cliff-*column*
-    //              cores (a short column still processes full-width blocks).
-    //   cliffrow — `single_block_size_cliff_row` tiles wide: the cores holding the narrow block at
-    //              the end of a row, plus the corner core that is both cliff-row and cliff-column.
-    //
-    // Each set gets its own indices and its own sizes, so no index is ever re-used at two
-    // different sizes. Either set may be empty for a given shape.
-    plan.full = BlockBufferSet{
-        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-        .input_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-        .output_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-        .block_tiles = plan.split.single_sub_block_size,
-        .core_ranges = union_of(
-            plan.split.core_range, plan.split.has_cliff_col ? plan.split.cliff_col_core_range : CoreRangeSet{}),
-    };
-    plan.cliffrow = BlockBufferSet{
-        .staging_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-        .input_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-        .output_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-        .block_tiles = plan.split.single_block_size_cliff_row,
-        .core_ranges = plan.split.has_cliff_row
-                           ? union_of(
-                                 plan.split.cliff_row_core_range,
-                                 plan.split.has_cliff_col ? plan.split.cliff_col_row_core_range : CoreRangeSet{})
-                           : CoreRangeSet{},
-    };
-    return plan;
-}
+using ttnn::operations::data_movement::BlockBufferSet;
+using ttnn::operations::data_movement::BlockPlan;
+using ttnn::operations::data_movement::buffer_set_for_core;
+using ttnn::operations::data_movement::make_block_plan;
+using ttnn::operations::data_movement::push_buffer_set;
 
 }  // namespace
 
@@ -218,7 +59,14 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     const uint32_t tile_hw = operation_attributes.tile.get_tile_hw();
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
-    const BlockPlan plan = make_block_plan(operation_attributes, a, output);
+    const BlockPlan plan = make_block_plan(
+        a,
+        output,
+        input_single_tile_size,
+        output_single_tile_size,
+        tile_height,
+        tile_width,
+        operation_attributes.sub_core_grids);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
@@ -430,8 +278,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
         // is in. The assertion then checks the one thing that must hold: the set's buffers are
         // sized for exactly the sub-block width being passed here, which is what keeps the
         // reader's raw block write inside its buffer.
-        const bool is_cliff_row_core = !cliffrow_set.empty() && cliffrow_set.core_ranges.contains(core);
-        const BlockBufferSet& set = is_cliff_row_core ? cliffrow_set : full_set;
+        const BlockBufferSet& set = buffer_set_for_core(plan, core);
+        const bool is_cliff_row_core = &set == &cliffrow_set;
         KernelDescriptor& reader_desc = is_cliff_row_core ? cliffrow_reader_desc : full_reader_desc;
         KernelDescriptor& writer_desc = is_cliff_row_core ? cliffrow_writer_desc : full_writer_desc;
         TT_FATAL(
@@ -442,8 +290,10 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             single_sub_block_size_row_arg,
             set.block_tiles);
 
-        // reader runtime args — Buffer* slot auto-registers as a BufferBinding so the
-        // framework patches addresses on cache hits.
+        // reader runtime args — slot 0 carries the input buffer. Note the `Buffer*` here does NOT
+        // self-refresh: this factory defines override_runtime_arguments, and the adapter then skips
+        // automatic binding resolution entirely, so the explicit slot-0 patch in that hook is the
+        // only thing that re-points addresses on a cache hit.
         reader_desc.emplace_runtime_args(
             core,
             {src0_buffer,
@@ -474,28 +324,47 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
         }
     }
 
-    // Push each non-empty set's reader before its writer. `TilizeDeviceOperation::override_runtime_arguments`
-    // re-points kernel 0 at the input buffer and kernel 1 at the output on a cache hit, so the first
-    // pair pushed must stay (reader, writer) in that order. The later pair, and every buffer slot in
-    // both, is refreshed anyway: slot 0 of each arg list is a `Buffer*`, which `emplace_runtime_args`
-    // registers as a per-kernel BufferBinding that the framework patches on every cache hit.
+    // One (reader, writer) pair per non-empty buffer set. Every pair's slot 0 has to be re-pointed
+    // on a program-cache hit: because this factory defines override_runtime_arguments, the adapter
+    // skips automatic binding resolution, so the `Buffer*` in slot 0 does not refresh on its own
+    // and an unpatched pair keeps the address from the call that populated the cache — quietly
+    // reading or writing the wrong buffer.
+    //
+    // Collect the handles as they are assigned rather than letting the hook infer them from the
+    // push order. The hook cannot re-derive any of this: the block split folds in
+    // `get_max_l1_space`, which reads live L1 occupancy (`lowest_occupied_compute_l1_address`) — a
+    // value the program cache does not key on, so a fresh split on a later hit can disagree with
+    // the split baked into the cached program.
+    std::vector<uint32_t> dm_kernel_handles;
+    dm_kernel_handles.reserve(4);
+    const auto push_pair = [&desc, &dm_kernel_handles](KernelDescriptor&& reader, KernelDescriptor&& writer) {
+        dm_kernel_handles.push_back(static_cast<uint32_t>(desc.kernels.size()));
+        desc.kernels.push_back(std::move(reader));
+        dm_kernel_handles.push_back(static_cast<uint32_t>(desc.kernels.size()));
+        desc.kernels.push_back(std::move(writer));
+    };
     if (!full_set.empty()) {
-        desc.kernels.push_back(std::move(full_reader_desc));
-        desc.kernels.push_back(std::move(full_writer_desc));
+        push_pair(std::move(full_reader_desc), std::move(full_writer_desc));
     }
     if (!cliffrow_set.empty()) {
-        desc.kernels.push_back(std::move(cliffrow_reader_desc));
-        desc.kernels.push_back(std::move(cliffrow_writer_desc));
+        push_pair(std::move(cliffrow_reader_desc), std::move(cliffrow_writer_desc));
     }
 
-    // Tell the cache-hit hook how many pairs it has to re-point, by riding on the first reader's
-    // common args. The hook cannot re-derive this: the block split depends on `get_max_l1_space`,
-    // which reads live L1 occupancy (`lowest_occupied_compute_l1_address`) — a value the program
-    // cache does not key on, so a fresh split on a later hit can disagree with the split baked
-    // into the cached program. Recording it keeps the fact with the program it describes.
-    // Host-side metadata only: the reader kernel reads no common args.
+    // Hand the hook the handles it must patch, riding on the first reader's common args:
+    // {num_pairs, reader0, writer0, [reader1, writer1]}. Host-side metadata only — the reader
+    // kernel reads no common args — and it keeps the fact with the program it describes.
     TT_FATAL(!desc.kernels.empty(), "Block tilize emitted no kernels");
-    desc.kernels.front().emplace_common_runtime_args({plan.num_dm_pairs()});
+    TT_FATAL(
+        dm_kernel_handles.size() == 2 * plan.num_dm_pairs(),
+        "Recorded {} DM kernel handles for {} pairs",
+        dm_kernel_handles.size(),
+        plan.num_dm_pairs());
+    KernelDescriptor::RTArgList dm_kernel_metadata;
+    dm_kernel_metadata.push_back(plan.num_dm_pairs());
+    for (uint32_t handle : dm_kernel_handles) {
+        dm_kernel_metadata.push_back(handle);
+    }
+    desc.kernels.front().emplace_common_runtime_args(dm_kernel_metadata);
 
     for (auto& cd : compute_kernels) {
         desc.kernels.push_back(std::move(cd));
@@ -517,12 +386,54 @@ void TilizeMultiCoreBlockProgramFactory::override_runtime_arguments(
     // call that populated the cache, which on a later hit with new tensor storage reads or writes
     // the wrong buffer with nothing to flag it. The count comes from the program itself — see the
     // note in create_descriptor for why it must not be re-derived here.
-    const uint32_t num_pairs = tt::tt_metal::GetCommonRuntimeArgs(program, 0)[0];
+    // create_descriptor recorded {num_pairs, reader0, writer0, [reader1, writer1]} here, so the
+    // handles are read rather than inferred from the push order — nothing in this hook assumes the
+    // DM kernels come first or sit at consecutive indices.
+    auto& dm_kernel_metadata = tt::tt_metal::GetCommonRuntimeArgs(program, 0);
+    const uint32_t num_pairs = dm_kernel_metadata[0];
+    TT_FATAL(
+        num_pairs == 1 || num_pairs == 2,
+        "Block tilize recorded {} reader/writer pairs; the work split yields at most two block widths, "
+        "so this should be 1 or 2",
+        num_pairs);
+    TT_FATAL(
+        dm_kernel_metadata.size() == 1 + 2 * num_pairs,
+        "Block tilize recorded {} metadata args for {} pairs; expected {}",
+        dm_kernel_metadata.size(),
+        num_pairs,
+        1 + 2 * num_pairs);
+
     const uint32_t src_addr = tensor_args.input_tensor.buffer()->address();
     const uint32_t dst_addr = tensor_return_value.buffer()->address();
+
+    // Belt and braces on top of the recorded handles: confirm each one really is the reader or
+    // writer before writing an address into its slot 0. Putting a buffer address into a compute
+    // kernel's args would be exactly the silent corruption this hook exists to prevent. A reader
+    // carries kReaderRuntimeArgCount args and a writer kWriterRuntimeArgCount, while this
+    // factory's compute kernels carry none, so the arg width identifies the role.
+    const auto patch_dm_kernel = [&program](
+                                     uint32_t kernel_idx, uint32_t addr, size_t expected_args, const char* role) {
+        for (const auto& col : tt::tt_metal::GetRuntimeArgs(program, kernel_idx)) {
+            for (const auto& args : col) {
+                if (args.size() == 0) {
+                    continue;  // core outside this kernel's range
+                }
+                TT_FATAL(
+                    args.size() == expected_args,
+                    "Kernel {} should be the {} (buffer address at slot 0) but carries {} runtime args, "
+                    "not {}. The reader/writer-pairs-first kernel order this hook relies on has changed",
+                    kernel_idx,
+                    role,
+                    args.size(),
+                    expected_args);
+            }
+        }
+        patch_tilize_kernel_slot0(program, kernel_idx, addr);
+    };
+
     for (uint32_t pair = 0; pair < num_pairs; ++pair) {
-        patch_tilize_kernel_slot0(program, 2 * pair, src_addr);      // reader
-        patch_tilize_kernel_slot0(program, 2 * pair + 1, dst_addr);  // writer
+        patch_dm_kernel(dm_kernel_metadata[1 + 2 * pair], src_addr, kReaderRuntimeArgCount, "input reader");
+        patch_dm_kernel(dm_kernel_metadata[2 + 2 * pair], dst_addr, kWriterRuntimeArgCount, "output writer");
     }
 }
 

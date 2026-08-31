@@ -940,7 +940,12 @@ def test_tilize_with_val_padding_block_per_node_cb_size(device, input_shape, pad
     )
     dram_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
-    for _ in range(2):
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    keep_alive = []  # retain prior tensors so each iteration allocates at a NEW address
+    entries = None
+    for i in range(2):
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         tt_rm = ttnn.from_torch(
             torch_input,
@@ -951,7 +956,16 @@ def test_tilize_with_val_padding_block_per_node_cb_size(device, input_shape, pad
         )
 
         tt_tile = ttnn.tilize_with_val_padding(tt_rm, output_shape, pad_value, use_multicore=True)
+        keep_alive += [tt_rm, tt_tile]
 
         assert tt_tile.layout == ttnn.TILE_LAYOUT
         torch_golden = pytorch_tilize_with_val_padding(torch_input, output_shape, pad_value)
         assert_equal(torch_golden, tt_tile.cpu().to_torch_with_padded_shape())
+
+        if i == 0:
+            entries = device.num_program_cache_entries()
+            assert entries >= 1, "the first invocation should have populated the program cache"
+        else:
+            assert (
+                device.num_program_cache_entries() == entries
+            ), "tilize_with_val_padding must reuse the cached program on a cache hit"
