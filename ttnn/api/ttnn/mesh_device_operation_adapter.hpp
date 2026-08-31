@@ -884,6 +884,14 @@ public:
             };
         }
 
+        // An overload set makes &create_program_artifacts ambiguous, which ProgramSpecFactoryConcept
+        // keys on, so the factory would silently stop matching instead of failing here.
+        static_assert(
+            !(create_program_artifacts_uses_mesh_dispatch_coordinate() &&
+              !requires { &SpecFactory::create_program_artifacts; }),
+            "create_program_artifacts is an overload set. Declare exactly one signature -- take the "
+            "MeshCoordinate as a defaulted parameter if the factory needs both call shapes.");
+
         // Resolve one artifacts' tensor bindings and park its op-owned tensors. Consumes
         // artifacts.op_owned_tensors; a vector move keeps the run_params references valid.
         static shared_variables_t make_shared_variables(
@@ -935,8 +943,12 @@ public:
                 for (const auto& coord : tensor_coords.coords()) {
                     auto artifacts = SpecFactory::create_program_artifacts(
                         attrs, tensor_args, tensor_return_value, std::optional<ttnn::MeshCoordinate>(coord));
-                    // No kernels means no work at this coordinate, as in the ProgramDescriptor path.
-                    if (artifacts.spec.kernels.empty()) {
+                    // No resources at all means no work here, as in the ProgramDescriptor path. A
+                    // partially populated spec falls through to MakeProgramFromSpec, which rejects it.
+                    const auto& spec = artifacts.spec;
+                    if (spec.kernels.empty() && spec.dataflow_buffers.empty() &&
+                        spec.cross_node_dataflow_buffers.empty() && spec.semaphores.empty() &&
+                        spec.scratchpads.empty() && spec.work_units.empty()) {
                         continue;
                     }
                     const ttnn::MeshCoordinateRange range(coord);

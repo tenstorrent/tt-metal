@@ -401,6 +401,54 @@ TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
 }
 
+// Idle on odd columns, real spec elsewhere, so one create_mesh_workload exercises coordinate
+// enumeration, per-coordinate specs, and the empty-spec skip together.
+struct PerCoordProdAllFactory {
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    static bool is_idle(const ttnn::MeshCoordinate& coord) { return coord[1] % 2 == 1; }
+
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const Op::operation_attributes_t& attrs,
+        const Op::tensor_args_t& tensor_args,
+        Op::tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+        if (mesh_dispatch_coordinate.has_value() && is_idle(*mesh_dispatch_coordinate)) {
+            return {};
+        }
+        return Op::ProdAllProgramFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
+    }
+};
+
+TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterPerCoordinateSkipsIdleCoords) {
+    using Op = ttnn::prim::ProdAllDeviceOperation;
+    using Adapter =
+        device_operation::MeshDeviceOperationAdapter<Op>::ProgramSpecMeshWorkloadFactoryAdapter<PerCoordProdAllFactory>;
+    static_assert(Adapter::create_program_artifacts_uses_mesh_dispatch_coordinate());
+
+    auto input = make_tensor_with_num_shards(8, mesh_device_.get());
+    Op::operation_attributes_t attrs{.output_mem_config = MemoryConfig{}};
+    Op::tensor_args_t tensor_args{.input = input};
+    auto output = Op::create_output_tensors(attrs, tensor_args);
+
+    ttnn::MeshCoordinateRangeSet tensor_coords;
+    tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device_->shape()));
+
+    auto cached = Adapter::create_mesh_workload(attrs, tensor_coords, tensor_args, output);
+
+    // One single-coordinate program per non-idle coordinate; idle ones contribute nothing.
+    size_t expected = 0;
+    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_device_->shape())) {
+        const ttnn::MeshCoordinateRange range(coord);
+        const bool idle = PerCoordProdAllFactory::is_idle(coord);
+        EXPECT_EQ(cached.workload.get_programs().contains(range), !idle) << "coord " << coord;
+        EXPECT_EQ(cached.shared_variables.contains(range), !idle) << "coord " << coord;
+        expected += idle ? 0 : 1;
+    }
+    EXPECT_GT(expected, 0u);
+    EXPECT_EQ(cached.workload.get_programs().size(), expected);
+    EXPECT_EQ(cached.shared_variables.size(), expected);
+}
+
 TEST_F(LaunchOperation2x4Test, ProgramSpecAdapterProgramsOnUniformTensorCoords) {
     using Op = ttnn::prim::ProdAllDeviceOperation;
     using Adapter = device_operation::MeshDeviceOperationAdapter<Op>::ProgramSpecMeshWorkloadFactoryAdapter<
