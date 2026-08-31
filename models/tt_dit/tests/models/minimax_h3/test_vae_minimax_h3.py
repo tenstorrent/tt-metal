@@ -146,6 +146,40 @@ def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_late
     _assert_same(expected, actual, pcc=0.99)  # ttnn.group_norm has no fp32 path: bf16 floor
 
 
+@pytest.mark.parametrize(
+    ("num_frames", "temporal_taps", "expected_latent_frames"),
+    [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
+)
+@pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
+def test_encode_clip_uint8_pixel_norm(mesh_device, num_frames, temporal_taps, expected_latent_frames):
+    """The `pixel_norm` fold: raw uint8 pixels into a folded encoder vs the reference on
+    normalized fp32. Gates the conv_in weight/bias fold, the uint8 -> typecast -> pad upload
+    chain, and -- on the clip case -- the `255 * mean` causal front-pad values, which only a
+    taps=3 encode with a temporal zero-pad in the reference can catch."""
+    from ....pipelines.minimax_h3.conditioning import MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD
+
+    weights_dir = _weights_dir()
+    reference, config = _build_reference(weights_dir)
+    torch.manual_seed(6)
+
+    extent = 512
+    pixels_uint8 = torch.randint(0, 256, (1, 3, num_frames, extent, extent), dtype=torch.uint8)
+    mean = torch.tensor(MINIMAX_H3_PIXEL_MEAN).view(1, -1, 1, 1, 1)
+    std = torch.tensor(MINIMAX_H3_PIXEL_STD).view(1, -1, 1, 1, 1)
+    normalized = (pixels_uint8.float().div(255.0) - mean) / std
+    with torch.no_grad():
+        expected = reference._encode_clip(normalized)
+
+    tt_vae = MiniMaxH3Vae(config, mesh_device=mesh_device, pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
+    tt_vae.load_encoder_state(dict(reference.state_dict()))
+    actual = tt_vae.encode_clip(pixels_uint8, temporal_taps=temporal_taps)
+
+    assert (
+        actual.shape[2] == expected_latent_frames
+    ), f"{actual.shape[2]} latent frames, expected {expected_latent_frames}"
+    _assert_same(expected, actual, pcc=0.99)
+
+
 def _shallow_decoder_reference(num_layers: int):
     """Reference VAE with a shallow decoder: geometry gates don't need 36-layer numerics."""
     cls = _reference("AutoencoderKLMiniMaxH3")

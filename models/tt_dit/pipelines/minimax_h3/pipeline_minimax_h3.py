@@ -1314,6 +1314,10 @@ class MiniMaxH3Pipeline:
                 # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
                 # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
                 pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
+                # The encode mirror: the normalize folds into each encoder's conv_in, so the
+                # keyframe/reference pixels cross PCIe as raw uint8 (`raw_pixels=True` at both
+                # encode call sites, which is a contract -- `_run_encoder_units` asserts it).
+                pixel_norm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
                 readback_uint8=self.vae_output_type == "uint8",
                 waves_per_device=self.vae_waves_per_device,
             )
@@ -1398,6 +1402,7 @@ class MiniMaxH3Pipeline:
             self.vae_config.latents_mean,
             self.vae_config.latents_std,
             self.patch_size,
+            raw_pixels=True,  # the device VAE is built with pixel_norm; conv_in normalizes
         )
 
     def _prepare_host_vae(self, *, want_encoder: bool = False, want_decoder: bool = False):
@@ -1800,6 +1805,7 @@ class MiniMaxH3Pipeline:
                 audio_latents_std=self.audio_config["latents_std"],
                 patch_size=self.patch_size,
                 audio_latent_channels=self.audio_config["latent_channels"],
+                raw_pixels=True,  # the device VAE is built with pixel_norm; conv_in normalizes
             )
 
         # 4. All the noise for the request, off one generator, in the reference's draw order:
