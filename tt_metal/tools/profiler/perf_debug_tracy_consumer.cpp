@@ -16,28 +16,9 @@
 
 namespace tt::tt_metal::perf_debug {
 
-namespace {
-constexpr uint32_t kMaxCorrDev = 32;
-std::array<std::atomic<int64_t>, kMaxCorrDev>& correction_table() {
-    static std::array<std::atomic<int64_t>, kMaxCorrDev> t{};
-    return t;
-}
-}  // namespace
-
-int64_t get_zone_ts_correction(uint32_t dev) {
-    return dev < kMaxCorrDev ? correction_table()[dev].load(std::memory_order_relaxed) : 0;
-}
-
-void set_zone_ts_correction(uint32_t dev, int64_t cycles) {
-    if (dev >= kMaxCorrDev) {
-        return;
-    }
-    auto& slot = correction_table()[dev];
-    int64_t cur = slot.load(std::memory_order_relaxed);
-    while (cycles > cur && !slot.compare_exchange_weak(cur, cycles, std::memory_order_relaxed)) {
-    }
-}
-
+// The correction store and its application both moved: the store to perf_debug_consumer.cpp
+// (keyed by CHIP id), the application to the receiver's pairing stage -- records arrive here
+// already on the unified timeline, so this consumer forwards timestamps as-is.
 
 PerfDebugTracyConsumer::PerfDebugTracyConsumer(PerfDebugTracyHandler* handler) : handler_(handler) {
     // The SWEEP/PACE alternation is what a drainer row is read by, so those two must contrast; PACE is
@@ -168,15 +149,10 @@ void PerfDebugTracyConsumer::operator()(const PerfDebugRecordBatch& batch) {
             }
         }
         const uint64_t base = clock_synced_[r.meta.dev] ? 0 : ts_base_[r.meta.dev];
-        const uint64_t start = r.data.zone.start;
-        const uint64_t end = r.data.zone.start + r.data.zone.duration;
-        // Add back what this device's clock has lost since its anchor was fitted (0 unless the live
-        // correction is enabled). Applied to both ends, so durations are untouched -- only placement moves.
-        const int64_t corr = r.meta.dev < kMaxCorrDev
-                                 ? correction_table()[r.meta.dev].load(std::memory_order_relaxed)
-                                 : 0;
-        const uint64_t cs = static_cast<uint64_t>(static_cast<int64_t>(start) + corr);
-        const uint64_t ce = static_cast<uint64_t>(static_cast<int64_t>(end) + corr);
+        // Live drift correction is already baked in by the receiver's pairing stage (one unified
+        // timeline for every consumer); both zone ends carry it, so durations are untouched.
+        const uint64_t cs = r.data.zone.start;
+        const uint64_t ce = r.data.zone.start + r.data.zone.duration;
         pkt.start = cs >= base ? cs - base : 0;
         pkt.end = ce >= base ? ce - base : 0;
         handler_->HandleWorkerZone(pkt);

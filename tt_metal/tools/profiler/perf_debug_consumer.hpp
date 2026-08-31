@@ -136,6 +136,29 @@ private:
 // Log a consumer's unnamed-id tally (no-op when it is 0, the invariant). Call at consumer teardown.
 void log_unnamed_ids(std::string_view consumer_name, const ZoneNameMirror& mirror);
 
+// ---- LIVE ALIGNMENT, applied centrally at record materialization -------------------------------
+//
+// One per-CHIP additive timestamp correction (device cycles), applied by the receiver's pairing
+// stage to every record it materializes -- so Tracy, the CSVs and user callbacks all see one
+// unified timeline and no consumer knows sync exists. Writers are the alignment authorities (host
+// drift corrector, resident-pair eth tracker, or the in-router fabric sync aggregator -- mutually
+// exclusive by construction).
+//
+// MONOTONIC BY CONTRACT: a correction only ever grows. Device clocks lose time and never gain it,
+// and Tracy requires per-lane non-decreasing timestamps, so a correction allowed to fall could
+// reorder adjacent records. Relative (device-vs-device) corrections wander both ways; their
+// publishers add a COMMON baseline chosen so every published value is non-decreasing -- it rides
+// through the ratchet and cancels out of every cross-device difference.
+//
+// The published quantity is offset-only ON PURPOSE. The authorities update at their measurement
+// cadence (>= a few Hz), so a rate term would contribute sub-ns over the staleness window while
+// re-entering exactly the monotonicity trap the ratchet exists to prevent. alignment_epoch() ticks
+// on every publish, so a consumer or report can tell whether alignment moved during a window.
+// Records materialized before the first publish carry correction 0 -- the init alignment.
+void set_zone_ts_correction(uint32_t chip_id, int64_t cycles);
+int64_t get_zone_ts_correction(uint32_t chip_id);
+uint64_t alignment_epoch();
+
 struct PerfDebugRecordBatch {
     std::span<const PerfDebugRec> records;  // oldest first; valid only for the duration of the call
     uint64_t dropped_delta = 0;             // records THIS consumer lost to ring lag since its last batch

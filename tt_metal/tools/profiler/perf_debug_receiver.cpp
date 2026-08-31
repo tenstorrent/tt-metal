@@ -4,6 +4,8 @@
 
 #include "tools/profiler/perf_debug_receiver.hpp"
 
+#include <array>
+
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -601,15 +603,23 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
     out.reserve(kConsumerScratchRecs);
     uint64_t unmatched_ends = 0;  // ZoneEnd with an empty stack (only possible after ring drops)
     uint64_t id_mismatches = 0;   // ZoneEnd whose id differs from the matching open: trust neither, drop
+    // Per-chip live alignment, loaded once per batch (its authorities publish at a few Hz at most,
+    // so per-record loads would buy nothing). Applied to every timestamp materialized below: one
+    // unified timeline for every consumer. Duration is untouched -- only placement moves.
+    std::array<int64_t, kPerfDebugMaxDevices> corr_of_dev{};
     auto pair_batch = [&](std::span<const PerfDebugRawRec> got) {
         out.clear();
+        for (uint32_t d = 0; d < ctx_.devices.size() && d < corr_of_dev.size(); d++) {
+            corr_of_dev[d] = get_zone_ts_correction(ctx_.devices[d].chip_id);
+        }
         for (const PerfDebugRawRec& r : got) {
             const uint32_t si = r.meta.dev * kPerfDebugMaxLanes + r.meta.lane;
+            const int64_t corr = corr_of_dev[r.meta.dev];
             switch (r.meta.type) {
                 case PerfDebugRawRecType::ZoneAtomic: {
                     // Already a whole zone: ts is the END, dur the duration -- no stack involved.
                     PerfDebugRec& o = out.emplace_back();
-                    o.data.zone = {r.ts - r.dur, r.dur};
+                    o.data.zone = {static_cast<uint64_t>(static_cast<int64_t>(r.ts - r.dur) + corr), r.dur};
                     o.id = r.id;
                     o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
                     o.prog = r.prog;
@@ -628,7 +638,7 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                         break;
                     }
                     PerfDebugRec& o = out.emplace_back();
-                    o.data.zone = {open.ts, r.ts - open.ts};
+                    o.data.zone = {static_cast<uint64_t>(static_cast<int64_t>(open.ts) + corr), r.ts - open.ts};
                     o.id = open.id;
                     o.meta = {0, r.meta.lane, r.meta.dev, PerfDebugRecType::Zone};
                     o.prog = open.prog;
@@ -636,7 +646,10 @@ void PerfDebugReceiver::consumer_thread(Consumer& c) {
                 }
                 default: {  // Data / Event / Ext / Cont: 1:1
                     PerfDebugRec& o = out.emplace_back();
-                    o.data.ts = r.ts;
+                    // Ext/Cont carry payload words, not timestamps: correct only the heads.
+                    const bool has_ts =
+                        r.meta.type == PerfDebugRawRecType::Data || r.meta.type == PerfDebugRawRecType::Event;
+                    o.data.ts = has_ts ? static_cast<uint64_t>(static_cast<int64_t>(r.ts) + corr) : r.ts;
                     o.id = r.id;
                     PerfDebugRecType t = PerfDebugRecType::Data;
                     if (r.meta.type == PerfDebugRawRecType::Event) {

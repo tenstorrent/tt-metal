@@ -4,6 +4,9 @@
 
 #include "tools/profiler/perf_debug_consumer.hpp"
 
+#include <array>
+#include <atomic>
+
 #include <algorithm>
 #include <mutex>
 
@@ -17,6 +20,38 @@
 #include "tools/profiler/perf_debug_receiver.hpp"
 
 namespace tt::tt_metal::perf_debug {
+
+namespace {
+constexpr uint32_t kMaxCorrChip = 64;
+std::array<std::atomic<int64_t>, kMaxCorrChip>& correction_table() {
+    static std::array<std::atomic<int64_t>, kMaxCorrChip> t{};
+    return t;
+}
+std::atomic<uint64_t>& correction_epoch() {
+    static std::atomic<uint64_t> e{0};
+    return e;
+}
+}  // namespace
+
+int64_t get_zone_ts_correction(uint32_t chip_id) {
+    return chip_id < kMaxCorrChip ? correction_table()[chip_id].load(std::memory_order_relaxed) : 0;
+}
+
+uint64_t alignment_epoch() { return correction_epoch().load(std::memory_order_relaxed); }
+
+void set_zone_ts_correction(uint32_t chip_id, int64_t cycles) {
+    if (chip_id >= kMaxCorrChip) {
+        return;
+    }
+    auto& slot = correction_table()[chip_id];
+    int64_t cur = slot.load(std::memory_order_relaxed);
+    while (cycles > cur && !slot.compare_exchange_weak(cur, cycles, std::memory_order_relaxed)) {
+    }
+    if (cycles > cur) {
+        correction_epoch().fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 
 void ZoneNameMirror::refresh() {
     std::vector<llrt::ZoneMetaEntry> delta;
