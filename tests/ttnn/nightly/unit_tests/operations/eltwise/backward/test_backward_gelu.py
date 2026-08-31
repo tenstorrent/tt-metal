@@ -13,6 +13,12 @@ from tests.ttnn.utils_for_testing import (
 )
 
 GELU_APPROXIMATIONS = ("none", "tanh")
+SHAPE_TEST_CASES = (
+    pytest.param(torch.Size([32]), id="rank1-tile-aligned"),
+    pytest.param(torch.Size([25, 34]), id="rank2-unaligned"),
+    pytest.param(torch.Size([1, 32, 32]), id="rank3-tile-aligned"),
+    pytest.param(torch.Size([1, 3, 323, 389]), id="rank4-unaligned"),
+)
 EXHAUSTIVE_TEST_CASES = (
     pytest.param("none", torch.bfloat16, ttnn.bfloat16, 2e-2, 9e-3, id="none-bf16"),
     # The tanh kernel has a 0.0134 absolute error at its BF16 zero crossing.
@@ -97,6 +103,20 @@ def test_gelu_bw_default_matches_none(device):
     assert torch.equal(default_actual, none_actual)
 
 
+@pytest.mark.parametrize("approximate", GELU_APPROXIMATIONS)
+@pytest.mark.parametrize("shape", SHAPE_TEST_CASES)
+def test_gelu_bw_shape_coverage(device, approximate, shape):
+    torch.manual_seed(shape.numel())
+    input_data = torch.rand(shape, dtype=torch.bfloat16) * 4 - 2
+    grad_data = torch.rand(shape, dtype=torch.bfloat16) * 4 - 2
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0])
+    rtol, atol = _bf16_tolerance(approximate)
+    assert_allclose(_gelu_bw_reference(input_data, grad_data, approximate), actual, rtol=rtol, atol=atol)
+
+
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype,rtol,atol", SPECIAL_VALUE_DTYPES)
 @pytest.mark.parametrize("approximate,input_value,expected", SPECIAL_VALUE_CASES)
 def test_gelu_bw_special_values(device, approximate, input_value, expected, torch_dtype, ttnn_dtype, rtol, atol):
@@ -177,8 +197,8 @@ def test_bw_gelu_program_cache_regression(device):
 
     def fresh_inputs(seed):
         torch.manual_seed(seed)
-        input_data = (torch.rand(shape, dtype=torch.bfloat16) * 10 - 5).detach()
-        grad_data = torch.ones(shape, dtype=torch.bfloat16)
+        input_data = (torch.rand(shape, dtype=torch.bfloat16) * 4 - 2).detach()
+        grad_data = (torch.rand(shape, dtype=torch.bfloat16) * 4 - 2).detach()
         return (
             input_data,
             grad_data,
