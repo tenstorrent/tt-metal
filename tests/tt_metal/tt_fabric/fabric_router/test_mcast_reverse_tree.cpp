@@ -367,8 +367,8 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
     const auto y_size = static_cast<std::uint32_t>(y_len);
     const auto x_size = static_cast<std::uint32_t>(x_len);
 
-    // None, one row either way, a two-sided range, a one-sided reach far enough to cross a ring
-    // boundary, and a range spanning most of the axis.
+    // Generic encoder coverage includes combined extents that the public source-injection API does
+    // not accept as one branch, plus legal one-sided branches that can require cardinal+Z fanout.
     const std::vector<std::pair<int, int>> y_extents = {{0, 0}, {1, 0}, {0, 1}, {2, 2}, {y_len / 2, 0}, {0, y_len / 2}};
     const std::vector<std::pair<int, int>> x_extents = {{0, 0}, {1, 0}, {0, 1}, {1, x_len - 2}};
 
@@ -429,12 +429,12 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
                     }
 
                     const std::uint8_t root_outputs = got[root_y] & ~Routing2DCodec::ACTION_LOCAL_DELIVER;
-                    if (root_outputs != 0 && (root_outputs & (root_outputs - 1)) != 0) {
+                    const bool has_vertical_trunk = n_hops != 0 || s_hops != 0;
+                    const bool is_one_branch =
+                        has_vertical_trunk ? ((n_hops != 0) != (s_hops != 0)) : ((e_hops != 0) != (w_hops != 0));
+                    if (is_one_branch && root_outputs != 0 && (root_outputs & (root_outputs - 1)) != 0) {
                         multi_output_roots++;
                     }
-                    // Source fanout must fit the four-slot connection manager.
-                    EXPECT_LE(std::popcount(static_cast<unsigned>(root_outputs)), 4)
-                        << where << ": root wants more outputs than a connection manager holds";
                     // A root with no eth outputs is legal and means deliver locally only.
                     if (n_hops == 0 && s_hops == 0 && e_hops == 0 && w_hops == 0) {
                         EXPECT_EQ(root_outputs, 0) << where << ": local-only mcast must leave no eth output";
@@ -446,9 +446,8 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
         }
     }
 
-    // A one-hop range reaches an adjacent row or column, which no canonical route needs a chord for,
-    // so its root leaves on exactly one edge. These are the ranges the express multicast YAML can
-    // drive before source multi-inject exists.
+    // A one-hop branch reaches an adjacent row or column, which no canonical route needs a chord for,
+    // so its root leaves on exactly one edge and the single-connection API remains sufficient.
     for (int root_y = 0; root_y < y_len; root_y++) {
         for (int root_x = 0; root_x < x_len; root_x++) {
             std::vector<std::uint8_t> table(Routing2DCodec::ROUTE_TABLE_BYTES, 0);
@@ -476,17 +475,17 @@ void check_encode(const std::string& fixture, bool expect_multi_output_roots) {
         }
     }
 
-    // Multi-output roots are ordinary on an express axis, which is why express multicast needs
-    // source multi-inject.
+    // A legal one-direction branch can have a multi-output root on an express axis, which is why the
+    // manager source-injection API submits one encoded branch through cardinal plus Z.
     if (expect_multi_output_roots) {
-        EXPECT_GT(multi_output_roots, 0) << fixture << ": expected express routing to produce multi-output roots";
+        EXPECT_GT(multi_output_roots, 0) << fixture
+                                         << ": expected express routing to produce a multi-output one-branch root";
     }
 }
 
-// Ranges that route over a chord from a single-output root: the ranges the express multicast YAML
-// can drive before source multi-inject exists. A root only needs multi-inject when it is itself a
-// chord tail whose range reaches that chord's head; a root further from the chord leaves on a
-// single edge and lets a transit router take it.
+// One-direction branches that route over a chord from a single-output root. A root only needs
+// multi-inject when it is itself a chord tail whose branch reaches that chord's head; a root further
+// from the chord leaves on one edge and lets a transit router take it.
 //
 // The column is not swept: with no E/W extent the X map is local delivery only and contributes no
 // teeth, so the Y map depends on the root row alone.
@@ -513,6 +512,9 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
     int candidates = 0;
     for (int n_hops = 0; n_hops < y_len; n_hops++) {
         for (int s_hops = 0; n_hops + s_hops < y_len; s_hops++) {
+            if ((n_hops != 0) == (s_hops != 0)) {
+                continue;
+            }
             for (int root_y = 0; root_y < y_len; root_y++) {
                 std::vector<std::uint8_t> got(y_size + x_size, 0);
                 encode_2d_mcast_maps(
@@ -542,8 +544,8 @@ void check_chord_ranges(const std::string& fixture, bool expect_candidates) {
     }
 
     if (expect_candidates) {
-        EXPECT_GT(candidates, 0) << fixture << ": no range routes over a chord from a single-output root, so express"
-                                 << " multicast coverage has to wait for source multi-inject";
+        EXPECT_GT(candidates, 0) << fixture
+                                 << ": no one-direction branch routes over a chord from a single-output root";
     }
 }
 
@@ -555,8 +557,8 @@ TEST(McastReverseTreeTest, ChordRanges32x4) {
     check_chord_ranges("express_links_32x4_mesh_graph_descriptor.textproto", /*expect_candidates=*/true);
 }
 
-// Every chip roots a range covering the whole mesh, bounding how many copies a sender must inject
-// for an all-to-all.
+// Generic encoder stress case: every chip roots combined extents covering the whole mesh. This is
+// not one legal source-injection branch; it verifies only the action-map structure and output bound.
 //
 // The root action is route_buffer_y[root_y] alone, not that OR'd with route_buffer_x[root_x]. The
 // X-root E/W teeth are copied onto the target rows, and a range with a Y extent excludes the source
