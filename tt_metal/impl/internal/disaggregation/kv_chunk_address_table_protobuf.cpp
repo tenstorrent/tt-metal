@@ -38,6 +38,9 @@ constexpr uint32_t kMaxRunStep = 64;
 constexpr uint64_t kDefaultDualWriteMaxBytes = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 constexpr uint64_t kEntryWireEstimate = 48;
 
+// Read per call on purpose: this is a test/canary override (tests re-point it between
+// exports via DualWriteEnvGuard), not a production runtime setting — export is cold-path,
+// so the getenv cost is irrelevant.
 uint64_t dual_write_max_bytes() {
     if (const char* env = std::getenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES")) {
         try {
