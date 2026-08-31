@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
 
 pytestmark = [
     run_for_blackhole(),
@@ -204,6 +205,100 @@ def _deallocate_state(state: KdaState) -> None:
     ttnn.deallocate(state.convolution)
 
 
+def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
+    names = set()
+    for source in kernel_sources:
+        parts = source.replace("\\", "/").split("/")
+        if "operations" not in parts:
+            continue
+        index = parts.index("operations") + 1
+        experimental = index < len(parts) and parts[index] == "experimental"
+        if experimental:
+            index += 1
+        if index < len(parts):
+            name = f"{'experimental.' if experimental else ''}{parts[index]}"
+            if name.endswith(("kda", "ccl")) and index + 1 < len(parts):
+                name = f"{name}.{parts[index + 1]}"
+            names.add(name)
+    if names:
+        return "+".join(sorted(names))
+    basenames = {Path(source).stem for source in kernel_sources}
+    return "+".join(sorted(basenames)) if basenames else "unknown"
+
+
+def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, layout: str) -> None:
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        raise RuntimeError(f"real-time profiler is inactive for the {layout} KDA e2e device-time breakdown")
+    state = _allocate_state(layer)
+    output = None
+    next_state = None
+    profiled_results: list[tuple[ttnn.Tensor, KdaState]] = []
+
+    def run_profiled_forward() -> tuple[ttnn.Tensor, KdaState]:
+        result = layer.forward(hidden, state)
+        profiled_results.append(result)
+        return result
+
+    try:
+        (output, next_state), per_program = profile_realtime_program_merged(
+            mesh_device,
+            run_profiled_forward,
+            record_timeout_seconds=30.0,
+        )
+        expected_chip_count = mesh_device.get_num_devices()
+        programs: list[dict[str, Any]] = [
+            {
+                "sequence": sequence,
+                "name": _device_program_label(info["kernel_sources"]),
+                "device_time_ns": round(float(info["duration_ns"]), 3),
+                "chip_count": len(info["chip_ids"]),
+                "record_count": int(info["record_count"]),
+                "complete": len(info["chip_ids"]) == expected_chip_count,
+            }
+            for sequence, info in enumerate(per_program.values())
+        ]
+        incomplete_program_sequences = [program["sequence"] for program in programs if not program["complete"]]
+        durations_by_name: dict[str, list[float]] = {}
+        for program in programs:
+            durations_by_name.setdefault(program["name"], []).append(program["device_time_ns"])
+        operation_summary = [
+            {
+                "name": name,
+                "program_count": len(durations),
+                "median_device_time_ns": round(statistics.median(durations), 3),
+                "max_device_time_ns": round(max(durations), 3),
+            }
+            for name, durations in durations_by_name.items()
+        ]
+        print(
+            "KDA_LAYER_DEVICE_TIMES="
+            + json.dumps(
+                {
+                    "layout": layout,
+                    "measurement": "one warm eager forward outside gated trace samples",
+                    "duration_semantics": (
+                        "per-program max across reported chip records; programs may overlap and durations must not be summed"
+                    ),
+                    "chip_completeness": {
+                        "expected_chip_count": expected_chip_count,
+                        "incomplete_program_sequences": incomplete_program_sequences,
+                    },
+                    "operation_summary": operation_summary,
+                    "programs": programs,
+                },
+                sort_keys=True,
+            )
+        )
+    finally:
+        if profiled_results and output is None:
+            output, next_state = profiled_results[-1]
+        if output is not None:
+            ttnn.deallocate(output)
+        if next_state is not None:
+            _deallocate_state(next_state)
+        _deallocate_state(state)
+
+
 def _trace_wall_samples_ms(
     mesh_device: ttnn.MeshDevice,
     layer: ttKDA,
@@ -343,3 +438,9 @@ def test_kimi_k3_layer_1_perf(
         f"{layout} median trace wall {median_wall_ms:.3f} ms exceeds LoudBox limit {max_wall_ms:.3f} ms "
         f"(reference {reference_ms:.3f} ms + {max_regression_pct:.1f}%)"
     )
+    if layout == "SP2xTP4":
+        # Best-effort diagnostics run once after the five samples and their sole regression assertion.
+        try:
+            _log_device_program_times(mesh_device, layer, hidden_tt, layout)
+        except Exception as error:
+            print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
