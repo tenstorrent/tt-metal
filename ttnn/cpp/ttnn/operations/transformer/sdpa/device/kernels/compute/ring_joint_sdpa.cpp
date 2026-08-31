@@ -271,6 +271,14 @@ void kernel_main() {
         // Indexed by ACTIVE ordinal, not absolute ring_iter -- see rot_active_ordinal. Compute reads
         // the same device-derived mask the reader published through cb_kv_pad_derived, so the ordinal
         // it computes is identical to the reader's and the writer's.
+        //
+        // Unlike the reader and writer, this runs BEFORE the inactive-iteration `continue` below, so
+        // on a skipped iteration it computes an ordinal it will not use and reads rot_my_count from
+        // that slot. That read is always in bounds: for a skipped iteration the ordinal equals the
+        // number of active iterations at or before it, and since at least one iteration is inactive
+        // that count is at most ring_size - 1 -- within the ring_size entries the host emits. Kept
+        // here rather than moved after the `continue` because rot_my_count feeds the arg decode that
+        // the ring-id sequencing below is interleaved with.
         const uint32_t rot_ordinal = rot_active_ordinal(active_ring_iter_mask, ring_iter);
         const uint32_t rot_iter_base = rot_args_base + rot_ordinal * rot_iter_stride;
         const uint32_t rot_my_count = get_arg_val<uint32_t>(rot_iter_base);
