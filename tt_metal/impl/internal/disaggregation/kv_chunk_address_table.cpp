@@ -29,9 +29,14 @@ tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id
 }  // namespace
 
 void KvChunkAddressTable::init_configs(
-    std::span<const KvChunkAddressTableConfig> configs, std::vector<std::string> names) {
+    std::span<const KvChunkAddressTableConfig> configs,
+    std::vector<std::string> names,
+    std::span<const ChunkCompression> compressions) {
     TT_FATAL(!configs.empty(), "KvChunkAddressTable requires at least one config");
     TT_FATAL(configs.size() == names.size(), "internal: configs/names size mismatch");
+    TT_FATAL(
+        compressions.empty() || compressions.size() == configs.size(),
+        "internal: configs/compressions size mismatch");
 
     configs_.assign(configs.begin(), configs.end());
     config_names_ = std::move(names);
@@ -47,13 +52,22 @@ void KvChunkAddressTable::init_configs(
 
         const uint32_t npc = (cfg.max_sequence_length + cfg.chunk_n_tokens - 1) / cfg.chunk_n_tokens;
         num_position_chunks_[c] = npc;
-        // All configs start UNROLLED; compressed maps are installed at import
-        // (install_strided_map) once their runs arrive.
-        UnrolledGrid grid;
-        grid.num_layers = cfg.num_layers;
-        grid.num_position_chunks = npc;
-        grid.entries.resize(static_cast<size_t>(cfg.num_slots) * cfg.num_layers * npc);
-        maps_[c] = std::move(grid);
+        if (!compressions.empty() && compressions[c] == ChunkCompression::kStridedRows) {
+            // Strided from birth (import path): an empty map, rows installed by
+            // install_strided_map(). No unrolled grid is allocated — the point of the
+            // compressed form is that a runs-only import never pays the grid's memory.
+            StridedRowMap map;
+            map.num_layers = cfg.num_layers;
+            map.num_position_chunks = npc;
+            map.num_slots = cfg.num_slots;
+            maps_[c] = std::move(map);
+        } else {
+            UnrolledGrid grid;
+            grid.num_layers = cfg.num_layers;
+            grid.num_position_chunks = npc;
+            grid.entries.resize(static_cast<size_t>(cfg.num_slots) * cfg.num_layers * npc);
+            maps_[c] = std::move(grid);
+        }
     }
 }
 
@@ -80,6 +94,21 @@ KvChunkAddressTable::KvChunkAddressTable(const std::map<std::string, KvChunkAddr
         cfgs.push_back(cfg);
     }
     init_configs(cfgs, std::move(names));
+}
+
+KvChunkAddressTable::KvChunkAddressTable(const std::map<std::string, NamedConfigInit>& configs) {
+    std::vector<KvChunkAddressTableConfig> cfgs;
+    std::vector<std::string> names;
+    std::vector<ChunkCompression> compressions;
+    cfgs.reserve(configs.size());
+    names.reserve(configs.size());
+    compressions.reserve(configs.size());
+    for (const auto& [name, init] : configs) {  // std::map iterates in sorted key order
+        names.push_back(name);
+        cfgs.push_back(init.config);
+        compressions.push_back(init.compression);
+    }
+    init_configs(cfgs, std::move(names), compressions);
 }
 
 uint32_t KvChunkAddressTable::resolve_config(const std::string& name) const {
@@ -166,6 +195,10 @@ StridedRowRangeView::Iterator StridedRowRangeView::end() const {
     return Iterator(map_, layer_, slot_, first_, last_ - first_);
 }
 size_t StridedRowRangeView::size() const { return last_ - first_; }
+bool StridedRowRangeView::empty() const { return last_ == first_; }
+KvCacheLocation StridedRowRangeView::front() const { return *begin(); }
+KvCacheLocation StridedRowRangeView::back() const { return *Iterator(map_, layer_, slot_, first_, last_ - first_ - 1); }
+KvCacheLocation StridedRowRangeView::operator[](size_t i) const { return *Iterator(map_, layer_, slot_, first_, i); }
 
 StridedRowRangeView::Iterator::Iterator(
     const KvChunkAddressTable::StridedRowMap* map, uint32_t layer, uint32_t slot, uint32_t first, uint32_t i) :
@@ -174,6 +207,7 @@ StridedRowRangeView::Iterator::Iterator(
 KvCacheLocation StridedRowRangeView::Iterator::operator*() const {
     return map_->lookup(layer_, first_ + i_, slot_);
 }
+KvCacheLocation StridedRowRangeView::Iterator::operator[](difference_type n) const { return *(*this + n); }
 StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator++() { return ++i_, *this; }
 StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator++(int) {
     auto t = *this;
@@ -181,6 +215,11 @@ StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator++(int) {
     return t;
 }
 StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator--() { return --i_, *this; }
+StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator--(int) {
+    auto t = *this;
+    --i_;
+    return t;
+}
 StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator+=(difference_type n) { return i_ += n, *this; }
 StridedRowRangeView::Iterator& StridedRowRangeView::Iterator::operator-=(difference_type n) { return i_ -= n, *this; }
 StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator+(difference_type n) const {
@@ -190,11 +229,15 @@ StridedRowRangeView::Iterator StridedRowRangeView::Iterator::operator-(differenc
     return Iterator(map_, layer_, slot_, first_, i_ - n);
 }
 StridedRowRangeView::Iterator::difference_type StridedRowRangeView::Iterator::operator-(const Iterator& o) const {
-    return i_ - o.i_;
+    // i_ is unsigned; cast BEFORE subtracting so negative distances don't wrap.
+    return static_cast<difference_type>(i_) - static_cast<difference_type>(o.i_);
 }
 bool StridedRowRangeView::Iterator::operator==(const Iterator& o) const { return i_ == o.i_; }
 bool StridedRowRangeView::Iterator::operator!=(const Iterator& o) const { return i_ != o.i_; }
 bool StridedRowRangeView::Iterator::operator<(const Iterator& o) const { return i_ < o.i_; }
+bool StridedRowRangeView::Iterator::operator>(const Iterator& o) const { return i_ > o.i_; }
+bool StridedRowRangeView::Iterator::operator<=(const Iterator& o) const { return i_ <= o.i_; }
+bool StridedRowRangeView::Iterator::operator>=(const Iterator& o) const { return i_ >= o.i_; }
 
 DeviceGroupIndex KvChunkAddressTable::add_device_group(std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids) {
     std::sort(fabric_node_ids.begin(), fabric_node_ids.end());

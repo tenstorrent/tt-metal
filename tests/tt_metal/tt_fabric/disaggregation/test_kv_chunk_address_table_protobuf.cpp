@@ -651,7 +651,42 @@ TEST(KvChunkAddressTableProtobuf, DualWriteMirrorsEntriesBelowThreshold) {
     expect_tables_equal(original, restored);
 }
 
+TEST(KvChunkAddressTableProtobuf, StridedVisitRangeRoundTrip) {
+    // Exercise visit_range on an in-memory StridedRowMap (import of a runs-only table):
+    // full-row range, sub-range, and empty range, plus iterator arithmetic — the path
+    // expect_tables_equal's per-entry lookup() does not cover.
+    DualWriteEnvGuard guard("0");
+    auto original = make_strided_table();  // affine rows: base + i*0x10000
+    auto table = import_from_protobuf(export_to_protobuf(original));
+    ASSERT_EQ(table.compression(0), ChunkCompression::kStridedRows);
+
+    table.visit_range(1, 0, 96 * 32, 1, 0, [&](auto range) {
+        ASSERT_EQ(range.size(), 96u);
+        for (uint32_t i = 0; i < 96; i++) {
+            EXPECT_EQ(range[i].noc_addr, (0x1'0000'0000ULL + 3 * 0x1000'0000ULL) + i * 0x10000ULL) << "chunk " << i;
+        }
+        // Iterator arithmetic: random access + signed distance both directions.
+        auto b = range.begin();
+        auto e = range.end();
+        EXPECT_EQ(e - b, 96);
+        EXPECT_EQ(b - e, -96);
+        EXPECT_EQ((*(b + 5)).noc_addr, range[5].noc_addr);
+        EXPECT_EQ((*(e - 1)).noc_addr, range[95].noc_addr);
+    });
+
+    // Sub-range: chunks [10, 20) of the row (positions 320..640).
+    table.visit_range(1, 320, 640, 1, 0, [&](auto range) {
+        ASSERT_EQ(range.size(), 10u);
+        EXPECT_EQ(range[0].noc_addr, (0x1'0000'0000ULL + 3 * 0x1000'0000ULL) + 10 * 0x10000ULL);
+    });
+
+    // Empty range (start == end): zero entries, not one.
+    table.visit_range(1, 320, 320, 1, 0, [&](auto range) { EXPECT_EQ(range.size(), 0u); });
+}
+
 TEST(KvChunkAddressTableProtobuf, RunValidationThrows) {
+    // The fixture is tagged STRIDED_ROWS so each case actually reaches the run validators
+    // (an UNROLLED tag would reject the run at the compression-tag check first).
     auto make_pb = [] {
         ::tt::disaggregation::proto::KvChunkAddressTable pb;
         auto* c = pb.add_configs();
@@ -660,6 +695,7 @@ TEST(KvChunkAddressTableProtobuf, RunValidationThrows) {
         c->set_max_sequence_length(64);
         c->set_num_slots(1);
         c->set_chunk_n_tokens(32);
+        c->set_compression(::tt::disaggregation::proto::STRIDED_ROWS);
         auto* g = pb.add_device_groups();
         g->add_fabric_node_ids()->set_mesh_id(0);
         return pb;
@@ -673,19 +709,37 @@ TEST(KvChunkAddressTableProtobuf, RunValidationThrows) {
         r->set_count(1);
         EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
     }
-    {  // extends past the config's position chunks (2 exist: 64/32)
+    {  // count does not tile the row: 2 chunks exist (64/32), a step-1 run needs count==2
         auto pb = make_pb();
         auto* r = pb.add_runs();
         r->set_config_idx(0);
-        r->set_start_chunk(1);
+        r->set_start_chunk(0);  // valid residue (start_chunk < chunk_step)
         r->set_chunk_step(1);
-        r->set_count(2);
+        r->set_count(3);  // wrong: would cover chunks 0..2, but only 0..1 exist
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // start_chunk >= chunk_step (residue out of range)
+        auto pb = make_pb();
+        auto* r = pb.add_runs();
+        r->set_config_idx(0);
+        r->set_start_chunk(2);
+        r->set_chunk_step(2);
+        r->set_count(1);
         EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
     }
     {  // config_idx out of range
         auto pb = make_pb();
         auto* r = pb.add_runs();
         r->set_config_idx(7);
+        r->set_chunk_step(1);
+        r->set_count(1);
+        EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));
+    }
+    {  // run targets an UNROLLED config
+        auto pb = make_pb();
+        pb.mutable_configs(0)->set_compression(::tt::disaggregation::proto::UNROLLED);
+        auto* r = pb.add_runs();
+        r->set_config_idx(0);
         r->set_chunk_step(1);
         r->set_count(1);
         EXPECT_ANY_THROW(import_from_protobuf(pb.SerializeAsString()));

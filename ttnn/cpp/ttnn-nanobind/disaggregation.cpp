@@ -204,6 +204,7 @@ void bind_disaggregation_api(nb::module_& mod) {
                uint32_t config_id) {
                 std::vector<KvCacheLocation> out;
                 table.visit_range(layer, start_pos, end_pos, slot, config_id, [&](auto range) {
+                    out.reserve(range.size());
                     for (const auto& loc : range) {
                         out.push_back(loc);
                     }
@@ -231,6 +232,7 @@ void bind_disaggregation_api(nb::module_& mod) {
                const std::string& config) {
                 std::vector<KvCacheLocation> out;
                 table.visit_range(layer, start_pos, end_pos, slot, table.config_id_of(config), [&](auto range) {
+                    out.reserve(range.size());
                     for (const auto& loc : range) {
                         out.push_back(loc);
                     }

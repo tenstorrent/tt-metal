@@ -30,10 +30,13 @@ constexpr uint32_t kMaxRunStep = 64;
 
 // Dual-write threshold: while the estimated unrolled `entries` payload stays below this,
 // STRIDED_ROWS configs also mirror every chunk into `entries` so pre-runs readers keep
-// working (they ignore `runs` and the compression tag). Above it, runs-only — such a table
-// exceeds protobuf's ~2GB message cap unrolled, so no entries-only reader could have
-// consumed it anyway. Override for tests/canary.
-constexpr uint64_t kDefaultDualWriteMaxBytes = 1ull << 30;
+// working (they ignore `runs` and the compression tag). The threshold sits just under
+// protobuf's 2 GiB (2^31) message cap with headroom for the runs + metadata payload, using a
+// conservative 48 B/entry wire estimate — so the mirror is dropped only when the unrolled
+// payload itself could not be serialized, i.e. when no entries-only reader could have
+// consumed the table anyway. Override for tests/canary.
+constexpr uint64_t kDefaultDualWriteMaxBytes = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
+constexpr uint64_t kEntryWireEstimate = 48;
 
 uint64_t dual_write_max_bytes() {
     if (const char* env = std::getenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES")) {
@@ -54,6 +57,10 @@ bool is_unset(const KvCacheLocation& loc) {
 // class mod s), or 0 if none. s is capped at (n-1)/2 so the period is PROVEN by at least one
 // repetition — any sequence trivially "fits" a period covering it once, which would compress
 // nothing. 0 = no proven period -> the config cannot be STRIDED_ROWS.
+//
+// Cost: O(n · min(n, kMaxRunStep)) per row, once per export per UNROLLED config (never on the
+// transfer hot path). Measured at 4.4 ms for a 61-layer x 8-slot x 4000-chunk table
+// (1.95M chunks total) — noise against the serialization it precedes.
 uint32_t delta_period(std::span<const KvCacheLocation> row) {
     const uint32_t n = static_cast<uint32_t>(row.size());
     if (n <= 1) {
@@ -311,7 +318,8 @@ void emit_config_payload(
 
     // Dual-write decision needs the total unrolled size up front (grid-equivalent count).
     const uint64_t total_chunks = table.total_entries();
-    const bool dual_write = total_chunks * 32 <= dual_write_max_bytes();  // ~32 B per entry on the wire
+    const bool dual_write =
+        total_chunks * kEntryWireEstimate <= dual_write_max_bytes();  // conservative per-entry wire estimate
 
     for (uint32_t c = 0; c < table.num_configs(); c++) {
         const auto& cfg = table.config(c);
@@ -378,38 +386,48 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
     // otherwise fall back to the legacy single-config scalar fields. Entries are
     // placed by config NAME (idx_to_name) so they land correctly even if the map
     // constructor reassigns ids by sorted-key order.
-    std::map<std::string, KvChunkAddressTableConfig> configs;
+    std::map<std::string, KvChunkAddressTable::NamedConfigInit> configs;
     std::vector<std::string> idx_to_name;
     std::vector<ChunkCompression> idx_to_compression;
     if (pb.configs_size() > 0) {
         idx_to_name.reserve(pb.configs_size());
         for (const auto& pb_cfg : pb.configs()) {
-            KvChunkAddressTableConfig cfg{
-                .num_layers = pb_cfg.num_layers(),
-                .max_sequence_length = pb_cfg.max_sequence_length(),
-                .num_slots = pb_cfg.num_slots(),
-                .chunk_n_tokens = pb_cfg.chunk_n_tokens(),
-                .chunk_size_bytes = pb_cfg.chunk_size_bytes(),
+            KvChunkAddressTable::NamedConfigInit init{
+                .config =
+                    KvChunkAddressTableConfig{
+                        .num_layers = pb_cfg.num_layers(),
+                        .max_sequence_length = pb_cfg.max_sequence_length(),
+                        .num_slots = pb_cfg.num_slots(),
+                        .chunk_n_tokens = pb_cfg.chunk_n_tokens(),
+                        .chunk_size_bytes = pb_cfg.chunk_size_bytes(),
+                    },
+                .compression = from_wire(pb_cfg.compression()),  // throws on unknown tag
             };
-            if (!configs.emplace(pb_cfg.name(), cfg).second) {
+            if (!configs.emplace(pb_cfg.name(), init).second) {
                 throw std::runtime_error("duplicate config name '" + pb_cfg.name() + "' in KvChunkAddressTable proto");
             }
             idx_to_name.push_back(pb_cfg.name());
-            idx_to_compression.push_back(from_wire(pb_cfg.compression()));  // throws on unknown tag
+            idx_to_compression.push_back(init.compression);
         }
     } else {
         configs.emplace(
             "0",
-            KvChunkAddressTableConfig{
-                .num_layers = pb.num_layers(),
-                .max_sequence_length = pb.max_sequence_length(),
-                .num_slots = pb.num_slots(),
-                .chunk_n_tokens = pb.chunk_n_tokens(),
-                .chunk_size_bytes = pb.chunk_size_bytes(),
+            KvChunkAddressTable::NamedConfigInit{
+                .config =
+                    KvChunkAddressTableConfig{
+                        .num_layers = pb.num_layers(),
+                        .max_sequence_length = pb.max_sequence_length(),
+                        .num_slots = pb.num_slots(),
+                        .chunk_n_tokens = pb.chunk_n_tokens(),
+                        .chunk_size_bytes = pb.chunk_size_bytes(),
+                    },
+                .compression = ChunkCompression::kUnrolled,  // legacy files: entries only
             });
         idx_to_name.push_back("0");
-        idx_to_compression.push_back(ChunkCompression::kUnrolled);  // legacy files: entries only
+        idx_to_compression.push_back(ChunkCompression::kUnrolled);
     }
+    // Strided configs start as empty StridedRowMaps (no unrolled grid is allocated — the
+    // point of compression is that a runs-only import never pays the grid's memory).
     KvChunkAddressTable table(configs);
 
     for (const auto& pb_group : pb.device_groups()) {
@@ -532,7 +550,10 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
         // A config tagged STRIDED_ROWS with no runs at all is an empty table declaration —
         // almost certainly a corrupt/truncated payload; fail loudly.
         for (uint32_t i = 0; i < idx_to_compression.size(); i++) {
-            if (idx_to_compression[i] == ChunkCompression::kStridedRows && !strided_maps.count(i)) {
+            // strided_maps is keyed by TABLE config id (sorted-name order); i is the wire
+            // index — resolve through the name before checking.
+            if (idx_to_compression[i] == ChunkCompression::kStridedRows &&
+                !strided_maps.count(table.config_id_of(idx_to_name[i]))) {
                 // …unless every row is legitimately unset: our exporter only tags configs whose
                 // rows all compress, and an all-unset config exports UNROLLED, so this is corrupt.
                 throw std::runtime_error(

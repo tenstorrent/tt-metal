@@ -128,6 +128,16 @@ public:
     // iterates sorted), and each config's name is its key. Requires at least one config.
     explicit KvChunkAddressTable(const std::map<std::string, KvChunkAddressTableConfig>& configs);
 
+    // Import/serializer path: like the named-configs constructor, but each config starts in its
+    // declared representation. STRIDED_ROWS configs get an empty StridedRowMap (rows sized to
+    // num_slots x num_layers, all step=0, filled by install_strided_map()) — importing a
+    // runs-only table never materializes the unrolled grid that compression exists to avoid.
+    struct NamedConfigInit {
+        KvChunkAddressTableConfig config;
+        ChunkCompression compression = ChunkCompression::kUnrolled;
+    };
+    explicit KvChunkAddressTable(const std::map<std::string, NamedConfigInit>& configs);
+
     // --- Device Group Management ---
 
     // Register a device group (set of replica FabricNodeIds).
@@ -194,7 +204,10 @@ public:
             cfg.max_sequence_length,
             config_id);
         const uint32_t start_chunk = to_chunk_index(config_id, start_pos);
-        const uint32_t end_chunk = to_chunk_index(config_id, end_pos + cfg.chunk_n_tokens - 1);
+        // Empty/reversed interval: clamp to an empty range (the pre-visit_range API returned
+        // an empty span here) rather than underflowing the unsigned chunk arithmetic.
+        const uint32_t end_chunk =
+            start_pos >= end_pos ? start_chunk : to_chunk_index(config_id, end_pos + cfg.chunk_n_tokens - 1);
         return visit_map(config_id, [&](const auto& map) -> decltype(auto) {
             return fn(map.lookup_range(layer, start_chunk, end_chunk, slot));
         });
@@ -234,7 +247,10 @@ public:
     size_t total_entries() const;
 
 private:
-    void init_configs(std::span<const KvChunkAddressTableConfig> configs, std::vector<std::string> names);
+    void init_configs(
+        std::span<const KvChunkAddressTableConfig> configs,
+        std::vector<std::string> names,
+        std::span<const ChunkCompression> compressions = {});  // empty => all UNROLLED
     uint32_t resolve_config(const std::string& name) const;
     void validate_config_id(uint32_t config_id) const;
     uint32_t to_chunk_index(uint32_t config_id, uint32_t position) const;
@@ -263,17 +279,23 @@ public:
 
         Iterator() = default;
         KvCacheLocation operator*() const;
+        KvCacheLocation operator[](difference_type n) const;
         Iterator& operator++();
         Iterator operator++(int);
         Iterator& operator--();
+        Iterator operator--(int);
         Iterator& operator-=(difference_type n);
         Iterator& operator+=(difference_type n);
         Iterator operator+(difference_type n) const;
         Iterator operator-(difference_type n) const;
+        friend Iterator operator+(difference_type n, const Iterator& it) { return it + n; }
         difference_type operator-(const Iterator& o) const;
         bool operator==(const Iterator& o) const;
         bool operator!=(const Iterator& o) const;
         bool operator<(const Iterator& o) const;
+        bool operator>(const Iterator& o) const;
+        bool operator<=(const Iterator& o) const;
+        bool operator>=(const Iterator& o) const;
 
     private:
         friend class StridedRowRangeView;
@@ -289,6 +311,11 @@ public:
     Iterator begin() const;
     Iterator end() const;
     size_t size() const;
+    // std::span parity, so generic consumers compile against either range type.
+    bool empty() const;
+    KvCacheLocation front() const;
+    KvCacheLocation back() const;
+    KvCacheLocation operator[](size_t i) const;
 
 private:
     friend struct KvChunkAddressTable::StridedRowMap;

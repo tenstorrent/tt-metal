@@ -71,13 +71,21 @@ def _s(b):
 
 # --- schema (field numbers from kv_chunk_address_table.proto) ---
 
-CONFIG_NAMES = {1: "name", 2: "num_layers", 3: "max_sequence_length", 4: "num_slots", 5: "chunk_n_tokens", 6: "chunk_size_bytes", 7: "compression"}
+CONFIG_NAMES = {
+    1: "name",
+    2: "num_layers",
+    3: "max_sequence_length",
+    4: "num_slots",
+    5: "chunk_n_tokens",
+    6: "chunk_size_bytes",
+    7: "compression",
+}
 COMPRESSION = {0: "UNROLLED", 1: "STRIDED_ROWS"}
 
 
 def _parse_config(buf):
     cfg = {}
-    for num, wt, val in _fields(buf):
+    for num, _wt, val in _fields(buf):
         if num == 1:
             cfg["name"] = _s(val)
         elif num in CONFIG_NAMES:
@@ -87,7 +95,7 @@ def _parse_config(buf):
 
 def _parse_group(buf):
     nodes = []
-    for num, wt, val in _fields(buf):
+    for num, _wt, val in _fields(buf):
         if num == 1:  # repeated FabricNodeId
             mesh, chip = 0, 0
             for fnum, _wt, fval in _fields(val):
@@ -128,9 +136,13 @@ def inspect(path, show_entries=False, show_runs=False):
         "unknown_fields": {},
     }
     entries, runs = [], []
-    for num, wt, val in _fields(data):
+    for num, _wt, val in _fields(data):
         if num in (1, 2, 3, 4, 5):  # legacy single-config scalars
-            out["legacy_scalars"][{1: "num_layers", 2: "max_sequence_length", 3: "num_slots", 4: "chunk_n_tokens", 5: "chunk_size_bytes"}[num]] = val
+            out["legacy_scalars"][
+                {1: "num_layers", 2: "max_sequence_length", 3: "num_slots", 4: "chunk_n_tokens", 5: "chunk_size_bytes"}[
+                    num
+                ]
+            ] = val
         elif num == 6:
             out["device_groups"].append(_parse_group(val))
         elif num == 7:
@@ -139,13 +151,13 @@ def inspect(path, show_entries=False, show_runs=False):
         elif num == 8:
             out["entries"] += 1
             if show_entries:
-                entries.append({f: v for f, v in _fields(val)})
+                entries.append({f: v for f, _wt2, v in _fields(val)})
         elif num == 9:
             out["configs"].append(_parse_config(val))
         elif num == 11:
             out["runs"] += 1
             if show_runs:
-                runs.append({f: v for f, v in _fields(val)})
+                runs.append({f: v for f, _wt2, v in _fields(val)})
         elif num == 12:
             out["format_version"] = val
         elif num == 13:
@@ -170,7 +182,10 @@ def main():
         return
 
     print(f"file: {info['file']}  ({info['bytes']} bytes)")
-    print(f"format_version: {info['format_version']}" + ("  (absent: legacy pre-tag format)" if info["format_version"] == 0 else ""))
+    print(
+        f"format_version: {info['format_version']}"
+        + ("  (absent: legacy pre-tag format)" if info["format_version"] == 0 else "")
+    )
     print(f"origin_host:    {info['origin_host'] or '(not recorded)'}")
     if info["unknown_fields"]:
         print(f"unknown fields: {info['unknown_fields']}  (written by a NEWER format; ignored here)")
