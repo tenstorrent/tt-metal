@@ -55,6 +55,41 @@ class GateComputeMode(Enum):
     GPT_DEVICE = "gpt_device"  # matmul device, ttnn.topk + ttnn.softmax on device
 
 
+# Routing-math family: modes in the same family are mutually substitutable (they only trade off
+# where the compute runs), but crossing families silently applies the wrong affinity function --
+# moe_grouped_topk.cpp implements only sigmoid/sqrtsoftplus, never softmax, so a GPT-style router
+# (Mistral) run under a "sigmoid" mode produces plausible-looking, wrong-expert routing with no error.
+GATE_MODE_FAMILY = {
+    GateComputeMode.DEVICE: "sigmoid",
+    GateComputeMode.DEVICE_FP32: "sigmoid",
+    GateComputeMode.HOST_GROUPED_GATE: "sigmoid",
+    GateComputeMode.HOST_MATMUL: "sigmoid",
+    GateComputeMode.HOST_ALL: "sigmoid",
+    GateComputeMode.HASH_HOST: "hash",
+    GateComputeMode.HASH_DEVICE: "hash",
+    GateComputeMode.GPT_HOST: "gpt",
+    GateComputeMode.GPT_DEVICE: "gpt",
+}
+
+
+def assert_gate_mode_matches_adapter(variant, gate_fallback_mode: GateComputeMode) -> None:
+    """The only other reader of ``adapter.default_gate_mode`` is prefill_runner.py's env-var
+    fallback -- nothing ties a test's chosen mode back to it, so the adapter and the test suite can
+    silently drift onto different routing families (this is how a wrong manifest gate mode survived
+    review once already). Checked by family, not exact value: HOST_ALL/DEVICE/DEVICE_FP32 rows
+    intentionally diverge from each other to exercise host-fallback paths, and must keep passing.
+    """
+    default_mode = GateComputeMode[variant.default_gate_mode]
+    expected_family = GATE_MODE_FAMILY[default_mode]
+    actual_family = GATE_MODE_FAMILY[gate_fallback_mode]
+    assert actual_family == expected_family, (
+        f"{variant.name}: test row uses {gate_fallback_mode.name} ({actual_family} routing) but the "
+        f"adapter declares default_gate_mode={variant.default_gate_mode!r} ({expected_family} routing) -- "
+        "one of the two is wrong, and the model's affinity function would silently differ from what "
+        "this test measures"
+    )
+
+
 # Per-chip prefill sequence the production deployment runs at, and the depth the MoE/gate tests
 # drive. Every tuned matmul entry is keyed to it; other depths fall back to TTNN's default tiling.
 GATE_PRODUCTION_SP_DIM = 640
