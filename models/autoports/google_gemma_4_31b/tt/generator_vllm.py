@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -43,6 +44,7 @@ def _resolve_model_dir() -> Path:
 
 HOST_SAMPLING_COMPAT_ENV = "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT"
 REDUCED_LAYERS_ENV = "GEMMA4_31B_VLLM_LAYER_INDICES"
+KEEP_DECODE_TRACES_ENV = "GEMMA4_31B_KEEP_DECODE_TRACES"
 PAGE_BLOCK_SIZE = 64
 logger = init_logger(f"vllm.{__name__}")
 
@@ -99,6 +101,11 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         self._decode_cache_identity: tuple[tuple[int, ...], ...] | None = None
         self._decode_sampling_key: tuple[Any, ...] | None = None
         self._decode_active_batch_size = 0
+        self._warm_prefill_shapes: set[tuple[int, ...]] = set()
+        # Rollback knob for the cross-request trace-keeping fast path: set
+        # GEMMA4_31B_KEEP_DECODE_TRACES=0 to restore the conservative
+        # release-and-recapture-per-request lifecycle.
+        self._keep_decode_traces = os.environ.get(KEEP_DECODE_TRACES_ENV, "1") == "1"
 
     @classmethod
     def initialize_vllm_model(
@@ -282,13 +289,34 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         page_tables_per_layer=None,
         **_: Any,
     ):
-        # A new prefill starts a new serving sequence. Release any prior
-        # model/sampler traces before page-table conversion can allocate or
-        # update device buffers; TT allocations are unsafe while a trace owns
-        # allocator addresses.
-        self._release_decode_state()
         kv_cache = self._require_kv_cache(kv_cache)
         prompt_lens_list = _to_int_list(prompt_lens, default=int(tokens.shape[1]))
+        # Steady-state serving keeps the decode traces alive across requests:
+        # a release forces the next decode step to re-capture both traces,
+        # which costs several full decode forwards plus two captures and
+        # lands in that request's TTFT. Keeping them is only safe while this
+        # prefill cannot allocate device memory that outlives the next trace
+        # execution; TT allocations are unsafe while a trace owns allocator
+        # addresses. A repeat-shape prefill allocates transients only (its
+        # programs and shape caches are warm, and same-shape page tables
+        # refresh in place), so the traces stay live. A first-of-its-shape
+        # prefill still compiles programs and fills shape caches whose
+        # allocations persist, so it releases any prior model/sampler traces
+        # before page-table conversion can allocate or update device buffers.
+        sampling = None if sampling_params is None else self.generator.resolve_sampling(sampling_params)
+        # The warm key pairs the prompt shape with the eager-sampling mode:
+        # greedy and general sampling exercise different sampler programs, so
+        # each (shape, mode) must run once with released traces before it may
+        # run alongside live ones.
+        if sampling is None:
+            prefill_mode = None
+        elif self.generator._is_semantic_greedy(top_k=sampling[0], top_p=sampling[1], temperature=sampling[2]):
+            prefill_mode = "greedy"
+        else:
+            prefill_mode = "sampled"
+        prefill_shape = (tuple(sorted(prompt_lens_list)), prefill_mode)
+        if not self._keep_decode_traces or prefill_shape not in self._warm_prefill_shapes:
+            self._release_decode_state()
         page_tables, _ = self._page_tables_to_tt(page_tables_per_layer, page_table)
         if sampling_params is None:
             self._require_host_sampling_compat()
@@ -300,13 +328,14 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
                 return_all_logits=False,
             )
 
-        top_k, top_p, temperature = self.generator.resolve_sampling(sampling_params)
+        top_k, top_p, temperature = sampling
         logits = self.generator.prefill_forward(
             tokens.to(torch.long),
             page_table=page_tables,
             kv_cache=kv_cache,
             prompt_lens=prompt_lens_list,
             return_device_logits=True,
+            release_decode_traces=False,
         )
         output_buffer = self.generator._new_token_buffer(len(prompt_lens_list))
         sampled, _ = self.generator._sample_eager(
@@ -315,10 +344,14 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            allow_live_traces=True,
         )
         tokens_host = _tokens_to_host(sampled, active_batch=len(prompt_lens_list))
         logits.deallocate(True)
         output_buffer.deallocate(True)
+        # The programs and shape caches for this prefill shape are warm now;
+        # later prefills of the same shape may run with live decode traces.
+        self._warm_prefill_shapes.add(prefill_shape)
         return tokens_host.reshape(len(prompt_lens_list), 1)
 
     def decode_forward(
@@ -401,7 +434,20 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
             or cache_changed
             or self._decode_sampling_key != sampling_key
         )
-        if must_prepare:
+        # A prepare forced only by batch membership (reset_batch) while the
+        # live traces already match this batch shape, sampling key, and KV
+        # cache keeps both traces: prepare_token_out_decode refreshes the
+        # trace-bound token/position/page-table inputs in place and replays
+        # without a capture.
+        steady_trace_reuse = (
+            must_prepare
+            and self._keep_decode_traces
+            and self.model.trace_state.trace_id is not None
+            and self.generator._sampling_trace_id is not None
+            and not cache_changed
+            and self._decode_sampling_key == sampling_key
+        )
+        if must_prepare and not steady_trace_reuse:
             # Dynamic-B page-table buffers can change shape.  Release and
             # synchronize both nonblocking traces before their conversion is
             # allowed to allocate a replacement buffer.
@@ -409,11 +455,13 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         page_tables, generations = self._page_tables_to_tt(page_tables_per_layer, page_table, rows=active_batch_size)
         if must_prepare:
             logger.info(
-                "Gemma 4 decode trace prepare: active_batch=%d cache_changed=%s reset_batch=%s",
+                "Gemma 4 decode trace prepare: active_batch=%d cache_changed=%s reset_batch=%s reuse=%s",
                 active_batch_size,
                 cache_changed,
                 bool(reset_batch),
+                steady_trace_reuse,
             )
+            prepare_started = time.perf_counter()
             output = self.generator.prepare_token_out_decode(
                 first_input_tokens=trace_tokens,
                 start_positions=trace_positions,
@@ -428,10 +476,13 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
                 temperature=sampling[2],
             )
             logger.info(
-                "Gemma 4 decode traces ready: active_batch=%d model_trace_id=%s sampler_trace_id=%s",
+                "Gemma 4 decode traces ready: active_batch=%d model_trace_id=%s sampler_trace_id=%s "
+                "reuse=%s elapsed_ms=%.1f",
                 active_batch_size,
                 self.model.trace_state.trace_id,
                 self.generator._sampling_trace_id,
+                steady_trace_reuse,
+                (time.perf_counter() - prepare_started) * 1000.0,
             )
             self._decode_cache_identity = cache_identity
             self._decode_sampling_key = sampling_key
@@ -510,6 +561,15 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         groups: dict[tuple[Any, ...], list[int]] = {}
         for local_idx, table in enumerate(selected):
             groups.setdefault(_page_table_source_key(table), []).append(local_idx)
+
+        # A replacement page-table device buffer must never be allocated
+        # while a trace owns allocator addresses.  Same-shape refreshes copy
+        # in place and keep the traces live; a shape change releases first.
+        if (self.model.trace_state.trace_id is not None or self.generator._sampling_trace_id is not None) and any(
+            _page_table_state_would_reallocate(self._page_table_states[members[0]], selected[members[0]])
+            for members in groups.values()
+        ):
+            self._release_decode_state()
 
         for members in groups.values():
             first = members[0]
@@ -613,6 +673,15 @@ def _page_table_prefix(table, *, rows: int | None):
     if host.ndim != 2 or int(host.shape[0]) < int(rows):
         raise ValueError("page table must be rank-2 with at least one row per active request")
     return host[: int(rows)]
+
+
+def _page_table_state_would_reallocate(previous, source) -> bool:
+    """Mirror of _update_page_table_state's device-allocation condition."""
+    if isinstance(source, ttnn.Tensor):
+        return False
+    if previous is None:
+        return True
+    return tuple(previous["device"].shape) != tuple(torch.as_tensor(source).shape)
 
 
 def _update_page_table_state(previous, source, mesh_device):
