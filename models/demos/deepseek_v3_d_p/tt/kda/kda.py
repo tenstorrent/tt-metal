@@ -139,10 +139,10 @@ class ttKDA:
         self.output_projection_grid = (output_grid.x, output_grid.y)
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
-        if weights is not None and state_dict:
+        if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
         if weights is None:
-            loaded = load_kda_weights(
+            weights = load_kda_weights(
                 mesh_device,
                 config,
                 state_dict,
@@ -150,8 +150,6 @@ class ttKDA:
                 cache_name_prefix=f"layer_{layer_idx}.kda",
                 tensor_parallel_axis=tp_axis,
             )
-            assert loaded is not None
-            weights = loaded
         expected_tp_size = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         if weights.tensor_parallel_size != expected_tp_size or weights.tensor_parallel_axis != tp_axis:
             raise ValueError(

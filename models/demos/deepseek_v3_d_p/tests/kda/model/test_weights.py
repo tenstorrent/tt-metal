@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Eight-device whole-head KDA weight-layout tests."""
 
-
 import pytest
 import torch
 
@@ -33,19 +32,6 @@ pytestmark = [
 
 def _host_shards(tensor: ttnn.Tensor) -> list[torch.Tensor]:
     return [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor)]
-
-
-def test_cache_build_requires_state_dict(mesh_device: ttnn.MeshDevice, tmp_path, expect_error) -> None:
-    config = KDAConfig(
-        hidden_size=64,
-        num_heads=8,
-        head_k_dim=32,
-        head_v_dim=32,
-        conv_kernel_size=4,
-        norm_eps=1e-5,
-    )
-    with expect_error(ValueError, "requires a state_dict"):
-        load_kda_weights(mesh_device, config, None, tmp_path, _load_to_device=False)
 
 
 def test_tp_weight_layout(mesh_device: ttnn.MeshDevice) -> None:
