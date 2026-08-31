@@ -139,7 +139,7 @@ skus:
     runs_on:
       - in-service
       - arch-blackhole
-      - BH-LoudBox
+      - BH-LoudBox-iommu
       - pipeline-functional
     weights-cache-mode: cloud-mlperf
 
