@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import Deep
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_y_device_params
@@ -263,7 +263,7 @@ def test_ttnn_reduce_single_expert(mesh_device, device_params, use_weights):
 REDUCE_MODELS = [
     ("dsv3", DeepSeekV3Config, False),
     ("glm_51", GLM51Config, True),
-    ("kimi_k26", KimiK26Config, True),
+    ("kimi_k2_7", KimiK27Config, True),
     ("minimax_m27", MiniMaxM27Config, True),
     ("dsv4_pro", DeepSeekV4ProConfig, True),
     ("dsv4_flash", DeepSeekV4FlashConfig, True),

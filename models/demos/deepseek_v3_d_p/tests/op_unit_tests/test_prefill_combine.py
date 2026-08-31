@@ -24,7 +24,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
@@ -344,7 +344,7 @@ ONLY_PROXY_QB_MESH = _Test_Mesh(
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
     ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
-    ("kimi_k26", KimiK26Config, ONLY_PROXY_QB_MESH),
+    ("kimi_k2_7", KimiK27Config, ONLY_PROXY_QB_MESH),
     ("minimax_m27", MiniMaxM27Config, ONLY_PROXY_QB_MESH),
     ("dsv4_pro", DeepSeekV4ProConfig, ONLY_PROXY_QB_MESH),
     ("dsv4_flash", DeepSeekV4FlashConfig, ONLY_PROXY_QB_MESH),

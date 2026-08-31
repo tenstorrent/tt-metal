@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
@@ -59,7 +59,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 # SCORE_FUNC, so each model is fully described by its config class.
 GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
-    "kimi_k2_7": KimiK26Config,  # K2.7-Code shares K2.6's config exactly
+    "kimi_k2_7": KimiK27Config,
     "kimi_k3": KimiK3Config,
     "glm_5_2": GLM52Config,
     "minimax_m2_7": MiniMaxM27Config,

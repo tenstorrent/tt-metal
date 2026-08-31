@@ -39,7 +39,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.pcc.test_ttnn_moe import run_model
@@ -58,7 +58,7 @@ _SEQ_LEN_PER_CHIP = PREFILL_CHUNK_TOKENS_PER_CHIP
 _DISPATCH_BUFFER_CAPACITY_FACTOR = 5
 
 # Both generations carry FABRIC_PAYLOAD_SIZE = 7168, so one device_params axis serves both.
-_FABRIC_PAYLOAD_SIZE = KimiK26Config.FABRIC_PAYLOAD_SIZE
+_FABRIC_PAYLOAD_SIZE = KimiK27Config.FABRIC_PAYLOAD_SIZE
 
 # The profiler's default 1s collection deadline is sized for a single block's programs. The MoE
 # forward at 896 experts dispatches far more, and records arrive asynchronously from the receiver
@@ -97,7 +97,7 @@ class _MoEPerfCase:
 # MoE shapes -- and therefore this baseline -- are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
-    config=KimiK26Config,
+    config=KimiK27Config,
     expected_ns=6_574_780,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned

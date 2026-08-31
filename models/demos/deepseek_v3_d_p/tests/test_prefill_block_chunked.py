@@ -33,7 +33,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank, num_full_indexer_layers, resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -855,7 +855,7 @@ def test_ds_prefill_block_chunked_padded(
 # ---------------------------------------------------------------------------
 # Same chunked-prefill machinery as the DeepSeek tests, with the kimi_k2_7 variant: the host gate
 # (GateComputeMode.HOST_ALL — Kimi has a single expert group and is validated only with the host
-# gate) and KimiK26Config fabric payload size. Kimi has a single dense layer (NUM_DENSE_LAYERS=1,
+# gate) and KimiK27Config fabric payload size. Kimi has a single dense layer (NUM_DENSE_LAYERS=1,
 # layer 0); the block test reads layer L-1's decoder output as layer L's input, so we cannot drive
 # the lone dense layer (would need layer -1) — only the first MoE layer (layer 1) is exercised.
 # These skip until the Kimi golden trace lands (set PREFILL_TRACE_DIR; see tt/runners/adapters/).
@@ -872,7 +872,7 @@ def test_ds_prefill_block_chunked_padded(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -919,7 +919,7 @@ def test_kimi_prefill_block_chunked(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
