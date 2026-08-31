@@ -4,6 +4,8 @@
 
 #include "multi_scale_deformable_attn_device_operation.hpp"
 
+#include <tt-metalium/hal.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::multi_scale_deformable_attn {
@@ -85,6 +87,21 @@ void MSDAOperation::validate_on_program_cache_miss(const operation_attributes_t&
     // them back per query row, so any positive multiple of 16 works. A head's
     // slice starts at h*D*2 bytes, which the 16-multiple also keeps NoC-aligned.
     TT_FATAL(d > 0 && d % 16 == 0, "value's per-head D (= {}) must be a positive multiple of 16", d);
+    // A head's slice starts at h*D*element_size, which the NoC reads from directly rather than
+    // rounding down the way it does for attn and grid: the destination is an exact tile face half,
+    // so a lead-in has nowhere to go. The boundary is arch-dependent — 32 bytes on Wormhole,
+    // 64 on Blackhole — so D that is legal on one arch can be illegal on the other.
+    if (nh > 1) {
+        const uint32_t align = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t head_stride_bytes = d * value.element_size();
+        TT_FATAL(
+            head_stride_bytes % align == 0,
+            "with num_heads > 1, per-head D (= {}) must give a head stride ({} B) that is a "
+            "multiple of this arch's DRAM alignment ({} B)",
+            d,
+            head_stride_bytes,
+            align);
+    }
 
     const uint32_t q = static_cast<uint32_t>(as[1]);
     // attn is either (N, Q, P) — the head is already in the batch index — or

@@ -91,6 +91,10 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     }
     const uint32_t total_output_tiles = static_cast<uint32_t>(tiles.size());
 
+    // A NoC read's DRAM-side offset must sit on this boundary, and it is not the same on every
+    // arch — 32 bytes on Wormhole, 64 on Blackhole.
+    const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+
     // Stick sizes (raw, before alignment).
     // The value page holds every head's slice; the reader takes one head out of it by
     // byte offset, which is what spares the caller a head-major copy of the whole tensor.
@@ -103,15 +107,15 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     const uint32_t grid_pts_per_stick = grid_packed ? P : static_cast<uint32_t>(gsh[-1]) / 2u;
     const uint32_t grid_n_div = grid_packed ? num_heads : 1u;
     const uint32_t grid_head_stride_pts = grid_packed ? (static_cast<uint32_t>(gsh[-1]) / 2u) / num_heads : 0u;
-    // Like attn: the run's byte offset is rounded down to the 32-byte NoC boundary, so the scratch
-    // row holds the worst-case lead-in as well.
+    // Like attn: the run's byte offset is rounded down to the NoC boundary, so the scratch row
+    // holds the worst-case lead-in as well.
     const uint32_t grid_stick_raw =
-        grid_packed ? (32u - 2u) + 2u * P * grid.element_size() : 2u * grid_pts_per_stick * grid.element_size();
+        grid_packed ? (dram_align - 2u) + 2u * P * grid.element_size() : 2u * grid_pts_per_stick * grid.element_size();
     const uint32_t grid_page_raw = static_cast<uint32_t>(gsh[-1]) * grid.element_size();
-    // The reader rounds a run's byte offset down to the 32-byte NoC boundary and indexes the
-    // wanted points from there, so a scratch row carries the worst-case lead-in as well.
-    // Kernel-side ATTN_READ_NBYTES derives the same number from P.
-    const uint32_t attn_stick_raw = (32u - 2u) + P * attn.element_size();
+    // A run's offset need not land on the boundary, so the reader rounds down and indexes the
+    // wanted points from there; a scratch row therefore carries the lead-in too. Kernel-side
+    // ATTN_READ_NBYTES derives the same number.
+    const uint32_t attn_stick_raw = (dram_align - 2u) + P * attn.element_size();
     const uint32_t attn_page_raw = static_cast<uint32_t>(as[2]) * attn.element_size();
     const uint32_t output_stick_raw = D * output.element_size();
 
@@ -125,6 +129,8 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // Tile size (bf16): 32 * 32 * 2 = 2048 bytes.
     const auto data_format = datatype_to_dataformat_converter(DataType::BFLOAT16);
     const uint32_t tile_nbytes = tt::tile_size(data_format);
+    // 32 bf16 — one tile row, spanning a face's low and high halves.
+    constexpr uint32_t tile_row_nbytes = 2u * 32u;
 
     // Work split across cores in tile units.
     auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_core_group_1, tiles_per_core_group_2] =
@@ -151,6 +157,7 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     constexpr uint8_t frac_y_cb = tt::CBIndex::c_12;         // compute -> compute (tile)
     constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;    // compute -> writer (tile)
     constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;  // writer-only stick scratch
+    constexpr uint8_t value_row_cb = tt::CBIndex::c_13;      // reader-only value-row scratch
 
     auto push_cb = [&](uint8_t idx, uint32_t pages, uint32_t page_size, tt::DataFormat fmt) {
         descriptor.cbs.push_back(CBDescriptor{
@@ -168,6 +175,12 @@ ProgramDescriptor MSDAOperation::create_descriptor(
     // once at startup and treats each as a linear L1 arena.
     push_cb(grid_cb, TILE_MAX_ROWS * (P / grid_pts_per_stick), grid_stick_aligned, grid_fmt);
     push_cb(attn_cb, TILE_MAX_ROWS, attn_stick_aligned, attn_fmt);
+    // A tile row is two 32-byte halves at non-contiguous L1 offsets, so a value stick cannot land
+    // in one transfer. Where the high half's 32-byte source offset clears the arch's DRAM read
+    // alignment the NoC places both halves directly; where it does not — Blackhole reads on a
+    // 64-byte boundary — the whole row is fetched once and split in L1, and this holds it.
+    const bool half_read_aligned = (tile_row_nbytes / 2) % dram_align == 0;
+    push_cb(value_row_cb, half_read_aligned ? 1u : TILE_MAX_ROWS * n_d_tiles, tile_row_nbytes, data_format);
     // Reader -> compute pipes: double-buffered blocks of n_d_tiles tiles.
     push_cb(input_tile_cb, 2 * n_d_tiles, tile_nbytes, data_format);
     // The geometry phase solves every point of a block before the reduction
@@ -216,6 +229,8 @@ ProgramDescriptor MSDAOperation::create_descriptor(
         grid_n_div,
         grid_head_stride_pts,
         grid_packed ? operation_attributes.point_offset : 0u,
+        dram_align,
+        value_row_cb,
     };
     TensorAccessorArgs(*value.buffer()).append_to(reader_ct);
     TensorAccessorArgs(*grid.buffer()).append_to(reader_ct);

@@ -5,7 +5,11 @@
 import pytest
 import torch
 import ttnn
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+# A NoC read's DRAM-side offset must land on this boundary. It is not the same on every arch.
+NOC_DRAM_ALIGN = 64 if is_blackhole() else 32
 
 
 def _reference_msda(value: torch.Tensor, grid: torch.Tensor, attn: torch.Tensor, align_corners: bool) -> torch.Tensor:
@@ -128,6 +132,8 @@ def test_msda_packed_heads(device, num_heads, head_dim):
     The reader picks head n % num_heads out of the stick by byte offset, so the caller never
     materialises (B*num_heads, h, w, D).
     """
+    if num_heads > 1 and (head_dim * 2) % NOC_DRAM_ALIGN:
+        pytest.skip(f"head stride {head_dim * 2} B is under this arch's {NOC_DRAM_ALIGN} B alignment")
     B, h_in, w_in, Q, P = 2, 16, 16, 32, 4
     N = B * num_heads
     torch.manual_seed(0)
@@ -200,7 +206,8 @@ def test_msda_packed_attn(device, num_heads, num_levels, level):
 
 def test_msda_rejects_point_offset_past_the_head_run(device, expect_error):
     """point_offset + P must stay inside a head's run, or the read walks into the next head."""
-    B, h_in, w_in, D, Q, P, num_heads, num_levels = 1, 10, 10, 16, 16, 4, 2, 2
+    # D is sized to clear the arch's DRAM alignment so the head-stride guard does not fire first.
+    B, h_in, w_in, D, Q, P, num_heads, num_levels = 1, 10, 10, NOC_DRAM_ALIGN // 2, 16, 4, 2, 2
     N = B * num_heads
     rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     value_t = ttnn.from_torch(torch.randn(B, h_in, w_in, num_heads * D).to(torch.bfloat16), **rm)
@@ -254,7 +261,8 @@ def test_msda_packed_grid(device, num_heads, num_levels, level):
 
 def test_msda_rejects_packed_grid_point_offset_overrun(device, expect_error):
     """point_offset + P must stay inside the grid's per-head run as well as attn's."""
-    B, h_in, w_in, D, Q, P, num_heads, num_levels = 1, 10, 10, 16, 16, 4, 2, 2
+    # D is sized to clear the arch's DRAM alignment so the head-stride guard does not fire first.
+    B, h_in, w_in, D, Q, P, num_heads, num_levels = 1, 10, 10, NOC_DRAM_ALIGN // 2, 16, 4, 2, 2
     rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     value_t = ttnn.from_torch(torch.randn(B, h_in, w_in, num_heads * D).to(torch.bfloat16), **rm)
     # attn's run is long enough, so only the grid's bound can fire.
@@ -265,3 +273,19 @@ def test_msda_rejects_packed_grid_point_offset_overrun(device, expect_error):
         ttnn.experimental.multi_scale_deformable_attn(
             value_t, grid_t, attn_t, num_heads=num_heads, num_points=P, point_offset=num_levels * P
         )
+
+
+def test_msda_rejects_head_stride_under_noc_alignment(device, expect_error):
+    """A head's slice is read with no rounding, so its stride must clear the arch's DRAM alignment."""
+    head_dim = NOC_DRAM_ALIGN // 2 - 16  # one 16-multiple short of the boundary
+    if head_dim <= 0:
+        pytest.skip("no legal 16-multiple below this arch's alignment")
+    B, h_in, w_in, Q, P, num_heads = 1, 10, 10, 16, 4, 2
+    N = B * num_heads
+    rm = dict(device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    value_t = ttnn.from_torch(torch.randn(B, h_in, w_in, num_heads * head_dim).to(torch.bfloat16), **rm)
+    grid_t = ttnn.from_torch((torch.rand(N, Q * P, 1, 2) * 2.0 - 1.0).to(torch.bfloat16), **rm)
+    attn_t = ttnn.from_torch(torch.softmax(torch.randn(N, Q, P), dim=-1).to(torch.bfloat16), **rm)
+
+    with expect_error(RuntimeError, "DRAM alignment"):
+        ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t, num_heads=num_heads)
