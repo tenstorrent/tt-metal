@@ -94,7 +94,7 @@ We’ll use a config file for flexibility:
     "enable_fast_runtime_mode": false,
     "enable_logging": true,
     "report_name": "ttnn_visualizer_tutorial",
-    "enable_graph_report": false,
+    "enable_graph_report": true,
     "enable_graph_python_stack_traces": true,
     "enable_detailed_buffer_report": true,
     "enable_detailed_tensor_report": false,
@@ -106,10 +106,10 @@ Each configuration option has a specific purpose:
 
 * **enable_fast_runtime_mode** - Must be disabled to enable logging.
 * **enable_logging** - Synchronizes main thread after every operation and logs the operation.
-* **report_name** (*optional*) - Name of the report used by TT-NN Visualizer. If not provided, no data will be dumped to disk.
+* **report_name** (*required*) - Name of the report used by TT-NN Visualizer. If not provided, no data will be dumped to disk. Note that tests under `tests/ttnn/` derive one from the test id automatically, but tests elsewhere (such as under `models/`) do not, so set it explicitly.
 * **enable_graph_python_stack_traces** (*optional*) - When true, outermost Python `begin_graph_capture` records Python call stacks. `ttnn.graph.full_graph_capture` always records Python stacks regardless of this flag.
-* **enable_detailed_buffer_report** (if *report_name* is set) - Enable to visualize the detailed buffer report after every operation.
-* **enable_graph_report** (if *report_name* is set) - Enable to visualize the graph after every operation.
+* **enable_graph_report** (*required*) - Captures the operation graph. This is what writes `db.sqlite`; with it disabled no report is produced at all, whatever the other report flags say.
+* **enable_detailed_buffer_report** (if *report_name* and *enable_graph_report* are set) - Enable to visualize the detailed buffer report after every operation.
 * **enable_detailed_tensor_report** (if *report_name* is set) - Enable to visualize the values of input and output tensors of every operation.
 * **enable_comparison_mode** (if *report_name* is set) - Enable to test the output of operations against their golden implementation.
 
