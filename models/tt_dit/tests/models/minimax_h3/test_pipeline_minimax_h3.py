@@ -9,8 +9,8 @@ Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. Th
 count from `align_num_frames`, so neither is tabulated here. Each case writes its own artifact stem,
 so a sweep does not overwrite itself.
 
-Pipeline wall-clock lives in `test_performance_minimax_h3.py`. Sanity, seam, CLIP, artifact, and
-reminder logs are silent unless `H3_LOG_QUALITY=1`.
+Pipeline wall-clock lives in `test_performance_minimax_h3.py`. Sanity, seam, CLIP, and reminder logs
+are silent unless `H3_LOG_QUALITY=1`.
 """
 
 from __future__ import annotations

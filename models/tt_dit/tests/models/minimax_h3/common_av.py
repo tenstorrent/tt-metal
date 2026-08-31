@@ -5,8 +5,8 @@
 """Reference-free A/V sanity checks plus the scaffolding shared by the MiniMax-H3 e2e gates.
 A/V sync is checked structurally (duration/ordering); envelope-vs-motion correlation is diagnostic only.
 
-Quality/sanity logs (OK lines, seams, CLIP, artifacts, reminders) are silent unless `H3_LOG_QUALITY=1`.
-Pipeline stage durations (`BenchmarkProfiler`) always log, host rank only.
+Quality/sanity logs (OK lines, seams, CLIP, reminders) are silent unless `H3_LOG_QUALITY=1`.
+Artifact write paths and pipeline stage durations (`BenchmarkProfiler`) always log, host rank only.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ import ttnn
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
 
-# Off by default: sanity, seam, CLIP, artifact, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
+# Off by default: sanity, seam, CLIP, and reminder chatter. Set H3_LOG_QUALITY=1 to see it.
 # Asserts still run either way. Stage durations always log on the host rank.
 _QUALITY_LOG_ON = ("1", "true", "yes", "on")
 
@@ -227,11 +227,13 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         handle.setframerate(sampling_rate)
         handle.writeframes((pcm * 32767.0).astype("<i2").tobytes())
     paths["wav"] = wav_path
-    log_quality(f"wrote {wav_path}")
+    if is_host():
+        logger.info(f"wrote {wav_path}")
 
     exe = _ffmpeg()
     if exe is None:
-        log_quality_warning("no ffmpeg available; skipping mp4 and the file-level checks")
+        if is_host():
+            logger.warning("no ffmpeg available; skipping mp4 and the file-level checks")
         return paths
 
     silent = directory / f"{stem}_silent.mp4"
@@ -296,7 +298,8 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
         capture_output=True,
     )
     paths["mp4"] = muxed
-    log_quality(f"wrote {muxed} and {silent}")
+    if is_host():
+        logger.info(f"wrote {muxed} and {silent}")
     return paths
 
 
