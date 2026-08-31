@@ -1141,7 +1141,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         dim);
 
     const bool full_mesh = !cluster_axis.has_value();
-    const auto mesh_shape = mesh_device.shape();
+    const auto& mesh_shape = mesh_device.shape();
     std::size_t num_devices =
         full_mesh ? mesh_shape.mesh_size() : (*cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols());
     ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
