@@ -4,6 +4,7 @@
 
 #include "unary_op_utils.hpp"
 
+#include <cmath>
 #include <optional>
 #include <type_traits>
 #include <tt_stl/assert.hpp>
@@ -660,6 +661,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {}u);", idst, lambda_bits)};
         }
         case UnaryOpType::SOFTSHRINK:
+            // softshrink_tile clamps to [-lambda, lambda] via sfpi::clamp(v, -lambda, lambda), which assumes
+            // -lambda <= lambda. A negative lambda swaps the bounds and silently collapses the output to a
+            // constant instead of raising an error, so reject it here before it reaches the kernel. The
+            // upper bound follows torch.nn.functional.softshrink's own contract (lambd in [0, dtype max]),
+            // which also excludes +inf.
+            TT_FATAL(
+                param0 >= 0.0f && std::isfinite(param0), "SOFTSHRINK requires a finite non-negative lambda, got {}", param0);
             return {
                 "softshrink_tile_init();",
                 fmt::format("softshrink_tile({}, {}u);", idst, std::bit_cast<uint32_t>(param0))};

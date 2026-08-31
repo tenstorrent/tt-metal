@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_device_operation.hpp"
+
+#include <cmath>
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -81,6 +83,15 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
             const auto beta = op.get_param_if<float>(0);
             TT_FATAL(beta.has_value(), "Unary: SOFTCAP requires a float beta parameter");
             TT_FATAL(*beta != 0.0f, "Unary: SOFTCAP requires a non-zero beta");
+        } else if (op.type() == operations::unary::UnaryOpType::SOFTSHRINK) {
+            // softshrink_tile clamps to [-lambda, lambda]; a negative lambda swaps the bounds
+            // and silently collapses the output to a constant instead of raising an error.
+            const auto lambda = op.get_param_if<float>(0);
+            TT_FATAL(lambda.has_value(), "Unary: SOFTSHRINK requires a float lambda parameter");
+            TT_FATAL(
+                *lambda >= 0.0f && std::isfinite(*lambda),
+                "Unary: SOFTSHRINK requires a finite non-negative lambda, got {}",
+                *lambda);
         }
     }
 
