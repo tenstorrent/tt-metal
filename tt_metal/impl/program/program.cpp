@@ -76,6 +76,7 @@
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include "tt_metal/jit_build/data_format.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
