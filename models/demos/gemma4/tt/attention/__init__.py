@@ -80,6 +80,7 @@ class Gemma4Attention:
         weight_dtype=ttnn.bfloat16,
         bounded_sliding_kv_cache: bool = False,
         ring_prefill_chunk_size=None,
+        sliding_ring_max_seq_len=None,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -134,16 +135,21 @@ class Gemma4Attention:
         # every cross-chunk read silently fell back to the mask path.
         if cp_degree(mesh_config) > 1 and ring_prefill_chunk_size:
             num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
+            ring_cache_len = (
+                int(sliding_ring_max_seq_len)
+                if config.is_sliding and sliding_ring_max_seq_len is not None
+                else max_seq_len
+            )
             self.ring_kv_cache = init_ring_kv_cache(
                 mesh_device=mesh_device,
                 mesh_config=mesh_config,
                 num_local_kv_heads=num_local_kv_heads,
                 head_dim=config.head_dim,
-                max_seq_len=max_seq_len,
+                max_seq_len=ring_cache_len,
                 num_layers=1,
                 num_users=max_batch_size,
             )
-            self.ring_max_seq_len = max_seq_len
+            self.ring_max_seq_len = ring_cache_len
 
         # Fallback CP mask cache for callers that pass no ccl_manager; the shared
         # one on CCLManager is preferred so a 60-layer stack holds two masks, not 60.

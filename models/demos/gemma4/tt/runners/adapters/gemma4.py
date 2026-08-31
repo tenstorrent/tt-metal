@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Common-prefill adapter for Gemma 4 31B global KV migration."""
+"""Common-prefill adapter for Gemma 4 31B mixed global/sliding KV migration."""
 
 from __future__ import annotations
 
@@ -19,11 +19,17 @@ class Gemma4PrefillConfig:
     EMB_SIZE = 5376
     FABRIC_PAYLOAD_SIZE = EMB_SIZE
     NUM_LAYERS = 60
-    NUM_KEY_VALUE_HEADS = 4
-    HEAD_DIM = 512
-    ROTARY_DIM = 128
-    MIGRATION_ROW_DIM = 640
+    NUM_KEY_VALUE_HEADS = 16
+    HEAD_DIM = 256
+    ROTARY_DIM = 256
+    GLOBAL_NUM_KEY_VALUE_HEADS = 4
+    GLOBAL_HEAD_DIM = 512
+    GLOBAL_ROTARY_DIM = 128
+    GLOBAL_MIGRATION_ROW_DIM = 640
     GLOBAL_LAYERS = tuple(range(5, 60, 6))
+    SLIDING_LAYERS = tuple(i for i in range(60) if i % 6 != 5)
+    SLIDING_NUM_KEY_VALUE_HEADS = 16
+    SLIDING_HEAD_DIM = 256
 
 
 @dataclass
@@ -32,6 +38,7 @@ class Gemma4KvCaches(KvCaches):
 
     paged: list
     migration: object
+    sliding_migration: object
 
 
 class Gemma4PrefillAdapter(PrefillModelAdapter):
@@ -93,6 +100,10 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             global_layer_indices,
         )
         from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
+        from models.demos.gemma4.tt.attention.sliding_migration import (
+            allocate_sliding_migration_cache,
+            sliding_layer_indices,
+        )
         from models.tt_transformers.tt.common import PagedAttentionConfig
 
         if not (params.is_first_rank and params.is_last_rank and params.first_layer_idx == 0):
@@ -119,25 +130,38 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
         for layer_idx in range(params.num_layers):
             config = Gemma4AttentionConfig(hf_config, layer_idx)
             if config.is_sliding:
-                config.cache_position_modulo = config.sliding_window
-                block_override = params.num_users * config.sliding_window // block_size
+                # Sliding computation uses its current K/V plus ring/tail path.
+                # Its only durable history is the packed migration cache below.
+                paged.append(None)
             else:
-                block_override = max_blocks // params.sp_factor
-            paged.append(
-                init_kv_cache(
-                    mesh_device,
-                    config,
-                    max_batch_size=params.num_users,
-                    max_seq_len=params.max_seq_len,
-                    paged_attention_config=paged_config,
-                    cache_dtype=cache_dtype,
-                    max_num_blocks_override=block_override,
+                paged.append(
+                    init_kv_cache(
+                        mesh_device,
+                        config,
+                        max_batch_size=params.num_users,
+                        max_seq_len=params.max_seq_len,
+                        paged_attention_config=paged_config,
+                        cache_dtype=cache_dtype,
+                        max_num_blocks_override=max_blocks // params.sp_factor,
+                    )
                 )
-            )
 
         globals_ = global_layer_indices(hf_config.layer_types)
         if globals_ != self.model_config.GLOBAL_LAYERS:
             raise ValueError(f"unexpected Gemma 4 global layer pattern: {globals_}")
+        sliding = sliding_layer_indices(hf_config.layer_types)
+        if sliding != self.model_config.SLIDING_LAYERS:
+            raise ValueError(f"unexpected Gemma 4 sliding layer pattern: {sliding}")
+        sliding_cache_len = int(os.environ.get("PREFILL_GEMMA4_SLIDING_CACHE_LEN", str(params.max_seq_len)))
+        if not 0 < sliding_cache_len <= params.max_seq_len:
+            raise ValueError(
+                f"PREFILL_GEMMA4_SLIDING_CACHE_LEN must be in (0, {params.max_seq_len}], " f"got {sliding_cache_len}"
+            )
+        if sliding_cache_len % params.chunk_size:
+            raise ValueError(
+                f"PREFILL_GEMMA4_SLIDING_CACHE_LEN={sliding_cache_len} must be divisible by "
+                f"PREFILL_CHUNK_SIZE={params.chunk_size}"
+            )
         migration = allocate_global_migration_cache(
             mesh_device,
             num_users=params.num_users,
@@ -147,7 +171,28 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             tp_axis=params.tp_axis,
             dtype=cache_dtype,
         )
-        return Gemma4KvCaches(paged=paged, migration=migration)
+        try:
+            sliding_migration = allocate_sliding_migration_cache(
+                mesh_device,
+                num_users=params.num_users,
+                num_layers=len(sliding),
+                max_seq_len=sliding_cache_len,
+                sp_axis=params.sp_axis,
+                tp_axis=params.tp_axis,
+                dtype=cache_dtype,
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                "Failed to allocate Gemma 4 full-history sliding migration K/V. "
+                f"Current profile: users={params.num_users}, layers={len(sliding)}, "
+                f"length={sliding_cache_len}, CP={params.sp_factor}. Lower "
+                "PREFILL_GEMMA4_SLIDING_CACHE_LEN for bring-up."
+            ) from error
+        return Gemma4KvCaches(
+            paged=paged,
+            migration=migration,
+            sliding_migration=sliding_migration,
+        )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         from models.demos.gemma4.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
@@ -165,6 +210,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             is_last_rank=params.is_last_rank,
             first_layer_idx=params.first_layer_idx,
             use_trace=params.use_trace,
+            sliding_cache_len=int(os.environ.get("PREFILL_GEMMA4_SLIDING_CACHE_LEN", str(params.max_seq_len))),
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

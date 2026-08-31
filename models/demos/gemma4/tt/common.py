@@ -35,6 +35,7 @@ def create_tt_model(
     bounded_sliding_kv_cache: bool = False,
     bounded_sliding_cache_slots: int | None = None,
     prefill_chunk_size=None,
+    sliding_ring_max_seq_len=None,
 ):
     """
     Create Gemma4 model with all weights loaded to device.
@@ -104,6 +105,7 @@ def create_tt_model(
         precision=precision,
         bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         bounded_sliding_cache_slots=bounded_sliding_cache_slots,
+        sliding_ring_max_seq_len=sliding_ring_max_seq_len,
     )
 
     return model_args, model, model.tt_kv_cache, state_dict

@@ -42,6 +42,7 @@ class TtPrefillRuntimeConfig:
     is_last_rank: bool = True
     first_layer_idx: int = 0
     use_trace: bool = False
+    sliding_cache_len: int = 262144
 
     @property
     def sp_factor(self) -> int:
@@ -74,6 +75,21 @@ class TtPrefillRuntime:
             raise ValueError(f"Gemma 4 migration requires CP8/TP4 mesh (8,4), got {config.mesh_shape}")
         if config.max_seq_len % config.chunk_size:
             raise ValueError(f"max_seq_len={config.max_seq_len} must be divisible by chunk_size={config.chunk_size}")
+        # Sliding computation currently needs a full-history ring cache in
+        # addition to the decode-ordered migration cache. Refuse profiles where
+        # those two families alone exceed a conservative per-device budget,
+        # before model construction fails deep inside DRAM allocation.
+        sliding_one_family = (
+            config.num_users * 50 * 4 * (config.sliding_cache_len // config.sp_factor) * 256 * 2 * 1088 // 1024
+        )
+        sliding_total = 2 * sliding_one_family
+        if sliding_total > 24 * 1024**3:
+            raise MemoryError(
+                "Gemma 4 sliding ring + migration caches require "
+                f"{sliding_total / 1024**3:.2f} GiB/device before weights/global KV. "
+                "Lower PREFILL_GEMMA4_SLIDING_CACHE_LEN; the current full-history ring "
+                "implementation cannot fit this profile."
+            )
 
         self.mesh_config = MeshConfig(
             config.mesh_shape,
@@ -97,15 +113,14 @@ class TtPrefillRuntime:
             paged_attention_config=self.paged_config,
             create_kv_cache=False,
             model_path=model_path,
-            bounded_sliding_kv_cache=True,
-            bounded_sliding_cache_slots=config.num_users,
+            bounded_sliding_kv_cache=False,
             prefill_chunk_size=config.chunk_size,
+            sliding_ring_max_seq_len=config.sliding_cache_len,
         )
         self.hf_config = model_args
         self.cp = config.sp_factor
         self._page_table_width = config.max_seq_len // PAGE_BLOCK_SIZE // self.cp
         self._chunk_page_table_width = config.chunk_size // PAGE_BLOCK_SIZE // self.cp
-        self._sliding_blocks_per_slot = model_args.sliding_window // PAGE_BLOCK_SIZE
         self._sliding_layers = tuple(layer_type == "sliding_attention" for layer_type in model_args.layer_types)
         self._slot_blocks = [_fixed_cache_slot_blocks(slot, self._page_table_width) for slot in range(config.num_users)]
 
@@ -139,9 +154,9 @@ class TtPrefillRuntime:
 
     def _layer_page_tables(self, slot: int) -> list[torch.Tensor]:
         full = _page_table_row(self._page_table_width, self._slot_blocks[slot])
-        sliding_blocks = _fixed_cache_slot_blocks(slot, self._sliding_blocks_per_slot)
-        sliding = _page_table_row(self._page_table_width, sliding_blocks)
-        return [sliding if is_sliding else full for is_sliding in self._sliding_layers]
+        # Sliding layers have no paged cache in the migration runtime. Keep a
+        # shape-compatible table in the per-layer list; it is never consumed.
+        return [full for _is_sliding in self._sliding_layers]
 
     def _stage_metadata(self, *, slot_id: int, actual_start: int, actual_end: int) -> None:
         layer_tables = self._layer_page_tables(slot_id)
@@ -154,9 +169,10 @@ class TtPrefillRuntime:
 
         valid = actual_end - actual_start
         valid_lengths = _cp_chunk_valid_lengths(valid, self.config.chunk_size, self.cp, self.config.tp_factor)
-        ttnn.copy_host_to_device_tensor(
-            _host_mesh_scalars(self.mesh_device, valid_lengths), self.model.prefill_valid_len_dev
-        )
+        if self.model.prefill_valid_len_dev is not None:
+            ttnn.copy_host_to_device_tensor(
+                _host_mesh_scalars(self.mesh_device, valid_lengths), self.model.prefill_valid_len_dev
+            )
         positions = torch.arange(actual_start, actual_start + self.config.chunk_size, dtype=torch.int32).unsqueeze(0)
         ttnn.copy_host_to_device_tensor(
             _host_tensor(
@@ -197,7 +213,7 @@ class TtPrefillRuntime:
             actual_start=0,
             actual_end=self.config.chunk_size,
         )
-        if self.config.max_seq_len > self.config.chunk_size:
+        if self.config.sliding_cache_len > self.config.chunk_size:
             self.prefill_chunk(
                 self.make_chunk_input([0] * self.config.chunk_size),
                 kv_caches,
@@ -234,6 +250,11 @@ class TtPrefillRuntime:
             raise ValueError("chunk exceeds the configured cache")
 
         kv = self._resolve_kv(kv_caches)
+        if actual_end > kv.sliding_migration.max_seq_len:
+            raise ValueError(
+                f"request end {actual_end} exceeds PREFILL_GEMMA4_SLIDING_CACHE_LEN="
+                f"{kv.sliding_migration.max_seq_len}"
+            )
         self._stage_metadata(slot_id=slot_id, actual_start=actual_start, actual_end=actual_end)
         embeds, page_table, chunk_page_table, _ = self.model.transform_and_embed_prefill_inputs_device(
             input_tensor, self.page_table, self.chunk_page_table, None
@@ -260,6 +281,7 @@ class TtPrefillRuntime:
             migration_slot_id=slot_id,
             migration_actual_end=actual_end,
             global_migration_cache=kv.migration,
+            sliding_migration_cache=kv.sliding_migration,
             on_layer_complete=on_layer_complete,
         )
         if out is not None:
