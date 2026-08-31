@@ -113,8 +113,10 @@ inline std::uint8_t fabric_set_2d_mcast_route(
 // chip's reverse trees, a foreign final mesh takes a unicast-style carrier leg toward the exit.
 //
 // This API sends through one caller-chosen connection, so the root action must have at most one eth
-// output -- the per-direction client contract (one operation per outgoing direction). A caller wanting
-// the whole rectangle in one operation uses a fabric_multicast_source_inject_* API.
+// output. Clients preserve the per-direction contract by issuing up to four branches: E-only, W-only,
+// N with optional E/W teeth, and S with optional E/W teeth. If one such branch has multiple root
+// outputs under express routing (for example N and Z), use a fabric_multicast_source_inject_* API to
+// submit the same encoded branch through each selected connection.
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
