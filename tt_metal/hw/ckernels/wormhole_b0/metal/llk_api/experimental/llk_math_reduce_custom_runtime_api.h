@@ -7,6 +7,7 @@
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_reduce_custom.h"
 #include "experimental/llk_math_reduce_runtime_custom.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK REDUCE CUSTOM - Specialized reduce_max_row operations
@@ -31,12 +32,14 @@
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_init_runtime(
     std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_mop_config_runtime(
     std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }
 
@@ -58,6 +61,7 @@ inline void llk_math_reduce_block_max_row_mop_config_runtime(
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_runtime(
     const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(dst_index, tensor_shape);
@@ -71,7 +75,10 @@ inline void llk_math_reduce_block_max_row_runtime(
  * the native llk_math_reduce_block_max_row_init LLK. This function is highly specialized
  * for a certain use case and the LLK team does not guarantee any degree of generality.
  */
-inline void llk_math_reduce_block_max_row_reinit_runtime() { _llk_math_reduce_block_max_row_reinit_runtime_(); }
+inline void llk_math_reduce_block_max_row_reinit_runtime() {
+    SAN_HOOK(unsupported());
+    _llk_math_reduce_block_max_row_reinit_runtime_();
+}
 
 /**
  * Short reinitialization for block-based reduce_max_row operation after a matmul.
@@ -83,5 +90,6 @@ inline void llk_math_reduce_block_max_row_reinit_runtime() { _llk_math_reduce_bl
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_reinit_short_runtime(
     std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     _llk_math_reduce_block_max_row_reinit_short_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }

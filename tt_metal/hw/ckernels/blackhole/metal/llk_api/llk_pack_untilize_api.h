@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_pack_common_api.h"
 #include "llk_pack_untilize.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK UNTILIZE
@@ -34,6 +35,7 @@ template <
     std::uint32_t row_num_datums = TILE_C_DIM,
     bool dense = false>
 inline void llk_pack_untilize_init(std::uint32_t output) {
+    SAN_HOOK(unsupported());
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -52,6 +54,7 @@ inline void llk_pack_untilize_init(std::uint32_t output) {
  * @param output Output circular buffer / operand index.
  */
 inline void llk_pack_untilize_uninit(std::uint32_t output) {
+    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(output);
     _llk_pack_untilize_uninit_(pack_src_format[output_id]);
 }
@@ -88,6 +91,7 @@ inline void llk_pack_untilize(
     std::uint32_t output,
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
+    SAN_HOOK(unsupported());
     static_assert(diagonal == false, "Diagonal is only supported on WH");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);

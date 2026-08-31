@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include "llk_pack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK CUSTOM (ADC-mutexed single-tile pack)
@@ -32,6 +33,7 @@
 template <bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void llk_pack_init_mutex_ADC(
     const std::uint32_t pack_output, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the Blackhole tilize workaround.
     const bool is_input_8bit_format = IS_8BIT_FORMAT(static_cast<std::uint32_t>(unpack_src_format[input_operand]));
@@ -49,6 +51,7 @@ inline void llk_pack_init_mutex_ADC(
 // Z-counter reset) under the mutex. Requires llk_pack_init_mutex_ADC.
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false>
 inline void llk_pack_mutex_ADC(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
+    SAN_HOOK(unsupported());
     const std::uint8_t output_id = get_output_id(output);
 
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, true /*mutex_ADC*/>(

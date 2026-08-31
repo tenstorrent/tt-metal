@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "llk_math_eltwise_unary_datacopy.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK ELTWISE UNARY DATACOPY
@@ -18,6 +19,7 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     const std::uint32_t operand_id = get_operand_id(operand);
@@ -32,6 +34,7 @@ template <
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
 
     for (uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
@@ -49,6 +52,7 @@ template <
     bool is_int_fpu_en = false,
     PackMode pack_mode = PackMode::Default>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
         "Blackhole math datacopy init supports only PackMode::Default and PackMode::Tilize");
@@ -62,5 +66,6 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_uninit() {
+    SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_datacopy_uninit_<src_b_bcast_type, unpack_to_dest>();
 }

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "llk_math_common_api.h"
 #include "experimental/llk_math_reduce_custom.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK REDUCE CUSTOM - Specialized reduce_max_row operations
@@ -29,6 +30,7 @@
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row_init(const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     _llk_math_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
 }
 
@@ -49,6 +51,7 @@ inline void llk_math_reduce_block_max_row_init(const ckernel::TensorShape& tenso
  */
 template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en>
 inline void llk_math_reduce_block_max_row(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
     _llk_math_reduce_block_max_row_<block_ct_dim, is_fp32_dest_acc_en>(dst_index, tensor_shape);

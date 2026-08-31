@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB SDPA_CUSTOM_MM_REUSE_DEST_SRCB
@@ -40,6 +41,7 @@ inline void llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     const std::uint32_t in1_k_stride = 1) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operand1);
 
     const std::uint32_t base_address_A = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;

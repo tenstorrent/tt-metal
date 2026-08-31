@@ -22,7 +22,10 @@
  *
  * @param enable When true, the packer treats the destination register as FP32 accumulated.
  */
-inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_acc_(enable); }
+inline void llk_pack_set_fp32_dest_acc(bool enable) {
+    SAN_HOOK(unsupported());
+    _llk_pack_set_fp32_dest_acc_(enable);
+}
 
 /**
  * Configure the packer hardware for the given output operand.
@@ -231,6 +234,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const 
  * @param relu_config Relu mode/threshold configuration.
  */
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    SAN_HOOK(unsupported());
     _llk_pack_relu_config_(relu_config);
 }
 
