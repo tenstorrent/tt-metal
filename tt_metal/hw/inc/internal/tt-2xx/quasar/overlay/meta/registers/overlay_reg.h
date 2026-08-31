@@ -1,3 +1,8 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
+
 #ifndef OVERLAY_REG_H
 #define OVERLAY_REG_H
 
