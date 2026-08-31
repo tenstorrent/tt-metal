@@ -2636,11 +2636,50 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // wherever these tests run on a natively 4-device host, since the accuracy test is not
     // ring-gated (only the perf check is).
     //
-    // Each term below is load-bearing for a DIFFERENT reason and none is implied by another -- in
-    // particular build_kv_chains is not redundant with k_mcast_enabled, because k_mcast_enabled's
-    // own guard tests enable_kv_chains rather than build_kv_chains, so it can be true at B > 1.
-    // Relaxing any of the scope terms (separate-V, B > 1, balanced/zigzag, kv-pad) is real feature
-    // work on the schedule, not the removal of a redundant predicate.
+    // Every term below is load-bearing, and for each the FIRST thing that breaks is known. Two are
+    // cost guards rather than correctness guards; that is called out. One caveat on minimality:
+    // k_mcast_enabled is *nearly* implied by the rest -- given the other terms its only residual
+    // content is grid_size.x >= 2 -- so it is kept for robustness and self-documentation, not
+    // because it is independent.
+    //
+    //   k_mcast_enabled        purpose: the lockstep unit is the ROW. Under mcast every row member
+    //                          loops the row max, so one float makes all grid_size.x cores of its
+    //                          row pay a +1 K slot EVERY iteration -- the imbalance this fixes is
+    //                          largely a row-mcast artifact. Removing it: at grid_size.x == 1 the
+    //                          chain is unicast with a single injector, so injector_col is unset for
+    //                          other rows and the TT_FATAL below fires.
+    //   build_kv_chains        carries B == 1. Removing it is a SILENT wrong answer, not a hang:
+    //                          k_mcast_enabled's own guard tests enable_kv_chains, so at B > 1 the
+    //                          row mcast is live and the injector multicasts K for ITS nb to peers
+    //                          whose rotated slot decodes a different nb.
+    //   v_shares_k_buffer      separate-V turns on the per-head V chain, whose per-(head, core)
+    //                          forwarding counts come from the STATIC split; a rotated float can
+    //                          belong to a head that core has no segment for -> V relay mismatch ->
+    //                          hang. Also subsumes !use_attention_sink, use_streaming_compute
+    //                          (!fp32_dest_acc_en) and !gqa_grouped_kv, which separate-V would have
+    //                          to state explicitly.
+    //   !args.is_balanced      two independent breaks. Zigzag sets extra_chunks_per_core = 2, so
+    //                          cores_doing_extra_work counts PAIRS while this schedule appends ONE
+    //                          float per owner -- chunk ids [base*C+F, base*C+2F) are then never
+    //                          scheduled (silent garbage). And balanced_skip_q's parity decision
+    //                          desyncs injector from receivers at the float slot -> hang.
+    //   !kv_pad_rotation_enabled  MEASURED hang (see below). Root cause: under kv-pad the KERNELS
+    //                          replace the host mask with a device-derived one, so the host cannot
+    //                          know which iterations run; a skipped iteration means the donor never
+    //                          flushes and the receiver waits on a semaphore nobody posts.
+    //   active_ring_iter_mask == full_ring_iter_mask  restricts the feature to CHUNKED prefill, and
+    //                          that is broader than it looks: ring_mla hardcodes is_causal, and
+    //                          kernel_is_causal = is_causal && !kernel_chunked, so DENSE causal ring
+    //                          MLA always has a partial mask (device 0 keeps 1 of ring_size iters)
+    //                          and is excluded too. Same handoff failure as above.
+    //   rot_float_chunks != 0            COST guard, not correctness: nothing breaks, but every core
+    //                          would pay the forced per-iteration Q re-read and DRAM accumulator
+    //                          round-trip for a rotation that moves nothing.
+    //   rot_rows_needed < grid_size.y    COST guard likewise: at equality the row index is
+    //                          t-independent so ownership cannot move.
+    //   rot_base_chunks >= 1   definitional. At base 0 the first failure is actually the compute
+    //                          kernel's static_assert(ROTATED_Q_SPLIT >= 2), ahead of the reader's
+    //                          rot_my_count - 1 underflow.
     const bool use_rotated_q_split =
         !rotated_q_split_disabled &&
         // Path scope: latent-V (V packed into K) on the streaming compute path, with K streamed
@@ -2650,16 +2689,21 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // !has_sliding_window, enable_kv_chains, k_uses_batch_chain and B == 1, and v_shares_k_buffer
         // subsumes !use_attention_sink (the op rejects that pair outright).
         k_mcast_enabled && build_kv_chains && v_shares_k_buffer &&
-        // !kv_pad_rotation_enabled is MEASURED load-bearing, not assumed. Removing it does make the
-        // rotation engage on the kv-pad path (kv_actual_isl ring MLA, chunk_size_local 256 on a 3x2
-        // grid: base 5, floats 2, active_iters 5 of 8) -- and the device HANGS there ("potential hang
-        // detected, unrecoverable", cores 15-3/15-2 stuck). That was with the rotation cycle already
-        // rebuilt over the ORDINAL sequence of active iterations (kv-pad makes the active mask
-        // partial, 5 of 8 here, and a skipped iteration otherwise breaks the donor->receiver chain),
-        // so the ordinal fix alone is not sufficient: the kv-pad path couples to the per-iteration
-        // KV geometry somewhere beyond Q ownership. test_ring_mla_chunked_kv_actual_isl_rotated_
-        // q_split_accuracy exists to re-attempt this -- the default kv-pad configs have
-        // total_q_chunks == 4, too small for the rotation to engage at any grid.
+        // !kv_pad_rotation_enabled is MEASURED load-bearing. Removing it does make the rotation
+        // engage on the kv-pad path (kv_actual_isl ring MLA, chunk_size_local 256 on a 3x2 grid:
+        // base 5, floats 2, active_iters 5 of 8) -- and the device HANGS ("potential hang detected,
+        // unrecoverable", cores 15-3/15-2). Rebuilding the rotation cycle over the ordinal sequence
+        // of active iterations did NOT fix it, and the reason is structural: under kv-pad the
+        // KERNELS derive their own active mask on device (ring_joint_reader.cpp / ring_joint_writer.cpp
+        // overwrite active_ring_iter_mask from the kv-pad metadata), so the host's notion of which
+        // iterations run is not what the kernels obey. A skipped iteration then means the donor
+        // never reaches flush_deferred_save() and its Semaphore(...).up(), while the next receiver
+        // blocks in handoff_sem.wait_min() -- a post that never happens. Fixing this needs the
+        // ownership cycle to be derived from the SAME mask the kernels use (either device-side, or
+        // by making the kv-pad mask host-known), not just re-indexed.
+        // test_ring_mla_chunked_kv_actual_isl_rotated_q_split_accuracy is the reachable case to
+        // re-attempt with -- the default kv-pad configs have total_q_chunks == 4, too small to engage
+        // at any grid.
         //
         // Schedules this rotation cannot model. Balanced/zigzag SKIPS whole Q chunks per device, so
         // the equal-cost-per-chunk counting the rotation is built on stops holding -- a causal mask
