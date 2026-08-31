@@ -189,13 +189,16 @@ def _make_l1_noise_tensor(device, num_tiles):
 def test_to_layout_wide_tensor_stress_54968(device):
     # Throwaway CI repro for https://github.com/tenstorrent/tt-metal/issues/54968.
     # Loops the failing test_to_layout_wide_tensor[shape=(1,1,32,131072)] case
-    # back-to-back on one device/program-cache, interleaving small L1 allocations
-    # on alternating iterations to widen the window between the codegen
-    # program-cache hash's L1 sample and the program factory's own later samples
-    # (see PR #50178 / #53399). Not intended to land on main.
+    # back-to-back on one device/program-cache. A first pass (1000 fast
+    # iterations, no perturbation) found this alone insufficient -- <1 minute
+    # of wall clock, no mismatch -- so noise-tensor alloc/dealloc is now
+    # interleaved around the untilize-codegen dispatch in four rotating
+    # patterns to widen the window between the codegen program-cache hash's
+    # L1 sample and the program factory's own later samples (see PR #50178 /
+    # #53399). Not intended to land on main.
     shape = (1, 1, 32, 128 * 1024)
-    max_wall_seconds = 480
-    max_iterations = 1000
+    max_wall_seconds = 1200
+    max_iterations = 25000
     failures = []
 
     start = time.monotonic()
@@ -209,14 +212,29 @@ def test_to_layout_wide_tensor_stress_54968(device):
         input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         input_tensor = ttnn.to_device(input_tensor, device)
 
-        noise = None
-        if iteration % 2 == 0:
-            noise = _make_l1_noise_tensor(device, num_tiles=(iteration % 7) + 1)
+        pattern = iteration % 4
+        pre_noise = None
+        if pattern in (1, 2, 3):
+            pre_noise = _make_l1_noise_tensor(device, num_tiles=(iteration % 7) + 1)
+        if pattern == 1:
+            # noise fully alloc+dealloc'd before dispatch: races the async
+            # completion of the dealloc against the codegen hash-time sample.
+            ttnn.deallocate(pre_noise)
+            pre_noise = None
+        extra_noise = None
+        if pattern == 3:
+            extra_noise = _make_l1_noise_tensor(device, num_tiles=((iteration * 3) % 5) + 1)
 
         output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
-        if noise is not None:
-            ttnn.deallocate(noise)
+        # pattern 2 and 3 deallocate only after the dispatch call returns,
+        # overlapping the noise tensor's lifetime with the op's own
+        # build/dispatch window (the async-completion race the program
+        # factory's live-L1 samples are most exposed to).
+        if pre_noise is not None:
+            ttnn.deallocate(pre_noise)
+        if extra_noise is not None:
+            ttnn.deallocate(extra_noise)
 
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
@@ -225,9 +243,9 @@ def test_to_layout_wide_tensor_stress_54968(device):
             assert_equal(torch_input_tensor, output_tensor)
         except AssertionError as e:
             failures.append((iteration, str(e)))
-            logger.error(f"[54968-repro] MISMATCH on iteration {iteration}: {e}")
+            logger.error(f"[54968-repro] MISMATCH on iteration {iteration} (pattern {pattern}): {e}")
 
-        if iteration % 25 == 0:
+        if iteration % 500 == 0:
             elapsed = time.monotonic() - start
             logger.info(f"[54968-repro] iteration {iteration}, elapsed {elapsed:.1f}s, failures so far: {len(failures)}")
 

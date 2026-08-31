@@ -16,9 +16,9 @@
 # https://github.com/tenstorrent/tt-metal/issues/54968.
 
 - name: "core ttnn unit test group"
-  cmd: 'pytest --timeout 900 tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_wide_tensor_stress_54968 -xvs'
+  cmd: 'pytest --timeout 1260 tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_wide_tensor_stress_54968 -xvs'
   skus:
     wh_n300_civ2:
-      timeout: 15
+      timeout: 22
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
