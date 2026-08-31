@@ -607,26 +607,15 @@ def test_exp_with_base_ceiling_is_currently_unreachable():
     )
 
 
-def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
-    """_hardtanh models a clamp, but its kernel is not one -- pin the agreement.
+def test_hardtanh_golden_matches_the_clamp_golden():
+    """Hardtanh's golden must stay Clamp's golden -- pin the identity.
 
-    `SfpuType::hardtanh` dispatches to `_calculate_hardtanh_`, three adds with two clamps-at-zero
-    and bf16 constants, where Clamp dispatches to `_calculate_clamp_` with fp16 min/max. They
-    agree on the finite range and at every special this op is enrolled for, but by arithmetic
-    rather than by sharing code, so the golden's use of sfpu_clamp is only sound while that holds.
+    Both ops bind metal kernels that are the same SFPSWAP max-then-min composition
+    (calculate_clamp's unary_max_min chain; calculate_hardtanh's sfpi::clamp), so one
+    golden -- sfpu_clamp -- models both. If either golden is ever remodelled
+    independently, the divergence surfaces here.
     """
-    from helpers.golden_generators import UnarySFPUGolden, sfpu_total_order_key
-
-    def kernel_chain(x: float, low: float, high: float) -> float:
-        # val += p0; v_if (val < 0) val = 0; val += p1; v_if (val >= 0) val = 0; val += p2
-        p0, p1, p2 = -low, -(high - low), high
-        val = x + p0
-        if sfpu_total_order_key(val) < 0:
-            val = 0.0
-        val = val + p1
-        if sfpu_total_order_key(val) >= 0:
-            val = 0.0
-        return val + p2
+    from helpers.golden_generators import UnarySFPUGolden
 
     golden = UnarySFPUGolden()
     low, high = -1.0, 1.0
@@ -643,11 +632,11 @@ def test_hardtanh_golden_matches_the_hardtanh_kernel_chain():
         float("nan"),
     ]
     for x in probes:
-        want = kernel_chain(x, low, high)
+        want = float(golden._clamp(x, low, high))
         got = float(golden._hardtanh(x, low, high))
         assert got == want or (got != got and want != want), (
-            f"hardtanh({x}) golden gives {got} but the kernel chain gives {want}. The golden "
-            "models _calculate_clamp_; if the two have stopped agreeing, model the chain."
+            f"hardtanh({x}) golden gives {got} but the clamp golden gives {want}; "
+            "the two goldens must move together while both ops bind the same composition."
         )
 
 

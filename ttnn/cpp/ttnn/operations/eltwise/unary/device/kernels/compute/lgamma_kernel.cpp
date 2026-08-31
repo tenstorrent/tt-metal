@@ -29,7 +29,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(cb_input);
     DataflowBuffer dfb_out(cb_output);
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
+    copy_init(cb_input);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
@@ -37,7 +38,7 @@ void kernel_main() {
         dfb_out.reserve_back(1);
 
         // copy input to dst 0 and 1
-        copy_tile_to_dst_init_short(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, 0, 0);  // x
         copy_tile(cb_input, 0, 1);  // x
 
@@ -75,7 +76,7 @@ void kernel_main() {
         fill_tile_init();
         fill_tile(2, M_PI);
 
-        copy_tile_to_dst_init_short(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, 0, 1);  // x
 
         // tile 1 = frac (x)
@@ -90,7 +91,7 @@ void kernel_main() {
         sin_tile_init();
         sin_tile(1);
 
-        copy_tile_to_dst_init_short(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, 0, 2);  // x
         copy_tile(cb_input, 0, 3);  // x
 
@@ -118,7 +119,7 @@ void kernel_main() {
         log_tile_init();
         log_tile(1);
 
-        copy_tile_to_dst_init_short(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, 0, 2);  // x
 
         lgamma_adjusted_tile_init();

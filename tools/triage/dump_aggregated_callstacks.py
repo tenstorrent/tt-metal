@@ -11,8 +11,8 @@ Options:
     --device-visualization           Show device visualizations instead of plain coordinate lists in the Locations column.
 
 Description:
-    Aggregates callstacks by (Kernel Path, kernel-relative PC and Operation Id) and shows:
-      - Kernel Name / # Kernel IDs (one group spans every kernel id that ran the same ELF)
+    Aggregates callstacks by (source-level frame signature, RISC and Operation Id) and shows:
+      - Kernel Name
       - Op Id (host_assigned_id, for correlation with dump_running_operations.py)
       - Callstack
       - # of Cores
@@ -50,6 +50,7 @@ from callstack_provider import (
 )
 from run_checks import run as get_run_checks, device_description_serializer
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.elf import CallstackEntry
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.memory_access import NO_MEMORY_ACCESS
@@ -62,6 +63,20 @@ script_config = ScriptConfig(
 
 BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 DEFAULT_MAX_LOCATIONS = 10
+
+
+def _frame_signature(
+    callstack: list[CallstackEntry], message: str | None
+) -> tuple[str | None | tuple[str | None, str | None, int | None, int | None], ...]:
+    return (message,) + tuple(
+        (
+            frame.function_name,
+            frame.file_info.file if frame.file_info is not None else None,
+            frame.file_info.line if frame.file_info is not None else None,
+            frame.file_info.column if frame.file_info is not None else None,
+        )
+        for frame in callstack
+    )
 
 
 def _render_device_for_bucket(
@@ -105,7 +120,6 @@ def _render_device_for_bucket(
 @dataclass
 class AggregatedCallstackRow:
     kernel_name: str | None = triage_field("Kernel Name")
-    kernel_id_count: int = triage_field("# Kernel IDs")  # distinct watcher_kernel_ids folded into this group
     op_id: int | str | None = triage_field("Op Id")  # host_assigned_id from dispatcher, or "N/A (read error)"
     callstack: KernelCallstackWithMessage = triage_field("Kernel Callstack", format_callstack_with_message)
     core_count: int = triage_field("# of Cores")
@@ -127,18 +141,16 @@ class AggregationBucket:
         # Existing aggregation for plain text mode
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
-        self.kernel_ids: set[int] = set()
 
         # Helper for device visualization mode
         self.per_core_hits: dict[int, set[tuple[int, int]]] = defaultdict(set)
 
-    def add_core(self, location: OnChipCoordinate, device_label: str, kernel_id: int):
+    def add_core(self, location: OnChipCoordinate, device_label: str):
         """Add a core to this aggregation bucket."""
 
         coord_str = location.to_user_str()
         self.core_locations.add(f"{device_label}:{coord_str}")
         self.device_labels.add(device_label)
-        self.kernel_ids.add(kernel_id)
 
         dev_id = location.device.id
         x, y = location._noc0_coord
@@ -169,7 +181,6 @@ class AggregationBucket:
 
         return AggregatedCallstackRow(
             kernel_name=self.kernel_name,
-            kernel_id_count=len(self.kernel_ids),
             op_id=self.op_id,
             callstack=self.callstack,
             core_count=len(self.core_locations),
@@ -186,7 +197,7 @@ def _collect_aggregated(
     verbose: bool,
     context: Context,
 ) -> list[AggregatedCallstackRow] | None:
-    """Collect callstacks and aggregate the cores stopped in a kernel by (kernel_path, pc, op_id)."""
+    """Collect callstacks and aggregate cores stopped in a kernel by (frames, risc, op_id)."""
 
     def per_core(location: OnChipCoordinate, risc_name: str) -> CallstacksData | None:
         try:
@@ -216,8 +227,8 @@ def _collect_aggregated(
     if not results:
         return None
 
-    # Aggregate by (kernel_path, normalized PC, op_id)
-    buckets: dict[tuple[str, int, int | None], AggregationBucket] = {}
+    # Aggregate by (source-level frames, risc, op_id)
+    buckets: dict[tuple, AggregationBucket] = {}
 
     for check_result in results:
         if check_result.result is None:
@@ -235,7 +246,12 @@ def _collect_aggregated(
         if kernel_elf.get_frame_description(pc, NO_MEMORY_ACCESS) is None:
             continue
 
-        key = (d.kernel_path, pc - d.kernel_offset, d.host_assigned_id)
+        cs = cs_data.kernel_callstack_with_message
+        key = (
+            _frame_signature(cs.callstack, cs.message),
+            check_result.risc_name,
+            d.host_assigned_id,
+        )
         bucket = buckets.get(key)
         if bucket is None:
             bucket = AggregationBucket(cs_data, check_result.risc_name)
@@ -243,11 +259,7 @@ def _collect_aggregated(
 
         # Get device label from device description
         device_label = device_description_serializer(check_result.device_description)
-        bucket.add_core(
-            location=check_result.location,
-            device_label=device_label,
-            kernel_id=d.watcher_kernel_id,
-        )
+        bucket.add_core(location=check_result.location, device_label=device_label)
 
     # Sort ascending by op_id
     sorted_buckets = sorted(buckets.values(), key=lambda b: (b.op_id is None, b.op_id))
