@@ -16,6 +16,9 @@
 #         * Chunked tests state total ISL and chunk size as <isl>@<chunk>, e.g. "code_debug 55k@5k".
 #         * Nothing else goes in parentheses -- the leading "(...)" is the model list and only that,
 #           so a qualifier is trailing prose: "... 55k@5k vs golden trace", "... 55k@5k, SC4".
+#         * No "/" in a name. The impl workflow uses the name verbatim as the test-log path and as
+#           the log/triage artifact names, so a slash buries the log in a subdirectory the console-echo
+#           glob misses and makes both uploads fail. Hyphenate, or drop the component list.
 #         * One separator, one meaning -- a job whose name reads several ways is the bug this
 #           convention exists to prevent:
 #             "+"  the distinct things this one job gates, each carrying its own shape
@@ -24,8 +27,6 @@
 #                  several shapes under one tag, or several tags under one shape
 #                  -> "(DeepSeek-V3-671B) MLA accuracy 100k, 128k"   (two shapes, one tag)
 #                  -> "ring MLA chunked 55k@5k perf, accuracy, determinism"  (one shape, three tags)
-#             "/"  components of one pipeline, not a list of gated things
-#                  -> "disaggregated prefill runner/producer"
 #         * Entries are grouped by model in file order, in the same order the name reads: a
 #           cross-model section first, then one section per model, then op-level jobs. Keep a new
 #           entry inside its model's section rather than appending it at the end.
@@ -102,7 +103,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.6-1T) MoE accuracy 5k + perf 25k"
+- name: "(Kimi-K2.6-1T) MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
 
@@ -504,14 +505,14 @@
   sp_config: sc1
 
 
-- name: "(GLM-5.2-744B) MoE accuracy 12.5k + perf 25k"
+- name: "(GLM-5.2-744B) MoE accuracy + perf 5k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
     # GLM-5.2 256-expert MoE (device gate, DEVICE_FP32) vs the CPU MoE reference; random weights.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "torus-xy-8x4 and pcc-device-glm-256" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "torus-xy-8x4 and (pcc-device-glm-256 or perf-device-glm-256)" -vvv --tb=short
     '
   test_type: glm_moe
   test_tags: [glm_5_2, moe]
@@ -718,10 +719,12 @@
 
 # ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
 
-# 4-galaxy (SC4-blitz) disaggregated prefill: a 4-rank background runner opens the mesh, loads
-# Kimi-2.7, warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less
-# producer then reads it back and PCCs it against the golden KV cache.
-- name: "(Kimi-K2.7-1T) disaggregated prefill runner/producer KV accuracy 55k@5k, SC4"
+# 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
+# warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
+# reads it back and PCCs it against the golden KV cache. The request runs to 250k so the per-chunk
+# timings cover depth, but only the 55k the golden trace spans is PCC'd -- the tail is timed, not
+# checked. A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -735,7 +738,7 @@
   test_group: module
   skus:
     bh_sc4:
-      # Measured test step ~6 min; headroom for the up-to-120s producer connect plus
+      # Measured test step 8.5 min at 50 chunks; headroom for the up-to-120s producer connect plus
       # model-load/NFS variance on a 4-galaxy run. Must match the shield/demo budget.
       timeout: 15
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
@@ -748,7 +751,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.2-744B) disaggregated prefill runner/producer KV accuracy 55k@5k, SC4"
+- name: "(GLM-5.2-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -762,9 +765,9 @@
   test_group: module
   skus:
     bh_sc4:
-      # 5.5 min weight load from the warm 8x4 cache, then a full-depth 11-chunk request over 78 layers
-      # plus both-cache UMD readback; headroom for the 120 s producer connect and NFS variance. Counts
-      # against the shield/demo budget together with the Kimi entry.
+      # Measured test step 9 min: weight load from the warm 8x4 cache, then 50 chunks over 78 layers
+      # plus both-cache UMD readback. The extra 5 min over the Kimi entry is cold-cache weight-load
+      # insurance. Counts against the shield/demo budget together with the Kimi entry.
       timeout: 20
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield

@@ -16,7 +16,10 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ROUTED_EXPERT_ACTIVATION_BY_NAME,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
@@ -76,12 +79,18 @@ class TtPrefillBlock(LightweightModule):
         experts_per_chip: int = 8,
         *,
         model_cfg: type | None = None,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ) -> bool:
         """Check if block cache is complete (norms + MLA + FFN/MoE).
 
         ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
         cannot know to look for the latent-projection cache files, and would report a cache that is
         missing them as complete. Left optional so existing callers are unaffected.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
         """
         prefix = f"layer_{layer_idx}"
 
@@ -103,6 +112,7 @@ class TtPrefillBlock(LightweightModule):
                 use_latent_moe=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
                 not in (None, getattr(model_cfg, "EMB_SIZE", None)),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
             ):
                 return False
 
@@ -124,7 +134,7 @@ class TtPrefillBlock(LightweightModule):
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
@@ -243,7 +253,7 @@ class TtPrefillBlock(LightweightModule):
         is_balanced: bool = False,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,

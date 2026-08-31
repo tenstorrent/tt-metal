@@ -75,7 +75,6 @@ struct BlockedMatmulConfig {
     tt::DataFormat in1_fmt = tt::DataFormat::Float16_b;
     tt::DataFormat out_fmt = tt::DataFormat::Float16_b;
     bool fp32_dest_acc_en = false;
-    bool enable_2x_src_format = false;
 };
 
 void create_CBs_for_fused_matmul(
@@ -723,9 +722,22 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                     .enable_consumer_implicit_sync = false,
                     .data_format = fmt});
         };
-        in0_id = make_dfb(in0_tile_size, M * K, 0x1, 0x100, in0_fmt);
-        in1_id = make_dfb(in1_tile_size, K * N, 0x1, 0x100, in1_fmt);
-        out_id = make_dfb(out_tile_size, M * N, 0x100, 0x2, out_fmt);
+
+        const std::set<DataMovementProcessor> dm_processors =
+            tt_metal::experimental::quasar::GetAvailableDataMovementProcessors(
+                program_, CoreRangeSet(CoreRange(core, core)), 2, HalProgrammableCoreType::TENSIX);
+        TT_FATAL(
+            dm_processors.size() == 2,
+            "blocked_matmul needs 2 free data movement processors for the reader and writer, got {}",
+            dm_processors.size());
+        auto dm_it = dm_processors.begin();
+        const uint16_t kReaderRiscMask = 1 << static_cast<uint32_t>(*dm_it++);  // reader is created first
+        const uint16_t kWriterRiscMask = 1 << static_cast<uint32_t>(*dm_it);    // writer is created second
+        constexpr uint16_t kComputeRiscMask = 0x100;                            // Tensix risc 0
+
+        in0_id = make_dfb(in0_tile_size, M * K, kReaderRiscMask, kComputeRiscMask, in0_fmt);
+        in1_id = make_dfb(in1_tile_size, K * N, kReaderRiscMask, kComputeRiscMask, in1_fmt);
+        out_id = make_dfb(out_tile_size, M * N, kComputeRiscMask, kWriterRiscMask, out_fmt);
         partials_id = tt_metal::experimental::dfb::CreateDataflowBuffer(
             program_,
             core,
@@ -805,7 +817,6 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
                 .num_threads_per_cluster = 1,
-                .enable_2x_src_format = cfg.enable_2x_src_format,
                 .compile_args = compute_compile_args,
                 .defines = compute_defines});
 
@@ -1238,10 +1249,10 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComp
         .N = 2,
         .num_blocks = 1,
         .packer_l1_acc = false,
+        // MxFp4 in0/in1 auto-selects the 2x-packed src-register format for matmul on Quasar.
         .in0_fmt = tt::DataFormat::MxFp4,
         .in1_fmt = tt::DataFormat::MxFp4,
-        .out_fmt = tt::DataFormat::Float16_b,
-        .enable_2x_src_format = true};
+        .out_fmt = tt::DataFormat::Float16_b};
     ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
 }
 

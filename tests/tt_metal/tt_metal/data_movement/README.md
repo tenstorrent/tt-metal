@@ -225,6 +225,8 @@ reporter normally provides `Latency (cycles)` and either `Bandwidth (bytes/cycle
 
 ### Maintaining the Viewer
 
+The app files are located on the `gh-pages` branch of `tt-low-level-documentation`;
+this branch must not be deleted.
 - Keep `test_information.yaml` and `web_viewer_groups.yaml` synchronized with test
     directories and generated CSV names. Remove or rename published CSVs deliberately;
     the viewer probes each known architecture and hides tests for which no CSV exists.
@@ -235,7 +237,7 @@ reporter normally provides `Latency (cycles)` and either `Bandwidth (bytes/cycle
     schema gains a column that should not be plotted as a sweep dimension. Otherwise
     the new column may become an unexpected filter or x-axis.
 - Keep the CDN dependency versions and Subresource Integrity hashes in
-    `web_viewer/index.html` together. The viewer currently uses Papa Parse for CSV,
+    `index.html` together. The viewer currently uses Papa Parse for CSV,
     js-yaml for mappings, and Plotly for charts.
 - If new useful information arises or there are consistent points of confusion regarding
     any particular tests, they can be added as FAQs to `web_viewer_groups.yaml`.

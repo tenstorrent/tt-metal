@@ -5,8 +5,10 @@
 # Multi-galaxy disaggregated prefill cache-accuracy leg: a background N-rank runner opens the mesh, loads
 # the model, warmup-compiles and publishes the merged KV chunk table to shared NFS; a device-less producer
 # then feeds it, reads EVERY device cache the model published back over UMD (a sparse model's indexer key
-# cache as well as its KVPE cache) and PCCs each against the golden trace. The producer's
-# exit code is the verdict, so this script's exit code is the producer's.
+# cache as well as its KVPE cache) and PCCs each against the golden trace. The producer exits non-zero on a
+# PCC miss, but under mpirun-ulfm a lost producer daemon can still return 0 with zero caches validated, so
+# the exit code alone is not trusted: the leg is green only when a durable ok=true verdict exists for every
+# producer rank (the PCC gate near the end). Perf/timing are reported but never gate.
 #
 # Usage: run_multirank_pcc.sh <model-key>       # model-key selects a block in the case below
 #
@@ -20,12 +22,16 @@ MODEL="${1:?usage: run_multirank_pcc.sh <model-key>}"
 : "${PREFILL_SUMMARIES:?PREFILL_SUMMARIES must be set by the blaze impl (shared /ci scratch for the KV table)}"
 export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
-MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration"
+MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
 # Shared defaults; a case block below overrides what its model needs. Each branch also names its own
 # scratch dir by swapping the summaries component out of PREFILL_SUMMARIES: that keeps the run-scoped leaf
 # and the shared-NFS root the blaze impl chose, while leaving the summaries dir itself alone.
-MAX_SEQ_LEN=56320
+CHUNK_SIZE=5120
+MAX_SEQ_LEN=256000
+GOLDEN_LEN=56320
+REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 RUNNER_ENV=""
 PRODUCER_ENV=""
@@ -33,18 +39,16 @@ PRODUCER_ENV=""
 case "${MODEL}" in
   kimi27)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
-    MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_mesh_graph_descriptor.textproto"
+    MGD="${MGD_DIR}/kimi27_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
-    # Dense MLA: one device cache, so the manifest's model + depth are all the producer needs. The runner
-    # needs the weight path on top: the K2.7 adapter inherits K2.6's reference default.
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized;"
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized; export PREFILL_USE_TRACE=1;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}';"
     ;;
   glm52)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm52_prefill_runner_kv}"
     # LINE/LINE variant: GLM-5.2's MoE all_to_all deadlocks in warmup under the torus fabric modes on
     # multi-galaxy pipeline prefill, so the descriptor declares no wrap and the fabric mode stays 2d.
-    MGD="${MGD_DIR}/pipeline_prefill_4galaxy_connected_fabric2d_mesh_graph_descriptor.textproto"
+    MGD="${MGD_DIR}/glm52_mgd.textproto"
     MANIFEST="${MANIFEST_DIR}/glm52.json"
     # Sparse DSA: TWO device caches (MLA KVPE over all 78 layers + the lightning-indexer KEY cache over the
     # 21 `full` layers), both PCC'd. The trace must be the indexer-K dump -- the adapter's default golden
@@ -80,6 +84,8 @@ PCC_DIR="${MR_DIR}/pcc_verdict"
 # Per-rank stdout/stderr files (mpirun --output-filename). These survive the teardown race that truncates
 # forwarded stdout, so their tails are the authoritative debug log.
 RANKLOGS="${MR_DIR}/ranklogs"
+TIMING_DIR="${MR_DIR}/timing"
+mkdir -p "${TIMING_DIR}"
 
 # The runner idles owning the multi-galaxy allocation until the producer's shutdown sentinel; on any early
 # exit (table-publish timeout, producer failure) it must be reaped or it strands the hardware until the
@@ -103,6 +109,23 @@ cleanup() {
       echo "---- ${f#"${RANKLOGS}"/} ----"
       tail -n 40 "$f" 2>/dev/null || true
     done
+    python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
+      --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+      --chunk-size "${CHUNK_SIZE}" --perf-window-chunks "${PERF_WINDOW_CHUNKS:-4}" \
+      --summary-name "${MODEL}" \
+      || echo "summary generation failed (non-fatal)"
+    # Under PREFILL_SUMMARIES rather than generated/test_logs: the blaze impl uploads that root with
+    # archive:false, which yields a direct PNG link on the job-summary page instead of a log zip to unpack.
+    GANTT_DIR="${PREFILL_SUMMARIES}/plots"
+    mkdir -p "${GANTT_DIR}"
+    python3 -c "import matplotlib" 2>/dev/null \
+      || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \
+      || timeout 90 python3 -m pip install --quiet matplotlib 2>/dev/null \
+      || echo "matplotlib install failed (gantt skipped, non-fatal)"
+    python3 "${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/scripts/plot_pipeline_trace.py" \
+      --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
+      -o "${GANTT_DIR}/${MODEL}_pipeline_gantt.png" \
+      || echo "gantt render failed (non-fatal)"
   fi
   rm -rf "${MR_DIR}"
 }
@@ -128,6 +151,8 @@ python3 "${TTRUN_PY}" \
     export PREFILL_MANIFEST='${MANIFEST}'; \
     export PREFILL_FABRIC_MODE=2d; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    export PREFILL_SYNC_PER_CHUNK=1; \
+    export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
     export PREFILL_ENABLE_MIGRATION=1; \
     export PREFILL_MOCK_MIGRATION=1; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
@@ -165,6 +190,9 @@ set +e
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
     export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN}; \
+    export PREFILL_PRODUCER_CHUNKS=${REAL_CHUNKS}; \
+    export PREFILL_PRODUCER_WARMUP_CHUNKS=${WARMUP_CHUNKS}; \
+    export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN}; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     export PREFILL_PCC_SUMMARY_DIR='${PCC_DIR}'; \
     export PREFILL_PRODUCER_CHECK_PCC=1; \
@@ -184,4 +212,40 @@ if [ "${PROD_RC}" -eq 0 ]; then
   wait "${RUNNER_PID}" || echo "runner exited non-zero after producer success (rc=$?)"
 fi
 
-exit ${PROD_RC}
+# PCC gate. Read the durable per-rank verdicts before cleanup() rm's MR_DIR: require an ok=true verdict from
+# every producer rank (one per host in HOSTS). This catches the case the exit code misses -- a ULFM daemon
+# loss that returns 0 with no verdict written, or a rank that failed to validate. Perf/timing never gate.
+EXPECTED_RANKS=$(printf '%s' "${HOSTS}" | tr ',' '\n' | grep -c .)
+PCC_GATE_RC=0
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" <<'PY' || PCC_GATE_RC=$?
+import glob, json, os, sys
+
+pcc_dir, expected = sys.argv[1], int(sys.argv[2])
+files = sorted(glob.glob(os.path.join(pcc_dir, "rank*.json")))
+if len(files) < expected:
+    print(f"PCC GATE FAIL: {len(files)}/{expected} producer verdict file(s) present", file=sys.stderr)
+    sys.exit(1)
+bad = 0
+for f in files:
+    name = os.path.basename(f)
+    try:
+        v = json.load(open(f))
+    except Exception as e:
+        print(f"PCC GATE FAIL: {name} unreadable: {e}", file=sys.stderr)
+        bad += 1
+        continue
+    status = "ok" if v.get("ok") else "FAIL"
+    print(f"  {name}: {status} min_pcc={v.get('min_pcc')} threshold={v.get('threshold')} per_cache={v.get('per_cache')}")
+    if not v.get("ok"):
+        bad += 1
+if bad:
+    print(f"PCC GATE FAIL: {bad}/{len(files)} rank(s) below threshold or unvalidated", file=sys.stderr)
+    sys.exit(1)
+print(f"PCC GATE PASS: {len(files)}/{expected} ranks ok, all caches >= threshold")
+PY
+
+# Green only when the producer exited clean AND every rank's PCC verdict is ok.
+if [ "${PROD_RC}" -ne 0 ]; then
+  exit "${PROD_RC}"
+fi
+exit "${PCC_GATE_RC}"
