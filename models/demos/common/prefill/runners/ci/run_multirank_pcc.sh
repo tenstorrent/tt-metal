@@ -112,8 +112,11 @@ cleanup() {
     python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
       --ranklogs "${RANKLOGS}" --timing-dir "${TIMING_DIR}" --real-chunks "${REAL_CHUNKS}" \
       --chunk-size "${CHUNK_SIZE}" --perf-window-chunks "${PERF_WINDOW_CHUNKS:-4}" \
+      --summary-name "${MODEL}" \
       || echo "summary generation failed (non-fatal)"
-    GANTT_DIR="${TT_METAL_HOME}/generated/test_logs"
+    # Under PREFILL_SUMMARIES rather than generated/test_logs: the blaze impl uploads that root with
+    # archive:false, which yields a direct PNG link on the job-summary page instead of a log zip to unpack.
+    GANTT_DIR="${PREFILL_SUMMARIES}/plots"
     mkdir -p "${GANTT_DIR}"
     python3 -c "import matplotlib" 2>/dev/null \
       || timeout 90 uv pip install --quiet matplotlib 2>/dev/null \

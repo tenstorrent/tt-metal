@@ -13,6 +13,7 @@ measured request is the last --real-chunks chunks per rank; any earlier chunks a
 import argparse
 import os
 import re
+import sys
 
 _KV = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+KV PCC:\s+nope=([-\d.]+)\s+pe=([-\d.]+)")
 _INDEX = re.compile(r"slot\s+(\d+)\s+layer\s+(\d+)\s+\(index rank\s+(\d+)\)\s+index PCC:\s+([-\d.]+)")
@@ -138,19 +139,102 @@ def _cell_metrics(kept, disp):
     return ct, ttft
 
 
+def _chunk_plot(kept, disp, height=15, width=100):
+    """Overlay per-rank device time against chunk index as characters.
+
+    The job-summary page renders markdown only -- its sanitizer strips inlined images -- so the shape of
+    the curve has to be drawn in text to be readable without fetching the gantt PNG.
+    """
+    ranks = sorted(kept)
+    inv = {i: c for c, i in disp.items()}
+    n = len(inv)
+    if not ranks or n == 0:
+        return []
+    # One column per chunk until the run outgrows the width, then fold with max() so that a single
+    # stalled chunk still shows up instead of being averaged into its neighbours.
+    cols = min(n, width)
+    series = {}
+    for r in ranks:
+        col = {}
+        for d in range(n):
+            c = inv.get(d)
+            ms = kept[r].get(c, [None, None])[1] if c is not None else None
+            if ms is None:
+                continue
+            x = d * cols // n
+            col[x] = max(col.get(x, ms), ms)
+        series[r] = col
+    vals = [v for col in series.values() for v in col.values()]
+    if not vals:
+        return []
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or 1.0
+    marks = "0123456789abcdefghijklmnopqrstuvwxyz"
+    grid = [[" "] * cols for _ in range(height)]
+    for i, r in enumerate(ranks):
+        mark = marks[i] if i < len(marks) else "?"
+        for x, v in series[r].items():
+            row = int(round((1 - (v - lo) / span) * (height - 1)))
+            grid[row][x] = mark if grid[row][x] == " " else "*"
+
+    legend = ", ".join(f"{marks[i] if i < len(marks) else '?'}=rank{r}" for i, r in enumerate(ranks))
+    lines = [
+        "==================== per-chunk device time by rank (measured request) ====================",
+        f"ms vs chunk index; {legend}, *=two or more ranks in one cell",
+    ]
+    lines += [f"{lo + (1 - row / (height - 1)) * span:8.0f} |" + "".join(grid[row]) for row in range(height)]
+    lines.append(" " * 9 + "+" + "-" * cols)
+    ticks = [" "] * cols
+    for d in range(0, n, 10):
+        x = d * cols // n
+        for k, ch in enumerate(str(d)):
+            if x + k < cols and ticks[x + k] == " ":
+                ticks[x + k] = ch
+    lines.append(" " * 10 + "".join(ticks))
+
+    hdr = f"{'rank':>5} {'min':>9} {'median':>9} {'max':>9} {'first':>9} {'last':>9}"
+    lines += ["", hdr, "-" * len(hdr)]
+    for r in ranks:
+        v = [kept[r][c][1] for c in sorted(kept[r]) if kept[r][c][1] is not None]
+        if not v:
+            continue
+        o = sorted(v)
+        med = o[len(o) // 2] if len(o) % 2 else (o[len(o) // 2 - 1] + o[len(o) // 2]) / 2.0
+        lines.append(f"{r:>5} {min(v):>9.0f} {med:>9.0f} {max(v):>9.0f} {v[0]:>9.0f} {v[-1]:>9.0f}")
+    return lines
+
+
+def _publish(lines, name):
+    """Print the perf block, and when named also drop it where the CI publish step globs for it."""
+    title = f"disaggregated prefill perf -- {name or 'run'}"
+    if name:
+        home = os.environ.get("TT_METAL_HOME")
+        if home and home not in sys.path:
+            sys.path.insert(0, home)
+        try:
+            from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary
+
+            emit_summary("perf", name, title, lines)
+            return
+        except Exception as exc:  # publishing is a reporting nicety; never lose the block over it
+            print(f"perf summary not published ({exc})")
+    print(title)
+    print("\n".join(lines))
+
+
 def _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks):
     n = len(cs_sorted)
     if n == 0:
-        return
+        return []
     max_seq = n * chunk_size
     ct, ttft = _cell_metrics(kept, disp)
 
     def idx(tok):
         return max(0, min(n - 1, tok // chunk_size))
 
-    print("==================== perf metrics (measured request, warmup excluded) ====================")
-    print(f"max_seq={max_seq} tok ({n} chunks x {chunk_size}); offsets snapped to the containing chunk")
-    print("chunk_time = first-rank start -> last-rank finish (cross-rank; assumes NTP-comparable clocks)")
+    out = ["==================== perf metrics (measured request, warmup excluded) ===================="]
+    out.append(f"max_seq={max_seq} tok ({n} chunks x {chunk_size}); offsets snapped to the containing chunk")
+    out.append("chunk_time = first-rank start -> last-rank finish (cross-rank; assumes NTP-comparable clocks)")
     for lbl, tok in (
         ("5k@0", 0),
         ("5k@50k", 50000),
@@ -159,16 +243,16 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks):
     ):
         d = idx(tok)
         val = f"{ct[d]:>12.3f}" if d in ct else f"{'-':>12}"
-        print(f"  chunk_time {lbl:>14} (chunk {d:>3}): {val} ms")
-    print("ttft = request start -> chunk finish")
+        out.append(f"  chunk_time {lbl:>14} (chunk {d:>3}): {val} ms")
+    out.append("ttft = request start -> chunk finish")
     for lbl, tok in (("@50k", 50000), ("@max_seq/2", max_seq // 2), ("@max_seq", max_seq)):
         d = idx(tok)
         val = f"{ttft[d]:>12.3f}" if d in ttft else f"{'-':>12}"
-        print(f"  ttft       {lbl:>14} (chunk {d:>3}): {val} s")
+        out.append(f"  ttft       {lbl:>14} (chunk {d:>3}): {val} s")
 
     rank0 = min(kept)
     inv = {i: c for c, i in disp.items()}
-    print(f"throughput = rank{rank0} start->start rate over the {win_chunks} chunks ending at the offset")
+    out.append(f"throughput = rank{rank0} start->start rate over the {win_chunks} chunks ending at the offset")
     for lbl, tok in (("@50k", 50000), ("@max_seq/2", max_seq // 2), ("@max_seq", max_seq)):
         d = idx(tok)
         first = max(0, d - win_chunks + 1)
@@ -178,12 +262,13 @@ def _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks):
         sb = kept[rank0][cb][0] if usable else None
         span = f"chunks {first:>3}..{d:>3}"
         if sa is None or sb is None or sb <= sa:
-            print(f"  throughput {lbl:>14} ({span}): {'-':>12}")
+            out.append(f"  throughput {lbl:>14} ({span}): {'-':>12}")
             continue
         # start->start spans (d - first) inter-chunk intervals, i.e. that many chunks dispatched in dt.
         dt = sb - sa
         tokens = (d - first) * chunk_size
-        print(f"  throughput {lbl:>14} ({span}): {tokens / dt:>12,.1f} tok/s  ({dt:.3f} s)")
+        out.append(f"  throughput {lbl:>14} ({span}): {tokens / dt:>12,.1f} tok/s  ({dt:.3f} s)")
+    return out
 
 
 def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, win_chunks=4):
@@ -194,12 +279,12 @@ def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, win_chunks=
     print("==================== per-rank x per-chunk timing (measured request) ====================")
     if not ranks:
         print("no timing rows found (set PREFILL_SYNC_PER_CHUNK=1 on the runner; timing CSVs / CHUNK_* logs absent)")
-        return
+        return []
     kept, cs_sorted, disp = _select_measured(ranks, real_chunks)
     all_starts = [c[0] for r in kept.values() for c in r.values() if c[0] is not None]
     if not all_starts:
         print("timing rows present but no compute_start timestamps parsed")
-        return
+        return []
     t0 = min(all_starts)
     print(f"start/end are seconds relative to the earliest chunk start ({t0:.6f} epoch); ms = device compute time")
     print(f"{'rank':>4}  {'chunk':>5}  {'start_s':>10}  {'end_s':>10}  {'ms':>9}")
@@ -211,8 +296,10 @@ def _timing_matrix(root, real_chunks, timing_dir=None, chunk_size=0, win_chunks=
             ms_s = f"{ms:>9.3f}" if ms is not None else f"{'-':>9}"
             print(f"{rank:>4}  {disp[c]:>5}  {start_s}  {end_s}  {ms_s}")
 
+    lines = _chunk_plot(kept, disp)
     if chunk_size > 0:
-        _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks)
+        lines += [""] + _perf_metrics(kept, cs_sorted, disp, chunk_size, win_chunks)
+    return lines
 
 
 def main():
@@ -222,12 +309,17 @@ def main():
     ap.add_argument("--real-chunks", type=int, default=0, help="chunks in the measured request (0 => all)")
     ap.add_argument("--chunk-size", type=int, default=0, help="tokens per chunk (0 => skip throughput)")
     ap.add_argument("--perf-window-chunks", type=int, default=4, help="chunks per throughput window at each offset")
+    ap.add_argument(
+        "--summary-name", default=None, help="publish the perf block under PREFILL_SUMMARIES/perf/<name>.md"
+    )
     args = ap.parse_args()
     if not os.path.isdir(args.ranklogs):
         print(f"ranklogs dir {args.ranklogs} not found; nothing to summarize")
         return
     _pcc_matrix(args.ranklogs)
-    _timing_matrix(args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, args.perf_window_chunks)
+    lines = _timing_matrix(args.ranklogs, args.real_chunks, args.timing_dir, args.chunk_size, args.perf_window_chunks)
+    if lines:
+        _publish(lines, args.summary_name)
 
 
 if __name__ == "__main__":
