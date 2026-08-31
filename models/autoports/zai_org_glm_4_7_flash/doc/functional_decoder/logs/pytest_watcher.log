@@ -1,0 +1,83 @@
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 22 items / 17 deselected / 5 selected
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_prefill_pcc[moe-512] 2026-08-31 18:26:28.220 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+[moe] prefill S=512 PCC=0.999382
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[moe] 2026-08-31 18:26:36.834 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+[moe] decode steps: 509:0.99998, 510:0.99997, 511:0.99998, 512:0.99998, 513:0.99998, 514:0.99997, 515:0.99997, 516:0.99998 | agg=0.99998
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[dense] [dense] decode steps: 509:0.99999, 510:0.99999, 511:0.99999, 512:0.99999, 513:0.99999, 514:0.99999, 515:0.99999, 516:0.99999 | agg=0.99999
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_cache_content cache PCC=0.999990
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_traced_and_deterministic 2026-08-31 18:26:38.867 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+traced replay pos=129 PCC=0.999974
+traced replay pos=130 PCC=0.999974
+traced replay pos=131 PCC=0.999979
+PASSED2026-08-31 18:26:46.977 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:410)
+
+
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+8.50s call     models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_traced_and_deterministic
+6.35s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_prefill_pcc[moe-512]
+1.24s call     models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[moe]
+1.06s call     models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_prefill_pcc[moe-512]
+0.44s call     models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_cache_content
+0.24s call     models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[dense]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[moe]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_traced_and_deterministic
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_cache_content
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[dense]
+0.03s teardown models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_traced_and_deterministic
+
+(4 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_prefill_pcc[moe-512]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[moe]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_pcc[dense]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_cache_content
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py::test_decode_traced_and_deterministic
+====================== 5 passed, 17 deselected in 18.69s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x76d21c8df8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x76d21cca2928 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "pad"
+ - leaked function "__hash__"
+ - leaked function "get_fabric_node_id"
+ - leaked function "buffer_unique_id"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-31 18:26:48.628 | info     |    BuildKernels | JIT cache stats: 597/690 hits (86.5%) [597 cached, 287 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)

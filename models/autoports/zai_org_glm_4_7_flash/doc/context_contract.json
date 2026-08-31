@@ -1,0 +1,72 @@
+{
+ "model": "zai-org/GLM-4.7-Flash",
+ "hf_advertised_context": 202752,
+ "hf_context_source": "config.json max_position_embeddings",
+ "functional_decoder": {
+  "supported_context": 202752,
+  "max_valid_position": 202751,
+  "tested_prefill_context": 202751,
+  "tested_decode_position": 202751,
+  "tested_non_aligned_lengths": [
+   17,
+   65,
+   509,
+   1057,
+   3000,
+   8191,
+   202751
+  ],
+  "capability_reduction": "none",
+  "notes": [
+   "Prefill tested at S=202751, the longest valid non-aligned logical length; the final position 202751 is exercised through the paged decode path attending the full cache. Together they cover all 202752 positions.",
+   "Layer 47 of the checkpoint is the MTP (num_nextn_predict_layers) head; HF's Glm4MoeLiteForCausalLM drops it via _keys_to_ignore_on_load_unexpected, so it is outside the decoder contract.",
+   "Decode batch tested up to 32 users (one decode row tile). paged_update_cache is issued in <=16-user groups because its per-core static CBs scale with B*Wt and exceed Blackhole L1 at 32 users x 576 latent width."
+  ],
+  "long_context_evidence": {
+   "moe": {
+    "prefill_wall_s": 95.7,
+    "cache_pcc": 0.999989,
+    "window_agg_pcc": {
+     "start": 0.999463,
+     "middle": 0.998914,
+     "end": 0.994916
+    },
+    "below_bar_rows_all_proven_ties_or_routing_flips": true,
+    "decode_at_202751_pcc": 0.999977
+   },
+   "dense_control": {
+    "prefill_wall_s": 70.8,
+    "cache_pcc": 0.999988,
+    "window_agg_pcc": {
+     "start": 0.999989,
+     "middle": 0.999939,
+     "end": 0.999704
+    },
+    "all_rows_at_bar": true,
+    "decode_at_202751_pcc": 0.999995
+   }
+  }
+ },
+ "kv_cache": {
+  "kind": "paged compressed MLA latent",
+  "entry_width": 576,
+  "entry_width_breakdown": "kv_lora_rank 512 (rmsnormed) + qk_rope_head_dim 64 (roped, pre-norm)",
+  "kv_heads": 1,
+  "block_size": 64,
+  "functional_dtype": "bfloat16",
+  "bytes_per_token_per_layer_bf16": 1152,
+  "full_model_projection": {
+   "cache_47_layers_202752_ctx_bf16_gib": 10.9,
+   "cache_47_layers_202752_ctx_bfp8_gib": 5.8,
+   "weights_bf4_experts_bf8_rest_gib_approx": 18.5,
+   "fits_32gib_single_chip": "yes at batch 1 with bf4 experts and bf8 (or bf16) latent cache",
+   "mha_style_cache_alternative_bytes_per_token_all_layers": 962560,
+   "mha_style_cache_context_ceiling_at_12gib": "~13k tokens - why the latent-cache contract is mandatory"
+  }
+ },
+ "provenance": {
+  "stage": "functional-decoder",
+  "evidence": "doc/functional_decoder/README.md, doc/functional_decoder/long_context_moe.json, doc/functional_decoder/long_context_dense.json",
+  "date": "2026-08-31"
+ }
+}

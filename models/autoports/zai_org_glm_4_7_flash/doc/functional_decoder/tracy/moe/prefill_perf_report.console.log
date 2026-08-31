@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL_MOE'.
+Using operations until 'PERF_PREFILL_MOE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/moe/prefill_perf_report.csv
+Overall DRAM roofline (modeled ops): 21.4% (110 GB/s)
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'TopKDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UntilizeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ScatterDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/moe/prefill_perf_report_stacked.csv
+Plotting PNG stacked report to models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/moe/prefill_perf_report_stacked.png

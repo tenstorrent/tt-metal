@@ -1,0 +1,12 @@
+{
+ "kind": "dense",
+ "mode": "prefill (warmed, non-traced)",
+ "seq_len": 2048,
+ "prefill_chunk_size": 1024,
+ "wall_s": 0.0196,
+ "tokens_per_s": 104622.6,
+ "signposts": [
+  "PERF_PREFILL_DENSE",
+  "PERF_PREFILL_DENSE_END"
+ ]
+}

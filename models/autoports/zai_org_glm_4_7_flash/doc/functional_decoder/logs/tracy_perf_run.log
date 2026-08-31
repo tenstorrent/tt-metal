@@ -1,0 +1,1271 @@
+Connecting to 127.0.0.1:8086...2026-08-31 18:05:17.491 | INFO     | __main__:main:430 - Test process started
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[moe] 2026-08-31 18:05:19.848 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+Building ncrisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDHT_GRANULARITY=2 -DEXP_APPROX_MODE=1 -DMUL_BCAST_GRANULARITY=1 -DREDUCE_GRANULARITY=1 -DSTATS_GRANULARITY=1 -DSUB_EXP_GRANULARITY=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_interleaved/10513852103724231548/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,1,32,32,32,32,18,16,1,32,1,32,110,1,0,0,0,0,1,2,256,0,1,1,1,0,0,0,0,0,0,1,0,2,2048,2,2048,2,2048,0,0,2,256,0,0,0,0,0,0,0,0,0,1,2,3,4294967295,6,4294967295,4294967295,0,0 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_interleaved/10513852103724231548/ncrisc/ncrisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_interleaved/10513852103724231548/ncrisc/ncrisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDHT_GRANULARITY=2 -DEXP_APPROX_MODE=1 -DMUL_BCAST_GRANULARITY=1 -DREDUCE_GRANULARITY=1 -DSTATS_GRANULARITY=1 -DSUB_EXP_GRANULARITY=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_interleaved/17499241034733448657/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,32,32,1024,18,16,1,32,1,32,1065369472,1031798784,110,1,0,0,1,0,1,0,1,0,1,0,2,2048,0,0,0,0,3,4,5,4294967295,15,0,0 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_interleaved/17499241034733448657/brisc/brisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_interleaved/17499241034733448657/brisc/brisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,78,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:78:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   78 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa/15551123393757437088/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,32,18,16,1,32,1,32,18,1,1,1,1,1,1,4,1,1,4,1,110,1,0,0,1,1031798784,0,0,0,32,0,1,0,0,1,2,3,4294967295,4,5,4294967295,4294967295,15,7,8,9,10,11,12,13,14,0,2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15551123393757437088/trisc0/trisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15551123393757437088/trisc0/trisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:97,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp:10,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1050:5: note: in expansion of macro 'DO_PRAGMA'
+ 1050 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sub_exp_block_bcast_cols(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB_EXP_BLOCK_INIT,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,493,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:493:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  493 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,502,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:502:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  502 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,516,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:516:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  516 |         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PACK SUB_EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,529,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:529:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  529 |         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void normalize_row_streaming(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MATMUL_RECIP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,724,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:724:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  724 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MUL_BCAST,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,773,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:773:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  773 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT),/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1316,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1316:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1316 |         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Q@KT MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1381,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1381:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1381 |                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Reduce max,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1481,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1481:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1481 |             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1554,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1554:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1554 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1589,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1589:25: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1589 |                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1645,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1645:21: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1645 |                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                     ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: ROW_NORM,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1676,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1676:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1676 |             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: S_CORR_FUSED,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1701,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1701:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1701 |                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1728,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1728:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1728 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1754,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1754:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1754 |                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa/15551123393757437088/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,32,18,16,1,32,1,32,18,1,1,1,1,1,1,4,1,1,4,1,110,1,0,0,1,1031798784,0,0,0,32,0,1,0,0,1,2,3,4294967295,4,5,4294967295,4294967295,15,7,8,9,10,11,12,13,14,0,2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15551123393757437088/trisc2/trisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15551123393757437088/trisc2/trisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:72,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp:10,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1055:5: note: in expansion of macro 'DO_PRAGMA'
+ 1055 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sub_exp_block_bcast_cols(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB_EXP_BLOCK_INIT,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,493,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:493:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  493 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,502,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:502:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  502 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,516,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:516:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  516 |         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PACK SUB_EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,529,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:529:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  529 |         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void normalize_row_streaming(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MATMUL_RECIP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,724,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:724:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  724 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MUL_BCAST,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,773,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:773:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  773 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT),/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1316,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1316:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1316 |         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Q@KT MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1381,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1381:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1381 |                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Reduce max,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1481,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1481:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1481 |             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1554,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1554:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1554 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1589,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1589:25: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1589 |                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1645,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1645:21: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1645 |                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                     ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: ROW_NORM,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1676,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1676:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1676 |             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: S_CORR_FUSED,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1701,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1701:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1701 |                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1728,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1728:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1728 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1754,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1754:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1754 |                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa/15551123393757437088/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,32,18,16,1,32,1,32,18,1,1,1,1,1,1,4,1,1,4,1,110,1,0,0,1,1031798784,0,0,0,32,0,1,0,0,1,2,3,4294967295,4,5,4294967295,4294967295,15,7,8,9,10,11,12,13,14,0,2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15551123393757437088/trisc1/trisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15551123393757437088/trisc1/trisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:24,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp:13,
+                 from ../chlkc_math.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sub_exp_block_bcast_cols(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB_EXP_BLOCK_INIT,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,493,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:493:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  493 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,502,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:502:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  502 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,516,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:516:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  516 |         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PACK SUB_EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,529,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:529:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  529 |         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void normalize_row_streaming(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MATMUL_RECIP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,724,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:724:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  724 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MUL_BCAST,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,773,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:773:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  773 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT),/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1316,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1316:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1316 |         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Q@KT MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1381,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1381:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1381 |                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Reduce max,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1481,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1481:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1481 |             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1554,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1554:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1554 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1589,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1589:25: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1589 |                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1645,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1645:21: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1645 |                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                     ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: ROW_NORM,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1676,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1676:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1676 |             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: S_CORR_FUSED,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1701,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1701:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1701 |                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1728,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1728:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1728 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1754,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1754:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1754 |                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDHT_GRANULARITY=2 -DEXP_APPROX_MODE=1 -DMUL_BCAST_GRANULARITY=1 -DREDUCE_GRANULARITY=1 -DSTATS_GRANULARITY=1 -DSUB_EXP_GRANULARITY=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_interleaved/9663365148842715422/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,1,32,64,32,64,18,16,1,32,1,64,110,1,0,0,0,0,1,2,256,0,1,1,1,0,0,0,0,0,0,1,0,2,2048,2,2048,2,2048,0,0,2,256,0,0,0,0,0,0,0,0,0,1,2,3,4294967295,6,4294967295,4294967295,0,0 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_interleaved/9663365148842715422/ncrisc/ncrisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/reader_interleaved/9663365148842715422/ncrisc/ncrisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,70,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:70:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   70 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDHT_GRANULARITY=2 -DEXP_APPROX_MODE=1 -DMUL_BCAST_GRANULARITY=1 -DREDUCE_GRANULARITY=1 -DSTATS_GRANULARITY=1 -DSUB_EXP_GRANULARITY=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_interleaved/7248482850208644096/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,32,32,2048,18,16,1,32,1,64,1065369472,1031798784,110,1,0,0,1,0,1,0,1,0,1,0,2,2048,0,0,0,0,3,4,5,4294967295,15,0,0 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_interleaved/7248482850208644096/brisc/brisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/writer_interleaved/7248482850208644096/brisc/brisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,78,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:78:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   78 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa/15957853840060133842/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,64,18,16,1,32,1,64,18,1,1,1,1,1,1,4,1,1,4,1,110,1,0,0,1,1031798784,0,0,0,64,0,1,0,0,1,2,3,4294967295,4,5,4294967295,4294967295,15,7,8,9,10,11,12,13,14,0,2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15957853840060133842/trisc0/trisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15957853840060133842/trisc0/trisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:97,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp:10,
+                 from ../chlkc_unpack.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1050:5: note: in expansion of macro 'DO_PRAGMA'
+ 1050 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sub_exp_block_bcast_cols(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB_EXP_BLOCK_INIT,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,493,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:493:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  493 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,502,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:502:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  502 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,516,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:516:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  516 |         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PACK SUB_EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,529,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:529:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  529 |         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void normalize_row_streaming(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MATMUL_RECIP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,724,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:724:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  724 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MUL_BCAST,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,773,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:773:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  773 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT),/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1316,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1316:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1316 |         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Q@KT MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1381,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1381:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1381 |                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Reduce max,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1481,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1481:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1481 |             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1554,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1554:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1554 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1589,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1589:25: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1589 |                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1645,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1645:21: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1645 |                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                     ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: ROW_NORM,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1676,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1676:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1676 |             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: S_CORR_FUSED,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1701,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1701:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1701 |                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1728,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1728:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1728 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1754,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1754:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1754 |                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa/15957853840060133842/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,64,18,16,1,32,1,64,18,1,1,1,1,1,1,4,1,1,4,1,110,1,0,0,1,1031798784,0,0,0,64,0,1,0,0,1,2,3,4294967295,4,5,4294967295,4294967295,15,7,8,9,10,11,12,13,14,0,2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15957853840060133842/trisc2/trisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15957853840060133842/trisc2/trisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /home/stisi/tt-metal/tt_metal/hw/inc/api/compute/compute_kernel_api.h:72,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp:10,
+                 from ../chlkc_pack.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1055:5: note: in expansion of macro 'DO_PRAGMA'
+ 1055 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sub_exp_block_bcast_cols(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB_EXP_BLOCK_INIT,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,493,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:493:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  493 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,502,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:502:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  502 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,516,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:516:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  516 |         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PACK SUB_EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,529,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:529:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  529 |         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void normalize_row_streaming(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MATMUL_RECIP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,724,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:724:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  724 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MUL_BCAST,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,773,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:773:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  773 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT),/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1316,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1316:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1316 |         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Q@KT MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1381,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1381:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1381 |                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Reduce max,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1481,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1481:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1481 |             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1554,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1554:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1554 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1589,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1589:25: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1589 |                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1645,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1645:21: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1645 |                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                     ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: ROW_NORM,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1676,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1676:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1676 |             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: S_CORR_FUSED,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1701,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1701:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1701 |                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1728,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1728:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1728 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1754,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1754:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1754 |                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/home/stisi/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh-tensix -I. -I.. -I/home/stisi/tt-metal/ -I/home/stisi/tt-metal/ttnn -I/home/stisi/tt-metal/ttnn/cpp -I/home/stisi/tt-metal/tt_metal -I/home/stisi/tt-metal/tt_metal/hw/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/common -I/home/stisi/tt-metal/tt_metal/hostdevcommon/api -I/home/stisi/tt-metal/tt_metal/api/ -I/home/stisi/tt-metal/runtime/sfpi/include -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/stisi/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/stisi/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="sdpa/15957853840060133842/" -DKERNEL_COMPILE_TIME_ARGS=1,20,1,64,18,16,1,32,1,64,18,1,1,1,1,1,1,4,1,1,4,1,110,1,0,0,1,1031798784,0,0,0,64,0,1,0,0,1,2,3,4294967295,4,5,4294967295,4294967295,15,7,8,9,10,11,12,13,14,0,2,2048 -c -o /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15957853840060133842/trisc1/trisck.15148178663158458589_137092.o /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /home/stisi/.cache/tt-metal-cache/5271600489027737207/kernels/sdpa/15957853840060133842/trisc1/trisck.15148178663158458589_137092.d
+In file included from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:24,
+                 from /home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa.cpp:13,
+                 from ../chlkc_math.cpp:3,
+                 from /home/stisi/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:16,
+                 from /home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sub_exp_block_bcast_cols(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB_EXP_BLOCK_INIT,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,493,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:493:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  493 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: SUB,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,502,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:502:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  502 |         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,516,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:516:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  516 |         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PACK SUB_EXP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,529,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:529:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  529 |         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void normalize_row_streaming(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MATMUL_RECIP,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,724,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:724:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  724 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NORM_MUL_BCAST,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,773,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:773:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+  773 |             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT),/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1316,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1316:9: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1316 |         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
+      |         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Q@KT MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1381,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1381:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1381 |                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Reduce max,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1481,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1481:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1481 |             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1554,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1554:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1554 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1589,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1589:25: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1589 |                         MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                         ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1645,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1645:21: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1645 |                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                     ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: ROW_NORM,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1676,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1676:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1676 |             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In lambda function:
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: S_CORR_FUSED,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1701,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1701:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1701 |                 MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp: In function 'void sdpa_inner_loop_step(AccumulatorHalf&, AccumulatorHalf&, bool, bool, bool, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, uint32_t, const KVPadRotationContext&, uint32_t)':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: Softmax(Q@KT)@V,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1728,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1728:13: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1728 |             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
+      |             ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: QKT@V MM+Pack,/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp,1754,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:48:5: note: in expansion of macro 'DO_PRAGMA'
+   48 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp:1754:17: note: in expansion of macro 'MaybeDeviceZoneScopedN'
+ 1754 |                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
+      |                 ^~~~~~~~~~~~~~~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: TRISC-KERNEL,/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/stisi/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/stisi/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/perf_wallclock_prefill_moe.json: {'kind': 'moe', 'mode': 'prefill (warmed, non-traced)', 'seq_len': 2048, 'prefill_chunk_size': 1024, 'wall_s': 0.2684, 'tokens_per_s': 7629.1, 'signposts': ['PERF_PREFILL_MOE', 'PERF_PREFILL_MOE_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[dense] 2026-08-31 18:05:28.555 | INFO     | tracy:signpost:49 - PERF_PREFILL_DENSE
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/perf_wallclock_prefill_dense.json: {'kind': 'dense', 'mode': 'prefill (warmed, non-traced)', 'seq_len': 2048, 'prefill_chunk_size': 1024, 'wall_s': 0.0196, 'tokens_per_s': 104622.6, 'signposts': ['PERF_PREFILL_DENSE', 'PERF_PREFILL_DENSE_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[moe] 2026-08-31 18:05:32.939 | INFO     | tracy:signpost:49 - PERF_DECODE_MOE
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/perf_wallclock_decode_moe.json: {'kind': 'moe', 'mode': 'decode (traced, warmed, batch 1, fixed position 1023)', 'context_depth': 1024, 'iterations': 32, 'wall_s': 0.0508, 'ms_per_token': 1.588, 'tokens_per_s': 629.9, 'signposts': ['PERF_DECODE_MOE', 'PERF_DECODE_MOE_END']}
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[dense] 2026-08-31 18:05:34.340 | INFO     | tracy:signpost:49 - PERF_DECODE_DENSE
+wrote /home/stisi/tt-metal/models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/perf_wallclock_decode_dense.json: {'kind': 'dense', 'mode': 'decode (traced, warmed, batch 1, fixed position 1023)', 'context_depth': 1024, 'iterations': 32, 'wall_s': 0.0334, 'ms_per_token': 1.042, 'tokens_per_s': 959.4, 'signposts': ['PERF_DECODE_DENSE', 'PERF_DECODE_DENSE_END']}
+PASSED2026-08-31 18:05:35.617 | info     |           Metal | Device kernel duration perf summary (device=0): count=4743, min=63ns, avg=166507.8ns, max=39418524ns (profiler_analysis.cpp:727)
+
+
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+6.54s call     models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[moe]
+4.51s call     models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[moe]
+4.43s teardown models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[dense]
+1.33s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[moe]
+1.02s call     models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[dense]
+0.67s call     models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[dense]
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[moe]
+0.21s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[dense]
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[dense]
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[moe]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_prefill_perf[dense]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[moe]
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py::test_decode_perf_traced[dense]
+============================== 4 passed in 19.18s ==============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7d9d66a58c28 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7d9d7411a6e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "update_tensor_topology"
+ - leaked function "get_device_ids"
+ - leaked function ""
+ - leaked function "ranges"
+ - leaked function "size"
+ - leaked function "device_coords"
+ - leaked function "create_matmul_attributes"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-31 18:05:40.714 | info     |    BuildKernels | JIT cache stats: 466/476 hits (97.9%) [466 cached, 128 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 26.77 s
+Zones: 4,134,899
+Elapsed time: 22.82 s
+Saving trace... done!
+Trace size 35.25 MB (17.64% ratio)
+PYTEST_EXIT:0

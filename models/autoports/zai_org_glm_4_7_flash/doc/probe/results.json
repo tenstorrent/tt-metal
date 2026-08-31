@@ -1,0 +1,28 @@
+{
+  "host_weight_roundtrip_bf4_min": 0.9934090340144963,
+  "shared_bf8_pcc": 0.9998983699500529,
+  "bf8": {
+    "per_expert_pcc_min": 0.999893307685852,
+    "per_expert_pcc_mean": 0.9998955726623535,
+    "worst_expert": 3,
+    "routed_sum_pcc": 0.9998961868994838,
+    "full_moe_pcc": 0.9998974004453557
+  },
+  "bf4": {
+    "per_expert_pcc_min": 0.9809134602546692,
+    "per_expert_pcc_mean": 0.9813413619995117,
+    "worst_expert": 3,
+    "routed_sum_pcc": 0.9815163809736358,
+    "full_moe_pcc": 0.9843606614713722
+  },
+  "meta": {
+    "model": "zai-org/GLM-4.7-Flash",
+    "layer": 1,
+    "tokens": 512,
+    "seed": 1234,
+    "inputs": "randn synthetic (weight-quantization probe, not activation-calibrated)",
+    "compute": "HiFi2, fp32_dest_acc, packer_l1_acc; activations bfloat16",
+    "routing": "host fp32 sigmoid+bias top-4, norm, scale 1.8, identical across arms",
+    "shared_expert": "bfloat8_b in all arms (planned policy)"
+  }
+}

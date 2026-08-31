@@ -1,0 +1,13 @@
+{
+ "kind": "dense",
+ "mode": "decode (traced, warmed, batch 1, fixed position 1023)",
+ "context_depth": 1024,
+ "iterations": 32,
+ "wall_s": 0.0334,
+ "ms_per_token": 1.042,
+ "tokens_per_s": 959.4,
+ "signposts": [
+  "PERF_DECODE_DENSE",
+  "PERF_DECODE_DENSE_END"
+ ]
+}

@@ -1,0 +1,66 @@
+Config{cache_path=/home/stisi/.cache/ttnn,model_cache_path=/home/stisi/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/stisi/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/stisi/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, repeat-0.9.4, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, anyio-4.14.2, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items / 2 deselected / 2 selected
+
+models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_absorbed_reference_matches_hf [transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+absorbed-reference certification PCC=1.00000000
+PASSED
+models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_prefill_8k_vs_hf 2026-08-31 18:04:48.787 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:222)
+HF fp32 reference at S=8193: 5.4s
+prefill S=8191 PCC=0.999458 wall=2.0s (4105 tok/s, includes compile)
+decode pos=8191 PCC=0.999978
+decode pos=8192 PCC=0.999976
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/stisi/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+17.38s call     models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_prefill_8k_vs_hf
+2.54s call     models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_absorbed_reference_matches_hf
+0.80s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_absorbed_reference_matches_hf
+0.20s setup    models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_prefill_8k_vs_hf
+
+(2 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_absorbed_reference_matches_hf
+PASSED models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py::test_prefill_8k_vs_hf
+======================= 2 passed, 2 deselected in 20.93s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7dcee247e9b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7dcee1ecf8e8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 253 functions!
+ - leaked function "__init__"
+ - leaked function "deallocate"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "volume"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-31 18:05:00.401 | info     |    BuildKernels | JIT cache stats: 449/453 hits (99.1%) [449 cached, 152 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+PYTEST_EXIT:0

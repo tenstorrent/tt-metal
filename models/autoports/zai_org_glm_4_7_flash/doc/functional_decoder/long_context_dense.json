@@ -1,0 +1,49 @@
+{
+ "kind": "dense",
+ "advertised_context": 202752,
+ "prefill_seq_len": 202751,
+ "prefill_wall_s": 70.8,
+ "prefill_tokens_per_s": 2862.2,
+ "cache_pcc_vs_linear_ref": 0.9999880799619135,
+ "windows": {
+  "start": {
+   "rows": [
+    0,
+    31
+   ],
+   "pcc_all_rows": 0.9999887513895918,
+   "pcc_min_ok_row": 0.9999818427228743,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "middle": {
+   "rows": [
+    101376,
+    101407
+   ],
+   "pcc_all_rows": 0.9999392464818923,
+   "pcc_min_ok_row": 0.9999338885319986,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  },
+  "end": {
+   "rows": [
+    202719,
+    202750
+   ],
+   "pcc_all_rows": 0.9997035806900828,
+   "pcc_min_ok_row": 0.9996855794957082,
+   "rows_at_bar": 32,
+   "explained": [],
+   "unexplained": []
+  }
+ },
+ "decode_max_position": {
+  "position": 202751,
+  "pcc": 0.9999945849350514,
+  "router_tie": false,
+  "first_call_wall_s": 0.017
+ }
+}
