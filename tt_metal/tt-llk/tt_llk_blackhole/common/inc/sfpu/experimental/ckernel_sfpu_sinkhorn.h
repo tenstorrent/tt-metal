@@ -285,9 +285,25 @@ inline void _sinkhorn_strip_pair_body_()
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
     TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG5, 0);
 
-    // Reciprocal: LREG4 = 1 / strip0_row_sum, LREG5 = 1 / strip1_row_sum.
-    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPARECIP_MOD1_RECIP);
-    TTI_SFPARECIP(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPARECIP_MOD1_RECIP);
+    // Reciprocal: LREG4 = 1 / (strip0_row_sum + eps), LREG5 = 1 / (strip1_row_sum + eps).
+    //
+    // SFPARECIP alone is only a ~5-7 bit mantissa initial estimate (designed as a Newton
+    // seed, not a final result). Refine each with three terms of the Neumann series
+    // (1/a = x*(1 + r + r^2 + ...) where r = 1 - a*x) -- same pattern that
+    // ckernel_sfpu_softmax_k.h uses on its normalization recip -- to get ~15+ bit mantissa
+    // (plenty after the final bf16 pack).
+    // LREG6/LREG7 hold the SFPARECIP seed x; LREG4/LREG5 shift from `a` to the refined 1/a.
+    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPARECIP(0, p_sfpu::LREG5, p_sfpu::LREG7, sfpi::SFPARECIP_MOD1_RECIP);
+    // r = 1 - a*x  (SFPMAD MOD=1: dst = -A*B + C).
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG4, 1);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG7, p_sfpu::LCONST_1, p_sfpu::LREG5, 1);
+    // r + r^2.
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, 0);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+    // Refined 1/a = x + x*(r + r^2) = x*(1 + r + r^2).
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LREG6, p_sfpu::LREG4, 0);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG7, p_sfpu::LREG7, p_sfpu::LREG5, 0);
 
     // Apply row recip to each strip's data LREGs.
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -316,9 +332,15 @@ inline void _sinkhorn_strip_pair_body_()
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, 0);
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG4, 0);
 
-    // Add eps to col_sum, then reciprocal: LREG4 = 1 / (col_sum + eps).
+    // Add eps to col_sum, then reciprocal: LREG4 = 1 / (col_sum + eps). Same Newton /
+    // Neumann-series refinement as the row-norm SFPARECIP above (see comment there). LREG5
+    // is available as scratch here (data lives in LREG0..3 after SFPTRANSP; LREG11/LREG13
+    // are persistent constants outside this group).
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
-    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG4, 1); // r
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, 0);    // r + r^2
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG4, 0);    // x*(1+r+r^2)
 
     // Apply col recip to each LREG (which now holds one row across cols).
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
