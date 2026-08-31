@@ -56,6 +56,12 @@ static_assert(PP_TYPE_SHIFT == kernel_profiler::SPSC_SPAN_TYPE_SHIFT, "packet ty
 // sees both headers, which makes it the only place the two can be held together.
 static_assert(PP_DATA == kernel_profiler::SPSC_TYPE_DATA, "PP_DATA wire code disagrees");
 static_assert(PP_DATA_SIZE_SHIFT == kernel_profiler::SPSC_DATA_SIZE_SHIFT, "PP_DATA size field moved");
+static_assert(PP_SYNC == kernel_profiler::SPSC_TYPE_SYNC, "PP_SYNC wire code disagrees");
+static_assert(PP_SYNC_WHICH_SHIFT == kernel_profiler::SPSC_SYNC_WHICH_SHIFT, "PP_SYNC which field moved");
+static_assert(PP_SYNC_ROUND_SHIFT == kernel_profiler::SPSC_SYNC_ROUND_SHIFT, "PP_SYNC round field moved");
+static_assert(PP_SYNC_ROUND_MASK == kernel_profiler::SPSC_SYNC_ROUND_MASK, "PP_SYNC round mask disagrees");
+static_assert(PP_SYNC_T0 == kernel_profiler::SPSC_SYNC_T0 && PP_SYNC_T1 == kernel_profiler::SPSC_SYNC_T1 &&
+              PP_SYNC_T2 == kernel_profiler::SPSC_SYNC_T2, "PP_SYNC which codes disagree");
 
 namespace tt::tt_metal::profiler {
 
@@ -322,6 +328,17 @@ inline uint32_t spsc_decode_frame(
                     const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
                     emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, w1), pg, nullptr, 0);
                     i += 2;
+                } else if (t == PP_SYNC) {
+                    // PP_SYNC: exactly 2 words -- a device-to-device clock-sync sample. Handed to the
+                    // emit_data sink, whose caller routes it to the sync aggregator rather than into
+                    // ordinary record delivery.
+                    if (i + 2 > run) {
+                        st.anomalies++;
+                        break;
+                    }
+                    const uint32_t w1 = ring[(hm + i + 1) & kSpscRingMask];
+                    emit_data(lane, PP_SYNC, pp_low27(w0), pp_full_ts(th, w1), pg, nullptr, 0);
+                    i += 2;
                 } else if (t == PP_DATA) {
                     // PP_DATA is 3 + size words and the length lives in word2, so the whole header must
                     // be inside the run before the packet can be sized at all.
@@ -450,6 +467,14 @@ inline uint32_t spsc_decode_frame(
                     break;
                 }
                 emit_data(lane, PP_EVENT, pp_point_id(w0), pp_full_ts(th, p[i + 1]), pg, nullptr, 0);
+                i += 2;
+            } else if (t == PP_SYNC) {
+                // PP_SYNC: exactly 2 words -- a clock-sync sample; routed by the emit_data sink's caller.
+                if (i + 2 > run) {
+                    st.anomalies++;
+                    break;
+                }
+                emit_data(lane, PP_SYNC, pp_low27(w0), pp_full_ts(th, p[i + 1]), pg, nullptr, 0);
                 i += 2;
             } else if (t == PP_DATA) {
                 // PP_DATA is 3 + size words with the length in word2; the packed window is flat, so the

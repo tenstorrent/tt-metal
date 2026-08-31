@@ -242,7 +242,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
     // Pass-local stats, folded into the stream once per pass: the NT ring stores go through casted
     // pointers, so per-record updates against Stream fields cannot stay in registers (the compiler must
     // assume aliasing) -- measured at ~20% of the decode profile as a load-add-store per marker.
-    uint64_t zone_markers = 0, stall_zones = 0, order_regressions = 0;
+    uint64_t zone_markers = 0, stall_zones = 0, order_regressions = 0, sync_seen = 0;
     uint64_t min_ts = s.min_zone_ts, max_ts = s.max_zone_ts;
     uint64_t* const last_ts = s.last_zone_ts.data();
 
@@ -281,6 +281,17 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
                          uint32_t prog,
                          const uint32_t* payload,
                          uint32_t n) {
+        if (type == PP_SYNC) {
+            // Clock-sync sample: relayed to the sync aggregator, never delivered as a record. The
+            // id argument is the packet's low27 (which | round | idx); the pp_sync_* extractors
+            // mask, so passing the bare low27 is exact.
+            sync_seen++;
+            if (sync_sink_) {
+                sync_sink_(PerfDebugSyncSample{
+                    dev, lane, pp_sync_which(id), pp_sync_round(id), pp_sync_idx(id), ts});
+            }
+            return;
+        }
         if (!sink) {
             return;
         }
@@ -427,6 +438,7 @@ bool PerfDebugReceiver::decode_pass(Stream& s) {
         s.records += pos - pos0;
     }
     s.zone_markers += zone_markers;
+    s.sync_packets += sync_seen;
     s.stall_zones += stall_zones;
     s.order_regressions += order_regressions;
     s.min_zone_ts = min_ts;

@@ -56,6 +56,7 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_FW_MAILBOX,
     TENSIX_FABRIC_CONNECTIONS,
     FABRIC_CONNECTION_LOCK,
+    FABRIC_ROUTER_SYNC_SCRATCH,  // AERISC fabric scratch words (router sync-hook discovery lives here)
     COUNT  // Keep this last so it always indicates number of enum options
 };
 

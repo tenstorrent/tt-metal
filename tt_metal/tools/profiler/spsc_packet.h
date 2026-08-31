@@ -152,6 +152,28 @@
 /* 2-word STICKY_PROG escape for host-ids >= 2^27 -- see STICKY_PROG above. */
 #define PP_STICKY_PROG_EXT 14u
 
+/* SYNC: a device-to-device clock-sync sample from the fabric-router hook (or any resident eth
+ * kernel running the same exchange). EXACTLY 2 words, the same shape as PP_EVENT:
+ *   [0] word0 = pp_sync_w0(which, round, idx)   [1] timer_low
+ * low27 = which(2) | round(17) | idx(8): `which` says T0 (initiator ping send), T1 (responder
+ * arrival stamp) or T2 (initiator echo stamp); (round, idx) is the JOIN KEY -- the host sync
+ * aggregator pairs T0/T2 from the initiator's stream with T1 from the responder's stream by it.
+ * The sample carries NO structural zone id and resolves to no name ON PURPOSE: the router kernel
+ * sits outside the zone-meta naming path, and a structural TYPE is one compare in the size-by-type
+ * walk where a reserved id band or a name screen would be a hot-path lookup. Link identity is NOT
+ * on the wire: the lane already names the emitting (core, risc), which the host maps to a chip and
+ * eth channel. Timestamp mechanics are the ordinary ones (timer_low here, high half from the
+ * lane's PP_STICKY_TIMER) -- the sample IS the packet's own instant. */
+#define PP_SYNC 15u
+#define PP_SYNC_WHICH_SHIFT 25u
+#define PP_SYNC_WHICH_MASK 0x3u
+#define PP_SYNC_ROUND_SHIFT 8u
+#define PP_SYNC_ROUND_MASK 0x1FFFFu
+#define PP_SYNC_IDX_MASK 0xFFu
+#define PP_SYNC_T0 0u
+#define PP_SYNC_T1 1u
+#define PP_SYNC_T2 2u
+
 /* --- word0 fields --- */
 #define PP_TYPE_SHIFT 27
 #define PP_TYPE_MASK 0x1Fu       /* 5 bits */
@@ -205,6 +227,14 @@ static inline uint32_t pp_data_w2(uint32_t size_words) {
 /* EVENT header: 2 words, no size word. */
 static inline uint32_t pp_event_w0(uint32_t id) { return pp_word0(PP_EVENT, id & PP_LOW27_MASK); }
 
+/* SYNC sample header: 2 words, no size word. */
+static inline uint32_t pp_sync_w0(uint32_t which, uint32_t round, uint32_t idx) {
+    return pp_word0(
+        PP_SYNC,
+        ((which & PP_SYNC_WHICH_MASK) << PP_SYNC_WHICH_SHIFT) |
+            ((round & PP_SYNC_ROUND_MASK) << PP_SYNC_ROUND_SHIFT) | (idx & PP_SYNC_IDX_MASK));
+}
+
 /* ----- decode (host) ----- */
 
 static inline uint32_t pp_type(uint32_t w0) { return (w0 >> PP_TYPE_SHIFT) & PP_TYPE_MASK; }
@@ -224,6 +254,10 @@ static inline int pp_is_event(uint32_t w0) { return pp_type(w0) == PP_EVENT; }
  * from that packet onward and produces plausible garbage. Branch on pp_is_event / pp_is_data separately. */
 static inline uint32_t pp_point_id(uint32_t w0) { return pp_low27(w0); }
 static inline uint32_t pp_data_size(uint32_t w2) { return (w2 >> PP_DATA_SIZE_SHIFT) & PP_DATA_SIZE_MASK; }
+static inline int pp_is_sync(uint32_t w0) { return pp_type(w0) == PP_SYNC; }
+static inline uint32_t pp_sync_which(uint32_t w0) { return (pp_low27(w0) >> PP_SYNC_WHICH_SHIFT) & PP_SYNC_WHICH_MASK; }
+static inline uint32_t pp_sync_round(uint32_t w0) { return (pp_low27(w0) >> PP_SYNC_ROUND_SHIFT) & PP_SYNC_ROUND_MASK; }
+static inline uint32_t pp_sync_idx(uint32_t w0) { return pp_low27(w0) & PP_SYNC_IDX_MASK; }
 
 /* Wire length (32-bit words) of a real-path packet: SRC/TIMER/PROG are 1 word (identity/timer_hi/host-id
  * fit in low27, no payload); zone markers, EVENT, PROG_EXT and META are 2; DATA is 3 + payload, and its length lives in
@@ -244,7 +278,7 @@ static inline uint32_t pp_packet_words(uint32_t w0, uint32_t w2) {
     if (t == PP_ZONE_L) {
         return 5u;  // word0 + end_lo + end_hi + dur_lo + dur_hi
     }
-    return 2u;  // ZONE_S, legacy zone markers, PP_EVENT, STICKY_PROG_EXT, STICKY_META
+    return 2u;  // ZONE_S, legacy zone markers, PP_EVENT, PP_SYNC, STICKY_PROG_EXT, STICKY_META
 }
 
 /* reader-injected source sticky: lane_id = core*NRISC + risc, carried in both words. */

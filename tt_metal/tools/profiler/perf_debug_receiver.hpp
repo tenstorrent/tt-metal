@@ -99,6 +99,20 @@ struct ReceiverDeviceConfig {
     double frequency_ghz = 0.0;
 };
 
+// One device-to-device clock-sync sample (a PP_SYNC packet), routed OUT of the record stream at the
+// decode stage: decode is the single point every packet passes exactly once, so the sync aggregator
+// sees each sample once, while per-consumer delivery threads never see them at all. dev/lane are
+// capture-context indices -- the aggregator maps them to (chip, eth core) via capture_context().
+struct PerfDebugSyncSample {
+    uint32_t dev = 0;
+    uint32_t lane = 0;
+    uint32_t which = 0;  // 0 = T0 (initiator send), 1 = T1 (responder stamp), 2 = T2 (initiator echo)
+    uint32_t round = 0;  // 17-bit round sequence (wraps); join key with idx
+    uint32_t idx = 0;    // sample index within the round
+    uint64_t ts = 0;     // full device timestamp (59-bit, timer_hi from the lane's sticky)
+};
+using PerfDebugSyncSink = std::function<void(const PerfDebugSyncSample&)>;
+
 struct ReceiverConfig {
     // Optional: called once per stream if it starves for the watchdog window mid-run while
     // its producers are not done (control plane can dump drainer state; receiver has no MMIO).
@@ -114,6 +128,11 @@ public:
     PerfDebugReceiver& operator=(const PerfDebugReceiver&) = delete;
 
     void start();
+
+    // Sync-sample sink: invoked on the DECODE thread for every PP_SYNC packet, so it must be cheap
+    // and must never block (enqueue-and-return). Set BEFORE start(); unset means sync packets are
+    // counted and dropped.
+    void set_sync_sink(PerfDebugSyncSink sink) { sync_sink_ = std::move(sink); }
 
     PerfDebugConsumerHandle add_consumer(std::string name, PerfDebugRecordCallback cb);
     void remove_consumer(PerfDebugConsumerHandle handle);
@@ -177,6 +196,7 @@ private:
         bool retired = false;
 
         uint64_t passes = 0, frames = 0, pages = 0, records = 0, zone_markers = 0, stall_zones = 0;
+        uint64_t sync_packets = 0;  // PP_SYNC packets routed to the sync sink (never delivered)
         uint64_t decode_ticks = 0;
         uint64_t order_regressions = 0, bad_frames = 0;
         uint64_t first_data_tsc = 0, last_commit_tsc = 0;
@@ -217,6 +237,7 @@ private:
     bool no_decode_ = false;
     bool read_only_ = false;  // peek + line-stride read + pop: isolates pinned-FIFO read bandwidth
     bool stall_only_ = false;
+    PerfDebugSyncSink sync_sink_;  // set before start(); decode threads call it, never mutate it
     uint32_t die_after_ = 0;
     std::chrono::seconds watchdog_{120};
 

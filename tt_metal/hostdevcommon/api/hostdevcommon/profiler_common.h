@@ -401,6 +401,22 @@ inline std::uint32_t spsc_data_w0(std::uint32_t id) {
 }
 inline std::uint32_t spsc_data_w2(std::uint32_t size_words) { return (size_words & 0x7Fu) << SPSC_DATA_SIZE_SHIFT; }
 
+// PP_SYNC: a device-to-device clock-sync sample (the fabric-router hook), 2 words like PP_EVENT.
+// low27 = which(2) | round(17) | idx(8); the timestamp is the packet's own (timer_low + the lane's
+// sticky high half) -- the sample IS the marker's instant, nothing stores a value. Mirrors
+// spsc_packet.h's pp_sync_*; asserted against them in spsc_marker_decode.hpp.
+static constexpr std::uint32_t SPSC_TYPE_SYNC = 15;
+static constexpr std::uint32_t SPSC_SYNC_T0 = 0;  // initiator: instant the ping enters the TXQ
+static constexpr std::uint32_t SPSC_SYNC_T1 = 1;  // responder: instant the ping was observed
+static constexpr std::uint32_t SPSC_SYNC_T2 = 2;  // initiator: instant the echo was observed
+static constexpr std::uint32_t SPSC_SYNC_WHICH_SHIFT = 25;
+static constexpr std::uint32_t SPSC_SYNC_ROUND_SHIFT = 8;
+static constexpr std::uint32_t SPSC_SYNC_ROUND_MASK = 0x1FFFF;
+inline std::uint32_t spsc_sync_low27(std::uint32_t which, std::uint32_t round, std::uint32_t idx) {
+    return ((which & 0x3u) << SPSC_SYNC_WHICH_SHIFT) | ((round & SPSC_SYNC_ROUND_MASK) << SPSC_SYNC_ROUND_SHIFT) |
+           (idx & 0xFFu);
+}
+
 // ---- The drainer's zone scope ------------------------------------------------------------------------
 //
 // An ATOMIC RAII zone, same shape as a worker's profileScope: the constructor only reads the clock (via

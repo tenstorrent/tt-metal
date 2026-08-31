@@ -118,6 +118,7 @@ struct ppfmt {
     static constexpr uint32_t T_STICKY_TIMER = 9u;      // PP_STICKY_TIMER
     static constexpr uint32_t T_DATA = 10u;             // PP_DATA
     static constexpr uint32_t T_EVENT = 12u;            // PP_EVENT
+    static constexpr uint32_t T_SYNC = 15u;             // PP_SYNC (device-to-device clock-sync sample)
     static constexpr uint32_t DATA_SIZE_SHIFT = 25u;    // PP_DATA_SIZE_SHIFT (in word2)
     static constexpr uint32_t DATA_SIZE_MASK = 0x7Fu;   // PP_DATA_SIZE_MASK
     static inline uint32_t w0(uint32_t type, uint32_t low27) {

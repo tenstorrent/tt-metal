@@ -127,6 +127,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status) +
         offsetof(eth_live_status_t, rxq2_pkt_drop);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_SYNC_SCRATCH)] =
+        MEM_AERISC_FABRIC_SCRATCH_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = MEM_AERISC_FABRIC_ROUTER_COMMAND_BASE;
@@ -157,6 +159,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_SYNC_SCRATCH)] =
+        MEM_AERISC_FABRIC_SCRATCH_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = sizeof(uint32_t);

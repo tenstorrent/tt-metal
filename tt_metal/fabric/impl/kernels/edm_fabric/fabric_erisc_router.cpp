@@ -32,6 +32,7 @@
 #include "noc_overlay_parameters.h"
 #include "api/alignment.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_sync_hook.hpp"
 #include "hostdev/fabric_telemetry_msgs.h"
 #ifdef FABRIC_2D
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edge_node_router.hpp"
@@ -2619,6 +2620,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
 
+            // Device-to-device clock-sync hook. Expands to NOTHING unless the FABRIC_ROUTER_SYNC_HOOK
+            // JIT define is present (profiler runs only); deliberately NOT nested in the heartbeat
+            // gate above -- it keeps its own prescaler and an L1-configured deadline, so the sync
+            // cadence is host-tunable without recompiling and costs one increment+test per iteration.
+            FABRIC_ROUTER_SYNC_POLL();
+
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
                 if constexpr (IDLE_CONTEXT_SWITCHING) {
@@ -2667,6 +2674,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     };
 
     uint64_t loop_start_cycles;
+
+    // Publish the sync hook's L1 block address for host discovery (vanishing macro, see above).
+    FABRIC_ROUTER_SYNC_INIT();
 
     if constexpr (MY_ERISC_ID == 0) {
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {

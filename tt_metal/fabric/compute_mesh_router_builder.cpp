@@ -943,6 +943,20 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
     }
 
+    // Device-to-device clock-sync hook (perf_debug profiler): compiled into the router ONLY when the
+    // profiler is enabled AND TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ is set. The define is the entire
+    // opt-in -- absent, the hook macros in the router expand to nothing and the binary is unchanged.
+    // The cadence itself is NOT compiled in: the hook reads its interval from an L1 config word the
+    // host writes (and can rewrite live); the prescaler mask only sets the coarse check granularity.
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        const char* fs = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_HZ");
+        if (fs != nullptr && *fs != '\0' && !(fs[0] == '0' && fs[1] == '\0')) {
+            defines["FABRIC_ROUTER_SYNC_HOOK"] = "1";
+            const char* pm = std::getenv("TT_METAL_PERF_DEBUG_FABRIC_SYNC_PRESCALER_MASK");
+            defines["FABRIC_ROUTER_SYNC_PRESCALER_MASK"] = (pm != nullptr && *pm != '\0') ? pm : "63";
+        }
+    }
+
     // Get SOC descriptor for eth core lookup
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(local_node_);

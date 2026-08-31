@@ -268,8 +268,12 @@
 #define MEM_AERISC_FABRIC_POSTCODES_BASE                                                                      \
     (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE - MEM_AERISC_FABRIC_POSTCODES_SIZE - \
      MEM_AERISC_FABRIC_SCRATCH_SIZE)
+// SCRATCH sits fully INSIDE the telemetry block, below its top. As previously written (base =
+// block end - POSTCODES_SIZE) the 28 B scratch began 4 B before the block's end and OVERRAN the
+// region above it by 24 B (ERISC_APP_SYNC_INFO here; the routing table on Wormhole). Latent only
+// because nothing used ROUTER_SCRATCH_WRITE; the postcode word (which IS live) keeps its address.
 #define MEM_AERISC_FABRIC_SCRATCH_BASE \
-    (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE - MEM_AERISC_FABRIC_POSTCODES_SIZE)
+    (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE - MEM_AERISC_FABRIC_SCRATCH_SIZE)
 
 #define MEM_AERISC_ROUTING_TABLE_BASE (MEM_AERISC_FABRIC_TELEMETRY_BASE + MEM_AERISC_FABRIC_TELEMETRY_SIZE)
 #define MEM_AERISC_ROUTING_TABLE_SIZE MEM_ROUTING_TABLE_SIZE
