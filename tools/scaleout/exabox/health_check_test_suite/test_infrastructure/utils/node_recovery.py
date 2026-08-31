@@ -82,7 +82,9 @@ def reboot_and_requeue(node: str, slurm_job_id: str) -> str | None:
     """
     request = os.environ.get(REQUEST_FILE_ENV, "")
     result = os.environ.get(RESULT_FILE_ENV, "")
-    if request and result:
+    if bool(request) != bool(result):
+        return f"host-side self-heal broker requires both ${REQUEST_FILE_ENV} and ${RESULT_FILE_ENV}"
+    if request:
         return _self_heal_via_host_broker(Path(request), Path(result), node, slurm_job_id)
     if shutil.which("scontrol") is None:
         return (
