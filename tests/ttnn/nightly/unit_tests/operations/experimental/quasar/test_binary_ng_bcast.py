@@ -304,6 +304,29 @@ _BCAST_ACTS = [ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.GELU, ttnn.UnaryOpType.TA
 _BCAST_ACT_KWARG = {"lhs": "lhs_act", "rhs": "rhs_act", "post": "post_act"}
 
 
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "a_shape,b_shape,bcast",
+    [
+        pytest.param([2, 1, 64, 128], [1, 2, 1, 128], "ROW_B", id="ROW_B"),
+        pytest.param([1, 2, 64, 1], [2, 1, 64, 128], "COL_A", id="COL_A"),
+        pytest.param([2, 1, 64, 128], [1, 2, 1, 1], "SCALAR_B", id="SCALAR_B"),
+        pytest.param([2, 1, 1, 128], [1, 2, 64, 1], "ROW_A_COL_B", id="ROW_A_COL_B"),
+    ],
+)
+def test_bcast_lhs_activation_dtype(device, dtype_tt, a_shape, b_shape, bcast):
+    """Exercise every SFPU broadcast kernel with bf16/fp32 activation DFBs."""
+    _run(
+        device,
+        "multiply",
+        ttnn.DRAM_MEMORY_CONFIG,
+        dtype_tt,
+        (a_shape, b_shape),
+        lhs_act=ttnn.UnaryOpType.RELU,
+        post_act=ttnn.UnaryOpType.RELU,
+    )
+
+
 @pytest.mark.parametrize("act", _BCAST_ACTS)
 @pytest.mark.parametrize("position", ["lhs", "rhs", "post"])
 @pytest.mark.parametrize("a_shape,b_shape,bcast", _BCAST_ACT_SHAPES)

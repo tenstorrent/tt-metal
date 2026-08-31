@@ -68,12 +68,18 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 
 // Generates TRISC prolog: #define + includes for JIT-generated headers and defines_generated.h
 // Kernels using Metal 2.0 get additional JIT-generated headers (not included for legacy kernels)
-string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool has_blaze_experimental_ct_args) {
+string build_trisc_prolog(
+    const char* trisc_define,
+    bool is_metal2_kernel,
+    bool has_blaze_experimental_ct_args,
+    bool include_defines_before_metal2_headers) {
     ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
-    // Kernel defines must precede Metal 2 generated headers: bindings and named
-    // arguments can include compute APIs whose declarations are define-sensitive.
-    prolog << "#include \"defines_generated.h\"\n";
+    if (include_defines_before_metal2_headers) {
+        // Explicitly opted-in kernels have define-sensitive compute APIs pulled
+        // through their generated binding headers.
+        prolog << "#include \"defines_generated.h\"\n";
+    }
     if (is_metal2_kernel) {
         prolog << "#include \"kernel_bindings_generated.h\"\n";
         prolog << "#include \"kernel_args_generated.h\"\n";
@@ -86,6 +92,9 @@ string build_trisc_prolog(const char* trisc_define, bool is_metal2_kernel, bool 
         prolog << "#include \"named_args_generated.h\"\n";
     }
     ////////////////////////////////////////////////////////////
+    if (!include_defines_before_metal2_headers) {
+        prolog << "#include \"defines_generated.h\"\n";
+    }
     return prolog.str();
 }
 
@@ -605,6 +614,14 @@ void jit_build_genfiles_triscs_src(
     const bool has_blaze_experimental_ct_args = write_named_args_generated_header(out_dir, settings);
     ////////////////////////////////////////////////////////////
 
+    // Most kernels retain the long-standing prolog order. The Quasar binary
+    // SFPU path opts in because its generated DFB bindings include compute APIs
+    // whose declarations depend on TT_UNPACK_TO_DEST_SECTION_SYNC.
+    bool include_defines_before_metal2_headers = false;
+    settings.process_defines([&include_defines_before_metal2_headers](const string& define, const string&) {
+        include_defines_before_metal2_headers |= define == "TT_UNPACK_TO_DEST_SECTION_SYNC";
+    });
+
     const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
     const string math_cpp = out_dir + "chlkc_math.cpp";
     const string pack_cpp = out_dir + "chlkc_pack.cpp";
@@ -612,11 +629,14 @@ void jit_build_genfiles_triscs_src(
 
     // Build prologs for each TRISC.
     // Blaze: the 3rd arg (has_blaze_experimental_ct_args) gates the experimental named_args_generated.h include.
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK", is_metal2, has_blaze_experimental_ct_args);
-    const string math_prolog = build_trisc_prolog("TRISC_MATH", is_metal2, has_blaze_experimental_ct_args);
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK", is_metal2, has_blaze_experimental_ct_args);
-    const string isolate_sfpu_prolog =
-        build_trisc_prolog("TRISC_ISOLATE_SFPU", is_metal2, has_blaze_experimental_ct_args);
+    const string unpack_prolog = build_trisc_prolog(
+        "TRISC_UNPACK", is_metal2, has_blaze_experimental_ct_args, include_defines_before_metal2_headers);
+    const string math_prolog = build_trisc_prolog(
+        "TRISC_MATH", is_metal2, has_blaze_experimental_ct_args, include_defines_before_metal2_headers);
+    const string pack_prolog = build_trisc_prolog(
+        "TRISC_PACK", is_metal2, has_blaze_experimental_ct_args, include_defines_before_metal2_headers);
+    const string isolate_sfpu_prolog = build_trisc_prolog(
+        "TRISC_ISOLATE_SFPU", is_metal2, has_blaze_experimental_ct_args, include_defines_before_metal2_headers);
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
     const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);

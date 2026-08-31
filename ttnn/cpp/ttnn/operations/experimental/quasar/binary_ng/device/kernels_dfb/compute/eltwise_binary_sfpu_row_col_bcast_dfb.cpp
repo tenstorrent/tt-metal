@@ -147,25 +147,17 @@ ALWI void process_tile(
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT;
 #endif
-        // Until Quasar supports arbitrary UNP_DEST indices, process one
-        // output at a time using the sequential DEST 0/1 pair.
+#ifdef ARCH_QUASAR
+        // Quasar cannot select arbitrary UNP_DEST indices yet, so process one
+        // output at a time using the sequential DEST 0/1 pair. Keep this path
+        // Quasar-only: Wormhole and Blackhole retain their batched register flow.
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             tile_regs_acquire();
-#ifdef ARCH_QUASAR
-            // Quasar reprograms the unpacker descriptor through copy_init. Both operands have the same
-            // data format in this slice, so only WH/BH need an explicit SrcA format reconfiguration.
+            // Reprogram the unpacker descriptor for each operand. Both inputs
+            // have the same data format in this Metal 2 slice.
             copy_init(dfb_post_lhs_id);
-#else
-            reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
-            copy_init(dfb_post_lhs_id);
-#endif
             copy_tile(dfb_post_lhs_id, i, 0);
-#ifdef ARCH_QUASAR
             copy_init(dfb_post_rhs_id);
-#else
-            reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
-            copy_init(dfb_post_rhs_id);
-#endif
             copy_tile(dfb_post_rhs_id, i, 1);
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT;
@@ -182,6 +174,35 @@ ALWI void process_tile(
             pack_tile(0, dfb_out_id);
             tile_regs_release();
         }
+#else
+        tile_regs_acquire();
+        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+        copy_init(dfb_post_lhs_id);
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            copy_tile(dfb_post_lhs_id, i, i * 2);
+        }
+        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+        copy_init(dfb_post_rhs_id);
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
+#if HAS_ACTIVATIONS(POST)
+            BINARY_SFPU_INIT;
+#endif
+#if ISCLOSE_OP
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
+            PROCESS_POST_ACTIVATIONS(i * 2);
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            pack_tile(i * 2, dfb_out_id);
+        }
+        tile_regs_release();
+#endif
 
         dfb_out.push_back(num_tiles_per_cycle);
         dfb_post_other.pop_front(num_tiles_per_cycle);

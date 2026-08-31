@@ -70,24 +70,16 @@ FORCE_INLINE void process_sfpu_tiles(
     BINARY_SFPU_INIT;
 #endif
 
+#ifdef ARCH_QUASAR
     // Quasar cannot select an arbitrary UNP_DEST tile yet. Process one output
     // at a time: the section starts at DEST 0, then the two copies advance
     // sequentially through DEST 0 and 1 before SFPU overwrites DEST 0.
+    // Keep this path Quasar-only so WH/BH retain their batched register flow.
     for (uint32_t i = 0; i < n; ++i) {
         tile_regs_acquire();
-#ifdef ARCH_QUASAR
         copy_init(dfb_post_lhs_id);
-#else
-        reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
-        copy_init(dfb_post_lhs_id);
-#endif
         copy_tile(dfb_post_lhs_id, i, 0);
-#ifdef ARCH_QUASAR
         copy_init(dfb_post_rhs_id);
-#else
-        reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
-        copy_init(dfb_post_rhs_id);
-#endif
         copy_tile(dfb_post_rhs_id, i, 1);
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
@@ -104,6 +96,35 @@ FORCE_INLINE void process_sfpu_tiles(
         pack_tile(0, dfb_out_id);
         tile_regs_release();
     }
+#else
+    tile_regs_acquire();
+    reconfig_data_format_srca(dfb_post_rhs_id, dfb_post_lhs_id);
+    copy_init(dfb_post_lhs_id);
+    for (uint32_t i = 0; i < n; ++i) {
+        copy_tile(dfb_post_lhs_id, i, i * 2);
+    }
+    reconfig_data_format_srca(dfb_post_lhs_id, dfb_post_rhs_id);
+    copy_init(dfb_post_rhs_id);
+    for (uint32_t i = 0; i < n; ++i) {
+        copy_tile(dfb_post_rhs_id, i, i * 2 + 1);
+#if HAS_ACTIVATIONS(POST)
+        BINARY_SFPU_INIT;
+#endif
+#if ISCLOSE_OP
+        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
+        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
+        PROCESS_POST_ACTIVATIONS(i * 2);
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile(i * 2, dfb_out_id);
+    }
+    tile_regs_release();
+#endif
 
     dfb_out.push_back(n);
     dfb_post_lhs.pop_front(n);

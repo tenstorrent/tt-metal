@@ -321,8 +321,12 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
         static_assert(UNP_SEL == p_unpacr::UNP_DEST, "unpack_to_dest path requires UNP_SEL == p_unpacr::UNP_DEST");
 
 #ifndef TT_UNPACK_TO_DEST_SECTION_SYNC
-        // The legacy per-copy protocol owns and advances the unpack section
-        // here. Section-scoped clients initialize it once at kernel startup.
+        // Unpack owns the DEST section base in the legacy unpack-to-DEST path:
+        // it is the DEST producer (UNP_DEST), so it programs the per-TRISC
+        // section base rather than letting the math middleman do so. Establish
+        // bank 0 here; each SyncHalf copy flips it. TriscID::Unpack selects the
+        // same SEC slot the UNP_DEST client reads. Section-scoped clients
+        // instead initialize the section once at tile_regs_acquire.
         ckernel::trisc::_reset_dest_register_offset_();
         ckernel::trisc::_set_dest_section_base_<to_underlying(ckernel::trisc::TriscID::Unpack)>(ckernel::trisc::_get_dest_buffer_base_());
 #endif
@@ -400,13 +404,24 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 #else
-        // Legacy descriptor kernels synchronize and advance one physical
-        // DEST bank per direct copy.
+        // The math thread is the middleman for two single-counting semaphores
+        // (max=N each). Without waiting on MATH_PACK as well, unpack could race
+        // 2N iterations ahead of pack and overwrite a bank pack has not read.
+        // Waiting on both bounds unpack to within N iterations of pack.
         _llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::MATH_PACK, semaphore::UNPACK_MATH);
+
+        // UNP_DEST is driven by the UNP_A bank counters. Select this tile and
+        // destination zero within the physical section owned by unpack.
         TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_tile_idx);
         TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
+
+        // Drain UNPACK0 before posting "filled" so the post cannot race the
+        // writes consumed by math.
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         _llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);
+
+        // Unpack owns the DEST section base, so SyncHalf advances to the other
+        // physical bank for the next direct copy.
         if constexpr (DEST_SYNC_MODE == ckernel::DstSync::SyncHalf)
         {
             _llk_sync_advance_dest_section_<to_underlying(ckernel::trisc::TriscID::Unpack), true /*EN_32BIT_DEST*/, p_stall::UNPACK0>();
