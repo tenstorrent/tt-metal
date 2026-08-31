@@ -48,14 +48,24 @@ REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
 def default_snapshot():
     """Local snapshot dir for MODEL_ID/MODEL_REVISION.
 
-    The port was written on a host whose HF cache lived at ``/huggingface/hub``;
-    deriving the root from ``HF_HOME`` keeps that default while letting a
-    differently-laid-out machine point at its own cache.
+    Ask ``huggingface_hub`` where the revision is actually cached rather than
+    reconstructing a path: it honours ``HF_HOME`` / ``HF_HUB_CACHE`` / the XDG
+    default, so this resolves on hosts whose cache is not at ``/huggingface/hub``.
+    ``local_files_only=True`` keeps a model load from silently fetching weights.
+
+    The constructed path remains as a fallback, so a host without
+    ``huggingface_hub`` behaves exactly as before. On the host this port was
+    validated on both paths agree.
     """
     from pathlib import Path as _Path
 
-    root = _Path(os.environ.get("HF_HOME", "/huggingface")) / "hub"
-    return root / f"models--{MODEL_ID.replace('/', '--')}" / "snapshots" / MODEL_REVISION
+    try:
+        from huggingface_hub import snapshot_download
+
+        return _Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
+    except Exception:
+        root = _Path(os.environ.get("HF_HOME", "/huggingface")) / "hub"
+        return root / f"models--{MODEL_ID.replace('/', '--')}" / "snapshots" / MODEL_REVISION
 
 
 def _linear_prefill_chunk_size() -> int:

@@ -28,7 +28,7 @@ from vllm.model_executor.models.qwen3_5 import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
-from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import default_snapshot, MODEL_REVISION
+from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, MODEL_REVISION, default_snapshot
 from models.autoports.qwen_qwen3_6_27b.tt.generator import Qwen36Generator
 from models.autoports.qwen_qwen3_6_27b.tt.model import Qwen36Model, _shard
 from models.autoports.qwen_qwen3_6_27b.tt.precision_config import DEFAULT_PRECISION_CONFIG
@@ -110,9 +110,19 @@ class Qwen36ForCausalLM(nn.Module, SupportsMultiModal):
             raise NotImplementedError("Qwen3.6 autoport supports one TP4 model replica")
         if not 1 <= int(max_batch_size) <= 32:
             raise ValueError("Qwen3.6 serving max_num_seqs must be in [1, 32]")
-        snapshot = Path(getattr(hf_config, "_name_or_path", "") or DEFAULT_SNAPSHOT)
+        snapshot = Path(getattr(hf_config, "_name_or_path", "") or "")
         if not snapshot.is_dir():
-            snapshot = DEFAULT_SNAPSHOT
+            # Resolve here, not at import: the checkpoint env vars and the HF cache
+            # layout are only known once the server process is up.
+            snapshot = default_snapshot()
+        if not snapshot.is_dir():
+            raise FileNotFoundError(
+                f"No local snapshot for {MODEL_ID}@{MODEL_REVISION}. Tried "
+                f"hf_config._name_or_path={getattr(hf_config, '_name_or_path', '')!r} "
+                f"and {snapshot}. Set QWEN_AUTOPORT_MODEL_ID / "
+                "QWEN_AUTOPORT_MODEL_REVISION, or ensure that revision is in the "
+                "HuggingFace cache this process can see."
+            )
         model = Qwen36Model.from_pretrained(
             mesh_device=mesh_device,
             snapshot=snapshot,
