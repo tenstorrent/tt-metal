@@ -455,7 +455,6 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     return ComputeConfig{
                         .math_fidelity = compute_descriptor.math_fidelity,
                         .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
-                        .enable_local_fp32_dest_epoch = compute_descriptor.enable_local_fp32_dest_epoch,
                         .dst_full_sync_en = compute_descriptor.dst_full_sync_en,
                         .unpack_to_dest_mode = compute_descriptor.unpack_to_dest_mode,
                         .bfp8_pack_precise = compute_descriptor.bfp8_pack_precise,
@@ -2557,13 +2556,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     auto prep_kernel = [&](const std::shared_ptr<Kernel>& kernel) {
         JitBuildOptions build_options(build_env.build_env);
         kernel->set_build_options(build_options);
-        if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE &&
-            build_options.build_env.get_arch() == tt::ARCH::WORMHOLE_B0) {
-            TT_FATAL(
-                !build_options.enable_local_fp32_dest_epoch,
-                "enable_local_fp32_dest_epoch is supported only on Blackhole; kernel '{}' targets Wormhole",
-                kernel->name());
-        }
         if (this->compiled_.empty()) {
             this->set_remote_circular_buffer_init(kernel);
         }
@@ -2583,13 +2575,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 build_options.hlk_desc.buf_dataformat_arr.end(),
                 is_fp8_format)) {
             const bool has_local_fp32_epoch = has_effective_local_fp32_epoch(
-                build_options.enable_local_fp32_dest_epoch, build_options.build_env.get_arch());
+                build_options.hlk_desc.buf_dataformat_arr,
+                build_options.unpack_to_dest_mode,
+                build_options.build_env.get_arch());
             TT_FATAL(
                 build_options.fp32_dest_acc_en || has_local_fp32_epoch,
                 "Fp8_e4m3 / Lf8 require a 32-bit (family-agnostic) DEST mode when any CB on the same core uses "
-                "an 8-bit float format. On Blackhole, set fp32_dest_acc_en=true in ComputeConfig or set "
-                "enable_local_fp32_dest_epoch=true. On Quasar, fp32_dest_acc_en must be true; local epochs do not "
-                "satisfy "
+                "an 8-bit float format. On Blackhole, set fp32_dest_acc_en=true in ComputeConfig or configure an "
+                "explicit per-CB FP32 epoch. On Quasar, fp32_dest_acc_en must be true; local epochs do not satisfy "
                 "this requirement. Kernel: {}",
                 kernel->name());
         }

@@ -730,20 +730,50 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     const tt_hlk_desc& desc,
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
-    bool enable_local_fp32_dest_epoch,
+    const std::vector<UnpackToDestMode>& unpack_to_dest_mode,
     bool bfp8_pack_precise,
     const tt::ARCH arch,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch,
-        enable_local_fp32_dest_epoch);
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
     vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
+
+    // FP8 formats are always unpacked to Float16 (A-family) in source/dest registers.
+    // Without any 32-bit DEST epoch, an FP8 kernel holds A-family data in DEST, so
+    // non-FP8 output CBs need A-family pack_src to match. A local FP32 epoch instead
+    // runs FP8 work in 32-bit DEST and restores the global 16-bit mode afterwards;
+    // outputs from that restored mode retain their declared exponent family.
+    // CBs that are themselves FP8 are already handled by get_single_pack_src_format.
+    if (!fp32_dest_acc_en &&
+        std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), tt::is_fp8_format)) {
+        const bool has_local_fp32_epoch =
+            has_effective_local_fp32_epoch(desc.buf_dataformat_arr, unpack_to_dest_mode, arch);
+        for (size_t i = 0; i < src_formats.size(); i++) {
+            const bool local_fp32 = desc.buf_dataformat_arr[i] == DataFormat::Float32 && has_local_fp32_epoch;
+            if (local_fp32) {
+                // An explicit FP32 epoch may write any Float32 intermediate
+                // in the kernel, not only the CB that marks the epoch. Preserve
+                // the complete destination mantissa instead of applying the
+                // mixed-FP8 kernel's Float16 pack-source rewrite.
+                src_formats[i] = DataFormat::Float32;
+                continue;
+            }
+            if (tt::is_fp8_format(desc.buf_dataformat_arr[i])) {
+                continue;
+            }
+            if (has_local_fp32_epoch) {
+                continue;
+            }
+            switch (src_formats[i]) {
+                case DataFormat::Float16_b: src_formats[i] = DataFormat::Float16; break;
+                case DataFormat::Bfp8_b: src_formats[i] = DataFormat::Bfp8; break;
+                case DataFormat::Bfp4_b: src_formats[i] = DataFormat::Bfp4; break;
+                case DataFormat::Bfp2_b: src_formats[i] = DataFormat::Bfp2; break;
+                default: break;
+            }
+        }
+    }
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -802,7 +832,8 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
     DataFormat unpack_conditional_dst_format =
         (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     DataFormat pack_conditional_dst_format = unpack_conditional_dst_format;
-    const bool has_local_fp32_epoch = has_effective_local_fp32_epoch(options.enable_local_fp32_dest_epoch, arch);
+    const bool has_local_fp32_epoch =
+        has_effective_local_fp32_epoch(desc.buf_dataformat_arr, options.unpack_to_dest_mode, arch);
     if ((options.fp32_dest_acc_en || has_local_fp32_epoch) &&
         (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;
@@ -829,7 +860,7 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         desc,
         pack_conditional_dst_format,
         options.fp32_dest_acc_en,
-        options.enable_local_fp32_dest_epoch,
+        options.unpack_to_dest_mode,
         options.bfp8_pack_precise,
         arch,
         max_cbs);

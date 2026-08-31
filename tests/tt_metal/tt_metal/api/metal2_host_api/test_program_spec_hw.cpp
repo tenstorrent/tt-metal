@@ -14,8 +14,6 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
-#include <algorithm>
-#include <bit>
 #include <cstdint>
 #include <vector>
 
@@ -31,8 +29,6 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/test_utils/bfloat_utils.hpp"
-#include "tt_metal/test_utils/float8_utils.hpp"
 #include "test_helpers.hpp"
 #include "impl/program/program_impl.hpp"  // ScratchpadBaseReDeliveredAfterDfbResize: DFB allocated-address query
 
@@ -191,119 +187,6 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
 
     ASSERT_EQ(output_data.size(), input_data.size());
     EXPECT_EQ(output_data, input_data);
-}
-
-TEST_F(ProgramSpecHWTest, BlackholeLocalFp32EpochRestoresBf16Dest) {
-    auto mesh_device = devices_.at(0);
-    if (mesh_device->arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Local FP32 DEST epochs are Blackhole-only";
-    }
-
-    constexpr NodeCoord node{0, 0};
-    constexpr float scale = 1.000244140625f;  // 1 + 2^-12: retained by FP32, rounded away by TF32.
-    const uint32_t fp8_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3);
-    const uint32_t fp32_tile_size = tt::tile_size(tt::DataFormat::Float32);
-    const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-
-    auto make_buffer = [&](uint32_t size) {
-        return distributed::MeshBuffer::create(
-            distributed::ReplicatedBufferConfig{.size = size},
-            {.page_size = size, .buffer_type = BufferType::DRAM},
-            mesh_device.get());
-    };
-    auto fp8_buffer = make_buffer(fp8_tile_size);
-    auto fp32_scale_buffer = make_buffer(fp32_tile_size);
-    auto bf16_buffer = make_buffer(bf16_tile_size);
-    auto fp32_output_buffer = make_buffer(fp32_tile_size);
-    auto bf16_output_buffer = make_buffer(bf16_tile_size);
-
-    ProgramSpec spec;
-    spec.name = "blackhole_local_fp32_epoch";
-
-    auto reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_1);
-    reader.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/fp8_local_fp32_epoch_reader.cpp";
-    reader.advanced_options.num_runtime_varargs = 3;
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-    compute.source = "tests/tt_metal/tt_metal/test_kernels/compute/fp8_local_fp32_epoch.cpp";
-    compute.compiler_options.defines = {{"USE_DFB_ACCESSORS", "1"}};
-    auto& compute_config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(compute.hw_config));
-    compute_config.enable_local_fp32_dest_epoch = true;
-    compute_config.unpack_modes = {{DFBSpecName{"fp32_scale"}, UnpackMode::UnpackToDest}};
-    auto writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_0);
-    writer.source = "tests/tt_metal/tt_metal/test_kernels/dataflow/fp8_local_fp32_epoch_writer.cpp";
-    writer.advanced_options.num_runtime_varargs = 2;
-
-    auto fp8_dfb = MakeMinimalDFB("fp8_input", fp8_tile_size, 2);
-    fp8_dfb.data_format_metadata = tt::DataFormat::Fp8_e4m3;
-    auto fp32_scale_dfb = MakeMinimalDFB("fp32_scale", fp32_tile_size, 2);
-    fp32_scale_dfb.data_format_metadata = tt::DataFormat::Float32;
-    auto bf16_dfb = MakeMinimalDFB("bf16_input", bf16_tile_size, 2);
-    bf16_dfb.data_format_metadata = tt::DataFormat::Float16_b;
-    auto fp32_output_dfb = MakeMinimalDFB("fp32_output", fp32_tile_size, 2);
-    fp32_output_dfb.data_format_metadata = tt::DataFormat::Float32;
-    auto bf16_output_dfb = MakeMinimalDFB("bf16_output", bf16_tile_size, 2);
-    bf16_output_dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    reader.dfb_bindings = {
-        ProducerOf(DFBSpecName{"fp8_input"}, "fp8_input"),
-        ProducerOf(DFBSpecName{"fp32_scale"}, "fp32_scale"),
-        ProducerOf(DFBSpecName{"bf16_input"}, "bf16_input")};
-    compute.dfb_bindings = {
-        ConsumerOf(DFBSpecName{"fp8_input"}, "fp8_input"),
-        ConsumerOf(DFBSpecName{"fp32_scale"}, "fp32_scale"),
-        ConsumerOf(DFBSpecName{"bf16_input"}, "bf16_input"),
-        ProducerOf(DFBSpecName{"fp32_output"}, "fp32_output"),
-        ProducerOf(DFBSpecName{"bf16_output"}, "bf16_output")};
-    writer.dfb_bindings = {
-        ConsumerOf(DFBSpecName{"fp32_output"}, "fp32_output"), ConsumerOf(DFBSpecName{"bf16_output"}, "bf16_output")};
-
-    spec.kernels = {reader, compute, writer};
-    spec.dataflow_buffers = {fp8_dfb, fp32_scale_dfb, bf16_dfb, fp32_output_dfb, bf16_output_dfb};
-    spec.work_units = {MakeMinimalWorkUnit("work_unit", node, {"reader", "compute", "writer"})};
-
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"reader"},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs =
-                        {{node, {fp8_buffer->address(), fp32_scale_buffer->address(), bf16_buffer->address()}}}}},
-        ProgramRunArgs::KernelRunArgs{
-            .kernel = KernelSpecName{"writer"},
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {fp32_output_buffer->address(), bf16_output_buffer->address()}}}}},
-    };
-    SetProgramRunArgs(program, run_args);
-
-    auto fp8_input =
-        ::create_random_vector_of_float8_e4m3(fp8_tile_size, /*rand_max_float=*/16, /*seed=*/42, /*offset=*/-8.0f);
-    std::vector<uint32_t> fp32_scale(fp32_tile_size / sizeof(uint32_t), std::bit_cast<uint32_t>(scale));
-    auto bf16_input =
-        ::create_random_vector_of_bfloat16(bf16_tile_size, /*rand_max_float=*/4, /*seed=*/17, /*offset=*/-2.0f);
-
-    auto& cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, fp8_buffer, fp8_input, /*blocking=*/true);
-    distributed::EnqueueWriteMeshBuffer(cq, fp32_scale_buffer, fp32_scale, /*blocking=*/true);
-    distributed::EnqueueWriteMeshBuffer(cq, bf16_buffer, bf16_input, /*blocking=*/true);
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
-
-    std::vector<uint32_t> fp32_output;
-    std::vector<uint32_t> bf16_output;
-    distributed::EnqueueReadMeshBuffer(cq, fp32_output, fp32_output_buffer, /*blocking=*/true);
-    distributed::EnqueueReadMeshBuffer(cq, bf16_output, bf16_output_buffer, /*blocking=*/true);
-
-    const auto fp8_values = tt::test_utils::fp8_to_floats(fp8_input);
-    ASSERT_EQ(fp32_output.size(), fp8_values.size());
-    for (size_t i = 0; i < fp8_values.size(); ++i) {
-        EXPECT_EQ(std::bit_cast<float>(fp32_output[i]), fp8_values[i] * scale);
-    }
-
-    auto expected_bf16 = tt::test_utils::bf16_to_floats(bf16_input);
-    std::ranges::transform(expected_bf16, expected_bf16.begin(), [](float value) { return std::max(value, 0.0f); });
-    EXPECT_EQ(tt::test_utils::bf16_to_floats(bf16_output), expected_bf16);
 }
 
 // ============================================================================

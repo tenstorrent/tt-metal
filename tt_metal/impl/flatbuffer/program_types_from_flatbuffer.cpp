@@ -37,7 +37,6 @@ ComputeConfig from_flatbuffer(const flatbuffer::ComputeConfig* fb_config) {
     // Extract math_fidelity and boolean flags
     config.math_fidelity = from_flatbuffer(fb_config->math_fidelity());
     config.fp32_dest_acc_en = fb_config->fp32_dest_acc_en();
-    config.enable_local_fp32_dest_epoch = fb_config->enable_local_fp32_dest_epoch();
     config.dst_full_sync_en = fb_config->dst_full_sync_en();
     config.bfp8_pack_precise = fb_config->bfp8_pack_precise();
     config.math_approx_mode = fb_config->math_approx_mode();

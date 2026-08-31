@@ -204,10 +204,7 @@ static LocalFp32EpochResult run_local_fp32_epoch(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/fp8_local_fp32_epoch.cpp",
         core,
-        ComputeConfig{
-            .fp32_dest_acc_en = false,
-            .enable_local_fp32_dest_epoch = true,
-            .unpack_to_dest_mode = unpack_to_dest_mode});
+        ComputeConfig{.fp32_dest_acc_en = false, .unpack_to_dest_mode = unpack_to_dest_mode});
 
     SetRuntimeArgs(
         program,

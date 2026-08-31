@@ -12,9 +12,11 @@
 namespace tt::tt_metal {
 enum class UnpackToDestMode : std::uint8_t;
 
-// The explicit local-FP32 capability is effective only on Blackhole. Per-CB
-// unpack-to-Dest modes are routing metadata and never imply this capability.
-bool has_effective_local_fp32_epoch(bool enable_local_fp32_dest_epoch, tt::ARCH arch);
+// A local FP32 epoch is effective only on Blackhole and only when a Float32 buffer has a
+// non-default unpack-to-dest mode at the same index. Mismatched vector lengths are allowed;
+// only indices present in both vectors are considered.
+bool has_effective_local_fp32_epoch(
+    std::span<const tt::DataFormat> data_formats, std::span<const UnpackToDestMode> unpack_to_dest_mode, tt::ARCH arch);
 }  // namespace tt::tt_metal
 
 namespace tt {
@@ -54,8 +56,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     bool int_fpu_en = false,
-    tt::ARCH arch = tt::ARCH::WORMHOLE_B0,
-    bool enable_local_fp32_dest_epoch = false);
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0);
 std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats);
 
 }  // namespace tt

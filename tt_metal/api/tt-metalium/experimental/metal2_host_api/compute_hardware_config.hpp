@@ -83,12 +83,6 @@ struct ComputeGen1Config {
     //       precision input data.
     bool enable_32_bit_dest = false;
 
-    // Blackhole only: declare that this kernel explicitly enters and restores
-    // local 32-bit Dest epochs while enable_32_bit_dest remains false.
-    // This capability does not route any DFB; use unpack_modes independently
-    // for Float32 operands that must unpack directly to Dest.
-    bool enable_local_fp32_dest_epoch = false;
-
     // Dest register double-buffering mode.
     // This setting trades off per-step tile capacity for pipeline throughput.
     // It affects performance and tile budget only (no effect on precision).

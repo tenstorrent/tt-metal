@@ -53,32 +53,5 @@ TEST(ProgramTypesFromFlatbuffer, SubDeviceIdVectorEmptyRoundtrip) {
     EXPECT_TRUE(roundtripped.empty());
 }
 
-TEST(ProgramTypesFromFlatbuffer, ComputeConfigLocalFp32EpochRoundtrip) {
-    ComputeConfig original;
-    original.enable_local_fp32_dest_epoch = true;
-
-    flatbuffers::FlatBufferBuilder builder;
-    const auto [config_type, untyped_offset] = to_flatbuffer(builder, original);
-    ASSERT_EQ(config_type, flatbuffer::KernelConfig::ComputeConfig);
-    builder.Finish(flatbuffers::Offset<flatbuffer::ComputeConfig>(untyped_offset.o));
-
-    const auto* fb_config = flatbuffers::GetRoot<flatbuffer::ComputeConfig>(builder.GetBufferPointer());
-    const ComputeConfig roundtripped = from_flatbuffer(fb_config);
-    EXPECT_TRUE(roundtripped.enable_local_fp32_dest_epoch);
-    EXPECT_FALSE(roundtripped.fp32_dest_acc_en);
-}
-
-TEST(ProgramTypesFromFlatbuffer, ComputeConfigLocalFp32EpochDefaultsFalse) {
-    ComputeConfig original;
-
-    flatbuffers::FlatBufferBuilder builder;
-    const auto [config_type, untyped_offset] = to_flatbuffer(builder, original);
-    ASSERT_EQ(config_type, flatbuffer::KernelConfig::ComputeConfig);
-    builder.Finish(flatbuffers::Offset<flatbuffer::ComputeConfig>(untyped_offset.o));
-
-    const auto* serialized = flatbuffers::GetRoot<flatbuffer::ComputeConfig>(builder.GetBufferPointer());
-    EXPECT_FALSE(from_flatbuffer(serialized).enable_local_fp32_dest_epoch);
-}
-
 }  // namespace
 }  // namespace tt::tt_metal

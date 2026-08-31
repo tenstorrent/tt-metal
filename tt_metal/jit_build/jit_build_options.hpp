@@ -39,7 +39,6 @@ public:
 
     // We can keep for future WH support, otherwise not used in GS
     bool fp32_dest_acc_en{};
-    bool enable_local_fp32_dest_epoch{};
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise{};
 

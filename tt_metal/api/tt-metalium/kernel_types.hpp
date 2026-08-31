@@ -105,9 +105,6 @@ struct WriterDataMovementConfig : public DataMovementConfig {
 struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
-    // Blackhole only: the kernel explicitly enters and restores one or more local
-    // FP32 DEST epochs while the global DEST mode remains 16-bit.
-    bool enable_local_fp32_dest_epoch = false;
     bool dst_full_sync_en = false;
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;

@@ -12,15 +12,6 @@ from loguru import logger
 from models.common.utility_functions import skip_for_blackhole
 
 
-def test_compute_config_descriptor_local_fp32_epoch_field():
-    default_config = ttnn.ComputeConfigDescriptor()
-    assert default_config.enable_local_fp32_dest_epoch is False
-
-    explicit_config = ttnn.ComputeConfigDescriptor(enable_local_fp32_dest_epoch=True)
-    assert explicit_config.enable_local_fp32_dest_epoch is True
-    assert explicit_config.fp32_dest_acc_en is False
-
-
 @skip_for_blackhole("Not tested / built for Blackhole")
 @pytest.mark.parametrize("num_tiles", [1, 12, 64, 128])
 def test_eltwise_exp(device, num_tiles):
