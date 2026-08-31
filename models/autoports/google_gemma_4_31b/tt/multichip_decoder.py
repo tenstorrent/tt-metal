@@ -237,6 +237,42 @@ def _persistent_ccl_memory_config(mesh_device, shard_height: int, width: int) ->
     )
 
 
+# Prefill all-reduce inputs are padded up to this row multiple before the
+# collective and sliced back after, so the reduce only ever compiles a handful
+# of programs. ttnn.all_reduce retains ~448 B/bank of L1 in every cached
+# program (one per input shape, never evicted); with agentic traffic nearly
+# every prompt is a new length, and after hours the leaked stack collides with
+# the static circular-buffer region of the next freshly compiled program
+# (issue #30's TT_THROW). Bounding the reduce shapes caps the leak at a few
+# buckets. Padding is safe: all-reduce is an element-wise sum, so pad rows
+# cannot contaminate valid rows. Set to 0 to disable.
+PREFILL_REDUCE_ROW_BUCKET = int(os.environ.get("GEMMA4_PREFILL_REDUCE_ROW_BUCKET", "1024"))
+
+
+def _bucketed_ccl_allreduce(communicated, mesh_config, ccl_manager):
+    rows = communicated.shape[-2]
+    bucket = PREFILL_REDUCE_ROW_BUCKET
+    # rows <= 32 is the eager decode/batched path; leave it alone
+    if bucket <= 1 or rows <= 32 or rows % bucket == 0:
+        return ccl_allreduce(communicated, mesh_config, ccl_manager)
+    padded_rows = math.ceil(rows / bucket) * bucket
+    shape = communicated.shape
+    padded = ttnn.pad(
+        communicated,
+        [(0, 0), (0, 0), (0, padded_rows - rows), (0, 0)],
+        value=0.0,
+    )
+    communicated.deallocate(True)
+    reduced_padded = ccl_allreduce(padded, mesh_config, ccl_manager)
+    reduced = ttnn.slice(
+        reduced_padded,
+        [0, 0, 0, 0],
+        [shape[0], shape[1], rows, shape[3]],
+    )
+    reduced_padded.deallocate(True)
+    return reduced
+
+
 def _tp_allreduce(
     partial,
     mesh_config,
@@ -355,7 +391,7 @@ def _tp_allreduce(
         reduced = ttnn.sharded_to_interleaved(reduced_l1, ttnn.DRAM_MEMORY_CONFIG)
         reduced_l1.deallocate(True)
     else:
-        reduced = ccl_allreduce(communicated, mesh_config, ccl_manager)
+        reduced = _bucketed_ccl_allreduce(communicated, mesh_config, ccl_manager)
     if communication_dtype == ttnn.bfloat16:
         return reduced
     restored = ttnn.typecast(reduced, ttnn.bfloat16)
