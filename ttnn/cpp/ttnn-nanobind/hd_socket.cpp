@@ -86,7 +86,7 @@ void py_module_types(nb::module_& mod) {
                     config_buffer_address (int): LIM address for the socket metadata.
                     data_fifo_address (int): LIM address for the data FIFO. In HOST_PUSH this
                         is the ring itself and must fit with fifo_size inside the L2CPU's
-                        static TLB window; in DEVICE_PULL the ring lives in pinned host memory
+                        LIM window; in DEVICE_PULL the ring lives in pinned host memory
                         and this is the base the device computes ring offsets against.
                     h2d_mode (H2DMode, optional): Transfer mode. Defaults to ``HOST_PUSH``.
             )doc")
