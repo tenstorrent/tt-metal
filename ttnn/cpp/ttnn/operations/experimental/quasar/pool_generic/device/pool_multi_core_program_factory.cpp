@@ -589,10 +589,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*force_max_tiles_per_reduction_4=*/false,
         // Symmetric lanes: one multi-threaded reader (not split readers) so STRIDED pairs reader
         // thread i with compute thread i. MPWI keeps its asymmetric reader0/reader1 structure.
-        /*single_reader_stream=*/!return_indices,
-        // Per-core output stick counts, so get_factory_parameters can TT_FATAL when the thread
-        // count does not divide a core's stick share.
-        shard_boundaries);
+        /*single_reader_stream=*/!return_indices);
 
     // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
     // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).

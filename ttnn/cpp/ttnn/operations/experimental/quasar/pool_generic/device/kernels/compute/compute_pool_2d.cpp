@@ -170,7 +170,7 @@ void kernel_main() {
         num_out_sticks_this_core % TILE_HEIGHT == 0 ? TILE_HEIGHT : num_out_sticks_this_core % TILE_HEIGHT;
 
     // Sticks are dealt whole to (reader thread, NEO) lanes; the per-core count must divide evenly.
-    // Runtime check (out_nhw_this_core is a per-core RUNTIME arg); the factory TT_FATALs first.
+    // Runtime ASSERT: out_nhw_this_core is a per-core runtime arg, so this cannot be a static_assert.
     ASSERT(num_out_sticks_this_core % get_num_threads() == 0);
     // Live thread-count probe for the perf harness A/B guard (inert unless TT_METAL_DPRINT_CORES set).
     DPRINT("qpool num_threads: {}\n", get_num_threads());
