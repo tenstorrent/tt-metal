@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <bit>
-#include <cmath>
 #include <map>
 
 namespace ttnn::prim {
@@ -52,13 +51,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
         operation_attributes.dim == ReduceOpDim::HW,
         "ReduceSingleCoreHwProgramFactory supports HW dim only, got dim enum value {}",
         static_cast<int>(operation_attributes.dim));
-
-    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
-    // scaler twice internally (once per dimension). Here we compensate with
-    // sqrt(scaler). However, sqrt of a negative number is NaN, so negative scalers
-    // must not reach this code path. Instead negative scalers are handled via the two-step
-    // W-then-H path where the scaler is applied once (see the reduce function in reduce_op.cpp).
-    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
 
     TT_FATAL(
         H % tile_height == 0 && W % tile_width == 0, "Reduce HW expects tile-aligned padded shape H={}, W={}", H, W);
@@ -213,7 +205,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceSingleCoreHwProgram
     };
 
     reader_desc.emplace_runtime_args(selected_core_coord, {a, num_tensor_tiles, 0u});
-    reader_desc.emplace_common_runtime_args({std::bit_cast<uint32_t>(std::sqrt(operation_attributes.scaler))});
+    // Always ScalerMode::PostMul here, so the tile carries 1.0 and the scalar is applied after.
+    reader_desc.emplace_common_runtime_args({std::bit_cast<uint32_t>(operation_attributes.scaler)});
     compute_desc.emplace_common_runtime_args({post_mul_scaler_bits});
 
     TT_FATAL(Ht != 0 && Wt != 0, "Height and width in tiles must be non-zero (Ht={}, Wt={}, H={}, W={})", Ht, Wt, H, W);
@@ -249,9 +242,7 @@ void ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::override_runtime_a
     tt::tt_metal::GetRuntimeArgs(program, kHwWriterIdx, core)[0] =
         output.mesh_buffer().get_reference_buffer()->address();
 
-    // REDUCE_SCALAR applies the scaler once per reduced dimension, so pre-compensate with sqrt.
-    tt::tt_metal::GetCommonRuntimeArgs(program, kHwReaderIdx)[0] =
-        std::bit_cast<uint32_t>(std::sqrt(operation_attributes.scaler));
+    tt::tt_metal::GetCommonRuntimeArgs(program, kHwReaderIdx)[0] = std::bit_cast<uint32_t>(operation_attributes.scaler);
     tt::tt_metal::GetCommonRuntimeArgs(program, kHwComputeIdx)[0] =
         std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler);
 }

@@ -373,17 +373,15 @@ def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, di
         # cannot apply a scalar at all (see call_fast_nc in generic_reductions.cpp). Selecting a
         # different, faster op for unity is deliberate and unrelated to #54180, so 1.0 is excluded
         # here; the identity case is covered on the H/W dims and by the Int32 test below.
-        ("sum", [0.5, 2.0, 0.03125, 0.25]),
+        # Mixed signs: the HW path applies the scalar after the reduction, so the sign no longer
+        # selects a different topology.
+        ("sum", [0.5, 2.0, 0.03125, -0.25, -3.0]),
+        # max flips to min for a negative scalar, so that stays a separate program by design.
         ("max", SCALARS),
     ],
 )
 def test_reduce_cache_reuse_across_scalars_hw(device, isolate_program_cache, op, scalars):
-    """Distinct scalar values share one cache entry on the HW path.
-
-    Positive scalars only: a negative scalar still forks HW onto the two-step W-then-H path because
-    the single-core HW kernel pre-compensates with sqrt(scaler). Removing that fork is Phase 2 of
-    #54180; until then a mixed-sign HW set legitimately needs two entries.
-    """
+    """Distinct scalar values share one cache entry on the HW path, both signs included for sum."""
     _assert_scalars_share_one_program(device, op, dim=None, scalars=scalars)
 
 
@@ -494,3 +492,36 @@ def test_reduce_cache_reuse_across_scalars_height_sharded(device, isolate_progra
         f"{len(SCALARS)} scalar values cost {device.cache_entries_counter.total} cache entries; "
         f"one scalar costs {baseline}."
     )
+
+
+@pytest.mark.parametrize("op", ["sum", "mean", "max", "min"])
+@pytest.mark.parametrize("shape", [(1, 1, 32, 32), (1, 1, 64, 64)], ids=["single-tile", "multi-tile"])
+def test_reduce_hw_negative_scalar(device, isolate_program_cache, op, shape):
+    """A negative scalar over dim=None must be correct on the HW path.
+
+    REDUCE_SCALAR applies the scaler tile once per reduced dimension, so the host used to hand it
+    sqrt(scaler) -- NaN for a negative value, which forced negative scalars onto the two-step
+    W-then-H path. The scalar is now applied once after the reduction, so both signs run the same
+    program. Single-tile exercises the single-core HW factory; multi-tile the two-step path.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    torch_op = {"sum": torch.sum, "mean": torch.mean, "max": torch.amax, "min": torch.amin}[op]
+    ttnn_op = {"sum": ttnn.sum, "mean": ttnn.mean, "max": ttnn.max, "min": ttnn.min}[op]
+
+    for scalar in (-3.0, -0.25, 2.0):
+        result = ttnn.to_torch(ttnn_op(ttnn_input, dim=None, scalar=scalar))
+        expected = torch_op(scalar * torch_input)
+        # A dim=None reduce yields one element, so correlation is undefined; allclose and the
+        # Frobenius ratio still pin the value.
+        assert_numeric_metrics(
+            expected.reshape(result.shape),
+            result,
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.3,
+            frobenius_threshold=0.02,
+            check_pcc=False,
+        )

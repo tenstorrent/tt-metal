@@ -71,11 +71,18 @@ inline bool use_sfpu_reduce_path(
 // None marks an intermediate stage that applies no scalar.
 enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
 
-// PostMul whenever the reduce path ignores the scaler CB: GMPOOL keeps only the scaler's exponent
-// for MAX/MIN, and the Int32 / accurate-fp32 SFPU folds bypass the CB entirely.
+// PostMul whenever the scaler CB cannot apply the value exactly: REDUCE_SCALAR (HW) applies the
+// tile once per reduced dimension and squares it, GMPOOL keeps only the exponent for MAX/MIN,
+// and the Int32 / accurate-fp32 SFPU folds bypass the CB.
 inline ScalerMode derive_scaler_mode(
-    tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, bool use_sfpu_reduce = false) {
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::DataType dtype,
+    tt::tt_metal::ReduceOpDim dim,
+    bool use_sfpu_reduce = false) {
     using tt::tt_metal::ReduceOpMath;
+    if (dim == tt::tt_metal::ReduceOpDim::HW) {
+        return ScalerMode::PostMul;
+    }
     if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
         return ScalerMode::PostMul;
     }

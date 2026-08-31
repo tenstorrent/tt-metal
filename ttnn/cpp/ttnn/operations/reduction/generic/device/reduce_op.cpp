@@ -201,13 +201,27 @@ Tensor reduce(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
-    // A non-unity scalar is applied after the reduction (see derive_scaler_mode() in common.hpp):
-    // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 SFPU path ignores the
-    // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
-    // The accurate fp32 SFPU path also post-muls (the SFPU ignores the scaler CB): mean applies its
-    // 1/N here, the rest their user scalar.
+    // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // W-then-H. Fast-mode Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to Int32 MAX/SUM/MIN.
+    // The accurate fp32 SFPU path likewise has no SFPU REDUCE_SCALAR, so it decomposes HW into
+    // W-then-H regardless of tile count; every op does so exactly (sum of sums, max of maxes, ...).
+    const bool use_two_step_hw_sfpu_reduce =
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
+        ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
+          (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
+           reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
+         use_sfpu_fp32_reduce);
+    const bool decomposes_hw = is_multicore_hw || use_two_step_hw_sfpu_reduce;
+
+    // A non-unity scalar is applied after the reduction on the paths derive_scaler_mode() marks
+    // PostMul (see common.hpp). Int32 post-mul rounds through fp32, so it is lossy for
+    // |result| > 2^24; mean applies its 1/N there rather than through the scaler CB.
+    // A decomposed HW reduce applies the scalar on its H half, so the mode follows that dim.
     // The mode depends only on op semantics, so it is hashed while the two scalar floats are not.
-    const auto scaler_mode = ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), use_sfpu_fp32_reduce);
+    const auto scaler_dim = decomposes_hw ? tt::tt_metal::ReduceOpDim::H : reduce_dim;
+    const auto scaler_mode =
+        ttnn::prim::derive_scaler_mode(reduce_math, prepared_input.dtype(), scaler_dim, use_sfpu_fp32_reduce);
     const bool use_post_mul = scaler_mode == ttnn::prim::ScalerMode::PostMul;
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
@@ -238,26 +252,7 @@ Tensor reduce(
             return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
         };
 
-    // The single-core HW path uses REDUCE_SCALAR mode, which applies the
-    // scaler twice internally (once per dimension).  The host compensates with
-    // sqrt(scaler) in ReduceSingleCoreHwProgramFactory::create.
-    // However, sqrt of a negative number is NaN, so negative scalers
-    // must take the two-step W-then-H path where the scaler is applied once.
-    //
-    // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
-    // W-then-H. Fast-mode Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
-    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to Int32 MAX/SUM/MIN.
-    // The accurate fp32 SFPU path likewise has no SFPU REDUCE_SCALAR, so it decomposes HW into
-    // W-then-H regardless of tile count; every op does so exactly (sum of sums, max of maxes, ...).
-    const bool use_two_step_hw_sfpu_reduce =
-        (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-        ((prepared_input.dtype() == tt::tt_metal::DataType::INT32 &&
-          (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
-           reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
-         use_sfpu_fp32_reduce);
-
-    if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
-        (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
+    if (decomposes_hw) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
         // Keep the W intermediate in FP32 (only H packs to BF16) to preserve accumulation
         // precision. Applies to SUM only:

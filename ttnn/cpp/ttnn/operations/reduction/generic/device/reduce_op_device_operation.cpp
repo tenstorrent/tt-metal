@@ -51,19 +51,23 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.scaler_mode != ScalerMode::PostMul || operation_attributes.scaler == 1.0f,
         "ScalerMode::PostMul reduces with scaler=1.0 and multiplies after, got scaler={}",
         operation_attributes.scaler);
-    // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 / accurate-fp32 SFPU folds
-    // ignore the scaler CB outright, so a non-unity scalar must never ride the tile on those paths.
-    const bool reduce_path_ignores_scaler_cb =
-        derive_scaler_mode(operation_attributes.math_op, tensor_args.dtype(), operation_attributes.use_sfpu_reduce) ==
-        ScalerMode::PostMul;
-    const bool scaler_tile_would_be_dropped = operation_attributes.scaler_mode == ScalerMode::ScalerTile &&
-                                              operation_attributes.scaler != 1.0f && reduce_path_ignores_scaler_cb;
+    // The scaler tile cannot apply the value exactly on the paths derive_scaler_mode() marks
+    // PostMul, so a non-unity scaler must not ride the tile there.
+    const bool scaler_cb_is_inexact = derive_scaler_mode(
+                                          operation_attributes.math_op,
+                                          tensor_args.dtype(),
+                                          operation_attributes.dim,
+                                          operation_attributes.use_sfpu_reduce) == ScalerMode::PostMul;
+    const bool scaler_tile_would_be_wrong = operation_attributes.scaler_mode == ScalerMode::ScalerTile &&
+                                            operation_attributes.scaler != 1.0f && scaler_cb_is_inexact;
     TT_FATAL(
-        !scaler_tile_would_be_dropped,
-        "Non-unity scaler {} routed through the scaler CB on a path that ignores it (math_op {}, dtype {})",
+        !scaler_tile_would_be_wrong,
+        "Non-unity scaler {} routed through the scaler CB, which cannot apply it exactly here "
+        "(math_op {}, dtype {}, dim {})",
         operation_attributes.scaler,
         operation_attributes.math_op,
-        tensor_args.dtype());
+        tensor_args.dtype(),
+        operation_attributes.dim);
     // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(
