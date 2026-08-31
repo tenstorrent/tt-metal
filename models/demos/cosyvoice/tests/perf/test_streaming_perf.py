@@ -81,18 +81,18 @@ def test_device_streaming_first_audio_latency(device):
     """First-audio latency and total, batch schedule against streaming schedule."""
     import ttnn
 
-    # **Still hangs Wormhole n300, and the StreamState fix did not change that.**
-    # Parking the carried caches on the host cured the *corruption* -- see
-    # `StreamState` -- and `CosyVoiceTTNN.synthesize_streaming` now runs clean on n300.
-    # This test does not, and the difference is how long a trace stays live: it holds
-    # one `TracedDecodeStep` across four passes and runs the flow decoder and vocoder
-    # under it repeatedly, where `synthesize_streaming` captures and releases per call.
-    # That is a hypothesis, not a diagnosis; what is measured is that this test wedges
-    # the board there and the shipped path does not.
+    # **Skipped on Wormhole for a TTNN defect, isolated below the port.**
+    # Re-seeding a trace's persistent buffers after that trace has *executed* hangs
+    # Wormhole. This test captures once and re-seeds per pass (see below), so passes
+    # 2-4 hit it. The minimal reproduction is `capture -> seed -> step() xN -> seed`
+    # with no flow decoder, no vocoder and no allocation under a live trace, and it
+    # hangs the same way; Blackhole runs that sequence in under a second.
+    # `synthesize_streaming` escapes it by capturing and releasing per call, which is
+    # why the shipped path runs on n300 and this test does not. See docs/VALIDATION.md.
     if "WORMHOLE" in str(device.arch()).upper():
         pytest.skip(
-            "hangs Wormhole n300: one decode trace held live across repeated flow/vocoder "
-            "work; see PERF.md, Known limitations"
+            "hangs Wormhole n300: re-seeding a trace's persistent buffers after the "
+            "trace has executed; see docs/VALIDATION.md and PERF.md, Known limitations"
         )
 
     from models.demos.cosyvoice.tt.flow.model import TtMaskedDiffWithXvec
