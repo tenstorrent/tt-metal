@@ -110,30 +110,41 @@ worth establishing rather than assuming, and the evidence is:
 
 **Root cause — one thing, not three.** `ttnn.all_reduce` passes no persistent
 semaphores (it forwards `std::nullopt` and falls through to the non-persistent
-`ttnn::reduce_scatter` / `ttnn::all_gather` wrappers), so every call creates
-fresh global semaphores. They are allocated above the first collective program's
-own footprint, and being persistent they stay there after that program is gone —
-pinning a low-water mark on contiguous L1 for the rest of the process. Measured
-on a (1,4) Blackhole mesh, largest contiguous L1 after the first `all_reduce`:
+`ttnn::reduce_scatter` / `ttnn::all_gather` wrappers), so the op mints its own
+global semaphores and keeps them, cached per collective configuration.
+
+*That caching is not the bug, and is not a leak.* Repeating one shape holds
+steady at nine 64-byte blocks across six calls; only a new shape adds another
+set. In a real model, where the collective shapes are fixed, it is bounded and
+small.
+
+The problem is **where the first set lands**. The op also allocates a large L1
+transient: a width-5120 `all_reduce` needs roughly 700-900 KiB contiguous, and
+below ~600 KiB it fails inside `bank_manager` rather than degrading — measured
+by reserving L1 with a blocker tensor and starving it. That transient is
+allocated *before* the semaphores, and semaphores are placed top-down into
+whatever is free. So on the first collective, with L1 empty, the transient takes
+the top of L1 and forces the semaphores underneath it. Because they are cached,
+freeing the transient does not move them, and contiguous L1 stays capped there
+for the rest of the process:
 
 | first call width | 32 | 512 | 5120 (the real residual width) |
 |---|---:|---:|---:|
 | largest contiguous L1 after | 1,461,120 B | 1,329,664 B | **805,376 B** |
 
-Later calls add more semaphores — 9 per call on the reduce-scatter + all-gather
-path, 60 blocks after eight calls in one sweep — but never lower the mark.
-
 805,376 B is not enough for this layer. The decode MLP down projection's static
 CBs alone reach 811,776 B. The prefill norm needs ~1,080,320 B contiguous,
-measured by squeezing L1 with a blocker tensor and bisecting; the same
-`ttnn.rms_norm` with a plain tiled `[1, 1, 1, W]` weight instead of the
-row-major `[1, 1, W/32, 32]` contract needs only ~564,224 B, which is why the
-single-chip path — which runs no collectives and so never loses the L1 — never
-saw any of this.
+measured by squeezing L1 and bisecting; the same `ttnn.rms_norm` with a plain
+tiled `[1, 1, 1, W]` weight instead of the row-major `[1, 1, W/32, 32]` contract
+needs only ~564,224 B, which is why the single-chip path — which runs no
+collectives and so never loses the L1 — never saw any of this.
 
-**Fix:** run one minimal collective (width 512) at load time, while L1 is empty,
-so the mark is set at the top. One extra program at setup, no numerics change,
-nothing added to the hot path. Commit `386e8b8ba9c`.
+**Fix:** run one minimal collective (width 512) at load time, while L1 is empty.
+It leaves its nine 64-byte blocks near the top; a later full-width call then has
+to put its transient below them, and can place its own semaphores in the holes
+they left. Measured, the mark then stays at 1,329,664 B across repeated
+width-5120 calls. One extra program at setup, no numerics change, nothing added
+to the hot path. Commit `386e8b8ba9c`.
 
 | Kind | Batch | recorded | now |
 |---|---:|---:|---:|
@@ -249,10 +260,12 @@ autoport's `.gitignore` -- `profile_log_device.csv` alone is 347 MB per arm.
    old base and measuring the same first-collective low-water mark. The fix does
    not depend on it, but the answer belongs upstream: any model that runs a
    collective before a large program inherits this on this base.
-3. Consider whether `ttnn.all_reduce` should take persistent semaphores rather
-   than minting fresh ones per call. The accumulation (9 per call) is bounded in
-   practice, but the placement of the first set is load-bearing for every
-   program that follows, which is a sharp edge for callers.
+3. Consider whether the collective should allocate its cached semaphores before
+   its large L1 transient rather than after. The caching itself is bounded and
+   correct; it is only the placement of the first set, underneath a transient
+   that is then freed, that is load-bearing for every program that follows.
+   That is a sharp edge for any caller who runs a collective before a large
+   program, and it is invisible until something else fails to fit.
 
 ## Note for anyone triaging the MLP down projection
 

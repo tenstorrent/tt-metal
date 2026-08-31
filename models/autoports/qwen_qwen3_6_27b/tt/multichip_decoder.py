@@ -448,13 +448,21 @@ class MultichipDecoder(OptimizedDecoder):
         )
 
     # A collective's first call in a process fixes an L1 low-water mark for the
-    # whole run.  ttnn.all_reduce passes no persistent semaphores, so each call
-    # creates fresh global semaphores; they are allocated below that call's own
-    # transient working set and, being persistent, stay stranded there once it
-    # is freed.  Later calls add more semaphores but never lower the mark, so
-    # whatever the first collective cost is what every later program has to fit
-    # under.  Measured on a (1,4) Blackhole mesh, largest contiguous L1 after the
-    # first all_reduce:
+    # whole run.
+    #
+    # ttnn.all_reduce passes no persistent semaphores, so the op mints its own
+    # global semaphores and keeps them, cached per collective configuration.
+    # That part is bounded and fine: repeating one shape holds steady at nine
+    # 64-byte blocks, and only a new shape adds another set.
+    #
+    # The problem is where the first set lands. The op also allocates a large
+    # L1 transient -- a width-5120 all_reduce needs roughly 700-900 KiB
+    # contiguous, and below ~600 KiB it fails inside bank_manager -- and that
+    # transient is allocated before the semaphores. Semaphores are placed
+    # top-down into whatever is free, so on the first collective, with L1 empty,
+    # the transient takes the top and forces them underneath it. They are
+    # cached, so freeing the transient does not move them, and contiguous L1
+    # stays capped there for the rest of the process:
     #
     #     first call width      32 -> 1,461,120 B     (composite path)
     #                          512 -> 1,329,664 B
@@ -462,8 +470,13 @@ class MultichipDecoder(OptimizedDecoder):
     #
     # 805,376 B is not enough for this layer: the decode MLP down projection's
     # static circular buffers alone reach 811,776 B, and the prefill norm needs
-    # more still.  Running one minimal collective here, while L1 is empty,
-    # establishes the mark at the top instead and costs one program at setup.
+    # ~1,080,320 B.
+    #
+    # One minimal collective here, while L1 is empty, leaves its 64-byte blocks
+    # near the top instead. A later full-width call then has to put its
+    # transient below them and can place its own semaphores in the holes they
+    # left, so the mark stays high -- measured, it stays at 1,329,664 B across
+    # repeated width-5120 calls. Costs one program at setup.
     _COLLECTIVE_WARMUP_WIDTH = 512
 
     def _warm_collectives(self):
