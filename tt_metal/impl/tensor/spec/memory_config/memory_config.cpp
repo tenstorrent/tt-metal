@@ -214,8 +214,8 @@ tt::tt_metal::MemoryConfig ttsl::json::from_json_t<tt::tt_metal::MemoryConfig>::
     if (per_core_allocation) {
         tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
     }
-    // Set after per_core_allocation so JSON asking for both trips the mutual-exclusion check
-    // rather than silently keeping whichever was applied last.
+    // JSON asking for both is rejected whichever is applied first: the mutual-exclusion check is
+    // in both setters, so this does not depend on the order of these two blocks.
     if (range_lockstep_allocation) {
         tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(memory_config, true);
     }
