@@ -464,6 +464,14 @@ inline void pack_block(uint32_t dst, uint32_t dfb, uint32_t count) {
 enum : uint8_t { DM_DEDICATED_NOC = 0, DM_DYNAMIC_NOC = 1 };
 #define NOC_MODE DM_DEDICATED_NOC
 
+// Metal generates this into chlkc_descriptors.h behind a UCK_CHLKC_* guard, so it exists
+// on the compute projections only -- which is the whole reason kMaxDstTiles is driven by
+// a host define instead. Mirroring that guard here keeps the compute build's cross-check
+// (math.hpp, DST_ACCUM_MODE vs TT_UNIFIED_DST_32BIT) non-vacuous.
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+constexpr bool DST_ACCUM_MODE = false;
+#endif
+
 #define TT_UNIFIED_CUSTOM_BINDING 1
 #include <tt/unified/core>
 
@@ -921,13 +929,10 @@ void example_matmul_acc() {
 // leftovers and prints a different transition. It is the only such state in the
 // library; `static` in math.hpp, impl.hpp and expr.hpp finds exactly this one.
 //
-// Driving it to a fixed buffer before each side, untraced, makes the comparison about
-// the two spellings rather than about what ran before them.
-static constexpr uint32_t kPackProbeReset = 31;
-static void reset_memoized_state() {
-    tt::unified::pack_to(kPackProbeReset);
-    trace.clear();
-}
+// pack_to_forget() is the library's own reset for exactly this, so use it rather than
+// driving pack_to() to a scratch buffer -- which was this harness's workaround before the
+// hook existed, and which cost a reconfig in the trace it then had to clear.
+static void reset_memoized_state() { tt::unified::pack_to_forget(); }
 
 static bool report_same(const char* title, void (*lhs)(), void (*rhs)()) {
     reset_memoized_state();

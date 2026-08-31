@@ -27,6 +27,12 @@ CMakeUserPresets.json
 /out/
 
 /test_*
+# ...except the unified model's suites, which are source. The rule above predates them, and
+# the ones already in the tree survive only because gitignore does not apply to tracked
+# files -- so a NEW suite is silently untracked, the runner then fails for everyone else,
+# and the check exists without running. That has already happened once here (the host
+# selftest). Name the family instead of remembering `git add -f`.
+!/test_unified_*.py
 core_graph_lib/core_graph_lib_integration_tests
 coremodel/model/release/
 

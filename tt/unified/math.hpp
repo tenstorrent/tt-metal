@@ -60,9 +60,35 @@ namespace unified {
 // depends on the absolute DST->L1 mapping and only the upper half is right --
 // measured as tiles 0..7 overwritten instead of accumulated.
 //
-// Halves again to 4 under fp32 accumulate (see reg_api.h), which this model does
-// not enable; raising it to 16 would require dst_full_sync_en.
-inline constexpr uint32_t kMaxDstTiles = 8;
+// Halves again to 4 under a 32-bit Dest (see reg_api.h); raising it to 16 would
+// require single-buffered Dest, which nothing here asks for.
+//
+// THE VALUE MUST BE THE SAME ON ALL FIVE PROJECTIONS, which is why it comes from a
+// define the host emits to every kernel rather than from DST_ACCUM_MODE. Metal
+// generates DST_ACCUM_MODE into chlkc_descriptors.h behind a UCK_CHLKC_* guard, so it
+// exists only on compute -- and a budget that differs by projection is not a numeric
+// bug here, it is a hang. Strategy<FPUFusion>::run picks between a single acquire and
+// run_banded() on `out_subblock_num_tiles <= kMaxDstTiles`, and the two emit different
+// buffer protocol: with 8 on the movement threads and 4 on compute, an 8-tile output
+// block has compute banding it while data movement does not, and they wait on each
+// other. The one thing every projection must agree about cannot be read from the one
+// place only one of them can see.
+#if !defined(TT_UNIFIED_DST_32BIT)
+#define TT_UNIFIED_DST_32BIT 0
+#endif
+inline constexpr uint32_t kMaxDstTiles = TT_UNIFIED_DST_32BIT ? 4 : 8;
+
+#if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
+// Compute is the one projection that can see both, so it is where the host's claim gets
+// checked rather than trusted -- the same move hazard 21 makes for semaphore ids. If the
+// harness ever emits the define from a different value than the one it puts in the
+// compute config, this is a build error naming the disagreement instead of a wrong DST
+// budget on three threads out of five.
+static_assert(
+    DST_ACCUM_MODE == (TT_UNIFIED_DST_32BIT != 0),
+    "TT_UNIFIED_DST_32BIT disagrees with metal's generated DST_ACCUM_MODE: the host's "
+    "enable_32_bit_dest and the define it emits to the kernels have come apart");
+#endif
 
 // The packer's OUTPUT data format is programmed once -- by compute_kernel_hw_startup, from
 // whichever single dataflow buffer the kernel's init names -- and every pack after that
@@ -79,25 +105,48 @@ inline constexpr uint32_t kMaxDstTiles = 8;
 //
 // ttnn does the same thing in the same places, spelled out per call site:
 // PACK((pack_reconfig_data_format(...))) in bmm_large_block_zm_fused_bias_activation.cpp.
+namespace detail {
+// The packer's programmed format, tracked so pack_to() can skip a reconfig that would
+// change nothing. It lives out here rather than inside pack_to as a function-local static
+// because it MUST be resettable: it is a claim about hardware state, and anything that
+// normalises that state behind the library's back makes the claim false. See
+// pack_to_forget().
+inline constexpr uint32_t kPackUnset = ~uint32_t(0);
+inline uint32_t g_pack_configured = kPackUnset;
+}  // namespace detail
+
 inline void pack_to(uint32_t dfb_id) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    constexpr uint32_t kUnset = ~uint32_t(0);
-    static uint32_t configured = kUnset;
-    if (configured == dfb_id) {
+    if (detail::g_pack_configured == dfb_id) {
         return;
     }
-    if (configured == kUnset) {
+    if (detail::g_pack_configured == detail::kPackUnset) {
         // First pass: what the packer holds came from the kernel's init, which named one
         // buffer and may not have named this one, so this reprograms unconditionally.
         ckernel::pack_reconfig_data_format(dfb_id);
     } else {
-        ckernel::pack_reconfig_data_format(configured, dfb_id);
+        ckernel::pack_reconfig_data_format(detail::g_pack_configured, dfb_id);
     }
-    configured = dfb_id;
+    detail::g_pack_configured = dfb_id;
 #else
     (void)dfb_id;
 #endif
 }
+
+// Forget what the packer was programmed for, so the next pack_to() reprograms
+// unconditionally instead of skipping.
+//
+// pack_to's memo is only as good as the assumption that nothing else touches the packer.
+// That holds inside one unified kernel and breaks the moment a unified body is composed
+// with something that normalises compute state between phases -- a fused binary running
+// many ops, a cleanup path, an escape-hatch routine that reconfigures and does not put it
+// back (hazard 28b). After any of those the memo names a format the hardware no longer
+// holds, and the next store SKIPS the reconfig it needed. Nothing catches it: the bytes
+// land, and bfloat16 read back as bfloat8_b is 1.33e36.
+//
+// Cheap enough to call whenever in doubt -- it costs one reconfig on the next pass, which
+// is what would have happened anyway had the memo not been there.
+inline void pack_to_forget() { detail::g_pack_configured = detail::kPackUnset; }
 
 // Largest number of output ROWS whose tiles fit one acquire, and which divides the block
 // evenly so no band is short. Row bands rather than rectangles because a band covers

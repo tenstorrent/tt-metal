@@ -652,6 +652,33 @@ sets its own environment per case and ignores both.
 
   The host said `dfb` and `num_entries` already, so the mismatch was visible on a single
   line of the harness: `spec.num_entries = d.num_pages`.
+- **The DST tile budget follows the Dest width**, and `test_unified_dst32.py` holds it there.
+  `kMaxDstTiles` was a literal 8; a 32-bit Dest holds four tiles, not eight. Two things make
+  this more than an arithmetic fix.
+
+  First, **it cannot be read from `DST_ACCUM_MODE`.** Metal generates that into
+  `chlkc_descriptors.h` behind a `UCK_CHLKC_*` guard, so it exists on compute only -- and
+  `kMaxDstTiles` is not merely asserted on. `Strategy<FPUFusion>::run` branches on
+  `out_subblock_num_tiles <= kMaxDstTiles` between one acquire and `run_banded()`, and the two
+  emit DIFFERENT buffer protocol. A budget that differs by projection is a hang, not a wrong
+  number: compute bands an 8-tile block, data movement does not, and they wait on each other.
+  So it comes from `TT_UNIFIED_DST_32BIT`, emitted by the harness to all three kernels from the
+  same value it puts in `ComputeGen1Config::enable_32_bit_dest`, and compute -- the one
+  projection that can see both -- `static_assert`s the two against each other. Hazard 21's move,
+  applied to a second two-places-must-agree contract.
+
+  Second, **the failure it prevents is the one this file already predicted.** Pinning the budget
+  back to 8 fails exactly one of the four rows: `l1 accumulate, 2x4=8 tiles, 32-bit Dest=True`,
+  at PCC 0.51, while the `dst` row passes. That is `math.hpp`'s own comment, confirmed --
+  "a too-large subblock still round-trips in Dst mode, because math and pack share the same
+  wrong mapping and it cancels; L1 mode exposes it".
+
+- **`pack_to_forget()`** exists, and `pack_to`'s memo lives in `detail::g_pack_configured`
+  rather than a function-local static. The memo is a claim about hardware state, and anything
+  that normalises that state behind the library's back makes it false -- after which the next
+  `store` skips a reconfig it needed and bfloat16 read back as bfloat8_b is 1.33e36. Wanted
+  independently by a fused-binary consumer and by this repo's own selftest, whose free-vs-method
+  probe could not compare two spellings while the memo leaked between them.
 
 ### Verification status, stated exactly
 
