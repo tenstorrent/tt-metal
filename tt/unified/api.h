@@ -4,7 +4,7 @@
 //
 // A unified kernel is ONE source describing a whole Tensix pipeline. It is
 // compiled once per baby RISC-V thread, and each statement below lowers to that
-// thread's half of the circular-buffer protocol:
+// thread's half of the dataflow-buffer protocol:
 //
 //   INPUT                    OUTPUT                   INTERMED
 //        DM    Compute            DM    Compute            DM    Compute
@@ -76,9 +76,9 @@ struct PhysicalCoord {
     // real coordinate: my_x/my_y are filled by risc_init(), which does not run on a
     // TRISC (risc_common.h guards it out), so metal gives compute no way to know
     // where it is. The consequence is a quiet one -- a statement whose COMPUTE side
-    // branches on this behaves as though every core were (0,0), so circular-buffer
+    // branches on this behaves as though every core were (0,0), so dataflow-buffer
     // traffic guarded by it happens everywhere and the pushes go unmatched. Gate
-    // NOC work on it, never CB work; LogicalCoord::this_core() is the one that
+    // NOC work on it, never DFB work; LogicalCoord::this_core() is the one that
     // every projection answers correctly.
     static PhysicalCoord this_core();
     static PhysicalCoord origin();
@@ -197,15 +197,15 @@ struct LogicalMcast {
 };
 
 // ---------------------------------------------------------------------------
-// Storage -- a circular buffer
+// Storage -- a dataflow buffer
 // ---------------------------------------------------------------------------
 
 template <typename S>
 struct Storage {
     using shape = S;
 
-    explicit Storage(uint32_t cb_id) : cb_id(cb_id) {
-        // The host sizes the circular buffer and the kernel names the Shape, and until
+    explicit Storage(uint32_t dfb_id) : dfb_id(dfb_id) {
+        // The host sizes the dataflow buffer and the kernel names the Shape, and until
         // here nothing made the two meet. A buffer smaller than one block cannot ever
         // satisfy cb_reserve_back, so the kernel does not fail -- it waits forever, with
         // no assert and no output, and the device needs a reset. Checking it where the
@@ -220,10 +220,10 @@ struct Storage {
         //
         // Data movement only: cb_interface does not link on a TRISC, so a live read of it
         // from a compute projection fails the build. One thread is enough -- the host
-        // configures one circular buffer for the core, so every projection would be
+        // configures one dataflow buffer for the core, so every projection would be
         // checking the same number.
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-        ASSERT(cb_num_pages(cb_id) >= S::num_pages);
+        ASSERT(dfb_num_entries(dfb_id) >= S::num_entries);
 #endif
     }
 
@@ -237,15 +237,15 @@ struct Storage {
     template <typename Node>
     Block<S> store(const Node& node);
 
-    uint32_t cb_id;
-    // PAGES, which is what the circular-buffer protocol counts -- reserve, push,
-    // wait and pop are all in pages, and cb_page_bytes() sizes one. The compute
+    uint32_t dfb_id;
+    // PAGES, which is what the dataflow-buffer protocol counts -- reserve, push,
+    // wait and pop are all in pages, and dfb_entry_bytes() sizes one. The compute
     // strategies then walk it as a TILE count, which holds only because this model
     // configures one tile per page; see Storage::store.
     //
     // Static now that the shape is: reading it off an instance still compiles, so
-    // every `storage.num_pages` in the implementation is unchanged.
-    static constexpr uint32_t num_pages = S::num_pages;
+    // every `storage.num_entries` in the implementation is unchanged.
+    static constexpr uint32_t num_entries = S::num_entries;
 };
 
 // This core's own pages, handed to a custom load or store routine. The harness has
@@ -257,21 +257,21 @@ struct Storage {
 // are easy to confuse. A TensorAccessor's pages are indices into a tensor that
 // mostly lives somewhere else; these are addresses in this core's L1:
 //
-//     noc_async_read(acc.get_noc_addr(tensor_page), pages.addr(i), pages.page_bytes);
+//     noc_async_read(acc.get_noc_addr(tensor_page), pages.addr(i), pages.entry_bytes);
 //                                     ^ index, remote   ^ address, local
 //
 // `count` is the number the handle will push or pop whatever the routine actually
 // touches, so looping on it -- rather than on a tile count the kernel re-derives
 // from a compile-time arg -- is what keeps the two in step.
-struct L1Pages {
+struct L1Entries {
     uint32_t base;
-    uint32_t page_bytes;
+    uint32_t entry_bytes;
     uint32_t count;
 
     // Address of page `i`, so a routine never writes the stride arithmetic itself.
-    uint32_t addr(uint32_t i) const { return base + i * page_bytes; }
+    uint32_t addr(uint32_t i) const { return base + i * entry_bytes; }
 
-    uint32_t total_bytes() const { return count * page_bytes; }
+    uint32_t total_bytes() const { return count * entry_bytes; }
 };
 
 // ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ struct Block {
     using shape = S;
 
     explicit Block(const Storage<S>& storage);
-    explicit Block(uint32_t cb_id);
+    explicit Block(uint32_t dfb_id);
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ~Block();
 #endif
@@ -313,8 +313,8 @@ struct Block {
     // Compiles to nothing when asserts are off.
     void consume();
 
-    uint32_t cb_id;
-    static constexpr uint32_t num_pages = S::num_pages;
+    uint32_t dfb_id;
+    static constexpr uint32_t num_entries = S::num_entries;
 
 private:
     // A RETAINED block: one the Accumulator hands back mid-accumulation. Its pages
@@ -336,9 +336,9 @@ private:
     bool must_consume = true;
     bool consumed = false;
 
-    // Poison stamped into a moved-from Block's cb_id. num_pages is part of the
+    // Poison stamped into a moved-from Block's dfb_id. num_entries is part of the
     // type now, so there is one field left to poison -- which is enough, since any
-    // use of a moved-from Block goes through cb_id.
+    // use of a moved-from Block goes through dfb_id.
     static constexpr uint32_t kMovedFrom = ~uint32_t(0);
 #endif
 };
@@ -405,7 +405,7 @@ public:
     RetainedBlock& operator=(RetainedBlock&&) = delete;
 
     // Take ownership of a freshly stored block. The MOVE is the mechanism: it transfers the
-    // obligation and leaves the source silent. Copying the cb id into a second Block would
+    // obligation and leaves the source silent. Copying the dfb id into a second Block would
     // leave two obligations for one push, and the source would then assert as it died.
     RetainedBlock& operator=(Held&& in);
 
@@ -429,7 +429,7 @@ private:
 // ---------------------------------------------------------------------------
 // Accumulator -- multi-block matmul
 //
-// The k-loop belongs to the kernel, because the operand CBs have to be waited and
+// The k-loop belongs to the kernel, because the operand DFBs have to be waited and
 // popped per block so the reader can stream them. The Accumulator holds the state
 // that loop would otherwise carry: which buffer is the running total, which is
 // the destination, and whether there is anything to reload yet.
@@ -442,10 +442,10 @@ private:
 //         if (k == Geom::num_blocks - 1) noc_store<0>(std::move(result), out, 0);
 //     }
 //
-// The two Storages must be DIFFERENT circular buffers. Intermediate blocks are
+// The two Storages must be DIFFERENT dataflow buffers. Intermediate blocks are
 // pushed to the accumulation buffer and re-consumed by the next call; if that
 // were also the output buffer, the DM writer would drain the first intermediate
-// as though it were the answer, and two threads would be popping one CB (see the
+// as though it were the answer, and two threads would be popping one DFB (see the
 // warning in api/compute/cb_api.h).
 // ---------------------------------------------------------------------------
 
@@ -503,12 +503,12 @@ public:
     ComputeBlock(ComputeBlock&&) = delete;
     ComputeBlock& operator=(ComputeBlock&&) = delete;
 
-    uint32_t get_cb_id() const { return cb_id; }
-    static constexpr uint32_t get_num_pages() { return S::num_pages; }
+    uint32_t get_dfb_id() const { return dfb_id; }
+    static constexpr uint32_t get_num_entries() { return S::num_entries; }
 
 private:
-    uint32_t cb_id;
-    static constexpr uint32_t num_pages = S::num_pages;
+    uint32_t dfb_id;
+    static constexpr uint32_t num_entries = S::num_entries;
 };
 
 // ---------------------------------------------------------------------------
@@ -584,7 +584,7 @@ Broadcast<A, S> bcast(const ComputeBlock<S>& v);
 // tt/unified/math.hpp for what each axis leaves behind.
 //
 //     using In = u::Shape<4, 4>;
-//     u::Storage<u::reduce_shape<In, u::ReduceAxis::Rows>> out(kCbOut);   // Shape<1, 4>
+//     u::Storage<u::reduce_shape<In, u::ReduceAxis::Rows>> out(kDfbOut);   // Shape<1, 4>
 //     out.store(u::reduce_sum<u::ReduceAxis::Rows>(block, scaler));
 //
 // The destination's shape is checked against what the reduction yields, so a
@@ -621,13 +621,13 @@ ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
 // The compute-side counterpart of noc_load's and noc_store's Fn forms: for a pass
 // this model does not express, call the LLK directly.
 //
-//     custom_compute(a, b, [&](uint32_t a_cb, uint32_t b_cb) {
+//     custom_compute(a, b, [&](uint32_t a_dfb, uint32_t b_dfb) {
 //     #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
 //         // any llk / compute api, on those two buffers
 //     #endif
 //     });
 //
-// Takes any number of ComputeBlocks and a routine taking that many circular-buffer
+// Takes any number of ComputeBlocks and a routine taking that many dataflow-buffer
 // ids, in the same order. Anything else in a block position is a compile error.
 //
 // WHY THE GUARD IS YOURS. The routine is only CALLED on the compute projection --
@@ -646,7 +646,7 @@ ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
 //     unlike Storage::store, whose strategies bracket every pass. If the routine
 //     uses DST it must bracket itself.
 //   * The output. The routine gets INPUT buffers. To produce a block, reach the
-//     destination's `Storage::cb_id`, do the reserve/pack/push by hand, and then
+//     destination's `Storage::dfb_id`, do the reserve/pack/push by hand, and then
 //     `Block<Out>{out_storage}` is the handle a data-movement thread can drain --
 //     that constructor only records the buffer, it does not push.
 //   * PUTTING THE UNITS BACK. This is the one that bites. Unpacker, math and packer
@@ -690,8 +690,8 @@ inline constexpr uint32_t kMcastSemBase = 0;
 // ---------------------------------------------------------------------------
 // Buffer slots
 //
-//     constexpr uint32_t kCbIn = get_named_compile_time_arg_val("cb_in");
-//     u::Storage<Block1D> in_storage(kCbIn);
+//     constexpr uint32_t kDfbIn = get_named_compile_time_arg_val("dfb_in");
+//     u::Storage<Block1D> in_storage(kDfbIn);
 //
 // A kernel cannot get its buffers' slot numbers from the `dfb::` binding tokens the way a
 // single-projection kernel would. A token is emitted only into the kernels that bind that
@@ -700,7 +700,7 @@ inline constexpr uint32_t kMcastSemBase = 0;
 // on the build that only reads `in`. See unified_metal2_spec.md 7.1.
 //
 // So the slot arrives as a named compile-time VALUE, exactly like every other scalar the
-// kernel is given, under the name `cb_<buffer>`. The harness predicts it from metal's
+// kernel is given, under the name `dfb_<buffer>`. The harness predicts it from metal's
 // allocator rule (lowest free slot, declaration order) and unified_program_spec() documents
 // that prediction.
 //
@@ -778,7 +778,7 @@ inline constexpr bool kCoreGridExact = false;
 #endif
 
 // Two bfloat16 1.0 values in one 32-bit word -- the scaler a SUM reduction wants.
-// A float32 CB would want a single 0x3F800000 instead.
+// A float32 DFB would want a single 0x3F800000 instead.
 inline constexpr uint32_t kReduceScalerOne = 0x3F803F80u;
 
 // The same word for any value: bfloat16 is the top half of a float32, twice over.
@@ -934,8 +934,8 @@ struct NocAsyncMcastTx {
     // site -- all of them `noc_load(...).wait()` -- compiles unchanged.
     Block<S> wait() const;
 
-    uint32_t cb_id;
-    static constexpr uint32_t num_pages = S::num_pages;
+    uint32_t dfb_id;
+    static constexpr uint32_t num_entries = S::num_entries;
 
     // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
     //
@@ -966,7 +966,7 @@ struct NocAsyncReadTx {
     using shape = S;
 
     explicit NocAsyncReadTx(const Storage<S>& storage);
-    explicit NocAsyncReadTx(uint32_t cb_id);
+    explicit NocAsyncReadTx(uint32_t dfb_id);
 
     NocAsyncReadTx(const NocAsyncReadTx&) = delete;
     NocAsyncReadTx& operator=(const NocAsyncReadTx&) = delete;
@@ -980,8 +980,8 @@ struct NocAsyncReadTx {
     // Completes the read and publishes the destination.
     Block<S> wait() const;
 
-    uint32_t cb_id;
-    static constexpr uint32_t num_pages = S::num_pages;
+    uint32_t dfb_id;
+    static constexpr uint32_t num_entries = S::num_entries;
 
     // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
     //
@@ -1006,7 +1006,7 @@ struct NocAsyncWriteTx {
     using shape = S;
 
     explicit NocAsyncWriteTx(const Storage<S>& storage);
-    explicit NocAsyncWriteTx(uint32_t cb_id);
+    explicit NocAsyncWriteTx(uint32_t dfb_id);
 
     NocAsyncWriteTx(const NocAsyncWriteTx&) = delete;
     NocAsyncWriteTx& operator=(const NocAsyncWriteTx&) = delete;
@@ -1019,8 +1019,8 @@ struct NocAsyncWriteTx {
     // Optional: block until the data has LANDED at the destination.
     void wait() const;
 
-    uint32_t cb_id;
-    static constexpr uint32_t num_pages = S::num_pages;
+    uint32_t dfb_id;
+    static constexpr uint32_t num_entries = S::num_entries;
 
     // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
     //
@@ -1052,11 +1052,11 @@ struct NocAsyncReadCoreTx {
     // wrong; nothing checked either fact before, since the two page counts were
     // independent runtime fields.
     static_assert(
-        S::num_pages <= D::num_pages,
+        S::num_entries <= D::num_entries,
         "a core-to-core copy's source does not fit its destination -- the source Block has more pages "
         "than the destination Storage");
     static_assert(
-        D::num_pages % S::num_pages == 0,
+        D::num_entries % S::num_entries == 0,
         "a core-to-core copy's destination is not a whole multiple of its source -- a gather deposits "
         "one source-sized slot per writer, so a ragged destination cannot be addressed by byte_offset");
 
@@ -1071,10 +1071,10 @@ struct NocAsyncReadCoreTx {
 
     Block<D> wait() const;
 
-    uint32_t dst_cb;
-    static constexpr uint32_t dst_pages = D::num_pages;
-    uint32_t src_cb;
-    static constexpr uint32_t src_pages = S::num_pages;
+    uint32_t dst_dfb;
+    static constexpr uint32_t dst_entries = D::num_entries;
+    uint32_t src_dfb;
+    static constexpr uint32_t src_entries = S::num_entries;
 
     // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
     //
@@ -1117,11 +1117,11 @@ struct NocAsyncWriteCoreTx {
     // wrong; nothing checked either fact before, since the two page counts were
     // independent runtime fields.
     static_assert(
-        S::num_pages <= D::num_pages,
+        S::num_entries <= D::num_entries,
         "a core-to-core copy's source does not fit its destination -- the source Block has more pages "
         "than the destination Storage");
     static_assert(
-        D::num_pages % S::num_pages == 0,
+        D::num_entries % S::num_entries == 0,
         "a core-to-core copy's destination is not a whole multiple of its source -- a gather deposits "
         "one source-sized slot per writer, so a ragged destination cannot be addressed by byte_offset");
 
@@ -1137,10 +1137,10 @@ struct NocAsyncWriteCoreTx {
 
     Block<D> wait(uint32_t num_writers) const;
 
-    uint32_t dst_cb;
-    static constexpr uint32_t dst_pages = D::num_pages;
-    uint32_t src_cb;
-    static constexpr uint32_t src_pages = S::num_pages;
+    uint32_t dst_dfb;
+    static constexpr uint32_t dst_entries = D::num_entries;
+    uint32_t src_dfb;
+    static constexpr uint32_t src_entries = S::num_entries;
 
     // The NOC this transaction was ISSUED on, so wait() can barrier on that one.
     //
@@ -1181,17 +1181,17 @@ struct NocAsyncWriteCoreTx {
 // unified_llama_prefill.md.
 // ---------------------------------------------------------------------------
 
-// Reads `storage.num_pages` pages into the buffer, starting at page
-// `block_idx * storage.num_pages`. The returned handle publishes them.
+// Reads `storage.num_entries` pages into the buffer, starting at page
+// `block_idx * storage.num_entries`. The returned handle publishes them.
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx);
 
 // Custom load, for routines the built-in overload cannot express. The harness
-// keeps the circular-buffer protocol -- cb_reserve_back, the write pointer, and
+// keeps the dataflow-buffer protocol -- cb_reserve_back, the write pointer, and
 // (via the returned handle) the read barrier and cb_push_back -- and `fn` owns
 // the traffic. It is called as
 //
-//     fn(L1Pages pages)
+//     fn(L1Entries pages)
 //
 // and must fill pages.count consecutive pages from pages.base: that is the
 // count the handle pushes, whatever `fn` actually wrote, so loop on pages.count.
@@ -1211,7 +1211,7 @@ template <int thread, typename S, typename Fn>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn);
 
 // Multicast load: one core in the rectangle reads the block from `acc` and
-// multicasts it into the SAME circular buffer on every core of the rectangle.
+// multicasts it into the SAME dataflow buffer on every core of the rectangle.
 // Every core runs this same statement; which side of the handshake it takes is a
 // runtime decision on its own coordinate.
 //
@@ -1278,7 +1278,7 @@ NocAsyncMcastTx<thread, S> noc_load(
 // Call it ONCE, before the first reduction; it pushes the page and nothing ever
 // pops it, because every reduce_tile re-reads the same tile.
 //
-// `value_bits` is written as raw 32-bit words, so its packing follows the CB's
+// `value_bits` is written as raw 32-bit words, so its packing follows the DFB's
 // format: for bfloat16 one word is TWO values, which is what kReduceScalerOne is.
 // Sum wants 1.0; an average wants 1/N (1/sqrt(N) reducing both axes).
 // Returns the page as a Block, so a scaler is held the same way a fused bias is:
@@ -1293,7 +1293,7 @@ template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx);
 
 // Custom store: the mirror of the custom noc_load. `fn` is called as
-// fn(L1Pages pages) over `block`'s pages -- pages.count is the number the handle
+// fn(L1Entries pages) over `block`'s pages -- pages.count is the number the handle
 // pops.
 //
 // `fn` must issue ONLY WRITES, and only on this thread's assigned NOC. The handle
@@ -1313,7 +1313,7 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn);
 // forward. Only the write side takes a rectangle: pushing one block to many peers
 // is meaningful, pulling from many is not.
 //
-// NOTE: reserve/push act on the *local* view of the destination CB. For a genuine
+// NOTE: reserve/push act on the *local* view of the destination DFB. For a genuine
 // peer buffer the far side's pointers have to be advanced too -- see
 // api/remote_circular_buffer.h (remote_cb_reserve_back /
 // remote_cb_push_back_and_write_pages, asymmetric between sender and receiver) or

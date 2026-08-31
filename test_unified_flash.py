@@ -92,10 +92,10 @@ def _launch(
     scores_pages, out_pages, vec_pages = sq * sk, sq * dt, sq
     dfbs = [
         dfb("q", sq * dt),
-        # Streamed per chunk, so these are the only CBs where a second block lets the
+        # Streamed per chunk, so these are the only DFBs where a second block lets the
         # reader run ahead of the compute. Worth a measured 5-6%, for L1 pages and
         # nothing else -- these shipped single-buffered, which is what a single/double
-        # sweep turned up. The state CBs below are a different matter: their 2x is an
+        # sweep turned up. The state DFBs below are a different matter: their 2x is an
         # aliasing requirement, and halving THEM deadlocks.
         dfb("k", stream_buffering * dt * sk),
         dfb("v", stream_buffering * sk * dt),

@@ -41,7 +41,7 @@
 // indexed c*K + k, and the output is R*C blocks of rt x ct in row-major core
 // order.
 //
-// Compile-time args: a cb_<name> per buffer.
+// Compile-time args: a dfb_<name> per buffer.
 //
 // Runtime args (identical on every core):
 //
@@ -64,10 +64,10 @@
 namespace u = tt::unified;
 
 void kernel_main() {
-    constexpr uint32_t kCbIn0 = get_arg(args::cb_in0);
-    constexpr uint32_t kCbIn1 = get_arg(args::cb_in1);
-    constexpr uint32_t kCbAcc = get_arg(args::cb_acc);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn0 = get_arg(args::dfb_in0);
+    constexpr uint32_t kDfbIn1 = get_arg(args::dfb_in1);
+    constexpr uint32_t kDfbAcc = get_arg(args::dfb_acc);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
 
     const u::LogicalCoord me = u::LogicalCoord::this_core();
     const uint32_t out_block = me.y * MM_GRID_W + me.x;
@@ -78,12 +78,12 @@ void kernel_main() {
     using In1 = u::Shape<MM_KT, MM_CT>;
     using Out = u::Shape<MM_RT, MM_CT>;
 
-    u::matmul_init<In0, In1>(kCbIn0, kCbIn1, kCbOut);
+    u::matmul_init<In0, In1>(kDfbIn0, kDfbIn1, kDfbOut);
 
-    u::Storage<In0> in0_storage(kCbIn0);
-    u::Storage<In1> in1_storage(kCbIn1);
-    u::Storage<Out> acc_storage(kCbAcc);
-    u::Storage<Out> out_storage(kCbOut);
+    u::Storage<In0> in0_storage(kDfbIn0);
+    u::Storage<In1> in1_storage(kDfbIn1);
+    u::Storage<Out> acc_storage(kDfbAcc);
+    u::Storage<Out> out_storage(kDfbOut);
 
     const auto in0 = TensorAccessor(tensor::in0);
     const auto in1 = TensorAccessor(tensor::in1);

@@ -20,7 +20,7 @@
 //
 // Shape equality is TYPE identity, which is the point of the exercise: Shape<1, 4> and
 // Shape<4> hold the same number of pages and are different types, so the mistake a
-// single num_pages count cannot see does not compile.
+// single num_entries count cannot see does not compile.
 //
 // A future DynamicShape, used in place of Shape, is the escape for the genuinely
 // runtime-extent cases (45% of Ht/Wt uses in ttnn are runtime). Nothing here should
@@ -59,16 +59,16 @@ struct Shape {
         return dims[i < 0 ? static_cast<uint32_t>(static_cast<int32_t>(rank) + i) : static_cast<uint32_t>(i)];
     }
 
-    // One tile per circular-buffer page in v1, so the page count is the product. This
-    // is the name the CB protocol speaks in, and it stays that name -- reading it off
-    // an instance (`storage.num_pages`) still compiles now that it is static.
-    static constexpr uint32_t num_pages = (uint32_t{1} * ... * Dims);
+    // One tile per dataflow-buffer page in v1, so the page count is the product. This
+    // is the name the DFB protocol speaks in, and it stays that name -- reading it off
+    // an instance (`storage.num_entries`) still compiles now that it is static.
+    static constexpr uint32_t num_entries = (uint32_t{1} * ... * Dims);
 
     static constexpr uint32_t cols = dims[rank - 1];
     // The guard is repeated inside the index because both arms of a ternary are
     // parsed: at rank 1 `rank - 2` would wrap.
     static constexpr uint32_t rows = rank >= 2 ? dims[rank >= 2 ? rank - 2 : 0] : 1;
-    static constexpr uint32_t leading = num_pages / (rows * cols);
+    static constexpr uint32_t leading = num_entries / (rows * cols);
 };
 
 // Shape equality, spelled for legibility inside static_asserts.

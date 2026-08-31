@@ -4,7 +4,7 @@
 // strategies. See <tt/unified/core> for the layering.
 //
 // This header deliberately does not depend on the core types. Leaves and nodes
-// carry raw circular-buffer ids, so the dependency runs one way: tt/unified/api.h
+// carry raw dataflow-buffer ids, so the dependency runs one way: tt/unified/api.h
 // includes this and supplies the thin ComputeBlock adaptors.
 //
 // A fusion KIND selects the driver strategy -- the shape of the enclosing loop,
@@ -19,7 +19,7 @@
 //                 to allocate: only a *unary* epilogue can fuse, applied in place
 //                 on the final accumulation step. The hardware says the same --
 //                 matmul's activation is compiled out when FUSE_BIAS is set, and
-//                 bias spills through an intermediate CB instead
+//                 bias spills through an intermediate DFB instead
 //                 (bmm_large_block_zm_fused_bias_activation.cpp:384).
 //
 //   ReduceFusion -- metal's reduce folds a whole tile grid down an axis, within
@@ -65,7 +65,7 @@ namespace unified {
 inline constexpr uint32_t kMaxDstTiles = 8;
 
 // The packer's OUTPUT data format is programmed once -- by compute_kernel_hw_startup, from
-// whichever single circular buffer the kernel's init names -- and every pack after that
+// whichever single dataflow buffer the kernel's init names -- and every pack after that
 // writes in that format regardless of where it is going. A kernel that packs to buffers of
 // DIFFERENT formats therefore writes some of them wrong, and nothing catches it: the bytes
 // land, there is no assert and no hang, and bfloat16 read back as bfloat8_b comes out as
@@ -79,23 +79,23 @@ inline constexpr uint32_t kMaxDstTiles = 8;
 //
 // ttnn does the same thing in the same places, spelled out per call site:
 // PACK((pack_reconfig_data_format(...))) in bmm_large_block_zm_fused_bias_activation.cpp.
-inline void pack_to(uint32_t cb_id) {
+inline void pack_to(uint32_t dfb_id) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     constexpr uint32_t kUnset = ~uint32_t(0);
     static uint32_t configured = kUnset;
-    if (configured == cb_id) {
+    if (configured == dfb_id) {
         return;
     }
     if (configured == kUnset) {
         // First pass: what the packer holds came from the kernel's init, which named one
         // buffer and may not have named this one, so this reprograms unconditionally.
-        ckernel::pack_reconfig_data_format(cb_id);
+        ckernel::pack_reconfig_data_format(dfb_id);
     } else {
-        ckernel::pack_reconfig_data_format(configured, cb_id);
+        ckernel::pack_reconfig_data_format(configured, dfb_id);
     }
-    configured = cb_id;
+    configured = dfb_id;
 #else
-    (void)cb_id;
+    (void)dfb_id;
 #endif
 }
 
@@ -159,7 +159,7 @@ constexpr uint32_t block_tile_index(uint32_t r0, uint32_t c0, uint32_t t, uint32
 
 // --- Leaves and ops ---
 
-// One tile out of a circular buffer, copied into a DST slot. The allocator picks
+// One tile out of a dataflow buffer, copied into a DST slot. The allocator picks
 // the slot, not the caller -- that is what keeps operands from clobbering
 // intermediates.
 template <typename S>
@@ -168,15 +168,15 @@ struct TileSource : expr::Fluent<TileSource<S>> {
     using shape = S;
     static constexpr uint32_t need = 1;
 
-    uint32_t cb_id;
+    uint32_t dfb_id;
 
     // Which buffer this leaf reads. The SFPU path never needs it -- it copies the tile
     // into DST and works there -- but the FPU forms take their operands from L1, so for
     // them the buffer identity IS the operand.
-    uint32_t source_cb() const { return cb_id; }
+    uint32_t source_dfb() const { return dfb_id; }
 
     // `reconfigure` re-points the unpacker's srcA data format at THIS leaf's buffer.
-    // Without it a tree whose leaves live in circular buffers of different formats is
+    // Without it a tree whose leaves live in dataflow buffers of different formats is
     // silently wrong: copy_tile does not carry a format, and
     // copy_tile_to_dst_init_short explicitly "does not reconfigure the unpacker data
     // types". The one-argument form is used because it needs no previous operand, so a
@@ -186,14 +186,14 @@ struct TileSource : expr::Fluent<TileSource<S>> {
     // operand's tiles together, which this per-tile loop does not.
     //
     // Uniform TILE GEOMETRY is a separate assumption, and one the model already makes:
-    // every circular buffer here holds exactly one 32x32 tile per page.
+    // every dataflow buffer here holds exactly one 32x32 tile per page.
     void emit(uint32_t dst, uint32_t tile, bool reconfigure) const {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         if (reconfigure) {
-            ckernel::reconfig_data_format_srca(cb_id);
-            ckernel::copy_tile_to_dst_init_short(cb_id);
+            ckernel::reconfig_data_format_srca(dfb_id);
+            ckernel::copy_tile_to_dst_init_short(dfb_id);
         }
-        ckernel::copy_tile(cb_id, tile, dst);
+        ckernel::copy_tile(dfb_id, tile, dst);
 #else
         (void)dst;
         (void)tile;
@@ -204,7 +204,7 @@ struct TileSource : expr::Fluent<TileSource<S>> {
 
 // add, sub and mul exist on BOTH units. The SFPU form below takes two DST slots,
 // which is why every operand has to be copy_tile'd into DST first; the FPU form
-// reads its operands straight out of circular buffers and needs no copy at all.
+// reads its operands straight out of dataflow buffers and needs no copy at all.
 // That is the whole reason for FpuEltwiseFusion: the measured SFPU cost in flash is
 // dominated by those leaf copies, not by the arithmetic.
 //
@@ -233,8 +233,8 @@ struct FpuBinary {
     static constexpr bool fpu_capable = true;
     static constexpr FpuOp fpu_op = TheOp;
 
-    // Seed: both operands out of circular buffers, result to DST.
-    static void fpu_seed_init(uint32_t cb0, uint32_t cb1) {
+    // Seed: both operands out of dataflow buffers, result to DST.
+    static void fpu_seed_init(uint32_t dfb0, uint32_t dfb1) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         // Point srcA and srcB at these two buffers' formats FIRST. The *_tiles_init
         // calls below are the short inits -- they program the math unit for the op and
@@ -244,32 +244,32 @@ struct FpuBinary {
         // not to a slightly worse number. The full init that would cover it,
         // binary_op_init_common, carries hw_configure and pack_sync_init and must not
         // run twice, so this is the same split matmul_block_init uses.
-        ckernel::reconfig_data_format(cb0, cb1);
+        ckernel::reconfig_data_format(dfb0, dfb1);
         if constexpr (TheOp == FpuOp::Add) {
-            ckernel::add_tiles_init(cb0, cb1);
+            ckernel::add_tiles_init(dfb0, dfb1);
         } else if constexpr (TheOp == FpuOp::Sub) {
-            ckernel::sub_tiles_init(cb0, cb1);
+            ckernel::sub_tiles_init(dfb0, dfb1);
         } else {
-            ckernel::mul_tiles_init(cb0, cb1);
+            ckernel::mul_tiles_init(dfb0, dfb1);
         }
 #else
-        (void)cb0;
-        (void)cb1;
+        (void)dfb0;
+        (void)dfb1;
 #endif
     }
 
-    static void fpu_seed_apply(uint32_t cb0, uint32_t cb1, uint32_t t0, uint32_t t1, uint32_t dst) {
+    static void fpu_seed_apply(uint32_t dfb0, uint32_t dfb1, uint32_t t0, uint32_t t1, uint32_t dst) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         if constexpr (TheOp == FpuOp::Add) {
-            ckernel::add_tiles(cb0, cb1, t0, t1, dst);
+            ckernel::add_tiles(dfb0, dfb1, t0, t1, dst);
         } else if constexpr (TheOp == FpuOp::Sub) {
-            ckernel::sub_tiles(cb0, cb1, t0, t1, dst);
+            ckernel::sub_tiles(dfb0, dfb1, t0, t1, dst);
         } else {
-            ckernel::mul_tiles(cb0, cb1, t0, t1, dst);
+            ckernel::mul_tiles(dfb0, dfb1, t0, t1, dst);
         }
 #else
-        (void)cb0;
-        (void)cb1;
+        (void)dfb0;
+        (void)dfb1;
         (void)t0;
         (void)t1;
         (void)dst;
@@ -292,28 +292,28 @@ struct FpuBinary {
 
     // Chain link: one operand from a buffer, the other already in DST.
     template <bool DstIsLhs>
-    static void fpu_reuse_init(uint32_t cb) {
+    static void fpu_reuse_init(uint32_t dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         // Only the buffer operand's side needs re-pointing here; the other side is DST,
         // whose format the accumulator already fixed. DstIsLhs means DST went to srcA,
         // so the buffer is srcB, and the other way round.
         if constexpr (DstIsLhs) {
-            ckernel::reconfig_data_format_srcb(cb);
+            ckernel::reconfig_data_format_srcb(dfb);
         } else {
-            ckernel::reconfig_data_format_srca(cb);
+            ckernel::reconfig_data_format_srca(dfb);
         }
-        ckernel::binary_dest_reuse_tiles_init<kType, kDir<DstIsLhs>>(cb);
+        ckernel::binary_dest_reuse_tiles_init<kType, kDir<DstIsLhs>>(dfb);
 #else
-        (void)cb;
+        (void)dfb;
 #endif
     }
 
     template <bool DstIsLhs>
-    static void fpu_reuse_apply(uint32_t cb, uint32_t tile, uint32_t dst) {
+    static void fpu_reuse_apply(uint32_t dfb, uint32_t tile, uint32_t dst) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-        ckernel::binary_dest_reuse_tiles<kType, kDir<DstIsLhs>>(cb, tile, dst);
+        ckernel::binary_dest_reuse_tiles<kType, kDir<DstIsLhs>>(dfb, tile, dst);
 #else
-        (void)cb;
+        (void)dfb;
         (void)tile;
         (void)dst;
 #endif
@@ -574,7 +574,7 @@ struct ReduceFusion {};
 // Verified on silicon: the pair matches torch's q @ k.T to 0.006-0.007 across four
 // shapes, while the flag alone matches neither q@k nor q@k.T once B is wider than one
 // tile. An A-transpose is NOT symmetric with this and has no flag: ttnn does it with a
-// separate materialised pass into another circular buffer.
+// separate materialised pass into another dataflow buffer.
 enum class TransposeB { No, Yes };
 
 // The geometry a matmul runs at, DERIVED from its operands rather than declared.
@@ -588,7 +588,7 @@ enum class TransposeB { No, Yes };
 //   num_blocks              never used here -- it was only ever a kernel loop bound
 //   in1_row_stride          B's own width, which is what it always was
 //
-// `in1_row_stride` is how far to step in B's circular buffer to move down one k row.
+// `in1_row_stride` is how far to step in B's dataflow buffer to move down one k row.
 // It is B's full block width, which equals ct_dim as long as B holds exactly the
 // output's columns. Subblocking B -- several output subblocks side by side in one
 // buffer -- would make them differ, and would then be expressed by giving B a wider
@@ -612,7 +612,7 @@ struct MatmulGeometry {
     using out_shape = with_hw<SA, rt_dim, ct_dim>;
 };
 
-// No bias. A real cb id could be 0, so the sentinel has to be out of range.
+// No bias. A real dfb id could be 0, so the sentinel has to be out of range.
 inline constexpr uint32_t kNoBias = ~uint32_t(0);
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
@@ -630,7 +630,7 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
     // matmul(a, b).bias(v).relu() is relu(A@B + v), the usual fusion.
     //
     // `operand` is duck-typed rather than named: this header does not know the
-    // core types, and all it needs is the circular buffer behind one. Pass a
+    // core types, and all it needs is the dataflow buffer behind one. Pass a
     // ComputeBlock held at KERNEL scope -- the bias is read by every finishing
     // block and must not be popped until the kernel ends. See unified_kernels.
     // Add a WHOLE BLOCK to the product, in place, before it is packed.
@@ -650,7 +650,7 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
             same_shape_v<typename Operand::shape, typename geometry::out_shape>,
             "a fused addend must have the matmul's OUTPUT shape -- for one row broadcast "
             "down the block, that is bias(), not add()");
-        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, bias_cb, operand.get_cb_id()};
+        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_dfb, in1_dfb, bias_dfb, operand.get_dfb_id()};
         return out;
     }
 
@@ -694,19 +694,19 @@ struct MatmulNode : expr::Fluent<MatmulNode<SA, SB, Tr, Chain>> {
         // nothing to notice; more and the kernel and the geometry disagree about
         // the shape. Checked here rather than in the strategy because this is where
         // the operand's page count is still in hand.
-        // Carries addend_cb through: without it, .add(m).bias(v) would drop the addend
+        // Carries addend_dfb through: without it, .add(m).bias(v) would drop the addend
         // silently -- the fused add would just not happen, and the result would look
         // like a plain biased matmul rather than like an error.
-        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_cb, in1_cb, operand.get_cb_id(), addend_cb};
+        MatmulNode<SA, SB, Tr, Chain> out{{}, in0_dfb, in1_dfb, operand.get_dfb_id(), addend_dfb};
         return out;
     }
 
-    uint32_t in0_cb;
-    uint32_t in1_cb;
-    uint32_t bias_cb = kNoBias;
-    // A whole block added to the product, distinct from bias_cb, which is one row
+    uint32_t in0_dfb;
+    uint32_t in1_dfb;
+    uint32_t bias_dfb = kNoBias;
+    // A whole block added to the product, distinct from bias_dfb, which is one row
     // broadcast. See add() above.
-    uint32_t addend_cb = kNoBias;
+    uint32_t addend_dfb = kNoBias;
 };
 
 // --- Reduction ---
@@ -779,7 +779,7 @@ struct is_fpu_fusion : std::is_same<expr::kind_of_t<T>, FPUFusion> {};
 
 // --- Broadcast ---
 //
-// A broadcast reads a BLOCK and a VECTOR from two circular buffers and expands the vector
+// A broadcast reads a BLOCK and a VECTOR from two dataflow buffers and expands the vector
 // along one axis as it goes. That is why it cannot be an expression-tree node: a tree
 // leaf copies whole tiles into DST, and what is needed here is the replication of one row
 // or one column WITHIN each tile, which only the unpacker's broadcast mode does.
@@ -862,7 +862,7 @@ struct Broadcast {
     static constexpr Axis axis = A;
     using shape = S;
 
-    uint32_t cb_id;
+    uint32_t dfb_id;
 };
 
 template <typename SB, Axis A>
@@ -894,8 +894,8 @@ struct BcastNode : expr::Fluent<BcastNode<Op, A, SB, SV, Chain>>, BcastNodeCheck
         return A == Axis::Rows ? t % SB::cols : (A == Axis::Cols ? t / SB::cols : 0);
     }
 
-    uint32_t block_cb;
-    uint32_t vec_cb;
+    uint32_t block_dfb;
+    uint32_t vec_dfb;
 };
 
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
@@ -950,7 +950,7 @@ struct ReduceGeometry {
     }
 };
 
-// `scaler_cb` holds the constant reduce_tile folds in: see fill_reduce_scaler.
+// `scaler_dfb` holds the constant reduce_tile folds in: see fill_reduce_scaler.
 template <typename S, ReduceAxis Axis, ReducePool Pool, typename Chain>
 struct ReduceNode : expr::Fluent<ReduceNode<S, Axis, Pool, Chain>> {
     using fusion_kind = ReduceFusion;
@@ -961,68 +961,68 @@ struct ReduceNode : expr::Fluent<ReduceNode<S, Axis, Pool, Chain>> {
     static constexpr ReduceAxis axis = Axis;
     static constexpr ReducePool pool = Pool;
 
-    uint32_t in_cb;
-    uint32_t scaler_cb;
+    uint32_t in_dfb;
+    uint32_t scaler_dfb;
 };
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto silu(const ReduceNode<S, A, P, Chain>& r) {
-    return ReduceNode<S, A, P, expr::chain_append_t<Chain, SiluOp>>{{}, r.in_cb, r.scaler_cb};
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, SiluOp>>{{}, r.in_dfb, r.scaler_dfb};
 }
 
 template <typename S, Axis A, ReducePool P, typename Chain>
 auto relu(const ReduceNode<S, A, P, Chain>& r) {
-    return ReduceNode<S, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_cb, r.scaler_cb};
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, ReluOp>>{{}, r.in_dfb, r.scaler_dfb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
 auto silu(const BcastNode<Op, A, SB, SV, Chain>& b) {
-    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, SiluOp>>{{}, {}, b.block_cb, b.vec_cb};
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, SiluOp>>{{}, {}, b.block_dfb, b.vec_dfb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
 auto relu(const BcastNode<Op, A, SB, SV, Chain>& b) {
-    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, ReluOp>>{{}, {}, b.block_cb, b.vec_cb};
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, ReluOp>>{{}, {}, b.block_dfb, b.vec_dfb};
 }
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto exp_(const ReduceNode<S, A, P, Chain>& r) {
-    return ReduceNode<S, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_cb, r.scaler_cb};
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, ExpOp>>{{}, r.in_dfb, r.scaler_dfb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
 auto exp_(const BcastNode<Op, A, SB, SV, Chain>& b) {
-    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, ExpOp>>{{}, {}, b.block_cb, b.vec_cb};
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, ExpOp>>{{}, {}, b.block_dfb, b.vec_dfb};
 }
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto recip(const ReduceNode<S, A, P, Chain>& r) {
-    return ReduceNode<S, A, P, expr::chain_append_t<Chain, RecipOp>>{{}, r.in_cb, r.scaler_cb};
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, RecipOp>>{{}, r.in_dfb, r.scaler_dfb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
 auto recip(const BcastNode<Op, A, SB, SV, Chain>& b) {
-    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, RecipOp>>{{}, {}, b.block_cb, b.vec_cb};
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, RecipOp>>{{}, {}, b.block_dfb, b.vec_dfb};
 }
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto sqrt_(const ReduceNode<S, A, P, Chain>& r) {
-    return ReduceNode<S, A, P, expr::chain_append_t<Chain, SqrtOp>>{{}, r.in_cb, r.scaler_cb};
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, SqrtOp>>{{}, r.in_dfb, r.scaler_dfb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
 auto sqrt_(const BcastNode<Op, A, SB, SV, Chain>& b) {
-    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, SqrtOp>>{{}, {}, b.block_cb, b.vec_cb};
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, SqrtOp>>{{}, {}, b.block_dfb, b.vec_dfb};
 }
 
 template <typename S, ReduceAxis A, ReducePool P, typename Chain>
 auto rsqrt(const ReduceNode<S, A, P, Chain>& r) {
-    return ReduceNode<S, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_cb, r.scaler_cb};
+    return ReduceNode<S, A, P, expr::chain_append_t<Chain, RsqrtOp>>{{}, r.in_dfb, r.scaler_dfb};
 }
 
 template <typename Op, Axis A, typename SB, typename SV, typename Chain>
 auto rsqrt(const BcastNode<Op, A, SB, SV, Chain>& b) {
-    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, RsqrtOp>>{{}, {}, b.block_cb, b.vec_cb};
+    return BcastNode<Op, A, SB, SV, expr::chain_append_t<Chain, RsqrtOp>>{{}, {}, b.block_dfb, b.vec_dfb};
 }
 
 // --- Node shapes ---
@@ -1153,38 +1153,44 @@ auto rsqrt(const N& n) {
 }
 
 // Each of these rebuilds the node with one more link on its chain, and each has to carry
-// BOTH operand fields across. Forgetting addend_cb here is not a compile error and not a
+// BOTH operand fields across. Forgetting addend_dfb here is not a compile error and not a
 // crash: it silently drops the fused add, so matmul(q, k).add(mask).relu() would come out
 // as relu(A@B). It was wrong that way until this comment existed. Making the addend part
 // of the node's TYPE would make the omission impossible rather than merely commented.
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto silu(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SiluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SiluOp>>{
+        {}, m.in0_dfb, m.in1_dfb, m.bias_dfb, m.addend_dfb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto relu(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ReluOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ReluOp>>{
+        {}, m.in0_dfb, m.in1_dfb, m.bias_dfb, m.addend_dfb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto exp_(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ExpOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, ExpOp>>{
+        {}, m.in0_dfb, m.in1_dfb, m.bias_dfb, m.addend_dfb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto recip(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RecipOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RecipOp>>{
+        {}, m.in0_dfb, m.in1_dfb, m.bias_dfb, m.addend_dfb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto sqrt_(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, SqrtOp>>{
+        {}, m.in0_dfb, m.in1_dfb, m.bias_dfb, m.addend_dfb};
 }
 
 template <typename SA, typename SB, TransposeB Tr, typename Chain>
 auto rsqrt(const MatmulNode<SA, SB, Tr, Chain>& m) {
-    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RsqrtOp>>{{}, m.in0_cb, m.in1_cb, m.bias_cb, m.addend_cb};
+    return MatmulNode<SA, SB, Tr, expr::chain_append_t<Chain, RsqrtOp>>{
+        {}, m.in0_dfb, m.in1_dfb, m.bias_dfb, m.addend_dfb};
 }
 
 // A broadcast is spelled with the ordinary operators, the marker on the right telling
@@ -1210,24 +1216,24 @@ struct bcast_block_shape<TileSource<S>> {
     static constexpr bool ok = true;
 };
 
-#define TT_UNIFIED_BCAST_OPERATOR(sym, OpType)                                                            \
-    template <typename B, Axis A, typename SV, typename = std::enable_if_t<is_operand<B>::value>>         \
-    auto operator sym(const B& block, Broadcast<A, SV> vec) {                                             \
-        using BN = std::decay_t<decltype(as_node(block))>;                                                \
-        static_assert(                                                                                    \
-            bcast_block_shape<BN>::ok,                                                                    \
-            "a broadcast's left operand must be a stored buffer, not an expression -- the FPU "           \
-            "reads both operands from circular buffers while an expression lives in DST, so "             \
-            "store it to a Storage first");                                                               \
-        using SB = typename bcast_block_shape<BN>::type;                                                  \
-        return BcastNode<OpType, A, SB, SV, expr::UnaryChain<>>{{}, {}, as_node(block).cb_id, vec.cb_id}; \
-    }                                                                                                     \
-    template <typename R, Axis A, typename SV>                                                            \
-    auto operator sym(Broadcast<A, SV>, const R&) {                                                       \
-        static_assert(                                                                                    \
-            always_false<R>::value,                                                                       \
-            "a broadcast has to be the RIGHT operand -- metal reads the broadcast vector from in1, "      \
-            "so write `block " #sym " bcast<Axis::...>(vec)`");                                           \
+#define TT_UNIFIED_BCAST_OPERATOR(sym, OpType)                                                              \
+    template <typename B, Axis A, typename SV, typename = std::enable_if_t<is_operand<B>::value>>           \
+    auto operator sym(const B& block, Broadcast<A, SV> vec) {                                               \
+        using BN = std::decay_t<decltype(as_node(block))>;                                                  \
+        static_assert(                                                                                      \
+            bcast_block_shape<BN>::ok,                                                                      \
+            "a broadcast's left operand must be a stored buffer, not an expression -- the FPU "             \
+            "reads both operands from dataflow buffers while an expression lives in DST, so "               \
+            "store it to a Storage first");                                                                 \
+        using SB = typename bcast_block_shape<BN>::type;                                                    \
+        return BcastNode<OpType, A, SB, SV, expr::UnaryChain<>>{{}, {}, as_node(block).dfb_id, vec.dfb_id}; \
+    }                                                                                                       \
+    template <typename R, Axis A, typename SV>                                                              \
+    auto operator sym(Broadcast<A, SV>, const R&) {                                                         \
+        static_assert(                                                                                      \
+            always_false<R>::value,                                                                         \
+            "a broadcast has to be the RIGHT operand -- metal reads the broadcast vector from in1, "        \
+            "so write `block " #sym " bcast<Axis::...>(vec)`");                                             \
     }
 
 TT_UNIFIED_BCAST_OPERATOR(+, AddOp)
@@ -1271,7 +1277,7 @@ auto fluent_rsqrt(const N& n) {
 // MatmulGeometry, reached by simply naming it.
 template <TransposeB Tr = TransposeB::No, typename SA, typename SB>
 auto matmul(TileSource<SA> a, TileSource<SB> b) {
-    return MatmulNode<SA, SB, Tr, expr::UnaryChain<>>{{}, a.cb_id, b.cb_id, kNoBias};
+    return MatmulNode<SA, SB, Tr, expr::UnaryChain<>>{{}, a.dfb_id, b.dfb_id, kNoBias};
 }
 
 // An FPU fusion cannot be an operand of a binary op: it already owns every DST
@@ -1317,13 +1323,13 @@ void operator/(const A&, const B&) {
 // Both self-guard: on a data-movement build the body preprocesses away, so
 // kernels call them unconditionally.
 
-// SFPU path: configures unpack/pack for one input/output CB pair.
-inline void compute_init(uint32_t in_cb, uint32_t out_cb) {
+// SFPU path: configures unpack/pack for one input/output DFB pair.
+inline void compute_init(uint32_t in_dfb, uint32_t out_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    ckernel::init_sfpu(in_cb, out_cb);
+    ckernel::init_sfpu(in_dfb, out_dfb);
 #else
-    (void)in_cb;
-    (void)out_cb;
+    (void)in_dfb;
+    (void)out_dfb;
 #endif
 }
 
@@ -1337,16 +1343,16 @@ inline void compute_init(uint32_t in_cb, uint32_t out_cb) {
 // check it across two separate calls -- the fix is to name it once in the kernel and
 // pass that constant to both. ttnn has the same coupling and resolves it the same way.
 template <typename SA, typename SB, TransposeB Tr = TransposeB::No>
-inline void matmul_init(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+inline void matmul_init(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     using Geometry = MatmulGeometry<SA, SB, Tr>;
-    ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(in0_cb, in1_cb, out_cb);
+    ckernel::compute_kernel_hw_startup<ckernel::SrcOrder::Reverse>(in0_dfb, in1_dfb, out_dfb);
     ckernel::matmul_block_init(
-        in0_cb, in1_cb, Geometry::transpose, Geometry::ct_dim, Geometry::rt_dim, Geometry::kt_dim);
+        in0_dfb, in1_dfb, Geometry::transpose, Geometry::ct_dim, Geometry::rt_dim, Geometry::kt_dim);
 #else
-    (void)in0_cb;
-    (void)in1_cb;
-    (void)out_cb;
+    (void)in0_dfb;
+    (void)in1_dfb;
+    (void)out_dfb;
 #endif
 }
 
@@ -1379,7 +1385,7 @@ struct Strategy;
 template <>
 struct Strategy<SFPUFusion> {
     template <typename Node>
-    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+    static void run(const Node& node, uint32_t dfb_id, uint32_t num_tiles) {
         static_assert(
             expr::need_v<Node> <= kMaxDstTiles,
             "SFPU expression needs more DST slots than the hardware has; "
@@ -1407,8 +1413,8 @@ struct Strategy<SFPUFusion> {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         constexpr uint32_t kLeaves = expr::leaf_slots_v<Node>;
         constexpr bool kLeafOuter = kLeaves > 1 && kLeaves * 2 <= kMaxDstTiles;
-        pack_to(cb_id);
-        cb_reserve_back(cb_id, num_tiles);
+        pack_to(dfb_id);
+        buffer(dfb_id).reserve_back(num_tiles);
         if constexpr (kLeafOuter) {
             constexpr uint32_t kPerAcquire = kMaxDstTiles / kLeaves;
             for (uint32_t base = 0; base < num_tiles; base += kPerAcquire) {
@@ -1422,7 +1428,7 @@ struct Strategy<SFPUFusion> {
                 ckernel::tile_regs_commit();
                 ckernel::tile_regs_wait();
                 for (uint32_t k = 0; k < count; ++k) {
-                    ckernel::pack_tile(k * kLeaves + expr::leaf_result_ofs_v<Node>, cb_id);
+                    ckernel::pack_tile(k * kLeaves + expr::leaf_result_ofs_v<Node>, dfb_id);
                 }
                 ckernel::tile_regs_release();
             }
@@ -1433,14 +1439,14 @@ struct Strategy<SFPUFusion> {
                 expr::emit(node, i, kEveryTile || i == 0);
                 ckernel::tile_regs_commit();
                 ckernel::tile_regs_wait();
-                ckernel::pack_tile(expr::result_slot_v<Node>, cb_id);
+                ckernel::pack_tile(expr::result_slot_v<Node>, dfb_id);
                 ckernel::tile_regs_release();
             }
         }
-        cb_push_back(cb_id, num_tiles);
+        buffer(dfb_id).push_back(num_tiles);
 #else
         (void)node;
-        (void)cb_id;
+        (void)dfb_id;
         (void)num_tiles;
 #endif
     }
@@ -1453,11 +1459,11 @@ struct Strategy<SFPUFusion> {
 template <>
 struct Strategy<FpuEltwiseFusion> {
     template <typename Node>
-    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+    static void run(const Node& node, uint32_t dfb_id, uint32_t num_tiles) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         constexpr uint32_t kPerAcquire = kMaxDstTiles;
-        pack_to(cb_id);
-        cb_reserve_back(cb_id, num_tiles);
+        pack_to(dfb_id);
+        buffer(dfb_id).reserve_back(num_tiles);
         for (uint32_t base = 0; base < num_tiles; base += kPerAcquire) {
             const uint32_t remaining = num_tiles - base;
             const uint32_t count = remaining < kPerAcquire ? remaining : kPerAcquire;
@@ -1467,21 +1473,21 @@ struct Strategy<FpuEltwiseFusion> {
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
             for (uint32_t k = 0; k < count; ++k) {
-                ckernel::pack_tile(k, cb_id);
+                ckernel::pack_tile(k, dfb_id);
             }
             ckernel::tile_regs_release();
         }
-        cb_push_back(cb_id, num_tiles);
+        buffer(dfb_id).push_back(num_tiles);
 #else
         (void)node;
-        (void)cb_id;
+        (void)dfb_id;
         (void)num_tiles;
 #endif
     }
 };
 
 // FPU: one k-block per call. The kernel owns the k-loop (see Accumulator in
-// tt/unified/api.h), because the operand CBs must be waited and popped per block
+// tt/unified/api.h), because the operand DFBs must be waited and popped per block
 // so the reader can stream them.
 //
 // Mirrors bmm_large_block_zm_fused_bias_activation.cpp:
@@ -1491,16 +1497,16 @@ struct Strategy<FpuEltwiseFusion> {
 template <>
 struct Strategy<FPUFusion> {
     // The finishing pass when a bias is fused. Both modes converge here: the
-    // total is in acc_cb, so this adds the broadcast bias into DST, applies the
-    // epilogue, and packs to out_cb.
+    // total is in acc_dfb, so this adds the broadcast bias into DST, applies the
+    // epilogue, and packs to out_dfb.
     //
     // It has to be a second pass over an intermediate, because metal's bcast add
-    // reads BOTH operands from circular buffers -- there is no "add a buffer tile
+    // reads BOTH operands from dataflow buffers -- there is no "add a buffer tile
     // into a DST slot". L1 mode pays nothing for that: this replaces the copy-out
-    // it already did. Dst mode pays one extra pack, into acc_cb, which it leaves
+    // it already did. Dst mode pays one extra pack, into acc_dfb, which it leaves
     // idle at finish anyway -- so neither mode needs a new buffer.
     template <typename Node, typename EpilogueChain>
-    static void bias_finish(const Node& node, uint32_t acc_cb, uint32_t out_cb, uint32_t bias_cb, EpilogueChain) {
+    static void bias_finish(const Node& node, uint32_t acc_dfb, uint32_t out_dfb, uint32_t bias_dfb, EpilogueChain) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using G = typename Node::geometry;
         constexpr uint32_t kTranspose = G::transpose;
@@ -1509,23 +1515,23 @@ struct Strategy<FPUFusion> {
         constexpr uint32_t kSubTiles = kSub.tiles();
 
         // Neither of these touches DST, so they program once for every subblock.
-        ckernel::reconfig_data_format(acc_cb, bias_cb);
-        ckernel::add_bcast_rows_init_short(acc_cb, bias_cb);
-        pack_to(out_cb);  // this drains the accumulator into the output
+        ckernel::reconfig_data_format(acc_dfb, bias_dfb);
+        ckernel::add_bcast_rows_init_short(acc_dfb, bias_dfb);
+        pack_to(out_dfb);  // this drains the accumulator into the output
 
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
             for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
                 ckernel::tile_regs_acquire();
-                cb_wait_front(acc_cb, kSubTiles);
+                buffer(acc_dfb).wait_front(kSubTiles);
                 for (uint32_t t = 0; t < kSubTiles; ++t) {
                     // Bias is 1 x ct_dim tiles broadcast DOWN the rows, so the tile for
                     // output (r, c) is c -- which within a subblock is its column offset
                     // plus its own position across. The total is read from the front of
-                    // acc_cb, so its index is subblock-relative while the bias index is
+                    // acc_dfb, so its index is subblock-relative while the bias index is
                     // block-absolute.
-                    ckernel::add_tiles_bcast_rows(acc_cb, bias_cb, t, c0 + t % kSub.cols, t);
+                    ckernel::add_tiles_bcast_rows(acc_dfb, bias_dfb, t, c0 + t % kSub.cols, t);
                 }
-                cb_pop_front(acc_cb, kSubTiles);
+                buffer(acc_dfb).pop_front(kSubTiles);
 
                 if constexpr (!EpilogueChain::empty) {
                     for (uint32_t t = 0; t < kSubTiles; ++t) {
@@ -1534,22 +1540,22 @@ struct Strategy<FPUFusion> {
                 }
 
                 ckernel::tile_regs_commit();
-                cb_reserve_back(out_cb, kSubTiles);
+                buffer(out_dfb).reserve_back(kSubTiles);
                 ckernel::tile_regs_wait();
-                ckernel::pack_block(0, out_cb, kSubTiles);
+                ckernel::pack_block(0, out_dfb, kSubTiles);
                 ckernel::tile_regs_release();
-                cb_push_back(out_cb, kSubTiles);
+                buffer(out_dfb).push_back(kSubTiles);
             }
         }
 
         // Put back what matmul_block needs, so the next output block can run.
-        ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
-        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+        ckernel::reconfig_data_format_srca(acc_dfb, node.in1_dfb);
+        ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 #else
         (void)node;
-        (void)acc_cb;
-        (void)out_cb;
-        (void)bias_cb;
+        (void)acc_dfb;
+        (void)out_dfb;
+        (void)bias_dfb;
 #endif
     }
 
@@ -1558,15 +1564,15 @@ struct Strategy<FPUFusion> {
     // one-round matmul. With reload=false and finish=true the accumulation buffer
     // is never touched, so passing the destination for both is safe.
     template <typename Node>
-    static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
+    static void run(const Node& node, uint32_t dfb_id, uint32_t /*num_tiles*/) {
         using G = typename Node::geometry;
         if constexpr (G::out_subblock_num_tiles <= kMaxDstTiles) {
-            run<AccumulatorMode::Dst>(node, /*acc_cb=*/cb_id, /*out_cb=*/cb_id, /*reload=*/false, /*finish=*/true);
+            run<AccumulatorMode::Dst>(node, /*acc_dfb=*/dfb_id, /*out_dfb=*/dfb_id, /*reload=*/false, /*finish=*/true);
         } else {
             // Too wide for one acquire, so walk it in row bands. Only the single-shot
             // path does this: an accumulating matmul would have to band its reload and
             // its bias the same way, and nothing needs that yet.
-            run_banded(node, cb_id);
+            run_banded(node, dfb_id);
         }
     }
 
@@ -1582,7 +1588,7 @@ struct Strategy<FPUFusion> {
     // r0 offsets A by r0*kt_dim and leaves B alone. The band's own rt_dim goes to
     // matmul_block; kt_dim and ct_dim stay the true ones, because they are the strides.
     template <typename Node>
-    static void run_banded(const Node& node, uint32_t out_cb) {
+    static void run_banded(const Node& node, uint32_t out_dfb) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using G = typename Node::geometry;
         using Chain = typename Node::chain;
@@ -1599,13 +1605,13 @@ struct Strategy<FPUFusion> {
         // ct_dim apart no matter how the output is cut. Only the extents change. Note that
         // ct_dim serves as B's column count AND as DST's row stride, which is precisely why
         // a partial-width subblock has to be a single row.
-        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+        ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
         // One reserve and one push around the whole block. pack_block advances the
         // buffer's write pointer itself and only cb_push_back resets it, so the subblocks
         // land back to back exactly as the output's row-major order needs -- which is what
         // dst_subblock's ordering invariant guarantees.
-        cb_reserve_back(out_cb, kTotalTiles);
+        buffer(out_dfb).reserve_back(kTotalTiles);
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
             for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
                 ckernel::tile_regs_acquire();
@@ -1613,8 +1619,8 @@ struct Strategy<FPUFusion> {
                 uint32_t in1_index = c0;
                 for (uint32_t k = 0; k < G::kt_dim; ++k) {
                     ckernel::matmul_block(
-                        node.in0_cb,
-                        node.in1_cb,
+                        node.in0_dfb,
+                        node.in1_dfb,
                         in0_index,
                         in1_index,
                         /*idst=*/0,
@@ -1627,25 +1633,25 @@ struct Strategy<FPUFusion> {
                 }
                 // The addend is the whole block, so each subblock tile reads its own position
                 // in it; DST is indexed from zero within the subblock.
-                if (node.addend_cb != kNoBias) {
-                    AddOp::fpu_reuse_init<true>(node.addend_cb);
+                if (node.addend_dfb != kNoBias) {
+                    AddOp::fpu_reuse_init<true>(node.addend_dfb);
                     for (uint32_t t = 0; t < kSubTiles; ++t) {
                         AddOp::fpu_reuse_apply<true>(
-                            node.addend_cb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
+                            node.addend_dfb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
                     }
                     // Put the matmul's own programming back for the next subblock.
-                    ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                    ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                 }
 
                 // A bias, folded the same way. This path has no accumulation buffer and so
                 // no second pass available to it -- folding is the only way it can bias at
                 // all, and having it is what lets bias() stop refusing large output blocks.
-                if (node.bias_cb != kNoBias) {
-                    AddOp::fpu_reuse_init<true>(node.bias_cb);
+                if (node.bias_dfb != kNoBias) {
+                    AddOp::fpu_reuse_init<true>(node.bias_dfb);
                     for (uint32_t t = 0; t < kSubTiles; ++t) {
-                        AddOp::fpu_reuse_apply<true>(node.bias_cb, c0 + t % kSub.cols, t);
+                        AddOp::fpu_reuse_apply<true>(node.bias_dfb, c0 + t % kSub.cols, t);
                     }
-                    ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                    ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                 }
 
                 if constexpr (!Chain::empty) {
@@ -1655,15 +1661,15 @@ struct Strategy<FPUFusion> {
                 }
                 ckernel::tile_regs_commit();
                 ckernel::tile_regs_wait();
-                pack_to(out_cb);
-                ckernel::pack_block(0, out_cb, kSubTiles);
+                pack_to(out_dfb);
+                ckernel::pack_block(0, out_dfb, kSubTiles);
                 ckernel::tile_regs_release();
             }
         }
-        cb_push_back(out_cb, kTotalTiles);
+        buffer(out_dfb).push_back(kTotalTiles);
 #else
         (void)node;
-        (void)out_cb;
+        (void)out_dfb;
 #endif
     }
 
@@ -1679,12 +1685,12 @@ struct Strategy<FPUFusion> {
     template <AccumulatorMode Mode, typename Node, typename EpilogueChain = expr::UnaryChain<>>
     static void run(
         const Node& node,
-        uint32_t acc_cb,
-        uint32_t out_cb,
+        uint32_t acc_dfb,
+        uint32_t out_dfb,
         bool reload,
         bool finish,
         EpilogueChain = {},
-        uint32_t epi_bias_cb = kNoBias) {
+        uint32_t epi_bias_dfb = kNoBias) {
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
 
@@ -1693,7 +1699,7 @@ struct Strategy<FPUFusion> {
         constexpr uint32_t kTranspose = G::transpose;
         // No rt*ct <= 8 limit any more: the output block is walked in subblocks, and the
         // reload, the pack and the bias are all walked with it. The subblocks are visited
-        // in row-major order, so each one's partial occupies the same pages of acc_cb on
+        // in row-major order, so each one's partial occupies the same pages of acc_dfb on
         // every call -- the reload reads them back in the same order they were written.
         constexpr DstSubblock kSub = dst_subblock(G::rt_dim, G::ct_dim);
         constexpr uint32_t kSubTiles = kSub.tiles();
@@ -1706,7 +1712,7 @@ struct Strategy<FPUFusion> {
         // matmul_init still has to run once at kernel entry, for the hardware startup it
         // carries, and that part must NOT be repeated: compute_kernel_hw_startup is MMIO
         // plus a pack-sync init, and calling it a second time mid-kernel hangs the device.
-        ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+        ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
 
         // Two ways to apply a fused bias, kept side by side only long enough to measure:
         //
@@ -1716,7 +1722,7 @@ struct Strategy<FPUFusion> {
         //       nothing extra in L1 or on the NOC: the bias is ct tiles either way, and
         //       only the contents of rows 1..31 differ.
         //
-        //   two-pass -- pack the total to acc_cb, then a second pass reads it back and
+        //   two-pass -- pack the total to acc_dfb, then a second pass reads it back and
         //       uses add_tiles_bcast_rows, which broadcasts row 0 in hardware but takes
         //       BOTH operands from buffers and so cannot run in the matmul's acquire.
         //
@@ -1725,10 +1731,10 @@ struct Strategy<FPUFusion> {
         // Which one wins depends on the mode, and measured at 2x4 kt=2 it is not close:
         //
         //   Dst  folded 5.76us, two-pass 6.36us -- the fold saves a whole pass, because Dst
-        //        mode would otherwise pack the total to acc_cb purely to have something for
+        //        mode would otherwise pack the total to acc_dfb purely to have something for
         //        the bias pass to read back.
         //   L1   folded 6.59us, two-pass 6.31us -- the fold LOSES. L1 mode has to copy the
-        //        total out of acc_cb anyway, and the two-pass form rides along in that copy
+        //        total out of acc_dfb anyway, and the two-pass form rides along in that copy
         //        for free, so folding pays for the bias on top of a pass that still runs.
         //
         // So Dst folds and L1 does not. The same split held at every shape measured, from
@@ -1745,9 +1751,9 @@ struct Strategy<FPUFusion> {
         // k-block and this one does not. In the EPILOGUE it reads as what it is: work on
         // the finished total. The epilogue spelling wins when both are given, and giving
         // both is a mistake worth catching rather than silently resolving.
-        ASSERT(epi_bias_cb == kNoBias || node.bias_cb == kNoBias);
-        const uint32_t bias_cb = (epi_bias_cb != kNoBias) ? epi_bias_cb : node.bias_cb;
-        const bool via_bias = !kBiasFolded && finish && bias_cb != kNoBias;
+        ASSERT(epi_bias_dfb == kNoBias || node.bias_dfb == kNoBias);
+        const uint32_t bias_dfb = (epi_bias_dfb != kNoBias) ? epi_bias_dfb : node.bias_dfb;
+        const bool via_bias = !kBiasFolded && finish && bias_dfb != kNoBias;
 
         for (uint32_t r0 = 0; r0 < G::rt_dim; r0 += kSub.rows) {
             for (uint32_t c0 = 0; c0 < G::ct_dim; c0 += kSub.cols) {
@@ -1757,15 +1763,15 @@ struct Strategy<FPUFusion> {
                     if (reload) {
                         // This subblock's partial, L1 -> DST, then restore the state
                         // matmul_block needs. Popping per subblock is what lets the pack
-                        // below reserve pages again: acc_cb holds exactly one output block,
+                        // below reserve pages again: acc_dfb holds exactly one output block,
                         // so reads and writes chase each other around it in lockstep.
-                        ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
-                        cb_wait_front(acc_cb, kSubTiles);
-                        ckernel::copy_block(acc_cb, 0, 0, kSubTiles);
-                        cb_pop_front(acc_cb, kSubTiles);
-                        ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
+                        ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_dfb, acc_dfb);
+                        buffer(acc_dfb).wait_front(kSubTiles);
+                        ckernel::copy_block(acc_dfb, 0, 0, kSubTiles);
+                        buffer(acc_dfb).pop_front(kSubTiles);
+                        ckernel::reconfig_data_format_srca(acc_dfb, node.in1_dfb);
                         ckernel::matmul_block_init(
-                            node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                            node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                     }
                 }
 
@@ -1775,8 +1781,8 @@ struct Strategy<FPUFusion> {
                 uint32_t in1_index = c0;
                 for (uint32_t k = 0; k < G::kt_dim; ++k) {
                     ckernel::matmul_block(
-                        node.in0_cb,
-                        node.in1_cb,
+                        node.in0_dfb,
+                        node.in1_dfb,
                         in0_index,
                         in1_index,
                         /*idst=*/0,
@@ -1789,15 +1795,15 @@ struct Strategy<FPUFusion> {
                 }
 
                 // Before the chain, so matmul(a, b).add(m).relu() is relu(A@B + m).
-                if (node.addend_cb != kNoBias) {
-                    AddOp::fpu_reuse_init<true>(node.addend_cb);
+                if (node.addend_dfb != kNoBias) {
+                    AddOp::fpu_reuse_init<true>(node.addend_dfb);
                     for (uint32_t t = 0; t < kSubTiles; ++t) {
                         AddOp::fpu_reuse_apply<true>(
-                            node.addend_cb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
+                            node.addend_dfb, block_tile_index(r0, c0, t, kSub.cols, G::ct_dim), t);
                     }
                     // The reuse op reprogrammed the math unit for an eltwise add, so
                     // anything matmul-shaped after this needs its own init back.
-                    ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                    ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                 }
 
                 // The bias, on the finishing call only -- it applies to the total, not to
@@ -1810,15 +1816,15 @@ struct Strategy<FPUFusion> {
                 // gets the same ordering by applying the bias inside bias_finish, ahead
                 // of the epilogue there.
                 if constexpr (kBiasFolded) {
-                    if (finish && bias_cb != kNoBias) {
-                        AddOp::fpu_reuse_init<true>(bias_cb);
+                    if (finish && bias_dfb != kNoBias) {
+                        AddOp::fpu_reuse_init<true>(bias_dfb);
                         for (uint32_t t = 0; t < kSubTiles; ++t) {
-                            AddOp::fpu_reuse_apply<true>(bias_cb, c0 + t % kSub.cols, t);
+                            AddOp::fpu_reuse_apply<true>(bias_dfb, c0 + t % kSub.cols, t);
                         }
                         // The reuse op reprogrammed the math unit, so put the matmul's own
                         // programming back for the next subblock.
                         ckernel::matmul_block_init(
-                            node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                            node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
                     }
                 }
 
@@ -1835,7 +1841,7 @@ struct Strategy<FPUFusion> {
                 // A@B without the bias -- relu(relu(A@B) + v) instead of relu(A@B + v).
                 if constexpr (Mode == AccumulatorMode::Dst) {
                     if constexpr (!EpilogueChain::empty) {
-                        if (finish && (kBiasFolded || bias_cb == kNoBias)) {
+                        if (finish && (kBiasFolded || bias_dfb == kNoBias)) {
                             for (uint32_t t = 0; t < kSubTiles; ++t) {
                                 EpilogueChain::apply_in_place(t);
                             }
@@ -1846,21 +1852,22 @@ struct Strategy<FPUFusion> {
                 ckernel::tile_regs_commit();
 
                 if constexpr (Mode == AccumulatorMode::Dst) {
-                    const uint32_t dest = (finish && !via_bias) ? out_cb : acc_cb;
+                    const uint32_t dest = (finish && !via_bias) ? out_dfb : acc_dfb;
                     pack_to(dest);
-                    cb_reserve_back(dest, kSubTiles);
+                    buffer(dest).reserve_back(kSubTiles);
                     ckernel::tile_regs_wait();
                     ckernel::pack_block(0, dest, kSubTiles);
                     ckernel::tile_regs_release();
-                    cb_push_back(dest, kSubTiles);
+                    buffer(dest).push_back(kSubTiles);
                 } else {
                     // L1: the packer adds this subblock's product into what is already at
                     // the destination, so the running total lives in L1 and never occupies
                     // DST.
                     //
                     // The push/pop pair is load-bearing, not bookkeeping. pack_block
-                    // advances the CB's fifo_wr_tile_ptr itself and cb_push_back is the
-                    // only thing that resets it (llk_io_pack.h), so a pack without a
+                    // advances the DFB's fifo_wr_tile_ptr itself and push_back is the
+                    // only thing that resets it -- PACK(llk_push_tiles) in llk_io_pack.h,
+                    // which is where DataflowBuffer::push_back lands -- so a pack without a
                     // matching push lands one subblock further along each round instead of
                     // on top of the previous one. Pushing every subblock and then popping
                     // the whole block wraps both pointers back to the base address -- which
@@ -1868,13 +1875,13 @@ struct Strategy<FPUFusion> {
                     // The accumulator must NOT be a block format: the packer's L1
                     // accumulate reads back what is already there and adds to it, which a
                     // shared-exponent format cannot do in place.
-                    pack_to(acc_cb);
-                    cb_reserve_back(acc_cb, kSubTiles);
+                    pack_to(acc_dfb);
+                    buffer(acc_dfb).reserve_back(kSubTiles);
                     ckernel::tile_regs_wait();
                     ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
-                    ckernel::pack_block(0, acc_cb, kSubTiles);
+                    ckernel::pack_block(0, acc_dfb, kSubTiles);
                     ckernel::tile_regs_release();
-                    cb_push_back(acc_cb, kSubTiles);
+                    buffer(acc_dfb).push_back(kSubTiles);
                     ckernel::pack_reconfig_l1_acc(0);  // leave the packer as we found it
                 }
             }
@@ -1882,33 +1889,33 @@ struct Strategy<FPUFusion> {
 
         if constexpr (Mode == AccumulatorMode::Dst) {
             // A fused bias needs the total in a buffer to add against, so the finishing
-            // packs went to acc_cb and bias_finish carries the block to out_cb.
+            // packs went to acc_dfb and bias_finish carries the block to out_dfb.
             if (via_bias) {
-                bias_finish(node, acc_cb, out_cb, bias_cb, EpilogueChain{});
+                bias_finish(node, acc_dfb, out_dfb, bias_dfb, EpilogueChain{});
             }
         } else {
             if (!finish) {
-                cb_wait_front(acc_cb, kAccTiles);
-                cb_pop_front(acc_cb, kAccTiles);
-            } else if (!kBiasFolded && bias_cb != kNoBias) {
+                buffer(acc_dfb).wait_front(kAccTiles);
+                buffer(acc_dfb).pop_front(kAccTiles);
+            } else if (!kBiasFolded && bias_dfb != kNoBias) {
                 // The copy-out below, with the bias folded into it -- same wait,
                 // same pop, same pack, one op different.
-                bias_finish(node, acc_cb, out_cb, bias_cb, EpilogueChain{});
+                bias_finish(node, acc_dfb, out_dfb, bias_dfb, EpilogueChain{});
             } else {
                 // Move the completed total into the output buffer. Copying it
-                // through DST rather than letting the DM writer drain acc_cb keeps
-                // one popper per CB -- compute owns acc_cb, the writer owns out_cb
+                // through DST rather than letting the DM writer drain acc_dfb keeps
+                // one popper per DFB -- compute owns acc_dfb, the writer owns out_dfb
                 // -- and gives the finish-only epilogue the whole total in DST,
                 // exactly as in Dst mode.
                 // A flat walk is enough here: no operand indexing is involved, and the
                 // subblocks are consumed in the order they were written.
-                ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_cb, acc_cb);
-                pack_to(out_cb);
+                ckernel::copy_tile_to_dst_init_short_with_dt(node.in1_dfb, acc_dfb);
+                pack_to(out_dfb);
                 for (uint32_t sb = 0; sb < kAccTiles; sb += kSubTiles) {
                     ckernel::tile_regs_acquire();
-                    cb_wait_front(acc_cb, kSubTiles);
-                    ckernel::copy_block(acc_cb, 0, 0, kSubTiles);
-                    cb_pop_front(acc_cb, kSubTiles);
+                    buffer(acc_dfb).wait_front(kSubTiles);
+                    ckernel::copy_block(acc_dfb, 0, 0, kSubTiles);
+                    buffer(acc_dfb).pop_front(kSubTiles);
 
                     if constexpr (!EpilogueChain::empty) {
                         for (uint32_t t = 0; t < kSubTiles; ++t) {
@@ -1917,26 +1924,26 @@ struct Strategy<FPUFusion> {
                     }
 
                     ckernel::tile_regs_commit();
-                    cb_reserve_back(out_cb, kSubTiles);
+                    buffer(out_dfb).reserve_back(kSubTiles);
                     ckernel::tile_regs_wait();
-                    ckernel::pack_block(0, out_cb, kSubTiles);
+                    ckernel::pack_block(0, out_dfb, kSubTiles);
                     ckernel::tile_regs_release();
-                    cb_push_back(out_cb, kSubTiles);
+                    buffer(out_dfb).push_back(kSubTiles);
                 }
 
                 // Restore the state matmul_block needs, so the accumulator can be
                 // cleared and driven again for the next output block.
-                ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
-                ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
+                ckernel::reconfig_data_format_srca(acc_dfb, node.in1_dfb);
+                ckernel::matmul_block_init(node.in0_dfb, node.in1_dfb, kTranspose, kSub.cols, kSub.rows, G::kt_dim);
             }
         }
 #else
         (void)node;
-        (void)acc_cb;
-        (void)out_cb;
+        (void)acc_dfb;
+        (void)out_dfb;
         (void)reload;
         (void)finish;
-        (void)epi_bias_cb;
+        (void)epi_bias_dfb;
         (void)kAccTiles;
 #endif
     }
@@ -1945,7 +1952,7 @@ struct Strategy<FPUFusion> {
 // Reduce: metal's reduce, folding the input grid down one axis. Every contributor
 // to an output tile accumulates into DST slot 0 -- reduce_tile adds into idst
 // rather than overwriting it -- so this costs ONE slot whatever the geometry.
-// BcastFusion: the block and the vector both come from circular buffers, and the
+// BcastFusion: the block and the vector both come from dataflow buffers, and the
 // unpacker's broadcast mode replicates the vector's one row or one column across each
 // tile as it is read. So there is nothing to allocate -- one DST slot holds the result of
 // one tile, whatever the block's size.
@@ -1958,33 +1965,33 @@ struct Strategy<FPUFusion> {
 template <>
 struct Strategy<BcastFusion> {
     template <typename Node>
-    static void run(const Node& node, uint32_t cb_id, uint32_t num_tiles) {
+    static void run(const Node& node, uint32_t dfb_id, uint32_t num_tiles) {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
         using Ops = BcastOps<typename Node::op, Node::axis>;
 
         // Point the unpacker at this pair, then program the broadcast mode. Both are
         // hoisted: neither buffer changes across the loop.
-        ckernel::reconfig_data_format(node.block_cb, node.vec_cb);
-        Ops::init(node.block_cb, node.vec_cb);
+        ckernel::reconfig_data_format(node.block_dfb, node.vec_dfb);
+        Ops::init(node.block_dfb, node.vec_dfb);
 
-        pack_to(cb_id);
-        cb_reserve_back(cb_id, num_tiles);
+        pack_to(dfb_id);
+        buffer(dfb_id).reserve_back(num_tiles);
         for (uint32_t t = 0; t < num_tiles; ++t) {
             ckernel::tile_regs_acquire();
-            Ops::apply(node.block_cb, node.vec_cb, t, Node::vec_tile(t), 0);
+            Ops::apply(node.block_dfb, node.vec_dfb, t, Node::vec_tile(t), 0);
             if constexpr (!Chain::empty) {
                 Chain::apply_in_place(0);
             }
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
-            ckernel::pack_tile(0, cb_id);
+            ckernel::pack_tile(0, dfb_id);
             ckernel::tile_regs_release();
         }
-        cb_push_back(cb_id, num_tiles);
+        buffer(dfb_id).push_back(num_tiles);
 #else
         (void)node;
-        (void)cb_id;
+        (void)dfb_id;
         (void)num_tiles;
 #endif
     }
@@ -1993,7 +2000,7 @@ struct Strategy<BcastFusion> {
 template <>
 struct Strategy<ReduceFusion> {
     template <typename Node>
-    static void run(const Node& node, uint32_t cb_id, uint32_t /*num_tiles*/) {
+    static void run(const Node& node, uint32_t dfb_id, uint32_t /*num_tiles*/) {
         using G = typename Node::geometry;
         constexpr ReduceAxis kAxis = Node::axis;
         constexpr uint32_t kOut = G::out_tiles(kAxis);
@@ -2014,34 +2021,34 @@ struct Strategy<ReduceFusion> {
         if constexpr (kDim == ckernel::ReduceDim::REDUCE_ROW && kPool != ckernel::PoolType::MAX) {
             // SUM/AVG along a row is an MVMUL with the operands swapped, so the
             // scaler has to be SrcA before init -- see reduce_init's own note.
-            ckernel::reconfig_data_format(node.scaler_cb, node.in_cb);
+            ckernel::reconfig_data_format(node.scaler_dfb, node.in_dfb);
         }
-        ckernel::reduce_init<kPool, kDim>(node.in_cb, node.scaler_cb, cb_id);
+        ckernel::reduce_init<kPool, kDim>(node.in_dfb, node.scaler_dfb, dfb_id);
 
-        pack_to(cb_id);
-        cb_reserve_back(cb_id, kOut);
+        pack_to(dfb_id);
+        buffer(dfb_id).reserve_back(kOut);
         for (uint32_t o = 0; o < kOut; ++o) {
             ckernel::tile_regs_acquire();
             for (uint32_t g = 0; g < kGroup; ++g) {
-                ckernel::reduce_tile<kPool, kDim>(node.in_cb, node.scaler_cb, G::contributor(kAxis, o, g), 0, 0);
+                ckernel::reduce_tile<kPool, kDim>(node.in_dfb, node.scaler_dfb, G::contributor(kAxis, o, g), 0, 0);
             }
             if constexpr (!Chain::empty) {
                 Chain::apply_in_place(0);
             }
             ckernel::tile_regs_commit();
             ckernel::tile_regs_wait();
-            ckernel::pack_tile(0, cb_id);
+            ckernel::pack_tile(0, dfb_id);
             ckernel::tile_regs_release();
         }
-        cb_push_back(cb_id, kOut);
+        buffer(dfb_id).push_back(kOut);
 
         // Mandatory, not tidiness: reduce_init left the packer masking every datum
         // outside the result to zero, and the next op inherits that until it is
         // reset.
-        ckernel::reduce_uninit(node.in_cb);
+        ckernel::reduce_uninit(node.in_dfb);
 #else
         (void)node;
-        (void)cb_id;
+        (void)dfb_id;
         (void)kOut;
         (void)kGroup;
 #endif

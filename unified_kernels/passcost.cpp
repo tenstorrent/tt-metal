@@ -5,7 +5,7 @@
 //
 // The slope is the point. It cancels every fixed cost -- program launch, the initial
 // load, the final store -- because those are paid once regardless of PASSES, so
-// nothing has to be modelled or guessed at. Each pass lands in its own scratch CB, so
+// nothing has to be modelled or guessed at. Each pass lands in its own scratch DFB, so
 // no pass reuses a buffer a live block still occupies.
 //
 //   default    out = copy(in)                      the zero-math control
@@ -41,7 +41,7 @@
 // `cols` prices one more OUTPUT tile, which is what puts a number on the one
 // tile_regs_acquire per output tile that Strategy<ReduceFusion> still does.
 //
-// Compile-time args, all named, plus a cb_<name> per buffer:
+// Compile-time args, all named, plus a dfb_<name> per buffer:
 //   block height in tiles
 //   block width in tiles
 //
@@ -97,15 +97,15 @@ void kernel_main() {
     constexpr uint32_t rows = get_arg(args::rows);
     constexpr uint32_t cols = get_arg(args::cols);
 
-    constexpr uint32_t kCbIn = get_arg(args::cb_in);
-    constexpr uint32_t kCbVec = get_arg(args::cb_vec);
-    constexpr uint32_t kCbOut = get_arg(args::cb_out);
+    constexpr uint32_t kDfbIn = get_arg(args::dfb_in);
+    constexpr uint32_t kDfbVec = get_arg(args::dfb_vec);
+    constexpr uint32_t kDfbOut = get_arg(args::dfb_out);
 
 #if defined(PC_MATMUL)
     static_assert(rows == cols, "a chained matmul has to be square to preserve the shape");
-    u::matmul_init<u::Shape<rows, cols>, u::Shape<rows, cols>>(kCbIn, kCbVec, kCbOut);
+    u::matmul_init<u::Shape<rows, cols>, u::Shape<rows, cols>>(kDfbIn, kDfbVec, kDfbOut);
 #else
-    u::compute_init(kCbIn, kCbOut);
+    u::compute_init(kDfbIn, kDfbOut);
 #endif
 
     using S = u::Shape<rows, cols>;
@@ -115,23 +115,23 @@ void kernel_main() {
     using Vec = u::reduce_shape<S, u::Axis::Cols>;  // rows x 1
 #endif
 
-    u::Storage<S> in_storage(kCbIn);
+    u::Storage<S> in_storage(kDfbIn);
 #if defined(PC_REDUCE)
-    u::Storage<Vec> out_storage(kCbOut);
+    u::Storage<Vec> out_storage(kDfbOut);
 #else
-    u::Storage<S> out_storage(kCbOut);
+    u::Storage<S> out_storage(kDfbOut);
 #endif
 
     // One scratch buffer per intermediate pass. Named rather than numbered: the slots the
-    // host assigns are its own business, and these used to be hardcoded 1..7 against a CB
+    // host assigns are its own business, and these used to be hardcoded 1..7 against a DFB
     // layout the launcher had to match by hand.
-    u::Storage<S> s1(get_arg(args::cb_s1));
-    u::Storage<S> s2(get_arg(args::cb_s2));
-    u::Storage<S> s3(get_arg(args::cb_s3));
-    u::Storage<S> s4(get_arg(args::cb_s4));
-    u::Storage<S> s5(get_arg(args::cb_s5));
-    u::Storage<S> s6(get_arg(args::cb_s6));
-    u::Storage<S> s7(get_arg(args::cb_s7));
+    u::Storage<S> s1(get_arg(args::dfb_s1));
+    u::Storage<S> s2(get_arg(args::dfb_s2));
+    u::Storage<S> s3(get_arg(args::dfb_s3));
+    u::Storage<S> s4(get_arg(args::dfb_s4));
+    u::Storage<S> s5(get_arg(args::dfb_s5));
+    u::Storage<S> s6(get_arg(args::dfb_s6));
+    u::Storage<S> s7(get_arg(args::dfb_s7));
 
     const auto in_acc = TensorAccessor(tensor::in);
     const auto out = TensorAccessor(tensor::out);
@@ -139,7 +139,7 @@ void kernel_main() {
     u::ComputeBlock c0 = u::noc_load<1>(in_storage, in_acc, 0).wait();
 
 #if defined(PC_BIN)
-    u::Storage<S> rhs_storage(kCbVec);
+    u::Storage<S> rhs_storage(kDfbVec);
     const auto rhs_acc = TensorAccessor(tensor::vec);
     u::ComputeBlock rhs = u::noc_load<1>(rhs_storage, rhs_acc, 0).wait();
 #endif
@@ -147,16 +147,16 @@ void kernel_main() {
     // Read once and used by every pass: a ComputeBlock is not consumed by being read,
     // which is what lets one operand feed the whole chain.
 #if defined(PC_MATMUL)
-    u::Storage<S> vec_storage(kCbVec);
+    u::Storage<S> vec_storage(kDfbVec);
 #else
-    u::Storage<Vec> vec_storage(kCbVec);
+    u::Storage<Vec> vec_storage(kDfbVec);
 #endif
     const auto vec_acc = TensorAccessor(tensor::vec);
     u::ComputeBlock vec = u::noc_load<1>(vec_storage, vec_acc, 0).wait();
 #endif
 
 #if defined(PC_REDUCE)
-    u::Storage<u::Shape<1, 1>> one_storage(kCbVec);
+    u::Storage<u::Shape<1, 1>> one_storage(kDfbVec);
     u::ComputeBlock one = u::fill_reduce_scaler<1>(one_storage, u::kReduceScalerOne);
     u::noc_store<0>(out_storage.store(u::reduce_max<u::Axis::Cols>(c0, one)), out, 0);
 #else
@@ -223,7 +223,7 @@ void kernel_main() {
     u::ComputeBlock c7 = s7.store(PC_PASS(c6));
 #endif
 
-    // The last pass writes the output CB, so PASSES passes in total.
+    // The last pass writes the output DFB, so PASSES passes in total.
 #if PASSES == 1
     u::noc_store<0>(out_storage.store(PC_PASS(c0)), out, 0);
 #elif PASSES == 2

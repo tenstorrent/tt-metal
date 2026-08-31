@@ -6,7 +6,7 @@
 
 unified_kernels/custom_compute.cpp computes a - b by hand -- its own reserve, its own DST
 bracketing, its own pack and push -- on blocks the unified model waits and pops. Subtraction
-is the point: it is not commutative, so a routine handed the two circular-buffer ids in the
+is the point: it is not commutative, so a routine handed the two dataflow-buffer ids in the
 wrong order gives a wrong answer rather than the same one.
 
     export TT_METAL_HOME=$PWD

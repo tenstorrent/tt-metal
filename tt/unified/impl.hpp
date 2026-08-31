@@ -220,7 +220,7 @@ Semaphore<thread>& Semaphore<thread>::set_mcast(LogicalMcast mcast) {
 // The one place a PAGE count is handed to something that reads it as a TILE count:
 // the strategies index tiles (copy_tile, pack_tile, reduce_tile) once per page.
 // True only while a page holds exactly one tile, which is how the harness builds
-// every CB -- cb_page_bytes() is the tile size. A CB configured otherwise would
+// every DFB -- dfb_entry_bytes() is the tile size. A DFB configured otherwise would
 // need the two counts separated here.
 template <typename S>
 template <typename Node>
@@ -232,20 +232,20 @@ Block<S> Storage<S>::store(const Node& node) {
         same_shape_v<node_shape_t<Node>, S>,
         "this Storage's shape is not the shape the expression produces -- compare the Storage<...> "
         "argument against the operands' shapes and the axis or geometry driving the op");
-    Strategy<expr::kind_of_t<Node>>::run(node, cb_id, num_pages);
-    return Block<S>(cb_id);
+    Strategy<expr::kind_of_t<Node>>::run(node, dfb_id, num_entries);
+    return Block<S>(dfb_id);
 }
 
 // --- Block ---
 
 template <typename S>
-Block<S>::Block(const Storage<S>& storage) : cb_id(storage.cb_id) {}
+Block<S>::Block(const Storage<S>& storage) : dfb_id(storage.dfb_id) {}
 
 template <typename S>
-Block<S>::Block(uint32_t cb_id) : cb_id(cb_id) {}
+Block<S>::Block(uint32_t dfb_id) : dfb_id(dfb_id) {}
 
 template <typename S>
-Block<S>::Block(const Storage<S>& storage, Retained) : cb_id(storage.cb_id) {
+Block<S>::Block(const Storage<S>& storage, Retained) : dfb_id(storage.dfb_id) {
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     must_consume = false;
 #endif
@@ -264,14 +264,14 @@ Block<S>::~Block() {
 // std::move(b1);` launder the debt -- b2 could then be dropped without a pop
 // and nothing would complain.
 template <typename S>
-Block<S>::Block(Block&& o) : cb_id(o.cb_id) {
+Block<S>::Block(Block&& o) : dfb_id(o.dfb_id) {
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ASSERT(o.must_consume);  // a retained block belongs to its accumulator
     must_consume = o.must_consume;
     consumed = o.consumed;
     o.must_consume = false;
     o.consumed = true;
-    o.cb_id = kMovedFrom;
+    o.dfb_id = kMovedFrom;
 #endif
 }
 
@@ -281,13 +281,13 @@ Block<S>& Block<S>::operator=(Block&& o) {
     ASSERT(o.must_consume);             // a retained block belongs to its accumulator
     ASSERT(!must_consume || consumed);  // do not drop pages this Block still owes
 #endif
-    cb_id = o.cb_id;
+    dfb_id = o.dfb_id;
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     must_consume = o.must_consume;
     consumed = o.consumed;
     o.must_consume = false;
     o.consumed = true;
-    o.cb_id = kMovedFrom;
+    o.dfb_id = kMovedFrom;
 #endif
     return *this;
 }
@@ -379,7 +379,8 @@ Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogu
         "Shape<A_rows, B_cols>");
 
     if constexpr (std::is_same_v<Epilogue, std::nullptr_t>) {
-        Strategy<expr::kind_of_t<Node>>::template run<Mode>(node, acc_storage.cb_id, out_storage.cb_id, reload, finish);
+        Strategy<expr::kind_of_t<Node>>::template run<Mode>(
+            node, acc_storage.dfb_id, out_storage.dfb_id, reload, finish);
     } else {
         // Apply the epilogue to a bare-chain node of the same geometry to
         // recover just the ops it adds; those are the finish-only ones. The
@@ -394,7 +395,7 @@ Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogu
 
         // EVALUATED, not just decltype'd, and that is the whole point. The chain is a
         // type and could be recovered without ever running the lambda -- but an operand
-        // is not: `sum.bias(v)` puts v's circular buffer in a RUNTIME member of the node
+        // is not: `sum.bias(v)` puts v's dataflow buffer in a RUNTIME member of the node
         // it returns. Taking only the type discards it, which made
         //
         //     [&](auto sum) { return sum.bias(bias_row).relu(); }
@@ -405,12 +406,12 @@ Block<S> Accumulator<S, Mode>::accumulate(const Node& node, bool finish, Epilogu
         // +-0.5, i.e. the whole bias missing.
         //
         // The bare node is built with kNoBias rather than {}: a default-constructed one
-        // would carry 0, which is a perfectly good circular buffer index, so an epilogue
-        // that sets no bias would have added CB 0 to every output block.
+        // would carry 0, which is a perfectly good dataflow buffer index, so an epilogue
+        // that sets no bias would have added DFB 0 to every output block.
         const Bare bare{{}, kNoBias, kNoBias, kNoBias, kNoBias};
         const auto fused = epilogue(bare);
         Strategy<expr::kind_of_t<Node>>::template run<Mode>(
-            node, acc_storage.cb_id, out_storage.cb_id, reload, finish, typename Fused::chain{}, fused.bias_cb);
+            node, acc_storage.dfb_id, out_storage.dfb_id, reload, finish, typename Fused::chain{}, fused.bias_dfb);
     }
 
     reload = !finish;
@@ -428,26 +429,26 @@ void Accumulator<S, Mode>::clear() {
 // --- ComputeBlock ---
 
 template <typename S>
-ComputeBlock<S>::ComputeBlock(Block<S> block) : cb_id(block.cb_id) {
+ComputeBlock<S>::ComputeBlock(Block<S> block) : dfb_id(block.dfb_id) {
     block.consume();
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    buffer(cb_id).wait_front(num_pages);
+    buffer(dfb_id).wait_front(num_entries);
 #endif
 }
 
 template <typename S>
 ComputeBlock<S>::~ComputeBlock() {
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
-    buffer(cb_id).pop_front(num_pages);
+    buffer(dfb_id).pop_front(num_entries);
 #endif
 }
 
 // --- Expression-leaf adaptors ---
 
-// TileSource identifies a circular buffer, so this must be the cb id.
+// TileSource identifies a dataflow buffer, so this must be the dfb id.
 template <typename S>
 TileSource<S> as_node(const ComputeBlock<S>& b) {
-    return TileSource<S>{{}, b.get_cb_id()};
+    return TileSource<S>{{}, b.get_dfb_id()};
 }
 
 template <typename S>
@@ -492,34 +493,34 @@ auto matmul(const ComputeBlock<SA>& a, const ComputeBlock<SB>& b) {
 
 template <Axis A, typename S>
 Broadcast<A, S> bcast(const ComputeBlock<S>& v) {
-    return Broadcast<A, S>{v.get_cb_id()};
+    return Broadcast<A, S>{v.get_dfb_id()};
 }
 
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Sum, expr::UnaryChain<>> reduce_sum(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
-    return {{}, b.get_cb_id(), scaler.get_cb_id()};
+    return {{}, b.get_dfb_id(), scaler.get_dfb_id()};
 }
 
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Max, expr::UnaryChain<>> reduce_max(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
-    return {{}, b.get_cb_id(), scaler.get_cb_id()};
+    return {{}, b.get_dfb_id(), scaler.get_dfb_id()};
 }
 
 template <ReduceAxis Axis, typename SB, typename SC>
 ReduceNode<SB, Axis, ReducePool::Avg, expr::UnaryChain<>> reduce_mean(
     const ComputeBlock<SB>& b, const ComputeBlock<SC>& scaler) {
-    return {{}, b.get_cb_id(), scaler.get_cb_id()};
+    return {{}, b.get_dfb_id(), scaler.get_dfb_id()};
 }
 
 // --- NocAsyncReadTx ---
 
 template <int thread, typename S>
-NocAsyncReadTx<thread, S>::NocAsyncReadTx(const Storage<S>& storage) : cb_id(storage.cb_id) {}
+NocAsyncReadTx<thread, S>::NocAsyncReadTx(const Storage<S>& storage) : dfb_id(storage.dfb_id) {}
 
 template <int thread, typename S>
-NocAsyncReadTx<thread, S>::NocAsyncReadTx(uint32_t cb_id) : cb_id(cb_id) {}
+NocAsyncReadTx<thread, S>::NocAsyncReadTx(uint32_t dfb_id) : dfb_id(dfb_id) {}
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
 template <int thread, typename S>
@@ -533,20 +534,20 @@ Block<S> NocAsyncReadTx<thread, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         Noc(noc_id).async_read_barrier();
-        buffer(cb_id).push_back(num_pages);
+        buffer(dfb_id).push_back(num_entries);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
 #endif
 #endif
-    return Block<S>(cb_id);
+    return Block<S>(dfb_id);
 }
 
 // --- NocAsyncMcastTx ---
 
 template <int thread, typename S>
 NocAsyncMcastTx<thread, S>::NocAsyncMcastTx(const Storage<S>& storage, uint32_t data_sent_id, bool sender) :
-    cb_id(storage.cb_id), data_sent(data_sent_id), sender(sender) {}
+    dfb_id(storage.dfb_id), data_sent(data_sent_id), sender(sender) {}
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
 template <int thread, typename S>
@@ -568,13 +569,13 @@ Block<S> NocAsyncMcastTx<thread, S>::wait() const {
         // inside noc_load; moving it here is the next step and a behaviour change, so it
         // is not smuggled into this one. `data_sent` and `sender` are carried for it.
         Noc(noc_id).async_read_barrier();
-        buffer(cb_id).push_back(num_pages);
+        buffer(dfb_id).push_back(num_entries);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
 #endif
 #endif
-    return Block<S>(cb_id);
+    return Block<S>(dfb_id);
 }
 
 // --- NocAsyncWriteTx ---
@@ -601,10 +602,10 @@ FORCE_INLINE void release_writes(uint8_t noc_id) {
 #endif
 
 template <int thread, typename S>
-NocAsyncWriteTx<thread, S>::NocAsyncWriteTx(const Storage<S>& storage) : cb_id(storage.cb_id) {}
+NocAsyncWriteTx<thread, S>::NocAsyncWriteTx(const Storage<S>& storage) : dfb_id(storage.dfb_id) {}
 
 template <int thread, typename S>
-NocAsyncWriteTx<thread, S>::NocAsyncWriteTx(uint32_t cb_id) : cb_id(cb_id) {}
+NocAsyncWriteTx<thread, S>::NocAsyncWriteTx(uint32_t dfb_id) : dfb_id(dfb_id) {}
 
 template <int thread, typename S>
 NocAsyncWriteTx<thread, S>::~NocAsyncWriteTx() {
@@ -613,7 +614,7 @@ NocAsyncWriteTx<thread, S>::~NocAsyncWriteTx() {
         // Departed local L1 releases the source buffer; see detail::release_writes for
         // why kernel exit can need more than that. Landing is wait()'s job.
         detail::release_writes(noc_id);
-        buffer(cb_id).pop_front(num_pages);
+        buffer(dfb_id).pop_front(num_entries);
     }
 #endif
 }
@@ -631,14 +632,14 @@ void NocAsyncWriteTx<thread, S>::wait() const {
 
 template <int thread, typename D, typename S>
 NocAsyncReadCoreTx<thread, D, S>::NocAsyncReadCoreTx(const Storage<D>& dst, const Block<S>& src) :
-    dst_cb(dst.cb_id), src_cb(src.cb_id) {}
+    dst_dfb(dst.dfb_id), src_dfb(src.dfb_id) {}
 
 template <int thread, typename D, typename S>
 NocAsyncReadCoreTx<thread, D, S>::~NocAsyncReadCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         // The source is the peer's L1; the local Block is only a handle.
-        buffer(src_cb).pop_front(src_pages);
+        buffer(src_dfb).pop_front(src_entries);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ASSERT(waited);
@@ -651,13 +652,13 @@ Block<D> NocAsyncReadCoreTx<thread, D, S>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         Noc(noc_id).async_read_barrier();  // landed HERE, which is all a pull needs
-        buffer(dst_cb).push_back(dst_pages);
+        buffer(dst_dfb).push_back(dst_entries);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
 #endif
 #endif
-    return Block<D>(dst_cb);
+    return Block<D>(dst_dfb);
 }
 
 // --- NocAsyncWriteCoreTx ---
@@ -670,7 +671,7 @@ NocAsyncWriteCoreTx<thread, D, S>::NocAsyncWriteCoreTx(
 template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S>::NocAsyncWriteCoreTx(
     const Storage<D>& dst, const Block<S>& src, bool reader, uint32_t semaphore_id) :
-    dst_cb(dst.cb_id), src_cb(src.cb_id), arrived(semaphore_id), reader(reader) {}
+    dst_dfb(dst.dfb_id), src_dfb(src.dfb_id), arrived(semaphore_id), reader(reader) {}
 
 template <int thread, typename D, typename S>
 NocAsyncWriteCoreTx<thread, D, S>::~NocAsyncWriteCoreTx() {
@@ -682,7 +683,7 @@ NocAsyncWriteCoreTx<thread, D, S>::~NocAsyncWriteCoreTx() {
         // this kernel has finished, against whatever runs next. The watcher calls
         // it "kernel completing with pending NOC transactions".
         Noc(noc_id).async_atomic_barrier();
-        buffer(src_cb).pop_front(src_pages);
+        buffer(src_dfb).pop_front(src_entries);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     ASSERT(waited);
@@ -701,14 +702,14 @@ Block<D> NocAsyncWriteCoreTx<thread, D, S>::wait(uint32_t num_writers) const {
             // synchronize_cores() between them is enough. See noc_core_write.
             arrived.wait(num_writers).set(0);
         }
-        buffer(dst_cb).push_back(dst_pages);
+        buffer(dst_dfb).push_back(dst_entries);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
     waited = true;
 #endif
 #endif
     (void)num_writers;  // read only by the reader's collect, above
-    return Block<D>(dst_cb);
+    return Block<D>(dst_dfb);
 }
 
 // --- Data movement ---
@@ -721,11 +722,11 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
     static_assert(same_shape_v<S, Shape<1, 1>>, "a reduce scaler is exactly one tile -- Shape<1, 1>");
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        buffer(scaler.cb_id).reserve_back(1);
+        buffer(scaler.dfb_id).reserve_back(1);
 
-        const uint32_t words = cb_page_bytes(scaler.cb_id) / sizeof(uint32_t);
+        const uint32_t words = dfb_entry_bytes(scaler.dfb_id) / sizeof(uint32_t);
         volatile tt_l1_ptr uint32_t* page =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer(scaler.cb_id).get_write_ptr());
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(buffer(scaler.dfb_id).get_write_ptr());
 
         // Everything the reduction must not pick up has to read as zero.
         for (uint32_t w = 0; w < words; ++w) {
@@ -742,12 +743,12 @@ Block<S> fill_reduce_scaler(const Storage<S>& scaler, uint32_t value_bits) {
             }
         }
 
-        buffer(scaler.cb_id).push_back(1);
+        buffer(scaler.dfb_id).push_back(1);
     }
 #else
     (void)value_bits;
 #endif
-    return Block<S>(scaler.cb_id);
+    return Block<S>(scaler.dfb_id);
 }
 
 // The built-in read, written as a custom routine. Every overload here funnels
@@ -780,8 +781,8 @@ namespace detail {
 // the watcher or TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS is on. Data movement only: the compute
 // projection carries a stand-in accessor with no page size to ask for, and never reads DRAM.
 template <typename Accessor>
-inline void check_page_format(uint32_t cb_id, const Accessor& acc) {
-    ASSERT(cb_page_bytes(cb_id) == acc.get_aligned_page_size());
+inline void check_entry_format(uint32_t dfb_id, const Accessor& acc) {
+    ASSERT(dfb_entry_bytes(dfb_id) == acc.get_aligned_page_size());
 }
 
 }  // namespace detail
@@ -789,12 +790,12 @@ inline void check_page_format(uint32_t cb_id, const Accessor& acc) {
 template <int thread, typename S, typename Accessor>
 NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-    detail::check_page_format(storage.cb_id, acc);
+    detail::check_entry_format(storage.dfb_id, acc);
 #endif
-    const uint32_t first = block_idx * storage.num_pages;
-    return noc_load<thread>(storage, [&](L1Pages pages) {
+    const uint32_t first = block_idx * storage.num_entries;
+    return noc_load<thread>(storage, [&](L1Entries pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
-            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
+            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.entry_bytes);
         }
     });
 }
@@ -810,15 +811,15 @@ inline void issue_load(const Storage<S>& storage, Fn fn) {
     if constexpr (thread == TT_DM_THREAD_ID) {
         {
             // Blocking here means the consumer has not freed a slot yet -- backpressure,
-            // not work. Deeper CBs are what buy it down.
+            // not work. Deeper DFBs are what buy it down.
             TT_U_ZONE("LOAD-RESERVE");
-            buffer(storage.cb_id).reserve_back(storage.num_pages);
+            buffer(storage.dfb_id).reserve_back(storage.num_entries);
         }
         {
             // ISSUING the reads, not waiting for them: they are asynchronous and their
             // cost lands at the barrier.
             TT_U_ZONE("LOAD-ISSUE");
-            fn(L1Pages{buffer(storage.cb_id).get_write_ptr(), cb_page_bytes(storage.cb_id), storage.num_pages});
+            fn(L1Entries{buffer(storage.dfb_id).get_write_ptr(), dfb_entry_bytes(storage.dfb_id), storage.num_entries});
         }
     }
 #else
@@ -843,12 +844,12 @@ NocAsyncReadTx<thread, S> noc_load(const Storage<S>& storage, Fn fn) {
 template <int thread, typename S, typename Accessor>
 NocAsyncWriteTx<thread, S> noc_store(Block<S> block, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-    detail::check_page_format(block.cb_id, acc);
+    detail::check_entry_format(block.dfb_id, acc);
 #endif
-    const uint32_t first = block_idx * block.num_pages;
-    return noc_store<thread>(std::move(block), [&](L1Pages pages) {
+    const uint32_t first = block_idx * block.num_entries;
+    return noc_store<thread>(std::move(block), [&](L1Entries pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
-            noc_async_write(pages.addr(p), acc.get_noc_addr(first + p), pages.page_bytes);
+            noc_async_write(pages.addr(p), acc.get_noc_addr(first + p), pages.entry_bytes);
         }
     });
 }
@@ -858,13 +859,13 @@ NocAsyncWriteTx<thread, S> noc_store(Block<S> block, Fn fn) {
     block.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        buffer(block.cb_id).wait_front(block.num_pages);
-        fn(L1Pages{buffer(block.cb_id).get_read_ptr(), cb_page_bytes(block.cb_id), block.num_pages});
+        buffer(block.dfb_id).wait_front(block.num_entries);
+        fn(L1Entries{buffer(block.dfb_id).get_read_ptr(), dfb_entry_bytes(block.dfb_id), block.num_entries});
     }
 #else
     (void)fn;
 #endif
-    return NocAsyncWriteTx<thread, S>(block.cb_id);
+    return NocAsyncWriteTx<thread, S>(block.dfb_id);
 }
 
 template <int thread, typename S, typename Fn>
@@ -895,7 +896,7 @@ NocAsyncMcastTx<thread, S> noc_load(
     }
 #endif
 
-    detail::issue_load<thread>(storage, [&](L1Pages pages) {
+    detail::issue_load<thread>(storage, [&](L1Entries pages) {
         const uint32_t num_dests = mcast.volume() - 1;
 
         if (PhysicalCoord::this_core() == mcast.start) {
@@ -982,12 +983,12 @@ NocAsyncMcastTx<thread, S> noc_load(
     const Accessor& acc,
     uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
-    detail::check_page_format(storage.cb_id, acc);
+    detail::check_entry_format(storage.dfb_id, acc);
 #endif
-    const uint32_t first = block_idx * storage.num_pages;
-    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, [&](L1Pages pages) {
+    const uint32_t first = block_idx * storage.num_entries;
+    return noc_load<thread>(storage, mcast, receivers_ready, data_sent, [&](L1Entries pages) {
         for (uint32_t p = 0; p < pages.count; ++p) {
-            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.page_bytes);
+            noc_async_read(acc.get_noc_addr(first + p), pages.addr(p), pages.entry_bytes);
         }
     });
 }
@@ -1075,7 +1076,7 @@ constexpr bool leading_all_compute_blocks(std::index_sequence<I...>) {
 
 template <typename Tuple, typename Fn, std::size_t... I>
 void custom_compute_invoke(Tuple& packed, Fn& fn, std::index_sequence<I...>) {
-    fn(std::get<I>(packed).get_cb_id()...);
+    fn(std::get<I>(packed).get_dfb_id()...);
 }
 
 }  // namespace detail
@@ -1190,11 +1191,11 @@ NocAsyncReadCoreTx<thread, D, S> noc_core_read(
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        buffer(src.cb_id).wait_front(src.num_pages);
-        buffer(dst.cb_id).reserve_back(dst.num_pages);
-        const uint32_t bytes = cb_page_bytes(dst.cb_id);
-        const uint64_t from = coord.get_noc_addr(buffer(src.cb_id).get_read_ptr() + byte_offset);
-        noc_async_read(from, buffer(dst.cb_id).get_write_ptr(), bytes * dst.num_pages);
+        buffer(src.dfb_id).wait_front(src.num_entries);
+        buffer(dst.dfb_id).reserve_back(dst.num_entries);
+        const uint32_t bytes = dfb_entry_bytes(dst.dfb_id);
+        const uint64_t from = coord.get_noc_addr(buffer(src.dfb_id).get_read_ptr() + byte_offset);
+        noc_async_read(from, buffer(dst.dfb_id).get_write_ptr(), bytes * dst.num_entries);
     }
 #else
     (void)coord;
@@ -1209,12 +1210,12 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        buffer(src.cb_id).wait_front(src.num_pages);
-        buffer(dst.cb_id).reserve_back(dst.num_pages);
+        buffer(src.dfb_id).wait_front(src.num_entries);
+        buffer(dst.dfb_id).reserve_back(dst.num_entries);
         if (write_predicate) {
-            const uint32_t bytes = cb_page_bytes(dst.cb_id);
-            const uint64_t to = coord.get_noc_addr(buffer(dst.cb_id).get_write_ptr() + byte_offset);
-            noc_async_write(buffer(src.cb_id).get_read_ptr(), to, bytes * src.num_pages);
+            const uint32_t bytes = dfb_entry_bytes(dst.dfb_id);
+            const uint64_t to = coord.get_noc_addr(buffer(dst.dfb_id).get_write_ptr() + byte_offset);
+            noc_async_write(buffer(src.dfb_id).get_read_ptr(), to, bytes * src.num_entries);
 
             Semaphore<thread> semaphore(kCopyArrivedSem<thread>);
             semaphore.inc_remote(coord);
@@ -1238,17 +1239,17 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
     src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        buffer(src.cb_id).wait_front(src.num_pages);
-        buffer(dst.cb_id).reserve_back(dst.num_pages);
+        buffer(src.dfb_id).wait_front(src.num_entries);
+        buffer(dst.dfb_id).reserve_back(dst.num_entries);
 
         if (write_predicate) {
-            const uint32_t bytes = cb_page_bytes(dst.cb_id);
-            const uint64_t to = mcast.get_noc_addr(buffer(dst.cb_id).get_write_ptr() + byte_offset);
+            const uint32_t bytes = dfb_entry_bytes(dst.dfb_id);
+            const uint64_t to = mcast.get_noc_addr(buffer(dst.dfb_id).get_write_ptr() + byte_offset);
 
             // A core inside the rectangle needs its own copy, which plain
             // multicast skips -- unless src and dst are already the same L1
             // address, where that copy would be onto itself.
-            const bool same_local_addr = buffer(dst.cb_id).get_write_ptr() == buffer(src.cb_id).get_read_ptr();
+            const bool same_local_addr = buffer(dst.dfb_id).get_write_ptr() == buffer(src.dfb_id).get_read_ptr();
             const bool loopback = !same_local_addr && mcast.contains(PhysicalCoord::this_core());
 
             // The two primitives count differently: plain multicast never writes
@@ -1263,9 +1264,9 @@ NocAsyncWriteCoreTx<thread, D, S> noc_core_write(
 
             if (loopback) {
                 noc_async_write_multicast_loopback_src(
-                    buffer(src.cb_id).get_read_ptr(), to, bytes * src.num_pages, num_dests);
+                    buffer(src.dfb_id).get_read_ptr(), to, bytes * src.num_entries, num_dests);
             } else {
-                noc_async_write_multicast(buffer(src.cb_id).get_read_ptr(), to, bytes * src.num_pages, num_dests);
+                noc_async_write_multicast(buffer(src.dfb_id).get_read_ptr(), to, bytes * src.num_entries, num_dests);
             }
 
             Semaphore<thread> semaphore(kCopyArrivedSem<thread>);

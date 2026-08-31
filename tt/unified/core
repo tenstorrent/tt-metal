@@ -6,7 +6,7 @@
 //
 // A unified kernel is ONE source describing a whole Tensix pipeline, compiled
 // once per baby RISC-V thread; each statement lowers to that thread's half of
-// the circular-buffer protocol. See tt/unified/api.h for the surface.
+// the dataflow-buffer protocol. See tt/unified/api.h for the surface.
 //
 // This file selects the BINDING -- what the model's intrinsics resolve to --
 // and there is exactly one implementation behind it:

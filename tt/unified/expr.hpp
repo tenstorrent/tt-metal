@@ -2,7 +2,7 @@
 //
 // Expression-tree register allocation.
 //
-// Deliberately op-agnostic: it knows nothing about circular buffers, the NOC, or
+// Deliberately op-agnostic: it knows nothing about dataflow buffers, the NOC, or
 // Tensix, and does not name a single op. It provides the tree shapes, a
 // compile-time register allocator, the emission walk, and the method spelling of
 // the ops; tt/unified/math.hpp supplies the policies.
@@ -17,7 +17,7 @@
 //                  static constexpr bool fpu_capable;      // is there an FPU form?
 //                  static constexpr FpuOp fpu_op;              // which, if there is
 //                    An op with an FPU form can take its operands straight from
-//                    circular buffers, which is what FpuTreeKind below is for. An op
+//                    dataflow buffers, which is what FpuTreeKind below is for. An op
 //                    without one must say so, so the predicate can ask uniformly.
 //
 //   Leaf node L:   static constexpr uint32_t need = 1;            // DST slots
@@ -129,7 +129,7 @@ struct is_expr<Un<Op, C>> : std::true_type {};
 // --------------------------------------------------- FPU eltwise trees ----
 //
 // A second kind for expression trees. add, sub and mul have FPU forms that read their
-// operands out of circular buffers, where the SFPU forms need every operand copied into
+// operands out of dataflow buffers, where the SFPU forms need every operand copied into
 // DST first. Measured, the copies are most of what an SFPU pass costs, so a tree that
 // can run entirely on the FPU should.
 //
@@ -139,8 +139,8 @@ struct is_expr<Un<Op, C>> : std::true_type {};
 //
 // FUSABLE means the tree linearises into the sequence the hardware offers:
 //
-//   seed    op_tiles(cbL, cbR, t, t, dst)          both operands from buffers
-//   chain   binary_dest_reuse_tiles(cb, t, dst)    one from a buffer, one from DST
+//   seed    op_tiles(dfbL, dfbR, t, t, dst)          both operands from buffers
+//   chain   binary_dest_reuse_tiles(dfb, t, dst)    one from a buffer, one from DST
 //   unary   apply_in_place(dst)                    SFPU, on the running value
 //
 // which requires every binary op to have an FPU form AND every binary node to have at
@@ -204,23 +204,23 @@ template <typename Op, typename L, typename R>
 struct FpuStages<Bin<Op, L, R>> {
     static void run(const Bin<Op, L, R>& n, uint32_t base_tile, uint32_t count) {
         if constexpr (is_leaf_v<L> && is_leaf_v<R>) {
-            Op::fpu_seed_init(n.lhs.source_cb(), n.rhs.source_cb());
+            Op::fpu_seed_init(n.lhs.source_dfb(), n.rhs.source_dfb());
             for (uint32_t k = 0; k < count; ++k) {
-                Op::fpu_seed_apply(n.lhs.source_cb(), n.rhs.source_cb(), base_tile + k, base_tile + k, k);
+                Op::fpu_seed_apply(n.lhs.source_dfb(), n.rhs.source_dfb(), base_tile + k, base_tile + k, k);
             }
         } else if constexpr (is_leaf_v<R>) {
             FpuStages<L>::run(n.lhs, base_tile, count);  // running value now in DST
-            Op::template fpu_reuse_init<true>(n.rhs.source_cb());
+            Op::template fpu_reuse_init<true>(n.rhs.source_dfb());
             for (uint32_t k = 0; k < count; ++k) {
-                Op::template fpu_reuse_apply<true>(n.rhs.source_cb(), base_tile + k, k);
+                Op::template fpu_reuse_apply<true>(n.rhs.source_dfb(), base_tile + k, k);
             }
         } else {
             FpuStages<R>::run(n.rhs, base_tile, count);
             // DST holds the RIGHT operand, so it goes to srcB and the buffer to srcA --
             // which is what keeps a subtraction the right way round.
-            Op::template fpu_reuse_init<false>(n.lhs.source_cb());
+            Op::template fpu_reuse_init<false>(n.lhs.source_dfb());
             for (uint32_t k = 0; k < count; ++k) {
-                Op::template fpu_reuse_apply<false>(n.lhs.source_cb(), base_tile + k, k);
+                Op::template fpu_reuse_apply<false>(n.lhs.source_dfb(), base_tile + k, k);
             }
         }
     }
@@ -376,7 +376,7 @@ struct Emit<Base, Bin<Op, L, R>> {
 // ------------------------------------------------- leaf-outer emission ---
 //
 // The walk above interleaves loads and ops, which means the unpacker is re-pointed at
-// a different circular buffer between every pair of leaves -- once per leaf per TILE.
+// a different dataflow buffer between every pair of leaves -- once per leaf per TILE.
 // Measured on flash, that reconfiguration is 9.17us of a 51.6us kernel, and the
 // expensive half of it (reprogramming the unpacker MOP) has no conditional form to
 // hide behind. See unified_llama_prefill.md.
