@@ -47,6 +47,13 @@ A/B'd against `main`.
 | `ckernel_sfpu_i0.h` (MTL) | §1 program CREGs | 180856 → 168760 | −6.7 % | 240 → 257 |
 | `ckernel_sfpu_i0.h` (MTL) | **§2 2-way interleave**, on top of §1 | 168760 → **137858** | **−18.3 %** | 257 → 256 |
 | `ckernel_sfpu_softplus.h` (MTL) | §1 program CREGs | 198231 → **185561** | **−6.4 %** | 239 → 257 |
+| `ckernel_sfpu_i1.h` (MTL) | §2 interleave co-resident `numer`/`denom` | 546676 → **538323** | **−1.53 %** | — |
+| `ckernel_sfpu_rsqrt_compat.h` (LLK) | §3 conditional negate → `copysgn` | see below | **−1.3 … −4.9 %** | — |
+
+`rsqrt_compat`'s one change has two call sites and so improves two ops, consistently across every
+measured variant: `RsqrtCompat` 160181 → 156085 (−2.56 %) and 304140 → 295428 (−2.86 %);
+`ReciprocalCompat` 139696 → 135600 (−2.93 %) and 168378 → 160176 (−4.87 %). It is the first
+confirmation that §3 pays on a *predication-heavy* kernel rather than only on `relu_max`.
 
 `i0` cumulative against `main`: 180856 → **137858, −23.8 %**. §1 and §2 compound on it exactly as
 predicted — §1 converts coefficient loads into `SFPNOP`s, §2 fills them.
@@ -660,6 +667,38 @@ My pair detector initially reported six. Two were false positives, worth recordi
 
 - `ckernel_sfpu_relu.h:67-70` (MTL) — the two guards are the two arms of an `if constexpr (IS_LOWER_BOUND) / else`. Only one ever compiles. Not a clamp.
 - `ckernel_sfpu_hardtanh.h:34-41` (LLK) — there is a `val += p1;` between the two blocks, so they are sequential operations on different values, not a clamp.
+
+### Second confirmation: a conditional negate in `rsqrt_compat`
+
+`_calculate_rsqrt_compat_` and `_calculate_reciprocal_compat_` both ended with:
+
+```cpp
+sfpi::vFloat out = _reciprocal_compat_<...>(in);
+v_if (in < 0.0) { out = -out; } v_endif;
+```
+
+`_reciprocal_compat_` always returns a non-negative magnitude — it forces `val` negative via
+`setsgn`, the Newton iteration on `val ∈ [−1,−0.5]` stays positive, `setexp` preserves that sign,
+and the saturation and pole cases produce `+0.0` and `+infinity`. So the conditional negate is
+exactly `copysgn(out, in)`:
+
+```cpp
+out = sfpi::copysgn(out, in);
+```
+
+Static, per unrolled body: `SFPSETCC` 17 → 9, `SFPENCC` 25 → 17, total SFPU 338 → 330. Hardware
+−2.5 % to −2.9 % typical, −4.9 % on one `ReciprocalCompat` variant. One edit, two ops.
+
+Signed zero is preserved for the same total-order reason as `relu_max`: `SFPSETCC` orders operands
+as a sign-magnitude total order, so `v_if(in < 0.0)` already fired for `−0.0` — which the pole-guard
+comment inside `_reciprocal_compat_` explicitly relies on — and `copysgn` transplants the same sign
+bit. Validated: the `_edges` probe for these ops feeds `{0, −0, ±2.4e−07, ±inf, NaN}` and all 32
+tests pass.
+
+**What did *not* collapse in the same kernel**, for the record: `v_if(new_exp < 0) { result = 0.0F;
+new_exp = 0; }` assigns two values, so it is not a single saturate; and the pole guard
+`v_if(setsgn(in,0) == 0.0F) { out = inf; }` is an equality compare, which has no min/max form.
+Predication-heavy kernels are a mix — expect roughly one collapsible site in three.
 
 ### The NaN caveat, resolved — and why it dissolved
 
