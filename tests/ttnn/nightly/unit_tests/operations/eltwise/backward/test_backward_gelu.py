@@ -6,7 +6,11 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import generate_all_bfloat16_bitpatterns, flush_subnormal_values_to_zero
+from tests.ttnn.utils_for_testing import (
+    assert_allclose,
+    flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
+)
 
 GELU_APPROXIMATIONS = ("none", "tanh")
 EXHAUSTIVE_TEST_CASES = (
@@ -46,27 +50,6 @@ def _gelu_bw_reference(input_tensor, grad_tensor, approximate):
     return input_tensor.grad
 
 
-def _assert_allclose(actual, expected, *, rtol, atol):
-    actual = actual.to(torch.float32)
-    close = torch.isclose(expected, actual, rtol=rtol, atol=atol)
-    if torch.all(close):
-        return
-
-    errors = (expected - actual).abs()
-    normalized_errors = errors / (atol + rtol * expected.abs())
-    worst_index = normalized_errors.flatten().argmax()
-    flat_errors = errors.flatten()
-    flat_expected = expected.flatten()
-    flat_actual = actual.flatten()
-    flat_normalized_errors = normalized_errors.flatten()
-    raise AssertionError(
-        f"GELU backward output does not match the selected PyTorch approximation within rtol={rtol}, atol={atol}; "
-        f"error_ratio={flat_normalized_errors[worst_index].item():.6g}, "
-        f"abs_error={flat_errors[worst_index].item():.6g}, expected={flat_expected[worst_index].item():.6g}, "
-        f"actual={flat_actual[worst_index].item():.6g}"
-    )
-
-
 def _make_exhaustive_inputs(torch_dtype):
     # These are every BF16 bit pattern, promoted losslessly for the FP32 path.
     # Tenstorrent hardware flushes subnormal values, so flush them before both the
@@ -100,7 +83,7 @@ def test_gelu_bw_exhaustive_allclose(device, approximate, torch_dtype, ttnn_dtyp
     actual = ttnn.to_torch(ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0])
 
     assert torch.isfinite(actual[finite_reference]).all(), "device output is non-finite for a finite reference"
-    _assert_allclose(actual[finite_reference], expected[finite_reference], rtol=rtol, atol=atol)
+    assert_allclose(expected[finite_reference], actual[finite_reference], rtol=rtol, atol=atol)
 
 
 def test_gelu_bw_default_matches_none(device):
@@ -156,9 +139,9 @@ def test_bw_gelu_opt_output(approximate, device):
     ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate, input_grad=input_grad, queue_id=0)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
     rtol, atol = _bf16_tolerance(approximate)
-    _assert_allclose(
-        input_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch(),
+    assert_allclose(
         _gelu_bw_reference(input_data, grad_data, approximate),
+        input_grad.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch(),
         rtol=rtol,
         atol=atol,
     )
@@ -208,8 +191,8 @@ def test_bw_gelu_program_cache_regression(device):
             input_data, grad_data, input_tensor, grad_tensor = fresh_inputs(expected_entries)
             actual = ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0]
             rtol, atol = _bf16_tolerance(approximate)
-            _assert_allclose(
-                ttnn.to_torch(actual), _gelu_bw_reference(input_data, grad_data, approximate), rtol=rtol, atol=atol
+            assert_allclose(
+                _gelu_bw_reference(input_data, grad_data, approximate), ttnn.to_torch(actual), rtol=rtol, atol=atol
             )
             assert device.num_program_cache_entries() == expected_entries
 
@@ -217,8 +200,8 @@ def test_bw_gelu_program_cache_regression(device):
             input_data, grad_data, input_tensor, grad_tensor = fresh_inputs(seed)
             actual = ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate)[0]
             rtol, atol = _bf16_tolerance(approximate)
-            _assert_allclose(
-                ttnn.to_torch(actual), _gelu_bw_reference(input_data, grad_data, approximate), rtol=rtol, atol=atol
+            assert_allclose(
+                _gelu_bw_reference(input_data, grad_data, approximate), ttnn.to_torch(actual), rtol=rtol, atol=atol
             )
             assert device.num_program_cache_entries() == 2
 
@@ -235,9 +218,9 @@ def test_bw_gelu_program_cache_regression(device):
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
                 ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate, input_grad=input_grad, queue_id=0)
-                _assert_allclose(
-                    ttnn.to_torch(input_grad),
+                assert_allclose(
                     _gelu_bw_reference(input_data, grad_data, approximate),
+                    ttnn.to_torch(input_grad),
                     rtol=rtol,
                     atol=atol,
                 )
