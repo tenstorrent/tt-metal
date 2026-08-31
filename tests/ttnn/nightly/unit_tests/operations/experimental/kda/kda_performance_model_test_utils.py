@@ -7,52 +7,43 @@
 from __future__ import annotations
 
 import math
-import time
-from dataclasses import dataclass
-from typing import Any, Iterable
-
-from loguru import logger
+from dataclasses import dataclass, replace
+from typing import Any, Iterable, Sequence
 
 CHUNK_SIZE = 32
 MATRIX_FLOPS_PER_CORE_CYCLE = 4096
 DRAM_BYTES_PER_NS = 512
-_PROFILER_INT_MAX = (1 << 31) - 1
 
 
 @dataclass(frozen=True)
 class KdaWork:
-    dense_flops: int = 0
-    multiply_results: int = 0
-    add_results: int = 0
-    reduction_input_elements: int = 0
-    omitted_sfpu_results: int = 0
+    fpu_matrix_flops: int = 0
+    fpu_multiply_ops: int = 0
+    fpu_add_ops: int = 0
+    fpu_reduction_ops: int = 0
+    sfpu_exp_ops: int = 0
+    sfpu_rsqrt_ops: int = 0
+    sfpu_sigmoid_ops: int = 0
+    sfpu_silu_ops: int = 0
+    dram_bytes: int = 0
 
 
 @dataclass(frozen=True)
-class KdaTensorTraffic:
+class KdaPerformance:
+    work: KdaWork
+    ideal_fpu_ns: float
+    ideal_dram_ns: float
+    ideal_ns: float
+    fpu_utilization_pct: float
+    dram_utilization_pct: float
+    utilization_pct: float
+
+
+@dataclass(frozen=True)
+class _TensorTraffic:
     buffer_address: int
     physical_bytes: int
     is_dram: bool
-
-
-@dataclass(frozen=True)
-class KdaEstimate:
-    valid: bool = False
-    ideal_fpu_cycles: int = 0
-    ideal_fpu_ns: int = 0
-    mandatory_dram_bytes: int = 0
-    ideal_dram_ns: int = 0
-    ideal_ns: int = 0
-    omitted_sfpu_results: int = 0
-    input_bytes: tuple[int, ...] = ()
-    output_bytes: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True)
-class KdaUtilization:
-    fpu_utilization_pct: float
-    dram_utilization_pct: float
-    roofline_utilization_pct: float
 
 
 def _sum_nonnegative(*terms: int) -> int:
@@ -65,305 +56,395 @@ def _product_nonnegative(*factors: int) -> int:
     return math.prod(factors)
 
 
-def _make_work(*values: int) -> KdaWork:
-    assert all(value >= 0 for value in values), "work values must be non-negative"
-    return KdaWork(*values)
+def _shape(tensor: Any) -> tuple[int, ...]:
+    return tuple(int(dimension) for dimension in tensor.shape)
 
 
-def sigmoid_gated_rms_norm_work(batch: int, num_heads: int, sequence: int, value_dim: int) -> KdaWork:
+def _base_work(**values: int) -> KdaWork:
+    assert all(value >= 0 for value in values.values()), "work values must be non-negative"
+    return KdaWork(**values)
+
+
+def _sigmoid_gated_rms_norm_work(batch: int, num_heads: int, sequence: int, value_dim: int) -> KdaWork:
     rows = _product_nonnegative(batch, num_heads, sequence)
     elements = _product_nonnegative(rows, value_dim)
-    return _make_work(
-        0,
-        _product_nonnegative(4, elements),
-        rows,
-        elements,
-        _sum_nonnegative(rows, elements),
+    return _base_work(
+        fpu_multiply_ops=_product_nonnegative(4, elements),
+        fpu_add_ops=rows,
+        fpu_reduction_ops=_product_nonnegative(rows, max(0, value_dim - 1)),
+        sfpu_rsqrt_ops=rows,
+        sfpu_sigmoid_ops=elements,
     )
 
 
-def qkv_causal_conv1d_silu_work(batch: int, sequence: int, q_width: int, k_width: int, v_width: int) -> KdaWork:
-    elements = _product_nonnegative(batch, sequence, _sum_nonnegative(q_width, k_width, v_width))
-    return _make_work(
-        0,
-        _product_nonnegative(4, elements),
-        _product_nonnegative(3, elements),
-        0,
-        elements,
+def _qkv_causal_conv1d_silu_work(batch: int, sequence: int, width: int) -> KdaWork:
+    elements = _product_nonnegative(batch, sequence, width)
+    return _base_work(
+        fpu_multiply_ops=_product_nonnegative(4, elements),
+        fpu_add_ops=_product_nonnegative(3, elements),
+        sfpu_silu_ops=elements,
     )
 
 
-def reduce_affine_transforms_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork:
+def _reduce_affine_transforms_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork:
     assert groups_per_head >= 0, "groups_per_head must be non-negative"
     compositions = _product_nonnegative(batch_heads, max(0, groups_per_head - 1))
-    key_squared = _product_nonnegative(key_dim, key_dim)
-    dense_per_composition = _sum_nonnegative(
-        _product_nonnegative(2, key_squared, key_dim),
-        _product_nonnegative(2, key_squared, value_dim),
-    )
-    return _make_work(
-        _product_nonnegative(compositions, dense_per_composition),
-        0,
-        _product_nonnegative(compositions, key_dim, value_dim),
-        0,
-        0,
+    return _base_work(
+        fpu_matrix_flops=_product_nonnegative(
+            compositions, _sum_nonnegative(2 * key_dim**3, 2 * key_dim**2 * value_dim)
+        ),
+        fpu_add_ops=_product_nonnegative(compositions, key_dim, value_dim),
     )
 
 
-def affine_exclusive_scan_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork:
+def _affine_exclusive_scan_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork:
     assert groups_per_head >= 0, "groups_per_head must be non-negative"
     transitions = _product_nonnegative(batch_heads, max(0, groups_per_head - 1))
-    return _make_work(
-        _product_nonnegative(transitions, 2, key_dim, key_dim, value_dim),
-        0,
-        _product_nonnegative(transitions, key_dim, value_dim),
-        0,
-        0,
+    return _base_work(
+        fpu_matrix_flops=_product_nonnegative(transitions, 2, key_dim, key_dim, value_dim),
+        fpu_add_ops=_product_nonnegative(transitions, key_dim, value_dim),
     )
 
 
-def prepare_chunk_recurrence_work(num_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
+def _prepare_chunk_recurrence_work(num_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
     instances = _product_nonnegative(num_heads, num_chunks)
     inverse_flops = CHUNK_SIZE * (CHUNK_SIZE - 1) * (CHUNK_SIZE + 1) // 3
-    return _make_work(
-        _product_nonnegative(
-            instances, _sum_nonnegative(_product_nonnegative(4, CHUNK_SIZE, CHUNK_SIZE, key_dim), inverse_flops)
+    return _base_work(
+        fpu_matrix_flops=_product_nonnegative(
+            instances, _sum_nonnegative(4 * CHUNK_SIZE**2 * key_dim, inverse_flops)
         ),
-        _product_nonnegative(
-            instances,
-            _sum_nonnegative(
-                _product_nonnegative(10, CHUNK_SIZE, key_dim), _product_nonnegative(CHUNK_SIZE, value_dim)
-            ),
+        fpu_multiply_ops=_product_nonnegative(instances, 10 * CHUNK_SIZE * key_dim + CHUNK_SIZE * value_dim),
+        fpu_add_ops=_product_nonnegative(
+            instances, 2 * CHUNK_SIZE + (CHUNK_SIZE - 1) * key_dim + CHUNK_SIZE * key_dim + CHUNK_SIZE**2
         ),
-        _product_nonnegative(
-            instances,
-            _sum_nonnegative(
-                2 * CHUNK_SIZE,
-                (CHUNK_SIZE - 1) * key_dim,
-                CHUNK_SIZE * key_dim,
-                CHUNK_SIZE * CHUNK_SIZE,
-            ),
-        ),
-        _product_nonnegative(instances, 2, CHUNK_SIZE, key_dim),
-        _product_nonnegative(instances, _sum_nonnegative(2 * CHUNK_SIZE, 3 * CHUNK_SIZE * key_dim, key_dim)),
+        fpu_reduction_ops=_product_nonnegative(instances, 2, CHUNK_SIZE, max(0, key_dim - 1)),
+        sfpu_exp_ops=_product_nonnegative(instances, 3 * CHUNK_SIZE * key_dim + key_dim),
+        sfpu_rsqrt_ops=_product_nonnegative(instances, 2, CHUNK_SIZE),
     )
 
 
-def recurrent_chunk_scan_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
+def _recurrent_chunk_scan_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
     instances = _product_nonnegative(batch_heads, num_chunks)
-    return _make_work(
-        _product_nonnegative(
-            instances,
-            _sum_nonnegative(
-                _product_nonnegative(6, CHUNK_SIZE, key_dim, value_dim),
-                _product_nonnegative(4, CHUNK_SIZE, CHUNK_SIZE, value_dim),
-            ),
+    return _base_work(
+        fpu_matrix_flops=_product_nonnegative(
+            instances, 6 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim
         ),
-        _product_nonnegative(instances, key_dim, value_dim),
-        _product_nonnegative(instances, _sum_nonnegative(2 * CHUNK_SIZE * value_dim, key_dim * value_dim)),
-        0,
-        0,
+        fpu_multiply_ops=_product_nonnegative(instances, key_dim, value_dim),
+        fpu_add_ops=_product_nonnegative(instances, 2 * CHUNK_SIZE * value_dim + key_dim * value_dim),
     )
 
 
-def summarize_chunk_recurrence_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
+def _summarize_chunk_recurrence_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
     instances = _product_nonnegative(batch_heads, num_chunks)
-    return _make_work(
-        _product_nonnegative(
-            instances,
-            _sum_nonnegative(
-                _product_nonnegative(8, CHUNK_SIZE, key_dim, value_dim),
-                _product_nonnegative(4, CHUNK_SIZE, CHUNK_SIZE, value_dim),
-            ),
+    return _base_work(
+        fpu_matrix_flops=_product_nonnegative(
+            instances, 8 * CHUNK_SIZE * key_dim * value_dim + 4 * CHUNK_SIZE**2 * value_dim
         ),
-        _product_nonnegative(instances, 2, key_dim, value_dim),
-        _sum_nonnegative(
-            _product_nonnegative(instances, _sum_nonnegative(2 * CHUNK_SIZE * value_dim, 2 * key_dim * value_dim)),
+        fpu_multiply_ops=_product_nonnegative(instances, 2, key_dim, value_dim),
+        fpu_add_ops=_sum_nonnegative(
+            _product_nonnegative(instances, 2 * CHUNK_SIZE * value_dim + 2 * key_dim * value_dim),
             _product_nonnegative(batch_heads, key_dim, value_dim),
         ),
-        0,
-        0,
     )
 
 
-def profile_realtime_program(device: Any, run_fn: Any) -> tuple[Any, dict[str, Any]]:
-    """Profile one KDA program while retaining the device clock used by its record."""
+def _math_fidelity_factor(math_fidelity: Any) -> int:
     import ttnn
 
-    profile_record = None
-    dropped = 0
-
-    def collect_records(batch: Any) -> None:
-        nonlocal dropped, profile_record
-        dropped += int(batch.dropped)
-        for record in batch.records:
-            if profile_record is not None:
-                return
-            start_timestamp = int(record.start_timestamp)
-            end_timestamp = int(record.end_timestamp)
-            frequency = float(record.frequency)
-            if frequency > 0 and end_timestamp > start_timestamp:
-                profile_record = {
-                    "runtime_id": int(record.runtime_id),
-                    "chip_id": int(record.chip_id),
-                    "duration_ns": (end_timestamp - start_timestamp) / frequency,
-                    "frequency_ghz": frequency,
-                    "kernel_sources": tuple(str(source) for source in record.kernel_sources),
-                }
-
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
     try:
-        result = run_fn()
-        ttnn.synchronize_device(device)
-        deadline = time.monotonic() + 1.0
-        while profile_record is None and time.monotonic() < deadline:
-            time.sleep(0.01)
-    finally:
-        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
-
-    if dropped:
-        raise RuntimeError(f"Real-time profiler dropped {dropped} record(s)")
-    if profile_record is None:
-        raise RuntimeError("Real-time profiler returned no valid KDA program record")
-    return result, profile_record
+        return {
+            ttnn.MathFidelity.LoFi: 1,
+            ttnn.MathFidelity.HiFi2: 2,
+            ttnn.MathFidelity.HiFi3: 3,
+            ttnn.MathFidelity.HiFi4: 4,
+        }[math_fidelity]
+    except KeyError as error:
+        raise ValueError(f"unsupported math fidelity: {math_fidelity}") from error
 
 
-def clock_mhz_from_frequency_ghz(frequency_ghz: float) -> int:
-    if not math.isfinite(frequency_ghz) or frequency_ghz <= 0:
-        return 0
-    return math.floor(frequency_ghz * 1000 + 0.5)
-
-
-def math_fidelity_factor(math_fidelity: Any) -> int:
-    import ttnn
-
-    return {
-        ttnn.MathFidelity.LoFi: 1,
-        ttnn.MathFidelity.HiFi2: 2,
-        ttnn.MathFidelity.HiFi3: 3,
-        ttnn.MathFidelity.HiFi4: 4,
-    }.get(math_fidelity, 0)
-
-
-def tensor_traffic(tensor: Any) -> KdaTensorTraffic | None:
+def _tensor_traffic(tensor: Any) -> _TensorTraffic:
     import ttnn
 
     if tensor.storage_type() != ttnn.StorageType.DEVICE or not tensor.is_allocated():
-        logger.warning("KDA performance model expected an allocated device tensor; returning a zero estimate")
-        return None
-    physical_bytes = _product_nonnegative(int(tensor.volume()), int(tensor.element_size()))
-    return KdaTensorTraffic(
+        raise ValueError("KDA performance model requires allocated device tensors")
+    return _TensorTraffic(
         buffer_address=int(tensor.buffer_address()),
-        physical_bytes=physical_bytes,
+        physical_bytes=_product_nonnegative(int(tensor.volume()), int(tensor.element_size())),
         is_dram=tensor.memory_config().buffer_type == ttnn.BufferType.DRAM,
     )
 
 
-def zero_estimate(input_count: int, output_count: int) -> KdaEstimate:
-    return KdaEstimate(input_bytes=(0,) * input_count, output_bytes=(0,) * output_count)
+def _mandatory_dram_bytes(inputs: Iterable[Any], outputs: Iterable[Any]) -> int:
+    total = 0
+    for tensors in (tuple(inputs), tuple(outputs)):
+        addresses: set[int] = set()
+        for tensor in tensors:
+            traffic = _tensor_traffic(tensor)
+            if traffic.is_dram and traffic.buffer_address not in addresses:
+                addresses.add(traffic.buffer_address)
+                total = _sum_nonnegative(total, traffic.physical_bytes)
+    return total
 
 
-def _ceil_div(numerator: int, denominator: int) -> int:
-    return numerator // denominator + int(numerator % denominator != 0)
-
-
-def estimate(
-    work: KdaWork,
-    inputs: Iterable[KdaTensorTraffic],
-    outputs: Iterable[KdaTensorTraffic],
-    *,
-    core_count: int,
-    clock_mhz: int,
-    fidelity_factor: int,
-) -> KdaEstimate:
-    inputs = tuple(inputs)
-    outputs = tuple(outputs)
-    fallback = zero_estimate(len(inputs), len(outputs))
-    if core_count <= 0 or clock_mhz <= 0 or fidelity_factor not in (1, 2, 3, 4):
-        logger.warning("KDA performance model received invalid cores, clock, or fidelity; returning a zero estimate")
-        return fallback
-
-    cycle_numerator = _sum_nonnegative(
-        _product_nonnegative(work.dense_flops, fidelity_factor),
-        _product_nonnegative(32, work.multiply_results, fidelity_factor),
-        _product_nonnegative(32, work.add_results),
-        _product_nonnegative(16, work.reduction_input_elements, fidelity_factor),
-    )
-    cycle_denominator = _product_nonnegative(MATRIX_FLOPS_PER_CORE_CYCLE, core_count)
-    ideal_fpu_cycles = _ceil_div(cycle_numerator, cycle_denominator)
-    fpu_time_numerator = _product_nonnegative(ideal_fpu_cycles, 1000)
-    ideal_fpu_ns = _ceil_div(fpu_time_numerator, clock_mhz)
-
-    input_bytes = [0] * len(inputs)
-    output_bytes = [0] * len(outputs)
-    mandatory_dram_bytes = 0
-    input_addresses: set[int] = set()
-    output_addresses: set[int] = set()
-    for index, traffic in enumerate(inputs):
-        if traffic.is_dram:
-            if traffic.physical_bytes > _PROFILER_INT_MAX:
-                raise OverflowError("KDA performance-model input bytes do not fit profiler fields")
-            input_bytes[index] = traffic.physical_bytes
-            if traffic.buffer_address not in input_addresses:
-                input_addresses.add(traffic.buffer_address)
-                mandatory_dram_bytes = _sum_nonnegative(mandatory_dram_bytes, traffic.physical_bytes)
-    for index, traffic in enumerate(outputs):
-        if traffic.is_dram:
-            if traffic.physical_bytes > _PROFILER_INT_MAX:
-                raise OverflowError("KDA performance-model output bytes do not fit profiler fields")
-            output_bytes[index] = traffic.physical_bytes
-            if traffic.buffer_address not in output_addresses:
-                output_addresses.add(traffic.buffer_address)
-                mandatory_dram_bytes = _sum_nonnegative(mandatory_dram_bytes, traffic.physical_bytes)
-
-    ideal_dram_ns = _ceil_div(mandatory_dram_bytes, DRAM_BYTES_PER_NS)
-    ideal_ns = max(ideal_fpu_ns, ideal_dram_ns)
-    if max(ideal_fpu_cycles, ideal_fpu_ns, ideal_dram_ns, ideal_ns) > _PROFILER_INT_MAX:
-        raise OverflowError("KDA performance-model estimate does not fit profiler fields")
-    return KdaEstimate(
-        valid=True,
-        ideal_fpu_cycles=ideal_fpu_cycles,
-        ideal_fpu_ns=ideal_fpu_ns,
-        mandatory_dram_bytes=mandatory_dram_bytes,
-        ideal_dram_ns=ideal_dram_ns,
-        ideal_ns=ideal_ns,
-        omitted_sfpu_results=work.omitted_sfpu_results,
-        input_bytes=tuple(input_bytes),
-        output_bytes=tuple(output_bytes),
-    )
-
-
-def estimate_for_tensors(
+def _performance(
     work: KdaWork,
     inputs: Iterable[Any],
     outputs: Iterable[Any],
     *,
-    device: Any,
+    measured_ns: float,
+    core_count: int,
     frequency_ghz: float,
     math_fidelity: Any,
-) -> KdaEstimate:
-    inputs = tuple(inputs)
-    outputs = tuple(outputs)
-    input_traffic = tuple(tensor_traffic(tensor) for tensor in inputs)
-    output_traffic = tuple(tensor_traffic(tensor) for tensor in outputs)
-    if any(traffic is None for traffic in (*input_traffic, *output_traffic)):
-        return zero_estimate(len(inputs), len(outputs))
-    grid = device.compute_with_storage_grid_size()
-    return estimate(
-        work,
-        input_traffic,
-        output_traffic,
-        core_count=int(grid.x) * int(grid.y),
-        clock_mhz=clock_mhz_from_frequency_ghz(frequency_ghz),
-        fidelity_factor=math_fidelity_factor(math_fidelity),
+) -> KdaPerformance:
+    if not isinstance(core_count, int) or core_count <= 0:
+        raise ValueError("core_count must be a positive integer")
+    if not math.isfinite(frequency_ghz) or frequency_ghz <= 0:
+        raise ValueError("frequency_ghz must be finite and positive")
+    if not math.isfinite(measured_ns) or measured_ns <= 0:
+        raise ValueError("measured_ns must be finite and positive")
+    work = replace(work, dram_bytes=_mandatory_dram_bytes(inputs, outputs))
+    fidelity_factor = _math_fidelity_factor(math_fidelity)
+    cycle_numerator = _sum_nonnegative(
+        _product_nonnegative(work.fpu_matrix_flops, fidelity_factor),
+        _product_nonnegative(32, work.fpu_multiply_ops, fidelity_factor),
+        _product_nonnegative(32, work.fpu_add_ops),
+        _product_nonnegative(16, work.fpu_reduction_ops, fidelity_factor),
+    )
+    ideal_fpu_ns = cycle_numerator / (MATRIX_FLOPS_PER_CORE_CYCLE * core_count * frequency_ghz)
+    ideal_dram_ns = work.dram_bytes / DRAM_BYTES_PER_NS
+    ideal_ns = max(ideal_fpu_ns, ideal_dram_ns)
+    return KdaPerformance(
+        work=work,
+        ideal_fpu_ns=ideal_fpu_ns,
+        ideal_dram_ns=ideal_dram_ns,
+        ideal_ns=ideal_ns,
+        fpu_utilization_pct=100 * ideal_fpu_ns / measured_ns,
+        dram_utilization_pct=100 * ideal_dram_ns / measured_ns,
+        utilization_pct=100 * ideal_ns / measured_ns,
     )
 
 
-def utilization(estimate: KdaEstimate, measured_ns: float) -> KdaUtilization:
-    if not estimate.valid or not math.isfinite(measured_ns) or measured_ns <= 0:
-        return KdaUtilization(0.0, 0.0, 0.0)
-    return KdaUtilization(
-        fpu_utilization_pct=100 * estimate.ideal_fpu_ns / measured_ns,
-        dram_utilization_pct=100 * estimate.ideal_dram_ns / measured_ns,
-        roofline_utilization_pct=100 * estimate.ideal_ns / measured_ns,
+def sigmoid_gated_rms_norm_performance(
+    input_tensor: Any,
+    gate: Any,
+    weight: Any,
+    output: Any,
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    input_shape, gate_shape, output_shape, weight_shape = map(_shape, (input_tensor, gate, output, weight))
+    if len(input_shape) != 3 or len(gate_shape) != 3 or output_shape != gate_shape or len(weight_shape) != 1:
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+    batch, sequence, hidden = gate_shape
+    value_dim = input_shape[-1]
+    if value_dim <= 0 or hidden % value_dim or weight_shape != (value_dim,):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+    num_heads = hidden // value_dim
+    if input_shape != (batch * num_heads, sequence, value_dim):
+        raise ValueError("sigmoid-gated RMSNorm tensor shapes are inconsistent")
+    return _performance(
+        _sigmoid_gated_rms_norm_work(batch, num_heads, sequence, value_dim),
+        (input_tensor, gate, weight),
+        (output,),
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
+    )
+
+
+def qkv_causal_conv1d_silu_performance(
+    input_tensor: Any,
+    history: Any,
+    taps: Sequence[Any],
+    outputs: Sequence[Any],
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    input_shape = _shape(input_tensor)
+    output_shapes = tuple(_shape(output) for output in outputs)
+    if len(input_shape) != 3 or len(output_shapes) != 3 or any(len(shape) != 3 for shape in output_shapes):
+        raise ValueError("QKV causal Conv1D plus SiLU tensor shapes are inconsistent")
+    batch, sequence, width = input_shape
+    if (
+        any(shape[:2] != (batch, sequence) for shape in output_shapes)
+        or sum(shape[-1] for shape in output_shapes) != width
+    ):
+        raise ValueError("QKV causal Conv1D plus SiLU tensor shapes are inconsistent")
+    return _performance(
+        _qkv_causal_conv1d_silu_work(batch, sequence, width),
+        (input_tensor, history, *taps),
+        outputs,
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
+    )
+
+
+def reduce_affine_transforms_performance(
+    a: Any,
+    b: Any,
+    outputs: Sequence[Any],
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    a_shape, b_shape = _shape(a), _shape(b)
+    output_shapes = tuple(_shape(output) for output in outputs)
+    if len(a_shape) != 3 or len(b_shape) != 3 or len(output_shapes) != 2:
+        raise ValueError("affine-transform reduction tensor shapes are inconsistent")
+    batch_heads, key_dim, output_key_dim = output_shapes[0]
+    value_dim = output_shapes[1][-1]
+    if (
+        batch_heads <= 0
+        or key_dim != output_key_dim
+        or output_shapes[1][:2] != (batch_heads, key_dim)
+        or a_shape[0] % batch_heads
+    ):
+        raise ValueError("affine-transform reduction tensor shapes are inconsistent")
+    groups_per_head = a_shape[0] // batch_heads
+    if a_shape != (batch_heads * groups_per_head, key_dim, key_dim) or b_shape != (a_shape[0], key_dim, value_dim):
+        raise ValueError("affine-transform reduction tensor shapes are inconsistent")
+    return _performance(
+        _reduce_affine_transforms_work(batch_heads, groups_per_head, key_dim, value_dim),
+        (a, b),
+        outputs,
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
+    )
+
+
+def affine_exclusive_scan_performance(
+    a: Any,
+    b: Any,
+    initial_state: Any,
+    output: Any,
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    a_shape, b_shape, state_shape, output_shape = map(_shape, (a, b, initial_state, output))
+    if any(len(shape) != 3 for shape in (a_shape, b_shape, state_shape, output_shape)):
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    batch_heads, key_dim, value_dim = state_shape
+    if batch_heads <= 0 or a_shape[0] % batch_heads:
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    groups_per_head = a_shape[0] // batch_heads
+    if (
+        a_shape != (a_shape[0], key_dim, key_dim)
+        or b_shape != (a_shape[0], key_dim, value_dim)
+        or output_shape != b_shape
+    ):
+        raise ValueError("affine exclusive-scan tensor shapes are inconsistent")
+    return _performance(
+        _affine_exclusive_scan_work(batch_heads, groups_per_head, key_dim, value_dim),
+        (a, b, initial_state),
+        (output,),
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
+    )
+
+
+def prepare_chunk_recurrence_performance(
+    inputs: Sequence[Any],
+    outputs: Sequence[Any],
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    if len(inputs) != 5 or len(outputs) != 7:
+        raise ValueError("chunk-recurrence preparation requires five inputs and seven outputs")
+    q_shape, v_shape, beta_shape = map(_shape, (inputs[0], inputs[2], inputs[4]))
+    if len(q_shape) != 3 or len(v_shape) != 3 or len(beta_shape) != 4:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    num_heads, num_chunks, chunk_size, trailing = beta_shape
+    if (
+        num_heads <= 0
+        or chunk_size != CHUNK_SIZE
+        or trailing != 1
+        or q_shape[-1] % num_heads
+        or v_shape[-1] % num_heads
+    ):
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    key_dim, value_dim = q_shape[-1] // num_heads, v_shape[-1] // num_heads
+    if q_shape[-2] != num_chunks * CHUNK_SIZE or v_shape[-2] != num_chunks * CHUNK_SIZE:
+        raise ValueError("chunk-recurrence preparation tensor shapes are inconsistent")
+    return _performance(
+        _prepare_chunk_recurrence_work(num_heads, num_chunks, key_dim, value_dim),
+        inputs,
+        outputs,
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
+    )
+
+
+def recurrent_chunk_scan_performance(
+    inputs: Sequence[Any],
+    state: Any,
+    outputs: Sequence[Any],
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    if len(inputs) != 7 or len(outputs) != 2:
+        raise ValueError("recurrent chunk scan requires seven protocol inputs and two outputs")
+    batch_heads, num_chunks, chunk_size, value_dim = _shape(inputs[0])
+    key_dim = _shape(inputs[1])[-1]
+    if chunk_size != CHUNK_SIZE or _shape(state) != (batch_heads, key_dim, value_dim):
+        raise ValueError("recurrent chunk-scan tensor shapes are inconsistent")
+    return _performance(
+        _recurrent_chunk_scan_work(batch_heads, num_chunks, key_dim, value_dim),
+        (*inputs, state),
+        outputs,
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
+    )
+
+
+def summarize_chunk_recurrence_performance(
+    inputs: Sequence[Any],
+    outputs: Sequence[Any],
+    *,
+    measured_ns: float,
+    core_count: int,
+    frequency_ghz: float,
+    math_fidelity: Any,
+) -> KdaPerformance:
+    if len(inputs) != 7 or len(outputs) != 2:
+        raise ValueError("chunk-recurrence summary requires seven inputs and two outputs")
+    batch_heads, num_chunks, chunk_size, value_dim = _shape(inputs[0])
+    key_dim = _shape(inputs[1])[-1]
+    if chunk_size != CHUNK_SIZE:
+        raise ValueError("chunk-recurrence summary tensor shapes are inconsistent")
+    return _performance(
+        _summarize_chunk_recurrence_work(batch_heads, num_chunks, key_dim, value_dim),
+        inputs,
+        outputs,
+        measured_ns=measured_ns,
+        core_count=core_count,
+        frequency_ghz=frequency_ghz,
+        math_fidelity=math_fidelity,
     )

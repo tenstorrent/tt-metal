@@ -13,11 +13,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
-    estimate_for_tensors,
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_realtime_profiler_test_utils import (
     profile_realtime_program,
-    prepare_chunk_recurrence_work,
-    utilization,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -362,26 +360,23 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
     duration_ns = perf_record["duration_ns"]
     assert len(outputs) == 7
     assert tuple(outputs[0].shape) == (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim)
-    work = prepare_chunk_recurrence_work(case.num_heads, case.num_chunks, case.key_dim, case.value_dim)
-    estimate = estimate_for_tensors(
-        work,
+    grid = device.compute_with_storage_grid_size()
+    performance = perf_model.prepare_chunk_recurrence_performance(
         inputs,
         outputs,
-        device=device,
+        measured_ns=duration_ns,
+        core_count=int(grid.x) * int(grid.y),
         frequency_ghz=perf_record["frequency_ghz"],
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
-    assert estimate.valid
-    percentages = utilization(estimate, duration_ns)
     logger.info(
         f"chunk-recurrence preparation {case.case_id}: measured_ns={duration_ns:.0f}, "
-        f"runtime_id={perf_record['runtime_id']}, ideal_fpu_cycles={estimate.ideal_fpu_cycles}, "
-        f"ideal_fpu_ns={estimate.ideal_fpu_ns}, mandatory_dram_bytes={estimate.mandatory_dram_bytes}, "
-        f"ideal_dram_ns={estimate.ideal_dram_ns}, ideal_ns={estimate.ideal_ns}, "
-        f"omitted_sfpu_results={estimate.omitted_sfpu_results}, "
-        f"fpu_utilization_pct={percentages.fpu_utilization_pct:.2f}, "
-        f"dram_utilization_pct={percentages.dram_utilization_pct:.2f}, "
-        f"roofline_utilization_pct={percentages.roofline_utilization_pct:.2f}"
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
     assert duration_ns <= upper, (

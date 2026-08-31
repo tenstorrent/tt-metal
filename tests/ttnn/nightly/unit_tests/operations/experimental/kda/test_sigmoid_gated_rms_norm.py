@@ -14,11 +14,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
-from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
-    estimate_for_tensors,
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
+from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_realtime_profiler_test_utils import (
     profile_realtime_program,
-    sigmoid_gated_rms_norm_work,
-    utilization,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -352,27 +350,26 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
         case.sequence,
         case.num_heads * _PRODUCTION_VALUE_DIM,
     )
-    work = sigmoid_gated_rms_norm_work(_PRODUCTION_BATCH, case.num_heads, case.sequence, _PRODUCTION_VALUE_DIM)
-    estimate = estimate_for_tensors(
-        work,
-        (input_tt, gate_tt, weight_tt),
-        (output_tt,),
-        device=device,
+    grid = device.compute_with_storage_grid_size()
+    performance = perf_model.sigmoid_gated_rms_norm_performance(
+        input_tt,
+        gate_tt,
+        weight_tt,
+        output_tt,
+        measured_ns=duration_ns,
+        core_count=int(grid.x) * int(grid.y),
         frequency_ghz=perf_record["frequency_ghz"],
         math_fidelity=ttnn.MathFidelity.HiFi4,
     )
-    assert estimate.valid
-    percentages = utilization(estimate, duration_ns)
     logger.info(
         f"sigmoid-gated RMSNorm {case.case_id}: measured_ns={duration_ns:.0f}, "
         f"reference={case.expected_duration_ns} ns, band=[{lower:.0f}, {upper:.0f}] ns, "
-        f"runtime_id={perf_record['runtime_id']}, ideal_fpu_cycles={estimate.ideal_fpu_cycles}, "
-        f"ideal_fpu_ns={estimate.ideal_fpu_ns}, mandatory_dram_bytes={estimate.mandatory_dram_bytes}, "
-        f"ideal_dram_ns={estimate.ideal_dram_ns}, ideal_ns={estimate.ideal_ns}, "
-        f"omitted_sfpu_results={estimate.omitted_sfpu_results}, "
-        f"fpu_utilization_pct={percentages.fpu_utilization_pct:.2f}, "
-        f"dram_utilization_pct={percentages.dram_utilization_pct:.2f}, "
-        f"roofline_utilization_pct={percentages.roofline_utilization_pct:.2f}"
+        f"runtime_id={perf_record['runtime_id']}, work={performance.work}, "
+        f"ideal_fpu_ns={performance.ideal_fpu_ns:.2f}, ideal_dram_ns={performance.ideal_dram_ns:.2f}, "
+        f"ideal_ns={performance.ideal_ns:.2f}, "
+        f"fpu_utilization_pct={performance.fpu_utilization_pct:.2f}, "
+        f"dram_utilization_pct={performance.dram_utilization_pct:.2f}, "
+        f"utilization_pct={performance.utilization_pct:.2f}"
     )
     assert lower <= duration_ns <= upper, (
         f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
