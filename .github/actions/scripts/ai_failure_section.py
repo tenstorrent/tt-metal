@@ -33,8 +33,11 @@ def section(data):
         if not cause:
             continue
         note = f"- {row.get('job_name') or 'unknown job'}: {_one_line(cause)}"
-        if row.get("category"):
-            note += f" [{row['category']}]"
+        tag = "/".join(t for t in (row.get("category"), row.get("subcategory")) if t)
+        if tag:
+            note += f" [{tag}]"
+        if row.get("root_cause") and row.get("error_message"):
+            note += f" — error: {_one_line(row['error_message'], 200)}"
         if row.get("log_complete") is False:
             note += " (log incomplete)"
         lines.append(note)
