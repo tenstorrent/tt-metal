@@ -64,6 +64,9 @@ from models.common.tests.utils import stable_model_seed
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.common.utility_functions import comp_allclose, comp_pcc
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)
 # =============================================================================

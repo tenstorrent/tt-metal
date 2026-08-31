@@ -37,6 +37,9 @@ from models.common.tensor_utils import TILE_SIZE
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import Mode
 
+# 1D module suites target the T3K; skip when the host system is a Galaxy.
+pytestmark = pytest.mark.usefixtures("skip_on_galaxy_system")
+
 
 def get_mlp_weights_from_ref_model(reference_mlp) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """

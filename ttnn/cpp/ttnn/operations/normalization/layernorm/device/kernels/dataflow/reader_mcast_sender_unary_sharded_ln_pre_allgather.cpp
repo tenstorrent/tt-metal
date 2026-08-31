@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -17,44 +18,46 @@ struct RemoteCoord {
 
 // split REDUCE across cores
 void kernel_main() {
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t block_h = get_compile_time_arg_val(3);
-    constexpr uint32_t block_h_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t num_all_to_all_workers_first_stage = get_compile_time_arg_val(5);
-    constexpr uint32_t num_tiles_per_worker = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_worker_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t num_tiles_per_worker_last = get_compile_time_arg_val(8);
-    constexpr uint32_t num_tiles_per_worker_last_bytes = get_compile_time_arg_val(9);
-    constexpr bool row_major = (bool)get_compile_time_arg_val(10);
-    constexpr uint32_t num_x = get_compile_time_arg_val(11);
-    constexpr uint32_t num_y = get_compile_time_arg_val(12);
-    constexpr bool use_two_stage_reduce = (bool)get_compile_time_arg_val(13);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(14);
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(15);
-    constexpr bool rms_norm = get_compile_time_arg_val(17) == 1;
+    constexpr auto num_blocks = get_arg(args::num_blocks);
+    constexpr auto block_h = get_arg(args::block_h);
+    constexpr auto num_tiles_per_worker = get_arg(args::num_tiles_per_worker);
+    constexpr bool row_major = (bool)get_arg(args::row_major);
+    constexpr auto num_x = get_arg(args::num_x);
+    constexpr auto num_y = get_arg(args::num_y);
+    constexpr bool use_two_stage_reduce = (bool)get_arg(args::use_two_stage_reduce);
+    constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
+#ifdef RMSNORM
+    constexpr bool rms_norm = true;
+#else
+    constexpr bool rms_norm = false;
+#endif
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
-    const uint32_t start_x = get_arg_val<uint32_t>(4);
-    const uint32_t start_y = get_arg_val<uint32_t>(5);
+    const uint32_t mcast_dest_noc_start_x = get_arg(args::mcast_dest_noc_start_x);
+    const uint32_t mcast_dest_noc_start_y = get_arg(args::mcast_dest_noc_start_y);
+    const uint32_t mcast_dest_noc_end_x = get_arg(args::mcast_dest_noc_end_x);
+    const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_dest_noc_end_y);
+    const uint32_t start_x = get_arg(args::start_x);
+    const uint32_t start_y = get_arg(args::start_y);
 
-    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
-    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
-
-    constexpr uint32_t dfb_ex_partial2 = tt::CBIndex::c_11;
-    constexpr uint32_t dfb_ex2 = tt::CBIndex::c_12;
-    constexpr uint32_t dfb_ex_external2 = tt::CBIndex::c_13;
-    constexpr uint32_t dfb_ex2_global = tt::CBIndex::c_14;
+    // The multicast grid's NOC coordinates arrive as a positional block: num_x X coordinates followed
+    // by num_y Y coordinates.
+    uint32_t in0_remote_noc_x[num_x];
+    uint32_t in0_remote_noc_y[num_y];
+    for (uint32_t i = 0; i < num_x; ++i) {
+        in0_remote_noc_x[i] = get_vararg(i);
+    }
+    for (uint32_t i = 0; i < num_y; ++i) {
+        in0_remote_noc_y[i] = get_vararg(num_x + i);
+    }
 
     Noc noc;
-    Semaphore<> reduce_receiver_sem(get_compile_time_arg_val(0));
-    Semaphore<> reduce_sender_sem(get_compile_time_arg_val(1));
-    Semaphore<> reduce_second_stage_sem(get_compile_time_arg_val(16));
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
 
-    DataflowBuffer dfb_ex_partial2_obj(dfb_ex_partial2);
+    DataflowBuffer dfb_ex_partial2_obj(dfb::ex_partial2);
     const uint32_t single_tile_size_bytes = dfb_ex_partial2_obj.get_tile_size();
 
     RemoteCoord remote_coords[num_blocks];
@@ -179,6 +182,6 @@ void kernel_main() {
                 }
                 dfb_partial_obj.pop_front(num_tiles_per_partial_result * block_h);
             };
-    global_reduce_sender(dfb_ex_partial2, dfb_ex_external2, dfb_ex2);
+    global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2);
     noc.async_write_barrier();
 }

@@ -18,9 +18,12 @@ from models.common.sampling import (
     format_sampling_params,
     scatter_sampling_params_to_slots,
 )
-from models.common.sampling.generator import _mark_trace_buffers_corruptible
+from models.common.sampling.generator import (
+    MAX_UINT32,
+    _hash_request_seed_to_device_seed,
+    _mark_trace_buffers_corruptible,
+)
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
-from models.common.sampling.generator import MAX_UINT32, _hash_request_seed_to_device_seed
 from models.common.utility_functions import comp_pcc
 
 
@@ -210,6 +213,21 @@ def test_duplicate_request_seeds_get_distinct_device_streams():
     assert len(set(first_draws)) == 4, f"duplicate-seed slots drew identical device seeds: {first_draws}"
 
 
+def test_duplicate_request_seeds_can_share_one_stream_when_salting_is_disabled():
+    """Independent vLLM requests with the same seed remain bit-identical."""
+
+    seed_manager = SeedManager(
+        SimpleNamespace(_sampling_dp=1),
+        max_batch_size=4,
+        salt_duplicate_seeds=False,
+    )
+    seed_manager.reset_seed([1234, 1234, 1234, 1234], [0, 1, 2, 3])
+
+    assert seed_manager.seed_salts == [0, 0, 0, 0]
+    first_draws = [seed_manager._next_device_seed_for_slot(slot) for slot in range(4)]
+    assert len(set(first_draws)) == 1
+
+
 def test_unique_seed_stream_is_unchanged_and_slot_independent():
     """A request whose seed is unique among active slots keeps salt 0, so its
     stream matches the pre-salt derivation and does not depend on the slot."""
@@ -350,6 +368,136 @@ def test_format_sampling_params_uses_device_argmax_sentinel_for_greedy_rows():
     assert params.temperature[0] == 1.0
     assert params.top_k[0] == 1
     assert params.top_p[0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Seeded decode reproducibility under async scheduling (#51981).
+# Host-only: the generator is built with __new__ and driven with stub modules.
+# ---------------------------------------------------------------------------
+SEED_TEST_BATCH = 32  # format_sampling_params requires a multiple of 32
+
+
+class _RecordingSeedManager(SeedManager):
+    """SeedManager that records each step's device seed vector instead of pushing it."""
+
+    def __init__(self, max_batch_size=SEED_TEST_BATCH):
+        super().__init__(SimpleNamespace(_sampling_dp=1), max_batch_size=max_batch_size)
+        self.pushed = []
+
+    def write_device_seed_values(self, seed_values):
+        self.pushed.append(list(seed_values))
+
+
+class _StubSamplingModule:
+    def __init__(self, max_batch_size=SEED_TEST_BATCH):
+        self.seed_manager = _RecordingSeedManager(max_batch_size)
+        self.tt_sampling = SimpleNamespace(max_batch_size=max_batch_size)
+
+    def apply_decode_state(self, sampling_params_chunks, **kwargs):
+        pass
+
+    def sample(self, logits=None, **kwargs):
+        return logits
+
+
+def _make_stub_generator(max_batch_size=SEED_TEST_BATCH):
+    from models.tt_transformers.tt.generator import Generator
+
+    generator = Generator.__new__(Generator)
+    generator.data_parallel = 1
+    sampling = _StubSamplingModule(max_batch_size)
+    generator.model = [SimpleNamespace(sampling=sampling, sampling_dp=1)]
+    return generator, sampling
+
+
+def _decode_sampling_step(generator, seeds, positions, reload_inputs, max_batch_size=SEED_TEST_BATCH):
+    """Run one device-sampling decode step; return the per-slot device seeds pushed."""
+    seeds = list(seeds) + [None] * (max_batch_size - len(seeds))
+    positions = list(positions) + [-1] * (max_batch_size - len(positions))
+    params = SamplingParams(
+        temperature=[1.0] * max_batch_size,
+        top_k=[32] * max_batch_size,
+        top_p=[1.0] * max_batch_size,
+        seed=seeds,
+    )
+    generator.sample_decode_on_device(
+        [None],
+        sampling_params=params,
+        start_pos=[torch.tensor(positions, dtype=torch.int32)],
+        reload_inputs=reload_inputs,
+    )
+    return generator.model[0].sampling.seed_manager.pushed[-1]
+
+
+def _expected_seed_stream(request_seed, first_position, num_steps):
+    """Device seeds for `num_steps` consecutive tokens starting at `first_position`."""
+    positions = range(first_position, first_position + num_steps)
+    return [_hash_request_seed_to_device_seed(request_seed, pos + 1) for pos in positions]
+
+
+def test_seed_stream_is_independent_of_host_position_lag():
+    """The counter must self-advance from the last authoritative anchor; re-anchoring
+    to a lagging host position replays device seeds (#51981)."""
+    generator, sampling = _make_stub_generator()
+
+    pushed = [_decode_sampling_step(generator, [7], [100], reload_inputs=True)[0]]
+    # Device is at 101, 102, 103; the host reports the previous position and
+    # stalls entirely when a readback is late.
+    for lagging_host_pos in (100, 101, 101):
+        pushed.append(_decode_sampling_step(generator, [7], [lagging_host_pos], reload_inputs=False)[0])
+
+    assert pushed == _expected_seed_stream(7, 100, 4)
+    assert len(set(pushed)) == 4  # no replayed seed
+    assert sampling.seed_manager.seed_counters[0] == 105  # anchored at 101, one per token
+
+
+def test_seed_stream_matches_across_different_host_lags():
+    """Same seed and true positions, but one run has async overlap engaged (host
+    lags) and the other does not. Equal streams is what `seed=` promises."""
+    lagged, _ = _make_stub_generator()
+    exact, _ = _make_stub_generator()
+
+    lagged_stream = [_decode_sampling_step(lagged, [7], [100], reload_inputs=True)[0]]
+    exact_stream = [_decode_sampling_step(exact, [7], [100], reload_inputs=True)[0]]
+    for true_pos in (101, 102, 103):
+        lagged_stream.append(_decode_sampling_step(lagged, [7], [true_pos - 1], reload_inputs=False)[0])
+        exact_stream.append(_decode_sampling_step(exact, [7], [true_pos], reload_inputs=False)[0])
+
+    assert lagged_stream == exact_stream
+
+
+def test_seed_counters_realign_when_host_inputs_are_authoritative():
+    """A batch reset re-anchors every active slot: vLLM may have evicted and
+    re-admitted the request elsewhere, so the resident counter is untrustworthy."""
+    generator, sampling = _make_stub_generator()
+
+    _decode_sampling_step(generator, [7], [100], reload_inputs=True)
+    sampling.seed_manager.seed_counters[0] = 0  # state moved behind our back
+    pushed = _decode_sampling_step(generator, [7], [200], reload_inputs=True)
+
+    assert pushed[0] == _hash_request_seed_to_device_seed(7, 201)
+
+
+def test_newly_seeded_slot_is_aligned_even_on_a_non_authoritative_step():
+    """A freshly admitted slot's position comes from its prefill, so it is
+    authoritative even when the rest of the batch's host inputs are stale;
+    otherwise its reset-to-zero counter starts the stream at the wrong offset."""
+    generator, _ = _make_stub_generator()
+
+    _decode_sampling_step(generator, [7], [100], reload_inputs=True)
+    # Slot 1 admitted mid-flight at position 5; slot 0 keeps decoding with a lag.
+    pushed = _decode_sampling_step(generator, [7, 11], [100, 5], reload_inputs=False)
+
+    assert pushed[0] == _hash_request_seed_to_device_seed(7, 102)  # unmoved, self-advanced
+    assert pushed[1] == _hash_request_seed_to_device_seed(11, 6)  # anchored to its prefill position
+
+
+def test_reset_seed_from_slots_if_needed_reports_the_slots_it_reset():
+    seed_manager = _make_host_only_seed_manager()
+    seed_manager.reset_seed_from_slots([42, 43, None, None], [0, 1, 2, 3])
+
+    assert seed_manager.reset_seed_from_slots_if_needed([42, 43, None, None], [0, 1, 2, 3]) == []
+    assert seed_manager.reset_seed_from_slots_if_needed([42, 99, None, None], [0, 1, 2, 3]) == [1]
 
 
 def test_scatter_sampling_params_to_slots_moves_params_to_their_slot_row():

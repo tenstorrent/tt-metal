@@ -650,7 +650,7 @@ def passed_test(
         is_valid = is_close | is_nan
         # `|` does not short-circuit, so only reach for the lattice when the tolerance
         # check has actually rejected something. Near-exact suites (test_unary_datacopy,
-        # test_sfpu_binary_float) accept every element here and would otherwise pay for a
+        # test_eltwise_binary_sfpu_float) accept every element here and would otherwise pay for a
         # second full-tensor compare that cannot change the verdict.
         if not torch.all(is_valid):
             is_valid = is_valid | _bfp_block_aware_compare(

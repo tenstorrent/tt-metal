@@ -120,6 +120,7 @@ struct InspectorSettings {
     bool capture_tensor_specs = true;
     bool log_runtime_entries = false;
     bool log_mesh_buffers = false;
+    bool log_mesh_sockets = false;
 };
 
 template <typename T>
@@ -547,6 +548,8 @@ public:
     void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
     bool get_inspector_log_mesh_buffers() const { return inspector_settings.log_mesh_buffers; }
     void set_inspector_log_mesh_buffers(bool enabled) { inspector_settings.log_mesh_buffers = enabled; }
+    bool get_inspector_log_mesh_sockets() const { return inspector_settings.log_mesh_sockets; }
+    void set_inspector_log_mesh_sockets(bool enabled) { inspector_settings.log_mesh_sockets = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }

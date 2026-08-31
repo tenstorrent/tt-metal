@@ -18,12 +18,3 @@
       timeout: 50
   owner_id: U07D5N7QL4U # Joseph Chu
   team: ttnn
-
-- name: Galaxy Wan2.2 integration tests
-  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model wan22
-  model: wan22
-  skus:
-    wh_galaxy:
-      timeout: 40
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: ttnn
