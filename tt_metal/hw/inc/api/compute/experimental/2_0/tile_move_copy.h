@@ -37,12 +37,21 @@ namespace experimental {
  * packed L1 output). Until it is, fp8 datacopy must use the legacy CB-id copy path; a static_assert here
  * rejects an fp8 LLKOperand rather than silently producing wrong near-zero fp8 results.
  *
- * | Template | Format | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |  | True |
- * | Template | Shape  | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |  | True |
+ * PARITY: transpose / transpose_within_16x16_face restore the copy-with-transpose capability legacy copy_init
+ * exposes; they were dropped when this id-free path was first authored (the authoring agent only exercised the
+ * plain, non-transpose copy). Both default OFF (0), so the default copy path is byte-identical; when nonzero they
+ * drive the unpacker exactly as legacy copy_init does (transpose -> transpose_of_faces, transpose_within_16x16_face
+ * -> within_face_16x16_transpose on the id-free llk_unpack_A_init, the same args transpose_init uses).
+ *
+ * | Template | Format                      | Buffer L1 data format (deduced from the LLKOperand argument) | DataFormat  |                                                                     | True  |
+ * | Template | Shape                       | Tile geometry (deduced from the LLKOperand argument)         | TensorShape |                                                                     | True  |
+ * | Function | transpose                   | Flag to perform transpose on SrcA                           | uint32_t    | Any positive value will indicate transpose is set                   | False |
+ * | Function | transpose_within_16x16_face | Flag to perform transpose within 16x16 face                 | uint32_t    | Any positive value will indicate transpose within 16x16 face is set | False |
  */
 // clang-format on
 template <DataFormat Format, TensorShape Shape>
-ALWI void copy_tile_init(LLKOperand<Format, Shape> /*src*/) {
+ALWI void copy_tile_init(
+    LLKOperand<Format, Shape> /*src*/, std::uint32_t transpose = 0, std::uint32_t transpose_within_16x16_face = 0) {
     static_assert(
         is_legal_tile_shape(Shape),
         "copy_tile_init: illegal tile shape (face_r_dim must be 1/2/4/8/16, total faces 1/2/4).");
@@ -56,7 +65,7 @@ ALWI void copy_tile_init(LLKOperand<Format, Shape> /*src*/) {
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
-            UnpackToDestEn>()));
+            UnpackToDestEn>(transpose, transpose_within_16x16_face)));
     MATH((llk_math_eltwise_unary_datacopy_init<
           LLKOperand<Format, Shape>::descriptor,
           DataCopyType::A2D,

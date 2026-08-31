@@ -96,9 +96,11 @@ ALWI void pack_untilize_init(LLKOperand<InFormat, InShape> /*in*/, LLKOperand<Ou
  *   handle, so llk_pack_untilize derives that per-row stride from the OUTPUT descriptor via
  *   tile_stride_words == one tile's L1 size; the input per-tile unpack base uses the same for InShape.
  *   The shipping untilize factories set both CB pages to one tile (in/out_single_tile_size), so this matches
- *   fifo_page_size for every format they use: geometry-exact for linear formats, exp section included for
- *   block floats. Remaining edge (no shipping op hits it): padded/multi-tile pages, and partial/tiny BFP
- *   tiles (tile_stride_words uses full-tile BFP size).
+ *   fifo_page_size for every format they use:
+ *     - linear formats (Float32/Float16/int): geometry-exact datum-count size (SCALE_DATUM_SIZE >> 4);
+ *     - block floats (Bfp8/Bfp4/Bfp2): mantissa + shared-exponent section, both scaled by the tile geometry
+ *       (matches tt_metal Tile::get_tile_size / the shipping CB page; see internal/llk_descriptor.h::tile_stride_words).
+ *   Remaining edge (no shipping op hits it): padded / multi-tile CB pages.
  *
  * | Template | block_ct_dim/full_ct_dim | Block width / full input width in tiles | uint32_t | | False |
  * | Function | in            | Input operand (tilized; unpack base)          | LLKOperand | | True |
