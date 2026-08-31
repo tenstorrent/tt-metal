@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
@@ -28,10 +29,12 @@ namespace ckernel {
  * does not reconfigure the unpacker data types. Eltwise-unary / SFPU kernels use this same init:
  * compute_kernel_hw_startup(icb, ocb) once, then copy_init(icb).
  *
- * Numerics: the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src zero-substitution flag
- * disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact value back out of DST.
- * Matmul and eltwise-binary re-establish the format-driven default themselves, so this preservation never
- * leaks into them.
+ * Numerics: with a 16-bit dest the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src
+ * zero-substitution flag disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact
+ * value back out of DST. With a 32-bit dest the datacopy is an ELWADD rather than a MOVA2D, which cannot
+ * preserve either, and holding the flag there instead adds 2^-127 into the result; that case takes the
+ * format-driven default. Matmul and eltwise-binary re-establish the default themselves, so this
+ * preservation never leaks into them.
  *
  * Return value: None
  *
@@ -44,10 +47,10 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void copy_init(
-    uint32_t cbid,
-    uint32_t transpose = 0,
-    uint32_t transpose_within_16x16_face = false,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid,
+    std::uint32_t transpose = 0,
+    std::uint32_t transpose_within_16x16_face = false,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(cbid, call_line);
@@ -65,10 +68,26 @@ ALWI void copy_init(
     // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
     // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. MATH-only
     // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
-    MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
+    //
+    // 16-bit dest only. That policy is written for the MOVA2D datacopy, where the flag decides whether
+    // the moved datum keeps its bit pattern. Under a 32-bit dest the datacopy is an ELWADD against a
+    // ZEROSRC'd SrcB instead, and with substitution disabled the FPU reads each zeroed SrcB datum as
+    // exp==0 plus the implied hidden bit -- 2^-127 -- which is added into every result that falls inside
+    // the adder's alignment window, corrupting the eleven smallest normal binades. Nothing is preserved
+    // by holding the flag there either: ELWADD returns +0.0 for a -0.0 input whatever the flag says. So
+    // fall back to the operand-driven default, which keeps the flush on for float operands and still
+    // disables it for the 16-bit integer operands the integer datacopy branch needs.
+    if constexpr (is_fp32_dest_acc_en) {
+        MATH((ckernel::math::_configure_default_zero_flag_state_()));
+    } else {
+        MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
+    }
 #else
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-        cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(cbid)));
 #endif
 }
 
@@ -94,7 +113,7 @@ ALWI void copy_init(
  * */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::uint32_t dst_tile_index) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
@@ -130,14 +149,21 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+ALWI void copy_block(
+    std::uint32_t in_cb_id,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
-    MATH((llk_math_eltwise_unary_datacopy_block<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
-        start_dst_tile_index, ntiles, in_cb_id)));
+    MATH((llk_math_eltwise_unary_datacopy_block<
+          DataCopyType::A2D,
+          is_fp32_dest_acc_en,
+          BroadcastType::NONE,
+          UnpackToDestEn>(start_dst_tile_index, ntiles, in_cb_id)));
 }
 
 // =====================================================================================================================
@@ -162,7 +188,7 @@ ALWI void copy_block(uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t s
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_init(
-    uint32_t cbid, uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     copy_init<is_fp32_dest_acc_en>(cbid, 0, false, call_line);
 }
@@ -182,10 +208,10 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated("Renamed to copy_init(). This will be removed after 20-09-2026.")]] ALWI void copy_tile_to_dst_init_short(
-    uint32_t cbid,
-    uint32_t transpose = 0,
-    uint32_t transpose_within_16x16_face = false,
-    uint32_t call_line = __builtin_LINE()) {
+    std::uint32_t cbid,
+    std::uint32_t transpose = 0,
+    std::uint32_t transpose_within_16x16_face = false,
+    std::uint32_t call_line = __builtin_LINE()) {
     LLK_SAN_FUNCTION();
     copy_init<is_fp32_dest_acc_en>(cbid, transpose, transpose_within_16x16_face, call_line);
 }
@@ -208,7 +234,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 [[deprecated(
     "Call reconfig_data_format_srca(old, new) then copy_init(new, transpose). This will be removed after "
     "20-09-2026.")]] ALWI void
-copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32_t transpose = 0) {
+copy_tile_to_dst_init_short_with_dt(std::uint32_t old_cbid, std::uint32_t new_cbid, std::uint32_t transpose = 0) {
     LLK_SAN_FUNCTION();
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
@@ -235,7 +261,10 @@ copy_tile_to_dst_init_short_with_dt(uint32_t old_cbid, uint32_t new_cbid, uint32
 // clang-format on
 [[deprecated("Use copy_block(); copy_block_matmul_partials will be removed after August 15th, 2026.")]] ALWI void
 copy_block_matmul_partials(
-    uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {
+    std::uint32_t in_cb_id,
+    std::uint32_t start_in_tile_index,
+    std::uint32_t start_dst_tile_index,
+    std::uint32_t ntiles) {
     copy_block(in_cb_id, start_in_tile_index, start_dst_tile_index, ntiles);
 }
 
