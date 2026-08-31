@@ -6,6 +6,11 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <algorithm>
+#include <array>
+#include <limits>
+#include <variant>
+
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
@@ -13,6 +18,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
@@ -35,6 +41,14 @@ uint32_t sliding_halo_token_count(uint32_t sliding_window_size, uint32_t k_chunk
     return ring_joint::chunked_sliding_halo_tile_rows(
                sliding_window_size, tt::constants::TILE_HEIGHT, k_chunk_size / tt::constants::TILE_HEIGHT) *
            tt::constants::TILE_HEIGHT;
+}
+
+bool is_replicated_across_complete_mesh(const Tensor& tensor) {
+    const auto& topology = tensor.tensor_topology();
+    return topology.distribution_shape().mesh_size() == tensor.device()->shape().mesh_size() &&
+           std::all_of(topology.placements().begin(), topology.placements().end(), [](const auto& placement) {
+               return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placement);
+           });
 }
 
 // Chunked causal prefill does not have the same valid-pair geometry as a full causal
@@ -296,6 +310,40 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !args.sliding_window_size.has_value() || args.has_sliding_window(),
         "RingJointSDPA sliding_window_size must be greater than zero when provided");
+    const auto& ag = args.all_gather_operation_attributes;
+    if (ag.full_mesh) {
+        TT_FATAL(!ag.cluster_axis.has_value(), "Full-mesh RingJointSDPA must not carry a cluster axis");
+        TT_FATAL(ag.topology == ttnn::ccl::Topology::Ring, "Full-mesh RingJointSDPA requires Ring topology");
+        TT_FATAL(!args.has_sliding_window(), "Full-mesh RingJointSDPA does not support sliding-window mode");
+        TT_FATAL(
+            ag.mesh_rows > 1 && ag.mesh_cols > 1 && ag.ring_size == ag.mesh_rows * ag.mesh_cols,
+            "Invalid full-mesh RingJointSDPA geometry: rows={}, cols={}, ring_size={}",
+            ag.mesh_rows,
+            ag.mesh_cols,
+            ag.ring_size);
+        TT_FATAL(
+            ag.route_plan_hash.has_value(), "Full-mesh RingJointSDPA requires a resolved direct-neighbor route hash");
+        const auto live_shape = input_tensor_q.device()->shape();
+        TT_FATAL(
+            live_shape.dims() == 2 && live_shape[0] == ag.mesh_rows && live_shape[1] == ag.mesh_cols,
+            "Full-mesh RingJointSDPA mapping {}x{} does not match live mesh {}",
+            ag.mesh_rows,
+            ag.mesh_cols,
+            live_shape);
+        TT_FATAL(
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_q) &&
+                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input_k) &&
+                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(gathered_input_tensor_k),
+            "Full-mesh RingJointSDPA requires row-major mesh coordinates for Q, local K/V, and gathered K/V");
+        TT_FATAL(
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) == ag.ring_size &&
+                ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input_k, ag.dim) == ag.ring_size,
+            "Full-mesh RingJointSDPA requires sequence shards across all {} mesh devices",
+            ag.ring_size);
+        TT_FATAL(
+            is_replicated_across_complete_mesh(gathered_input_tensor_k),
+            "Full-mesh RingJointSDPA requires the persistent gathered K/V buffer replicated across the mesh");
+    }
 
     const bool has_input_v = tensor_args.input_v.has_value();
     const bool has_gathered_v = tensor_args.gathered_v.has_value();
@@ -435,6 +483,16 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     auto q_chunk_size = args.get_q_chunk_size();
     auto k_chunk_size = args.get_k_chunk_size();
     const bool has_kv_pad_rotation = args.has_kv_pad_rotation();
+
+    if (ag.full_mesh) {
+        TT_FATAL(
+            gathered_buffer_n == N_local_kv * args.ring_size,
+            "Full-mesh RingJointSDPA gathered sequence extent must equal local extent times ring size; got {} vs "
+            "{} * {}",
+            gathered_buffer_n,
+            N_local_kv,
+            args.ring_size);
+    }
 
     if (args.has_sliding_window()) {
         const uint32_t window_size = args.sliding_window_size.value();
@@ -1034,7 +1092,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
-    const uint32_t cluster_axis,
+    const std::optional<uint32_t> cluster_axis,
     const ttnn::MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const CoreCoord ccl_core_grid_offset,
@@ -1072,7 +1130,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "all-gather invoked with cluster_axis API without 2D mesh, which is currently unsupported");
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     int32_t rank = input_tensor_k.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
@@ -1082,6 +1139,58 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         rank,
         rank - 1,
         dim);
+
+    const bool full_mesh = !cluster_axis.has_value();
+    const auto mesh_shape = mesh_device.shape();
+    std::size_t num_devices =
+        full_mesh ? mesh_shape.mesh_size() : (*cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols());
+    ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+    std::optional<uint64_t> route_plan_hash;
+    if (full_mesh) {
+        TT_FATAL(topology == ttnn::ccl::Topology::Ring, "ring_mla cluster_axis=None requires Ring topology");
+        TT_FATAL(
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_q) &&
+                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor_k) &&
+                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(persistent_output_buffer_k),
+            "ring_mla cluster_axis=None requires row-major mesh coordinates for Q, KV, and the persistent buffer");
+        TT_FATAL(
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_q, 2) == num_devices &&
+                ttnn::operations::ccl::common::tensor_dim_shard_factor(input_tensor_k, gather_dim) == num_devices,
+            "ring_mla cluster_axis=None requires Q sequence dim 2 and KV gather dim {} to be sharded across all {} "
+            "mesh devices",
+            gather_dim,
+            num_devices);
+        TT_FATAL(
+            is_replicated_across_complete_mesh(persistent_output_buffer_k),
+            "ring_mla cluster_axis=None requires the persistent gathered-KV buffer to be replicated across the "
+            "complete mesh");
+
+        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+        std::array<tt::tt_fabric::Topology, 2> axis_topology{
+            ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 0),
+            ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 1)};
+        const auto plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+            input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla");
+        TT_FATAL(plan.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh snake ring");
+        TT_FATAL(
+            plan->ring_size <= std::numeric_limits<uint32_t>::digits,
+            "ring_mla supports at most {} full-mesh ranks, got {}",
+            std::numeric_limits<uint32_t>::digits,
+            plan->ring_size);
+        snake_orientation = plan->orientation;
+        mesh_rows = plan->mesh_rows;
+        mesh_cols = plan->mesh_cols;
+        route_plan_hash = plan->route_plan_hash;
+        num_devices = plan->ring_size;
+    } else {
+        TT_FATAL(
+            *cluster_axis < mesh_shape.dims(),
+            "ring_mla cluster_axis must be an in-range mesh axis or None; got {} for mesh {}",
+            *cluster_axis,
+            mesh_shape);
+    }
 
     auto all_gather_operation_attributes = ttnn::experimental::prim::RingAttentionAllGatherAsyncParams{
         {},
@@ -1093,7 +1202,12 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,
-        core_allocation_strategy};
+        core_allocation_strategy,
+        full_mesh,
+        snake_orientation,
+        mesh_rows,
+        mesh_cols,
+        route_plan_hash};
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k};
     std::vector<std::optional<Tensor>> all_gather_output_tensors = {persistent_output_buffer_k};
     if (input_tensor_v.has_value()) {

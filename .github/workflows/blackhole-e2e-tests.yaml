@@ -29,7 +29,7 @@ on:
         type: choice
         options:
           - all
-          - deepseek_prefill
+          - disaggregated_prefill
       test-selection:
         description: 'Select e2e tests to run: all tests, or one test id'
         required: false
@@ -37,8 +37,8 @@ on:
         type: choice
         options:
           - all
-          - bh-lb-deepseek-prefill-perf
-          - bh-qb2-deepseek-d2d-socket-sync
+          - bh-lb-disaggregated-prefill-perf
+          - bh-qb2-disaggregated-prefill-d2d-socket-sync
       build-type:
         required: false
         type: choice

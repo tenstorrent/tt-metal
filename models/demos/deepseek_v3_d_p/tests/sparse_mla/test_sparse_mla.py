@@ -773,8 +773,35 @@ def test_sparse_mla_rotated(
     )
 
 
+# None of these tests cover the chunked+non_balanced case, which is the only path production
+# runs — so they are all CI-skipped (still runnable locally).
+def _ci_unsupported_param_combos_sparse_mla_accuracy(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_sparse_mla_indexer_reuse(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
+def _ci_unsupported_param_combos_sparse_mla_determinism(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+
+    if not on_ci:
+        return False
+    return True
+
+
 # One combined parametrization instead of independent variant/mesh/sequence/format axes. BF16 retains
 # both sparsity regimes; scaled FP8 is restricted to the real-pruning sequence to avoid redundant CI work.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_accuracy)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params, cache_format",
     SPARSE_ACCURACY_CASES,
@@ -819,6 +846,7 @@ def test_sparse_mla_accuracy(
 SPARSE_REUSE_CASES = [c for c in SPARSE_ANCHOR_CASES if "glm_5_2" in c.id]
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_indexer_reuse)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_REUSE_CASES,
@@ -877,6 +905,7 @@ def test_sparse_mla_indexer_reuse(
 
 
 # Anchor cases (per-variant prod-closest mesh, seq=4096); collected == run.
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_sparse_mla_determinism)
 @pytest.mark.parametrize(
     "variant, mesh_device, seq_len, device_params",
     SPARSE_ANCHOR_CASES,

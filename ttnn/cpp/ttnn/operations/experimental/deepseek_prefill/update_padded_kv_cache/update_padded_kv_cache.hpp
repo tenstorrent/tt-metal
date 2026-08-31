@@ -41,7 +41,7 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t layer_idx,
     uint32_t num_layers,
     uint32_t kv_actual_global,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> tp_axis = std::nullopt);
 
 // (2) Per-element-tensor form (traceable): `slot_idx`/`kv_actual_global` are read on-device by the
@@ -57,7 +57,7 @@ ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache

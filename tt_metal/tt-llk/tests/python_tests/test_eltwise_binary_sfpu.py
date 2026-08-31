@@ -81,6 +81,21 @@ def _skip_bh_float16_no_dest_acc(formats, dest_acc):
         )
 
 
+def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
+    """SfpuLcm dest_acc=Yes is codegen-sensitive on Blackhole and hangs (extra dest SFPLOAD after
+    SFPU): it passes on an unperturbed build but any codegen shift -- extra nops, an inlining change
+    -- tips it into a TENSIX timeout. Disabled until the missing stall is added. See tt-metal#52997.
+    """
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and mathop == MathOperation.SfpuLcm
+        and dest_acc == DestAccumulation.Yes
+    ):
+        pytest.skip(
+            "SfpuLcm dest_acc=Yes is codegen-sensitive and hangs on Blackhole; see tt-metal#52997"
+        )
+
+
 # =============================================================================
 # Shared crafted-stimuli helpers
 #
@@ -1152,6 +1167,7 @@ _INT_BINARY_STIMULI = {
     dest_acc=[DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc):
+    _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc)
     int_format = DataFormat.UInt32 if mathop in _UINT32_BINARY_OPS else DataFormat.Int32
     formats = InputOutputFormat(int_format, int_format)
     low, high = _INT_BINARY_STIMULI[mathop]

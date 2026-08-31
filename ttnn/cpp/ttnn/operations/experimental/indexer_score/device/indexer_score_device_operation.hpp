@@ -141,16 +141,19 @@ ttnn::Tensor indexer_score_msa(
 // co-schedules the ring_attention all-gather + the indexer compute, overlapping fabric transport with scoring:
 // the reader gates each K band on only the SP shards its tiles land in (per-band overlap, not a coarse whole-
 // gather barrier), then scores exactly as indexer_score_dsa. Same score semantics +
-// block-cyclic remap as indexer_score_dsa. Ring runs over `cluster_axis` (the SP mesh axis) on `topology`
-// (Linear on a non-torus grid). `ag_multi_device_global_semaphore` are the all-gather's own out-ready
-// semaphores; `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
+// block-cyclic remap as indexer_score_dsa. An integer `cluster_axis` keeps the existing independent axis ring.
+// Explicit nullopt selects one direct-neighbor snake ring over the complete 2D mesh, with canonical row-major
+// tensor and causal ranks; that mode requires Ring topology, no `seq_subshard_axis` or `block_cyclic_sp_axis`,
+// and accepts `block_cyclic_chunk_local` alone with SP equal to the mesh size and chunk_local equal to Q's local
+// sequence extent. `ag_multi_device_global_semaphore` are the all-gather's own out-ready semaphores;
+// `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
 ttnn::Tensor ring_indexer_score_dsa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     const ttnn::Tensor& k_local,
     const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     ttnn::ccl::Topology topology,
     uint32_t num_links = 1,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,

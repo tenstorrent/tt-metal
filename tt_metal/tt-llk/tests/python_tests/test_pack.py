@@ -30,6 +30,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     PackerReluType,
+    PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
@@ -37,12 +38,13 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -53,30 +55,38 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+PACK_FORMATS = input_output_formats(
+    [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Int32,
+        DataFormat.Bfp8_b,
+    ]
+)
+PACK_RELU_TYPES = [
+    PackerReluType.NoRelu,
+    PackerReluType.ZeroRelu,
+    PackerReluType.MinThresholdRelu,
+    PackerReluType.MaxThresholdRelu,
+]
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-        ]
-    ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+# Shared with perf_pack.py so the two sweeps stay aligned.
+# dest_index stays a lambda: get_valid_dest_indices also takes all_indices, which
+# is not a sweep axis and would fail dependency resolution if passed directly.
+PACK_SWEEP = dict(
+    formats=PACK_FORMATS,
+    dest_acc=get_valid_dest_accumulation_modes,
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
-    relu_type=[
-        PackerReluType.NoRelu,
-        PackerReluType.ZeroRelu,
-        PackerReluType.MinThresholdRelu,
-        PackerReluType.MaxThresholdRelu,
-    ],
+    relu_type=PACK_RELU_TYPES,
     dest_sync=[DestSync.Half, DestSync.Full],
     dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
         dest_sync, dest_acc, formats, input_dimensions
     ),
 )
+
+
+@parametrize(**PACK_SWEEP)
 def test_pack(
     formats,
     dest_acc,
@@ -84,6 +94,11 @@ def test_pack(
     relu_type,
     dest_sync,
     dest_index,
+    *,
+    is_perf: bool = False,
+    perf_report=None,
+    run_types=None,
+    loop_factor: int = 1,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -173,23 +188,30 @@ def test_pack(
             )
         num_blocks = tile_cnt_A // num_tiles_in_block
 
-    configuration = TestConfig(
-        "sources/pack_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    test_config_kwargs = {
+        "test_name": "sources/pack_test.cpp",
+        "formats": formats,
+        "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILIZE(),
             DEST_SYNC(dest_sync),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             DEST_INDEX(dest_index),
             RELU_CONFIG(relu_config),
             NUM_FACES(num_faces=FACES_PER_TILE),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -199,9 +221,18 @@ def test_pack(
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 

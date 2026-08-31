@@ -23,8 +23,8 @@ void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_arg(args::per_core_tile_cnt);
     constexpr uint32_t onetile = 1;
 
-    unary_op_init_common(dfb::in, dfb::out);
-    copy_tile_init(dfb::in);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
 
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);

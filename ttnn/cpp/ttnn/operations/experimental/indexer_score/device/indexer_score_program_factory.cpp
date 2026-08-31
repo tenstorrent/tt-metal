@@ -339,6 +339,8 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         return ct;
     }();
     reader_ct.insert(reader_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
+    // Keep the shared reader's full-mesh rank-mapping CT tail canonical for the classic path.
+    reader_ct.insert(reader_ct.end(), {0u, 0u, 0u, 0u});
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(0u);                             // fused_ring off

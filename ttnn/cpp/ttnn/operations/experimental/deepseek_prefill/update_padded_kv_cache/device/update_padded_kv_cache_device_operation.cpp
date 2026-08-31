@@ -4,7 +4,9 @@
 
 #include "update_padded_kv_cache_device_operation.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -13,6 +15,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache {
@@ -69,15 +72,25 @@ constexpr uint32_t kMetadataBytes = 16;
 void validate_runtime_args(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
-    TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
+    TT_FATAL(
+        !args.cluster_axis.has_value() || *args.cluster_axis < 2,
+        "cluster_axis must be 0, 1, or None for a complete-mesh row-major cache; got {}",
+        args.cluster_axis);
     if (args.tp_axis.has_value()) {
         const uint32_t tp_axis = args.tp_axis.value();
+        // Complete-mesh mode already linearizes BOTH mesh axes into one block-cyclic order, so a
+        // separately named TP axis has nothing left to describe and would double-count the extent.
+        TT_FATAL(
+            args.cluster_axis.has_value(),
+            "tp_axis ({}) requires an explicit cluster_axis; complete-mesh mode (cluster_axis=None) already "
+            "spans both mesh axes",
+            tp_axis);
         TT_FATAL(tp_axis == 0 || tp_axis == 1, "tp_axis ({}) must be 0 or 1", tp_axis);
         TT_FATAL(
-            tp_axis != args.cluster_axis,
+            tp_axis != *args.cluster_axis,
             "tp_axis ({}) must differ from cluster_axis ({})",
             tp_axis,
-            args.cluster_axis);
+            *args.cluster_axis);
         // The reader picks this chip's 1/tp source window from the HOST kv_actual_global (common arg), while
         // on the metadata path the writer reads the real value on-device and the host scalar is always 0. The
         // two would silently disagree for any chunk start that is not window-aligned, so reject the combo.
@@ -95,6 +108,26 @@ void validate_runtime_args(
     const auto& cache = tensor_args.cache;
     const auto& mesh_view = cache.device()->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
+    if (!args.cluster_axis.has_value()) {
+        const uint32_t mesh_size = mesh_view.num_rows() * mesh_view.num_cols();
+        TT_FATAL(
+            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(cache) &&
+                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(tensor_args.input),
+            "update_padded_kv_cache cluster_axis=None requires row-major tensor coordinates");
+        const uint32_t cache_shard_factor = ttnn::operations::ccl::common::tensor_dim_shard_factor(cache, 2);
+        const uint32_t input_shard_factor =
+            ttnn::operations::ccl::common::tensor_dim_shard_factor(tensor_args.input, 2);
+        TT_FATAL(
+            cache_shard_factor == mesh_size && input_shard_factor == mesh_size,
+            "update_padded_kv_cache cluster_axis=None requires cache and input sequence dim 2 sharded across all "
+            "{} mesh devices (got cache factor {}, input factor {}; cache distribution {}, placements {}, rank {})",
+            mesh_size,
+            cache_shard_factor,
+            input_shard_factor,
+            cache.tensor_topology().distribution_shape(),
+            cache.tensor_topology().placements(),
+            cache.logical_shape().rank());
+    }
 
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
@@ -140,8 +173,10 @@ void validate_runtime_args(
 
         // This chunk is written at a per-chip offset derived from kv_actual_global; the prior valid KV
         // plus this chunk must fit the global cache capacity (sp_factor*tp_factor slabs of cache_seq
-        // tokens each), else the write spills past the cache. sp/tp_factor = mesh extents.
-        const uint32_t sp_factor = mesh_axis_extent(mesh_view, args.cluster_axis);
+        // tokens each), else the write spills past the cache. sp_factor is the mesh extent along
+        // cluster_axis, or the tensor's whole device list in complete-mesh mode; tp_factor is 1 unless
+        // the cache is TP-deduped (and TP is rejected in complete-mesh mode, so the two never stack).
+        const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
         const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
 
         const uint32_t input_seq = tensor_args.input.padded_shape()[-2];
@@ -259,6 +294,15 @@ UpdatePaddedKvCacheDeviceOperation::spec_return_value_t UpdatePaddedKvCacheDevic
     return tensor_args.cache.tensor_spec();
 }
 
+UpdatePaddedKvCacheDeviceOperation::topology_return_value_t
+UpdatePaddedKvCacheDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    // In-place: preserve the cache's exact distribution. The generic output-topology inference sees
+    // both cache and update inputs and otherwise collapses a valid Shard(2),Shard(2) cache to the
+    // cache allocator's legacy Shard(2),Replicate projection before validation and launch.
+    return {tensor_args.cache.tensor_topology()};
+}
+
 UpdatePaddedKvCacheDeviceOperation::tensor_return_value_t UpdatePaddedKvCacheDeviceOperation::create_output_tensors(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     // In-place: return a handle to the cache.
@@ -346,8 +390,23 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
     // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
     const auto& mesh_view = device->get_view();
-    const uint32_t sp_factor = mesh_axis_extent(mesh_view, args.cluster_axis);
-    const uint32_t sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
+    uint32_t sp_coord;
+    if (args.cluster_axis.has_value()) {
+        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    } else {
+        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
+        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
+        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
+        //
+        // This value is ALREADY the linearized sp*tp position that the block-cyclic math below wants:
+        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
+        // mode, so tp_factor collapses to 1 and linear_coord below reduces to this index unchanged.
+        const auto& topology_coords = cache.tensor_topology().mesh_coords();
+        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
+        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
+        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
+    }
     // On the metadata path slot_idx and kv_actual_global are not host values — the writer kernel reads
     // element [0] of each per-element tensor and divides kv_actual_global by TILE_HEIGHT on-device.
 
@@ -573,7 +632,7 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> tp_axis) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -35,9 +36,13 @@ struct UpdatePaddedKvCacheDeviceOperation {
         uint32_t kv_actual_global;  // scalar path only
         uint32_t layer_idx;
         uint32_t num_layers;
-        uint32_t cluster_axis;  // the SP (sequence-parallel) axis the cache is sharded on
+        // Named SP (sequence-parallel) mesh axis the cache is sharded on, or nullopt when sequence
+        // shards span the complete 2D mesh in canonical row-major coordinate order. Row-major over the
+        // full mesh IS the sp*tp linearization below, which is why the two modes share the offset math.
+        std::optional<uint32_t> cluster_axis;
         // KV dedup: second axis to also shard the cache across. The input stays TP-replicated and each chip
         // persists only its own 1/tp window; the axes linearize to one block-cyclic axis of size sp*tp.
+        // Mutually exclusive with complete-mesh mode, which already spans both axes.
         std::optional<uint32_t> tp_axis;
     };
 
@@ -55,6 +60,7 @@ struct UpdatePaddedKvCacheDeviceOperation {
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
 
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -100,6 +106,7 @@ struct UpdatePaddedKvCacheDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static topology_return_value_t compute_output_topologies(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -120,7 +127,7 @@ ttnn::Tensor update_padded_kv_cache(
     uint32_t kv_actual_global,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> tp_axis = std::nullopt);
 
 }  // namespace ttnn::prim
