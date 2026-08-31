@@ -489,3 +489,61 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    ("in0_val", "in1_val", "in2_val", "value", "expected"),
+    [
+        # #54055 overflow cases: |in1 * value| > FLT_MAX, yet in0 + value * (in1 / in2) is finite.
+        # The kernel used to form in1 * value first -> +/-inf; dividing first keeps it finite.
+        (0.0, 3.0e38, 8.0, 4.0, 1.5e38),
+        (0.0, 3.0e38, 16.0, 10.0, 1.875e38),
+        (1.0, 2.0e38, 4.0, 3.0, 1.5e38),
+        (0.0, 1.0e38, 100.0, 50.0, 5.0e37),
+        (-2.0, 3.0e38, 8.0, 4.0, 1.5e38),
+        # ordinary-magnitude controls: must keep their exact values after the reorder
+        (5.0, 1.0, 2.0, 4.0, 7.0),
+        (0.0, 6.0, 3.0, 7.0, 14.0),
+    ],
+)
+def test_addcdiv_divides_before_scaling(device, in0_val, in1_val, in2_val, value, expected):
+    """Regression guard: addcdiv must apply 1/in2 before scaling by value (#54055).
+
+    The SFPU kernel previously computed `in0 + (in1 * value_float * recip(in2))` left-associatively:
+    `in1 * value_float` is rounded in the destination register *before* the reciprocal participates,
+    so for |in1 * value| > FLT_MAX the intermediate overflows to +/-inf and poisons the lane -- even
+    when the exact result `in0 + value * (in1 / in2)` is an ordinary finite number, contradicting
+    torch.addcdiv's documented formula `input + value * (tensor1 / tensor2)`. Applying the reciprocal
+    before the scalar keeps these cases finite; inputs whose exact result truly overflows still
+    return inf.
+    """
+    shape = (1, 1, 32, 32)
+    in0 = ttnn.from_torch(
+        torch.full(shape, in0_val, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    in1 = ttnn.from_torch(
+        torch.full(shape, in1_val, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    in2 = ttnn.from_torch(
+        torch.full(shape, in2_val, dtype=torch.float32),
+        device=device,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    out = ttnn.to_torch(ttnn.addcdiv(in0, in1, in2, value=value))
+    expected_t = torch.full(shape, expected, dtype=torch.float32)
+
+    assert torch.isfinite(out).all(), (
+        f"addcdiv returned a non-finite value (expected {expected}); "
+        f"got {out.flat[0].item()} -- in1 * value overflowed before the divide was applied"
+    )
+    assert torch.allclose(out, expected_t, rtol=1e-3), (
+        f"addcdiv mismatch: got {out.flat[0].item()}, expected {expected}"
+    )

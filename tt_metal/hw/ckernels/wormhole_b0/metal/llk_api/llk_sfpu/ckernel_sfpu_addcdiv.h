@@ -34,7 +34,11 @@ inline void calculate_addcdiv(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 + (in1 * value_float * sfpu_reciprocal_iter<2>(in2));
+        // Divide before scaling by value (matches torch.addcdiv's documented
+        // `input + value * (tensor1 / tensor2)` order): applying the reciprocal first keeps
+        // the intermediate in range -- `in1 * value_float` overflows to +/-inf whenever
+        // |in1 * value| > FLT_MAX, even when the exact result is finite (see #54055).
+        sfpi::vFloat result = in0 + ((in1 * sfpu_reciprocal_iter<2>(in2)) * value_float);
         if constexpr (!is_fp32_dest_acc_en) {
             result = float32_to_bf16_rne(result);
         }
