@@ -102,31 +102,38 @@ inline void calculate_i1() {
         // for the asymptotic block to use.
         {
             const sfpi::vFloat t = x * x;
+            // numer and denom are independent Horner chains, so their steps are interleaved
+            // rather than run back to back: on Wormhole a dependent SFPMAD stalls one cycle
+            // waiting on its predecessor, and each chain fills the other's stall slot. The
+            // sfpi builtins are ordered side effects, so the compiler will not do this for us
+            // -- the alternation has to be in the source. Coefficients ascend exactly as
+            // PolynomialEvaluator::eval consumed them, so both chains keep their operations,
+            // operands and order: bit-exact.
 #ifdef INP_FLOAT32
-            sfpi::vFloat numer = PolynomialEvaluator::eval(
-                t,
-                5.0000000000e-01f,
-                5.6819390506e-02f,
-                1.9247245509e-03f,
-                2.8397364076e-05f,
-                2.0916867527e-07f,
-                7.7937084564e-10f,
-                1.2293555930e-12f);
-            sfpi::vFloat denom = PolynomialEvaluator::eval(
-                t,
-                1.0f,
-                -1.1361218989e-02f,
-                6.1268139689e-05f,
-                -1.9771712800e-07f,
-                3.8127551116e-10f,
-                -3.1218170410e-13f,
-                -3.0635529988e-16f,
-                7.4301498523e-19f);
+            sfpi::vFloat numer = 1.2293555930e-12f;
+            sfpi::vFloat denom = 7.4301498523e-19f;
+            numer = numer * t + 7.7937084564e-10f;
+            denom = denom * t + -3.0635529988e-16f;
+            numer = numer * t + 2.0916867527e-07f;
+            denom = denom * t + -3.1218170410e-13f;
+            numer = numer * t + 2.8397364076e-05f;
+            denom = denom * t + 3.8127551116e-10f;
+            numer = numer * t + 1.9247245509e-03f;
+            denom = denom * t + -1.9771712800e-07f;
+            numer = numer * t + 5.6819390506e-02f;
+            denom = denom * t + 6.1268139689e-05f;
+            numer = numer * t + 5.0000000000e-01f;
+            denom = denom * t + -1.1361218989e-02f;
+            denom = denom * t + 1.0f;
 #else
-            sfpi::vFloat numer = PolynomialEvaluator::eval(
-                t, 4.9992737740e-01f, 5.4503594600e-02f, 1.6126291630e-03f, 2.0223499130e-05f);
-            sfpi::vFloat denom =
-                PolynomialEvaluator::eval(t, 1.0f, -1.6242591070e-02f, 1.0333660750e-04f, -2.5076132990e-07f);
+            sfpi::vFloat numer = 2.0223499130e-05f;
+            sfpi::vFloat denom = -2.5076132990e-07f;
+            numer = numer * t + 1.6126291630e-03f;
+            denom = denom * t + 1.0333660750e-04f;
+            numer = numer * t + 5.4503594600e-02f;
+            denom = denom * t + -1.6242591070e-02f;
+            numer = numer * t + 4.9992737740e-01f;
+            denom = denom * t + 1.0f;
 #endif
             val = numer * x * sfpu_reciprocal<APPROXIMATION_MODE>(denom);
         }

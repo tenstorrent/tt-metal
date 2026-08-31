@@ -468,11 +468,38 @@ the per-element loop, none in cold branches, so the counts are directly actionab
 by opportunity is close to the *inverse* of the ranking by feasibility: the kernels with the most
 stalls are the most predicated.
 
-**Where §2 actually applies.** `sigmoid` is the best risk-adjusted target — 40 stalls with only 8
-`cc`, i.e. mostly straight-line, and the same polynomial shape as `i0`. Then `gelu_tanh` (27/8) and
-`i1` (16/3). `polygamma` (14/0), `cosine` (10/0), `cbrt` (10/0) and `expm1_cw` (6/0) are
-structurally ideal but individually small. `softplus` sits just under the reporting threshold and
-still carries 6 per element with `i0`'s exact shape, so it remains the cheapest known-good rewrite.
+**A third precondition: register headroom — and it is the one that actually bites.** Predication
+and stall count are not enough. Two interleaved elements double the live values, and the SFPU has
+only 8 general LRegs. `i0` fit (6 of 8). The next three candidates did not, and the results were
+measured rather than predicted:
+
+| op | stalls / `cc` | attempt | result |
+|---|---|---|---|
+| `sigmoid` | 40 / 8 | 2 elements, stage-pairwise (exp, then `1+`, then reciprocal) | **regression: +2.7 % and +6.8 %** on its two variants. Static 276 → 388 `sfp` with new `SFPMOV` spills. Reverted. |
+| `gelu_tanh` | 27 / 8 | assessed, not landed | already emits 13 `SFPMOV` and carries an explicit `// reload due to register pressure` at *one* element per iteration. No headroom for a second. |
+| `i1` | 16 / 3 | interleaved its two *independent* chains (`number`/`denom`) instead of two elements | **−1.53 %**, bit-exact, no extra registers. |
+
+`sigmoid` fails for a specific reason worth remembering: its body is `exp → 1+ → reciprocal`, a
+single dependent chain built from *composed helpers*. Pairing at stage granularity does not
+interleave anything, because the sfpi builtins are ordered side effects — `exp(v0)`'s whole
+instruction stream still precedes `exp(v1)`'s. Getting a real interleave there would require
+2-wide versions of `_sfpu_exp_21f_bf16_` and `sfpu_reciprocal_iter`, i.e. refactoring shared
+helpers used by many kernels. That may be worth doing, but it is a much bigger change than §2
+looked like from the stall counts.
+
+**So the durable lesson is that §2 needs all three:** stalls in the loop, little predication, **and**
+spare registers. Of the three candidates the survey ranked highest, only the one where two
+independent chains already existed inside a single element paid off.
+
+**`i1`'s pattern is the transferable one.** Rather than interleaving two elements, look for two
+independent chains already present in one element — `i1` computes a rational approximation as
+`number/denom`, two separate Horner chains that were being run back to back. Interleaving those costs
+no extra registers at all. Any kernel evaluating a ratio of polynomials has the same opportunity.
+
+`polygamma` (14/0), `cosine` (10/0), `cbrt` (10/0) and `expm1_cw` (6/0) remain structurally ideal
+for element interleaving but are individually small. `softplus` sits just under the reporting
+threshold, still carries 6 per element, and has `i0`'s exact shape — the cheapest remaining
+known-good rewrite.
 
 **For the heavily predicated kernels, §3 comes first and unlocks §2.** `rpow` carries ~53 `v_if`
 blocks and `gelu_derivative` ~33. Collapsing those to branch-free idioms — the `relu_max` treatment
@@ -750,8 +777,10 @@ Remaining order of work (items 1–2 are **done** — see §0):
    alternating steps; see §2.
 4. **2-way interleave (§2) on `softplus`** — still 6 `SFPNOP` per element after §1, same
    `PolynomialEvaluator::eval` shape as `i0`. Cheapest next win.
-5. **2-way interleave on `sigmoid`** (40 stalls, only 8 `cc`), then `gelu_tanh` and `i1` — the
-   stall-heavy kernels §2 can actually reach.
+5. ~~2-way interleave on `sigmoid`, `gelu_tanh`, `i1`~~ — **attempted; see §2.** `sigmoid`
+   regressed on register pressure and was reverted, `gelu_tanh` has no register headroom, and `i1`
+   paid −1.53 % via a different route (interleaving its own `number`/`denom` chains). The remaining
+   element-interleave candidates are `softplus`, then `polygamma` / `cosine` / `cbrt`.
 5a. **§3 on `rpow` and `gelu_derivative`** — ~53 and ~33 `v_if` blocks. Worth doing for its own
    sake (§3 measured −39 % on `relu_max`) and it unlocks §2 on the two largest stall counts in the
    tree, 168 and 138. This is the highest-ceiling item in either document.
@@ -1090,6 +1119,8 @@ Recorded so they are not rediscovered.
 | 4-way element interleave | `dst_reg[k]` immediate window is `[-8,7]` half-rows; overflows and fails to compile once unrolled. §2. |
 | Round the Horner-tail constant `4.99999851e-1f` to `0.5f` | **Regresses WH** (+1): the bf16 immediate splits the fused `SFPMAD` into `SFPMULI`+`SFPADD` and the added `SFPNOP`s cost more than the two saved loads. Companion doc §4, T1-d. |
 | Assume `erf`/`i1`/`digamma`/`gelu` have free CREG slots | Wrong — all reach `sfpu_reciprocal_init`, which claims all three. Availability must be resolved transitively. §1. |
+| Rank §2 candidates by stalls and predication alone | Misses register headroom, which is what actually blocked the top two. `sigmoid` regressed +2.7 %/+6.8 % on spills; `gelu_tanh` already emits 13 `SFPMOV` and reloads `x` for pressure at one element per iteration. Check for existing `SFPMOV` count and pressure comments before attempting. §2. |
+| Interleave two elements at *stage* granularity through composed helpers | Does nothing. `exp(v0)` then `exp(v1)` keeps both instruction streams intact and sequential, because the sfpi builtins are ordered side effects. A real interleave needs 2-wide helper internals. §2. |
 | Rank §2 candidates by `SFPNOP` count alone | Ignores that interleaving cannot cross a `v_if` — the condition-code state is shared, so two elements taking different branches cannot have their predicated blocks interleaved. The stall ranking is close to the inverse of the feasibility ranking: `rpow` (168 stalls, 106 `cc`) and `gelu_derivative` (138, 67) are the worst §2 targets despite topping the list. Read `SFPNOP` with `cc`. §2. |
 | Take the first body-bearing ELF per op when scanning | Each op builds one ELF per PerfRunType and they differ in size; the first one over a size threshold is not the largest. This understated `rpow` as 35 stalls when it has 168, and `sigmoid` as 18 when it has 40. Pick the max-`sfp` ELF per op. §2. |
 | Scan for `SFPNOP` density while the perf build is still compiling | Produces a confidently wrong ranking. A scan at 312 of 1369 math ELFs omitted `gelu_derivative` (138 NOPs), `rsqrt_compat`, `mish` and `gelu` entirely — every one of the four largest — and promoted `erfinv` to top candidate. Wait for the build to finish. §2. |
