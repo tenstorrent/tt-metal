@@ -80,7 +80,7 @@ tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @ten
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra
 
 # Emule software emulation tests
-tests/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
+tests/emule/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT
@@ -152,7 +152,7 @@ tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @anashTT @mo-tenstorrent @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
-tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
+tt_metal/impl/emulation/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental impl
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
@@ -169,7 +169,7 @@ tt_metal/impl/internal/service/ @jbaumanTT @tt-asaigal @sidnadTT
 tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT
-tt_metal/impl/memory_tracking/ @aperezvicente-TT @alnah005
+tt_metal/impl/memory_tracking/ @aperezvicente-TT
 tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu
 tt_metal/impl/profiler/ @mo-tenstorrent @akerteszTT
@@ -259,7 +259,7 @@ tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yug
 tests/tt_metal/tt_fabric/physical_discovery/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr
 tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT
 tests/tt_metal/tt_fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
+tests/tt_metal/tt_metal/api/emule/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 tests/tt_metal/tt_metal/debug_tools/ @tenstorrent/metalium-developers-triage
 tests/tt_metal/tt_metal/llk/ @tenstorrent/low-level-team-wh-bh @tenstorrent/low-level-team-quasar
@@ -595,7 +595,7 @@ models/experimental/speecht5_tts @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/transfuser/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT
-models/experimental/tt_symbiote @alnah005 @mbahnasTT @yieldthought @uaydonat
+models/experimental/tt_symbiote @mbahnasTT @yieldthought @uaydonat
 models/experimental/tt_transformers_v2 @gwangTT @yieldthought @uaydonat
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/perf/ @yieldthought @esmalTT @mtairum @uaydonat
