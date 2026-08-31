@@ -5,12 +5,14 @@
 #include "shm_publisher.hpp"
 
 #include <fcntl.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -59,10 +61,44 @@ ShmPublisher::~ShmPublisher() { close(); }
 bool ShmPublisher::open(uint64_t asic_id, uint32_t arch_id, uint32_t signal_sources, uint32_t num_cores) {
     close();
     shm_name_ = shm_name_for(asic_id);
-    // Replace any stale file from a crashed collector.
-    ::shm_unlink(shm_name_.c_str());
+    // EXCLUSIVE WRITER, enforced by flock -- not by unlinking.
+    //
+    // This used to `shm_unlink` first and then create with O_CREAT, on the theory that it
+    // was clearing a stale file from a crashed collector. What it actually did was let a
+    // SECOND collector silently steal the name: unlink detaches the inode the first one is
+    // still writing to, O_CREAT makes a fresh one, and from then on the first collector
+    // publishes into an inode no reader can open. The viewer sees whichever collector
+    // created each chip's file last, so with two running the grid shows a mix of live and
+    // permanently frozen chips -- diagnosed as "the TUI is hung" before it was understood.
+    //
+    // flock has exactly the lifetime we need and no heuristics: it is released when the fd
+    // closes OR when the process dies, so a crashed collector's file is takeable while a
+    // live one's is not. No pid liveness guessing, no unlink race.
     fd_ = ::shm_open(shm_name_.c_str(), O_CREAT | O_RDWR, 0644);
     if (fd_ < 0) {
+        return false;
+    }
+    if (::flock(fd_, LOCK_EX | LOCK_NB) != 0) {
+        // Someone live owns this chip. Name them: the pid is right there in the header.
+        uint32_t other = 0;
+        UtilShmHeader peek{};
+        if (::pread(fd_, &peek, sizeof(peek), 0) == static_cast<ssize_t>(sizeof(peek)) &&
+            std::memcmp(peek.magic, kShmMagic, 4) == 0) {
+            other = peek.collector_pid;
+        }
+        std::fprintf(
+            stderr,
+            "ttnvtop-collector: another collector is already publishing %s%s%u%s.\n"
+            "  Two collectors cannot share one chip's shared memory -- the second would take\n"
+            "  the name and the first would publish where no viewer can see it. Stop that one\n"
+            "  first, or use --device to give each collector a disjoint set of chips.\n",
+            shm_name_.c_str(),
+            other ? " (pid " : "",
+            other,
+            other ? ")" : "");
+        std::fflush(stderr);
+        ::close(fd_);
+        fd_ = -1;
         return false;
     }
     map_size_ = shm_file_size(num_cores);

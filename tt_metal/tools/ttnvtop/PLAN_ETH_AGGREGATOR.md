@@ -2216,3 +2216,82 @@ Recovery, in order, all verified:
   the pytest simultaneously, on a board carrying 37,091 AER entries and an `a1:00.0`
   physical-layer RxErr storm. SIGBUS in two unrelated processes at once is a PCIe fault,
   not our code. It did not recur after the board reset.
+
+## 5v. The shutdown fixes hold; "the TUI is hung" was three separate publisher bugs -- 2026-08-31
+
+### Shutdown, measured under live fabric load
+
+    up: 8/8   skips: 2        journal-fed: 8/8
+    collector exited in 6s code 130   (watchdog fired: 1)
+    workload ALIVE after collector exit (good)
+    stopped 8 of 8 aggregator(s).
+
+The 5u live-lock is closed. A SIGINT that used to leave two threads spinning on the
+interprocess tunnel locks forever now takes the process down in 6 s, the workload behind
+it survives, and the ethernet cores clear 8/8 with no reset. Three changes did it:
+
+1. `read_chunked_stoppable` -- the journal read is issued in <=1 KiB pieces with a g_stop
+   check between them, so UMD's interprocess lock is released between tunnel blocks
+   instead of being held across all three.
+2. A shutdown watchdog: once a stop is requested the process leaves within a grace period
+   (5 s, TTNVTOP_SHUTDOWN_GRACE_S) whether its threads joined or not. A thread inside
+   UMD's tunnel poll cannot be interrupted, so leaving is the only thing that releases the
+   lock. The robust mutexes are then recovered by the kernel -- measured in 5u, 20 s.
+3. Shutdown asks every live aggregator to retire before joining, so a normal Ctrl-C leaves
+   the ethernet cores clean without a second command.
+
+### RETRACTED: falling back to local-only
+
+I added an automatic re-exec that dropped remote discovery when discovery timed out, and
+backed it out the same session. Remote chips ARE the case this feature exists for, so
+"give up on remote telemetry" is not an acceptable automatic response to a wedged tunnel.
+`--local-only` survives only as an explicit user choice, never a fallback.
+
+### "The TUI is hung" -- three bugs, none of them in the TUI
+
+The viewer was the suspect and was innocent. What it faithfully displayed:
+
+**a) Two collectors silently stole each other's SHM files.** `ShmPublisher::open` did
+`shm_unlink` then `shm_open(O_CREAT)`, believing it was clearing a stale file. What it
+actually did was let a second collector detach the inode the first was still writing to
+and create a fresh one. From then on the first published into an inode no reader could
+open. Observed with two live collectors -- the pid stamp differed per file and half the
+grid was frozen:
+
+    tt_device_0_util pid=115222 age= 41.26s F:nz=0    <- writer alive, publishing nowhere
+    tt_device_4_util pid=115216 age=  0.08s F:nz=18
+
+Now an flock on the SHM fd: released on close OR on process death, so a crashed
+collector's file is takeable and a live one's is not. No pid liveness guessing, no unlink
+race. A second collector is refused by name, with the holder's pid.
+
+**b) Device I/O on the publish path froze every chip at once.** The publish loop called
+`get_clock()` per chip inline, commented "non-blocking" -- it is a legacy ARC message on
+Wormhole, and we measured it timing out (`Timed out after waiting 1000 ms for ARC to
+respond`). The ported `dram_update` had the same shape on the sampler thread, iterating
+all chips. Either one stalling froze `last_update_us` for every chip, which is precisely a
+hung grid. Both are now per-chip telemetry threads; publishing touches no device at all.
+This is the FOURTH instance of the same defect (ring drain 5t, journal feed, DRAM, AICLK):
+any all-chips loop that does device I/O starves every chip behind the slowest link.
+Afterwards, all 8 chips: `age=0.02-0.11s`.
+
+**c) Two writers fought over the same two fields.** The journal feed writes
+`compute_busy_p1000`/`sfpu_busy_p1000` for the pipe `counter_sel` says was measured; the
+publish loop independently recomputed BOTH from its own EWMAs every tick. Whichever ran
+last won, so a reading jumped between chips and between the FPU and SFPU fields, and the
+unmeasured pipe got clobbered with a stale EWMA -- reported as "appearing intermittent,
+and sometimes telemetry just hangs", and the likely explanation of the flat zeros in 5u.
+The feed now owns those fields on any chip with `journal_active`.
+
+### Still open
+
+- AICLK reads 0 on some remote chips (chip 7 consistently, chip 5 intermittently) while
+  its neighbours report 878-1000 MHz. Per-chip now, so it no longer harms anything else.
+- The chip-summary line truncates: cores showing 0.8% render as a chip average of `F 0%`,
+  which reads as "no activity" when there is some. A rounding choice in the viewer.
+- The single-writer refusal is UNVERIFIED. The test's second collector exited rc=3 --
+  discovery timeout, contending with the first for the tunnel -- so it never reached
+  `shm_open` and the flock path did not run. Needs a retest with a longer discovery bound.
+- Under a CCL-only workload F/S sit near 1%, which is plausible (fabric collectives are
+  NOC and DRAM work, not FPU math: DRAM read 33 GB/s per chip, 12% of 288) but is not the
+  same thing as having been validated against a known-utilization kernel.

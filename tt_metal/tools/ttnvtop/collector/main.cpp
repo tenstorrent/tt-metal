@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cerrno>
 #include <cstring>
 #include <deque>
 #include <fstream>
@@ -198,6 +199,7 @@ struct CliOptions {
     int fidelity_probe_s = 0;         // Phase 2.2: drain the aggregator journal for N s and report loss
     bool stop_aggregator = false;     // Phase 2.2: ask every running aggregator to return
     bool pin_tunnel = false;          // Narrow each remote chip's tunnel to its real link channels
+    bool local_only = false;          // Skip remote discovery entirely -- the rescue path for a wedged tunnel
     std::string peek;                 // "chip,x,y,addr[,len]" -- read raw L1 twice and print it
     int watchdog_s = 0;               // Guard against a dead aggregator hard-blocking the next device open
 
@@ -253,8 +255,6 @@ void print_help(const char* argv0) {
               << kDefaultPublishHz
               << ").\n"
                  "  --device N              Only monitor chip N. Repeat to select several.\n"
-                 "  --journal-probe        scan every chip's ethernet cores for an\n"
-                 "                         aggregator journal, print what was found, exit\n"
                  "  --journal-probe         Scan every chip's ethernet cores for a Phase 2.2\n"
                  "                          aggregator journal, print what was found, and exit.\n"
                  "  --remote-budget N       Tunnelled transactions/s the per-core ring drain may\n"
@@ -262,6 +262,10 @@ void print_help(const char* argv0) {
                  "                          feeding it (default 1500, 0 = uncapped). A chip with an\n"
                  "                          aggregator does not drain per-core at all, so this\n"
                  "                          never applies to it.\n"
+                 "  --local-only            Monitor only the MMIO chips, skipping remote discovery.\n"
+                 "                          An explicit choice, never a fallback: the remote chips ARE\n"
+                 "                          the hard case this tool exists for, so dropping them is\n"
+                 "                          never the automatic answer to a wedged tunnel.\n"
                  "  --log-file PATH         Redirect collector stderr (incl. UMD logs) to PATH.\n"
                  "\n"
                  "Examples:\n"
@@ -343,6 +347,8 @@ bool parse_cli(int argc, char* argv[], CliOptions& out) {
             out.pin_tunnel = true;
         } else if (a == "--stop-aggregator") {
             out.stop_aggregator = true;
+        } else if (a == "--local-only") {
+            out.local_only = true;
         } else if (a == "--fidelity-probe") {
             const char* v = need_arg("--fidelity-probe");
             if (v == nullptr) {
@@ -593,6 +599,16 @@ struct ChipState {
     std::vector<uint32_t> dram_noc0_y;
     std::vector<uint32_t> dram_prev_rd, dram_prev_wr;
     bool dram_primed = false;
+    // AICLK cached by this chip's OWN telemetry thread. Read on the publish path, which
+    // must never touch the device: get_clock() is a legacy ARC message on Wormhole and we
+    // have measured it timing out ("Timed out after waiting 1000 ms for ARC to respond"),
+    // so calling it inline made one sick chip stall the publish of every chip behind it in
+    // the same pass -- the whole SHM set went stale and the viewer showed a frozen grid.
+    // Plain word, like the dram_* fields beside it: one aligned u32 written by this
+    // chip's telemetry thread and read by the publisher. The race is benign and
+    // advisory -- a reader either sees the old clock or the new one -- and ChipState
+    // has to stay movable because `chips` is a vector that grows during discovery.
+    uint32_t aiclk_mhz = 0;
     uint32_t dram_rd_mbps = 0;
     uint32_t dram_wr_mbps = 0;
     uint32_t dram_peak_mbps = 0;
@@ -763,6 +779,29 @@ struct RegistryWriter {
 };
 
 std::atomic<bool> g_stop{false};
+
+// Read L1 in <=1 KiB pieces, checking g_stop between them.
+//
+// UMD splits a remote transfer into MAX_BLOCK_SIZE tunnel transactions -- 1024 B when the
+// process has no SysmemManager, which a UMD-only monitor does not -- and holds the
+// INTERPROCESS mutex `NON_MMIO_<n>_PCIe` for the whole call, not per block. So the 2112 B
+// journal read (64 B header + 64 cores x 32 B) is three blocks of held lock with no point
+// at which a stop can take effect. One block per call gives back both: the lock is
+// released between blocks so another process can interleave, and a stop lands within one
+// block instead of never. See 5u -- two feed threads spinning inside this call held two of
+// those locks for nine minutes and starved a Llama teardown in an unrelated process.
+//
+// On an MMIO chip this is a plain BAR access and the chunking costs nothing measurable.
+inline bool read_chunked_stoppable(TTDevice* dev, const tt_xy_pair& core, uint64_t addr, uint8_t* dst, uint32_t bytes) {
+    constexpr uint32_t kChunk = 1024;
+    for (uint32_t off = 0; off < bytes; off += kChunk) {
+        if (g_stop.load(std::memory_order_relaxed)) {
+            return false;  // partial buffer; caller must not publish it
+        }
+        dev->read_from_device(dst + off, core, addr + off, std::min(kChunk, bytes - off));
+    }
+    return true;
+}
 
 // Set once discovery has returned. Until then the process is inside a blocking UMD
 // call that no signal can interrupt.
@@ -1009,7 +1048,14 @@ int main(int argc, char* argv[]) {
     constexpr uint32_t kLaunchBufEntries = launch_msg_buffer_num_entries;
 
     TopologyDiscoveryOptions opts;
-    opts.discover_remote_devices = true;
+    // --local-only is the RESCUE path. Remote discovery is what hangs when an ethernet
+    // core's firmware heartbeat has stopped: UMD walks the links to build the tunnel and
+    // sits in ETH_STARTUP_TIMEOUT (10 s/core, compile-time) on the dead one. Skipping it
+    // reaches the MMIO chips over their own BARs, which cannot hang on a remote link, so
+    // `--stop-aggregator --local-only` can still clear the local ethernet cores. Freeing
+    // those is often what lets a subsequent full discovery -- and therefore a full
+    // `--stop-aggregator` -- succeed without a board reset. See 5u.
+    opts.discover_remote_devices = !cli.local_only;
     opts.wait_on_ethernet_link_training = false;
     opts.low_power = true;
     opts.cmfw_mismatch_action = TopologyDiscoveryOptions::Action::IGNORE;
@@ -1037,6 +1083,9 @@ int main(int argc, char* argv[]) {
                             "  UMD is still inside its own timeouts (ETH_STARTUP 10 s/core, ARC_STARTUP 300 s).\n"
                             "  Usual cause: an ethernet core whose firmware heartbeat has stopped - for example a\n"
                             "  persistent kernel occupying ERISC0, or a process killed mid-transaction.\n"
+                            "  A collector exiting here leaves nothing behind: it has written no bytes yet.\n"
+                            "  If this persists, an ethernet core is still holding a stopped heartbeat from\n"
+                            "  an EARLIER process that did not stop its aggregator; that needs a board reset.\n"
                             "  Raise the bound with TTNVTOP_DISCOVERY_TIMEOUT_S if this machine is simply slow.\n",
                             limit_s);
                         std::fflush(stderr);
@@ -1049,6 +1098,44 @@ int main(int argc, char* argv[]) {
     }
     auto [cluster_desc, devices] = TopologyDiscovery::discover(opts);
     g_discovery_done.store(true, std::memory_order_relaxed);
+
+    // SHUTDOWN WATCHDOG -- the guarantee that a stop is a stop.
+    //
+    // g_stop is cooperative, and a thread inside UMD's remote-tunnel poll does not
+    // cooperate: it spins on the remote ERISC command queue with no timeout, holding the
+    // interprocess `NON_MMIO_<n>_PCIe` mutex the whole time. No signal reaches it. In 5u
+    // two feed threads sat like that at 100% CPU for nine minutes after a SIGINT, holding
+    // two of those locks, and a Llama-70B teardown in a completely separate process
+    // blocked behind them until this collector was SIGKILLed from outside.
+    //
+    // A monitor that can wedge the machine it monitors is worse than no monitor, so the
+    // last resort is unconditional: once a stop has been requested, leave -- joined or
+    // not. Leaving is what releases the locks. They are robust mutexes, so the kernel
+    // marks them owner-died and the next acquirer recovers them; that is measured, not
+    // assumed -- the blocked process resumed 20 s after the kill that proved this path.
+    {
+        const char* env = std::getenv("TTNVTOP_SHUTDOWN_GRACE_S");
+        const int grace_s = env ? std::atoi(env) : 5;
+        if (grace_s > 0) {
+            std::thread([grace_s]() {
+                while (!g_stop.load(std::memory_order_relaxed)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                // A clean exit returns from main well inside this window and takes the
+                // whole process, this thread included, with it. Reaching the end of the
+                // sleep means at least one thread is stuck where g_stop cannot reach.
+                std::this_thread::sleep_for(std::chrono::seconds(grace_s));
+                const char msg[] =
+                    "ttnvtop-collector: a thread did not stop within the grace period -- almost certainly\n"
+                    "  inside a UMD remote-tunnel poll, which cannot be interrupted and holds an\n"
+                    "  interprocess lock. Exiting hard to release it. Any journal still resident on an\n"
+                    "  ethernet core is untouched: clear it with --stop-aggregator.\n";
+                ssize_t ignored = ::write(STDERR_FILENO, msg, sizeof(msg) - 1);
+                (void)ignored;
+                ::_exit(130);
+            }).detach();
+        }
+    }
     if (devices.empty()) {
         std::cerr << "ttnvtop-collector: no Tenstorrent devices discovered.\n";
         return 1;
@@ -2476,8 +2563,6 @@ int main(int argc, char* argv[]) {
         // the sweep rate (the counters are 32-bit and wrap in ~8 s at full
         // bandwidth, so 5 Hz leaves ample margin) and keeps the extra NOC reads
         // off the hot per-core path.
-        auto next_dram = std::chrono::steady_clock::now();
-        auto last_dram_t = std::chrono::steady_clock::now();
         // ---- END ported from tt_coremon
         while (!g_stop.load(std::memory_order_relaxed)) {
             for (auto& chip : chips) {
@@ -2667,19 +2752,11 @@ int main(int argc, char* argv[]) {
                     }
                 }
             }
-            // ---- BEGIN ported from tt_coremon (source lines 1872-1878)
-            {
-                const auto loop_t = std::chrono::steady_clock::now();
-                if (loop_t >= next_dram) {
-                    const double dram_dt = std::chrono::duration<double>(loop_t - last_dram_t).count();
-                    for (auto& chip : chips) {
-                        dram_update(chip, dram_dt);
-                    }
-                    last_dram_t = loop_t;
-                    next_dram = loop_t + kDramSampleInterval;
-                }
-            }
-            // ---- END ported from tt_coremon
+            // DRAM sampling used to live here, iterating every chip from this one thread.
+            // That is the same defect as the single-threaded ring drain and the
+            // single-threaded journal feed: its reads cross the NON_MMIO tunnel on a remote
+            // chip, so one slow link stalled the dispatch sampling of all eight. It is now
+            // per-chip, in `chip_telemetry`.
             next += period;
             const auto now_t = std::chrono::steady_clock::now();
             if (next < now_t) {
@@ -3170,7 +3247,10 @@ int main(int argc, char* argv[]) {
                 const bool trace = jf_ticks[chip.chip_id] < 3;
                 ++jf_ticks[chip.chip_id];
                 try {
-                    dev->read_from_device(buf.data(), chip.journal_core, ttnvtop_agg::landing_base(chip.arch), bytes);
+                    if (!read_chunked_stoppable(
+                            dev, chip.journal_core, ttnvtop_agg::landing_base(chip.arch), buf.data(), bytes)) {
+                        break;  // stopping: the buffer is partial, do not fold it in
+                    }
                 } catch (const std::exception& e) {
                     if (trace) {
                         std::fprintf(
@@ -3291,6 +3371,44 @@ int main(int argc, char* argv[]) {
         ring_drain_threads.emplace_back(ring_drain, i);
     }
 
+    // ONE TELEMETRY THREAD PER CHIP -- AICLK and DRAM counters.
+    //
+    // Both are per-chip device reads, and on a remote chip both cross the tunnel. Held on
+    // a shared loop they starved everything behind them: get_clock() on the publish path
+    // froze the whole SHM set, and dram_update() on the sampler path froze dispatch
+    // sampling for all eight chips. Per chip, a bad link costs only that chip's telemetry,
+    // which the reader already renders correctly -- 0 means "not sampled" for the DRAM
+    // fields and "unknown" for AICLK, both of which the viewer hides rather than faking.
+    //
+    // DRAM keeps the 200 ms cadence its counters need (32-bit, ~8 s wrap at full
+    // bandwidth). AICLK is the expensive one -- a legacy ARC message on Wormhole -- so it
+    // goes at 1 Hz, which is plenty for a clock, and its cost lands on this chip alone.
+    std::vector<std::thread> telemetry_threads;
+    for (size_t ci = 0; ci < chips.size(); ++ci) {
+        telemetry_threads.emplace_back([&chips, ci]() {
+            auto& chip = chips[ci];
+            auto last_t = std::chrono::steady_clock::now();
+            int tick = 0;
+            while (!g_stop.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(kDramSampleInterval);
+                if (g_stop.load(std::memory_order_relaxed)) {
+                    break;
+                }
+                const auto now_t = std::chrono::steady_clock::now();
+                const double dt = std::chrono::duration<double>(now_t - last_t).count();
+                last_t = now_t;
+                dram_update(chip, dt);
+                if (++tick % 5 == 0 && !chip.cores.empty()) {
+                    try {
+                        chip.aiclk_mhz = chip.cores.front().device->get_clock();
+                    } catch (const std::exception&) {
+                        chip.aiclk_mhz = 0;
+                    }
+                }
+            }
+        });
+    }
+
     // Publisher: copy rolling stats into SHM at the configured rate.
     const auto publish_period = std::chrono::milliseconds(1000 / cli.publish_hz);
     while (!g_stop.load(std::memory_order_relaxed)) {
@@ -3300,17 +3418,11 @@ int main(int argc, char* argv[]) {
             if (views == nullptr) {
                 continue;
             }
-            // Refresh AICLK from ARC telemetry. get_clock() is non-blocking
-            // (telemetry read on BH, legacy ARC message on WH). Failure -> 0.
+            // AICLK and the DRAM rates are whatever this chip's telemetry thread last
+            // cached. No device access on this path: publishing is the one thing that must
+            // stay fast for every chip regardless of what any single chip's link is doing.
             if (auto* header = chip.publisher.header(); header != nullptr) {
-                uint32_t aiclk_mhz = 0;
-                if (chip.cores.empty() == false) {
-                    try {
-                        aiclk_mhz = chip.cores.front().device->get_clock();
-                    } catch (const std::exception&) {
-                    }
-                }
-                header->aiclk_mhz = aiclk_mhz;
+                header->aiclk_mhz = chip.aiclk_mhz;
                 // ---- BEGIN ported from tt_coremon (source lines 2343-2345)
                 header->dram_rd_mbps = chip.dram_rd_mbps;
                 header->dram_wr_mbps = chip.dram_wr_mbps;
@@ -3341,12 +3453,59 @@ int main(int argc, char* argv[]) {
                 } else if (sb > 1.0) {
                     sb = 1.0;
                 }
-                v.compute_busy_p1000 = static_cast<uint16_t>(fb * 1000.0);
-                v.sfpu_busy_p1000 = static_cast<uint16_t>(sb * 1000.0);
+                // ONE WRITER PER FIELD. On a chip fed by an on-chip aggregator the journal
+                // feed owns these two fields, and it must not be overwritten here.
+                //
+                // Both paths were writing them every tick from different sources -- the feed
+                // from the aggregator's busy/wall deltas, this loop from its own EWMAs -- so
+                // whichever ran last won. The visible symptom was a reading that jumped
+                // between chips and between the FPU and SFPU fields tick to tick, reported
+                // as "intermittent, and sometimes telemetry just hangs". It also explains
+                // pipes reading a flat 0 while the other showed a plausible number: the feed
+                // deliberately writes only the pipe that counter_sel says was measured, and
+                // this loop then clobbered the other one with a stale EWMA.
+                if (!chip.journal_active) {
+                    v.compute_busy_p1000 = static_cast<uint16_t>(fb * 1000.0);
+                    v.sfpu_busy_p1000 = static_cast<uint16_t>(sb * 1000.0);
+                }
                 v.last_kernel_id = c.last_kernel_id;
                 // Phase 2+ fields stay at their zero-initialized values.
             }
             chip.publisher.mark_updated();
+        }
+    }
+
+    // RETIRE THE AGGREGATORS ON THE WAY OUT -- first shutdown action, before any join.
+    //
+    // The kernel keeps the ethernet firmware's 0xABCD heartbeat advancing while it runs,
+    // so a LIVE aggregator is not what wedges topology discovery. An abandoned one is:
+    // once this process is gone nothing pets that word again, and UMD's next
+    // `eth_heartbeat_running` sits in its timeouts for every process on the machine.
+    // Leaving them resident is what made a stuck collector cost a board reset in 5u.
+    //
+    // Four bytes per chip, so it fits inside the shutdown grace even on a contended
+    // tunnel, and it is idempotent -- `--stop-aggregator` does exactly this. If a write
+    // does block behind a spinning tunnel read, the grace watchdog still takes the
+    // process down; this only ever improves on that outcome, never delays it.
+    {
+        int asked = 0;
+        for (auto& chip : chips) {
+            if (!chip.journal_active || chip.cores.empty()) {
+                continue;
+            }
+            const auto l1 = ttnvtop::agg_layout(
+                static_cast<uint32_t>(ttnvtop_agg::landing_base(chip.arch)), chip.journal_num_cores);
+            const uint32_t req = 0x504F5453u;  // 'STOP' -- see kStopRequest in eth_aggregator.cpp
+            try {
+                chip.cores.front().device->write_to_device(&req, chip.journal_core, l1.dbg + 12u, sizeof(req));
+                ++asked;
+            } catch (const std::exception&) {
+                // Best effort. A chip we cannot reach now is one --stop-aggregator must
+                // clear later, which is why that command still exists.
+            }
+        }
+        if (asked > 0) {
+            std::cout << "\nttnvtop-collector: asked " << asked << " aggregator(s) to retire.\n";
         }
     }
 
@@ -3355,6 +3514,9 @@ int main(int argc, char* argv[]) {
         t.join();
     }
     for (auto& t : journal_feed_threads) {
+        t.join();
+    }
+    for (auto& t : telemetry_threads) {
         t.join();
     }
     std::cout << "\nttnvtop-collector: exiting.\n";
