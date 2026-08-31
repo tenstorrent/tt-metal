@@ -442,16 +442,15 @@ class CosyVoiceTTNN:
     ) -> "StreamResult":
         """The full chain, **interleaved**: waveform chunks start before the LLM stops.
 
-        **Known defect: the audio this returns has an amplitude spike.** Generation is
-        correct -- the tokens are identical to `synthesize`'s under greedy sampling,
-        asserted in `tests/e2e/test_pipeline_api.py` -- and the chunk schedule is
-        correct, but the assembled waveform peaks around 72 where speech should peak
-        near 1. The fault is in how *this wrapper* builds each chunk's conditioning,
-        not in the interleaving: the same `StreamSession` scheduler driven with the
-        golden's own prompt produces audio that
-        `test_device_streamed_matches_non_streamed` gates on content. Until it is
-        closed, treat this method as the pipelining *mechanism* rather than a way to
-        get audio, and use `synthesize` for output that is gated.
+        **This once returned corrupt audio, and the reason shapes the design.** The
+        flow decoder and the vocoder run from inside the decode loop, so the state
+        `StreamState` carries across a chunk boundary used to sit in device buffers
+        while `generate()`'s trace was live -- and a trace execution clobbers those.
+        The symptom was a first chunk matching a no-trace reference at PCC 0.99999994
+        and a second chunk with a *bit-identical* mel but waveform PCC 0.011.
+        `StreamState` now parks those four tensors on the host between chunks; its
+        docstring carries the measurement. Nothing here needs to know about it, but a
+        caller adding state that survives a seam does.
 
         `synthesize` above runs the three stages strictly in order -- every token,
         then all the mel, then all the audio -- so the first sample of output exists
