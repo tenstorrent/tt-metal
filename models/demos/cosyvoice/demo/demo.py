@@ -225,8 +225,7 @@ def main() -> int:
         "--stream",
         action="store_true",
         help="interleave the stages (--inputs path only): emit audio chunks as tokens are generated "
-        "instead of after the last one, and report time to first audio. NOTE: generation is correct "
-        "but the assembled audio has a known amplitude defect -- see CosyVoiceTTNN.synthesize_streaming",
+        "instead of after the last one, and report time to first audio",
     )
     ap.add_argument(
         "--run-dir",

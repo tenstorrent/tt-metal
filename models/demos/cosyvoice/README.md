@@ -272,8 +272,10 @@ fitted to it.
 |---|---|
 | Token accuracy | Exact agreement, not top-k overlap: teacher-forced argmax match per position, plus free-running greedy (`top_k=1`) full-sequence comparison. RAS sampling (`top_p 0.8`, `top_k 25`) is stochastic — reported for audio quality, never the gate. |
 | Per-module numerics | PCC ≥ 0.99 against goldens captured from the reference. |
-| Streaming | Content, not chunk count: concatenated streamed audio versus non-streamed, same text and seed. |
-| Perf targets | Ordinary passing tests. A missed target is reported with the gap explained rather than marked `xfail`. |
+| Streaming, content | Not chunk count: concatenated streamed audio versus non-streamed, same text and seed, compared in mel space and in the energy envelope, plus seam continuity. |
+| Streaming, schedule | That audio starts *before* generation finishes — the interleaved path measured against the batch one, both schedules in one process with all three stages real. Chunked reconstruction and interleaving are different claims and are gated separately. |
+| Batching | Batched decode against single-row decode at *ragged* prompt lengths, gated on PCC and on the deviation not compounding across steps; plus a sweep that fails if batching amortises nothing. |
+| Perf targets | **Asserted, not printed.** Every numeric threshold goes through [`tests/perf/gates.py`](tests/perf/gates.py): a met gate is asserted against the requirement, a missed one against a recorded two-sided band, so neither a regression nor a stale published figure passes. A missed target gets a number, a band and a named lever — never an `xfail`. |
 
 **Every measured figure lives in [`PERF.md`](PERF.md) and nowhere else** — the end-to-end
 RTF, the per-stage breakdown, the Blackhole/Wormhole comparison, which targets are met on
@@ -283,7 +285,10 @@ PCCs quoted in this file support an argument; PERF.md is the record.
 **[`docs/VALIDATION.md`](docs/VALIDATION.md) maps it the other way** — every requirement
 in the bring-up scope against the test that decides it, including the ones that are not
 met and why. It carries no numbers of its own; it links to PERF.md for each. Start there
-to check a specific requirement; start at PERF.md to read the measurements.
+to check a specific requirement; start at PERF.md to read the measurements. It also
+carries the open device-level findings, and one that was diagnosed and fixed: buffers
+carried across a streaming chunk boundary while a decode trace was live got corrupted,
+which is a constraint on anyone extending that path.
 
 ### Two things cannot be gated on exact agreement
 
