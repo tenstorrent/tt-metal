@@ -623,6 +623,45 @@ KNOBS = {
     # live in the dg twins (lreg-coalesce-*.C: wasted-victim spill
     # disappears, 2 spills -> 1, round-trip words 26/9 -> 25/8).
     "lreg-coalesce": "-mtt-tensix-optimize-lreg-coalesce",
+    # KF (placement-arbiter, FABLE_GOES_BURR item #13): ONE PRICED
+    # PLACEMENT AUTHORITY over the invariant-constant tiers that
+    # decide locally-greedily today — the early invariant hoist's
+    # park-ordering demand cut (in_region >= 3), the const-residency
+    # walk's uses-then-value within-class ranking (GV's self-named
+    # residual), and the pressure-park tier's marginal LREG park —
+    # priced through the one delivery-cost API (#12), the one pressure
+    # engine (#10), and the trips facade (#2), with every legality
+    # proof kept in its owning pass and every named refusal preserved.
+    # The erfinv relief lever is the FOLD RESERVE: the marginal park
+    # can be outbid by the priced demand of a downstream dst-ownership
+    # identity-reload fold (place-fold-reserve-outbid), so the fold's
+    # lreg-pressure-exceeded guard (the IP-2 erfinv 9 > 8 witness; the
+    # pin-48 named successor "price the fold through the pressure-park
+    # tier"; laneJT refuted lp-alloc coalescing as relief) finds its
+    # register free.  MEASURED (laneKF-evidence-20260831): at ON + flag
+    # the erfinv fold FIRES — reload 2926 of load 865 folds to an
+    # lreg-resident copy, 0 lreg-pressure-exceeded, math.elf .text
+    # 1680 -> 1384 bytes; device-golden corr 3 reps x both legs 6/6
+    # PASSED on the BH p150 (the row has no perf selector — laneJT —
+    # so the word evidence is the channel).  Wide compiler-A/B census
+    # (152 rows, ON vs ON+flag): erfinv is the ONLY moved row after
+    # the park-ordering verdict was made monotone fail-closed (the
+    # priced verdict may rescue an over-deferral, never manufacture a
+    # new one: the late walk's re-placement is unprovable at the early
+    # pass — the trigonometry census anatomy, adjudicated and closed).
+    # Rides ON the ON-set placement tiers it arbitrates
+    # (const-residency/pressure-park/park-ordering), so a solo leg is
+    # structurally weaker — on-plus.  Fail-closed refusals:
+    # place-alternative-unpriceable (trip weight unproven / defer side
+    # unprovable), place-budget-exhausted (>64 candidates); flag off
+    # every decision point keeps the legacy chain byte-identically
+    # while dumping the arbiter's shadow verdict (the stage-A
+    # disagreement census).  Fire proofs live in the dg twins
+    # (priced-placement-*.C: fold-reserve fire = the erfinv anatomy
+    # replicated, 9>8 refusal flag-off -> 1 reload folded flag-on;
+    # park-ordering priced keep; rank flip; defer-unpriceable +
+    # unpriceable + budget near-misses).
+    "priced-placement": "-mtt-tensix-optimize-priced-placement",
     # DR (milp-and-hygiene): the pressure scheduler with the vendored
     # exact branch-and-bound backend (always compiled; lp_solve is a
     # cross-check only, so codegen is byte-identical across build
@@ -1581,6 +1620,11 @@ KNOB_MODES = {
     # a solo leg is structurally an A/A (the pass never runs on the
     # all-off base), so the booking A/B is (ON + flag) vs plain ON.
     "lreg-coalesce": "on-plus",
+    # priced-placement arbitrates the ON-set placement tiers
+    # (const-residency/pressure-park/park-ordering): a solo leg leaves
+    # every arbitrated decision point ungated, so the booking A/B is
+    # (ON + flag) vs plain ON.
+    "priced-placement": "on-plus",
     "milp": "on-plus",
     # pin-16 booking flags (lane EN): same on-plus reasoning as the
     # pin-15 seeds — the shapes materialize on the reviewed-ON
