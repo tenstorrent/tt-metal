@@ -114,48 +114,6 @@ bool PerfDebugTracyHandler::LookupAnchor(uint32_t chip_id, uint32_t core_x, uint
     return LookupAnchorLocked(chip_id, core_x, core_y, out);
 }
 
-
-// WHAT THIS SHOWS, and what it does not. The marker is placed at the device clock value the context's anchor
-// was fitted at, so it renders at exactly that anchor's host instant -- by construction. It is therefore NOT
-// evidence that the anchor is CORRECT (nothing self-referential can be; see the retired SYNC_ANCHOR and the
-// PREDICTED echo markers, both tautological in the same way).
-//
-// What it does show is WHEN each anchor was taken, as horizontal distance from the workload zones, and that
-// is the thing worth seeing: an anchor fitted at profiler init sits seconds to the LEFT of the first zone,
-// and the whole point of the host re-anchor is to drag it to within ~0.1 s of it. Staleness becomes a
-// distance you can measure with the cursor rather than a number in a log.
-//
-// One marker per core, on BRISC only. Stamping all five lanes multiplies the count by 5 and tells you
-// nothing extra -- every lane on a core shares the core's anchor.
-void PerfDebugTracyHandler::EmitSyncMarkerLocked(
-    [[maybe_unused]] uint32_t chip_id,
-    [[maybe_unused]] TracyTTCtx ctx,
-    [[maybe_unused]] uint32_t core_x,
-    [[maybe_unused]] uint32_t core_y,
-    [[maybe_unused]] const ChipAnchor& anchor) {
-#if defined(TRACY_ENABLE)
-    if (ctx == nullptr) {
-        return;
-    }
-    tracy::TTDeviceMarker marker{};
-    marker.chip_id = chip_id;
-    marker.core_x = core_x;
-    marker.core_y = core_y;
-    marker.risc = tracy::RiscType::BRISC;
-    marker.timestamp = static_cast<uint64_t>(anchor.first_timestamp);
-    marker.runtime_host_id = 0;
-    marker.marker_type = tracy::TTDeviceMarkerType::DATA;
-    marker.marker_name = "HOST_ANCHOR";
-    marker.file = "perf_debug_profiler";
-    marker.line = 0;
-    // The two numbers a reader actually wants when asking "what is this device pinned to": the device clock
-    // value the fit landed on, and the host tick it was tied to.
-    marker.data = static_cast<uint64_t>(anchor.first_timestamp);
-    marker.data_high = static_cast<uint64_t>(anchor.host_start);
-    TracyTTPushMarker(ctx, marker);
-#endif
-}
-
 TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     [[maybe_unused]] uint32_t chip_id,
     [[maybe_unused]] uint32_t core_x,
@@ -184,13 +142,6 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
     TracyTTContextPopulateCalibrated(ctx, a.host_start, a.first_timestamp, a.frequency);
     TracyTTContextName(ctx, ctx_name.c_str(), ctx_name.size());
     tracy_contexts_[key] = ctx;
-    // Stamp the anchor this context was just populated with. Emitted HERE, before any zone can reach the
-    // context, so its (earlier) timestamp cannot violate Tracy's per-lane non-decreasing arrival contract.
-    // Skipped on ETH rows: their sync samples predate the anchor instant, so a marker at the anchor would
-    // arrive after timestamps that precede it.
-    if (!is_eth) {
-        EmitSyncMarkerLocked(chip_id, ctx, core_x, core_y, a);
-    }
     return ctx;
 #else
     return nullptr;

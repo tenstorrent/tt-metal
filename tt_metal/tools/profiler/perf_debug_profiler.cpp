@@ -2331,56 +2331,116 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
     // both on purpose -- this path then only measures and reports).
     st->publish = (eth_track_hz() == 0);
 
-    // ---- give every sync eth lane its OWN Tracy anchor, BEFORE its first zone ----
+    // ---- anchor the sync eth lanes: ONE host fit, everything else via device<->device ----
     // Contexts are minted lazily on a core's first zone and bake their anchor in at creation, so this
-    // has to happen now (start), not at the teardown render. An eth lane without its own anchor falls
-    // back to the worker anchor and its zones land seconds away from the workload.
-    if (tracy_ != nullptr) {
+    // has to happen now (start), never at the teardown render.
+    //
+    // NOT a host fit per lane. Two eth cores on the SAME die, in the same reset domain -- whose true
+    // origins differ by ~nothing -- disagreed by 4-16 ms when each got its own fit (bh-31 chips 0..3:
+    // 7.263 / 11.365 / 4.029 / 15.791 ms). That spread IS the host<->device sync error, and it is
+    // ~5 orders of magnitude worse than the device<->device sync it would be competing with (ring
+    // closure -43.70 ns). Host fits are simply the wrong instrument for anything but the root.
+    //
+    // So: ONE host fit establishes the ETH-CLASS origin, and every other lane is that origin carried
+    // across by the tree -- the same rule the per-DEVICE anchors already follow (root gets the careful
+    // fit; everyone else is eth_sync_anchor_for + root_host_anchor_). The class origin does have to be
+    // measured once, because eth cores do NOT share the worker origin: using the worker anchor put
+    // these rows 10.4 s away from the workload they ran inside.
+    if (tracy_ != nullptr && root_sync_valid_ && root_freq_ghz_ > 0.0) {
+        std::vector<FabricSyncState::End*> ends;
         for (auto& e : st->edges) {
-            for (auto* en : {&e.init, &e.resp}) {
-                double f = 0.0;
-                for (const auto& ctx : devices_) {
-                    if (ctx.chip_id == en->chip) {
-                        f = ctx.freq_ghz;
-                        break;
-                    }
-                }
-                CoreCoord n0;
-                try {
-                    n0 = cluster.get_physical_coordinate_from_logical_coordinates(
-                        en->chip, en->logical, CoreType::ETH, /*no_warn=*/true);
-                } catch (const std::exception&) {
+            ends.push_back(&e.init);
+            ends.push_back(&e.resp);
+        }
+        // Prefer a reference lane on the ROOT chip: then the class origin needs no carrying at all and
+        // the one remaining hop of composition disappears.
+        FabricSyncState::End* ref = nullptr;
+        for (auto* en : ends) {
+            if (en->chip == eth_sync_root_chip_) {
+                ref = en;
+                break;
+            }
+        }
+        if (ref == nullptr && !ends.empty()) {
+            ref = ends.front();
+        }
+
+        // Per-chip clock at the ROOT's host instant, from the anchors already composed off the root.
+        const int64_t h0 = root_host_anchor_;
+        auto chip_clock_at_h0 = [&](uint32_t chip, double& freq_out) -> std::optional<double> {
+            for (const auto& ctx : devices_) {
+                if (ctx.chip_id != chip) {
                     continue;
                 }
-                const PerfDebugSync ds = sync_device_clock(cluster, en->chip, en->virt);
-                if (!ds.valid || f <= 0.0) {
-                    log_warning(
-                        tt::LogMetal,
-                        "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) got NO clock sync; "
-                        "its FSYNC rows would fall back to the worker anchor, so they are NOT drawn",
-                        en->chip,
-                        n0.x,
-                        n0.y);
-                    continue;
+                if (!ctx.anchor_valid || ctx.freq_ghz <= 0.0) {
+                    return std::nullopt;
                 }
-                // Own ANCHOR, SHARED slope -- same rule the DRISC contexts follow: relative alignment
-                // makes a common rate error invisible, while per-core rate fits scatter by ~99 ppm.
-                tracy_->AddCore(en->chip, n0.x, n0.y, ds.host_anchor, static_cast<double>(ds.device_at_anchor), f);
-                tracy_->RegisterEthCore(en->chip, n0.x, n0.y);
-                en->noc0_x = static_cast<uint32_t>(n0.x);
-                en->noc0_y = static_cast<uint32_t>(n0.y);
-                en->tracy_ok = true;
+                freq_out = ctx.freq_ghz;
+                return static_cast<double>(ctx.anchor_dev) + static_cast<double>(h0 - ctx.anchor_host) * ctx.freq_ghz;
+            }
+            return std::nullopt;
+        };
+
+        // THE one host fit. spacing_us=500 matches the root's own: the slope is baseline-limited, and
+        // at back-to-back spacing the fitted frequency carries ~1e-4 of error.
+        double f_ref = 0.0;
+        std::optional<double> ref_eth_at_h0, ref_chip_at_h0;
+        if (ref != nullptr) {
+            const PerfDebugSync rs = sync_device_clock(cluster, ref->chip, ref->virt, /*spacing_us=*/500);
+            double f_tmp = 0.0;
+            ref_chip_at_h0 = chip_clock_at_h0(ref->chip, f_tmp);
+            if (rs.valid && ref_chip_at_h0.has_value()) {
+                f_ref = f_tmp;
+                ref_eth_at_h0 =
+                    static_cast<double>(rs.device_at_anchor) + static_cast<double>(h0 - rs.host_anchor) * f_ref;
                 log_info(
                     tt::LogMetal,
-                    "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) anchored "
-                    "(host_anchor {}, device_at_anchor {} cy, {:.6f} GHz shared)",
+                    "[perf-debug profiler] FABRIC SYNC: eth-class origin measured ONCE on chip {} "
+                    "(the only host<->device fit for these lanes); every other lane is carried across "
+                    "by the device<->device tree",
+                    ref->chip);
+            }
+        }
+
+        for (auto* en : ends) {
+            CoreCoord n0;
+            try {
+                n0 = cluster.get_physical_coordinate_from_logical_coordinates(
+                    en->chip, en->logical, CoreType::ETH, /*no_warn=*/true);
+            } catch (const std::exception&) {
+                continue;
+            }
+            double f_chip = 0.0;
+            const std::optional<double> chip_at_h0 = chip_clock_at_h0(en->chip, f_chip);
+            if (!ref_eth_at_h0.has_value() || !ref_chip_at_h0.has_value() || !chip_at_h0.has_value() || f_chip <= 0.0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) has no route to the "
+                    "root anchor; its FSYNC rows would fall back to the worker anchor, so they are NOT drawn",
                     en->chip,
                     n0.x,
-                    n0.y,
-                    ds.host_anchor,
-                    ds.device_at_anchor,
-                    f);
+                    n0.y);
+                continue;
             }
+            // The eth-class origin, carried from the reference chip to this one by the chip-to-chip
+            // delta the device<->device sync measured. No second host fit anywhere.
+            const double dev = *ref_eth_at_h0 + (*chip_at_h0 - *ref_chip_at_h0);
+            tracy_->AddCore(en->chip, n0.x, n0.y, h0, dev, f_chip);
+            tracy_->RegisterEthCore(en->chip, n0.x, n0.y);
+            en->noc0_x = static_cast<uint32_t>(n0.x);
+            en->noc0_y = static_cast<uint32_t>(n0.y);
+            en->tracy_ok = true;
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] FABRIC SYNC: eth lane chip {} NOC0 ({},{}) anchored (host_anchor {}, "
+                "device_at_anchor {:.0f} cy, {:.6f} GHz){}",
+                en->chip,
+                n0.x,
+                n0.y,
+                h0,
+                dev,
+                f_chip,
+                en == ref ? " [reference: the one host fit]" : " [carried by device<->device]");
         }
     }
 

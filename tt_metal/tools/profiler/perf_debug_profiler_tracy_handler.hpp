@@ -111,9 +111,6 @@ private:
         double frequency = 0.0;
     };
 
-    void EmitSyncMarkerLocked(
-        uint32_t chip_id, TracyTTCtx ctx, uint32_t core_x, uint32_t core_y, const ChipAnchor& anchor);
-
     // Resolve the anchor for one core: its own per-core entry if it has one, else its chip's. Returns false
     // when neither exists (the device was never AddDevice'd). Two flavours because GetOrCreateContext already
     // holds mutex_ across its whole body and mutex_ is not recursive -- taking it again would self-deadlock.

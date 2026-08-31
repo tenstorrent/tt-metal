@@ -150,7 +150,13 @@ inline bool wait_tag(volatile const uint32_t* w, uint32_t want, uint64_t deadlin
 // the key. Sample 0's wait is `first_wait` (it carries the responder's doorbell-notice latency,
 // which the min-RTT filter then discards); later samples use the tight `next_wait`.
 template <uint32_t TXQ, uint32_t BLK>
-inline void initiator_round(uint32_t n) {
+// NOINLINE ON PURPOSE. Inlined, this merges its frame into the router kernel_main, which on the
+// 2D/Mesh build already sits near the limit: the hook pushed it to 4064 B against
+// -Werror=stack-usage=1912 and the router FAILED TO COMPILE (1D fits, 2D does not). The frame is
+// the cost, not the data -- the hook keeps its state in RISC-local globals and L1, not on the
+// stack. Out of line it gets its own frame, live only during a round (20/s), while poll() stays
+// inline so the per-iteration prescaler check keeps costing 6 instructions.
+__attribute__((noinline)) void initiator_round(uint32_t n) {
     volatile Blk* b = blk<BLK>();
     if (!ring_has_room(4 * n + 1)) {
         publish_state(8);  // failed: no ring room (profiler not draining)
@@ -196,7 +202,13 @@ inline void initiator_round(uint32_t n) {
 // The round is marked served the moment it is detected, so an aborted round's stragglers (idx > 0)
 // can never re-trigger service.
 template <uint32_t TXQ, uint32_t BLK>
-inline void responder_service(uint32_t n) {
+// NOINLINE ON PURPOSE. Inlined, this merges its frame into the router kernel_main, which on the
+// 2D/Mesh build already sits near the limit: the hook pushed it to 4064 B against
+// -Werror=stack-usage=1912 and the router FAILED TO COMPILE (1D fits, 2D does not). The frame is
+// the cost, not the data -- the hook keeps its state in RISC-local globals and L1, not on the
+// stack. Out of line it gets its own frame, live only during a round (20/s), while poll() stays
+// inline so the per-iteration prescaler check keeps costing 6 instructions.
+__attribute__((noinline)) void responder_service(uint32_t n) {
     volatile Blk* b = blk<BLK>();
     invalidate_l1_cache();
     const uint32_t t0tag = b->ping.tag;
