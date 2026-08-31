@@ -46,7 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -114,6 +114,9 @@ def run_model(
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
+    # The routing family this row drives must match the one the adapter declares; crossing
+    # families applies a different affinity function with no error (see the assert).
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
     # Kimi's parametrize has no `balanced` entry today (only non_balanced).
     # Applying this skip would zero out Kimi's CI coverage for this test.
     # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
