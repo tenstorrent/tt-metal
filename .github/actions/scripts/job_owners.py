@@ -3,9 +3,9 @@
 
 Every pipeline_reorg entry carries `owner_id: U... # Display Name` and `team:`
 (100% coverage, enforced by models/MIGRATING_TO_TIERED_CI.md). The display
-name lives in the comment, which yaml.safe_load drops, so entries are
-line-scanned with the same regex approach as .github/scripts/utils/
-tests_by_owner.py. An entry whose owner comment is missing is treated as
+name lives in the comment, which yaml.safe_load drops, so a line regex
+recovers owner_id -> display name and the rest of the entry is read as
+plain YAML. An entry whose owner comment is missing is treated as
 unresolvable rather than surfacing a raw Slack id in a ticket.
 
 The join key is the job's leaf name minus the runner tag:
@@ -24,18 +24,17 @@ import os
 import re
 import sys
 
+import yaml
+
 from failure_title import _RUNNER_TAG
 
 PIPELINE_REORG = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tests", "pipeline_reorg")
 )
 
-# Entry fields sit at two-space indent (or on the "- " line itself); the
-# deeper indent of cmd block scalars keeps their content from matching.
-_ENTRY_RE = re.compile(r"^- ")
-_NAME_RE = re.compile(r"^(?:- |  )name:\s*(.+?)\s*$")
-_OWNER_RE = re.compile(r"^(?:- |  )owner_id:\s*\S+\s*#\s*(.*\S)\s*$")
-_TEAM_RE = re.compile(r"^(?:- |  )team:\s*(\S+)\s*$")
+# Owner comments sit at entry indent; the deeper indent of cmd block scalars
+# keeps their content from matching.
+_OWNER_COMMENT_RE = re.compile(r"^(?:- |  )owner_id:\s*(\S+)\s*#\s*(.*\S)", re.M)
 
 
 def _load(root=None):
@@ -45,23 +44,15 @@ def _load(root=None):
     """
     table = {}
     for path in sorted(glob.glob(os.path.join(root or PIPELINE_REORG, "*.yaml"))):
-        current = {}
-
-        def commit():
-            if current.get("name") and current.get("owner") and current.get("team"):
-                table.setdefault(current["name"], {"owner": current["owner"], "team": current["team"]})
-
         with open(path, encoding="utf-8") as f:
-            for line in f:
-                if _ENTRY_RE.match(line):
-                    commit()
-                    current = {}
-                for key, rx in (("name", _NAME_RE), ("owner", _OWNER_RE), ("team", _TEAM_RE)):
-                    m = rx.match(line)
-                    if m:
-                        current[key] = m.group(1)
-                        break
-            commit()
+            text = f.read()
+        owners = dict(_OWNER_COMMENT_RE.findall(text))
+        entries = yaml.safe_load(text)
+        # Not every file is a test matrix (ttsim-skip-list.yaml is a mapping).
+        for entry in entries if isinstance(entries, list) else []:
+            owner = owners.get(entry.get("owner_id"))
+            if entry.get("name") and owner and entry.get("team"):
+                table.setdefault(entry["name"], {"owner": owner, "team": entry["team"]})
     return table
 
 
