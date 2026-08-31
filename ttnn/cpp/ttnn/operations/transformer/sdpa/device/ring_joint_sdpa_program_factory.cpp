@@ -2403,16 +2403,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // presence, so "=0" leaves the feature ON as the name implies. Latched once per process, so
     // toggling the variable between dispatches (mock.patch.dict and friends) has no effect after the
     // first ring-joint invocation -- A/B it across two separate runs.
-    // Separate-V rotation is implemented and correct, but MEASURED SLOWER, so it is opt-in:
-    // RING_MLA_ROTATE_SEPARATE_V=1. kimi50k q32/k640 separate-V, in-process profiler, 2 runs each:
-    // rotated 8.456/8.466 ms (26.37/26.34%) vs static 7.581/7.614 ms (29.42/29.29%) -- 11.5% slower.
-    // The cause is structural, not a bug: under rotation the float chunks land in heads that have no
-    // base chunks, so their V is read from DRAM instead of riding the per-head store-and-forward
-    // chain, and losing that amortization costs more than the K-mcast slot the rotation saves.
-    // Latent-V does not have this problem because V is packed into K and rides the K mcast already.
-    // Making it a win needs head-ALIGNED float packing (group floats so each hosting row's floats
+    // Separate-V rotation is implemented and correct, and its perf is REGIME-DEPENDENT, so it is
+    // opt-in: RING_MLA_ROTATE_SEPARATE_V=1. kimi50k q32/k640 separate-V, in-process profiler, 2 runs
+    // per cell:
+    //    100 cores (grid 10x10, base 2, floats 80): rotated 7.595/7.607 vs static 7.907/7.914 ms
+    //                                               -> rotation WINS by 4.0%
+    //    110 cores (grid 11x10, base 2, floats 60): rotated 8.473/8.465 vs static 7.602/7.600 ms
+    //                                               -> rotation LOSES by 11.4%
+    // So it is NOT inherently slower -- and note 100 cores is the STOCK p150 split, while the
+    // 110-core box these numbers were taken on is the re-flashed outlier. The mechanism behind the
+    // penalty is that under rotation the float chunks land in heads with no base chunks, so their V
+    // is read from DRAM instead of riding the per-head store-and-forward chain; what is not
+    // explained by float count alone is why 80 floats at 100 cores beats 60 floats at 110 (the
+    // partial float row at 110 -- 60 floats over 11-wide rows -- is the obvious suspect and is
+    // unverified). Two data points do not locate the boundary, which is exactly why this stays
+    // opt-in rather than being enabled on a guessed heuristic.
+    // Latent-V never has the penalty at all: V is packed into K and rides the K mcast already.
+    // The principled fix is head-ALIGNED float packing (group floats so each hosting row's floats
     // share one head, then row-mcast V on the float slot, reusing the head chain's semaphores which
-    // are idle at that slot) -- worthwhile but a separate change.
+    // are idle there) -- a separate change, and it would likely make this always-on-able.
     static const bool rotate_separate_v = []() {
         const char* value = std::getenv("RING_MLA_ROTATE_SEPARATE_V");
         return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
