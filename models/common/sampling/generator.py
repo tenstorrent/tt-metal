@@ -452,10 +452,6 @@ class SamplingGenerator:
         slot["kwargs"] = {"tt_out_tok": tt_out_tok}
         _mark_trace_buffers_corruptible(self._active_trace_bucket, (logits, output))
 
-        # begin/end_trace_capture only records the ops, so the output buffer still holds the
-        # previous step's token. Run the trace once or this call replays that stale token.
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=self.cq_id, blocking=False)
-
         return slot["output"]
 
     def _execute_trace(self, key: _TraceKey) -> ttnn.Tensor:
@@ -498,11 +494,15 @@ class SamplingGenerator:
         else:
             key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
             if slot["id"] is None:
-                return self.capture_trace(
+                self.capture_trace(
                     logits,
                     tt_out_tok=tt_out_tok,
                     skip_precompile=skip_precompile,
                 )
+                # begin/end_trace_capture only records the ops, so the captured output buffer
+                # still holds the previous step's token; replay before returning it as this
+                # step's sample. Callers that only capture (warmup) must not pay for this.
+                return self._execute_trace(key)
 
             self._validate_trace_inputs(slot, logits, tt_out_tok)
             tt_out = self._execute_trace(key)
