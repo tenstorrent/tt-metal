@@ -3018,6 +3018,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
     full_mesh=False,
+    runtime=None,
 ):
     sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
     if sp_size < 2:
@@ -3061,7 +3062,11 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     q_full = fa_rand(b, nhq, total_seq, d_q)
     kv_full = fa_rand(b, nhk, total_seq, d_k)
 
-    runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
+    # A caller that already holds a runtime (the perf probe, which must profile inside the
+    # device's lifetime) passes it in and keeps ownership; otherwise open and close our own.
+    owns_runtime = runtime is None
+    if owns_runtime:
+        runtime = open_ring_joint_sdpa_runtime(mesh_config, full_mesh=full_mesh)
     mesh_device = runtime.mesh_device
     topology = runtime.topology
     sp_axis = runtime.sp_axis
@@ -3288,7 +3293,8 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         )
 
     finally:
-        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+        if owns_runtime:
+            close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
 def run_ring_mla_sdpa_chunked_indexed_kv_cache(
@@ -3645,6 +3651,48 @@ def test_ring_mla_chunked_kv_actual_isl_rotated_q_split_accuracy():
     run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
         MESH_CONFIG,
         chunk_size_local=256,
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("RING_MLA_K_SWEEP"), reason="Report-only kv-pad perf probe for the rotated-Q-split A/B"
+)
+def test_ring_mla_chunked_kv_actual_isl_rotated_q_split_perf_report_only():
+    """Report device time on the kv-pad (kv_actual_isl) path so the rotated Q split can be A/B'd there.
+
+    The rotation only engages on kv-pad from this commit onward, and every other kv-pad test is
+    accuracy-only, so there was no way to tell whether enabling it there costs anything. Report-only
+    by design: the shape is the small accuracy config (4 heads, d_q=64, chunk_size_local=256), far too
+    small to carry a committed utilization baseline. Its value is the ON-vs-OFF DELTA on one fixed
+    shape, not the absolute number.
+
+    Needs RING_MLA_SDPA_GRID_OVERRIDE, since total_q_chunks is 32 here and the default 110-core grid
+    gives rot_base_chunks == 0 (rotation declines, and most rows have no work so the K mcast injector
+    cannot be picked either). 3x8 -> 24 cores -> base 1, floats 8, which exercises a real float
+    handoff. Pair with RING_MLA_DISABLE_ROTATED_Q_SPLIT=1 for the OFF arm.
+    """
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    try:
+        duration_ns, perf_records = profile_ring_joint_runtime_duration_ns(
+            runtime.mesh_device,
+            lambda: run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+                MESH_CONFIG,
+                chunk_size_local=256,
+                runtime=runtime,
+            ),
+        )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+    rotation = "OFF" if os.environ.get("RING_MLA_DISABLE_ROTATED_Q_SPLIT") else "ON"
+    grid = os.environ.get("RING_MLA_SDPA_GRID_OVERRIDE", "default")
+    # Report the SDPA span per chip, not the raw records: each record carries its kernel_sources
+    # tuple, so logging the list itself buries the numbers in several KB of paths.
+    sdpa_us = sorted(r["duration_ns"] / 1e3 for r in perf_records)
+    logger.info(
+        f"ring_mla kv_actual_isl rotated-Q-split perf probe: rotation={rotation} grid={grid} "
+        f"duration={duration_ns / 1e6:.3f} ms, chips={len(perf_records)}, "
+        f"per-chip us min={sdpa_us[0]:.1f} max={sdpa_us[-1]:.1f}"
     )
 
 
