@@ -188,6 +188,60 @@ def load_qwen36_mtp_state_dict(model_path) -> Dict[str, torch.Tensor]:
     return remap_mtp_state_dict(dequantized)
 
 
+def load_qwen36_shared_head_weights(model_path) -> Dict[str, torch.Tensor]:
+    """Load ONLY the shared embedding + LM head, straight from the safetensors shards.
+
+    The MTP head reuses the target's ``embed_tokens`` / ``lm_head``
+    (``mtp_use_dedicated_embeddings=false``) — this is the real-weight
+    counterpart of the small random stand-ins ``tests/unit/test_mtp.py`` uses,
+    for building an end-to-end torch reference (``reference/mtp_torch.py:
+    build_mtp_reference``) without loading the full ~27B-parameter backbone
+    through ``Qwen3_5ForCausalLM.from_pretrained`` just to reach two tensors.
+
+    Returns ``{"embed_weight": [vocab, dim], "lm_head_weight": [vocab, dim]}``
+    (HF ``[out, in]`` convention for the LM head), dequantized if the
+    checkpoint is block-wise FP8. Raises if either tensor is absent (e.g. a
+    ``tie_word_embeddings=true`` checkpoint with no separate ``lm_head.weight``
+    — none of the current Qwen3.6/3.8-27B checkpoints tie).
+    """
+    from safetensors import safe_open
+
+    model_path = Path(model_path)
+    index_path = model_path / "model.safetensors.index.json"
+    with open(index_path) as f:
+        weight_map = json.load(f)["weight_map"]
+
+    embed_key = next((k for k in weight_map if k.endswith("embed_tokens.weight")), None)
+    lm_head_key = "lm_head.weight" if "lm_head.weight" in weight_map else None
+    missing = [name for name, k in (("embed_tokens.weight", embed_key), ("lm_head.weight", lm_head_key)) if k is None]
+    assert not missing, f"{model_path} is missing {missing} (tied embeddings are not supported here)"
+
+    file_to_keys: Dict[str, list] = {}
+    for key in (embed_key, lm_head_key):
+        file_to_keys.setdefault(weight_map[key], []).append(key)
+
+    raw: Dict[str, torch.Tensor] = {}
+    for filename, keys in file_to_keys.items():
+        with safe_open(str(model_path / filename), framework="pt") as sf:
+            present = set(sf.keys())
+            for key in keys:
+                raw[key] = sf.get_tensor(key)
+                scale_key = key + "_scale_inv"
+                if scale_key in present:
+                    raw[scale_key] = sf.get_tensor(scale_key)
+
+    def _dequant(key):
+        tensor = raw[key]
+        if tensor.dtype != torch.float8_e4m3fn:
+            return tensor
+        from models.demos.blackhole.qwen36.tt.tp_common import dequant_fp8_block
+
+        scale_key = key + "_scale_inv"
+        return dequant_fp8_block(tensor, raw[scale_key]) if scale_key in raw else tensor.to(torch.bfloat16)
+
+    return {"embed_weight": _dequant(embed_key), "lm_head_weight": _dequant(lm_head_key)}
+
+
 def is_fp8_checkpoint(model_path) -> bool:
     """True when the checkpoint dir holds block-wise FP8 safetensors.
 
