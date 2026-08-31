@@ -30,6 +30,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -44,14 +45,14 @@ using namespace tt::test_utils;
 namespace unit_tests::compute::matmul_partials {
 
 struct CopyBlockMatmulPartialsConfig {
-    uint32_t single_tile_size = 2 * 32 * 32;
-    uint32_t num_tiles = 1;
+    std::uint32_t single_tile_size = 2 * 32 * 32;
+    std::uint32_t num_tiles = 1;
     // *_ublock defines no. of tiles finished with single LLK API call:
-    uint32_t reader_ublock = 1;
-    uint32_t writer_ublock = 1;
-    uint32_t compute_ublock = 1;
-    uint32_t src0_cb_index = 0;
-    uint32_t ouput_cb_index = 16;
+    std::uint32_t reader_ublock = 1;
+    std::uint32_t writer_ublock = 1;
+    std::uint32_t compute_ublock = 1;
+    std::uint32_t src0_cb_index = 0;
+    std::uint32_t ouput_cb_index = 16;
     // Whether or not we want the result to be stored in DST in FP32:
     bool fp32_dest_acc_en = false;
     // Whether or not to sync full/half DST between MATH and PACK:
@@ -61,9 +62,9 @@ struct CopyBlockMatmulPartialsConfig {
     std::string compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp";
 };
 
-static std::vector<uint32_t> generate_copy_block_stimulus(
-    uint32_t dram_buffer_size, const CopyBlockMatmulPartialsConfig& test_config) {
-    std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100, 0);
+static std::vector<std::uint32_t> generate_copy_block_stimulus(
+    std::uint32_t dram_buffer_size, const CopyBlockMatmulPartialsConfig& test_config) {
+    std::vector<std::uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100, 0);
 
     if (test_config.fp32_dest_acc_en) {
         auto src_vec_float = generate_uniform_random_vector<float>(-100, 100, dram_buffer_size / sizeof(float), 0);
@@ -81,9 +82,9 @@ void run_single_core_copy_block_matmul_partials(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     const experimental::NodeCoord node{0, 0};
 
-    uint32_t single_tile_size = test_config.single_tile_size;
-    uint32_t num_tiles = test_config.num_tiles;
-    uint32_t dram_buffer_size = single_tile_size * num_tiles;
+    std::uint32_t single_tile_size = test_config.single_tile_size;
+    std::uint32_t num_tiles = test_config.num_tiles;
+    std::uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     tt::DataFormat data_format = test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
@@ -93,8 +94,8 @@ void run_single_core_copy_block_matmul_partials(
     auto src_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_local_config, mesh_device.get());
     auto dst_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_local_config, mesh_device.get());
 
-    uint32_t num_input_tiles = test_config.reader_ublock;
-    uint32_t num_output_tiles = test_config.writer_ublock;
+    std::uint32_t num_input_tiles = test_config.reader_ublock;
+    std::uint32_t num_output_tiles = test_config.writer_ublock;
 
     const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
     const experimental::DFBSpecName DST_DFB{"dst_dfb"};
@@ -223,7 +224,7 @@ void run_single_core_copy_block_matmul_partials(
     workload.add_program(device_range, std::move(program));
     auto& program_run = workload.get_programs().at(device_range);
 
-    std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
+    std::vector<std::uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
     experimental::ProgramRunArgs params;
@@ -255,7 +256,7 @@ void run_single_core_copy_block_matmul_partials(
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> result_vec;
+    std::vector<std::uint32_t> result_vec;
     distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
 
     EXPECT_EQ(src_vec.size(), result_vec.size());
@@ -374,6 +375,43 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeCopyPackBlockComputeBottleneck) {
             }
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) copy_block / copy_tile_to_dst_init_short / pack_block: each is a pure Float16_b -> Float16_b
+// datacopy, so the host golden is the identity (device output == input, bit-for-bit). Validated against the
+// input, not a legacy kernel. Runs on Blackhole (the id-free API is BH-only).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixCopyBlockIdFreeIdentity) {
+    constexpr std::uint32_t num_tiles = 64;  // multiple of the 4-tile block
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/copy_block_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+    EXPECT_EQ(src_vec, result);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackBlockIdFreeIdentity) {
+    constexpr std::uint32_t num_tiles = 64;  // multiple of the 4-tile block
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_block_2_0.cpp",
+        /*cb_depth_tiles=*/num_tiles);
+    EXPECT_EQ(src_vec, result);
 }
 
 }  // namespace tt::tt_metal

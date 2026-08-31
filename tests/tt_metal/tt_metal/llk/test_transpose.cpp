@@ -41,6 +41,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -55,13 +56,13 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::transpose {
 
-enum TransposeType : uint8_t { WH = 0 };
+enum TransposeType : std::uint8_t { WH = 0 };
 
 struct TransposeConfig {
     bool short_init;
     bool transpose_dest;
-    uint32_t single_tile_size;
-    std::vector<uint32_t> shape;
+    std::uint32_t single_tile_size;
+    std::vector<std::uint32_t> shape;
     TransposeType transpose_type;
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
     bool dst_full_sync_en = false;
@@ -70,25 +71,25 @@ struct TransposeConfig {
 
 // Tiled dimensions derived from a 4-D NCHW tensor shape, with shared validation.
 struct TransposeDims {
-    uint32_t W;
-    uint32_t H;
-    uint32_t NC;
-    uint32_t Wt;
-    uint32_t Ht;
-    uint32_t num_tensor_tiles;
+    std::uint32_t W;
+    std::uint32_t H;
+    std::uint32_t NC;
+    std::uint32_t Wt;
+    std::uint32_t Ht;
+    std::uint32_t num_tensor_tiles;
 };
 
-static TransposeDims compute_and_validate_transpose_dims(const std::vector<uint32_t>& shape) {
+static TransposeDims compute_and_validate_transpose_dims(const std::vector<std::uint32_t>& shape) {
     TT_FATAL(shape.size() == 4, "Error");
-    const uint32_t W = shape[3];
-    const uint32_t H = shape[2];
-    const uint32_t NC = shape[1] * shape[0];
+    const std::uint32_t W = shape[3];
+    const std::uint32_t H = shape[2];
+    const std::uint32_t NC = shape[1] * shape[0];
     TT_FATAL(W % 32 == 0 && H % 32 == 0, "Error");
     TT_FATAL(H > 0 && W > 0 && NC > 0, "Error");
-    const uint32_t Wt = W / 32;
+    const std::uint32_t Wt = W / 32;
     // size of DST register, with unary r/w this currently only works if the entire Wt fits into DST for reduce
     TT_FATAL(Wt <= 16, "Error");
-    const uint32_t Ht = H / 32;
+    const std::uint32_t Ht = H / 32;
     return TransposeDims{
         .W = W,
         .H = H,
@@ -104,22 +105,22 @@ static TransposeDims compute_and_validate_transpose_dims(const std::vector<uint3
 // tolerant float compare. 32-bit formats (Float32/Int32) are exact, lossless data movement, so they
 // use an exact word compare.
 void validate_transpose_wh(
-    const std::vector<uint32_t>& src_vec,
-    const std::vector<uint32_t>& shape,
-    const std::vector<uint32_t>& result_vec,
+    const std::vector<std::uint32_t>& src_vec,
+    const std::vector<std::uint32_t>& shape,
+    const std::vector<std::uint32_t>& result_vec,
     tt::DataFormat data_format) {
     TT_FATAL(shape.size() == 4, "Error");
-    const vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
+    const vector<std::uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
 
     bool pass = false;
     int argfail = -1;
-    if (tt::datum_size(data_format) == sizeof(uint32_t)) {
+    if (tt::datum_size(data_format) == sizeof(std::uint32_t)) {
         // 32-bit datum: one uint32 per element, exact compare.
-        auto src_linear =
-            convert_layout<uint32_t>(src_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+        auto src_linear = convert_layout<std::uint32_t>(
+            src_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
         auto gold_lin = ::unit_tests::compute::gold_transpose_wh(src_linear, shape);
-        auto gold_tiled =
-            convert_layout<uint32_t>(gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
+        auto gold_tiled = convert_layout<std::uint32_t>(
+            gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
 
         ASSERT_EQ(result_vec.size(), gold_tiled.size());
         const auto res_it = std::mismatch(result_vec.begin(), result_vec.end(), gold_tiled.begin()).first;
@@ -135,10 +136,10 @@ void validate_transpose_wh(
             const float absdiff = fabsf(a - b);
             return (absdiff <= atol) || (absdiff < rtol * fmaxf(fabsf(a), fabsf(b)));
         };
-        auto src_linear = convert_layout<uint16_t>(
+        auto src_linear = convert_layout<std::uint16_t>(
             u16_from_u32_vector(src_vec), shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
         auto gold_lin = ::unit_tests::compute::gold_transpose_wh(src_linear, shape);
-        auto gold_tiled = u32_from_u16_vector(convert_layout<uint16_t>(
+        auto gold_tiled = u32_from_u16_vector(convert_layout<std::uint16_t>(
             gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
 
         pass = packed_uint32_t_vector_comparison(result_vec, gold_tiled, comparison_function, &argfail);
@@ -153,8 +154,9 @@ void validate_transpose_wh(
 // Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
 // pages, each `entry_size` bytes. Used to bind src/dst tensors as TensorParameters
 // to the reader/writer kernels via the Metal 2.0 named TensorAccessor ctor.
-static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
-    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(
+    std::uint32_t entry_size, std::uint32_t total_entries) {
+    const std::uint32_t entry_size_words = entry_size / sizeof(std::uint32_t);
     auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
     auto memory_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
@@ -167,17 +169,17 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
     const experimental::NodeCoord node{0, 0};
 
     const TransposeDims dims = compute_and_validate_transpose_dims(test_config.shape);
-    const uint32_t NC = dims.NC, Wt = dims.Wt, Ht = dims.Ht, num_tensor_tiles = dims.num_tensor_tiles;
+    const std::uint32_t NC = dims.NC, Wt = dims.Wt, Ht = dims.Ht, num_tensor_tiles = dims.num_tensor_tiles;
 
-    uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
+    std::uint32_t dram_buffer_size = test_config.single_tile_size * num_tensor_tiles;
 
     auto in_tensor = MeshTensor::allocate_on_device(
         mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
     auto out_tensor = MeshTensor::allocate_on_device(
         mesh_device, make_flat_dram_tensor_spec(test_config.single_tile_size, num_tensor_tiles));
 
-    constexpr uint32_t num_buffer_tiles = 32;
-    constexpr uint32_t num_output_buffer_tiles = 32;
+    constexpr std::uint32_t num_buffer_tiles = 32;
+    constexpr std::uint32_t num_output_buffer_tiles = 32;
 
     const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
     const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
@@ -338,8 +340,8 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
 
     // Fixed seed so each test produces a repeatable input vector across runs.
     constexpr std::uint32_t kRandomSeed = 0x1234;
-    vector<uint32_t> src_vec;
-    const std::uint32_t n_u32 = dram_buffer_size / sizeof(uint32_t);
+    vector<std::uint32_t> src_vec;
+    const std::uint32_t n_u32 = dram_buffer_size / sizeof(std::uint32_t);
     // Fill src_vec with seeded random words: `dist` draws values and `convert` reinterprets
     // each draw into its uint32 word representation for the given data format.
     auto fill_random = [&](auto dist, auto convert) {
@@ -348,11 +350,13 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
         std::generate(src_vec.begin(), src_vec.end(), [&]() { return convert(dist(rng)); });
     };
     if (test_config.data_format == tt::DataFormat::Float32) {
-        fill_random(
-            std::uniform_real_distribution<float>(-100.0f, 100.0f), [](float v) { return std::bit_cast<uint32_t>(v); });
+        fill_random(std::uniform_real_distribution<float>(-100.0f, 100.0f), [](float v) {
+            return std::bit_cast<std::uint32_t>(v);
+        });
     } else if (test_config.data_format == tt::DataFormat::Int32) {
-        fill_random(
-            std::uniform_int_distribution<int32_t>(-10000, 10000), [](int32_t v) { return static_cast<uint32_t>(v); });
+        fill_random(std::uniform_int_distribution<std::int32_t>(-10000, 10000), [](std::int32_t v) {
+            return static_cast<std::uint32_t>(v);
+        });
     } else {
         src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, kRandomSeed);
     }
@@ -365,7 +369,7 @@ void run_single_core_transpose(distributed::MeshDevice& mesh_device, const Trans
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), result_vec);
 
     const std::uint32_t bytes_per_elem = tt::datum_size(test_config.data_format);
-    EXPECT_EQ(result_vec.size(), (dims.NC * dims.H * dims.W * bytes_per_elem) / sizeof(uint32_t));
+    EXPECT_EQ(result_vec.size(), (dims.NC * dims.H * dims.W * bytes_per_elem) / sizeof(std::uint32_t));
 
     validate_transpose_wh(src_vec, test_config.shape, result_vec, test_config.data_format);
 }
@@ -412,7 +416,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
         unit_tests::compute::transpose::TransposeConfig test_config = {
             .short_init = false,
             .transpose_dest = true,
-            .single_tile_size = constants::TILE_HW * sizeof(uint32_t),
+            .single_tile_size = constants::TILE_HW * sizeof(std::uint32_t),
             .shape = {1, 1, 64, 64},
             .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
             .data_format = tt::DataFormat::Float32,
@@ -431,7 +435,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
         unit_tests::compute::transpose::TransposeConfig test_config = {
             .short_init = false,
             .transpose_dest = true,
-            .single_tile_size = constants::TILE_HW * sizeof(uint16_t),
+            .single_tile_size = constants::TILE_HW * sizeof(std::uint16_t),
             .shape = {1, 1, 64, 64},
             .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
             .data_format = tt::DataFormat::Float16_b,
@@ -440,6 +444,27 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
         };
         unit_tests::compute::transpose::run_single_core_transpose(this->device(), test_config);
     }
+}
+
+// ============================================================================
+// Id-free (2.0) transpose (WH): per-tile within-tile transpose, tiled c_0 -> tiled c_16. Validated against the
+// gold_transpose_wh host golden via the file's validate_transpose_wh helper (packed compare, rtol 0.02).
+// Single Float16_b tile ({1,1,32,32}). Runs on Blackhole (BH-only API).
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixTransposeIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    const std::vector<std::uint32_t> shape{1, 1, 32, 32};
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/100, /*seed=*/0x1234, /*offset=*/0.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/transpose_2_0.cpp");
+    unit_tests::compute::transpose::validate_transpose_wh(src, shape, result, tt::DataFormat::Float16_b);
 }
 
 }  // namespace tt::tt_metal

@@ -48,6 +48,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "single_core_compute_runners.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -1646,6 +1647,68 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstTinyTile) {
             unit_tests::compute::tilize::run_single_core_tilize_program(*this->devices_.at(0), test_config);
         }
     }
+}
+
+// ============================================================================
+// Id-free (2.0) tilize / pack_untilize / pack_untilize_dest, validated against the gold_standard_tilize /
+// gold_standard_untilize host goldens (exact, bitwise), not a legacy kernel. Single Float16_b tile. Runs on
+// Blackhole (BH-only API). tilize: row-major c_0 -> tiled c_16; (pack_)untilize: tiled c_0 -> row-major c_16.
+// ============================================================================
+TEST_F(LLKBlackholeSingleCardFixture, TensixTilizeIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/tilize_2_0.cpp");
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_tilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_2_0.cpp");
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_untilize(src, config);
+    EXPECT_EQ(golden, result);
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixPackUntilizeDestIdFreeGolden) {
+    constexpr std::uint32_t num_tiles = 1;
+    auto src = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result = unit_tests::llk::single_core::run_unary(
+        *this->devices_.at(0),
+        tt::DataFormat::Float16_b,
+        tt::DataFormat::Float16_b,
+        src,
+        num_tiles,
+        /*fp32_dest_acc_en=*/false,
+        "tests/tt_metal/tt_metal/test_kernels/compute/pack_untilize_dest_2_0.cpp");
+
+    ::unit_tests::compute::GoldenConfig config{
+        .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .face_r_dim = 16, .face_c_dim = 16, .num_faces = 4};
+    auto golden = ::unit_tests::compute::gold_standard_untilize(src, config);
+    EXPECT_EQ(golden, result);
 }
 
 }  // namespace tt::tt_metal
