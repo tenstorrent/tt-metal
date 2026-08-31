@@ -189,14 +189,19 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
                 dequantized[key] = tensor.to(torch.bfloat16)
             elif tensor.dim() <= 2:
                 dequantized[key] = dequant_fp8_block(tensor, raw[scale_key])
-            else:
-                # Fused MoE expert weights are 3D ([E, out, in]); dequant_fp8_block is
-                # 2D-only, so dequant each expert's [out, in] slice with its own scale
-                # block and stack back. (Unexercised by the current bf16 35B-A3B; here
-                # so a future FP8 MoE checkpoint dequantizes correctly instead of crashing.)
+            elif "experts" in key and tensor.dim() == 3 and tensor.shape[-1] % 128 == 0 and tensor.shape[-2] % 128 == 0:
+                # Fused MoE expert weights are 3D ([E, out, in]); dequant_fp8_block is 2D-only,
+                # so dequant each expert's [out, in] slice with its own scale block and stack
+                # back. Restricted to fused-expert keys with 128-divisible dims so other 3-D
+                # tensors (e.g. GDN conv1d.weight [ch, 1, kernel]) don't hit the block reshape.
+                # (Unexercised by the current bf16 35B-A3B.)
                 scale = raw[scale_key]
                 slices = [dequant_fp8_block(tensor[e], scale[e]) for e in range(tensor.shape[0])]
                 dequantized[key] = torch.stack(slices, dim=0)
+            else:
+                raise NotImplementedError(
+                    f"FP8 block dequant for tensor '{key}' with shape {tuple(tensor.shape)} is not supported"
+                )
         else:
             dequantized[key] = tensor
 
