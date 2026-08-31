@@ -125,6 +125,13 @@ ttnn:
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
+  pnr:
+    wh_llmbox: 30
+    wh_galaxy: 100
+    wh_n150_civ2: 60
+    wh_n150: 5
+    bh_p100: 30
+    bh_p150b_civ2_viommu: 30
   profiler:
     wh_llmbox: 30
     wh_n150_civ2: 8

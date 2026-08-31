@@ -32,6 +32,15 @@ on:
         required: false
         default: ""
         type: string
+      additional_test_categories:
+        description: >
+          Additional test categories to run (comma-separated). Applied to both the ops PnR
+          test track (tests/pipeline_reorg/ops_pnr.yaml, filtered by its `category` field)
+          and the models e2e suite (tests/pipeline_reorg/models_e2e_tests.yaml, filtered
+          by `model_family` as an interim measure — see release-demo-tests-impl.yaml).
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -122,6 +131,7 @@ jobs:
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tier: "1"
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      additional_test_categories: ${{ inputs.additional_test_categories }}
       summary-scope: ${{ inputs.platform }}
 
   runtime-sanity-tests:
@@ -192,6 +202,29 @@ jobs:
           else
             echo "::warning::Report file not found: $REPORT_FILE"
           fi
+
+  # ===========================================================================
+  # Team: ttnn
+  # test list: ops_pnr.yaml (currently a single no-op placeholder entry)
+  #
+  # additional_test_categories is filtered here against ops_pnr.yaml's own
+  # `category` field, but against `model_family` for the models e2e suite
+  # below in release-demo-tests (see release-demo-tests-impl.yaml) — two
+  # different fields serving the same input as an interim measure. Plan is
+  # to unify these into a single `category` field/filter shared by every
+  # PnR test track once the models e2e taxonomy is settled.
+  # ===========================================================================
+  ops-pnr-tests:
+    needs: [build-artifact, determine-test-skus]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/ops-pnr-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
+      additional_test_categories: ${{ inputs.additional_test_categories }}
 
   # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
   # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel

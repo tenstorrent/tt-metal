@@ -27,6 +27,15 @@ on:
         required: false
         default: ""
         type: string
+      additional_test_categories:
+        description: >
+          Additional test categories to run (comma-separated). Applied to both the ops PnR
+          test track (tests/pipeline_reorg/ops_pnr.yaml, filtered by its `category` field)
+          and the models e2e suite (tests/pipeline_reorg/models_e2e_tests.yaml, filtered
+          by `model_family` as an interim measure — see release-demo-tests-impl.yaml).
+        required: false
+        type: string
+        default: ""
 
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
@@ -161,6 +170,7 @@ jobs:
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+      additional_test_categories: ${{ inputs.additional_test_categories }}
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
@@ -654,7 +664,8 @@ jobs:
             {
               "release-type": "rc",
               "dry-run": "${{ inputs.dry-run || 'false' }}",
-              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}",
+              "additional_test_categories": "${{ inputs.additional_test_categories || '' }}"
             }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
@@ -682,5 +693,6 @@ jobs:
             {
               "release-type": "prod",
               "dry-run": "${{ inputs.dry-run || 'false' }}",
-              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}",
+              "additional_test_categories": "${{ inputs.additional_test_categories || '' }}"
             }

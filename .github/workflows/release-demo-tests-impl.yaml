@@ -1,8 +1,10 @@
 name: "[internal] Release demo tests impl"
 
 # Package-and-release entry for models e2e: download optional gist, filter to
-# release_ready, then pass the combined matrix to models-e2e-tests-impl.yaml
-# which splits single-host vs exabox multihost and runs the tests.
+# release_ready (and, optionally, additional_test_categories via model_family —
+# see the apply-filters step), then pass the combined matrix to
+# models-e2e-tests-impl.yaml which splits single-host vs exabox multihost and
+# runs the tests.
 
 on:
   workflow_call:
@@ -38,6 +40,16 @@ on:
         type: string
         default: ""
         description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided). Security: Only GitHub gist/raw URLs allowed, validated before download."
+      additional_test_categories:
+        required: false
+        type: string
+        default: ""
+        description: >
+          Comma-separated category filter, matched against each test's `model_family`
+          (case-insensitive; models_e2e_tests.yaml has no dedicated `category` field yet
+          — see release-build-test-publish.yaml's ops-pnr-tests section for the plan to
+          unify this with ops_pnr.yaml's `category` field). Empty = no narrowing (today's
+          tier/release_ready behavior).
       summary-scope:
         required: false
         type: string
@@ -110,7 +122,7 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Apply tier, release_ready, and model filters
+      - name: Apply tier, release_ready, model, and category filters
         id: apply-filters
         # Pass values via env rather than inline ${{ }} so arbitrary cmd content in the matrix
         # (apostrophes, parentheses, etc.) cannot break the shell quoting of the assignment.
@@ -118,6 +130,7 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
           TIER: ${{ inputs.tier }}
           MODEL: ${{ inputs.model }}
+          CATEGORIES: ${{ inputs.additional_test_categories }}
         run: |
           # Filter by tier
           FILTERED=$(echo "$MATRIX" | jq -c --argjson tier "$TIER" '[.[] | select(.tier == $tier)]')
@@ -129,8 +142,16 @@ jobs:
               ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
               | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
+          # Filter by additional_test_categories (interim: matched against model_family
+          # since models_e2e_tests.yaml has no dedicated category field yet — exact
+          # match, case-insensitive; empty input = no narrowing).
+          if [ -n "$CATEGORIES" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg c "$CATEGORIES" '
+              ($c | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
+              | [ .[] | select((.model_family // "" | ascii_downcase) as $mf | any($toks[]; . == $mf)) ]')
+          fi
           if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${TIER}, release_ready=true, model=${MODEL}. Pipeline will be skipped."
+            echo "::warning::No tests found for tier=${TIER}, release_ready=true, model=${MODEL}, additional_test_categories=${CATEGORIES}. Pipeline will be skipped."
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
             echo "matrix<<EOF" >> $GITHUB_OUTPUT

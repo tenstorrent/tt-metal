@@ -1,0 +1,31 @@
+# This file defines the test matrix for the ops PnR (package-and-release) tests pipeline.
+#
+# Team: ttnn
+# Scaffolding in preparation for ops PnR tests — only a no-op placeholder entry
+# so far. Consumed by ops-pnr-tests-impl.yaml, which is wired into
+# release-build-test-publish.yaml's package-and-release pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   category: Selector used by package-and-release.yaml's additional_test_categories
+#     dispatch input. On dispatch the impl filters this matrix to entries whose
+#     category appears in the comma-separated list.
+
+# For max allowed timeout refer to .github/time_budget.yaml (ttnn -> pnr)
+
+- name: ops PnR no-op smoke test
+  # Placeholder entry to verify the category-filter/dispatch wiring end-to-end.
+  # Replace with real ops PnR tests as they come online.
+  cmd: 'echo "ops PnR no-op smoke test"'
+  skus:
+    wh_n150:
+      timeout: 5
+  owner_id: U08DEGUJY3H # Rose Li
+  team: ttnn
+  category: matmul
