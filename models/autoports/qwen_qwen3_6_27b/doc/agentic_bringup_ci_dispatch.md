@@ -89,31 +89,58 @@ Both were still preventable here, just not from there: the path
 log, and was rejected during the first fix as "a tt-inference-server concept the
 model should not depend on". That judgement cost the second build.
 
-## Local is not the weaker test -- on one axis it is the stricter one
+## The health clock is what actually failed the run
 
-Measured, not assumed:
+Run 33405666767 got past both weights fixes -- the engine reached
+`Initializing a V1 LLM engine` -- and then died on the clock:
 
-| Path | Health timeout | Observed bring-up | Used |
-| --- | --- | --- | --- |
-| CI, first bring-up (run 33176296979, Gemma) | 3600 s | 1401 s | 39% |
-| CI, benchmarks child (same run) | 2400 s | server already up | -- |
-| Local `--local-server` (Qwen3.8, this host) | 1200 s | 950.6 s | 79% |
+```
+16:02:15  Waiting for inference server at .../health (timeout 1200s)
+16:22:15  Inference server did not become healthy within 1200s
+16:22:15  Inference server not healthy; aborting sweep.
+```
 
-`llm_module/server_control.py:25` defaults to `DEFAULT_WAIT_HEALTHY_TIMEOUT_S
-= 3600.0`. `llm_module/runner.py:64` declares
-`wait_healthy_timeout_s: float = 1200.0`, and that value is the one the
-`--local-server` path uses. No call site passes it and no environment variable
-reaches it, so **the local budget is a third of the CI budget and is not
-configurable without editing the harness.** A cold-cache local run of a model
-this size can fail bring-up while the same model passes in CI.
+Where those 1200 s went:
 
-The 2400 s value observed on the benchmarks child is not present in this
-checkout; CI runs a different tt-inference-server commit, so treat the two
-columns as measurements of two builds, not one.
+| From | To | Spent on |
+| --- | --- | --- |
+| 16:02:18 | 16:09:10 | staging weights (`Fetching 32 files`), ~6 min 52 s |
+| 16:09:32 | 16:22:15 | engine load, killed at 12 min 43 s, incomplete |
 
-This corrects, for this repo, the Gemma branch's fourth finding that
-`wait_healthy_timeout_s = 1200` is marginal in CI. On the CI path it is 3600.
-The 1200 is real, but it binds locally.
+Measured model load on this host is 881-950 s (~15 min), so ~13 min was never
+going to be enough. **The run failed for a reason unrelated to the model.**
+
+### Why it binds, and why raising it is not a magic number
+
+`llm_module/server_control.py:25` sets
+`DEFAULT_WAIT_HEALTHY_TIMEOUT_S = 3600.0`, and `wait_for_healthy(timeout=None)`
+exists precisely to fall through to it. `llm_module/runner.py:64` declared
+`wait_healthy_timeout_s: float = 1200.0` and always passed it, so the
+fallthrough could never happen; no call site and no environment variable could
+raise it. `capture_trace_timeout_s` had the same shape.
+
+Fixed by defaulting both to `None` (`09599f09` on the
+`mvasiljevic/qwen38-autoport-qb2` tt-inference-server branch), which restores
+the intended fallthrough to 3600 s. Callers wanting a tighter bound can still
+pass one. For calibration, Gemma's real CI bring-up was 1401 s.
+
+### Staging is inside the window, and does not amortise
+
+Attempt 2 staged weights in 6 min 50 s; attempt 3 in 6 min 52 s. The
+`cache_root/weights` volume does **not** carry over between runs, so every
+dispatch pays that ~7 min inside the health window. A plain re-dispatch would
+have failed identically -- which is why the timeout, not the retry, was the fix.
+
+### The local run passed the same gate, for a reason that does not transfer
+
+Locally the window was 950.6 s of 1200 s (79%), because the weights were
+already on the host and no staging happened inside it. Local bring-up is
+therefore **not** evidence that CI bring-up fits: the two differ by the whole
+staging step.
+
+The 3600 s and 2400 s windows observed in Gemma run 33176296979 are the
+`release` workflow (evals child first), a different controller path. They do
+not apply to `benchmarks`.
 
 ## Pre-dispatch checklist
 
@@ -161,7 +188,8 @@ the health-window numbers only became available once the artifact was opened.
 | Fixed the first weights failure by replacing one path prediction with another | Second 60 min build failed on a metadata-only cache directory | Gate on the file you are about to read (`model.safetensors.index.json`), not on the directory |
 | Rejected `MODEL_WEIGHTS_DIR` as "a tt-inference-server concept the model should not depend on" | Discarded the correct answer, which run 1 had already printed in its own log | The harness telling you where it staged the weights is evidence, not coupling |
 | Skipped the offered pre-dispatch grep for host-shaped paths | Both failures were in its output | Run the cheap static check; it costs a minute against a 60 min build |
-| Predicted a CI health-timeout risk from the 1200 s default in `runner.py` | Wrong by 3x -- CI uses 3600 s; the exposure is local, not CI | Measure the window from a successful run's artifact before predicting |
+| Measured 3600 s in a Gemma **release** run and concluded the CI health clock was not a risk | Generalised across workflows: `benchmarks` uses the 1200 s path, and the run in flight while I wrote that died on it | Measure the path you are about to run, not an adjacent one; check which controller the workflow uses |
+| Treated the passing local bring-up as evidence CI would fit | Local skips the ~7 min weight staging that CI pays inside the same window | Compare like windows: add staging to any local bring-up figure before predicting CI |
 | Diagnosed both failures from the truncated job log | Delayed finding the health numbers, which were in the artifact all along | Download `workflow_logs` first |
 
 ## Run history from this host
@@ -170,7 +198,8 @@ the health-window numbers only became available once the artifact was opened.
 | --- | --- | --- |
 | 33388601937 | `16cfafb7302` (pre-fix) | failed, `OSError` on HF repo id at `model.py:254` |
 | 33396877687 | fix 1 | failed, `FileNotFoundError` on shard index at `model.py:67` |
-| 33405666767 | fix 2 | dispatched 2026-08-31T14:57:39Z |
+| 33405666767 | fix 2 | build ok, weights ok; **failed on the 1200 s health clock** mid-load |
+| next | + `09599f09` (timeout fallthrough) | not yet dispatched |
 
 ## Unrelated ordering note, recorded because it cost eval time
 
