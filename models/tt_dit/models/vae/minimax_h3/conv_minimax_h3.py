@@ -113,6 +113,7 @@ class MiniMaxH3CausalConv3d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config=None,
         ccl_manager=None,
+        pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
     ) -> None:
         super().__init__()
 
@@ -153,6 +154,21 @@ class MiniMaxH3CausalConv3d(Module):
         # Causal front-pad, applied locally in forward. Zero once collapsed. T is never
         # sharded, so this stays a local concat of zeros.
         self.time_pad = 0 if self.collapse_temporal else self.kernel_size[0] - 1
+
+        # ``pixel_norm`` folds `(x/255 - mean)/std` into this conv (see _prepare_torch_state),
+        # so the input is the decoder's raw uint8 pixels as floats. The causal front-pad must
+        # then carry the raw value that normalizes to ZERO -- `255 * mean` per channel -- or
+        # the first output frame of every clip diverges from the reference's zero-padded
+        # normalized input. taps=1 collapses the pad away, so keyframes never hit this.
+        self.pixel_norm = pixel_norm
+        self.causal_pad_values: tuple[float, ...] | None = None
+        if pixel_norm is not None:
+            mean, std = pixel_norm
+            assert (
+                len(mean) == len(std) == in_channels
+            ), f"pixel_norm has {len(mean)} channels for a {in_channels}-channel conv"
+            if self.time_pad > 0:
+                self.causal_pad_values = tuple(255.0 * m for m in mean)
 
         # Padding is asymmetric in general: H3's downsamplers pre-pad ``(0,1,0,1)`` reflect
         # (one extra row at the bottom, one column at the right) so a stride-2 conv lands on
@@ -227,6 +243,21 @@ class MiniMaxH3CausalConv3d(Module):
             # Only the final temporal tap survives a single frame.
             weight = weight[:, :, -1:].contiguous()
 
+        if self.pixel_norm is not None:
+            # Fold `(x/255 - mean)/std` into the weight and bias, so raw uint8 pixels (as
+            # floats) enter this conv directly: `conv((ax + d)) = conv_scaled(x) + bias_shift`
+            # with per-channel `a = 1/(255 std)`, `d = -mean/std`. AFTER the collapse slice,
+            # because the bias shift sums `W * d` over exactly the taps this conv applies --
+            # a taps=1 keyframe conv must not carry the two sliced-away taps' shift. The
+            # taps=3 causal front-pad is handled by `causal_pad_values` above.
+            mean, std = self.pixel_norm
+            scale = torch.tensor([1.0 / (255.0 * s) for s in std], dtype=weight.dtype).view(1, -1, 1, 1, 1)
+            shift = torch.tensor([-m / s for m, s in zip(mean, std)], dtype=weight.dtype).view(1, -1, 1, 1, 1)
+            if bias is None:
+                bias = torch.zeros(weight.shape[0], dtype=weight.dtype)
+            bias = bias + (weight * shift).sum(dim=(1, 2, 3, 4))
+            weight = weight * scale
+
         # torch conv3d weight is (out, in, kt, kh, kw); dim 1 is the in-channel axis.
         if self.in_channels != self.unpadded_in_channels:
             weight = torch.nn.functional.pad(
@@ -297,7 +328,9 @@ class MiniMaxH3CausalConv3d(Module):
         if any(self.external_pad_h) or any(self.external_pad_w):
             x_BTHWC = self._halo_pad(x_BTHWC)
         if self.time_pad > 0:
-            x_BTHWC = causal_pad_t(x_BTHWC, self.time_pad, self.mesh_device, self._causal_zeros)
+            x_BTHWC = causal_pad_t(
+                x_BTHWC, self.time_pad, self.mesh_device, self._causal_zeros, values=self.causal_pad_values
+            )
 
         out = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -316,27 +349,39 @@ class MiniMaxH3CausalConv3d(Module):
 
 
 def causal_pad_t(
-    x_BTHWC: ttnn.Tensor, pad: int, mesh_device: ttnn.MeshDevice, cache: dict | None = None
+    x_BTHWC: ttnn.Tensor,
+    pad: int,
+    mesh_device: ttnn.MeshDevice,
+    cache: dict | None = None,
+    values: Sequence[float] | None = None,
 ) -> ttnn.Tensor:
-    """Prepend ``pad`` zero frames on T. Nothing is appended -- that is the causality.
+    """Prepend ``pad`` constant frames on T. Nothing is appended -- that is the causality.
 
-    ``cache`` holds the zero block across calls. Without it this allocates and **writes**
-    a fresh zero tensor on every convolution -- 34 MB at block 0, thirteen times per unit --
-    and `ttnn.zeros(device=...)` is a host-to-device write, which both costs PCIe time on
-    the critical path and makes the encoder impossible to capture into a trace
-    ("Writes are not supported during trace capture"). The block is constant, so one
-    allocation serves every call.
+    ``values`` is the per-channel fill, zeros by default; a pixel-norm-folded ``conv_in``
+    passes ``255 * mean`` so the pad normalizes to the reference's zero (channels past
+    ``len(values)`` -- the tile-alignment pad -- stay zero, their weights are zero anyway).
+
+    ``cache`` holds the block across calls. Without it this allocates and **writes**
+    a fresh tensor on every convolution -- 34 MB at block 0, thirteen times per unit --
+    and a host-to-device write both costs PCIe time on the critical path and makes the
+    encoder impossible to capture into a trace ("Writes are not supported during trace
+    capture"). The block is constant, so one allocation serves every call.
     """
     B, _, H, W, C = x_BTHWC.shape
     key = (B, pad, H, W, C, x_BTHWC.get_dtype())
-    zeros = None if cache is None else cache.get(key)
-    if zeros is None:
-        zeros = ttnn.zeros(
-            (B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
-        )
+    block = None if cache is None else cache.get(key)
+    if block is None:
+        if values is None:
+            block = ttnn.zeros(
+                (B, pad, H, W, C), dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+            )
+        else:
+            filled = torch.zeros(B, pad, H, W, C)
+            filled[..., : len(values)] = torch.tensor(list(values))
+            block = ttnn.from_torch(filled, dtype=x_BTHWC.get_dtype(), layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
         if cache is not None:
-            cache[key] = zeros
-    return ttnn.concat([zeros, x_BTHWC], dim=1)
+            cache[key] = block
+    return ttnn.concat([block, x_BTHWC], dim=1)
 
 
 def reflect_edge_correction(
