@@ -15,7 +15,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -135,11 +134,6 @@ public:
     static GraphTracker& instance();
 
     bool is_enabled() const;
-
-    // Whether any processor is registered, i.e. whether the track_* calls below do anything.
-    // Unlike is_enabled() this also counts non-capture (background) processors, so it matches
-    // exactly the condition each track_* call tests before fanning out.
-    bool has_processors() const;
 
     void push_processor(const std::shared_ptr<IGraphProcessor>& processor);
     void pop_processor();
