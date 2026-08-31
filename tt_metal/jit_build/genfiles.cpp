@@ -753,7 +753,7 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     if (!fp32_dest_acc_en &&
         std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), tt::is_fp8_format)) {
         const bool has_local_fp32_epoch =
-            tt::has_effective_local_fp32_epoch(desc.buf_dataformat_arr, unpack_to_dest_mode, arch);
+            has_effective_local_fp32_epoch(desc.buf_dataformat_arr, unpack_to_dest_mode, arch);
         for (size_t i = 0; i < src_formats.size(); i++) {
             const bool local_fp32 = desc.buf_dataformat_arr[i] == DataFormat::Float32 && has_local_fp32_epoch;
             if (local_fp32) {
@@ -835,7 +835,7 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         (exp_prec == ExpPrecision::A) ? DataFormat::Float16 : DataFormat::Float16_b;
     DataFormat pack_conditional_dst_format = unpack_conditional_dst_format;
     const bool has_local_fp32_epoch =
-        tt::has_effective_local_fp32_epoch(desc.buf_dataformat_arr, options.unpack_to_dest_mode, arch);
+        has_effective_local_fp32_epoch(desc.buf_dataformat_arr, options.unpack_to_dest_mode, arch);
     if ((options.fp32_dest_acc_en || has_local_fp32_epoch) &&
         (tt::is_all_fp32_formats(desc.buf_dataformat_arr) || (exp_prec == ExpPrecision::B))) {
         unpack_conditional_dst_format = DataFormat::Tf32;

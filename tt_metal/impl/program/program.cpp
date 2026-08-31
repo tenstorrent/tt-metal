@@ -2574,7 +2574,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 build_options.hlk_desc.buf_dataformat_arr.begin(),
                 build_options.hlk_desc.buf_dataformat_arr.end(),
                 is_fp8_format)) {
-            const bool has_local_fp32_epoch = tt::has_effective_local_fp32_epoch(
+            const bool has_local_fp32_epoch = has_effective_local_fp32_epoch(
                 build_options.hlk_desc.buf_dataformat_arr,
                 build_options.unpack_to_dest_mode,
                 build_options.build_env.get_arch());

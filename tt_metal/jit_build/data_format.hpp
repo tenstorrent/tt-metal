@@ -11,6 +11,12 @@
 
 namespace tt::tt_metal {
 enum class UnpackToDestMode : std::uint8_t;
+
+// A local FP32 epoch is effective only on Blackhole and only when a Float32 buffer has a
+// non-default unpack-to-dest mode at the same index. Mismatched vector lengths are allowed;
+// only indices present in both vectors are considered.
+bool has_effective_local_fp32_epoch(
+    std::span<const tt::DataFormat> data_formats, std::span<const UnpackToDestMode> unpack_to_dest_mode, tt::ARCH arch);
 }  // namespace tt::tt_metal
 
 namespace tt {
@@ -43,14 +49,6 @@ std::vector<DataFormat> get_unpack_dst_formats(
 // Quasar has no performance penalty for unpacking to Dest for any data format, unlike WH/BH
 // which restrict it to 32-bit formats; the routing is captured kernel-wide, not per-operand.
 bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpack_to_dest_mode);
-
-// A local FP32 epoch is effective only on Blackhole and only when a Float32 buffer has a
-// non-default unpack-to-dest mode at the same index. Mismatched vector lengths are allowed;
-// only indices present in both vectors are considered.
-bool has_effective_local_fp32_epoch(
-    std::span<const DataFormat> data_formats,
-    std::span<const tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    tt::ARCH arch);
 
 std::vector<DataFormat> get_pack_src_formats(
     std::span<const DataFormat> data_formats,

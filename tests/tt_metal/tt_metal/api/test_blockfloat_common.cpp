@@ -119,14 +119,14 @@ TEST(DataFormatLocalFp32Epoch, RequiresMatchingFloat32AndNonDefaultMode) {
     const std::array formats{DataFormat::Float32, DataFormat::Float16_b, DataFormat::Fp8_e4m3};
     std::array modes{UnpackToDestMode::Default, UnpackToDestMode::Default, UnpackToDestMode::Default};
 
-    EXPECT_FALSE(tt::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
 
     modes[1] = UnpackToDestMode::UnpackToDestFp32;
     modes[2] = UnpackToDestMode::UnpackToDestFp32;
-    EXPECT_FALSE(tt::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
 
     modes[0] = UnpackToDestMode::UnpackToDestFp32;
-    EXPECT_TRUE(tt::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
+    EXPECT_TRUE(tt::tt_metal::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
 }
 
 TEST(DataFormatLocalFp32Epoch, HandlesShortModesAndRetainsBlackholeGate) {
@@ -135,13 +135,13 @@ TEST(DataFormatLocalFp32Epoch, HandlesShortModesAndRetainsBlackholeGate) {
 
     const std::array formats{DataFormat::Float16_b, DataFormat::Float32};
     const std::array short_modes{UnpackToDestMode::UnpackToDestFp32};
-    EXPECT_FALSE(tt::has_effective_local_fp32_epoch(formats, short_modes, tt::ARCH::BLACKHOLE));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(formats, short_modes, tt::ARCH::BLACKHOLE));
 
     const std::array float32_format{DataFormat::Float32};
     const std::array local_mode{UnpackToDestMode::UnpackToDestFp32};
-    EXPECT_TRUE(tt::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::BLACKHOLE));
-    EXPECT_FALSE(tt::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::QUASAR));
-    EXPECT_FALSE(tt::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::WORMHOLE_B0));
+    EXPECT_TRUE(tt::tt_metal::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::BLACKHOLE));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::QUASAR));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::WORMHOLE_B0));
 }
 
 TEST(DataFormatFp8Predicate, IncludesLf8) {
