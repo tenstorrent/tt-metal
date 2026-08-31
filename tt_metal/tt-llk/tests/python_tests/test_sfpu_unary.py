@@ -946,6 +946,15 @@ def eltwise_unary_sfpu(
         spec_A=spec_A,
     )
 
+    # laneJO formal-equivalence witness-check hook (see test_sfpu_binary.py):
+    # LANEJO_SRC_OVERRIDE holds a tensor replayed verbatim as src_A.
+    import os as _lanejo_os
+
+    _lanejo_src = _lanejo_os.environ.get("LANEJO_SRC_OVERRIDE")
+    if _lanejo_src:
+        _lanejo_t = torch.load(_lanejo_src).to(src_A.dtype).flatten()
+        src_A = _lanejo_t.repeat(src_A.numel() // _lanejo_t.numel())
+
     generate_golden = get_golden_generator(UnarySFPUGolden)
     # golden_mathop: certification rows whose kernel selector rides a host
     # SfpuType (lane GW SFPARECIP probes on SfpuType::identity) key their
@@ -1016,6 +1025,13 @@ def eltwise_unary_sfpu(
 
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+
+    # laneJO witness-check hook (paired with LANEJO_SRC_OVERRIDE above).
+    _lanejo_dump = _lanejo_os.environ.get("LANEJO_DUMP")
+    if _lanejo_dump:
+        torch.save({"src_A": src_A, "result": res_tensor}, _lanejo_dump)
+    if _lanejo_os.environ.get("LANEJO_SKIP_ASSERT") == "1":
+        return
 
     assert passed_test(
         golden_tensor,
