@@ -3,15 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <vector>
 
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -119,6 +123,132 @@ using tt::test_utils::check_pcc;
 using tt::test_utils::is_close;
 using tt::test_utils::is_close_vectors;
 
+struct LocalFp32EpochResult {
+    vector<uint32_t> fp32;
+    vector<uint32_t> bf16;
+};
+
+static LocalFp32EpochResult run_local_fp32_epoch(
+    distributed::MeshDevice& mesh_device,
+    const vector<uint32_t>& fp8_input,
+    const vector<uint32_t>& fp32_scale,
+    const vector<uint32_t>& bf16_input) {
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    constexpr auto fp8_cb = tt::CBIndex::c_0;
+    constexpr auto fp32_scale_cb = tt::CBIndex::c_1;
+    constexpr auto bf16_cb = tt::CBIndex::c_2;
+    constexpr auto fp32_out_cb = tt::CBIndex::c_16;
+    constexpr auto bf16_out_cb = tt::CBIndex::c_17;
+
+    const uint32_t fp8_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3);
+    const uint32_t fp32_tile_size = tt::tile_size(tt::DataFormat::Float32);
+    const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+
+    auto make_dram_buffer = [&](uint32_t size) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = size},
+            {.page_size = size, .buffer_type = BufferType::DRAM},
+            &mesh_device);
+    };
+
+    auto fp8_buffer = make_dram_buffer(fp8_tile_size);
+    auto fp32_scale_buffer = make_dram_buffer(fp32_tile_size);
+    auto bf16_buffer = make_dram_buffer(bf16_tile_size);
+    auto fp32_out_buffer = make_dram_buffer(fp32_tile_size);
+    auto bf16_out_buffer = make_dram_buffer(bf16_tile_size);
+
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(fp8_tile_size, {{fp8_cb, tt::DataFormat::Fp8_e4m3}}).set_page_size(fp8_cb, fp8_tile_size));
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(fp32_tile_size, {{fp32_scale_cb, tt::DataFormat::Float32}})
+            .set_page_size(fp32_scale_cb, fp32_tile_size));
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(bf16_tile_size, {{bf16_cb, tt::DataFormat::Float16_b}})
+            .set_page_size(bf16_cb, bf16_tile_size));
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(fp32_tile_size, {{fp32_out_cb, tt::DataFormat::Float32}})
+            .set_page_size(fp32_out_cb, fp32_tile_size));
+    CreateCircularBuffer(
+        program,
+        core,
+        CircularBufferConfig(bf16_tile_size, {{bf16_out_cb, tt::DataFormat::Float16_b}})
+            .set_page_size(bf16_out_cb, bf16_tile_size));
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+        core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .defines = {{"LOAD_BUF2_DATA", "1"}}});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_dual_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+
+    vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dest_mode[fp32_scale_cb] = UnpackToDestMode::UnpackToDestFp32;
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/fp8_local_fp32_epoch.cpp",
+        core,
+        ComputeConfig{.fp32_dest_acc_en = false, .unpack_to_dest_mode = unpack_to_dest_mode});
+
+    SetRuntimeArgs(
+        program,
+        reader,
+        core,
+        {
+            fp8_buffer->address(),
+            0,
+            fp32_scale_buffer->address(),
+            0,
+            1,
+            bf16_buffer->address(),
+            0,
+        });
+    SetRuntimeArgs(
+        program,
+        writer,
+        core,
+        {
+            fp32_out_buffer->address(),
+            0,
+            bf16_out_buffer->address(),
+            0,
+            1,
+        });
+
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, fp8_buffer, fp8_input, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, fp32_scale_buffer, fp32_scale, /*blocking=*/true);
+    distributed::EnqueueWriteMeshBuffer(cq, bf16_buffer, bf16_input, /*blocking=*/true);
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    LocalFp32EpochResult result;
+    distributed::EnqueueReadMeshBuffer(cq, result.fp32, fp32_out_buffer, /*blocking=*/true);
+    distributed::EnqueueReadMeshBuffer(cq, result.bf16, bf16_out_buffer, /*blocking=*/true);
+    return result;
+}
+
 }  // namespace unit_tests::llk::fp8_typecast
 
 using namespace unit_tests::llk::fp8_typecast;
@@ -146,6 +276,41 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16b) {
     EXPECT_TRUE(is_close_vectors<float>(
         src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, TensixFp8LocalFp32EpochRestoresBf16Dest) {
+    auto& mesh_device = *devices_[0];
+    constexpr float scale = 1.000244140625f;  // 1 + 2^-12: retained by FP32, rounded away by TF32.
+
+    auto fp8_input = create_random_vector_of_float8_e4m3(
+        tt::tile_size(tt::DataFormat::Fp8_e4m3), /*rand_max_float=*/16, /*seed=*/42, /*offset=*/-8.0f);
+    vector<uint32_t> fp32_scale(
+        tt::tile_size(tt::DataFormat::Float32) / sizeof(uint32_t), std::bit_cast<uint32_t>(scale));
+    auto bf16_input = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b), /*rand_max_float=*/4, /*seed=*/17, /*offset=*/-2.0f);
+
+    const auto result = run_local_fp32_epoch(mesh_device, fp8_input, fp32_scale, bf16_input);
+
+    const auto fp8_values = fp8_to_floats(fp8_input);
+    vector<float> expected_fp32(fp8_values.size());
+    std::transform(
+        fp8_values.begin(), fp8_values.end(), expected_fp32.begin(), [](float value) { return value * scale; });
+
+    vector<float> actual_fp32;
+    actual_fp32.reserve(result.fp32.size());
+    for (uint32_t word : result.fp32) {
+        actual_fp32.push_back(std::bit_cast<float>(word));
+    }
+    EXPECT_TRUE(is_close_vectors<float>(
+        expected_fp32, actual_fp32, [](float expected, float actual) { return expected == actual; }));
+
+    auto expected_bf16 = bf16_to_floats(bf16_input);
+    std::transform(expected_bf16.begin(), expected_bf16.end(), expected_bf16.begin(), [](float value) {
+        return std::max(value, 0.0f);
+    });
+    const auto actual_bf16 = bf16_to_floats(result.bf16);
+    EXPECT_TRUE(is_close_vectors<float>(
+        expected_bf16, actual_bf16, [](float expected, float actual) { return expected == actual; }));
 }
 
 // ============================================================================

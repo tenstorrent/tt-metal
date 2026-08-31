@@ -746,9 +746,10 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
         desc.buf_dataformat_arr);
 
     // FP8 formats are always unpacked to Float16 (A-family) in source/dest registers.
-    // Without fp32_dest_acc, the dest register holds Float16 (A-family) data when
-    // the input is FP8, so non-FP8 output CBs need A-family pack_src to match.
-    // With fp32_dest_acc, dest holds Float32 and pack_src semantics differ, so skip.
+    // Without any 32-bit DEST epoch, an FP8 kernel holds A-family data in DEST, so
+    // non-FP8 output CBs need A-family pack_src to match. A local FP32 epoch instead
+    // runs FP8 work in 32-bit DEST and restores the global 16-bit mode afterwards;
+    // outputs from that restored mode retain their declared exponent family.
     // CBs that are themselves FP8 are already handled by get_single_pack_src_format.
     if (!fp32_dest_acc_en &&
         std::any_of(desc.buf_dataformat_arr.begin(), desc.buf_dataformat_arr.end(), tt::is_fp8_format)) {
@@ -765,6 +766,9 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
                 continue;
             }
             if (tt::is_fp8_format(desc.buf_dataformat_arr[i])) {
+                continue;
+            }
+            if (has_local_fp32_epoch) {
                 continue;
             }
             switch (src_formats[i]) {
