@@ -180,6 +180,10 @@ constexpr uint64_t kAddrFpuOutL = kRiscvDebugBase + 0x120;  // 4 B
 constexpr uint64_t kAddrFpuOutH = kRiscvDebugBase + 0x124;  // 4 B, adjacent to OUT_L
 constexpr uint64_t kAddrWallL = kRiscvDebugBase + 0x1F0;    // 4 B
 constexpr uint64_t kAddrWallH = kRiscvDebugBase + 0x1F8;    // 4 B, +8 from WALL_L
+// The coalesced reads above depend on these adjacencies. Assert them so a future edit to
+// the register map breaks the build rather than silently reading the wrong words.
+static_assert(kAddrFpuOutH == kAddrFpuOutL + 4, "OUT_L/OUT_H must be adjacent to coalesce");
+static_assert(kAddrWallH == kAddrWallL + 8, "WALL_L/WALL_H must be 8 apart to coalesce");
 
 // EWMA smoothing for compute_busy. alpha = 2/(N+1) for N-sample horizon.
 // N=10 gives a ~1s smoothing window at 10 Hz publish rate.
@@ -263,6 +267,10 @@ void print_help(const char* argv0) {
                  "                          feeding it (default 1500, 0 = uncapped). A chip with an\n"
                  "                          aggregator does not drain per-core at all, so this\n"
                  "                          never applies to it.\n"
+                 "  --remote-util-only      On REMOTE chips read only the perf counters, skipping the\n"
+                 "                          mailbox reads that feed dispatch%% and per-kernel TIME%%.\n"
+                 "                          Cuts remote transactions per core from 5 to 2. Utilization\n"
+                 "                          is unaffected -- it comes from the counters alone.\n"
                  "  --local-only            Monitor only the MMIO chips, skipping remote discovery.\n"
                  "                          An explicit choice, never a fallback: the remote chips ARE\n"
                  "                          the hard case this tool exists for, so dropping them is\n"
@@ -1038,9 +1046,11 @@ constexpr auto kDramSampleInterval = std::chrono::milliseconds(200);  // 5 Hz, v
 // it counts what it dropped in ChipState::drain_lost_samples -- so a too-small budget
 // here degrades visibly rather than lying, which is the whole point of the fallback.
 constexpr double kDrainOpsPerCore = 1.0;
-// Reads the register sampler issues per core per tick: the go/mailbox block, the launch
-// read-pointer, the host_assigned_id, and the perf counter plus wall clock.
-constexpr double kSamplerOpsPerCore = 5.0;
+// Transactions the register sampler issues per core per visit, counted from the code and
+// not estimated: the go/mailbox block, the launch read-pointer, the host_assigned_id, then
+// OUT_H, WALL_L and WALL_H, plus the counter_sel write. Seven. It was 5 here, which made
+// the remote budget under-count real spend by ~30% and hand out tokens it could not honour.
+constexpr double kSamplerOpsPerCore = 7.0;
 
 // Roll one chip's DRAM rates forward over `dt` seconds. The first call only
 // primes the anchor. Read failures leave the previous rate standing rather than
@@ -2787,6 +2797,16 @@ int main(int argc, char* argv[]) {
                 if (cli.journal_transport && chip.is_remote) {
                     continue;
                 }
+                // A chip whose on-chip aggregator is running does not need the host to walk
+                // its cores at all -- that is the entire point of the aggregator, and the
+                // sampler was the one path that never honoured it. `ring_drain` and
+                // `journal_feed` both gate on journal_active; this loop did not, so an
+                // aggregated remote chip still paid ~2,370 tunnel calls/s to collect data
+                // the journal was already delivering in ~30. Gating here is what turns the
+                // aggregator's headline number into the real one.
+                if (chip.journal_active) {
+                    continue;
+                }
                 // Spend the remote budget here too, rotating coverage so a constrained
                 // budget samples every core in turn instead of the same first N forever.
                 // A local chip takes no NON_MMIO lock, so there is nothing to be polite
@@ -2815,6 +2835,13 @@ int main(int argc, char* argv[]) {
                     chip.samp_rr_cursor = (chip.samp_rr_cursor + 1) % chip.cores.size();
                     uint8_t now_bit = 0;
                     bool have_dispatch = false;
+                    // DO NOT skip these on remote chips to save tunnel transactions.
+                    //
+                    // Tried as --remote-util-only and measured: with it, all four remote
+                    // chips read exactly 0.00% under a 100%-duty matmul while the MMIO
+                    // chips read an inflated 37-39%; without it, remote read a correct
+                    // 15-17%. It zeroed precisely the chips it was meant to help. The
+                    // saving was speculative, the damage was not, so the flag is gone.
                     try {
                         c.device->read_from_device(buf.data(), c.translated, read_addr, kReadSize);
                         have_dispatch = true;
@@ -2863,13 +2890,26 @@ int main(int argc, char* argv[]) {
                     // (WALL_CLOCK). Four small reads land correctly on
                     // both local and remote.
                     bool have_perf = false;
-                    uint32_t fpu_out_l_now = 0;
                     uint32_t fpu_out_h_now = 0;
                     uint32_t wall_l_now = 0;
                     uint32_t wall_h_now = 0;
                     uint64_t wall_now = 0;
+                    // FOUR SEPARATE 4-BYTE READS. Do not "optimise" these into a block read.
+                    //
+                    // Tried and reverted once already (29d4f10b39d, April): a block read at
+                    // 0xFFB12120 does not survive UMD's ETH tunnel on a remote chip. OUT_L
+                    // came back advancing, OUT_H was silently ALIASED to OUT_L, and the wall
+                    // words came back 0xFFFFFFFF -- so the wall delta computed as 0, every
+                    // remote perf sample was dropped, and compute% sat at 0 while the chip
+                    // was busy. I reintroduced it in this session and it was caught before
+                    // it shipped; the aliasing is silent, which is what makes it dangerous.
+                    //
+                    // Ordering matters too: reading WALL_CLOCK_L (0x1F0) is what LATCHES the
+                    // high half into 0x1F8 (risc_common.h:245). Program-ordered reads
+                    // guarantee that; a block read delegates beat order to the ERISC.
+                    // 0x1F4 is not a gap either -- it is WALL_CLOCK_1, the UN-latched high
+                    // word, which tears.
                     try {
-                        c.device->read_from_device(&fpu_out_l_now, c.translated, kAddrFpuOutL, sizeof(fpu_out_l_now));
                         c.device->read_from_device(&fpu_out_h_now, c.translated, kAddrFpuOutH, sizeof(fpu_out_h_now));
                         c.device->read_from_device(&wall_l_now, c.translated, kAddrWallL, sizeof(wall_l_now));
                         c.device->read_from_device(&wall_h_now, c.translated, kAddrWallH, sizeof(wall_h_now));
@@ -2899,11 +2939,10 @@ int main(int argc, char* argv[]) {
                                 std::fprintf(
                                     stderr,
                                     "[live-probe] core(1,1) is_remote=%d sel=%u "
-                                    "wall=0x%016lx out_l=0x%08x out_h=0x%08x last_%s=0x%08x\n",
+                                    "wall=0x%016lx out_h=0x%08x last_%s=0x%08x\n",
                                     c.is_remote ? 1 : 0,
                                     sel,
                                     wall_now,
-                                    fpu_out_l_now,
                                     fpu_out_h_now,
                                     (sel == kFpuCounterSelSfpu) ? "sfpu_out_h" : "fpu_out_h",
                                     last_matching);

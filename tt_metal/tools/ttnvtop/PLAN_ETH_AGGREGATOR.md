@@ -2631,3 +2631,69 @@ switching on the WH CCL routers.
 The 0% is now CORROBORATION rather than a symptom: the calibrated host register path also
 reads ~0 for Llama, and batch-1 decode is a memory-bound GEMV. Both paths finally agree,
 which is what the clamp fix was for.
+
+## 5aa. Two coalescing attempts, both wrong, both caught by measurement -- 2026-08-31
+
+Scoping the "host aggregator with coalesced reads" idea produced two changes that looked
+obviously right and were both wrong. Recording them so they are not attempted again.
+
+### (1) Block-reading the perf registers -- ALREADY TRIED AND REVERTED IN APRIL
+
+Coalescing the four 4-byte reads (OUT_L 0x120, OUT_H 0x124, WALL_L 0x1F0, WALL_H 0x1F8)
+into two block reads. Reverted before it shipped, because commit 29d4f10b39d (2026-04-22)
+exists precisely to undo it:
+
+    the 220-byte block read at RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU (0xFFB12120) did not
+    survive UMD's ETH tunnel on remote chips. The first 4 bytes (OUT_L) came back with
+    real advancing values; bytes 4-7 (OUT_H) were silently aliased to OUT_L; and
+    WALL_CLOCK_L/H came back as 0xFFFFFFFF
+
+An 8-byte read at 0x120 is 32-B aligned, so it takes the same CMD_DATA_BLOCK path that
+aliased. Two further errors in the attempt:
+  - 0x1F0 is NOT 32-B aligned (0x1F0 & 0x1F = 0x10), so a 12-byte read there degrades to
+    THREE single-word commands -- one MORE than the two 4-byte reads it replaced.
+  - 0x1F4 is not a gap. It is WALL_CLOCK_1, the UN-latched high word, which tears.
+    Reading WALL_CLOCK_L (0x1F0) is what LATCHES the high half into 0x1F8
+    (risc_common.h:245), so program order matters and a block read delegates beat order
+    to the ERISC.
+
+The four separate reads now carry a comment saying all of this.
+
+### (2) --remote-util-only -- skipping the mailbox reads. MEASURED HARMFUL.
+
+Skipping the go/mailbox, launch-rd_ptr and host_assigned_id reads on remote chips, on the
+reasoning that they feed dispatch% and per-kernel attribution, not the busy/wall ratio, and
+each costs a tunnel command-queue slot. Under one continuous 100%-duty matmul, swapping
+only the collector flags underneath it:
+
+    --remote-budget 1500 --remote-util-only : mmio 37.98 38.89 37.11 38.50
+                                              remote 0.00 0.00 0.00 0.00
+    --remote-budget 1500                    : mmio 20.52 16.30 14.88 15.88
+                                              remote 16.25 15.14 15.92 16.94
+    --remote-budget 0                       : mmio 21.86 12.06 12.09 12.14
+                                              remote 11.89 12.14 12.55 14.27
+
+It zeroed all four remote chips -- exactly the ones it was meant to help -- and inflated
+the MMIO chips to ~38%. Removed rather than debugged: the saving was speculative and the
+damage was measured. Root cause not chased; if it is ever revisited, note the flag also
+perturbed MMIO chips it was not supposed to touch (`util_only` gates on `chip.is_remote`),
+which suggests the effect is on budget/round-robin accounting, not on the reads themselves.
+
+### What DID survive, unverified against the ramp
+
+  - the dead OUT_L read removed (its only consumer was a debug fprintf)
+  - the sampler gated on `journal_active` -- ring_drain and journal_feed both honoured it,
+    the sampler never did, so an aggregated remote chip still paid full per-core tunnel
+    cost for data the journal was already delivering
+  - kSamplerOpsPerCore 5 -> 7, the real per-visit transaction count, so --remote-budget
+    stops handing out tokens it cannot honour
+
+The ramp that would confirm these did not move the calibration has NOT been run clean: the
+one attempt died on an ARC startup timeout, and the isolation run above used the broken
+flag. Last known-good budgeted baseline remains slope 0.281-0.307, R^2 0.976-0.985.
+
+### Lesson
+
+Both changes were argued from the transport model (cost is per transaction, so fewer
+transactions must be better) and both were wrong for reasons only the hardware knew. On
+this stack, a transport optimisation is a hypothesis until a duty ramp says otherwise.
