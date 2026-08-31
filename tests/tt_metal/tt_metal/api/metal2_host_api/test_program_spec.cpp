@@ -3127,6 +3127,26 @@ protected:
     std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
 };
 
+class ProgramSpecTestBlackhole : public ::testing::Test {
+protected:
+    void SetUp() override {
+        slow_dispatch_override_.emplace();
+        experimental::configure_mock_mode(tt::ARCH::BLACKHOLE, 1);
+        mesh_device_ = distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{1, 1}));
+    }
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+        experimental::disable_mock_mode();
+        slow_dispatch_override_.reset();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
+};
+
 // Gen1 counterpart of the compute-config translation-stability tests (the Gen2 pair lives in the
 // Quasar suite): a default ComputeGen1Config{} must yield the historical internal ComputeConfig
 // defaults. Guards the perf/precision knobs that don't move a functional pass/fail result.
@@ -3138,6 +3158,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ComputeGen1ConfigDefaultsMapToInternalDefaults) 
     const auto& built = std::get<ComputeConfig>(built_variant);
     EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
     EXPECT_FALSE(built.fp32_dest_acc_en);
+    EXPECT_FALSE(built.enable_local_fp32_dest_epoch);
     EXPECT_FALSE(built.dst_full_sync_en);   // double_buffer_dest defaults true -> !true
     EXPECT_FALSE(built.bfp8_pack_precise);  // bfp_pack_precision_mode defaults Approximate
     EXPECT_FALSE(built.math_approx_mode);   // sfpu_precision_mode defaults Precise
@@ -3146,6 +3167,97 @@ TEST_F(ProgramSpecTestGen1, CPU_ComputeGen1ConfigDefaultsMapToInternalDefaults) 
 TEST_F(ProgramSpecTestGen1, CPU_MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_LocalFp32DestEpochRejectedOnWormhole) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config));
+    config.enable_local_fp32_dest_epoch = true;
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("local FP32 DEST epochs are supported only on Blackhole")));
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_Float32UnpackToDestWithoutLocalEpochFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float32;
+    auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config));
+    config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("A 32-bit datum cannot be unpacked into a 16-bit Dest register")));
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_ExplicitLocalEpochAllowsFloat32UnpackToDest) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float32;
+    auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config));
+    config.enable_local_fp32_dest_epoch = true;
+    config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_TRUE(built.enable_local_fp32_dest_epoch);
+    EXPECT_FALSE(built.fp32_dest_acc_en);
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_LocalEpochDoesNotRequireFloat32InputRoute) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config));
+    config.enable_local_fp32_dest_epoch = true;
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    EXPECT_TRUE(std::get<ComputeConfig>(built_variant).enable_local_fp32_dest_epoch);
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_ProducerOnlyUnpackModeDoesNotEnableLocalEpoch) {
+    const NodeCoord node{0, 0};
+    ProgramSpec spec;
+    spec.name = "producer_only_unpack_mode";
+
+    auto producer = MakeMinimalGen1ComputeKernel("producer");
+    auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(producer.hw_config));
+    config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_0);
+    auto dfb = MakeMinimalDFB("dfb_0");
+    dfb.data_format_metadata = tt::DataFormat::Float32;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_0"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_0"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto built_variant = program.impl().get_kernel_by_spec_name("producer")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_FALSE(built.enable_local_fp32_dest_epoch);
+    EXPECT_EQ(built.unpack_to_dest_mode[program.impl().get_dfb_handle("dfb_0")], UnpackToDestMode::UnpackToDestFp32);
+}
+
+TEST_F(ProgramSpecTestBlackhole, CPU_LocalEpochUnpackModeUsesDfbSlot) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    auto dfb1 = MakeMinimalDFB("dfb_1");
+    dfb1.data_format_metadata = tt::DataFormat::Float32;
+    spec.dataflow_buffers.push_back(dfb1);
+    spec.kernels[0].dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb_1"}, "out1"));
+    spec.kernels[1].dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb_1"}, "in1"));
+
+    auto& config = std::get<ComputeGen1Config>(std::get<ComputeHardwareConfig>(spec.kernels[1].hw_config));
+    config.enable_local_fp32_dest_epoch = true;
+    config.unpack_modes = {{DFBSpecName{"dfb_1"}, UnpackMode::UnpackToDest}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto built_variant = program.impl().get_kernel_by_spec_name("compute_kernel")->config();
+    const auto& built = std::get<ComputeConfig>(built_variant);
+    EXPECT_EQ(built.unpack_to_dest_mode.size(), tt::tt_metal::hal::get_arch_num_circular_buffers());
+    EXPECT_EQ(built.unpack_to_dest_mode[program.impl().get_dfb_handle("dfb_1")], UnpackToDestMode::UnpackToDestFp32);
+    EXPECT_EQ(built.unpack_to_dest_mode[program.impl().get_dfb_handle("dfb_0")], UnpackToDestMode::Default);
 }
 
 // Device slots are per-core: a ProgramSpec may declare more DFBs than

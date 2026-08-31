@@ -639,11 +639,13 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::MathFidelity math_fidelity,
                bool math_approx_mode,
                bool fp32_dest_acc_en,
+               bool enable_local_fp32_dest_epoch,
                bool dst_full_sync_en,
                bool bfp8_pack_precise) {
                 new (t) tt::tt_metal::ComputeConfigDescriptor{
                     .math_fidelity = math_fidelity,
                     .fp32_dest_acc_en = fp32_dest_acc_en,
+                    .enable_local_fp32_dest_epoch = enable_local_fp32_dest_epoch,
                     .dst_full_sync_en = dst_full_sync_en,
                     .bfp8_pack_precise = bfp8_pack_precise,
                     .math_approx_mode = math_approx_mode};
@@ -651,6 +653,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("math_fidelity") = nb::cast(tt::tt_metal::MathFidelity::HiFi4),
             nb::arg("math_approx_mode") = false,
             nb::arg("fp32_dest_acc_en") = false,
+            nb::arg("enable_local_fp32_dest_epoch") = false,
             nb::arg("dst_full_sync_en") = false,
             nb::arg("bfp8_pack_precise") = false,
             R"pbdoc(
@@ -660,6 +663,7 @@ void py_module_types(nb::module_& mod) {
                     math_fidelity: Mathematical precision level (default: HiFi4)
                     math_approx_mode: Enable approximation mode (default: False)
                     fp32_dest_acc_en: Enable FP32 destination accumulation (default: False)
+                    enable_local_fp32_dest_epoch: Enable explicit Blackhole-local FP32 DEST epochs (default: False)
                     dst_full_sync_en: Enable full destination synchronization (default: False)
                     bfp8_pack_precise: Enable precise BFP8 packing (default: False)
             )pbdoc")
@@ -671,6 +675,10 @@ void py_module_types(nb::module_& mod) {
             "fp32_dest_acc_en",
             &tt::tt_metal::ComputeConfigDescriptor::fp32_dest_acc_en,
             "Enable FP32 destination accumulation")
+        .def_rw(
+            "enable_local_fp32_dest_epoch",
+            &tt::tt_metal::ComputeConfigDescriptor::enable_local_fp32_dest_epoch,
+            "Enable explicit local FP32 DEST epochs (Blackhole only)")
         .def_rw(
             "dst_full_sync_en",
             &tt::tt_metal::ComputeConfigDescriptor::dst_full_sync_en,

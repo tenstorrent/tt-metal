@@ -112,36 +112,68 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }
 
-TEST(DataFormatLocalFp32Epoch, RequiresMatchingFloat32AndNonDefaultMode) {
+TEST(DataFormatLocalFp32Epoch, ExplicitFlagIsBlackholeOnly) {
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(false, tt::ARCH::BLACKHOLE));
+    EXPECT_TRUE(tt::tt_metal::has_effective_local_fp32_epoch(true, tt::ARCH::BLACKHOLE));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(true, tt::ARCH::QUASAR));
+    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(true, tt::ARCH::WORMHOLE_B0));
+}
+
+TEST(DataFormatLocalFp32Epoch, PerCbModeControlsRoutingOnly) {
     using tt::DataFormat;
     using tt::tt_metal::UnpackToDestMode;
 
     const std::array formats{DataFormat::Float32, DataFormat::Float16_b, DataFormat::Fp8_e4m3};
-    std::array modes{UnpackToDestMode::Default, UnpackToDestMode::Default, UnpackToDestMode::Default};
+    const std::vector modes{
+        UnpackToDestMode::UnpackToDestFp32, UnpackToDestMode::Default, UnpackToDestMode::UnpackToDestFp32};
 
-    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
+    const auto unpack_dst =
+        tt::get_unpack_dst_formats(formats, DataFormat::Float16_b, false, modes, /*int_fpu_en=*/false);
+    EXPECT_EQ(unpack_dst[0], DataFormat::Float32);
 
-    modes[1] = UnpackToDestMode::UnpackToDestFp32;
-    modes[2] = UnpackToDestMode::UnpackToDestFp32;
-    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
-
-    modes[0] = UnpackToDestMode::UnpackToDestFp32;
-    EXPECT_TRUE(tt::tt_metal::has_effective_local_fp32_epoch(formats, modes, tt::ARCH::BLACKHOLE));
+    const auto pack_src = tt::get_pack_src_formats(
+        formats,
+        DataFormat::Float16_b,
+        /*fp32_dest_acc_en=*/false,
+        /*bfp8_pack_precise=*/false,
+        /*int_fpu_en=*/false,
+        tt::ARCH::BLACKHOLE,
+        /*enable_local_fp32_dest_epoch=*/false);
+    EXPECT_EQ(pack_src[0], DataFormat::Float16);
+    EXPECT_EQ(pack_src[1], DataFormat::Float16);
 }
 
-TEST(DataFormatLocalFp32Epoch, HandlesShortModesAndRetainsBlackholeGate) {
+TEST(DataFormatLocalFp32Epoch, PreservesMixedFp8PackFormatsInsideAndAfterEpoch) {
     using tt::DataFormat;
-    using tt::tt_metal::UnpackToDestMode;
 
-    const std::array formats{DataFormat::Float16_b, DataFormat::Float32};
-    const std::array short_modes{UnpackToDestMode::UnpackToDestFp32};
-    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(formats, short_modes, tt::ARCH::BLACKHOLE));
+    for (const DataFormat fp8_format : {DataFormat::Fp8_e4m3, DataFormat::Lf8}) {
+        const std::array formats{fp8_format, DataFormat::Float32, DataFormat::Float16_b};
+        const auto pack_src = tt::get_pack_src_formats(
+            formats,
+            DataFormat::Float16_b,
+            /*fp32_dest_acc_en=*/false,
+            /*bfp8_pack_precise=*/false,
+            /*int_fpu_en=*/false,
+            tt::ARCH::BLACKHOLE,
+            /*enable_local_fp32_dest_epoch=*/true);
+        EXPECT_EQ(pack_src[1], DataFormat::Float32);
+        EXPECT_EQ(pack_src[2], DataFormat::Float16_b);
+    }
+}
 
-    const std::array float32_format{DataFormat::Float32};
-    const std::array local_mode{UnpackToDestMode::UnpackToDestFp32};
-    EXPECT_TRUE(tt::tt_metal::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::BLACKHOLE));
-    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::QUASAR));
-    EXPECT_FALSE(tt::tt_metal::has_effective_local_fp32_epoch(float32_format, local_mode, tt::ARCH::WORMHOLE_B0));
+TEST(DataFormatLocalFp32Epoch, DoesNotRequireFloat32InputRoute) {
+    using tt::DataFormat;
+
+    const std::array formats{DataFormat::Fp8_e4m3, DataFormat::Float16_b};
+    const auto pack_src = tt::get_pack_src_formats(
+        formats,
+        DataFormat::Float16_b,
+        /*fp32_dest_acc_en=*/false,
+        /*bfp8_pack_precise=*/false,
+        /*int_fpu_en=*/false,
+        tt::ARCH::BLACKHOLE,
+        /*enable_local_fp32_dest_epoch=*/true);
+    EXPECT_EQ(pack_src[1], DataFormat::Float16_b);
 }
 
 TEST(DataFormatFp8Predicate, IncludesLf8) {

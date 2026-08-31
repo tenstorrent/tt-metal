@@ -12,11 +12,19 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
+#ifdef USE_DFB_ACCESSORS
+    constexpr auto fp8_cb_id = dfb::fp8_input;
+    constexpr auto fp32_scale_cb_id = dfb::fp32_scale;
+    constexpr auto bf16_cb_id = dfb::bf16_input;
+    constexpr auto fp32_out_cb_id = dfb::fp32_output;
+    constexpr auto bf16_out_cb_id = dfb::bf16_output;
+#else
     constexpr auto fp8_cb_id = tt::CBIndex::c_0;
     constexpr auto fp32_scale_cb_id = tt::CBIndex::c_1;
     constexpr auto bf16_cb_id = tt::CBIndex::c_2;
     constexpr auto fp32_out_cb_id = tt::CBIndex::c_16;
     constexpr auto bf16_out_cb_id = tt::CBIndex::c_17;
+#endif
     constexpr uint32_t dst_data = 0;
     constexpr uint32_t dst_scale = 1;
 

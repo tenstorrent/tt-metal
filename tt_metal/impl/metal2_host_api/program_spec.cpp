@@ -885,6 +885,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
                     "ComputeGen2Config. Supply a Gen1 config (ComputeGen1Config).",
                     kernel.unique_id);
+                if (get_arch() == tt::ARCH::WORMHOLE_B0) {
+                    const auto& gen1 = std::get<ComputeGen1Config>(compute_config);
+                    TT_FATAL(
+                        !gen1.enable_local_fp32_dest_epoch,
+                        "KernelSpec '{}' sets enable_local_fp32_dest_epoch, but local FP32 DEST epochs are "
+                        "supported only on Blackhole",
+                        kernel.unique_id);
+                }
             } else if (is_gen2_arch()) {
                 TT_FATAL(
                     std::holds_alternative<ComputeGen2Config>(compute_config),
@@ -981,9 +989,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     //   UnpackToSrc                          → always accepted (the default path).
     //   UnpackToDest, producer-only binding  → inert (the DFB is never unpacked): tolerated.
     //   UnpackToDest, consumer, enable=true  → accepted (Dest is 32-bit; the choice is coherent).
-    //   UnpackToDest, consumer, enable=false, 32-bit format (Float32/Int32/UInt32/RawUInt32)
-    //                                        → REJECTED on every generation: a 32-bit datum cannot
-    //                                          be unpacked into a 16-bit Dest register.
+    //   UnpackToDest, consumer, enable=false, Float32, Blackhole local epoch enabled
+    //                                        → accepted: the kernel explicitly switches Dest locally.
+    //   UnpackToDest, consumer, enable=false, other 32-bit format (or no BH local epoch)
+    //                                        → REJECTED: a 32-bit datum cannot be unpacked into a
+    //                                          16-bit Dest register.
     //   UnpackToDest, consumer, enable=false, <=16-bit format, Gen1
     //                                        → REJECTED: bad for perf (bypasses SrcA/B for no gain).
     //   UnpackToDest, consumer, enable=false, <=16-bit format, Gen2
@@ -1024,6 +1034,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         const bool enable_32_bit_dest =
             std::visit([](const auto& config) { return config.enable_32_bit_dest; }, compute_config);
         const bool is_gen2 = std::holds_alternative<ComputeGen2Config>(compute_config);
+        const bool enable_local_fp32_dest_epoch =
+            std::holds_alternative<ComputeGen1Config>(compute_config) &&
+            std::get<ComputeGen1Config>(compute_config).enable_local_fp32_dest_epoch &&
+            get_arch() == tt::ARCH::BLACKHOLE;
 
         // Index the kernel's DFB bindings: which it binds at all, and which it CONSUMES. A self-loop
         // DFB appears as two separate bindings (one PRODUCER, one CONSUMER — there is no BOTH endpoint
@@ -1075,11 +1089,15 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             }
 
             const tt::DataFormat fmt = dfb_spec->data_format_metadata.value();
+            if (fmt == tt::DataFormat::Float32 && enable_local_fp32_dest_epoch) {
+                continue;
+            }
             TT_FATAL(
                 !is_32bit_element_format(fmt),
                 "Compute kernel '{}' unpack_modes entry for DFB '{}' specifies UnpackToDest, but the DFB entries use a "
                 "32-bit format ({}) and enable_32_bit_dest is false. A 32-bit datum cannot be unpacked into "
-                "a 16-bit Dest register. Set enable_32_bit_dest=true, or use UnpackToSrc.",
+                "a 16-bit Dest register. On Blackhole, Float32 may instead use "
+                "enable_local_fp32_dest_epoch=true; otherwise set enable_32_bit_dest=true or use UnpackToSrc.",
                 kernel.unique_id,
                 dfb_name,
                 fmt);
@@ -2784,6 +2802,7 @@ ComputeConfig MakeGen1ComputeConfig(const KernelSpec& kernel_spec, const DFBName
     return ComputeConfig{
         .math_fidelity = gen1.fpu_math_fidelity,
         .fp32_dest_acc_en = gen1.enable_32_bit_dest,
+        .enable_local_fp32_dest_epoch = gen1.enable_local_fp32_dest_epoch,
         .dst_full_sync_en = !gen1.double_buffer_dest,
         .unpack_to_dest_mode = unpack_dst_modes,
         .bfp8_pack_precise = (gen1.bfp_pack_precision_mode == Precision::Precise),

@@ -101,6 +101,7 @@ struct ComputeConfigDescriptor {
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
+    bool enable_local_fp32_dest_epoch = false;
     bool dst_full_sync_en = false;
     UnpackToDestModes unpack_to_dest_mode;
     bool bfp8_pack_precise = false;

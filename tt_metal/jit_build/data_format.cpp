@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
 #include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
 #include <circular_buffer_constants.h>
+#include <algorithm>
 #include <functional>
 #include <iostream>       // for basic_ostream
 #include <set>            // for set
@@ -234,21 +235,8 @@ bool any_unpack_to_dest(const std::vector<tt::tt_metal::UnpackToDestMode>& unpac
     return false;
 }
 
-bool tt_metal::has_effective_local_fp32_epoch(
-    std::span<const tt::DataFormat> data_formats,
-    std::span<const tt_metal::UnpackToDestMode> unpack_to_dest_mode,
-    tt::ARCH arch) {
-    if (arch != tt::ARCH::BLACKHOLE) {
-        return false;
-    }
-
-    for (std::size_t index = 0; index < data_formats.size() && index < unpack_to_dest_mode.size(); ++index) {
-        if (data_formats[index] == tt::DataFormat::Float32 &&
-            unpack_to_dest_mode[index] != tt_metal::UnpackToDestMode::Default) {
-            return true;
-        }
-    }
-    return false;
+bool tt_metal::has_effective_local_fp32_epoch(bool enable_local_fp32_dest_epoch, tt::ARCH arch) {
+    return enable_local_fp32_dest_epoch && arch == tt::ARCH::BLACKHOLE;
 }
 
 DataFormat get_single_pack_src_format(
@@ -396,7 +384,8 @@ std::vector<DataFormat> get_pack_src_formats(
     bool fp32_dest_acc_en,
     bool bfp8_pack_precise,
     bool int_fpu_en,
-    tt::ARCH arch) {
+    tt::ARCH arch,
+    bool enable_local_fp32_dest_epoch) {
     std::vector<DataFormat> pack_src_formats;
     pack_src_formats.reserve(data_formats.size());
     DataFormat pack_src_format;
@@ -404,6 +393,34 @@ std::vector<DataFormat> get_pack_src_formats(
         pack_src_format = get_single_pack_src_format(
             src_format, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, int_fpu_en, arch);
         pack_src_formats.push_back(pack_src_format);
+    }
+
+    // FP8 formats use the mixed-FP8 path. With globally 16-bit DEST, legacy
+    // kernels use A-family pack sources for other outputs. An explicit local
+    // FP32 epoch instead restores the global 16-bit mode before those outputs:
+    // Float32 values created inside the epoch retain Float32 pack source, while
+    // post-restore BF16 outputs retain Float16_b.
+    if (!fp32_dest_acc_en && std::ranges::any_of(data_formats, tt::is_fp8_format)) {
+        const bool has_local_fp32_epoch = tt_metal::has_effective_local_fp32_epoch(enable_local_fp32_dest_epoch, arch);
+        for (size_t i = 0; i < pack_src_formats.size(); ++i) {
+            if (data_formats[i] == DataFormat::Float32 && has_local_fp32_epoch) {
+                pack_src_formats[i] = DataFormat::Float32;
+                continue;
+            }
+            if (tt::is_fp8_format(data_formats[i])) {
+                continue;
+            }
+            if (has_local_fp32_epoch) {
+                continue;
+            }
+            switch (pack_src_formats[i]) {
+                case DataFormat::Float16_b: pack_src_formats[i] = DataFormat::Float16; break;
+                case DataFormat::Bfp8_b: pack_src_formats[i] = DataFormat::Bfp8; break;
+                case DataFormat::Bfp4_b: pack_src_formats[i] = DataFormat::Bfp4; break;
+                case DataFormat::Bfp2_b: pack_src_formats[i] = DataFormat::Bfp2; break;
+                default: break;
+            }
+        }
     }
 
     return pack_src_formats;
