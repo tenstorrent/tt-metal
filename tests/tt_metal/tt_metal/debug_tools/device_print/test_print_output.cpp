@@ -75,7 +75,7 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
             .unique_id = experimental::KernelSpecName{"dm_print"},
             .source = std::filesystem::path{kernel_path},
             .num_threads = dm_threads,
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
             .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
         });
         placed.push_back(experimental::KernelSpecName{"dm_print"});
@@ -85,7 +85,7 @@ experimental::ProgramSpec MakeQuasarPrintSpec(
             .unique_id = experimental::KernelSpecName{"compute_print"},
             .source = std::filesystem::path{kernel_path},
             .num_threads = compute_engines,
-            .hw_config = experimental::ComputeGen2Config{},
+            .hw_config = experimental::ComputeHardwareConfig{},
             .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 1},
         });
         placed.push_back(experimental::KernelSpecName{"compute_print"});
@@ -101,9 +101,9 @@ experimental::ProgramSpec MakeComputePrintSpec(
     tt::ARCH arch, std::string_view kernel_path, const experimental::NodeCoord& node = kDefaultPrintNode) {
     experimental::ComputeHardwareConfig hw_config;
     if (arch == tt::ARCH::QUASAR) {
-        hw_config = experimental::ComputeGen2Config{};
+        hw_config = experimental::ComputeHardwareConfig{};
     } else {
-        hw_config = experimental::ComputeGen1Config{};
+        hw_config = experimental::ComputeHardwareConfig{};
     }
 
     const experimental::KernelSpecName name{"compute_print"};

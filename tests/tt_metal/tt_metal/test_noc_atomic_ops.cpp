@@ -83,7 +83,7 @@ protected:
                 .num_threads = num_dms_,
                 .compiler_options = {.defines = {{mode_define, "1"}}},
                 .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             kernel_names.push_back(DM_KERNEL);
             params.kernel_run_args.push_back(make_run_params(DM_KERNEL));
@@ -97,9 +97,12 @@ protected:
                     .compiler_options = {.defines = {{mode_define, "1"}}},
                     .runtime_arg_schema = {.runtime_arg_names = {"sem_addr", "increment_times"}},
                     .hw_config =
-                        experimental::DataMovementGen1Config{
-                            .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
-                            .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                        experimental::DataMovementHardwareConfig{
+                            .config_1xx =
+                                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                                    .processor = static_cast<tt_metal::DataMovementProcessor>(dm_id),
+                                    .noc = (dm_id == 1 ? NOC::RISCV_1_default : NOC::RISCV_0_default),
+                                },
                         },
                 });
                 kernel_names.push_back(name);

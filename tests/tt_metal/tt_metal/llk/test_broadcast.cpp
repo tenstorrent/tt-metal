@@ -97,26 +97,32 @@ constexpr float k_broadcast_rtol = 0.0155;
 // the processor/NOC pair per direction. Identical for every runner in this file, hence the helpers.
 experimental::DataMovementHardwareConfig make_reader_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default}};
 }
 
 experimental::DataMovementHardwareConfig make_writer_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true}};
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx = experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default}};
 }
 
 experimental::ComputeHardwareConfig make_compute_hw_config(
     const distributed::MeshDevice& mesh_device, MathFidelity math_fidelity) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::ComputeGen2Config{.fpu_math_fidelity = math_fidelity};
+        return experimental::ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
     }
-    return experimental::ComputeGen1Config{.fpu_math_fidelity = math_fidelity};
+    return experimental::ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
 }
 
 struct BroadcastConfig {

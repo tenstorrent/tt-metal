@@ -180,8 +180,8 @@ const std::vector<std::string> field_names_unpack_config_wormhole_or_blackhole =
     "reserved_4",
     "fifo_size",
     "reserved_5"};
-const std::vector<uint32_t> field_values_unpack_config_wormhole_or_blackhole = {0, 1, 2, 0, 1, 1, 0, 3,  0, 0,  16,
-                                                                                5, 6, 0, 0, 2, 3, 0, 0,  0, 0,  0};
+const std::vector<uint32_t> field_values_unpack_config_wormhole_or_blackhole = {0, 1, 2, 0, 1, 1, 0, 3, 0, 0, 16,
+                                                                                5, 6, 0, 0, 2, 3, 0, 0, 0, 0, 0};
 
 const std::vector<std::string> field_names_pack_config_blackhole = {
     "row_ptr_section_size",
@@ -281,9 +281,9 @@ static std::string int_to_hex(int value) {
 static Program make_writer_program(distributed::MeshDevice& mesh_device, const ConfigRegPrintTestConfig& config) {
     experimental::ComputeHardwareConfig hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        hw_config = experimental::ComputeGen2Config{};
+        hw_config = experimental::ComputeHardwareConfig{};
     } else {
-        hw_config = experimental::ComputeGen1Config{};
+        hw_config = experimental::ComputeHardwareConfig{};
     }
 
     const experimental::KernelSpecName kKernel{"config_reg_writer"};

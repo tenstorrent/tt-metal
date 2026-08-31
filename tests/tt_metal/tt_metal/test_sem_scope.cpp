@@ -51,7 +51,7 @@ protected:
     void SetUp() override {
         MeshDispatchFixture::SetUp();
         if (arch_ != tt::ARCH::QUASAR) {
-            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementGen2Config";
+            GTEST_SKIP() << "SemScope suite is Gen2 (Quasar) only: its specs use DataMovementHardwareConfig";
         }
         mesh_device_ = devices_[0];
         device_ = mesh_device_->get_devices()[0];
@@ -105,7 +105,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         });
         std::vector<experimental::WorkUnitSpec> work_units{experimental::WorkUnitSpec{
             .name = "main",
@@ -124,7 +124,7 @@ protected:
                 .runtime_arg_schema =
                     {.runtime_arg_names =
                          {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             work_units.push_back(experimental::WorkUnitSpec{
                 .name = "observer",
@@ -215,7 +215,7 @@ protected:
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"report_addr", "increment_times", "num_threads", "self_noc_x", "self_noc_y"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
@@ -300,7 +300,7 @@ protected:
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"external_sem"}, .accessor_name = "external"},
                  {.semaphore_spec_name = experimental::SemaphoreSpecName{"done_sem"}, .accessor_name = "done"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "increment_times", "num_threads"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = core};
@@ -366,7 +366,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"increment_times", "remote_noc_x", "remote_noc_y"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
         experimental::KernelSpec receiver_spec{
             .unique_id = RECEIVER,
@@ -375,7 +375,7 @@ protected:
             .semaphore_bindings =
                 {{.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter"}},
             .runtime_arg_schema = {.runtime_arg_names = {"report_addr", "expected"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
 
         experimental::WorkUnitSpec wu_recv{.name = "wu_recv", .kernels = {RECEIVER}, .target_nodes = core};
@@ -469,7 +469,7 @@ protected:
                 .runtime_arg_schema =
                     {.runtime_arg_names =
                          {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-                .hw_config = experimental::DataMovementGen2Config{},
+                .hw_config = experimental::DataMovementHardwareConfig{},
             });
             bool placed = false;
             for (auto& [node, names] : by_node) {
@@ -817,7 +817,7 @@ TEST_F(SemScopeFixture, TestCensusTwoCachedSemsOneNodeBothCached) {
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
@@ -942,7 +942,7 @@ TEST_F(SemScopeFixture, TestCachedSeederImmuneToUserBarrierSlots) {
             .runtime_arg_schema =
                 {.runtime_arg_names =
                      {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-            .hw_config = experimental::DataMovementGen2Config{},
+            .hw_config = experimental::DataMovementHardwareConfig{},
         };
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {KA, KB}, .target_nodes = core};
@@ -1093,7 +1093,7 @@ TEST_F(SemScopeFixture, TestSameIdSemaphoresKeepDistinctScopes) {
             {{.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_near"}, .accessor_name = "near_sem"},
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"sem_far"}, .accessor_name = "far_sem"}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec wu{.name = "wu", .kernels = {K}, .target_nodes = core};
     experimental::ProgramSpec spec{
@@ -1135,7 +1135,7 @@ TEST_F(SemScopeFixture, TestDoubleBindingRejected) {
              {.semaphore_spec_name = experimental::SemaphoreSpecName{"counter_sem"}, .accessor_name = "counter_again"}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"report_addr", "increment_times", "is_reporter", "barrier_idx", "wait_min_total"}},
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = core};
     experimental::ProgramSpec spec{.name = "sem_double_bind", .kernels = {ks}, .semaphores = {sem}, .work_units = {wu}};
