@@ -83,9 +83,9 @@ variants that feed NaN, ±inf and −0.0. The skips are the pre-existing ReluMin
   candidate table now flags measurability per kernel.
 - **§2 on `softplus`** — the same rewrite `i0` got. It still carries 6 `SFPNOP` per element after
   §1. Same `PolynomialEvaluator::eval` shape, so the same statement-level interleave applies.
-- **§2 on the kernels ranked in §2's survey table** — the `gelu` family carries the most stalls in
-  absolute terms (`gelu_derivative` 138, `gelu` 60, `gelu_tanh` 27) and is hot in production;
-  `cbrt`, `rsqrt_compat`, `erfinv` and `polygamma` are the most stall-bound by share.
+- **§2 on `sigmoid`, then `gelu_tanh` and `i1`** — the stall-heavy kernels that are still mostly
+  straight-line. The bigger stall counts (`rpow` 168, `gelu_derivative` 138) sit behind heavy
+  predication, where §3 has to come first; see §2's survey table.
 
 ---
 
@@ -427,45 +427,58 @@ sfpnop / sfpmul ... sfpnop / sfpaddi ...
 
 ### Where else to apply it
 
-`SFPNOP` count in the compiled math ELF is the direct signal. All 48 unary SFPU ops whose math ELF
-carries more than 25 SFPU instructions were scanned (one ELF per op); the remaining 23 have
-trivially small bodies.
+`SFPNOP` count inside the per-element loop is the direct signal — but it is not sufficient on its
+own, because **interleaving cannot cross a `v_if`**. The SFPU's condition-code state is a single
+shared resource: `SFPSETCC` sets it for the whole pipeline, so two interleaved elements that take
+different branches cannot have their predicated blocks interleaved. In a predication-heavy kernel
+the independent work is fragmented into one block at a time and most of the payoff disappears.
+`i0` delivered a clean 18 percent cut precisely because it has **zero** predicate instructions.
 
-**Read absolute count for how much is on the table, and share for how stall-bound the kernel is.**
-These are whole-ELF figures, so a large absolute count can be spread across cold branches rather
-than concentrated in the hot loop — confirm against the loop body before committing to one.
+So read two columns together: `SFPNOP` for how much is on the table, and `cc`
+(`SFPSETCC`/`SFPENCC`/`PUSHC`/`POPC` inside the loop) for whether §2 can reach it. All 48 unary
+SFPU ops whose math ELF carries more than 25 SFPU instructions, largest body-bearing ELF per op:
 
-| op | `SFPNOP` | total `sfp*` | NOP share |
-|---|---|---|---|
-| `gelu_derivative` | **138** | 795 | 17.4 % |
-| `rsqrt_compat` | **72** | 338 | **21.3 %** |
-| `mish` | **65** | 380 | 17.1 % |
-| `gelu` | **60** | 474 | 12.7 % |
-| `erfinv` | 42 | 199 | **21.1 %** |
-| `rpow` | 35 | 615 | 5.7 % |
-| `gelu_tanh` | 27 | 299 | 9.0 % |
-| `asinh` | 21 | 148 | 14.2 % |
-| `acosh` | 20 | 122 | 16.4 % |
-| `sigmoid` | 18 | 132 | 13.6 % |
-| `i1` | 16 | 136 | 11.8 % |
-| `polygamma` | 14 | 72 | 19.4 % |
-| `digamma` | 12 | 137 | 8.8 % |
-| `asin` / `acos` | 11 | 73 / 74 | 15.1 / 14.9 % |
-| `cbrt` | 10 | 44 | **22.7 %** |
-| `cosine` | 10 | 65 | 15.4 % |
+| op | loop `SFPNOP` | NOP share | loop `cc` | §2 prospect |
+|---|---|---|---|---|
+| `rpow` | 168 | 14.4 % | 106 | poor |
+| `gelu_derivative` | 138 | 17.6 % | 67 | poor |
+| `rsqrt_compat` | 72 | 21.4 % | 42 | poor |
+| `mish` | 65 | 17.7 % | 25 | marginal |
+| `gelu` | 60 | 12.7 % | 26 | marginal |
+| `erfinv` | 42 | 21.9 % | 12 | marginal |
+| `sigmoid` | 40 | 15.2 % | 8 | good |
+| `gelu_tanh` | 27 | 9.4 % | 8 | good |
+| `asinh` | 24 | 15.4 % | 12 | marginal |
+| `acosh` | 20 | 17.9 % | 12 | marginal |
+| `i1` | 16 | 12.7 % | 3 | good |
+| `polygamma` | 14 | 23.3 % | 0 | **ideal** — straight-line |
+| `digamma` | 12 | 9.5 % | 10 | marginal |
+| `asin` | 11 | 15.5 % | 12 | marginal |
+| `acos` | 11 | 15.3 % | 12 | marginal |
+| `cosine` | 10 | 18.5 % | 0 | **ideal** — straight-line |
+| `cbrt` | 10 | 29.4 % | 0 | **ideal** — straight-line |
+| `atanh` | 10 | 11.2 % | 8 | good |
+| `log1p` | 9 | 7.0 % | 9 | marginal |
+| `selu` | 8 | 12.1 % | 4 | good |
+| `remainder` | 8 | 12.3 % | 20 | marginal |
+| `reciprocal_compat` | 8 | 9.1 % | 26 | marginal |
 
-By weight of opportunity the `gelu` family leads — `gelu_derivative` alone carries 138 stalls, and
-`gelu` and `gelu_tanh` add 87 more, in kernels that are far hotter in production than the inverse
-hyperbolics. By share, `cbrt`, `rsqrt_compat`, `erfinv` and `polygamma` are the most stall-bound.
+Two things worth noting from the scan. Every op has `loop nop == ELF nop` — all the stalls sit in
+the per-element loop, none in cold branches, so the counts are directly actionable. And the ranking
+by opportunity is close to the *inverse* of the ranking by feasibility: the kernels with the most
+stalls are the most predicated.
 
-`softplus` is not in this table (it sits just under the reporting threshold after §1) but still
-carries 6 `SFPNOP` per element and shares `i0`'s `PolynomialEvaluator::eval` shape, so it remains
-the cheapest next one — a known-good rewrite rather than a new investigation.
+**Where §2 actually applies.** `sigmoid` is the best risk-adjusted target — 40 stalls with only 8
+`cc`, i.e. mostly straight-line, and the same polynomial shape as `i0`. Then `gelu_tanh` (27/8) and
+`i1` (16/3). `polygamma` (14/0), `cosine` (10/0), `cbrt` (10/0) and `expm1_cw` (6/0) are
+structurally ideal but individually small. `softplus` sits just under the reporting threshold and
+still carries 6 per element with `i0`'s exact shape, so it remains the cheapest known-good rewrite.
 
-> **Methodology note.** An earlier revision of this table was produced against a partially
-> completed build (312 of 1369 math ELFs) and named `erfinv`, `acosh`, `asin` and `asinh` as the
-> top candidates. Ops not yet compiled were simply absent, which omitted every one of the four
-> largest. If you regenerate this, confirm the build has finished before scanning.
+**For the heavily predicated kernels, §3 comes first and unlocks §2.** `rpow` carries ~53 `v_if`
+blocks and `gelu_derivative` ~33. Collapsing those to branch-free idioms — the `relu_max` treatment
+in §3, which measured a 39 percent cut — saves 2-9 slots each *and* removes the barrier to
+interleaving afterwards. That ordering is the opposite of what §5 originally suggested: §3 unlocks
+§2 on these kernels, rather than §2 being the follow-up to §1.
 
 ### Three measured limits
 
@@ -737,9 +750,11 @@ Remaining order of work (items 1–2 are **done** — see §0):
    alternating steps; see §2.
 4. **2-way interleave (§2) on `softplus`** — still 6 `SFPNOP` per element after §1, same
    `PolynomialEvaluator::eval` shape as `i0`. Cheapest next win.
-5. **2-way interleave on the remaining kernels** — `gelu_derivative` first (138 `SFPNOP`, and a
-   hot production op), then `gelu` / `gelu_tanh`, `mish`, `rsqrt_compat`; see §2's survey table for
-   the full ranking by both absolute count and share.
+5. **2-way interleave on `sigmoid`** (40 stalls, only 8 `cc`), then `gelu_tanh` and `i1` — the
+   stall-heavy kernels §2 can actually reach.
+5a. **§3 on `rpow` and `gelu_derivative`** — ~53 and ~33 `v_if` blocks. Worth doing for its own
+   sake (§3 measured −39 % on `relu_max`) and it unlocks §2 on the two largest stall counts in the
+   tree, 168 and 138. This is the highest-ceiling item in either document.
 6. **`tanh_derivative` CREGs** (§1) — needs the `l_reg[LReg0/1/2]` LUT interaction and the two
    init variants resolved first. ~3 slots/element once that is understood.
 7. **`relu.h:125-127` and `:164-166`** (§3) — the two remaining two-sided clamp pairs, in the
@@ -767,7 +782,8 @@ The hardware numbers reorder the priorities from the original draft. §3 is the 
 it applies, but it applies to few sites. §1 alone is much smaller than it looked. **§2 is the one
 with broad remaining headroom** — it is the only idea here that attacks the `SFPNOP` tax directly,
 it compounds with §1, and §2's survey table shows most polynomial kernels still paying 6–23 % of
-their SFPU instructions to stalls — 138 of them in `gelu_derivative` alone. Its cost is that each application is a real rewrite, not a
+their SFPU instructions to stalls — 168 of them in `rpow` and 138 in `gelu_derivative`. The
+catch is that §2 cannot cross a `v_if`, so on those two the route in is §3 first. Its cost is that each application is a real rewrite, not a
 mechanical edit.
 
 The literal-encoding work is still worth doing — it applies to kernels that have no free CREGs,
@@ -1074,6 +1090,8 @@ Recorded so they are not rediscovered.
 | 4-way element interleave | `dst_reg[k]` immediate window is `[-8,7]` half-rows; overflows and fails to compile once unrolled. §2. |
 | Round the Horner-tail constant `4.99999851e-1f` to `0.5f` | **Regresses WH** (+1): the bf16 immediate splits the fused `SFPMAD` into `SFPMULI`+`SFPADD` and the added `SFPNOP`s cost more than the two saved loads. Companion doc §4, T1-d. |
 | Assume `erf`/`i1`/`digamma`/`gelu` have free CREG slots | Wrong — all reach `sfpu_reciprocal_init`, which claims all three. Availability must be resolved transitively. §1. |
+| Rank §2 candidates by `SFPNOP` count alone | Ignores that interleaving cannot cross a `v_if` — the condition-code state is shared, so two elements taking different branches cannot have their predicated blocks interleaved. The stall ranking is close to the inverse of the feasibility ranking: `rpow` (168 stalls, 106 `cc`) and `gelu_derivative` (138, 67) are the worst §2 targets despite topping the list. Read `SFPNOP` with `cc`. §2. |
+| Take the first body-bearing ELF per op when scanning | Each op builds one ELF per PerfRunType and they differ in size; the first one over a size threshold is not the largest. This understated `rpow` as 35 stalls when it has 168, and `sigmoid` as 18 when it has 40. Pick the max-`sfp` ELF per op. §2. |
 | Scan for `SFPNOP` density while the perf build is still compiling | Produces a confidently wrong ranking. A scan at 312 of 1369 math ELFs omitted `gelu_derivative` (138 NOPs), `rsqrt_compat`, `mish` and `gelu` entirely — every one of the four largest — and promoted `erfinv` to top candidate. Wait for the build to finish. §2. |
 | Apply §2 by writing two element expressions back to back and letting GCC schedule them | Does nothing — GCC will not interleave two independent expression trees. Measured 18 `SFPNOP` per two elements on `i0`, identical per-element to the 1-way version. The interleave has to alternate at statement level. §2. |
 | Treat the 32-instruction replay cap as a constraint on every kernel | The real kernels with `#pragma GCC unroll 0` compile to rolled RISC-V loops with no `TTREPLAY` at all, so the cap never binds. `i0`'s interleaved body is 63 slots and fine. Check the disassembly first. §2. |
