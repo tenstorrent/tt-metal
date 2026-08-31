@@ -1957,9 +1957,54 @@ Not a compile-time timeout (the second attempt is immediate), not a link or size
 (the build is silent). `MEM_MAP_END` is derived from this reservation and is the Tensix
 **KERNEL_CONFIG base**, so growing it shifts that base and every
 `*_INIT_LOCAL_L1_BASE_SCRATCH` above it. Which of those movements breaks init is NOT
-diagnosed and needs firmware-layout knowledge. Reverted; the constant now carries a
-warning comment. **This is the highest-value open item: fixing it likely removes the whole
-feature.**
+diagnosed. Reverted; the constant now carries a warning comment.
+
+**DO NOT PURSUE THIS. Corrected below -- an earlier revision of this section called it "the
+highest-value open item", which was wrong on footprint grounds.**
+
+### Why growing the ring is the WORST option, not the cheapest
+
+The ring lives in **Tensix** L1 (`wh_hal_tensix.cpp` registers `UTIL_SAMPLER`; the writers
+are `brisc.cc`'s `init()`, `trisc.cc`'s `force_kernel_start_sample()` and the LLK math
+hooks). The ethernet core is only ever a CONSUMER. So the ring size is the one lever that
+reaches back into the address space every workload runs in:
+
+    Tensix L1                1464 KB
+    reserved (MEM_MAP_END)   35.2 KB
+    sampler ring              1024 B  = 0.068% of L1, 2.8% of the reserved region
+
+Nothing overlaps or corrupts -- the ring is below `MEM_MAP_END` and workload buffers are
+allocated from `UNRESERVED` up, with `MEM_MAP_END` as the watcher's enforced boundary. But:
+
+1. **It is a permanent global tax.** 1 KiB (or 2) of EVERY Tensix core on EVERY chip,
+   reserved whether or not anyone is monitoring. The aggregator is 2 KB on ONE idle eth
+   core, only while monitoring. On footprint the ring is strictly MORE invasive.
+2. **`MEM_MAP_END` is an ABI boundary**, not merely a size: the Tensix `KERNEL_CONFIG` base
+   and the base of every `*_INIT_LOCAL_L1_BASE_SCRATCH`. Moving it invalidates precompiled
+   firmware -- whose `build_key` does not hash header contents -- and anything with baked
+   L1 addresses. A fleet-wide compatibility event for an optional monitor.
+3. **L1-tight ops.** tt-metal kernels are tuned against available L1 to the byte; a hard
+   boundary moving by 1 KiB can push a tuned config over.
+
+Read that way, the init hang is plausibly the platform saying this boundary is not meant to
+move, rather than a bug to be fixed.
+
+### Corrected ranking for the remote-chip gap
+
+    option                              permanent device footprint        while monitoring
+    parallel host drain (DONE)          none                              host threads only
+    eth aggregator, remote chips only   none                              2 KB + 1 idle eth core
+    bigger ring                         1 KiB x every Tensix core, ALWAYS  --
+                                        + moves an ABI boundary
+
+So the aggregator is the option with ZERO permanent footprint, scoped to the only case that
+still needs it. Its hazards are real but bounded, Wormhole-specific, and the mitigations are
+known (invalid-signature exit so a dead kernel cannot hard-block a device open, plus a
+host-side watchdog on a stalled `sweep_count`).
+
+Note the producer side is committed either way: the 1 KiB ring exists today and the whole
+telemetry feature rests on it. This was only ever a CONSUMER-side decision -- which is
+exactly why the parallel drain was a pure host change with no device footprint at all.
 
 Note also that the precompiled-firmware `build_key` is derived from build options, NOT from
 header contents, so changing a layout header silently reuses stale firmware. Any future
@@ -2004,8 +2049,17 @@ but any bulk remote read from a monitoring process is 32x under-blocked.
 3. If the `MEM_UTIL_SAMPLER_SIZE` init hang is fixed, 126 slots very likely removes (2) as
    well, and with it the entire feature.
 
-So the ordering is: fix the firmware init hang FIRST. Everything device-side is downstream
-of that answer.
+So the ordering is:
+
+1. **Parallel drain: done.** MMIO chips are solved with zero device footprint.
+2. **Decide whether 10-33% loss on remote chips is acceptable.** That is a product call, not
+   an engineering one, and it should be made before any more device work.
+3. If it is not acceptable, **the eth aggregator scoped to remote chips only** is the right
+   mechanism -- smallest permanent footprint (none), and the hazard mitigations are known.
+   Finish the pinning fix (set the MMIO chip's own RemoteCommunication too) first, since it
+   attacks the contention directly and costs nothing on-device.
+4. **Do not grow the sampler ring.** Not because it hangs, but because it taxes every
+   workload permanently and moves an ABI boundary.
 
 ## 6. Risks
 
