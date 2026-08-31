@@ -190,6 +190,16 @@ def normalize_reference_pixels(frames: np.ndarray, device: torch.device | str | 
     return (pixels.to(torch.float32).div(255.0) - pixel_mean) / pixel_std
 
 
+def raw_reference_pixels(frames: np.ndarray, device: torch.device | str | None = None) -> torch.Tensor:
+    """``(T, H, W, 3)`` uint8 frames to ``(1, 3, T, H, W)`` raw **uint8** pixels.
+
+    The un-normalized twin of :func:`normalize_reference_pixels`, for a device VAE built with
+    ``pixel_norm``: its conv_in carries the ImageNet affine, so the pixels stay 1 byte each
+    from the media decoder to the PCIe transfer and the host runs no float pass at all.
+    """
+    return torch.from_numpy(np.ascontiguousarray(frames)).to(device).permute(3, 0, 1, 2)[None]
+
+
 def pad_waveform_to_hop(waveform: torch.Tensor) -> torch.Tensor:
     """Right-pad a waveform with zeros up to a whole 800-sample hop.
 
@@ -218,6 +228,7 @@ def encode_references(
     patch_size: tuple[int, int, int] = (1, 2, 2),
     audio_latent_channels: int = 32,
     device: torch.device | str | None = None,
+    raw_pixels: bool = False,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     """Encode the references into packed condition rows, resolving their geometry.
 
@@ -251,7 +262,9 @@ def encode_references(
             else:
                 # Snapped DOWN to a 17n + 5 the VAE encodes without padding.
                 frames = reference.frames[: trim_reference_num_frames(reference.frames.shape[0])]
-            pixels = normalize_reference_pixels(frames, device=device)
+            # raw_pixels: uint8 straight through, for encoders whose conv_in folds the normalize.
+            to_pixels = raw_reference_pixels if raw_pixels else normalize_reference_pixels
+            pixels = to_pixels(frames, device=device)
             # A single frame takes the spatial encoder alone; a video takes the temporal
             # chunking that turns 17n + 5 frames into 5n + 2 latent frames.
             moments = encode_clip(pixels) if reference.kind == "image" else encode_video(pixels)
