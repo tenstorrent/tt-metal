@@ -126,12 +126,15 @@ class TtMiniMaxMoE(LightweightModule):
             cluster_axis=0,
             num_links=num_links,
             topology=topology,
-            # M3's real routing is heavily skewed -> many empty experts/unwritten combine slots. With
-            # init_zeros=False those slots keep STALE DRAM (a weight/old activation under the full-model
-            # footprint) which the weighted-sum reads as a ~1e38 garbage value -> residual overflow -> nan
-            # -> token-0. Zero-init the combine output so unwritten slots are 0. (DS default is True; the
-            # False override was unsafe for skewed routing.) See token-0 debug 2026-06-29.
-            init_zeros=True,
+            # init_zeros=False saves a ~95 us full-buffer zeroing on every chip's critical path per
+            # call. It is safe iff every combine-output slot post_combine_reduce reads is guaranteed
+            # written: (a) pad rows carry the gate's sentinel expert id whose dispatch-table entry is
+            # -1, so pcr skips them; (b) dispatch drops are impossible because the dispatch buffer is
+            # sized for the worst case (dispatch_buffer_capacity_factor=4 in mlp.py — factor 2 could
+            # drop rows under extreme skew, which is what caused the token-0 NaN of 2026-06-29 and
+            # forced init_zeros=True until now). If the factor is ever lowered, this must go back to
+            # True.
+            init_zeros=False,
         )
         global_expert_idx_tt = ttnn.from_torch(
             ExpertMapping.create_global_expert_idx_table(

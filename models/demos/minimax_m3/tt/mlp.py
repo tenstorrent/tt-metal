@@ -132,8 +132,16 @@ class MLP:
         mc = extract_mesh_config(mesh_device)
         dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
         E = hf_config.num_local_experts
+        # dispatch_buffer_capacity_factor=4 sizes the flat dispatch buffer for the TRUE worst case:
+        # all num_experts_per_tok(=4) slots of every column token landing on one chip's experts
+        # (4 x dgs x seq rows). With factor 2 the dispatch/combine overflow clamps could DROP rows
+        # under extreme routing skew, leaving combine-output slots unwritten-but-readable — the
+        # reason init_zeros=True was needed (token-0 NaN hunt 2026-06-29). Factor 4 makes drops
+        # structurally impossible, which is what lets TtCombineModule run init_zeros=False (the
+        # padding sentinel was always safe: dispatch-table entry 128 is -1). Cost: ~+200 MB DRAM
+        # per chip of dispatch-buffer capacity; regions are count-driven so no extra runtime work.
         experts_per_chip, metadata_len, max_buf, max_tok = compute_constants(
-            ep_seq_len_per_chip, E, hf_config.num_experts_per_tok, mesh_device.get_num_devices(), dgs, 2
+            ep_seq_len_per_chip, E, hf_config.num_experts_per_tok, mesh_device.get_num_devices(), dgs, 4
         )
         # MiniMax experts: w1=gate, w3=up, w2=down (direct map, no transpose). None in cache-only mode —
         # TtRoutedExpert then loads the tilized per-expert weights straight from the cache.
