@@ -195,16 +195,13 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, src2_dram_buffer, src2_vec, /*blocking=*/true);
 
-    const std::uint32_t src_aligned_page_size = single_tile_size;
-    const std::uint32_t dst_aligned_page_size = single_tile_size;
-
     auto reader_run_args = [&](const std::shared_ptr<distributed::MeshBuffer>& buf) {
         return experimental::MakeRuntimeArgsForSingleNode(
             node,
             {{"src_addr", buf->address()},
              {"src_bank_id", 0u},
              {"num_tiles", TILES_STREAMED_PER_INPUT},
-             {"dram_page_stride", src_aligned_page_size}});
+             {"dram_page_stride", single_tile_size}});
     };
 
     experimental::ProgramRunArgs params;
@@ -222,7 +219,7 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, QuasarBfdDatacopy) {
                 {{"dst_addr", dst_dram_buffer->address()},
                  {"dst_bank_id", 0u},
                  {"num_tiles", TOTAL_TILES},
-                 {"dram_page_stride", dst_aligned_page_size}}),
+                 {"dram_page_stride", single_tile_size}}),
         },
     };
     experimental::SetProgramRunArgs(program, params);
