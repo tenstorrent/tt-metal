@@ -139,11 +139,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // be INITIAL -> CONFIGURED" ("the first operation in the kernel must be a
     // hardware configure").
     //
-    // The datacopy driver this fixture mirrors calls init first, as do
-    // eltwise_binary_test.cpp and reduce_test.cpp; matmul_test.cpp and
-    // sfpu_sampling_test.cpp configure first. Those are latent rather than
-    // broken today because the sanitizer is compiled out -- LLK_SAN_ENABLE is
-    // not defined anywhere in this repo, so llk::san::* is the stub branch of
+    // The datacopy driver this fixture mirrors calls its op init before
+    // hw_configure. That is latent rather than broken today because the
+    // sanitizer is compiled out -- LLK_SAN_ENABLE is not defined anywhere in
+    // this repo, so llk::san::* resolves to the stub branch of
     // common/sanitizer/api.h.
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     // copy srca to dest

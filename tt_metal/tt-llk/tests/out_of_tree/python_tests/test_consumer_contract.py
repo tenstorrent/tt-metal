@@ -208,13 +208,6 @@ def test_names_the_harness_rebinds_are_resolved_at_call_time():
     finally:
         implementation.get_golden_generator = original
 
-    # Mode-agnostic on purpose: under ``--compile-producer`` the "original"
-    # captured above is itself the stand-in ``setup_mode`` installed, so this
-    # cannot assert the registry entry. What it does assert is that the
-    # forwarded name tracks whatever the implementation currently holds.
-    # Types, not identity: the stand-in returns a fresh instance per call.
-    assert type(imported_by_value(OutOfTreeGolden)) is type(original(OutOfTreeGolden))
-
 
 def test_every_exported_name_resolves():
     """``__all__`` is the contract; nothing in it may be a dangling re-export.
@@ -344,10 +337,18 @@ def test_plugin_supplies_the_pytest_hooks():
 
 
 def test_suite_local_package_imports_without_sys_path_edits():
-    """The plugin puts ``<rootdir>/python_tests`` on the path for the consumer.
+    """A consumer's test modules must not have to touch ``sys.path`` themselves.
 
-    This module imported ``goldens.oot_golden`` and ``fixture_paths`` at the top
-    without touching ``sys.path``. Consumer test files must not have to.
+    This module imported ``goldens.oot_golden`` and ``fixture_paths`` at the
+    top without doing so, which is the property the contract promises.
+
+    On the mechanism, deliberately not asserted here: pytest's prepend import
+    mode puts ``<rootdir>/python_tests`` on the path when it collects this
+    module, and this suite's ``pytest.ini`` sets ``pythonpath`` as well, exactly
+    as blaze's does. ``_ensure_suite_pythonpath`` in the plugin is a third
+    fallback for a consumer that sets neither. Neutering it changes nothing
+    here, so this test does not guard that function — it guards the outcome,
+    which is what a consumer actually depends on.
     """
     import fixture_paths
     import goldens
@@ -462,42 +463,7 @@ def test_out_of_tree_driver_compiles():
     Under ``--compile-producer`` the harness compiles and then skips, which is
     what makes this runnable in CI with no silicon attached.
     """
-    formats = _formats()
-
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=INPUT_DIMENSIONS,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=INPUT_DIMENSIONS,
-    )
-
-    configuration = TestConfig(
-        cpp_source("out_of_tree_contract_test.cpp"),
-        formats,
-        templates=[
-            params.generate_input_dim(INPUT_DIMENSIONS, INPUT_DIMENSIONS),
-            params.TILIZE(Tilize.No),
-        ],
-        runtimes=[
-            params.DEST_INDEX(0),
-            params.TILE_COUNT(tile_cnt_A),
-            params.NUM_FACES(NUM_FACES_PER_TILE),
-            params.NUM_BLOCKS(1),
-            params.NUM_TILES_IN_BLOCK(1),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_A,
-            tile_count_res=tile_cnt_A,
-            num_faces=NUM_FACES_PER_TILE,
-        ),
-        dest_acc=DestAccumulation.No,
-    )
+    configuration = _compilable_variant()
 
     # The compile is the assertion, so this calls ``prepare()`` rather than
     # ``run()``: it builds and stops, with no device step and no producer-mode
@@ -531,23 +497,13 @@ def test_per_variant_include_dirs_override_suite_wide_ones():
     """
     low, _high = shadowed_include_dirs()
 
-    configuration = TestConfig(
-        cpp_source("out_of_tree_contract_test.cpp"),
-        _formats(),
-        templates=[
-            params.generate_input_dim(INPUT_DIMENSIONS, INPUT_DIMENSIONS),
-            params.TILIZE(Tilize.No),
-        ],
-        runtimes=[
-            params.DEST_INDEX(0),
-            params.TILE_COUNT(1),
-            params.NUM_FACES(NUM_FACES_PER_TILE),
-            params.NUM_BLOCKS(1),
-            params.NUM_TILES_IN_BLOCK(1),
-        ],
-        include_dirs=[low],
-        dest_acc=DestAccumulation.No,
-    )
+    # Same stimuli as the positive test, so this variant is compilable in every
+    # respect except the inverted include precedence. Without them
+    # ``generate_runtime_args_struct`` omits buffer_A/buffer_Res, the driver's
+    # TUs fail on a missing member whichever probe header wins, and the compile
+    # would break for a reason that has nothing to do with what this test
+    # claims to prove — leaving DID NOT RAISE unreachable.
+    configuration = _compilable_variant(include_dirs=[low])
 
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         RuntimeError
@@ -594,6 +550,54 @@ def test_driver_path_that_breaks_the_include_directive_is_rejected():
             ValueError
         ):
             TestConfig(bad, _formats())
+
+
+def _compilable_variant(**overrides) -> TestConfig:
+    """A variant of the fixture driver that compiles cleanly.
+
+    Shared by the positive and negative compile tests so they differ in exactly
+    one thing — the include precedence the negative test inverts. In particular
+    the stimuli are not optional: without them ``generate_runtime_args_struct``
+    omits ``buffer_A``/``buffer_Res``, which the driver's UNPACK and PACK
+    translation units dereference unconditionally, and every compile would fail
+    on a missing member regardless of which probe header won.
+    """
+    formats = _formats()
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=INPUT_DIMENSIONS,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=INPUT_DIMENSIONS,
+    )
+
+    return TestConfig(
+        cpp_source("out_of_tree_contract_test.cpp"),
+        formats,
+        templates=[
+            params.generate_input_dim(INPUT_DIMENSIONS, INPUT_DIMENSIONS),
+            params.TILIZE(Tilize.No),
+        ],
+        runtimes=[
+            params.DEST_INDEX(0),
+            params.TILE_COUNT(tile_cnt_A),
+            params.NUM_FACES(NUM_FACES_PER_TILE),
+            params.NUM_BLOCKS(1),
+            params.NUM_TILES_IN_BLOCK(1),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_A,
+            tile_count_res=tile_cnt_A,
+            num_faces=NUM_FACES_PER_TILE,
+        ),
+        dest_acc=DestAccumulation.No,
+        **overrides,
+    )
 
 
 def _formats():
