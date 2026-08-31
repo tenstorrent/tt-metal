@@ -823,6 +823,14 @@ std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
     return devices;
 }
 
+const std::vector<IDevice*>& MeshDeviceImpl::get_local_devices(const MeshCoordinateRange& range) const {
+    auto [entry, inserted] = local_devices_by_range_.try_emplace(range);
+    if (inserted) {
+        entry->second = view_->get_devices(range);
+    }
+    return entry->second;
+}
+
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDeviceImpl::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{static_cast<uint32_t>(row_idx), static_cast<uint32_t>(col_idx)});
@@ -947,6 +955,7 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     }
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
+    local_devices_by_range_.clear();
 }
 
 bool MeshDeviceImpl::close() {

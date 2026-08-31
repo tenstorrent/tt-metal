@@ -1452,6 +1452,28 @@ std::shared_ptr<CircularBufferImpl> detail::ProgramImpl::get_circular_buffer(CBH
     return this->circular_buffer_by_id_.at(cb_id);
 }
 
+void detail::ProgramImpl::update_circular_buffer_page_size(CBHandle cb_id, uint8_t buffer_index, uint32_t page_size) {
+    const auto circular_buffer = this->get_circular_buffer(cb_id);
+    circular_buffer->config().set_page_size(buffer_index, page_size);
+
+    const auto update_cached_page_sizes = [&](auto& command_sequences) {
+        for (auto& [_, command_sequence] : command_sequences) {
+            for (auto& update : command_sequence.local_cb_config_updates) {
+                if (update.circular_buffer == circular_buffer.get() && update.buffer_index == buffer_index) {
+                    update.page_size = page_size;
+                }
+            }
+            for (auto& update : command_sequence.remote_cb_config_updates) {
+                if (update.circular_buffer == circular_buffer.get() && update.buffer_index == buffer_index) {
+                    update.page_size = page_size;
+                }
+            }
+        }
+    };
+    update_cached_page_sizes(cached_program_command_sequences_);
+    update_cached_page_sizes(trace_cached_program_command_sequences_);
+}
+
 std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers_on_core(
     const CoreCoord& core) const {
     std::vector<std::shared_ptr<CircularBufferImpl>> cbs_on_core;
