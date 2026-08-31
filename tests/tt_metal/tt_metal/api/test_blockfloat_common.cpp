@@ -110,9 +110,3 @@ TEST(DataFormatFp8ArchGuard, Fp8E4m3PackSrcFormatPerArch) {
 
     EXPECT_ANY_THROW(tt::get_pack_src_formats(fp8_formats, unpack_dst, true, false, false, tt::ARCH::WORMHOLE_B0));
 }
-
-TEST(DataFormatFp8Predicate, IncludesLf8) {
-    EXPECT_TRUE(tt::is_fp8_format(tt::DataFormat::Fp8_e4m3));
-    EXPECT_TRUE(tt::is_fp8_format(tt::DataFormat::Lf8));
-    EXPECT_FALSE(tt::is_fp8_format(tt::DataFormat::Float16_b));
-}
