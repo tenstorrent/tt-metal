@@ -688,7 +688,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
                 static_cast<uint8_t>(this->id()));
 
-            const auto& local_devices = mesh_workload.impl().get_local_devices(mesh_device_, device_range);
+            const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
             if (record_sub_device) {
                 for (const auto* device : local_devices) {
                     tt::RecordProgramSubDevice(
@@ -803,7 +803,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             entry.cmd_seq->prefetcher_cache_used);
 
         const size_t tasks_before_program = program_tasks.size();
-        for (auto* device : mesh_workload.impl().get_local_devices(mesh_device_, device_range)) {
+        for (auto* device : mesh_device_->impl().get_local_devices(device_range)) {
             program_tasks.push_back(DeviceDispatchTask{device, &entry});
             chip_ids_in_workload.insert(device->id());
         }

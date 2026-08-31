@@ -981,6 +981,10 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
         cb_config.num_pages *= 2;
         const uint32_t cb_size = cb_config.num_pages * cb_config.page_size;
         UpdateCircularBufferTotalSize(mesh_workload.get_programs().at(devices), cb_handles[cb_id], cb_size);
+        cb_config.page_size /= 2;
+        cb_config.num_pages *= 2;
+        UpdateCircularBufferPageSize(
+            mesh_workload.get_programs().at(devices), cb_handles[cb_id], cb_config.cb_id, cb_config.page_size);
     }
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());

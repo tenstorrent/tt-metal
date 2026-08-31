@@ -140,6 +140,7 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
+    mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -386,6 +387,7 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
+    const std::vector<IDevice*>& get_local_devices(const MeshCoordinateRange& range) const;
     IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;

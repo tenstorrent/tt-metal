@@ -1717,7 +1717,7 @@ void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_
 }
 
 void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
-    program.impl().get_circular_buffer(cb_handle)->config().set_page_size(buffer_index, page_size);
+    program.impl().update_circular_buffer_page_size(cb_handle, buffer_index, page_size);
 }
 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer) {

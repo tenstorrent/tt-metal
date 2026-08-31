@@ -57,7 +57,6 @@ private:
     ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     const std::vector<Program*>& get_cross_node_programs();
-    const std::vector<IDevice*>& get_local_devices(MeshDevice* mesh_device, const MeshCoordinateRange& device_range);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
 
@@ -69,8 +68,6 @@ private:
     std::unordered_map<MeshCoordinateRange, Program> programs_;
     // Programs and their device ranges cannot change after finalization. Cache the derived topology
     // and command-layout properties that EnqueueMeshWorkload otherwise recomputes for every operation.
-    std::unordered_map<std::size_t, std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>>>
-        local_devices_by_mesh_;
     std::unordered_map<std::size_t, std::unordered_map<uint64_t, std::unordered_set<SubDeviceId>>>
         sub_device_ids_by_mesh_and_manager_;
     std::optional<std::vector<uint32_t>> program_config_sizes_;

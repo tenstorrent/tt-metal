@@ -348,6 +348,7 @@ public:
     void finalize_dataflow_buffer_configs();
 
     std::shared_ptr<CircularBufferImpl> get_circular_buffer(CBHandle cb_id) const;
+    void update_circular_buffer_page_size(CBHandle cb_id, uint8_t buffer_index, uint32_t page_size);
 
     std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl> get_dataflow_buffer(uint32_t dfb_id) const;
 

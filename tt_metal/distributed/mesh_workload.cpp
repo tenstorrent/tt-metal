@@ -99,22 +99,6 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
     programs_[device_range] = std::move(program);
 }
 
-const std::vector<IDevice*>& MeshWorkloadImpl::get_local_devices(
-    MeshDevice* mesh_device, const MeshCoordinateRange& device_range) {
-    auto& devices_by_range = local_devices_by_mesh_[mesh_device->id()];
-    auto [entry, inserted] = devices_by_range.try_emplace(device_range);
-    auto& local_devices = entry->second;
-    if (inserted) {
-        local_devices.reserve(device_range.shape().mesh_size());
-        for (const auto& coord : device_range) {
-            if (mesh_device->impl().is_local(coord)) {
-                local_devices.push_back(mesh_device->impl().get_device(coord));
-            }
-        }
-    }
-    return local_devices;
-}
-
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     auto& program = programs_.at(device_range);
     program.impl().compile_and_allocate(mesh_device, false);
