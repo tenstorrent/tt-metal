@@ -75,19 +75,23 @@ and measured the same way: `MATH_ISOLATE`, `KERNEL` marker, Float16_b→Float16_
 `loop_factor=16`, `iterations=32`, a fresh build root per variant, each op A/B'd against the same
 tree with only that change reverted.
 
-| kernel | idea | BH `KERNEL` before → after | BH delta | WH delta |
+| kernel | idea | `KERNEL` before → after | delta | `INIT` |
 |---|---|---|---|---|
-| `_relu_max_impl_` (LLK) | §3 branch-free clamp | 53167 → **32815** | **−38.3 %** | −39.2 % |
-| `Hardsigmoid` via `_relu_max_body_` (MTL) | §3, free rider | 61615 → **36782** | **−40.3 %** | not measured |
-| `ckernel_sfpu_i0.h` (MTL) | §1 program CREGs | 167855 → 155564 | −7.3 % | −6.7 % |
-| `ckernel_sfpu_i0.h` (MTL) | §2 2-way interleave, on §1 | 155564 → **130987** | **−15.8 %** | −18.3 % |
-| `ckernel_sfpu_softplus.h` (MTL) | §1 program CREGs | 192177 → 179885 | −6.4 % | −6.4 % |
-| `ckernel_sfpu_softplus.h` (MTL) | §2 2-way interleave, on §1 | 179885 → **155310** | **−13.7 %** | not done on WH |
+| `_relu_max_impl_` (LLK) | §3 branch-free clamp | 53167 → **32815** | **−38.3 %** | 170 → 171 |
+| `Hardsigmoid` via `_relu_max_body_` (MTL) | §3, free rider | 61615 → **36782** | **−40.3 %** | 185 → 185 |
+| `ckernel_sfpu_i0.h` (MTL) | §1 program CREGs | 167855 → 155564 | −7.3 % | 171 → 188 |
+| `ckernel_sfpu_i0.h` (MTL) | §2 2-way interleave, on §1 | 155564 → **130987** | **−15.8 %** | 188 → 195 |
+| `ckernel_sfpu_softplus.h` (MTL) | §1 program CREGs | 192177 → 179885 | −6.4 % | 170 → 188 |
+| `ckernel_sfpu_softplus.h` (MTL) | §2 2-way interleave, on §1 | 179885 → **155310** | **−13.7 %** | 188 → 188 |
 
 Cumulative against an unmodified tree: `i0` **−22.0 %**, `softplus` **−19.2 %** (dest_acc No) /
 **−20.7 %** (dest_acc Yes). `TILE_LOOP` tracks `KERNEL` to within 0.1 % throughout, and `Square`
 carried as a control read 20398 → 20398 in every run. `INIT` rises 17–25 cycles on `i0` and
-`softplus`, which is §1 working as designed.
+`softplus`, which is §1 working as designed — the six coefficient loads move out of the
+per-element body and are paid once per kernel invocation instead.
+
+`Hardsigmoid` is a free rider: it calls `_relu_max_body_`, so §3 reaches it without a separate
+change. `softplus` §2 is applied here first; §5 tracks it as still open on Wormhole.
 
 **Correctness:** 318 passed / 234 skipped in `test_eltwise_unary_sfpu.py` for
 `mathop ∈ {I0, Softplus, ReluMax, ReluMin, Hardsigmoid, Lrelu}`, plus 65/65 in
@@ -139,8 +143,9 @@ interleave could not be measured in this harness.
 
 #### Blackhole diverges in mechanism, not in outcome
 
-The headline numbers resemble Wormhole's. They do not come from the same place, and §2's survey
-table does not transfer as written.
+The three ideas all pay here, but not for the reasons §1 and §2 give above, and §2's survey table
+does not transfer to this architecture as written. What follows is why a Blackhole kernel has to be
+scanned on Blackhole.
 
 - **There is essentially no `SFPNOP` tax on Blackhole to remove.** Scanning the largest math ELF
   for each of 103 unary SFPU ops (5760 ELFs, full build) finds **145** `SFPNOP` in total, and all
@@ -184,12 +189,12 @@ Largest body-bearing ELF per op, ops above 25 SFPU instructions:
 | `gelu` | 386 | 156 | 40.4 % | 26 | marginal |
 | `polygamma` | 332 | 124 | 37.3 % | 56 | poor — §3 first |
 | `mish` | 324 | 122 | 37.7 % | 81 | poor — §3 first |
-| `gelu_tanh` | 227 | 69 | 30.4 % | 8 | good — but no register headroom on WH |
+| `gelu_tanh` | 227 | 69 | 30.4 % | 8 | good — check register headroom |
 | `silu` | 172 | 67 | 39.0 % | 24 | marginal |
 | `rsqrt_compat` | 202 | 66 | 32.7 % | 43 | poor — §3 first |
-| `sigmoid` | 164 | 59 | 36.0 % | 24 | marginal — regressed on WH |
+| `sigmoid` | 164 | 59 | 36.0 % | 24 | marginal |
 | `asinh` | 134 | 47 | 35.1 % | 13 | marginal |
-| `i1` | 105 | 41 | 39.0 % | 5 | **good** — port WH's chain interleave |
+| `i1` | 105 | 41 | 39.0 % | 5 | **good** — two independent chains, no extra registers |
 | `erfinv` | 80 | 30 | 37.5 % | 6 | good |
 | `tanh_derivative` | 88 | 29 | 33.0 % | 8 | good |
 | `expm1_cw` | 38 | 16 | 42.1 % | 0 | **ideal** — straight-line |
