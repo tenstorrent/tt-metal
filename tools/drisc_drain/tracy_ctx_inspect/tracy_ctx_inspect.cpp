@@ -7,6 +7,8 @@
 // in each. Build with build.sh (see that script for the fiddly capstone/ppqsort
 // flag details).
 #include <algorithm>
+#include <map>
+#include <string>
 #include <chrono>
 #include <vector>
 #include <cstdio>
@@ -79,6 +81,12 @@ struct EthIv {
 };
 static std::vector<EthIv> g_rtt;
 static std::vector<long long> g_echo;
+static std::vector<EthIv> g_close_rtt;
+// Per RECEIVER CONTEXT, not pooled. Links drift independently and in OPPOSITE directions (measured
+// +215 us, +225 us, -104 us in one session), so pooling them and pairing by rank mixes one link's
+// measured value with another's predicted and reports a mean of physically unrelated numbers.
+static std::map<std::string, std::vector<long long>> g_meas_by_ctx;
+static std::map<std::string, std::vector<long long>> g_pred_by_ctx;
 static std::vector<long long> g_meas;
 static std::vector<long long> g_pred;
 
@@ -87,6 +95,9 @@ static void collect_rtt(const tracy::Worker& w, const tracy::Vector<tracy::short
         const char* nm = w.GetZoneName(e);
         if (nm != nullptr && strcmp(nm, "ETH_SYNC_RTT") == 0) {
             g_rtt.push_back(EthIv{(long long)e.GpuStart(), (long long)e.GpuEnd()});
+        }
+        if (nm != nullptr && strcmp(nm, "ETH_SYNC_CLOSE_RTT") == 0) {
+            g_close_rtt.push_back(EthIv{(long long)e.GpuStart(), (long long)e.GpuEnd()});
         }
     };
     if (vec.is_magic()) {
@@ -238,9 +249,11 @@ int main(int argc, char** argv) {
                     // computed, so agreeing is a real cross-check rather than a restatement.
                     if (mn != nullptr && strcmp(mn, "ETH_SYNC_ECHO_MEASURED") == 0) {
                         g_meas.push_back((long long)m->gpuTime);
+                        g_meas_by_ctx[nm].push_back((long long)m->gpuTime);
                     }
                     if (mn != nullptr && strcmp(mn, "ETH_SYNC_ECHO_PREDICTED") == 0) {
                         g_pred.push_back((long long)m->gpuTime);
+                        g_pred_by_ctx[nm].push_back((long long)m->gpuTime);
                     }
                 }
             }
@@ -321,23 +334,49 @@ int main(int argc, char** argv) {
             total_markers += ctx_markers;
             total_zones += c->count;
         }
-        // ---- SESSION DRIFT, as drawn ----
-        if (!g_meas.empty() && g_meas.size() == g_pred.size()) {
-            std::sort(g_meas.begin(), g_meas.end());
-            std::sort(g_pred.begin(), g_pred.end());
-            // Pair by rank: both series are the same 64 samples per link, drawn together.
-            long long lo = 0x7fffffffffffffffLL, hi = -0x7fffffffffffffffLL;
-            double sum = 0.0;
-            for (size_t i = 0; i < g_meas.size(); i++) {
-                const long long d = g_meas[i] - g_pred[i];
-                if (d < lo) { lo = d; }
-                if (d > hi) { hi = d; }
-                sum += (double)d;
+        // ---- CLOSE-PASS SAMPLE DUMP (ETH_DUMP=1) ----
+        // Prints the last close-time round trip and the two echo markers around it, so the rendered
+        // positions can be read directly instead of inferred from aggregates.
+        if (getenv("ETH_DUMP") != nullptr) {
+            if (!g_close_rtt.empty()) {
+                std::sort(g_close_rtt.begin(), g_close_rtt.end(),
+                          [](const EthIv& a, const EthIv& b) { return a.lo < b.lo; });
+                const auto& z = g_close_rtt.back();
+                printf("=== last ETH_SYNC_CLOSE_RTT: [%lld .. %lld] mid=%lld dur=%lld ns ===\n",
+                       z.lo, z.hi, (z.lo + z.hi) / 2, z.hi - z.lo);
             }
-            printf("=== session drift, as drawn (%zu measured/predicted pairs) ===\n", g_meas.size());
-            printf("  measured - predicted: mean %+.3f us, range [%+.3f .. %+.3f] us\n",
-                   sum / (double)g_meas.size() / 1000.0, (double)lo / 1000.0, (double)hi / 1000.0);
-            printf("  [this is the gap visible on the eth lanes; it must match the logged SESSION DRIFT]\n");
+            if (!g_meas.empty() && !g_pred.empty()) {
+                std::sort(g_meas.begin(), g_meas.end());
+                std::sort(g_pred.begin(), g_pred.end());
+                printf("  last MEASURED  = %lld\n", g_meas.back());
+                printf("  last PREDICTED = %lld\n", g_pred.back());
+            }
+        }
+
+        // ---- SESSION DRIFT, as drawn ----
+        if (!g_meas_by_ctx.empty()) {
+            printf("=== session drift, as drawn (per link) ===\n");
+            for (auto& [ctxname, meas] : g_meas_by_ctx) {
+                auto pit = g_pred_by_ctx.find(ctxname);
+                if (pit == g_pred_by_ctx.end() || pit->second.size() != meas.size()) {
+                    continue;
+                }
+                auto& pred = pit->second;
+                std::sort(meas.begin(), meas.end());
+                std::sort(pred.begin(), pred.end());
+                double sum = 0.0;
+                long long lo = 0x7fffffffffffffffLL, hi = -0x7fffffffffffffffLL;
+                for (size_t i = 0; i < meas.size(); i++) {
+                    const long long d = meas[i] - pred[i];
+                    sum += (double)d;
+                    if (d < lo) { lo = d; }
+                    if (d > hi) { hi = d; }
+                }
+                printf("  %-28s %3zu pairs   measured-predicted: mean %+9.3f us  [%+9.3f .. %+9.3f]\n",
+                       ctxname.c_str(), meas.size(), sum / (double)meas.size() / 1000.0,
+                       (double)lo / 1000.0, (double)hi / 1000.0);
+            }
+            printf("  [each row is ONE link, on the peer's lane; must match that link's logged CLOSE-CHECK]\n");
         }
 
         // ---- ETH DOMAIN vs WORKLOAD ----

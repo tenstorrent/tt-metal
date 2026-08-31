@@ -12,7 +12,8 @@ ROOT="${TT_METAL_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 TRACY="$ROOT/tt_metal/third_party/tracy"
 PPQ="$(dirname "$(find "$ROOT/.cpmcache/ppqsort" -name ppqsort.h | head -1)")"
 CAP="$(dirname "$(dirname "$(find "$ROOT/.cpmcache/capstone" -name capstone.h | head -1)")")"
-OUT="${1:-$(pwd)/tracy_zone_csv}"
+OUT="${1:-$ROOT/build/tools/drisc_drain/tracy_zone_csv}"
+mkdir -p "$(dirname "$OUT")"
 cd "$TRACY"
 g++ -std=c++20 -O2 -DNDEBUG -pthread -I. -I"$CAP" -I"$CAP/capstone" -I"$PPQ" \
     "$SCRIPT_DIR/tracy_zone_csv.cpp" \

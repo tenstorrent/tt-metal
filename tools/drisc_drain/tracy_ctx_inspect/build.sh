@@ -28,7 +28,10 @@ SRCS="public/common/TracySocket.cpp public/common/TracyStackFrames.cpp public/co
 public/common/tracy_lz4.cpp public/common/tracy_lz4hc.cpp server/TracyMemory.cpp server/TracyMmap.cpp \
 server/TracyPrint.cpp server/TracyTaskDispatch.cpp server/TracyTextureCompression.cpp \
 server/TracyThreadCompress.cpp server/TracyWorker.cpp"
-OUT="${1:-$(pwd)/tracy_ctx_inspect}"
+# Default OUT lands in the build tree (build -> build_Release), which is gitignored, so the
+# binary stops showing up as an untracked file in the repo. Pass an explicit path to override.
+OUT="${1:-$ROOT/build/tools/drisc_drain/tracy_ctx_inspect}"
+mkdir -p "$(dirname "$OUT")"
 cd "$TRACY"
 # shellcheck disable=SC2086
 g++ -std=c++20 -O2 -DNDEBUG -pthread -I. -I"$CAP" -I"$CAP/capstone" -I"$PPQ" \

@@ -36,7 +36,7 @@ from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_META
 
 CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
 WORKLOAD_BIN = Path(TT_METAL_HOME) / "build_Release" / "programming_examples" / "test_perf_debug_zones"
-CTX_INSPECT = Path(TT_METAL_HOME) / "tools" / "drisc_drain" / "tracy_ctx_inspect" / "tracy_ctx_inspect"
+CTX_INSPECT = Path(TT_METAL_HOME) / "build" / "tools" / "drisc_drain" / "tracy_ctx_inspect"
 ARTIFACTS = PROFILER_ARTIFACTS_DIR / "perf_debug_profiler_tests"
 
 
@@ -127,9 +127,10 @@ def test_perf_debug_zones_capture(gx, gy, iters):
         pytest.fail(
             f"tracy_ctx_inspect not built at {CTX_INSPECT} -- the device-zone assertions cannot run and "
             f"this test would otherwise verify only that the capture exceeds 4096 bytes. Build it with:\n"
-            f"  bash tools/drisc_drain/tracy_ctx_inspect/build.sh "
-            f"$TT_METAL_HOME/tools/drisc_drain/tracy_ctx_inspect/tracy_ctx_inspect\n"
-            f"(the output path must be ABSOLUTE -- build.sh cds into third_party/tracy first)"
+            f"  bash tools/drisc_drain/tracy_ctx_inspect/build.sh
+"
+            f"(it defaults into build/tools/drisc_drain/; pass an ABSOLUTE path to override -- "
+            f"build.sh cds into third_party/tracy first)"
         )
 
     n_ctx, n_with_zones = _gpu_context_stats(out_tracy)
