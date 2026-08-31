@@ -296,7 +296,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
+          path: |
+            ${{ env.PREFILL_SUMMARIES }}/**/*.md
+            ${{ env.PREFILL_SUMMARIES }}/**/*.csv
           if-no-files-found: ignore
           retention-days: 30
 

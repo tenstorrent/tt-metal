@@ -15,11 +15,19 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <deque>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
@@ -70,6 +78,192 @@ struct ProgramCommandSequence;
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+using MeshWorkloadEnqueueClock = std::chrono::steady_clock;
+
+struct MeshWorkloadEnqueueRecord {
+    uint64_t sequence = 0;
+    uint64_t workload_id = 0;
+    uint64_t first_runtime_id = 0;
+    uint64_t program_devices = 0;
+    uint64_t local_program_writes = 0;
+    uint64_t program_config_bytes = 0;
+    uint64_t command_write_bytes = 0;
+    uint64_t runtime_arg_write_bytes = 0;
+    uint64_t cb_config_updates = 0;
+    uint64_t ordering_sync_count = 0;
+    uint64_t lock_wait_ns = 0;
+    uint64_t reserve_ns = 0;
+    uint64_t command_lookup_ns = 0;
+    uint64_t command_update_ns = 0;
+    uint64_t command_issue_ns = 0;
+    uint64_t unused_go_ns = 0;
+    uint64_t submit_ns = 0;
+    uint64_t finish_ns = 0;
+    uint64_t total_ns = 0;
+    uint32_t programs = 0;
+    uint32_t cross_node_programs = 0;
+    uint32_t mesh_devices = 0;
+    uint32_t local_mesh_devices = 0;
+    uint32_t unused_go_devices = 0;
+    uint32_t max_kernel_bytes = 0;
+    uint32_t num_workers = 0;
+    uint8_t cq_id = 0;
+    uint8_t sub_device_id = 0;
+    uint8_t binary_status = 0;
+    bool blocking = false;
+    bool mcast = false;
+    bool unicast = false;
+    bool prefetch_cache_used = false;
+    bool prefetch_cache_hit = false;
+    bool stall_first = false;
+    bool stall_before_program = false;
+};
+
+class MeshWorkloadEnqueueRecorder {
+public:
+    explicit MeshWorkloadEnqueueRecorder(const char* path) : output_(path, std::ios::out | std::ios::trunc) {
+        TT_FATAL(output_.is_open(), "Failed to open MeshWorkload enqueue log at {}", path);
+        records_.reserve(flush_batch_size);
+        output_ << "sequence,workload_id,first_runtime_id,cq_id,sub_device_id,blocking,"
+                   "binary_status_before_enqueue,programs,"
+                   "cross_node_programs,mesh_devices,local_mesh_devices,program_devices,local_program_writes,"
+                   "unused_go_devices,program_config_bytes,max_kernel_bytes,command_write_bytes,"
+                   "runtime_arg_write_bytes,cb_config_updates,num_workers,mcast,unicast,prefetch_cache_used,"
+                   "prefetch_cache_hit,stall_first,stall_before_program,ordering_sync_count,lock_wait_ns,reserve_ns,"
+                   "command_lookup_ns,command_update_ns,command_issue_ns,unused_go_ns,submit_ns,finish_ns,total_ns\n";
+        output_.flush();
+        writer_thread_ = std::thread(&MeshWorkloadEnqueueRecorder::write_batches, this);
+    }
+
+    void record(MeshWorkloadEnqueueRecord record) {
+        std::lock_guard lock(mutex_);
+        TT_ASSERT(!stopping_);
+        record.sequence = next_sequence_++;
+        records_.push_back(record);
+        if (records_.size() == flush_batch_size) {
+            pending_batches_.push_back(std::move(records_));
+            records_.clear();
+            records_.reserve(flush_batch_size);
+            cv_.notify_one();
+        }
+    }
+
+    void flush() {
+        {
+            std::lock_guard lock(mutex_);
+            if (stopping_) {
+                return;
+            }
+            stopping_ = true;
+            if (!records_.empty()) {
+                pending_batches_.push_back(std::move(records_));
+            }
+        }
+        cv_.notify_one();
+        writer_thread_.join();
+    }
+
+private:
+    void write_batch(const std::vector<MeshWorkloadEnqueueRecord>& records) {
+        for (const auto& record : records) {
+            output_ << record.sequence << ',' << record.workload_id << ',' << record.first_runtime_id << ','
+                    << static_cast<uint32_t>(record.cq_id) << ',' << static_cast<uint32_t>(record.sub_device_id) << ','
+                    << record.blocking << ',' << static_cast<uint32_t>(record.binary_status) << ',' << record.programs
+                    << ',' << record.cross_node_programs << ',' << record.mesh_devices << ','
+                    << record.local_mesh_devices << ',' << record.program_devices << ',' << record.local_program_writes
+                    << ',' << record.unused_go_devices << ',' << record.program_config_bytes << ','
+                    << record.max_kernel_bytes << ',' << record.command_write_bytes << ','
+                    << record.runtime_arg_write_bytes << ',' << record.cb_config_updates << ',' << record.num_workers
+                    << ',' << record.mcast << ',' << record.unicast << ',' << record.prefetch_cache_used << ','
+                    << record.prefetch_cache_hit << ',' << record.stall_first << ',' << record.stall_before_program
+                    << ',' << record.ordering_sync_count << ',' << record.lock_wait_ns << ',' << record.reserve_ns
+                    << ',' << record.command_lookup_ns << ',' << record.command_update_ns << ','
+                    << record.command_issue_ns << ',' << record.unused_go_ns << ',' << record.submit_ns << ','
+                    << record.finish_ns << ',' << record.total_ns << '\n';
+        }
+        output_.flush();
+    }
+
+    void write_batches() {
+        while (true) {
+            std::vector<MeshWorkloadEnqueueRecord> records;
+            {
+                std::unique_lock lock(mutex_);
+                cv_.wait(lock, [this] { return stopping_ || !pending_batches_.empty(); });
+                if (pending_batches_.empty()) {
+                    return;
+                }
+                records = std::move(pending_batches_.front());
+                pending_batches_.pop_front();
+            }
+            this->write_batch(records);
+        }
+    }
+
+    static constexpr size_t flush_batch_size = 50000;
+
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    std::ofstream output_;
+    std::vector<MeshWorkloadEnqueueRecord> records_;
+    std::deque<std::vector<MeshWorkloadEnqueueRecord>> pending_batches_;
+    std::thread writer_thread_;
+    uint64_t next_sequence_ = 0;
+    bool stopping_ = false;
+};
+
+MeshWorkloadEnqueueRecorder*& mesh_workload_enqueue_recorder_storage() {
+    static MeshWorkloadEnqueueRecorder* recorder = nullptr;
+    return recorder;
+}
+
+void flush_mesh_workload_enqueue_recorder() {
+    if (auto* recorder = mesh_workload_enqueue_recorder_storage(); recorder != nullptr) {
+        recorder->flush();
+    }
+}
+
+MeshWorkloadEnqueueRecorder* get_mesh_workload_enqueue_recorder() {
+    static const bool initialized = [] {
+        const char* path = std::getenv("TT_METAL_MESH_WORKLOAD_ENQUEUE_LOG");
+        if (path != nullptr && path[0] != '\0') {
+            mesh_workload_enqueue_recorder_storage() = new MeshWorkloadEnqueueRecorder(path);
+            TT_FATAL(std::atexit(flush_mesh_workload_enqueue_recorder) == 0, "Failed to register enqueue-log flush");
+        }
+        return true;
+    }();
+    (void)initialized;
+    return mesh_workload_enqueue_recorder_storage();
+}
+
+uint64_t elapsed_ns(MeshWorkloadEnqueueClock::time_point start, MeshWorkloadEnqueueClock::time_point end) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count());
+}
+
+class DeferredMeshWorkloadEnqueueRecord {
+public:
+    DeferredMeshWorkloadEnqueueRecord(
+        MeshWorkloadEnqueueRecorder* recorder,
+        MeshWorkloadEnqueueRecord& record,
+        MeshWorkloadEnqueueClock::time_point call_start) :
+        recorder_(recorder), record_(record), call_start_(call_start) {}
+
+    ~DeferredMeshWorkloadEnqueueRecord() {
+        if (armed_) {
+            record_.total_ns = elapsed_ns(call_start_, MeshWorkloadEnqueueClock::now());
+            recorder_->record(record_);
+        }
+    }
+
+    void arm() { armed_ = true; }
+
+private:
+    MeshWorkloadEnqueueRecorder* recorder_;
+    MeshWorkloadEnqueueRecord& record_;
+    MeshWorkloadEnqueueClock::time_point call_start_;
+    bool armed_ = false;
+};
 
 // Don't use std::forward since we are in a loop.
 // NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
@@ -382,8 +576,15 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    MeshWorkloadEnqueueRecord enqueue_record;
+    auto* enqueue_recorder = get_mesh_workload_enqueue_recorder();
+    const auto call_start =
+        enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
+    DeferredMeshWorkloadEnqueueRecord deferred_enqueue_record(enqueue_recorder, enqueue_record, call_start);
     ZoneScopedN("EnqueueProgram");
     auto lock = lock_api_function_();
+    const auto lock_acquired =
+        enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     const auto& sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_, command_hash);
@@ -479,6 +680,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     const auto& program_config_sizes = mesh_workload.impl().get_program_config_sizes();
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
+    const auto reserve_start =
+        enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
         program_config_sizes,
@@ -487,6 +690,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         expected_num_workers_completed,
         program_ordering_sync_count,
         dispatch_metadata);
+    const auto reserve_done =
+        enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
 
     size_t num_program_devices = 0;
     for (const auto& [device_range, program] : mesh_workload.get_programs()) {
@@ -501,6 +706,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     auto max_program_kernels_sizeB = mesh_workload.impl().get_finalized_metadata().max_program_kernels_sizeB;
     bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
+    bool prefetcher_cache_hit = false;
     if (use_prefetcher_cache) {
         bool is_cached;
         uint32_t cache_offset;
@@ -515,6 +721,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         dispatch_metadata.prefetcher_cache_info.is_cached = is_cached;
         dispatch_metadata.prefetcher_cache_info.offset = cache_offset;
         dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = max_program_kernels_sizeB;
+        prefetcher_cache_hit = is_cached;
     } else {
         // prefetcher cache will be overwritten, reset for next workload
         this->reset_prefetcher_cache_manager();
@@ -530,16 +737,49 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const uint32_t num_available_worker_cores =
         record_sub_device ? mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) : 0;
 
+    if (enqueue_recorder != nullptr) {
+        enqueue_record.workload_id = mesh_workload.impl().get_id();
+        enqueue_record.first_runtime_id =
+            mesh_workload.get_programs().empty() ? 0 : mesh_workload.get_programs().begin()->second.get_runtime_id();
+        enqueue_record.program_devices = num_program_devices;
+        enqueue_record.programs = static_cast<uint32_t>(mesh_workload.get_programs().size());
+        enqueue_record.cross_node_programs = static_cast<uint32_t>(cross_node_program_ids.size());
+        enqueue_record.mesh_devices = static_cast<uint32_t>(mesh_device_->shape().mesh_size());
+        enqueue_record.local_mesh_devices = static_cast<uint32_t>(mesh_device_->get_devices().size());
+        enqueue_record.max_kernel_bytes = max_program_kernels_sizeB;
+        enqueue_record.num_workers = num_workers;
+        enqueue_record.cq_id = static_cast<uint8_t>(this->id());
+        enqueue_record.sub_device_id = *sub_device_id;
+        enqueue_record.binary_status = static_cast<uint8_t>(program_binary_status);
+        enqueue_record.blocking = blocking;
+        enqueue_record.mcast = mcast_go_signals;
+        enqueue_record.unicast = unicast_go_signals;
+        enqueue_record.prefetch_cache_used = use_prefetcher_cache;
+        enqueue_record.prefetch_cache_hit = prefetcher_cache_hit;
+        enqueue_record.ordering_sync_count = program_ordering_sync_count;
+        for (const uint32_t config_size : program_config_sizes) {
+            enqueue_record.program_config_bytes += config_size;
+        }
+        enqueue_record.lock_wait_ns = elapsed_ns(call_start, lock_acquired);
+        enqueue_record.reserve_ns = elapsed_ns(reserve_start, reserve_done);
+    }
+
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
+        const auto command_lookup_start =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
             use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
             "use_prefetcher_cache: {}, program_cmd_seq.prefetcher_cache_used: {}",
             use_prefetcher_cache,
             program_cmd_seq.prefetcher_cache_used);
+        const auto command_lookup_done =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
+        const auto command_update_start =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
         program_dispatch::update_program_dispatch_commands(
             program.impl(),
             program_cmd_seq,
@@ -552,7 +792,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_binary_status,
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores),
             static_cast<uint8_t>(this->id()));
+        const auto command_update_done =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
 
+        const auto device_write_start =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
         const auto& local_devices = mesh_device_->impl().get_local_devices(device_range);
         if (record_sub_device) {
             for (const auto* device : local_devices) {
@@ -571,6 +815,22 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             dispatch_metadata.stall_first,
             dispatch_metadata.stall_before_program,
             covers_entire_mesh ? nullptr : &chip_ids_in_workload);
+        const auto device_write_done =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
+        if (enqueue_recorder != nullptr) {
+            enqueue_record.command_lookup_ns += elapsed_ns(command_lookup_start, command_lookup_done);
+            enqueue_record.command_update_ns += elapsed_ns(command_update_start, command_update_done);
+            enqueue_record.command_issue_ns += elapsed_ns(device_write_start, device_write_done);
+            enqueue_record.local_program_writes += local_devices.size();
+            enqueue_record.command_write_bytes +=
+                static_cast<uint64_t>(program_cmd_seq.get_one_shot_fetch_size(
+                    dispatch_metadata.stall_first, dispatch_metadata.stall_before_program, true)) *
+                local_devices.size();
+            enqueue_record.runtime_arg_write_bytes +=
+                static_cast<uint64_t>(program_cmd_seq.get_rt_args_size()) * local_devices.size();
+            enqueue_record.cb_config_updates +=
+                program_cmd_seq.local_cb_config_updates.size() + program_cmd_seq.remote_cb_config_updates.size();
+        }
 
         // Tag the host-side Tracy zone with the program's runtime_host_id so it pairs 1:1
         // with the device-side zones emitted by the real-time profiler.
@@ -590,6 +850,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 
     // Send go signals to devices not running a program to ensure consistent global state
     if (!covers_entire_mesh) {
+        if (enqueue_recorder != nullptr) {
+            enqueue_record.unused_go_devices =
+                static_cast<uint32_t>(mesh_device_->get_devices().size() - chip_ids_in_workload.size());
+        }
+        const auto unused_go_start =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
         this->write_go_signal_sequences_to_unused_sub_grids(
             chip_ids_in_workload,
             sub_device_id,
@@ -597,6 +863,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             mcast_go_signals,
             unicast_go_signals,
             dispatch_metadata);
+        const auto unused_go_done =
+            enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
+        if (enqueue_recorder != nullptr) {
+            enqueue_record.unused_go_ns = elapsed_ns(unused_go_start, unused_go_done);
+        }
     }
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
@@ -609,8 +880,18 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
+    const auto submit_done =
+        enqueue_recorder != nullptr ? MeshWorkloadEnqueueClock::now() : MeshWorkloadEnqueueClock::time_point{};
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
+    }
+    if (enqueue_recorder != nullptr) {
+        const auto finish_done = MeshWorkloadEnqueueClock::now();
+        enqueue_record.stall_first = dispatch_metadata.stall_first;
+        enqueue_record.stall_before_program = dispatch_metadata.stall_before_program;
+        enqueue_record.submit_ns = elapsed_ns(lock_acquired, submit_done);
+        enqueue_record.finish_ns = blocking ? elapsed_ns(submit_done, finish_done) : 0;
+        deferred_enqueue_record.arm();
     }
 }
 
@@ -920,13 +1201,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
