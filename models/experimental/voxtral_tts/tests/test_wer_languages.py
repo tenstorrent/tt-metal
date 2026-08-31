@@ -44,7 +44,15 @@ from models.experimental.voxtral_tts.tests.sentence_corpus import (  # noqa: E40
 ASR_MODEL = "openai/whisper-large-v3"  # small hallucinates on short audio and is weak outside en
 ASR_SR = 16000
 OUTPUT_SR = 24000
-SEED = 0
+# One draw per (voice, sentence) is enough where the audio is stable, which is every cell whose runs
+# come back perfect. It is NOT enough for a cell that free-runs long: hi/long generates ~45-60 s per
+# utterance and its trajectory moves with the seed, so hi_male reads 0.3419 / 0.0513 / 0.0342 /
+# 0.0342 / 0.2051 over seeds 0-4 -- a 10x spread in which one draw would decide half the cell's mean.
+# Averaging three seeds there makes the statistic survive a reshuffle, which any numerics change
+# causes. Listed per cell rather than per band because the other eight long cells measure
+# 0.0000-0.0119 with every run perfect, so extra draws buy nothing there and cost ~48 min a run.
+SEEDS = {("hi", "long"): (0, 1, 2)}
+DEFAULT_SEEDS = (0,)
 FULL_SWEEP_LANG = "en"
 
 # Past this a run did not say the sentence, so it is counted rather than averaged -- a mean over ten
@@ -95,12 +103,26 @@ CEILINGS = {
     ("hi", "short"): 0.25,          # measured 0.0000
     ("hi", "medium"): 0.18,         # measured 0.0615
     # THE WEAKEST CELL, and the only one whose ceiling is the cap rather than 3x its mean. Measured
-    # 0.1966 as the mean of two very unlike draws: hi_female 0.0513 (117 of 117 words) and hi_male
-    # 0.3419 (80 of 117). hi_male generated 671 frames -- 53.7 s of audio for a passage that should
-    # run ~30 s -- and stopped on its own, well short of the 821-frame cap. More audio carrying
-    # fewer words is the model repeating and losing the tail, not a scoring artefact. Hindi has only
-    # two voices, so this mean rests on two draws and is correspondingly unstable.
-    ("hi", "long"): 0.30,           # measured 0.1966, capped at COLLAPSE
+    # 0.1966: the mean of hi_female 0.0513 and hi_male 0.3419 on ONE seed each.
+    #
+    # THAT 0.3419 IS A TRAJECTORY, NOT A DEFECT, and the numbers to check before chasing it: hi_male
+    # over seeds 0-4 reads 0.3419 / 0.0513 / 0.0342 / 0.0342 / 0.2051 -- a 10x spread, of which the
+    # gate's seed 0 is the worst draw. The fp32 CPU reference reads 0.0256 on the same text and
+    # voice, next to the device's BEST seeds, and hi_female matches the reference exactly (0.0513
+    # both). So the device tracks the reference; one free-running path happened to degrade.
+    #
+    # Over-generation IS the model: the reference makes 736 frames (58.9 s) for a passage that
+    # should run ~30 s, MORE than the device's 671. hi_male is unstable on both axes (frames
+    # 573-748, +/-15%) where hi_female is not (510-523, +/-1.3%).
+    #
+    # The cell is reproducible -- fixed seed, deterministic device -- so it works as a regression
+    # detector, but it is SENSITIVE: any numerics change reshuffles the trajectory and this WER can
+    # move 0.03 -> 0.34 with nothing wrong. A failure here means re-run across seeds before
+    # believing it.
+    # Three seeds (see SEEDS): 0.1011 over 6 runs, against 0.1966 when one seed's bad draw carried
+    # half the mean. The cap and the 3x rule now agree -- 3 x 0.1011 = 0.303 -- so this ceiling is
+    # no longer the cap rescuing an unstable statistic. Degenerate 1 of 6, inside the limit of 2.
+    ("hi", "long"): 0.30,           # measured 0.1011 over 3 seeds
     ("it", "short"): 0.25,          # measured 0.0000
     ("it", "medium"): 0.03,         # measured 0.0105
     ("it", "long"): 0.02,           # measured 0.0000
@@ -263,7 +285,7 @@ def voices_for(lang, all_voices):
 
 def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None,
                  collapse=COLLAPSE, verbose=True):
-    """One (language, band) voice x sentence matrix -> stats dict.
+    """One (language, band) voice x sentence x seed matrix -> stats dict.
 
     No assertions, so the measurement probe and the gate share one code path.
     """
@@ -271,18 +293,20 @@ def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None
 
     voices = voices if voices is not None else voices_for(lang, all_voices())
     texts = wer_band(lang, band)[:max_sentences]   # a wide voice sweep pays breadth, not depth
+    seeds = SEEDS.get((lang, band), DEFAULT_SEEDS)
     scores, non_terminating = {}, []
     for voice in voices:
         for si, text in enumerate(texts):
-            cap = frame_budget(text)
-            embeds = corpus_embeds(text, voice, pipe.wb)
-            pipe.backbone.reset()
-            frames, _, _ = pipe.generate(embeds, max_frames=cap, seed=SEED, verbose=False)
-            if len(frames) >= cap:
-                non_terminating.append(f"{voice}/s{si}")
-            scores[(voice, si)] = wer(text, asr(pipe.decode(frames), lang))
+            for sd in seeds:
+                cap = frame_budget(text)
+                embeds = corpus_embeds(text, voice, pipe.wb)
+                pipe.backbone.reset()
+                frames, _, _ = pipe.generate(embeds, max_frames=cap, seed=sd, verbose=False)
+                if len(frames) >= cap:
+                    non_terminating.append(f"{voice}/s{si}/seed{sd}")
+                scores[(voice, si, sd)] = wer(text, asr(pipe.decode(frames), lang))
         if verbose:
-            row = [scores[(voice, i)] for i in range(len(texts))]
+            row = [scores[(voice, i, sd)] for i in range(len(texts)) for sd in seeds]
             print(f"  {lang}/{band:<6} {voice:18s} " + " ".join(f"{w:.3f}" for w in row)
                   + f"   mean {sum(row) / len(row):.4f}", flush=True)
     vals = list(scores.values())
@@ -290,7 +314,8 @@ def run_language(lang, asr, pipe, band="medium", voices=None, max_sentences=None
         "lang": lang, "band": band, "n_voices": len(voices), "n_runs": len(vals),
         "mean": sum(vals) / len(vals), "worst": max(vals),
         "perfect": sum(1 for w in vals if w == 0),
-        "degenerate": [f"{v}/s{i}" for (v, i), w in scores.items() if w >= collapse],
+        "degenerate": [f"{v}/s{i}/seed{sd}" for (v, i, sd), w in scores.items()
+                       if w >= collapse],
         "non_terminating": non_terminating, "collapse": collapse,
     }
 
@@ -320,7 +345,9 @@ def test_wer_per_language_band(rig, lang, band):
     asr, pipe = rig
     s = run_language(lang, asr, pipe, band=band)
     ceiling = CEILINGS[(lang, band)]
-    print(f"\n  {lang}/{band}: {s['n_voices']} voices x {s['n_runs'] // s['n_voices']} sentences, "
+    n_seeds = len(SEEDS.get((lang, band), DEFAULT_SEEDS))
+    per = s["n_runs"] // s["n_voices"] // n_seeds
+    print(f"\n  {lang}/{band}: {s['n_voices']} voices x {per} sentences x {n_seeds} seed(s), "
           f"WER {s['mean']:.4f} (worst {s['worst']:.3f}, perfect {s['perfect']}/{s['n_runs']}, "
           f"degenerate {len(s['degenerate'])}, non-terminating {len(s['non_terminating'])}) "
           f"ceiling {ceiling}", flush=True)
