@@ -8,7 +8,9 @@
 
 namespace tt::tt_metal::experimental::range_lockstep_allocation {
 
-// MemoryConfig free functions — access experimental range lockstep state on MemoryConfigImpl.
+// Experimental and subject to change: this header carries no API-stability guarantee.
+//
+// MemoryConfig free functions — access range lockstep state on MemoryConfigImpl.
 //
 // See experimental/range_lockstep_allocation/buffer.hpp for what the mode means. Setting it here
 // is how a tensor carries the request down to buffer allocation.
