@@ -17,7 +17,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfi
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True),
+    pytest.mark.use_module_device({"l1_small_size": 24576}),
 ]
 
 
@@ -74,14 +74,6 @@ def test_grouped_scan_capacity_reports_device_limit(device: ttnn.Device, expect_
             summary_group_chunks=1,
             device=device,
         )
-
-
-def test_grouped_scan_uses_largest_valid_configured_divisor(device: ttnn.Device) -> None:
-    del device
-    assert ops._effective_summary_group_chunks(160, 20) == 20
-    assert ops._effective_summary_group_chunks(64, 20) == 16
-    assert ops._effective_summary_group_chunks(88, 21) == 11
-    assert ops._effective_summary_group_chunks(161, 8) == 7
 
 
 def test_chunk_recurrence_rejects_nonproduction_contract(device: ttnn.Device, expect_error) -> None:

@@ -23,11 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"l1_small_size": 24576, "trace_region_size": 256 * 1024 * 1024}],
-        indirect=True,
-    ),
+    pytest.mark.use_module_device({"l1_small_size": 24576, "trace_region_size": 256 * 1024 * 1024}),
 ]
 
 

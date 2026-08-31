@@ -31,6 +31,7 @@ tests/
 ├── conftest.py                         — Pinned checkpoint fixture plus perf marker registration.
 ├── checkpoint_utils.py                 — Indexed Kimi-K3 layer loading for tests.
 ├── test_cache_fingerprints.py           — Persistent checkpoint-content, config, and placement identities.
+├── test_summary_groups.py              — Summary-group divisor resolution for grouped scan.
 ├── test_numeric_validation.py          — Accuracy, equality, bit-identity, and finiteness contracts.
 ├── utils.py                            — Three numeric contracts; case builders,
 │                                         reconstruction, and device-case support.
