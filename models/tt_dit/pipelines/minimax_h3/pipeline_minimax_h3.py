@@ -364,6 +364,7 @@ class MiniMaxH3Pipeline:
         num_links: int | None = None,
         topology: ttnn.Topology | None = None,
         task: str = "t2va",
+        vsa_config=None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -384,6 +385,7 @@ class MiniMaxH3Pipeline:
             num_links=num_links,
             topology=topology,
             task=task,
+            vsa_config=vsa_config,
         )
 
     @staticmethod
