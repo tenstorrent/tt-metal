@@ -309,6 +309,9 @@ POLICIES.update(
         "final_up_w4": replace(_FINAL_FULL, mlp_up_decode_in0_block_w=4),
         "final_up_w10": replace(_FINAL_FULL, mlp_up_decode_in0_block_w=10),
         "final_mlp_hifi2": replace(_FINAL_FULL, mlp_fidelity=ttnn.MathFidelity.HiFi2),
+        # TP4 splits the MLP down projection to K=4352, which is 17 K tiles
+        # per core across 8 cores; 1 and 17 are its only legal block widths.
+        "final_down_w1": replace(_FINAL_FULL, mlp_down_in0_block_w=1),
         "final_down_w4": replace(_FINAL_FULL, mlp_down_in0_block_w=4),
         "final_down_w34": replace(_FINAL_FULL, mlp_down_in0_block_w=34),
         "final_down_w68": replace(_FINAL_FULL, mlp_down_in0_block_w=68),
