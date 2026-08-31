@@ -58,7 +58,7 @@ def _run_recurrence(
         compute_config=ops._RecurrenceComputeConfig(
             preparation=None,
             affine_prefix=prefix_compute_config,
-            grouped_scan=prefix_compute_config,
+            scan=prefix_compute_config,
         ),
         sequence_parallel_axis=None,
     )
