@@ -79,7 +79,8 @@
 #      harness wiring], pressure-schedule+milp) are Init(0) on-plus knob legs.
 #      First silicon = the pin-15 measurement pass (MEASUREMENT-PLAN-PIN15.md).
 #  CANDIDATE 29. 45ba7169920924fd6ebeb6eeb3766156b413dbf895e091b53603bed1e35e7d79 (UNRATIFIED SUPERSEDED; never a baseline anchor) — proposed pin 29 (2026-08-25)
-#  49. da957c5793b72c0266d968934412a4f77a0b2c8c71688f19d4eb0591536c4c55 (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 49 = pin 48 + FABLE_GOES_BURR wave 1 (refusal registry, generated tables, trips facade, Briggs coalescing; corpus byte-identical every flag state) (2026-08-31)
+#  50. 4a85f9e26d62a1945f98a2b4e979bfddc1e705f673bfb63fe93adeb79cced1db (CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 50 = pin 49 + FABLE_GOES_BURR wave 2 (pressure/timing/delivery-cost engines, attr migration, CC-region tree, suffix-automaton shadow; corpus byte-identical, union chkon zero ICEs) (2026-08-31)
+#  49. da957c5793b72c0266d968934412a4f77a0b2c8c71688f19d4eb0591536c4c55 (superseded by 50; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 49 = pin 48 + FABLE_GOES_BURR wave 1 (refusal registry, generated tables, trips facade, Briggs coalescing; corpus byte-identical every flag state) (2026-08-31)
 #  48. 93f973d9dd94e80c13b26bfab28a0b5c157c6c479c95da44652342f234f00dab (superseded by 49; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 48 = pin 47 + IZ measurability closures IP-6/IP-2 (corpus-inert: ON-36 byte-identical 5564/5564) (2026-08-30)
 #  47. dc12870203364a44b04bb3dce082086b5c5c3c1f15490ef293a2006cdde80fb6 (superseded by 48; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 47 = pin 46 + F1 recovery pair IU/IV (2026-08-29)
 #  46. 7bb90d0c88ec055c3a6666492188f14f735119add84c687e45db70f4f19ad468 (superseded by 47; was CURRENT sweep_2x2.conf PINNED_CC1PLUS_SHA256) — pin 46 = pin 45 + IS F1 honest fix + IP audit twins (2026-08-29)
