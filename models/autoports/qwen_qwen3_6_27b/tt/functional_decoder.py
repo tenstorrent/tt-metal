@@ -45,27 +45,62 @@ ADVERTISED_CONTEXT = 262_144
 REPRESENTATIVE_LAYERS = {"linear_attention": 0, "full_attention": 3}
 
 
-def default_snapshot():
-    """Local snapshot dir for MODEL_ID/MODEL_REVISION.
+SNAPSHOT_INDEX_FILE = "model.safetensors.index.json"
 
-    Ask ``huggingface_hub`` where the revision is actually cached rather than
-    reconstructing a path: it honours ``HF_HOME`` / ``HF_HUB_CACHE`` / the XDG
-    default, so this resolves on hosts whose cache is not at ``/huggingface/hub``.
-    ``local_files_only=True`` keeps a model load from silently fetching weights.
 
-    The constructed path remains as a fallback, so a host without
-    ``huggingface_hub`` behaves exactly as before. On the host this port was
-    validated on both paths agree.
+def snapshot_is_usable(candidate) -> bool:
+    """A snapshot is only usable if it carries the shard index.
+
+    ``config.json`` alone is not enough: a partially populated HuggingFace cache
+    satisfies ``AutoConfig.from_pretrained`` and then fails 60 lines later inside
+    ``SnapshotReader``, which opens this file directly.
     """
     from pathlib import Path as _Path
 
     try:
+        return (_Path(candidate) / SNAPSHOT_INDEX_FILE).is_file()
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def snapshot_candidates():
+    """Every place this checkpoint's weights might live, best first.
+
+    Hosts disagree about where weights land: the validated host used an HF cache
+    at ``/huggingface/hub``, while tt-inference-server stages them into
+    ``MODEL_WEIGHTS_DIR`` and huggingface_hub may hold only metadata in its own
+    default cache. Yield all of them and let the caller pick the usable one.
+    """
+    from pathlib import Path as _Path
+
+    staged = os.environ.get("MODEL_WEIGHTS_DIR")
+    if staged:
+        yield _Path(staged)
+
+    try:
         from huggingface_hub import snapshot_download
 
-        return _Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
+        yield _Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
     except Exception:
-        root = _Path(os.environ.get("HF_HOME", "/huggingface")) / "hub"
-        return root / f"models--{MODEL_ID.replace('/', '--')}" / "snapshots" / MODEL_REVISION
+        pass
+
+    root = _Path(os.environ.get("HF_HOME", "/huggingface")) / "hub"
+    yield root / f"models--{MODEL_ID.replace('/', '--')}" / "snapshots" / MODEL_REVISION
+
+
+def default_snapshot():
+    """Local snapshot dir for MODEL_ID/MODEL_REVISION.
+
+    Returns the first candidate that actually carries the shard index. Falls back
+    to the constructed ``HF_HOME`` path when none qualifies, so the caller can
+    report it and behaviour on the validated host is unchanged.
+    """
+    last = None
+    for candidate in snapshot_candidates():
+        last = candidate
+        if snapshot_is_usable(candidate):
+            return candidate
+    return last
 
 
 def _linear_prefill_chunk_size() -> int:
