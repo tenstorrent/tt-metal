@@ -1,8 +1,8 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "271136535a97122f",
-    "tt/generator.py": "1d05363ee78cea4c",
+    "tt/model.py": "984d9a9d8199f57f",
+    "tt/generator.py": "bce7b6debe2aa98e",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
@@ -25,8 +25,8 @@
         "sampling:MeshTraceId(1)": 0
       },
       "unsafe_total": 0,
-      "program_cache_entries": 559,
-      "program_cache_entries_at_capture": 559,
+      "program_cache_entries": 571,
+      "program_cache_entries_at_capture": 571,
       "trace_recaptures": 0,
       "allocating_ops": [],
       "replay": "ok"
@@ -39,8 +39,8 @@
         "sampling:MeshTraceId(3)": 0
       },
       "unsafe_total": 0,
-      "program_cache_entries": 571,
-      "program_cache_entries_at_capture": 571,
+      "program_cache_entries": 583,
+      "program_cache_entries_at_capture": 583,
       "trace_recaptures": 1,
       "allocating_ops": [],
       "replay": "ok"
@@ -53,8 +53,8 @@
         "sampling:MeshTraceId(3)": 16
       },
       "unsafe_total": 32,
-      "program_cache_entries": 587,
-      "program_cache_entries_at_capture": 571,
+      "program_cache_entries": 599,
+      "program_cache_entries_at_capture": 583,
       "trace_recaptures": 1,
       "allocating_ops": [
         "EmbeddingsDeviceOperation",
@@ -75,8 +75,8 @@
         "sampling:MeshTraceId(5)": 0
       },
       "unsafe_total": 0,
-      "program_cache_entries": 587,
-      "program_cache_entries_at_capture": 587,
+      "program_cache_entries": 599,
+      "program_cache_entries_at_capture": 599,
       "trace_recaptures": 2,
       "allocating_ops": [],
       "replay": "ok"

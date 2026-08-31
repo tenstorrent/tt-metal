@@ -1,8 +1,8 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "271136535a97122f",
-    "tt/generator.py": "1d05363ee78cea4c",
+    "tt/model.py": "984d9a9d8199f57f",
+    "tt/generator.py": "bce7b6debe2aa98e",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
@@ -16,8 +16,8 @@
   "context_allocated": 8192,
   "decode_position": 128,
   "iterations": 8,
-  "traced_model_only_ms": 1.888,
-  "traced_token_out_ms": 2.976,
+  "traced_model_only_ms": 1.891,
+  "traced_token_out_ms": 2.979,
   "sampling_ms": 1.088,
   "wall_clock_note": "measured before the signposted windows, with no profiler flushes in the loop",
   "signposts": [

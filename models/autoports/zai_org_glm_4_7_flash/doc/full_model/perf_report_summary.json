@@ -1,8 +1,8 @@
 {
   "source_manifest": {
     "tt/provenance.py": "3b162e8ac0fe0674",
-    "tt/model.py": "271136535a97122f",
-    "tt/generator.py": "1d05363ee78cea4c",
+    "tt/model.py": "984d9a9d8199f57f",
+    "tt/generator.py": "bce7b6debe2aa98e",
     "tt/optimized_decoder.py": "b2abc9f36278b32f",
     "tt/fused_decoder.py": "0dbbe26e401a1716",
     "tt/functional_decoder.py": "d04c7d1958a8fe74",
@@ -15,13 +15,13 @@
     "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
     "total_rows": 1264,
     "ops_per_step": 158.0,
-    "device_us_per_step": 1706.9,
-    "op_to_op_gap_us_per_step": 20596.0,
+    "device_us_per_step": 1709.5,
+    "op_to_op_gap_us_per_step": 20616.6,
     "bound": {
-      "slow_rows": 112,
+      "slow_rows": 111,
       "total_rows": 1264,
-      "slow_us_per_step": 256.3,
-      "slow_pct_of_window": 15.0,
+      "slow_us_per_step": 248.8,
+      "slow_pct_of_window": 14.6,
       "slow_ops": [
         {
           "op": "MatmulDeviceOperation 32 x 2048 x 1536",
@@ -41,7 +41,7 @@
         },
         {
           "op": "MatmulDeviceOperation 32 x 2048 x 10240",
-          "rows": 16
+          "rows": 15
         },
         {
           "op": "MatmulDeviceOperation 32 x 2048 x 64",
@@ -59,56 +59,56 @@
     "top_ops": [
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 154880",
-        "us_per_step": 870.99,
-        "pct": 51.0,
+        "us_per_step": 873.41,
+        "pct": 51.1,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 10240",
-        "us_per_step": 131.61,
+        "us_per_step": 131.91,
         "pct": 7.7,
         "calls_per_step": 2.0
       },
       {
         "op": "LayerNormDeviceOperation",
-        "us_per_step": 52.66,
+        "us_per_step": 52.63,
         "pct": 3.1,
         "calls_per_step": 9.0
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
-        "us_per_step": 51.82,
+        "us_per_step": 51.86,
         "pct": 3.0,
         "calls_per_step": 1.0
       },
       {
         "op": "SdpaDecodeDeviceOperation",
-        "us_per_step": 49.89,
+        "us_per_step": 49.9,
         "pct": 2.9,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 10240 x 2048",
-        "us_per_step": 47.49,
+        "us_per_step": 47.35,
         "pct": 2.8,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 5120 x 2048",
-        "us_per_step": 44.99,
+        "us_per_step": 45.02,
         "pct": 2.6,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 1536",
-        "us_per_step": 39.2,
+        "us_per_step": 39.04,
         "pct": 2.3,
         "calls_per_step": 4.0
       },
       {
         "op": "BinaryNgDeviceOperation",
-        "us_per_step": 36.85,
-        "pct": 2.2,
+        "us_per_step": 36.68,
+        "pct": 2.1,
         "calls_per_step": 13.0
       },
       {
@@ -119,25 +119,25 @@
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 1536 x 2048",
-        "us_per_step": 30.37,
+        "us_per_step": 30.5,
         "pct": 1.8,
         "calls_per_step": 1.0
       },
       {
         "op": "FillPadDeviceOperation",
-        "us_per_step": 30.24,
+        "us_per_step": 30.23,
         "pct": 1.8,
         "calls_per_step": 5.0
       },
       {
         "op": "TransposeDeviceOperation",
-        "us_per_step": 25.72,
+        "us_per_step": 25.7,
         "pct": 1.5,
         "calls_per_step": 8.0
       },
       {
         "op": "SliceDeviceOperation",
-        "us_per_step": 24.17,
+        "us_per_step": 24.25,
         "pct": 1.4,
         "calls_per_step": 19.0
       }
@@ -150,12 +150,12 @@
     "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
     "total_rows": 1600,
     "ops_per_step": 200.0,
-    "device_us_per_step": 2752.4,
-    "op_to_op_gap_us_per_step": 28133.6,
+    "device_us_per_step": 2751.8,
+    "op_to_op_gap_us_per_step": 27382.9,
     "bound": {
       "slow_rows": 112,
       "total_rows": 1600,
-      "slow_us_per_step": 258.1,
+      "slow_us_per_step": 258.4,
       "slow_pct_of_window": 9.4,
       "slow_ops": [
         {
@@ -194,85 +194,85 @@
     "top_ops": [
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 154880",
-        "us_per_step": 873.75,
+        "us_per_step": 872.26,
         "pct": 31.7,
         "calls_per_step": 1.0
       },
       {
         "op": "TopkLargeIndicesDeviceOperation",
-        "us_per_step": 664.53,
-        "pct": 24.1,
+        "us_per_step": 664.87,
+        "pct": 24.2,
         "calls_per_step": 4.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 10240",
-        "us_per_step": 132.37,
+        "us_per_step": 132.7,
         "pct": 4.8,
         "calls_per_step": 2.0
       },
       {
         "op": "TopkRouteFinishDeviceOperation",
-        "us_per_step": 81.83,
+        "us_per_step": 82.08,
         "pct": 3.0,
         "calls_per_step": 4.0
       },
       {
         "op": "SliceDeviceOperation",
-        "us_per_step": 80.44,
+        "us_per_step": 80.09,
         "pct": 2.9,
         "calls_per_step": 23.0
       },
       {
         "op": "BinaryNgDeviceOperation",
-        "us_per_step": 73.11,
+        "us_per_step": 73.04,
         "pct": 2.7,
         "calls_per_step": 25.0
       },
       {
         "op": "TopkRoutePrepDeviceOperation",
-        "us_per_step": 68.96,
+        "us_per_step": 68.76,
         "pct": 2.5,
         "calls_per_step": 4.0
       },
       {
         "op": "LayerNormDeviceOperation",
-        "us_per_step": 52.57,
+        "us_per_step": 52.61,
         "pct": 1.9,
         "calls_per_step": 9.0
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072",
-        "us_per_step": 51.41,
+        "us_per_step": 52.08,
         "pct": 1.9,
         "calls_per_step": 1.0
       },
       {
         "op": "SdpaDecodeDeviceOperation",
-        "us_per_step": 49.85,
+        "us_per_step": 49.83,
         "pct": 1.8,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 10240 x 2048",
-        "us_per_step": 47.49,
+        "us_per_step": 47.35,
         "pct": 1.7,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 5120 x 2048",
-        "us_per_step": 45.03,
+        "us_per_step": 44.97,
         "pct": 1.6,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 1536",
-        "us_per_step": 40.45,
+        "us_per_step": 40.5,
         "pct": 1.5,
         "calls_per_step": 4.0
       },
       {
         "op": "CopyDeviceOperation",
-        "us_per_step": 40.39,
+        "us_per_step": 40.41,
         "pct": 1.5,
         "calls_per_step": 1.0
       }
@@ -285,13 +285,13 @@
     "normalized_by": "anchor_calls_in_window (one LM head per step), not an assumed iteration count",
     "total_rows": 110,
     "ops_per_step": 110.0,
-    "device_us_per_step": 10451.7,
-    "op_to_op_gap_us_per_step": 456.5,
+    "device_us_per_step": 10426.4,
+    "op_to_op_gap_us_per_step": 320.7,
     "bound": {
       "slow_rows": 17,
       "total_rows": 110,
-      "slow_us_per_step": 2209.1,
-      "slow_pct_of_window": 21.1,
+      "slow_us_per_step": 2210.1,
+      "slow_pct_of_window": 21.2,
       "slow_ops": [
         {
           "op": "MatmulDeviceOperation 128 x 2048 x 1344",
@@ -333,85 +333,85 @@
     "top_ops": [
       {
         "op": "SparseMatmulDeviceOperation active=?/256 x 32 x 2048 x 3072",
-        "us_per_step": 3062.36,
-        "pct": 29.3,
+        "us_per_step": 3047.68,
+        "pct": 29.2,
         "calls_per_step": 1.0
       },
       {
         "op": "SparseMatmulDeviceOperation active=?/64 x 128 x 1536 x 2048",
-        "us_per_step": 1987.71,
-        "pct": 19.0,
+        "us_per_step": 1989.17,
+        "pct": 19.1,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation 32 x 2048 x 154880",
-        "us_per_step": 875.15,
+        "us_per_step": 872.93,
         "pct": 8.4,
         "calls_per_step": 1.0
       },
       {
         "op": "MatmulDeviceOperation b={20} x 128 x 768 x 256",
-        "us_per_step": 701.82,
+        "us_per_step": 701.89,
         "pct": 6.7,
         "calls_per_step": 2.0
       },
       {
         "op": "UnaryDeviceOperation",
-        "us_per_step": 466.92,
+        "us_per_step": 465.43,
         "pct": 4.5,
         "calls_per_step": 7.0
       },
       {
         "op": "BinaryNgDeviceOperation",
-        "us_per_step": 452.88,
+        "us_per_step": 448.13,
         "pct": 4.3,
         "calls_per_step": 14.0
       },
       {
         "op": "MatmulDeviceOperation b={20} x 128 x 512 x 256",
-        "us_per_step": 434.22,
+        "us_per_step": 435.04,
         "pct": 4.2,
         "calls_per_step": 2.0
       },
       {
         "op": "PermuteDeviceOperation",
-        "us_per_step": 327.36,
+        "us_per_step": 325.89,
         "pct": 3.1,
         "calls_per_step": 2.0
       },
       {
         "op": "SliceDeviceOperation",
-        "us_per_step": 326.94,
+        "us_per_step": 323.36,
         "pct": 3.1,
         "calls_per_step": 22.0
       },
       {
         "op": "MatmulDeviceOperation 128 x 5120 x 2048",
-        "us_per_step": 237.18,
+        "us_per_step": 237.49,
         "pct": 2.3,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 128 x 10240 x 2048",
-        "us_per_step": 231.88,
+        "us_per_step": 232.15,
         "pct": 2.2,
         "calls_per_step": 1.0
       },
       {
         "op": "LayerNormDeviceOperation",
-        "us_per_step": 215.33,
+        "us_per_step": 215.36,
         "pct": 2.1,
         "calls_per_step": 9.0
       },
       {
         "op": "MatmulDeviceOperation b={20} x 128 x 192 x 512",
-        "us_per_step": 190.36,
+        "us_per_step": 190.03,
         "pct": 1.8,
         "calls_per_step": 2.0
       },
       {
         "op": "MatmulDeviceOperation 128 x 2048 x 10240",
-        "us_per_step": 148.84,
+        "us_per_step": 147.98,
         "pct": 1.4,
         "calls_per_step": 2.0
       }

@@ -1,0 +1,135 @@
++ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
++ HF_HUB_OFFLINE=1
++ TRANSFORMERS_OFFLINE=1
+++ git rev-parse --show-toplevel
++ cd /home/stisi/tt-metal
++ D=models/autoports/zai_org_glm_4_7_flash
++ L=models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs
++ P=./python_env/bin/python
++ REAL_HOME=/home/stisi
++ SNAPSHOT=/home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
++ :
++ provenance started
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/dram_capacity_probe.py
++ echo dram=0
+dram=0
++ TT_METAL_TRACE_ALLOC_TRACKING=1
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/trace_alloc_probe.py
++ echo tracealloc=0
+tracealloc=0
++ TT_METAL_TRACE_ALLOC_TRACKING=1
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py capacity --seq 128
++ echo tracealloc_full=0
+tracealloc_full=0
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/measure_cold_compile.py --repeats 4
++ echo warmcompile=0
+warmcompile=0
++ cp models/autoports/zai_org_glm_4_7_flash/doc/full_model/compile_cost.json models/autoports/zai_org_glm_4_7_flash/doc/full_model/compile_cost_warm.json
++ rm -rf /tmp/glm47_coldhome
++ mkdir -p /tmp/glm47_coldhome
++ HOME=/tmp/glm47_coldhome
++ GLM47_FLASH_SNAPSHOT=/home/stisi/.cache/huggingface/hub/models--zai-org--GLM-4.7-Flash/snapshots/7dd20894a642a0aa287e9827cb1a1f7f91386b67
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/measure_cold_compile.py --repeats 4
++ echo coldcompile=0
+coldcompile=0
++ rm -rf /tmp/glm47_coldhome
++ ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py -q -s -p no:randomly
++ echo mainonly=0
+mainonly=0
++ ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py -q -s -p no:randomly
++ echo main=0
+main=0
++ ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py -q -s -p no:randomly
++ echo padding=0
+padding=0
++ ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_perf.py -q -s -p no:randomly
++ echo perf=0
+perf=0
++ GLM47_FM_BATCH=32
++ GLM47_FM_BATCH_SEQ=8192
++ ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py -q -s -p no:randomly
++ echo batch=0
+batch=0
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/decode_position_scaling_probe.py
++ echo posscale=0
+posscale=0
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py
++ echo firstuse=0
+firstuse=0
++ ./python_env/bin/python -m models.common.readiness_check.run_prefill_check --model-dir models/autoports/zai_org_glm_4_7_flash --reference models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt --mesh-device N150 --trace-region-size 350000000 --l1-small-size 32768
++ echo prefillcheck=0
+prefillcheck=0
++ ./python_env/bin/python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/zai_org_glm_4_7_flash --reference models/autoports/zai_org_glm_4_7_flash/readiness_aime24_chat.refpt --mesh-device N150 --trace-region-size 350000000 --l1-small-size 32768
++ echo tf=0
+tf=0
++ ./python_env/bin/python -m models.common.readiness_check.run_autoregressive --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --prompt-file models/autoports/zai_org_glm_4_7_flash/doc/full_model/autoregressive_prompt_chat.txt --mesh-device N150 --trace-region-size 350000000 --l1-small-size 32768 --max-new-tokens 256
++ echo autoreg=0
+autoreg=0
++ ./python_env/bin/python models/common/readiness_check/check_degenerate_output.py --model-dir models/autoports/zai_org_glm_4_7_flash --missing-artifacts critical --scope autoregressive --json models/autoports/zai_org_glm_4_7_flash/doc/full_model/degenerate_check.json
++ echo degen=0
+degen=0
++ ./python_env/bin/python .agents/scripts/check_context_contract.py --model-dir models/autoports/zai_org_glm_4_7_flash --hf-model zai-org/GLM-4.7-Flash --stage full-model --require-contract
++ echo ctx=0
+ctx=0
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/run_qualitative_suite.py --max-new-tokens 128 --skip-hf
++ echo qual=0
+qual=0
++ rm -rf models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy
++ mkdir -p models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy
++ ./python_env/bin/python -m tracy -r -p -v -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py -q -s -p no:randomly
++ echo tracy=0
+tracy=0
+++ grep -a 'OPs csv generated at' /tmp/tracy_run.log
+++ tail -1
+++ sed 's/.*at: //'
++ CSV=/home/stisi/tt-metal/generated/profiler/reports/2026_09_02_10_08_49/ops_perf_results_2026_09_02_10_08_49.csv
++ for w in DECODE_MODEL DECODE_TOKENOUT PREFILL
+++ tr A-Z a-z
+++ echo DECODE_MODEL
++ out=models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report
++ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_10_08_49/ops_perf_results_2026_09_02_10_08_49.csv --start-signpost PERF_FM_DECODE_MODEL --end-signpost PERF_FM_DECODE_MODEL_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv
++ for w in DECODE_MODEL DECODE_TOKENOUT PREFILL
+++ echo DECODE_TOKENOUT
+++ tr A-Z a-z
++ out=models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report
++ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_10_08_49/ops_perf_results_2026_09_02_10_08_49.csv --start-signpost PERF_FM_DECODE_TOKENOUT --end-signpost PERF_FM_DECODE_TOKENOUT_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.csv
++ for w in DECODE_MODEL DECODE_TOKENOUT PREFILL
+++ echo PREFILL
+++ tr A-Z a-z
++ out=models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report
++ ./python_env/bin/tt-perf-report --arch p150 /home/stisi/tt-metal/generated/profiler/reports/2026_09_02_10_08_49/ops_perf_results_2026_09_02_10_08_49.csv --start-signpost PERF_FM_PREFILL --end-signpost PERF_FM_PREFILL_END --csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/prefill_perf_report.csv
++ gzip -c /tmp/tracy_run.log
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/summarize_perf_report.py --tracy-dir models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy
++ echo summary=0
+summary=0
++ gzip -f models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_model_perf_report.csv models/autoports/zai_org_glm_4_7_flash/doc/full_model/tracy/decode_tokenout_perf_report.csv
++ rm -rf generated/watcher models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher
++ mkdir -p models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/watcher
++ TT_METAL_WATCHER=2
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py smoke
+++ grep -aicE 'error|assert|sanitize|fatal|exception' generated/watcher/watcher.log
++ echo 'wsmoke=0 faults=0'
+wsmoke=0 faults=0
++ gzip -c generated/watcher/watcher.log
++ rm -rf generated/watcher
++ TT_METAL_WATCHER=2
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py trace --layers probe --seq-cap 202752
+++ grep -aicE 'error|assert|sanitize|fatal|exception' generated/watcher/watcher.log
++ echo 'wtrace=0 faults=0'
+wtrace=0 faults=0
++ gzip -c generated/watcher/watcher.log
++ rm -rf generated/watcher
++ TT_METAL_WATCHER=2
++ ./python_env/bin/python models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py capacity --seq 128
+++ grep -aicE 'error|assert|sanitize|fatal|exception' generated/watcher/watcher.log
++ echo 'wfull=0 faults=0'
+wfull=0 faults=0
++ gzip -c generated/watcher/watcher.log
++ rm -rf generated/watcher
++ PYTHONUNBUFFERED=1
++ ./python_env/bin/python -m pytest models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py -q -s -p no:randomly
++ echo fullctx=0
+fullctx=0
++ provenance finished
++ echo SWEEP_DONE
+SWEEP_DONE

@@ -14,15 +14,15 @@ optimized-decoder deployment policy, unchanged.
 
 | | value | how measured |
 |---|---|---|
-| **TTFT, prompt 128** | **334.5 ms** (382.7 tok/s prefill) | warmed shape, `perf.json`, `tests/test_full_model_perf.py`. Prefill + the untraced prefill sampler + the one-word token readback; the request-boundary cache reset (28.3 ms) is drained before the clock starts and reported separately |
-| **TTFT, prompt 154** (AIME reference) | **591.0 ms** | `logs/run_teacher_forcing.log`, the first request in a fresh process. There is no first-use penalty left at this length: `first_use_ttft.json` measures 583.4 ms for both the first and the second request (0.0 ms apart) because every terminal program for a single-chunk prompt is warmed before capture |
+| **TTFT, prompt 128** | **334.4 ms** (382.8 tok/s prefill) | warmed shape, `perf.json`, `tests/test_full_model_perf.py`. Prefill + the untraced prefill sampler + the one-word token readback; the request-boundary cache reset (28.3 ms) is drained before the clock starts and reported separately |
+| **TTFT, prompt 154** (AIME reference) | **590.7 ms** | `logs/run_teacher_forcing.log`, the first request in a fresh process. There is no first-use penalty left at this length: `first_use_ttft.json` measures 584.0 then 583.9 ms and **0 new programs compiled** on either request, because every terminal program family for a single-chunk prompt is warmed before capture |
 | **Traced decode, batch 1 (model trace only, logits out)** | **21.760 ms/token = 45.96 t/s/u** | model decode trace only (no sampling, no token feedback) |
-| **Traced decode, batch 1 (token-out)** | **23.017 ms/token = 43.45 t/s/u** | model trace + sampling trace + the one caller-visible token read |
-| Token-out decode as the readiness harness drives it | 43.98 t/s/u | `run_teacher_forcing`, `generate(..., enable_trace=True)` |
+| **Traced decode, batch 1 (token-out)** | **23.014 ms/token = 43.45 t/s/u** | model trace + sampling trace + the one caller-visible token read |
+| Token-out decode as the readiness harness drives it | 44.04 t/s/u | `run_teacher_forcing`, `generate(..., enable_trace=True)` |
 | End to end, prompt 128 / generate 128 | 3.242 s (39.48 tok/s) | includes cache reset, prefill, 127 traced steps |
 
 The two decode numbers differ by the sampler (1.123 ms) plus the token
-readback (0.134 ms); 21.760 + 1.123 + 0.134 = 23.017. Both paths replay the
+readback (0.131 ms); 21.760 + 1.123 + 0.131 = 23.014. Both paths replay the
 same captured model trace. Every number in this table comes from the single
 committed `perf.json` (and, for the two harness rows, from
 `logs/run_teacher_forcing.log`) produced by the sweep in work log FM-016.
@@ -65,7 +65,7 @@ Bar is top-5 >= 0.98 and top-100 = 1.00. Both clear it.
   (`" fox jumps over the lazy dog. Tenstor"`), the last prompt position's top-1
   logit sat 27.3 above the row mean, and those eight steps ran with zero host
   token/position/page-table refreshes and zero full-logits readbacks. Prefill
-  measured 90.7 tok/s (2236.4 s) and decode 136.3 ms/token at that depth
+  measured 90.6 tok/s (2236.6 s) and decode 136.3 ms/token at that depth
   (`full_context.json`).
 
   The same run also reads a **needle** back out of the far end of the cache. A
@@ -86,7 +86,7 @@ Bar is top-5 >= 0.98 and top-100 = 1.00. Both clear it.
   failing, so `set_decode_positions` refuses any position outside
   `[-1, max_seq_len)` (`test_decode_position_past_context_is_rejected`, work
   log FM-013). Decode cost itself scales smoothly to the end of the context:
-  1.80 -> 6.64 ms per traced step from position 128 to 202751 on the 2-layer
+  1.81 -> 6.66 ms per traced step from position 128 to 202751 on the 2-layer
   probe (`decode_position_scaling.json`).
 * KV cache cost is 612 B/token/layer = **28,764 B/token** across 47 layers
   (paged compressed-MLA latent, width 576 = kv_lora_rank 512 + qk_rope 64, one
@@ -97,7 +97,7 @@ Bar is top-5 >= 0.98 and top-100 = 1.00. Both clear it.
   202752 context. Batch and context trade directly against DRAM:
   `batch x context x 28764 B` must fit what is left after the weights.
   Batch **32 tested** at 8192 tokens/user (17.440 + 7.022 = 24.462 GiB,
-  `tests/test_full_model_batch.py`, 9 passed). Batch 32 at 202752 would need
+  `tests/test_full_model_batch.py`, 10 passed). Batch 32 at 202752 would need
   174 GiB of cache, which is a hard physical limit rather than a design
   choice.
 * Prompt length is a logical input. Tested through the public generator at
@@ -177,25 +177,25 @@ New model-level pieces:
    the trace-lifecycle bullet in the runtime fallback audit. Both costs are
    measured in `compile_cost.json`, cold and warm
    (`tests/measure_cold_compile.py`; the cold run's log records
-   `JIT cache stats: 0/1235 hits (0.0%)`, the warm one `1235/1235 (100.0%)`):
+   `JIT cache stats: 0/1244 hits (0.0%)`, the warm one `1244/1244 (100.0%)`):
 
    | | cold JIT cache | warm JIT cache |
    |---|---|---|
-   | generator construction | 270.2 s | 181.8 s |
-   | of which prefill warmup (buckets + every terminal tile offset) | 71.4 s | 4.5 s |
-   | of which trace capture | 21.2 s | 0.3 s |
-   | first request at an **un-warmed** shape (prompt 3000) | 7821.9 ms | 6480.6 ms |
-   | steady state at that shape (mean of 4 repeats) | 6477.1 ms | 6477.4 ms |
-   | first request at a **warmed** shape (prompt 128) | 313.9 ms | 313.8 ms |
-   | steady state at that shape (mean of 4 repeats) | 313.7 ms | 313.6 ms |
+   | generator construction | 269.5 s | 176.5 s |
+   | of which prefill warmup (buckets + every terminal program family) | 71.5 s | 4.5 s |
+   | of which trace capture | 21.3 s | 0.3 s |
+   | first request at an **un-warmed** shape (prompt 3000) | 7827.3 ms | 6481.0 ms |
+   | steady state at that shape (mean of 4 repeats) | 6477.0 ms | 6477.6 ms |
+   | first request at a **warmed** shape (prompt 128) | 313.9 ms | 313.7 ms |
+   | steady state at that shape (mean of 4 repeats) | 313.8 ms | 313.8 ms |
 
    Read the request rows across, not down: the cold JIT cache costs an
-   un-warmed prefill shape **+1341 ms** inside its first request
-   (7821.9 - 6480.6) and costs a warmed shape nothing (313.9 vs 313.8, inside
-   the 0.3% call-to-call spread), which is exactly what construction having
+   un-warmed prefill shape **+1346 ms** inside its first request
+   (7827.3 - 6481.0) and costs a warmed shape nothing (313.9 vs 313.7, inside
+   the 0.1% call-to-call spread), which is exactly what construction having
    already built those kernels should look like. The cold arm reaches the same
-   conclusion without leaving its own data: its first call sits +1344.8 ms
-   above its own repeat mean (`first_minus_repeat_mean_ms`), against +3.2 ms
+   conclusion without leaving its own data: its first call sits +1350.3 ms
+   above its own repeat mean (`first_minus_repeat_mean_ms`), against +3.4 ms
    for the warm arm. Every timed prefill in this table brackets the call with
    `ttnn.synchronize_device`; an earlier unsynchronized version of this probe
    measured host enqueue instead and produced both a smaller penalty and an
@@ -336,8 +336,9 @@ Metal treats anything allocated while a trace is registered as unsafe for that
 trace. `_maybe_recapture_after_compile` compares
 `mesh_device.num_program_cache_entries()` against its value at capture time, so
 the trigger is exact rather than a guess, and it is wired into every prefill
-entry point. It costs 175 ms once per new prefill shape and is timed apart from
-both TTFT and the decode rate. Verified with `TT_METAL_TRACE_ALLOC_TRACKING=1`
+entry point. It costs **177.6 ms** once per new prefill shape (`perf.json`
+ measures 177.0 at prompt 3000, `first_use_ttft.json` 177.6 at prompt 4300)
+and is timed apart from both TTFT and the decode rate. Verified with `TT_METAL_TRACE_ALLOC_TRACKING=1`
 in `trace_alloc.json`; work log FM-016.
 
 Because the trace advances the position itself, the loop also has to know where
@@ -357,8 +358,8 @@ guard cannot be stepped around
 layer-stack lower bound   46 x 0.491 (moe) + 1 x 0.447 (dense) = 23.033 ms/token
 traced model decode                                              21.760 ms/token
   + sampling trace                                              + 1.123 ms
-  + token readback                                              + 0.134 ms
-  = token-out decode                                              23.017 ms/token
+  + token readback                                              + 0.131 ms
+  = token-out decode                                              23.014 ms/token
 ```
 
 The full model runs **below** the naive layer-stack lower bound. That is
@@ -368,16 +369,21 @@ dispatch overhead is counted 47 times in the sum, while the full model pays it
 once for a 47-layer trace. Both full-model-only terminal costs are measured on
 top of the stack figure and are small:
 
-* **LM head** 871.0 us device per step in the reduced profile (x1.0 call/step,
-  51.0% of that 2-layer window, 3.8% of the 47-layer token-out step). Roofline
+* **LM head** 873.4 us device per step in the reduced profile (x1.0 call/step,
+  51.1% of that 2-layer window, 3.8% of the 47-layer token-out step). Roofline
   for its 337 MB bf8 weight read at 512 GB/s is 658 us, i.e. 75% of that
   ceiling; `tt-perf-report`'s own column for the same row says 70.99%
   (363.5 GB/s), because it models the p150 differently. Both are quoted so
   neither denominator is implied. bf4 measures 628 us but is held back for
   LM-head accuracy (a datatype-sweep candidate).
-* **Sampler** 1.123 ms, **4.9%** of the token-out step, dominated by
-  `TopkLargeIndicesDeviceOperation`: 4 calls per step (one per vocab chunk),
-  664.5 us/step total, 24.1% of the reduced-profile token-out window. It does
+* **Sampler** 1.123 ms, **4.9%** of the token-out step. Its whole device
+  footprint in the reduced-profile token-out window is 861.4 us/step (31.3% of
+  that 2-layer window): `TopkLargeIndicesDeviceOperation` 664.9 us over 4
+  calls (one per vocab chunk), `TopkRouteFinish` 82.1, `TopkRoutePrep` 68.8,
+  `SamplingDeviceOperation` 27.3 and `ManualSeedDeviceOperation` 18.4. The
+  per-step `ManualSeed` is pure waste in a greedy (`k=1, p=0, temp=1`) trace
+  and belongs to `models/common/sampling`, not to this model; it is a second
+  stage-07 lever next to the 32-row floor in the limitations. It does
   not dominate token-out decode, and the alternative (force-argmax) was
   benchmarked and is 0.024 ms faster - rejected on trace behaviour, not shape
   (see the Sampler section).
@@ -396,8 +402,8 @@ ops/step, multi-GB dumps).
 The profiled windows run 8 iterations with an explicit `ttnn.ReadDeviceProfiler`
 after each, because the device marker buffer overflows otherwise; the captures
 are complete, with the once-per-step LM head appearing exactly 8 times in each
-decode window (1264 and 1600 rows, device 1706.9 and 2752.4 us/step,
-consistent with the 1.888 / 2.976 ms wall clock in `perf_reduced_decode.json`).
+decode window (1264 and 1600 rows, device 1709.5 and 2751.8 us/step,
+consistent with the 1.891 / 2.979 ms wall clock in `perf_reduced_decode.json`).
  The run log still contains 295
 `Profiler DRAM buffers were full, markers were dropped!` lines: they all come
 from the *un-flushed* wall-clock loops that run before the first signpost
@@ -410,14 +416,14 @@ is measured *before* them with no profiler flushes in the loop, and the
 per-window `op_to_op_gap` in the summary is dominated by those flushes - it is
 instrumentation, not the real dispatch gap.
 
-Prefill is the weak side, and it degrades with depth: 382.7 tok/s at prompt 128
-(334.5 ms), 432.8 tok/s at prompt 3000 (6935.5 ms, physical 3072), and 90.7 tok/s
+Prefill is the weak side, and it degrades with depth: 382.8 tok/s at prompt 128
+(334.4 ms), 432.8 tok/s at prompt 3000 (6936.5 ms, physical 3072), and 90.6 tok/s
 at the full 202733-token context (2236 s). Decode degrades far more gently -
-1.80 -> 6.64 ms per traced step from position 128 to 202751 on the 2-layer probe
+1.81 -> 6.66 ms per traced step from position 128 to 202751 on the 2-layer probe
 (`decode_position_scaling.json`), and 136.3 ms/token measured at full context on
 the 47-layer model.
 The reduced-profile prefill window shows the two sparse expert matmuls at
-**48.3%** of device time (3062.4 + 1987.7 of 10451.7 us/step). `tt-perf-report`
+**48.3%** of device time (3047.7 + 1989.2 of 10426.4 us/step). `tt-perf-report`
 omits DRAM utilisation for those rows (it cannot know the active expert count,
 hence its `nnz` warning), so no bandwidth figure is claimed for them. See
 Limitations.
@@ -492,15 +498,22 @@ early collapse, no doubled tokens, no control-token leakage.
   unsafe side of them, so the generator re-captures
   (`_maybe_recapture_after_compile`, triggered by an exact
   `num_program_cache_entries()` comparison rather than a guess). Two things
-  keep the cost off the common path. `warmup_terminal_shapes` compiles every
-  terminal tile offset for the five buckets before capture, so **a prompt
-  inside one prefill chunk compiles nothing and re-captures nothing**:
-  `first_use_ttft.json` measures 583.9 ms then 583.8 ms at prompt 154, a
-  0.0 ms first-use penalty, and
+  keep the cost off the common path. Every terminal program family is keyed
+  on the *bucketed physical* prefill length rather than the logical one (the
+  whole-tile slab of the token-out path, and the tile-aligned walk of the
+  host-logits path that `prefill_logits` and the low-level `prefill_forward`
+  use), and `warmup_terminal_shapes` compiles all of them for the five buckets
+  before capture. So **a prompt inside one prefill chunk compiles nothing and
+  re-captures nothing on any of the three entry points**, which
+  `test_host_logits_paths_compile_nothing_at_an_unaligned_length` asserts
+  against `num_program_cache_entries()`:
+  `first_use_ttft.json` measures 584.0 ms then 583.9 ms at prompt 154 with
+  **0 new programs compiled** on either request, and
   `test_single_chunk_prompt_shape_does_not_recapture` asserts the
   program-cache counter does not move. A prompt past one chunk still compiles
-  its chunk-offset programs on first use (17 of them at 4300 tokens) and pays
-  one recapture, measured at **182.5 ms** once per new chunk depth. Bounding
+  its chunk-offset programs on first use (**18** of them at 4300 tokens,
+  recorded by the probe) and pays one recapture, measured at **177.6 ms**, for
+  a 183.7 ms first-use penalty once per new chunk depth. Bounding
   that too needs the terminal path to slice the last chunk before the tile,
   which is stage-07 work.
 * **The recapture is non-destructive by construction.** Its warm pass runs
@@ -522,8 +535,9 @@ early collapse, no doubled tokens, no control-token leakage.
   full 47-layer build, prefill and 128-token generate). Two things had to
   change for that: the cache-reset zero buffer is allocated before capture
   instead of on first `reset()`, and a prefill that compiles programs after
-  capture triggers `recapture_decode_traces()` (175 ms, once per new prefill
-  shape, timed separately from TTFT). Work log FM-016 has the measurements,
+  capture triggers `recapture_decode_traces()` (177.6 ms, once per new
+  prefill shape, timed separately from TTFT, and never for a prompt inside one
+  chunk). Work log FM-016 has the measurements,
   including what the untreated hazard looks like.
 * **Host-sampling compatibility mode**: `generate(..., host_sampling=True)` or
   `build_generator(..., host_sampling=True)`. It selects the *same* tokens as
@@ -579,12 +593,12 @@ early collapse, no doubled tokens, no control-token leakage.
 
 | suite | result |
 |---|---|
-| `tests/test_full_model.py` (batch 1, all 47 layers) | **41 passed** (252 s, `logs/pytest_full_model_only.log`) |
-| `tests/test_full_model_perf.py` | **2 passed** (221 s) |
-| `tests/test_full_model_batch.py` (`GLM47_FM_BATCH=32`, `GLM47_FM_BATCH_SEQ=8192`, echoed into the log) | **9 passed** (265 s) |
-| `tests/test_prefill_padding.py` (bucket-padding non-leakage, the supported-context boundary, the inactive-slot cache proof) | **13 passed** |
+| `tests/test_full_model.py` (batch 1, all 47 layers) | **43 passed** (253 s, `logs/pytest_full_model_only.log`) |
+| `tests/test_full_model_perf.py` | **2 passed** (217 s) |
+| `tests/test_full_model_batch.py` (`GLM47_FM_BATCH=32`, `GLM47_FM_BATCH_SEQ=8192`, echoed into the log) | **10 passed** (305 s) |
+| `tests/test_prefill_padding.py` (bucket-padding non-leakage, the supported-context boundary, the inactive-slot cache proof) | **13 passed** (46 s, `logs/pytest_prefill_padding.log`) |
 | `tests/test_full_context.py` (202733-token prefill, decode to 202751, needle read) | **3 passed** (40 min), periodic continuation 9/9, needle top-1 correct |
-| `test_full_model.py` + `test_prefill_padding.py` in one session (`logs/pytest_full_model.log`) | **54 passed** (292 s) |
+| `test_full_model.py` + `test_prefill_padding.py` in one session (`logs/pytest_full_model.log`) | **56 passed** (295 s) |
 | `tests/test_full_model_profile.py` under Tracy | **2 passed** |
 | `run_prefill_check` / `run_teacher_forcing` / `run_autoregressive` | pass, above bar |
 | `check_degenerate_output.py` | clean (exit 0) |
@@ -635,7 +649,7 @@ run logs corroborate the contents.
 
 ## Limitations and follow-ups (all disclosed, none blocking this stage)
 
-1. **Prefill throughput 383-433 tok/s at short prompts, 90.7 tok/s at the
+1. **Prefill throughput 383-433 tok/s at short prompts, 90.6 tok/s at the
    full context** (`perf.json`, `full_context.json`). The reduced-profile prefill window is
    48% two sparse expert matmuls, and no bandwidth figure is claimed for them
    because `tt-perf-report` omits DRAM utilisation for sparse rows. The prefill
@@ -645,22 +659,30 @@ run logs corroborate the contents.
    M-tiles, so short prompts get the untuned path. This is the main
    optimized-full-model (stage 07) target.
 2. **Prefill program compilation** is a construction-time cost that a serving
-   deployment must keep paying up front: 71.4 s on a cold JIT cache, 4.6 s on
-   a warm one, for the five bucket shapes and every terminal tile offset. A
+   deployment must keep paying up front: 71.5 s on a cold JIT cache, 4.5 s on
+   a warm one, for the five bucket shapes and every terminal program family. A
    prompt whose *physical* shape was
-   not warmed (any multi-chunk length) adds **+1341 ms** to its first TTFT on
-   a cold cache (7821.9 vs 6480.6 ms at prompt 3000), plus a one-time
-   **182.5 ms** trace recapture that the post-capture compile makes necessary
-   (see the trace-lifecycle bullet in the fallback audit). A prompt inside one
-   prefill chunk pays neither: its terminal programs are warmed at
-   construction, measured at a 0.0 ms first-use penalty in
-   `first_use_ttft.json`. `build_generator(warmup_prefill_lens=[...])` takes
+   not warmed (any multi-chunk length) adds **+1346 ms** to its first TTFT on
+   a cold cache (7827.3 vs 6481.0 ms at prompt 3000), plus a one-time
+   **177.6 ms** trace recapture that the post-capture compile makes necessary
+   (see the trace-lifecycle bullet in the fallback audit); at prompt 4300 the
+   two together are a 183.7 ms first-use penalty over 18 newly compiled
+   programs. A prompt inside one prefill chunk pays neither: every terminal
+   program family is warmed at construction, and `first_use_ttft.json` records
+   **0 new programs** and a 0.1 ms penalty at prompt 154. `build_generator(warmup_prefill_lens=[...])` takes
    the exact logical lengths a deployment expects and pre-pays the multi-chunk
    case too, before the traces are captured. Bucketing is what bounds this to `{2048} | buckets` shapes
    instead of one per prompt length; without it the first request at each new
    length paid it (measured 16.7 s readiness TTFT before the fix).
-3. **LM head at bf8** costs 871 us/token; bf4 measures 628 us. Deferred to the
-   datatype sweep with a top-k accuracy gate rather than taken blind here.
+3. **LM head at bf8** costs 871 us/token; bf4 measures 628 us, a 243 us/token
+   saving, i.e. 1.1% of the token-out step. Deferred to the datatype sweep
+   (stage 08) **with no accuracy datapoint yet**: this stage carries the
+   optimized decoder's dtype policy forward unchanged and does not re-select
+   it, so the honest statement is "not measured", not "measured and worse".
+   The gate it has to clear is the one this stage already uses: top-5 >= 0.98
+   and top-100 = 1.00 against `readiness_aime24_chat.refpt`, on real weights.
+   `lm_head_dtype=bfloat4_b` is a `from_pretrained` argument, so the
+   measurement is one readiness run once stage 08 owns the decision.
 4. **On-device logprobs are unavailable at 1x1**:
    `LogProbsCalculator._is_supported` requires 8 or 32 devices
    (`tt_log_probs.py:419-425`). Logprobs must be computed on host until that
@@ -671,7 +693,7 @@ run logs corroborate the contents.
    return it.
 6. **The sampler always processes 32 logits rows**, even at batch 1: `ttnn.sampling`
    takes one row per user and `TTSampling` floors its batch to a full tile, so
-   the four 38720-wide `ttnn.topk` calls (664.5 us/step) do 32x the work a
+   the four 38720-wide `ttnn.topk` calls (664.9 us/step) do 32x the work a
    single active user needs. That is the concrete stage-07 lever on the 1.123 ms
    sampler cost, and it needs a `TTSampling` change rather than a model-side one.
 7. **Batch 32 is tested at 8192 tokens/user**, not at the full context. The
@@ -681,9 +703,11 @@ run logs corroborate the contents.
    `tt-perf-report`'s `Bound` column says those rows are neither compute nor
    bandwidth bound, i.e. the geometry leaves cores idle, and
    `perf_report_summary.json` now counts them per window so the number is in
-   an artifact rather than a CSV column: **17 of 110 prefill rows, 21.1% of
-   that window**, 112 of 1264 decode-model rows (15.0%) and 112 of 1600
-   token-out rows (9.4%), all matmuls. This is the concrete
+   an artifact rather than a CSV column: **17 of 110 prefill rows, 21.2% of
+   that window**, 111 of 1264 decode-model rows (14.6%) and 112 of 1600
+   token-out rows (9.4%), all matmuls, and all of them carried-forward decoder
+   matmuls rather than full-model-only ops (the LM head and the sampler are
+   not among them). This is the concrete
    matmul-geometry target for stage 07, alongside the two sparse expert
    matmuls in item 1; nothing here is fixed in this stage.
 9. The `tt-perf-report` warnings about `SparseMatmulDeviceOperation` nnz and
@@ -691,15 +715,15 @@ run logs corroborate the contents.
    timings are unaffected (work log FM-010).
 10. **Prefill call-to-call spread is small, but read it from the artifact.**
    With the timer bracketed by `ttnn.synchronize_device`, `compile_cost.json`
-   records `repeat_spread_pct` of 0.0-0.3% at both prompt 128 and prompt 3000,
-   and `perf.json`'s back-to-back 3000-token pair (6935.5 / 6931.5 ms) differs
+   records `repeat_spread_pct` of 0.0-0.1% at both prompt 128 and prompt 3000,
+   and `perf.json`'s back-to-back 3000-token pair (6936.5 / 6932.2 ms) differs
    by 0.06%. That is tight enough to compare single calls, which the
    cold-versus-warm rows above rely on. It was not true of the earlier
    unsynchronized probe, so treat any prefill figure from before FM-015 as
    host-enqueue time rather than prefill time. The decode numbers are averages
    over 64 replays and are stable to <1%. Prefill cost *is* prompt-content
    dependent, though, because MoE routing is: at the same prompt length and the
-   same physical shape, this report's prompt prefills in 333.2 ms and
+   same physical shape, this report's prompt prefills in 333.1 ms and
    `measure_cold_compile.py`'s in 313.9 ms, 6.2% apart
    (`perf.json: ttft_breakdown_ms`). Compare prefill numbers across probes only
    at the same prompt text.
@@ -726,7 +750,8 @@ probe/greedy_sampler_probe.py                    split-topk vs force-argmax gree
 probe/trace_alloc_probe.py                       unsafe-allocation accounting per trace id
 probe/first_use_ttft_probe.py                    first vs second request at an unwarmed prompt length
 tt/provenance.py                                 source_manifest, ttnn-free so CSV tools can stamp too
-readiness_aime24_chat.refpt(+.meta.json)         fresh AIME24 chat-template reference
+readiness_aime24_chat.refpt                      fresh AIME24 chat-template reference
+readiness_aime24_chat.meta.json                  its provenance (tokenizer, template, top-k, transformers)
 readiness_autoregressive/                        HF vs TT free-running completions
 doc/full_model/accuracy.json                     top-1/5/100, prefill and decode
 doc/full_model/perf.json                         TTFT, both decode metrics, counters
@@ -745,7 +770,9 @@ doc/full_model/tracy/                            tt-perf-report txt/csv(.gz)/png
 doc/full_model/qualitative/                      prompt format, HF control, side by side
 doc/full_model/degenerate_check.json             degeneracy verdict
 doc/full_model/logs/                             every run above, incl. watcher/*.log.gz
-doc/full_model/logs/sweep_provenance.log         HEAD + `git status` at the start and end of the sweep
+doc/full_model/logs/sweep_provenance.log         HEAD, tracked + untracked files, sha256 of every stage source file, at both ends
+doc/full_model/logs/sweep_run.log                the sweep's own stdout: every step's exit code and watcher fault count
+tests/run_evidence_sweep.sh                      the sweep itself
 doc/context_contract.json                        updated with the full_model section
 
 Every JSON above carries a `source_manifest` block (sha256 prefixes of

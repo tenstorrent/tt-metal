@@ -1,28 +1,28 @@
-== decode_model: 8 captured steps, 158.0 ops/step, 1706.9 us/step device, 20596.0 us/step gap
-   MatmulDeviceOperation 32 x 2048 x 154880           871.0 us/step  51.0%  x1.0
-   MatmulDeviceOperation 32 x 2048 x 10240            131.6 us/step   7.7%  x2.0
-   LayerNormDeviceOperation                            52.7 us/step   3.1%  x9.0
-   SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072      51.8 us/step   3.0%  x1.0
+== decode_model: 8 captured steps, 158.0 ops/step, 1709.5 us/step device, 20616.6 us/step gap
+   MatmulDeviceOperation 32 x 2048 x 154880           873.4 us/step  51.1%  x1.0
+   MatmulDeviceOperation 32 x 2048 x 10240            131.9 us/step   7.7%  x2.0
+   LayerNormDeviceOperation                            52.6 us/step   3.1%  x9.0
+   SparseMatmulDeviceOperation active=?/64 x 32 x 2048 x 3072      51.9 us/step   3.0%  x1.0
    SdpaDecodeDeviceOperation                           49.9 us/step   2.9%  x2.0
-   MatmulDeviceOperation 32 x 10240 x 2048             47.5 us/step   2.8%  x1.0
+   MatmulDeviceOperation 32 x 10240 x 2048             47.4 us/step   2.8%  x1.0
    MatmulDeviceOperation 32 x 5120 x 2048              45.0 us/step   2.6%  x2.0
-   MatmulDeviceOperation 32 x 2048 x 1536              39.2 us/step   2.3%  x4.0
-== decode_tokenout: 8 captured steps, 200.0 ops/step, 2752.4 us/step device, 28133.6 us/step gap
-   MatmulDeviceOperation 32 x 2048 x 154880           873.8 us/step  31.7%  x1.0
-   TopkLargeIndicesDeviceOperation                    664.5 us/step  24.1%  x4.0
-   MatmulDeviceOperation 32 x 2048 x 10240            132.4 us/step   4.8%  x2.0
-   TopkRouteFinishDeviceOperation                      81.8 us/step   3.0%  x4.0
-   SliceDeviceOperation                                80.4 us/step   2.9%  x23.0
-   BinaryNgDeviceOperation                             73.1 us/step   2.7%  x25.0
-   TopkRoutePrepDeviceOperation                        69.0 us/step   2.5%  x4.0
+   MatmulDeviceOperation 32 x 2048 x 1536              39.0 us/step   2.3%  x4.0
+== decode_tokenout: 8 captured steps, 200.0 ops/step, 2751.8 us/step device, 27382.9 us/step gap
+   MatmulDeviceOperation 32 x 2048 x 154880           872.3 us/step  31.7%  x1.0
+   TopkLargeIndicesDeviceOperation                    664.9 us/step  24.2%  x4.0
+   MatmulDeviceOperation 32 x 2048 x 10240            132.7 us/step   4.8%  x2.0
+   TopkRouteFinishDeviceOperation                      82.1 us/step   3.0%  x4.0
+   SliceDeviceOperation                                80.1 us/step   2.9%  x23.0
+   BinaryNgDeviceOperation                             73.0 us/step   2.7%  x25.0
+   TopkRoutePrepDeviceOperation                        68.8 us/step   2.5%  x4.0
    LayerNormDeviceOperation                            52.6 us/step   1.9%  x9.0
-== prefill: 1 captured steps, 110.0 ops/step, 10451.7 us/step device, 456.5 us/step gap
-   SparseMatmulDeviceOperation active=?/256 x 32 x 2048 x 3072    3062.4 us/step  29.3%  x1.0
-   SparseMatmulDeviceOperation active=?/64 x 128 x 1536 x 2048    1987.7 us/step  19.0%  x1.0
-   MatmulDeviceOperation 32 x 2048 x 154880           875.1 us/step   8.4%  x1.0
-   MatmulDeviceOperation b={20} x 128 x 768 x 256     701.8 us/step   6.7%  x2.0
-   UnaryDeviceOperation                               466.9 us/step   4.5%  x7.0
-   BinaryNgDeviceOperation                            452.9 us/step   4.3%  x14.0
-   MatmulDeviceOperation b={20} x 128 x 512 x 256     434.2 us/step   4.2%  x2.0
-   PermuteDeviceOperation                             327.4 us/step   3.1%  x2.0
+== prefill: 1 captured steps, 110.0 ops/step, 10426.4 us/step device, 320.7 us/step gap
+   SparseMatmulDeviceOperation active=?/256 x 32 x 2048 x 3072    3047.7 us/step  29.2%  x1.0
+   SparseMatmulDeviceOperation active=?/64 x 128 x 1536 x 2048    1989.2 us/step  19.1%  x1.0
+   MatmulDeviceOperation 32 x 2048 x 154880           872.9 us/step   8.4%  x1.0
+   MatmulDeviceOperation b={20} x 128 x 768 x 256     701.9 us/step   6.7%  x2.0
+   UnaryDeviceOperation                               465.4 us/step   4.5%  x7.0
+   BinaryNgDeviceOperation                            448.1 us/step   4.3%  x14.0
+   MatmulDeviceOperation b={20} x 128 x 512 x 256     435.0 us/step   4.2%  x2.0
+   PermuteDeviceOperation                             325.9 us/step   3.1%  x2.0
 wrote models/autoports/zai_org_glm_4_7_flash/doc/full_model/perf_report_summary.json

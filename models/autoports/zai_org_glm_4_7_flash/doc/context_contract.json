@@ -239,12 +239,12 @@
   "notes": [
    "Prefill lengths are bucketed to (128, 256, 512, 1024, 2048) and longer prompts to whole 2048-token chunks plus a bucketed tail; this only pads the physical prefill. The logical prompt length is unrestricted up to 202752 and padded positions are proven not to reach a real one (tests/test_prefill_padding.py: bit-identical logits and generated tokens under two different pad token values, single-chunk and multi-chunk).",
    "Every layer shares one RoPE table set: 47 private copies would add 2.4 GiB of byte-identical data at this context. The decode RoPE index is derived from the current position on device, so there is one position state tensor and an inactive (-1) slot stays pinned at index 0.",
-   "Prefill program shapes are bucketed, but two smaller families are not: chunk-offset-dependent programs for multi-chunk prompts, and the terminal 32-row tile slice, whose offset depends on the prompt length. warmup_terminal_shapes compiles every offset for the five buckets before the decode traces are captured, so a prompt inside one chunk compiles nothing on first use (measured: a 0.1 ms first-use penalty at prompt 154, doc/full_model/first_use_ttft.json). A longer prompt compiles its chunk-offset programs once and the generator re-captures its traces (180.8 ms) so no replay runs over a buffer allocated while a trace was live; the recapture warms with every slot inactive, so it writes no cache row. See doc/full_model/trace_alloc.json."
+   "Prefill program shapes are bucketed, and every terminal program family is keyed on the bucketed physical length rather than the logical one: the whole-tile slab of prefill_forward_last_logits_device, and the tile-aligned walk of the host-logits path that prefill_logits and the low-level prefill_forward use. warmup_terminal_shapes compiles all of them for the five buckets before the decode traces are captured, so a prompt inside one prefill chunk compiles nothing on first use on any entry point (measured: 0 new programs and a 0.1 ms first-use penalty at prompt 154, doc/full_model/first_use_ttft.json; asserted against num_program_cache_entries() in tests/test_full_model.py). What is not bounded is the chunk-offset-dependent programs of a multi-chunk prompt: 18 of them at 4300 tokens, compiled once, after which the generator re-captures its decode traces (177.6 ms) so no replay runs over a buffer allocated while a trace was live. The recapture warms with every slot inactive, so it writes no cache row. See doc/full_model/trace_alloc.json."
   ],
   "provenance": {
    "stage": "full-model",
    "evidence": "doc/full_model/README.md, doc/full_model/accuracy.json, doc/full_model/perf.json, doc/full_model/logs/",
-   "source_commit": "ca0b1330d38",
+   "source_commit": "acc2b26b83d",
    "source_provenance": "every *generated* artifact under doc/full_model/ carries a source_manifest block (sha256 prefixes of tt/*.py plus the producing script); the exceptions are named in a table in doc/full_model/README.md. This contract file is hand-maintained, not generated, so it carries none. doc/full_model/logs/sweep_provenance.log records HEAD, tracked changes, untracked files and a sha256 of every stage source file at the start and end of the sweep that produced the artifacts.",
    "date": "2026-09-02"
   },
@@ -261,8 +261,8 @@
    "prompt_len": 202733,
    "physical_prefill_len": 202752,
    "last_decode_position": 202751,
-   "prefill_s": 2236.4,
-   "prefill_tokens_per_s": 90.7,
+   "prefill_s": 2236.6,
+   "prefill_tokens_per_s": 90.6,
    "decode_ms_per_token_at_202751": 136.3,
    "periodic_continuation": "9/9 exact",
    "needle_recall": {

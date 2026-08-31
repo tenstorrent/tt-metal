@@ -1,19 +1,18 @@
 ++ date -Is
-+ echo '=== sweep started 2026-09-02T06:55:47-04:00'
-=== sweep started 2026-09-02T06:55:47-04:00
++ echo '=== sweep started 2026-09-02T09:18:00-04:00'
+=== sweep started 2026-09-02T09:18:00-04:00
 ++ git rev-parse HEAD
-+ echo HEAD=ca0b1330d38e53a931e0117141993c9b85358492
-HEAD=ca0b1330d38e53a931e0117141993c9b85358492
++ echo HEAD=acc2b26b83df240dcd4e543545c940bb48a9bc9d
+HEAD=acc2b26b83df240dcd4e543545c940bb48a9bc9d
 + echo '--- tracked changes in the stage directory:'
 --- tracked changes in the stage directory:
 + git status --porcelain -- models/autoports/zai_org_glm_4_7_flash
- M models/autoports/zai_org_glm_4_7_flash/doc/full_model/README.md
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/sweep_provenance.log
- M models/autoports/zai_org_glm_4_7_flash/doc/full_model/work_log.md
 + echo '--- untracked files in the stage directory:'
 --- untracked files in the stage directory:
 + git ls-files --others -- models/autoports/zai_org_glm_4_7_flash
 + grep -v __pycache__
+models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/sweep_run.log
 models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/logs/watcher/generated/watcher/watcher.log
 models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/dense/ops_perf_results.csv
 models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/moe/ops_perf_results.csv
@@ -32,9 +31,9 @@ models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/tracy/moe/decode_op
 + sha256sum models/autoports/zai_org_glm_4_7_flash/tt/functional_decoder.py models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py models/autoports/zai_org_glm_4_7_flash/tt/generator.py models/autoports/zai_org_glm_4_7_flash/tt/__init__.py models/autoports/zai_org_glm_4_7_flash/tt/model.py models/autoports/zai_org_glm_4_7_flash/tt/optimized_decoder.py models/autoports/zai_org_glm_4_7_flash/tt/provenance.py models/autoports/zai_org_glm_4_7_flash/tests/collect_stats.py models/autoports/zai_org_glm_4_7_flash/tests/conftest.py models/autoports/zai_org_glm_4_7_flash/tests/dev_bringup.py models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py models/autoports/zai_org_glm_4_7_flash/tests/dev_optimize.py models/autoports/zai_org_glm_4_7_flash/tests/__init__.py models/autoports/zai_org_glm_4_7_flash/tests/measure_cold_compile.py models/autoports/zai_org_glm_4_7_flash/tests/probe_fp32acc_drift.py models/autoports/zai_org_glm_4_7_flash/tests/run_qualitative_suite.py models/autoports/zai_org_glm_4_7_flash/tests/summarize_perf_report.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py models/autoports/zai_org_glm_4_7_flash/tests/utils.py models/autoports/zai_org_glm_4_7_flash/probe/decode_cache_scaling_probe.py models/autoports/zai_org_glm_4_7_flash/probe/decode_position_scaling_probe.py models/autoports/zai_org_glm_4_7_flash/probe/dram_capacity_probe.py models/autoports/zai_org_glm_4_7_flash/probe/expert_bf4_pcc_probe.py models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py models/autoports/zai_org_glm_4_7_flash/probe/full_model_head_probe.py models/autoports/zai_org_glm_4_7_flash/probe/fusing_contract_probe.py models/autoports/zai_org_glm_4_7_flash/probe/greedy_sampler_probe.py models/autoports/zai_org_glm_4_7_flash/probe/optimize_perf_probe.py models/autoports/zai_org_glm_4_7_flash/probe/trace_alloc_probe.py
 d04c7d1958a8fe7432482bcff41929aaccebd09c4af00a340174ca3bb3bd7d9e  models/autoports/zai_org_glm_4_7_flash/tt/functional_decoder.py
 0dbbe26e401a1716a07b4ba2406157303a36b096626ed6059630f8bc2be7b931  models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py
-1d05363ee78cea4ceb548c81c406f3bffc2092dc13277bf8e54c80025162f422  models/autoports/zai_org_glm_4_7_flash/tt/generator.py
+bce7b6debe2aa98e306ce8afc2e9f9c5851fdf57b92c26ac83e59df12278cb79  models/autoports/zai_org_glm_4_7_flash/tt/generator.py
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  models/autoports/zai_org_glm_4_7_flash/tt/__init__.py
-271136535a97122f238e9d304be40733c997ed3fc066066afec17b3dd3cc939c  models/autoports/zai_org_glm_4_7_flash/tt/model.py
+984d9a9d8199f57f7adbee10dae9a62288121085949f91dc59c2e82f1be67240  models/autoports/zai_org_glm_4_7_flash/tt/model.py
 b2abc9f36278b32fa0081a3137dd252fa572fa5ac8bdd12df6cba6f1577de75d  models/autoports/zai_org_glm_4_7_flash/tt/optimized_decoder.py
 3b162e8ac0fe06749cc2745727d3771d16252f5ba36e11cd70ca13a4b1e91e54  models/autoports/zai_org_glm_4_7_flash/tt/provenance.py
 c3567a2d4f79d8452497795983a28e28c0421cefa8bbf3bae1c94dc9ce1c753e  models/autoports/zai_org_glm_4_7_flash/tests/collect_stats.py
@@ -48,10 +47,10 @@ e8c617238b4ef4787b57606aace02f3cb568ea65d7a2133e157687ee07304f24  models/autopor
 2ace3c575354300f38deb59ddc851bb62e60fc76f4cd9086af31f43ee78a52bf  models/autoports/zai_org_glm_4_7_flash/tests/run_qualitative_suite.py
 eec4f089f126edda9ef16f45af5ac9f0ab99d0ceb0ab4c260d394932db76183f  models/autoports/zai_org_glm_4_7_flash/tests/summarize_perf_report.py
 7f13e05249591318646610d9618b0b86c65574150cd1b4fc32ab8ed53ba3e5fe  models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py
-fbff820729073a4c7c8b49306a0977fc3664f45760eaef1de62defdceeb77bdb  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py
+c116415f4c961615d3170c96684ca66c1174292cd39f6473e0f8dc6c51e75762  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py
 1670117919a43273f64ec380af8b5f401144e825b3180427fb50d23e401ec294  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_perf.py
 435583a6d61e56109d523267adecbd008cf94932407c5cce0dd7ba24f0f34f96  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py
-c76430670c78ed2a76d4eae38a241e797800ec3147879a8c9fc41cd01bfcb98a  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py
+7e3801b16d2b79b80f18ee7c40a11434ffc66c17240f80b935208e35fbe551f3  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py
 d9f56a6dd26a2a9a62c8b7bfe46aab5f2424fab6bed07a93e8ac7d3b3411ebfc  models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py
 edf0375a4906c7a318442adfe19984dab02b5a9419f1a6d863614c8c3021675f  models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py
 e6e8941333e6f12d97c9373cebd71a56c65fbee07329fc079ec577ec330b5a97  models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py
@@ -65,18 +64,18 @@ b61f6ac16e09aed2950d8a16fa7525f1d27a7003dd37adf36f5183994d796013  models/autopor
 289fcda8eab1188b0eedd21cc90fdb52dd2616a8ce34ec16536584545932c9d0  models/autoports/zai_org_glm_4_7_flash/probe/decode_position_scaling_probe.py
 6756766ac698bd5eaa74fe1c3f2c221f6978c450c03b10f62f1cdb15741a9eff  models/autoports/zai_org_glm_4_7_flash/probe/dram_capacity_probe.py
 75ff5ad34b357d583679fd901a0900d673acd3e8edfbe8cef066d48c444658ea  models/autoports/zai_org_glm_4_7_flash/probe/expert_bf4_pcc_probe.py
-d6e38bc0476078aed9333c7efb7961dc3e050aed07178a42868b8ee5d9edf8e1  models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py
+8ec518cf2ae1eda961945237e33280cafc9f0717069ee74dc04631055bfb6288  models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py
 22268c2cf7773787fbe9892ff20f8d3144a7f21d37a66dd12e37d511e18d16ec  models/autoports/zai_org_glm_4_7_flash/probe/full_model_head_probe.py
 7db26d13e71bdf29830aed562a1a9f799b68f210065f2d45aa9f981502867f39  models/autoports/zai_org_glm_4_7_flash/probe/fusing_contract_probe.py
 331238f2607cfa0ad798f068f5594f3798c96f5a828b08987ff80ff1437997ce  models/autoports/zai_org_glm_4_7_flash/probe/greedy_sampler_probe.py
 e0afeb543f07a32a375d96186ae30f3b96d5a18377ef784a77ce58ac257921ec  models/autoports/zai_org_glm_4_7_flash/probe/optimize_perf_probe.py
 890b06f5133fede72e8c3aacf84c343c3261bb5569581efde6601c2fd33c0966  models/autoports/zai_org_glm_4_7_flash/probe/trace_alloc_probe.py
 ++ date -Is
-+ echo '=== sweep finished 2026-09-02T08:29:56-04:00'
-=== sweep finished 2026-09-02T08:29:56-04:00
++ echo '=== sweep finished 2026-09-02T10:53:40-04:00'
+=== sweep finished 2026-09-02T10:53:40-04:00
 ++ git rev-parse HEAD
-+ echo HEAD=ca0b1330d38e53a931e0117141993c9b85358492
-HEAD=ca0b1330d38e53a931e0117141993c9b85358492
++ echo HEAD=acc2b26b83df240dcd4e543545c940bb48a9bc9d
+HEAD=acc2b26b83df240dcd4e543545c940bb48a9bc9d
 + echo '--- tracked changes in the stage directory:'
 --- tracked changes in the stage directory:
 + git status --porcelain -- models/autoports/zai_org_glm_4_7_flash
@@ -99,7 +98,9 @@ HEAD=ca0b1330d38e53a931e0117141993c9b85358492
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_context.log
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model.log
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model_batch32.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model_only.log
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model_perf.log
+ M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_prefill_padding.log
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/qualitative_suite.log
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/run_autoregressive.log
  M models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/run_prefill_check.log
@@ -140,9 +141,9 @@ HEAD=ca0b1330d38e53a931e0117141993c9b85358492
  M models/autoports/zai_org_glm_4_7_flash/readiness_autoregressive/tt_completion.txt
 + echo '--- untracked files in the stage directory:'
 --- untracked files in the stage directory:
-+ git ls-files --others -- models/autoports/zai_org_glm_4_7_flash
 + grep -v __pycache__
-models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/pytest_full_model_only.log
++ git ls-files --others -- models/autoports/zai_org_glm_4_7_flash
+models/autoports/zai_org_glm_4_7_flash/doc/full_model/logs/sweep_run.log
 models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/logs/watcher/generated/watcher/watcher.log
 models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/dense/ops_perf_results.csv
 models/autoports/zai_org_glm_4_7_flash/doc/functional_decoder/tracy/moe/ops_perf_results.csv
@@ -161,9 +162,9 @@ models/autoports/zai_org_glm_4_7_flash/doc/optimized_decoder/tracy/moe/decode_op
 + sha256sum models/autoports/zai_org_glm_4_7_flash/tt/functional_decoder.py models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py models/autoports/zai_org_glm_4_7_flash/tt/generator.py models/autoports/zai_org_glm_4_7_flash/tt/__init__.py models/autoports/zai_org_glm_4_7_flash/tt/model.py models/autoports/zai_org_glm_4_7_flash/tt/optimized_decoder.py models/autoports/zai_org_glm_4_7_flash/tt/provenance.py models/autoports/zai_org_glm_4_7_flash/tests/collect_stats.py models/autoports/zai_org_glm_4_7_flash/tests/conftest.py models/autoports/zai_org_glm_4_7_flash/tests/dev_bringup.py models/autoports/zai_org_glm_4_7_flash/tests/dev_full_model.py models/autoports/zai_org_glm_4_7_flash/tests/dev_optimize.py models/autoports/zai_org_glm_4_7_flash/tests/__init__.py models/autoports/zai_org_glm_4_7_flash/tests/measure_cold_compile.py models/autoports/zai_org_glm_4_7_flash/tests/probe_fp32acc_drift.py models/autoports/zai_org_glm_4_7_flash/tests/run_qualitative_suite.py models/autoports/zai_org_glm_4_7_flash/tests/summarize_perf_report.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_long_context.py models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_decoder.py models/autoports/zai_org_glm_4_7_flash/tests/test_optimized_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_perf.py models/autoports/zai_org_glm_4_7_flash/tests/test_prefill_padding.py models/autoports/zai_org_glm_4_7_flash/tests/utils.py models/autoports/zai_org_glm_4_7_flash/probe/decode_cache_scaling_probe.py models/autoports/zai_org_glm_4_7_flash/probe/decode_position_scaling_probe.py models/autoports/zai_org_glm_4_7_flash/probe/dram_capacity_probe.py models/autoports/zai_org_glm_4_7_flash/probe/expert_bf4_pcc_probe.py models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py models/autoports/zai_org_glm_4_7_flash/probe/full_model_head_probe.py models/autoports/zai_org_glm_4_7_flash/probe/fusing_contract_probe.py models/autoports/zai_org_glm_4_7_flash/probe/greedy_sampler_probe.py models/autoports/zai_org_glm_4_7_flash/probe/optimize_perf_probe.py models/autoports/zai_org_glm_4_7_flash/probe/trace_alloc_probe.py
 d04c7d1958a8fe7432482bcff41929aaccebd09c4af00a340174ca3bb3bd7d9e  models/autoports/zai_org_glm_4_7_flash/tt/functional_decoder.py
 0dbbe26e401a1716a07b4ba2406157303a36b096626ed6059630f8bc2be7b931  models/autoports/zai_org_glm_4_7_flash/tt/fused_decoder.py
-1d05363ee78cea4ceb548c81c406f3bffc2092dc13277bf8e54c80025162f422  models/autoports/zai_org_glm_4_7_flash/tt/generator.py
+bce7b6debe2aa98e306ce8afc2e9f9c5851fdf57b92c26ac83e59df12278cb79  models/autoports/zai_org_glm_4_7_flash/tt/generator.py
 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  models/autoports/zai_org_glm_4_7_flash/tt/__init__.py
-271136535a97122f238e9d304be40733c997ed3fc066066afec17b3dd3cc939c  models/autoports/zai_org_glm_4_7_flash/tt/model.py
+984d9a9d8199f57f7adbee10dae9a62288121085949f91dc59c2e82f1be67240  models/autoports/zai_org_glm_4_7_flash/tt/model.py
 b2abc9f36278b32fa0081a3137dd252fa572fa5ac8bdd12df6cba6f1577de75d  models/autoports/zai_org_glm_4_7_flash/tt/optimized_decoder.py
 3b162e8ac0fe06749cc2745727d3771d16252f5ba36e11cd70ca13a4b1e91e54  models/autoports/zai_org_glm_4_7_flash/tt/provenance.py
 c3567a2d4f79d8452497795983a28e28c0421cefa8bbf3bae1c94dc9ce1c753e  models/autoports/zai_org_glm_4_7_flash/tests/collect_stats.py
@@ -177,10 +178,10 @@ e8c617238b4ef4787b57606aace02f3cb568ea65d7a2133e157687ee07304f24  models/autopor
 2ace3c575354300f38deb59ddc851bb62e60fc76f4cd9086af31f43ee78a52bf  models/autoports/zai_org_glm_4_7_flash/tests/run_qualitative_suite.py
 eec4f089f126edda9ef16f45af5ac9f0ab99d0ceb0ab4c260d394932db76183f  models/autoports/zai_org_glm_4_7_flash/tests/summarize_perf_report.py
 7f13e05249591318646610d9618b0b86c65574150cd1b4fc32ab8ed53ba3e5fe  models/autoports/zai_org_glm_4_7_flash/tests/test_full_context.py
-fbff820729073a4c7c8b49306a0977fc3664f45760eaef1de62defdceeb77bdb  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py
+c116415f4c961615d3170c96684ca66c1174292cd39f6473e0f8dc6c51e75762  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_batch.py
 1670117919a43273f64ec380af8b5f401144e825b3180427fb50d23e401ec294  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_perf.py
 435583a6d61e56109d523267adecbd008cf94932407c5cce0dd7ba24f0f34f96  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model_profile.py
-c76430670c78ed2a76d4eae38a241e797800ec3147879a8c9fc41cd01bfcb98a  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py
+7e3801b16d2b79b80f18ee7c40a11434ffc66c17240f80b935208e35fbe551f3  models/autoports/zai_org_glm_4_7_flash/tests/test_full_model.py
 d9f56a6dd26a2a9a62c8b7bfe46aab5f2424fab6bed07a93e8ac7d3b3411ebfc  models/autoports/zai_org_glm_4_7_flash/tests/test_functional_decoder.py
 edf0375a4906c7a318442adfe19984dab02b5a9419f1a6d863614c8c3021675f  models/autoports/zai_org_glm_4_7_flash/tests/test_fused_decoder.py
 e6e8941333e6f12d97c9373cebd71a56c65fbee07329fc079ec577ec330b5a97  models/autoports/zai_org_glm_4_7_flash/tests/test_fused_perf.py
@@ -194,7 +195,7 @@ b61f6ac16e09aed2950d8a16fa7525f1d27a7003dd37adf36f5183994d796013  models/autopor
 289fcda8eab1188b0eedd21cc90fdb52dd2616a8ce34ec16536584545932c9d0  models/autoports/zai_org_glm_4_7_flash/probe/decode_position_scaling_probe.py
 6756766ac698bd5eaa74fe1c3f2c221f6978c450c03b10f62f1cdb15741a9eff  models/autoports/zai_org_glm_4_7_flash/probe/dram_capacity_probe.py
 75ff5ad34b357d583679fd901a0900d673acd3e8edfbe8cef066d48c444658ea  models/autoports/zai_org_glm_4_7_flash/probe/expert_bf4_pcc_probe.py
-d6e38bc0476078aed9333c7efb7961dc3e050aed07178a42868b8ee5d9edf8e1  models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py
+8ec518cf2ae1eda961945237e33280cafc9f0717069ee74dc04631055bfb6288  models/autoports/zai_org_glm_4_7_flash/probe/first_use_ttft_probe.py
 22268c2cf7773787fbe9892ff20f8d3144a7f21d37a66dd12e37d511e18d16ec  models/autoports/zai_org_glm_4_7_flash/probe/full_model_head_probe.py
 7db26d13e71bdf29830aed562a1a9f799b68f210065f2d45aa9f981502867f39  models/autoports/zai_org_glm_4_7_flash/probe/fusing_contract_probe.py
 331238f2607cfa0ad798f068f5594f3798c96f5a828b08987ff80ff1437997ce  models/autoports/zai_org_glm_4_7_flash/probe/greedy_sampler_probe.py
