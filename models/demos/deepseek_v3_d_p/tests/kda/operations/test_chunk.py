@@ -66,7 +66,7 @@ def _run_recurrence(
 
 def test_grouped_scan_capacity_reports_device_limit(device: ttnn.Device, expect_error) -> None:
     grid = device.compute_with_storage_grid_size()
-    capacity = min(grid.x * grid.y, 128)
+    capacity = grid.x * grid.y
     with expect_error(ValueError, f"only {capacity} are supported"):
         ops._validate_grouped_scan_capacity(
             batch_heads=capacity + 1,

@@ -484,19 +484,23 @@ def test_reduce_affine_transforms_rejects_invalid_inputs(
         _run(a_tt, b_tt, groups_per_head)
 
 
-def test_reduce_affine_transforms_rejects_excess_workers(
+def test_reduce_affine_transforms_enforces_device_worker_capacity(
     device: ttnn.Device,
     expect_error: Callable,
 ) -> None:
     grid = device.compute_with_storage_grid_size()
-    worker_limit = min(grid.x * grid.y, 128)
+    worker_limit = grid.x * grid.y
+
+    a, b = _host_inputs(1, worker_limit, 32, 32)
+    expected_a, expected_b = _oracle(a, b, 1, worker_limit)
+    actual_a, actual_b = _run(_to_device(a, device), _to_device(b, device), worker_limit)
+    assert_accurate(expected_a, ttnn.to_torch(actual_a), name="full-grid reduced A", pcc_threshold=0.999)
+    assert_accurate(expected_b, ttnn.to_torch(actual_b), name="full-grid reduced B", pcc_threshold=0.999)
+
     group_workers = worker_limit + 1
     a, b = _host_inputs(1, group_workers, 32, 32)
-    a_tt = _to_device(a, device)
-    b_tt = _to_device(b, device)
-
     with expect_error(RuntimeError, f"supports at most {worker_limit} group workers on this device"):
-        _run(a_tt, b_tt, group_workers)
+        _run(_to_device(a, device), _to_device(b, device), group_workers)
 
 
 @pytest.mark.parametrize("input_name", ["a", "b"])
