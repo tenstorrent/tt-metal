@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""LoRA adapter save/load in PEFT/diffusers key format. See README.md for the format."""
+"""LoRA adapter save/load in PEFT/diffusers key format. """
 
 from __future__ import annotations
 
