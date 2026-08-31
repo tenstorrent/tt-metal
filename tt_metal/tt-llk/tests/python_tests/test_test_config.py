@@ -67,10 +67,22 @@ def variant_id() -> str:
     return configuration.variant_id
 
 
-def clear_search_dirs() -> None:
+# Stand-ins for the in-tree ``-I`` flags ``setup_compilation_options`` installs.
+IN_TREE_INCLUDES = ["-I/in/tree/first", "-I/in/tree/second"]
+
+
+def clear_search_dirs(in_tree: bool = False) -> None:
+    """Reset the registries, optionally as a session that has run ``setup_build``.
+
+    The distinction is load-bearing. ``add_include_dirs`` folds header extras
+    into ``INCLUDES`` (``prepend + rest + append``) only when ``INCLUDES`` is
+    already populated, which in a real session it always is by the time a test
+    runs. Clearing it to ``[]`` skips that fold, so a test written that way
+    exercises a path production never takes.
+    """
     for name in SEARCH_DIR_STATE:
         getattr(TestConfig, name).clear()
-    TestConfig.INCLUDES = []
+    TestConfig.INCLUDES = list(IN_TREE_INCLUDES) if in_tree else []
 
 
 # --------------------------------------------------------------------------- #
@@ -122,7 +134,16 @@ def test_search_dir_precedence_changes_the_variant_id(isolated_search_dirs):
         pytest.param(TestConfig.add_src_include_dirs, id="src-dirs"),
     ],
 )
-def test_search_dir_role_changes_the_variant_id(isolated_search_dirs, register):
+@pytest.mark.parametrize(
+    "in_tree",
+    [
+        pytest.param(True, id="after-setup-build"),
+        pytest.param(False, id="before-setup-build"),
+    ],
+)
+def test_search_dir_role_changes_the_variant_id(
+    isolated_search_dirs, register, in_tree
+):
     """The same dir, prepended vs appended, is not the same configuration.
 
     ``prepend`` decides whether the dir shadows the in-tree copy — for src dirs,
@@ -130,12 +151,19 @@ def test_search_dir_role_changes_the_variant_id(isolated_search_dirs, register):
     a flat concatenation of the groups lost that distinction: the token sequence
     was identical either way, so both roles shared one variant id and one cached
     ELF.
+
+    Both regimes are covered because two different mechanisms carry the role.
+    Before ``setup_build``, header extras sit in ``EXTRA_INCLUDE_*`` and the
+    hash's group fences distinguish them. After it — which is every real session
+    — they are folded into ``INCLUDES`` by order, the fences are empty, and the
+    ordering is what the hash has to notice. A test that only ran the first
+    regime would pass while the fold silently stopped honouring ``prepend``.
     """
-    clear_search_dirs()
+    clear_search_dirs(in_tree)
     register("/probe/role", prepend=True)
     prepended = variant_id()
 
-    clear_search_dirs()
+    clear_search_dirs(in_tree)
     register("/probe/role", prepend=False)
     appended = variant_id()
 

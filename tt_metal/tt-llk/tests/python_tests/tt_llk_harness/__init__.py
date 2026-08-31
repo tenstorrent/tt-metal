@@ -66,8 +66,8 @@ from helpers.golden_generators import (
     round_to_dest_width,
 )
 
-# NOTE: ``get_golden_generator`` is deliberately absent from that list. See the
-# ``__getattr__`` at the bottom of this module.
+# NOTE: ``get_golden_generator`` is deliberately absent from that list. It is
+# defined as a forwarding function at the bottom of this module; see why there.
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
@@ -201,22 +201,20 @@ __all__ = [
 # during ``pytest_configure``: a stand-in generator under ``--compile-producer``,
 # a caching proxy under ``--stimuli-only`` / ``--use-stimuli``. This package is
 # imported *earlier* than that — a consumer's rootdir ``conftest.py`` declares
-# ``pytest_plugins = ["tt_llk_harness.plugin"]``, which imports it — so binding
-# the name eagerly would freeze the pre-swap function.
+# ``pytest_plugins = ["tt_llk_harness.plugin"]``, which imports it.
 #
-# The damage from that is quiet: ``tt_llk_harness.goldens.get_golden_generator``
-# would see the swap while the flat ``__all__`` name would not, so two spellings
-# this module presents as equivalent would disagree. An out-of-tree suite would
-# compute real goldens under ``--compile-producer`` instead of the stand-in, and
-# ``--stimuli-only`` would fail inside the proxy.
+# A module ``__getattr__`` is not enough here. It defers ``tt_llk_harness.name``
+# but not ``from tt_llk_harness import name``, which resolves once at import and
+# binds the result for good — and that is the spelling ``__all__`` advertises.
+# A conftest, or anything a conftest imports, would freeze the pre-swap
+# generator and then quietly compute real goldens under ``--compile-producer``.
 #
-# Resolving through ``__getattr__`` defers the lookup to attribute-access time,
-# which for a consumer's test module is collection time — after
-# ``pytest_configure``, same as for in-tree tests.
-_REBOUND_AT_RUNTIME = frozenset({"get_golden_generator"})
+# So the export is a real function that forwards on every call. Swap-safety then
+# does not depend on which spelling a consumer used or when its module was
+# imported.
+def get_golden_generator(cls):
+    """Look up the golden registered for ``cls``, honouring the active mode.
 
-
-def __getattr__(name: str):
-    if name in _REBOUND_AT_RUNTIME:
-        return getattr(goldens, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    Forwards at call time; see the note above for why this is not a re-export.
+    """
+    return goldens.get_golden_generator(cls)

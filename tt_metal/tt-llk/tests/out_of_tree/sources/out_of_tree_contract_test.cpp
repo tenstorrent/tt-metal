@@ -16,16 +16,21 @@
 #include <cstdint>
 #include <cstdio>
 
-// (1) Header from an out-of-tree -I dir. Two fixture dirs both provide
-//     oot_probe.h, so which one lands here reports the effective search-dir
-//     precedence. The tokens below are asserted on by name from
-//     test_out_of_tree_contract.py, including by the negative test that
-//     deliberately inverts precedence — keep them stable.
+// Each #include below is itself the check that its search dir was registered:
+// if the dir never reached the compiler, preprocessing dies right here with
+// "No such file or directory" naming the header. There is deliberately no
+// #error or static_assert guarding *resolution* — one could never fire, since
+// the failing include stops the translation unit before any later line is
+// evaluated.
+//
+// (1) Header from an out-of-tree -I dir, registered with add_include_dirs.
+//     Two fixture dirs supply oot_probe.h with different ids, so which one
+//     lands here reports the effective search-dir *precedence* — a question
+//     the include alone cannot answer, which is why this one does carry a
+//     check. OOT_PROBE_SHADOWED is asserted on by name from
+//     test_consumer_contract.py's negative test; keep the token stable.
 #include "oot_probe.h"
 
-#if !defined(OOT_PROBE_ID)
-#error "OOT_PROBE_UNRESOLVED: registered include dirs did not reach the compiler"
-#endif
 #if OOT_PROBE_ID != 2
 #error "OOT_PROBE_SHADOWED: oot_probe.h resolved to the low-priority copy"
 #endif
@@ -37,8 +42,11 @@
 //     tests/helpers/src role (add_helpers_tree -> add_src_include_dirs).
 #include <oot_src_probe.cpp>
 
-static_assert(oot_helpers_marker() == OOT_EXPECTED_MARKER, "out-of-tree helpers/include header did not resolve");
-static_assert(oot_src_probe_value() == OOT_EXPECTED_SRC_VALUE, "out-of-tree helpers/src translation unit did not resolve");
+// Both symbols come from the headers above and are compared against macros
+// those same headers define, so these only confirm the definitions are usable
+// in a constant expression — the resolution guarantee is the include itself.
+static_assert(oot_helpers_marker() == OOT_EXPECTED_MARKER, "oot_helpers.h is not usable at compile time");
+static_assert(oot_src_probe_value() == OOT_EXPECTED_SRC_VALUE, "oot_src_probe.cpp is not usable at compile time");
 
 #include "ckernel.h"
 #include "llk_defs.h"

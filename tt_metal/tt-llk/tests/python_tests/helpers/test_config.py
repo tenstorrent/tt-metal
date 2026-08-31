@@ -1286,6 +1286,16 @@ class TestConfig:
         # and ``prepend=False`` yields the same token sequence while deciding
         # opposite precedence against the in-tree ``helpers/src``. Labels cannot
         # be confused with flags, which all start with ``-I``.
+        #
+        # The two sides are not symmetric, and it is worth being precise about
+        # which mechanism carries which. Header extras are folded into
+        # ``INCLUDES`` by ``_apply_extra_includes`` as ``prepend + rest +
+        # append``, so once ``setup_build`` has run header role is carried by
+        # the *order* of ``INCLUDES`` — and the two header fences below are
+        # empty. They are non-empty only before that fold, which is the window
+        # where the extras are the sole record of what was registered. Src
+        # extras are never folded into a merged list, so for those the fences
+        # are the only thing that distinguishes prepend from append.
         header_tokens = self._header_include_tokens()
         header_prepend, header_append = TestConfig._extra_header_include_flag_lists(
             header_tokens

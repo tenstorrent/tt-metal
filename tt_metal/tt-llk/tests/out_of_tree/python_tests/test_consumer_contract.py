@@ -188,17 +188,32 @@ def test_names_the_harness_rebinds_are_resolved_at_call_time():
     def stand_in(*args, **kwargs):  # what setup_mode installs
         return "stand-in"
 
+    # The spelling that matters is the one ``__all__`` advertises and that this
+    # module itself uses at the top: ``from tt_llk_harness import
+    # get_golden_generator``. It resolves once, at import, and binds for good —
+    # so a module ``__getattr__`` would not save it, and a conftest importing
+    # this name would freeze the pre-swap generator. Hence the call-through
+    # assertion below rather than an identity check on the attribute.
+    from tt_llk_harness import get_golden_generator as imported_by_value
+
     implementation.get_golden_generator = stand_in
     try:
-        assert tt_llk_harness.get_golden_generator is stand_in, (
-            "the flat facade name is frozen to the pre-swap function; it must "
-            "resolve through __getattr__ at call time"
+        assert imported_by_value(OutOfTreeGolden) == "stand-in", (
+            "a name bound by `from tt_llk_harness import ...` did not follow "
+            "the swap; the export must forward on every call, not re-export a "
+            "reference captured at import time"
         )
+        assert tt_llk_harness.get_golden_generator(OutOfTreeGolden) == "stand-in"
         assert tt_llk_harness.goldens.get_golden_generator is stand_in
     finally:
         implementation.get_golden_generator = original
 
-    assert tt_llk_harness.get_golden_generator is original
+    # Mode-agnostic on purpose: under ``--compile-producer`` the "original"
+    # captured above is itself the stand-in ``setup_mode`` installed, so this
+    # cannot assert the registry entry. What it does assert is that the
+    # forwarded name tracks whatever the implementation currently holds.
+    # Types, not identity: the stand-in returns a fresh instance per call.
+    assert type(imported_by_value(OutOfTreeGolden)) is type(original(OutOfTreeGolden))
 
 
 def test_every_exported_name_resolves():
@@ -357,8 +372,15 @@ def test_out_of_tree_golden_registers():
     assert type(registered) is OutOfTreeGolden
     assert registered() == OutOfTreeGolden.MARKER
 
+    # The registry assertions above are the substance, and they run everywhere.
+    #
+    # What follows does not run in CI, by design: the wrapper always launches
+    # this suite with ``--compile-producer``, and ``setup_mode`` then swaps in a
+    # stand-in generator that ignores ``cls`` entirely — so the lookup can only
+    # return a DummyGoldenGenerator and the branch below is dead. It is kept for
+    # a developer running this suite directly without that flag, where it does
+    # check that the lookup resolves a real out-of-tree golden.
     generate = get_golden_generator(OutOfTreeGolden)
-    # ``--compile-producer`` swaps the lookup for a stand-in generator.
     if type(generate) is goldens.DummyGoldenGenerator:
         return
     assert generate is registered
@@ -538,10 +560,6 @@ def test_per_variant_include_dirs_override_suite_wide_ones():
         "expected the low-priority oot_probe.h to win for this variant; "
         "per-variant include_dirs no longer take precedence, or the driver's "
         f"probe went dead:\n{message}"
-    )
-    assert "OOT_PROBE_UNRESOLVED" not in message, (
-        "the probe header did not resolve at all — the search dirs never "
-        "reached the compiler"
     )
     # A consumer debugging its own kernel needs the compiler's diagnostics, not
     # a bare non-zero exit. Asserted here rather than in a second test: an
