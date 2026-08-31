@@ -2511,11 +2511,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //                          kernel_is_causal = is_causal && !kernel_chunked, so DENSE causal ring
     //                          MLA always has a partial mask (device 0 keeps 1 of ring_size iters)
     //                          and is excluded too. Same handoff failure as above.
-    //   rot_float_chunks != 0            COST guard, not correctness: nothing breaks, but every core
-    //                          would pay the forced per-iteration Q re-read and DRAM accumulator
-    //                          round-trip for a rotation that moves nothing.
-    //   rot_rows_needed < grid_size.y    COST guard likewise: at equality the row index is
-    //                          t-independent so ownership cannot move.
+    //   (rot_float_chunks != 0 and rot_rows_needed < grid_size.y were COST guards here and have
+    //    been REMOVED -- see the predicate for why both are provable no-ops rather than guards.)
     //   rot_base_chunks >= 1   definitional. At base 0 the first failure is actually the compute
     //                          kernel's static_assert(ROTATED_Q_SPLIT >= 2), ahead of the reader's
     //                          rot_my_count - 1 underflow.
@@ -2609,8 +2606,24 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // clamps to 1 so the kernel's slot array and modulo stay well-formed, and iteration 0 never
         // receives a float.
         active_ring_iter_mask == full_ring_iter_mask &&
-        // Degenerate: nothing to rotate (work divides evenly), or nowhere to rotate it to.
-        rot_float_chunks != 0 && rot_rows_needed < grid_size.y &&
+        // Degenerate cases need NO guard: they are provably no-ops, and both were measured.
+        // rot_float_chunks == 0 (work divides evenly): with no floats, every core's rotated range
+        // i*base .. i*base+base-1 is IDENTICAL to its static range on every iteration, so the
+        // rotation reduces to the static split rather than merely resembling it. There is nothing to
+        // hand off, and iteration 0 never receives a float.
+        // rot_rows_needed == grid_size.y (floats reach every row): no row is float-free, so there is
+        // nowhere cheaper to move the +1 mcast slot to; the cycle still permutes WHICH row hosts
+        // which float, which is harmless.
+        // Both used to decline to the static path purely as a cost guard. Removing them widens the
+        // predicate by two terms with no behavioural change. Verified on bh-lb-33 ring-8 after the
+        // removal, kimi50k q32/k640 via RING_MLA_SDPA_GRID_OVERRIDE:
+        //   grid 7x10 (70 cores | 280 chunks) -> base 4, floats 0, rows_needed 0: ACTIVE, PCC pass
+        //   grid 11x2 (base 12, floats 16, rows_needed 2 of 2 rows): ACTIVE, PCC pass
+        // and the whole latent-V suite unchanged on the default grid: sweep accuracy 10 passed
+        // (includes every base-2 q64 id, the shapes that catch a broken handoff), determinism
+        // 10 passed, perf q32/k640 68.04% and q64/k448 68.00% -- both inside their committed bands.
+        // Zero-float perf is neutral rather than better, as expected: ON 15.525/15.572 ms vs OFF
+        // 15.586/15.556 ms.
         // rot_base_chunks >= 1: every core must own at least one chunk every iteration, since the
         // reader decodes slot (rot_my_count - 1) on padded iterations and would underflow at 0.
         // base == 1 is now supported and is the largest win (measured 1.71x on kimi_k3 q128: 15.587
