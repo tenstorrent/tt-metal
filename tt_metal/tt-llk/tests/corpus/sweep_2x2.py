@@ -598,6 +598,31 @@ KNOBS = {
     # nodes get it, fail-closed; see selftest_dst_layout_32b.py).
     # Target rows: lcm-fresh, xielu-fresh (pressure>8 shapes).
     "lreg-alloc": "-mtt-tensix-optimize-lreg-alloc",
+    # JT (briggs-coalescing, FABLE_GOES_BURR item #6): Briggs/George
+    # CONSERVATIVE COALESCING on the DSATUR allocator's interference
+    # graph before the colorability verdict and spill-victim selection —
+    # copy-related webs merge when the merge provably cannot turn an
+    # 8-colorable graph uncolorable, so a copy web spilled as a wasted
+    # victim colors for free; failed tests refuse by name
+    # (coalesce-conservative-degree / coalesce-george-interference /
+    # coalesce-web-class / coalesce-interfering-copy /
+    # coalesce-precolor-conflict).  Rides INSIDE the lreg-alloc gate
+    # (one knob = one mechanism) and lp-alloc only engages above the
+    # 8-LREG pressure wall, so the knob is corpus-inert wherever the
+    # allocator no-ops.  MEASURABILITY (laneJT-evidence-20260831): the
+    # only non-interfering plain copies that reach lp-alloc are
+    # RTL-minted (out-of-SSA pre-coalesces every tree-visible one) — in
+    # this port the dst-ownership identity-reload fold's lreg-resident
+    # copy, which is why the erfinv IP-2 row is the named vehicle; at
+    # ON-36 the erfinv fold still refuses lreg-pressure-exceeded
+    # (9 > 8) WITH this knob on (pass ordering: dst_ownership runs
+    # before lp_alloc; its guard is a raw liveness count), .text
+    # byte-identical — the refusal is RE-CERTIFIED with coalescing in
+    # the census, and relief stays with the named #13 successor
+    # (price the fold through the pressure-park tier).  Fire proofs
+    # live in the dg twins (lreg-coalesce-*.C: wasted-victim spill
+    # disappears, 2 spills -> 1, round-trip words 26/9 -> 25/8).
+    "lreg-coalesce": "-mtt-tensix-optimize-lreg-coalesce",
     # DR (milp-and-hygiene): the pressure scheduler with the vendored
     # exact branch-and-bound backend (always compiled; lp_solve is a
     # cross-check only, so codegen is byte-identical across build
@@ -1552,6 +1577,10 @@ KNOB_MODES = {
     # (solo would be structurally weaker; the binder acts on the post-ON
     # pipeline's pressure shapes).
     "lreg-alloc": "drop-one",
+    # lreg-coalesce rides INSIDE the lreg-alloc gate, which is ON-set:
+    # a solo leg is structurally an A/A (the pass never runs on the
+    # all-off base), so the booking A/B is (ON + flag) vs plain ON.
+    "lreg-coalesce": "on-plus",
     "milp": "on-plus",
     # pin-16 booking flags (lane EN): same on-plus reasoning as the
     # pin-15 seeds — the shapes materialize on the reviewed-ON
