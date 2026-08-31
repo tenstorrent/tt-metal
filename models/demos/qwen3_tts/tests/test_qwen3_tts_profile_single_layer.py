@@ -387,14 +387,17 @@ def _synthetic_speaker_tdnn_sd():
 
 
 def _synthetic_speaker_block_sd():
-    """Random weights for one SERes2Net block (block 1, 512-ch, kernel 3)."""
+    """Random weights for one SERes2Net block (block 1, 512-ch).
+
+    Matches HF: TDNN1/2 are k=1 (device linear); Res2Net parts are k=3 dilated.
+    """
     torch.manual_seed(0)
-    c, k, scale, se_mid = 512, 3, 8, 128
+    c, res2_k, scale, se_mid = 512, 3, 8, 128
     part = c // scale
     sd = {
-        "speaker_encoder.blocks.1.tdnn1.conv.weight": torch.randn(c, c, k),
+        "speaker_encoder.blocks.1.tdnn1.conv.weight": torch.randn(c, c, 1),
         "speaker_encoder.blocks.1.tdnn1.conv.bias": torch.zeros(c),
-        "speaker_encoder.blocks.1.tdnn2.conv.weight": torch.randn(c, c, k),
+        "speaker_encoder.blocks.1.tdnn2.conv.weight": torch.randn(c, c, 1),
         "speaker_encoder.blocks.1.tdnn2.conv.bias": torch.zeros(c),
         "speaker_encoder.blocks.1.se_block.conv1.weight": torch.randn(se_mid, c, 1),
         "speaker_encoder.blocks.1.se_block.conv1.bias": torch.zeros(se_mid),
@@ -402,7 +405,7 @@ def _synthetic_speaker_block_sd():
         "speaker_encoder.blocks.1.se_block.conv2.bias": torch.zeros(c),
     }
     for i in range(scale - 1):
-        sd[f"speaker_encoder.blocks.1.res2net_block.blocks.{i}.conv.weight"] = torch.randn(part, part, k)
+        sd[f"speaker_encoder.blocks.1.res2net_block.blocks.{i}.conv.weight"] = torch.randn(part, part, res2_k)
         sd[f"speaker_encoder.blocks.1.res2net_block.blocks.{i}.conv.bias"] = torch.zeros(part)
     return sd
 
