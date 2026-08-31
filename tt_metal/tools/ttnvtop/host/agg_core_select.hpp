@@ -76,23 +76,54 @@ struct EthCoreChoice {
     std::string reason;  // populated when !ok, for a loud failure at init
 };
 
-// Ethernet channels that no shipped Wormhole cluster descriptor ever routes, on
-// either an MMIO or a remote chip (PLAN_ETH_AGGREGATOR.md 2). Preferring these
-// keeps the aggregator away from channels that a recabling could bring into use.
-// Preference only -- never a requirement, since Blackhole harvests channels and
-// the free set differs there (2.1).
-inline bool is_never_routed_channel(uint32_t channel) {
+// Channels a monitor must NOT prefer, and must not take at all.
+//
+// The previous version of this file had `is_never_routed_channel()` returning true for
+// {2,3,4,5,10,11,12,13} and PREFERRED those, on the theory that no shipped Wormhole
+// descriptor routes them. That was actively harmful:
+//
+//   core_descriptors/wormhole_b0_80_arch_eth_dispatch.yaml:17
+//       dispatch_cores: [[0,4],[0,5],[0,10],[0,11],[0,12],[0,13]]
+//
+// All SIX ETH-dispatch seed channels were inside the preferred set, and the ranking put
+// them FIRST. Under ETH dispatch the launcher therefore walked onto the prefetcher and
+// dispatcher cores in preference order. Measured consequence: Llama-3.3-70B died with
+// "TT_FATAL: Unexpected values for event in completion queue ... pad1 28688 (expected
+// 1024)" -- a trampled fast-dispatch completion queue.
+//
+// Note also that FABRIC is NOT the hazard here, contrary to an earlier comment in the
+// launcher. On Wormhole fabric channels are a strict SUBSET of
+// cluster_desc->get_active_eth_channels(): llrt/tt_cluster.cpp:1237-1257 seeds router
+// mode only from the active set, and get_fabric_ethernet_channels() further requires
+// is_ethernet_link_up(). Fabric cannot take a link-free core.
+//
+// The real link-free hazard is channel 15. fabric/control_plane.cpp:2255-2272 forces it
+// into the ACTIVE set on any WH MMIO chip that has tunnels, with no live link required,
+// because "UMD routing FW uses these cores for base routing / channel 15 is used by
+// syseng tools". On a T3K that is all four MMIO chips, and trampling it corrupts the
+// NON_MMIO tunnel every remote operation depends on.
+inline bool is_eth_dispatch_seed_channel(uint32_t channel) {
     switch (channel) {
-        case 2:
-        case 3:
         case 4:
         case 5:
         case 10:
         case 11:
         case 12:
-        case 13: return true;
+        case 13: return true;  // wormhole_b0_80_arch_eth_dispatch.yaml dispatch_cores
         default: return false;
     }
+}
+
+// Reserved by the control plane on WH MMIO chips with tunnels, link or no link.
+inline bool is_umd_base_routing_channel(uint32_t channel) { return channel == 15u; }
+
+// Lower rank sorts first. Anything dispatch might seed goes LAST; channel 15 is excluded
+// outright by the caller, never merely deprioritised.
+inline int aggregator_channel_rank(uint32_t channel) {
+    if (is_umd_base_routing_channel(channel)) {
+        return 100;  // must be filtered out entirely; ranked last as belt and braces
+    }
+    return is_eth_dispatch_seed_channel(channel) ? 10 : 0;
 }
 
 // Inactive eth cores in preference order: never-routed channels first, then the
@@ -102,10 +133,10 @@ inline std::vector<tt::tt_metal::CoreCoord> rank_aggregator_eth_cores(tt::tt_met
     std::vector<tt::tt_metal::CoreCoord> ranked(
         device->get_inactive_ethernet_cores().begin(), device->get_inactive_ethernet_cores().end());
     std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) {
-        const bool na = is_never_routed_channel(a.y);
-        const bool nb = is_never_routed_channel(b.y);
-        if (na != nb) {
-            return na;
+        const int ra = aggregator_channel_rank(static_cast<uint32_t>(a.y));
+        const int rb = aggregator_channel_rank(static_cast<uint32_t>(b.y));
+        if (ra != rb) {
+            return ra < rb;
         }
         return a.y < b.y;
     });

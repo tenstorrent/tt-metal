@@ -446,6 +446,12 @@ namespace ttnvtop_agg {
 //
 //   Wormhole   MEM_IERISC_MAP_END 0x7df0 + 25 KiB, rounded to 32  -> 0xe200  (57856)
 //   Blackhole  MEM_AERISC_MAP_END 0xf330 + 25 KiB, aligned to 32  -> 0x15740 (87872)
+// routing_info_t.routing_enabled, first word of ERISC_APP_ROUTING_INFO_BASE
+// (dev_mem_map.h:258 MEM_ERISC_MAX_L1_LOADING_ADDR; dev_msgs.h:459 puts routing_enabled
+// at offset 0). Set to 1 for exactly the control-plane ACTIVE eth set, forced channel 15
+// included (llrt/tt_cluster.cpp:1499-1522).
+constexpr uint64_t kEthRoutingInfoAddr = 0x3DC00ull;
+
 constexpr uint64_t kLandingBaseWormhole = 0xe200ull;
 constexpr uint64_t kLandingBaseBlackhole = 0x15740ull;
 
@@ -1221,7 +1227,13 @@ int main(int argc, char* argv[]) {
                 if (active.count(channel) != 0) {
                     continue;  // carries a live link — never ours
                 }
-                candidates.emplace_back(ttnvtop::is_never_routed_channel(channel) ? 0 : 1, eth);
+                // Channel 15 is forced ACTIVE by the control plane on any WH MMIO chip
+                // with tunnels, link or no link (fabric/control_plane.cpp:2255-2272), and
+                // carries UMD's base routing for the NON_MMIO tunnel. Never take it.
+                if (ttnvtop::is_umd_base_routing_channel(channel)) {
+                    continue;
+                }
+                candidates.emplace_back(ttnvtop::aggregator_channel_rank(channel), eth);
             }
             std::stable_sort(
                 candidates.begin(), candidates.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -1237,6 +1249,72 @@ int main(int argc, char* argv[]) {
             bool chip_ok = false;
             for (size_t cand = 0; cand < candidates.size() && !chip_ok; ++cand) {
                 target = candidates[cand].second;
+
+                // PRE-FLIGHT: prove the core is free BEFORE writing a single byte.
+                //
+                // The previous version wrote its 25 KB image into candidate after
+                // candidate and inferred ownership from whether the kernel started. That
+                // is structurally unsound -- the image overwrites whatever kernel is
+                // resident, and on chip 4 it walked EIGHT cores, clobbering fabric and
+                // dispatch kernels and killing the workload with a corrupted completion
+                // queue. Verification cannot come after the destructive act.
+                //
+                // Three conditions, ALL required. Together they are race-free against
+                // anything already resident:
+                //
+                //  a) heartbeat at 0x1C has signature 0xAABB and ADVANCES across two
+                //     samples. This is the strong one, because an advancing counter can
+                //     only come from live code -- no staleness is possible. 0xAABB is
+                //     FABRIC_HEARTBEAT_SIGNATURE, which is what tt-metal's idle_erisc
+                //     posts from its wait-for-GO loop (idle_erisc.cc:68-76); 0xABCD is
+                //     BASE_FW_HEARTBEAT_SIGNATURE, meaning UMD/syseng eth base FW owns the
+                //     core and it was never handed to tt-metal. Frozen either way means
+                //     wedged. Only "0xAABB advancing" means tt-metal firmware is sitting
+                //     there ready to accept a go signal -- which is also exactly the
+                //     residency precondition a launch needs.
+                //  b) routing_enabled == 0 at 0x3DC00. Written to 1 for precisely the
+                //     control-plane ACTIVE set, INCLUDING forced channel 15
+                //     (llrt/tt_cluster.cpp:1499-1522).
+                //  c) go_messages[0].signal != RUN_MSG_GO. A persistent kernel leaves GO
+                //     standing for its whole life, since idle_erisc.cc only writes
+                //     RUN_MSG_DONE after the kernel returns.
+                //
+                // (c) alone is NOT sufficient and was the bug in the first attempt at this
+                // check: tt-metal never writes the IDLE_ETH go word on a core it classified
+                // ACTIVE_ETH (risc_firmware_initializer.cpp:340-372), so on those cores it
+                // reads stale L1. (a) is what closes that hole.
+                try {
+                    uint32_t routing_enabled = 0;
+                    dev->read_from_device(
+                        &routing_enabled, target, ttnvtop_agg::kEthRoutingInfoAddr, sizeof(routing_enabled));
+                    if (routing_enabled != 0) {
+                        std::cout << "  chip " << chip.chip_id << " eth (" << target.x << "," << target.y
+                                  << "): routing_enabled=1 — control-plane ACTIVE core, skipping\n";
+                        continue;
+                    }
+                    uint32_t hb0 = 0, hb1 = 0;
+                    dev->read_from_device(&hb0, target, ttnvtop::kWormholeEthHeartbeatAddr, sizeof(hb0));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    dev->read_from_device(&hb1, target, ttnvtop::kWormholeEthHeartbeatAddr, sizeof(hb1));
+                    const uint32_t sig = hb1 >> 16;
+                    if (sig != 0xAABBu || hb0 == hb1) {
+                        std::cout << "  chip " << chip.chip_id << " eth (" << target.x << "," << target.y
+                                  << "): heartbeat 0x" << std::hex << hb0 << " -> 0x" << hb1 << std::dec
+                                  << (sig == 0xABCDu ? " (base FW owns it)"
+                                                     : (hb0 == hb1 ? " (frozen)" : " (unknown signature)"))
+                                  << " — skipping\n";
+                        continue;
+                    }
+                    uint32_t go_now = 0;
+                    dev->read_from_device(&go_now, target, go_addr, sizeof(go_now));
+                    if (((go_now >> 24) & 0xFFu) == tt::tt_metal::dev_msgs::RUN_MSG_GO) {
+                        std::cout << "  chip " << chip.chip_id << " eth (" << target.x << "," << target.y
+                                  << "): RUN_MSG_GO — a kernel is running here, skipping\n";
+                        continue;
+                    }
+                } catch (const std::exception&) {
+                    continue;  // cannot read it, so cannot establish it is free
+                }
                 const auto l1 = ttnvtop::agg_layout(eth_l1, grid.num_cores());
                 const auto rt = ttnvtop::agg_rt_args(
                     grid,
