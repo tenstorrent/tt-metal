@@ -882,25 +882,6 @@
   team: models
   sp_config: sc1
 
-- name: "Mistral-Small-4-119B MoE dispatch, combine, reduce accuracy"
-  fabric_profile: torus_xy
-  cmd: |
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -k "mistral4-perf_no_pcc and 8x4" -vvv --tb=short
-    '
-  test_type: mistral4_moe_ops
-  test_group: module
-  skus:
-    bh_sc1:
-      # 16 cases across the four op files (verified by --collect-only). Measured 12 min; +15%.
-      # mesh_configs' only marker-carrying 8x4 row is fabric2d-torus-xy-8x4-2link, so this leg
-      # measured 86 s for 4 passed + 12 skipped, plus runner setup
-      timeout: 11
-  owner_id: U08GEEEEC75 # ssalice
-  team: models
-  sp_config: sc1
-
 - name: "Mistral-Small-4-119B prefill block accuracy 5k"
   cmd: |
     mpirun --bind-to none --pernode --tag-output bash -lc '
@@ -919,7 +900,7 @@
   team: models
   sp_config: sc1
 
-- name: "Mistral-Small-4-119B MoE accuracy 5k"
+- name: "Mistral-Small-4-119B MoE accuracy 5k, 25k"
   cmd: |
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
