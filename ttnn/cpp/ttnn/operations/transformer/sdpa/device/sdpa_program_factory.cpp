@@ -752,9 +752,12 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     }
     if (use_attention_sink) {
         const tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
+        const uint32_t sink_tile_size = tt::tile_size(sink_df);
+        log_debug(tt::LogOp, "sink_tile_size: {}", sink_tile_size);
+        log_debug(tt::LogOp, "sink_df: {}", sink_df);
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = ATTENTION_SINK,
-            .entry_size = tt::tile_size(sink_df),
+            .entry_size = sink_tile_size,
             .num_entries = attention_sink_tiles,
             .data_format_metadata = sink_df});
     }

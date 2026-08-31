@@ -81,6 +81,14 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     const uint32_t cat_Skt = cat_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
 
+    // Kernel will need to know the tile-based shapes of both sets of tensors
+    // to create a representation of the concatenated tensors.
+    //
+    // const std::vector<uint32_t> q_tile_shape = {B, NH, padded_Nqt, DHt};
+    // const std::vector<uint32_t> k_tile_shape = {B, NH, padded_Nkt, DHt};
+    // const std::vector<uint32_t> joint_q_tile_shape = {B, NH, padded_Lqt, DHt};
+    // const std::vector<uint32_t> joint_k_tile_shape = {B, NH, padded_Lkt, DHt};
+
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
     Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
@@ -100,6 +108,27 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
     log_debug(tt::LogOp, "use_joint_mask: {}", use_joint_mask);
+    log_debug(tt::LogOp, "padded_Nq: {}", padded_Nq);
+    log_debug(tt::LogOp, "padded_Nk: {}", padded_Nk);
+    log_debug(tt::LogOp, "padded_Lq: {}", padded_Lq);
+    log_debug(tt::LogOp, "padded_Lk: {}", padded_Lk);
+    log_debug(tt::LogOp, "padded_Nqt: {}", padded_Nqt);
+    log_debug(tt::LogOp, "padded_Nkt: {}", padded_Nkt);
+    log_debug(tt::LogOp, "padded_Lqt: {}", padded_Lqt);
+    log_debug(tt::LogOp, "padded_Lkt: {}", padded_Lkt);
+    log_debug(tt::LogOp, "DHt: {}", DHt);
+    log_debug(tt::LogOp, "valid_Nt: {}", valid_Nt);
+    log_debug(tt::LogOp, "valid_Lt: {}", valid_Lt);
+    log_debug(tt::LogOp, "Sq_chunk_t: {}", Sq_chunk_t);
+    log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
+    log_debug(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
+    log_debug(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
+    log_debug(tt::LogOp, "q_num_chunks: {}", q_num_chunks);
+    log_debug(tt::LogOp, "k_num_chunks: {}", k_num_chunks);
+    log_debug(tt::LogOp, "cat_Sq: {}", cat_Sq);
+    log_debug(tt::LogOp, "cat_Sk: {}", cat_Sk);
+    log_debug(tt::LogOp, "cat_Sqt: {}", cat_Sqt);
+    log_debug(tt::LogOp, "cat_Skt: {}", cat_Skt);
 
     IDevice* device = input_tensor_q.device();
 
@@ -140,6 +169,11 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     const uint32_t q_per_core = tt::div_up(q_num_chunks, q_parallel_factor);
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+    log_debug(tt::LogOp, "Parallelization scheme:");
+    log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
+    log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
+    log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
+    log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
@@ -151,6 +185,14 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     uint32_t out0_t = Sq_chunk_t * DHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
+    log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
+    log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
+    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
+    log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
+    log_debug(tt::LogOp, "out0_t: {}", out0_t);
+    log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
+    log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -170,6 +212,19 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+    log_debug(tt::LogOp, "dst_size: {}", dst_size);
+    log_debug(tt::LogOp, "qk_in0_block_w: {}", qk_in0_block_w);
+    log_debug(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
+    log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
+    log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
+    log_debug(tt::LogOp, "qk_in1_num_subblocks: {}", qk_in1_num_subblocks);
+    log_debug(tt::LogOp, "qk_num_blocks: {}", qk_num_blocks);
+    log_debug(tt::LogOp, "out_in0_block_w: {}", out_in0_block_w);
+    log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
+    log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
+    log_debug(tt::LogOp, "out_in0_num_subblocks: {}", out_in0_num_subblocks);
+    log_debug(tt::LogOp, "out_in1_num_subblocks: {}", out_in1_num_subblocks);
+    log_debug(tt::LogOp, "out_num_blocks: {}", out_num_blocks);
 
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
@@ -178,12 +233,18 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
     const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
+    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
+    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
+    log_debug(tt::LogOp, "mul_bcast_granularity: {}", mul_bcast_granularity);
+    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
+    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
     const uint32_t scale_packed = std::bit_cast<uint32_t>(args.scale);
+    log_debug(tt::LogOp, "scale: {}", args.scale);
 
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
@@ -215,6 +276,14 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    log_debug(tt::LogOp, "q_data_format: {}", q_df);
+    log_debug(tt::LogOp, "k_data_format: {}", k_df);
+    log_debug(tt::LogOp, "v_data_format: {}", v_df);
+    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
+    log_debug(tt::LogOp, "out_data_format: {}", out_df);
+    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
+    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
+    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
     // ---- Metal 2.0 named resources ----
 
@@ -551,6 +620,14 @@ ttnn::device_operation::ProgramArtifacts JointSDPADeviceOperation::JointSDPAProg
         local_nh_end = std::min(local_nh_end, NH);
         local_q_start = std::min(local_q_start, q_num_chunks);
         local_q_end = std::min(local_q_end, q_num_chunks);
+        log_debug(tt::LogOp, "core: {}", i);
+        log_debug(tt::LogOp, "x={},y={}", node.x, node.y);
+        log_debug(tt::LogOp, "local_batch_start: {}", local_batch_start);
+        log_debug(tt::LogOp, "local_batch_end: {}", local_batch_end);
+        log_debug(tt::LogOp, "local_nh_start: {}", local_nh_start);
+        log_debug(tt::LogOp, "local_nh_end: {}", local_nh_end);
+        log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
+        log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
 
         AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
