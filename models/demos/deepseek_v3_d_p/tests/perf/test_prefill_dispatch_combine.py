@@ -54,6 +54,10 @@ DISPATCH_BUFFER_CAPACITY_FACTOR = 8
 # and builds the capture filename expert_routing_kimi26.safetensors from it, so it cannot be
 # renamed to kimi_k2_7 without renaming that file on /mnt/models. Config stays KimiK26Config to
 # match the key; the values are identical to K2.7 either way.
+#
+# FOLLOW-UP: only the K2.6 routing capture exists today. A K2.7 routing capture still needs to be
+# produced and staged; once it is, add a ("kimi27", KimiK27Config) entry here, extend the allowlist
+# in tt/moe/init_helpers.py, and this K2.6 entry can go.
 _CHUNK_MODELS = [("dsv3", DeepSeekV3Config), ("kimi26", KimiK26Config), ("glm52", GLM52Config)]
 _TORUS_Y_MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id == "fabric2d-torus-y-8x1-2link"]
 assert len(_TORUS_Y_MESH_CONFIGS) == 1, "LoudBox TorusY proxy config missing from ALL_MESH_CONFIGS"
