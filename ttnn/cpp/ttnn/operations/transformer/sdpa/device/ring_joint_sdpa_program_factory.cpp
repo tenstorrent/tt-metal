@@ -2428,6 +2428,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     //   base 2 (q64,  90 cores, floats 60, rn 7)            base 6 (q32, 70,  floats 60, rn 9)
     //   base 3 (q64,  70 cores, floats 30, rn 5)            base 9 (q32, 50,  floats 30, rn 6)
     //   base 4 (q32, 100 cores, floats 80, rn 8)
+    // Perf across that whole range, rotation ON vs OFF (same build, kill switch for OFF): base 1
+    // 15.587 -> 9.091 ms (1.71x), base 2 11.351 -> 8.678 (1.31x), base 4 9.687 -> 8.676 (1.12x),
+    // base 5 63.32 -> 68.36%, base 6 69.63 -> 69.62% (NEUTRAL), base 9 68.49 -> 71.18%. Never a
+    // regression anywhere it engages. The win tracks how many rows are FLOAT-FREE
+    // (grid_size.y - rot_rows_needed), not base -- base 6 above is break-even precisely because
+    // rows_needed is 9 of 10 rows, leaving almost nothing to rebalance.
     // plus three DECLINE cases, all PCC-passing on the static fallback: floats == 0 (60 cores, q32
     // and q64), and rows_needed == grid_size.y (11x2 grid, q64: base 10, floats 20, rows_needed 2
     // of 2 rows). That covers rows_needed 1..9 and floats 10..80.
