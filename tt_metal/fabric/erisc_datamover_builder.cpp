@@ -322,7 +322,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     this->edm_local_sync_address = termination_signal_address + field_size;
     this->edm_status_address = edm_local_sync_address + field_size;
 
-    uint32_t buffer_address = edm_status_address + field_size;
+    // In-router clock-sync hook block (fabric_router_sync_hook.hpp): host-written config + eth
+    // message slots + TXQ staging. Must be NoC/eth-addressable L1 -- kernel .bss is RISC-LOCAL
+    // memory, which neither the host, the peer router, nor the local TXQ engine can reach. Carved
+    // unconditionally (96 B) so the channel layout never depends on a profiler env var.
+    this->sync_blk_address = edm_status_address + field_size;
+    uint32_t buffer_address = static_cast<uint32_t>(this->sync_blk_address) + 96;
 
     // ----------- Sender Channels
     for (uint32_t i = 0; i < num_sender_channels; i++) {
@@ -861,6 +866,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 
     // Add telemetry buffer address (16B aligned)
     named_args["PERF_TELEMETRY_BUFFER_ADDR"] = static_cast<uint32_t>(config.perf_telemetry_buffer_address);
+    named_args["SYNC_BLK_ADDR"] = static_cast<uint32_t>(config.sync_blk_address);
 
     // Add code profiling arguments (conditionally enabled)
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {

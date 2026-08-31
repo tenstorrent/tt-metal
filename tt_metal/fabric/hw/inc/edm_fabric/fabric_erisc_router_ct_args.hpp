@@ -268,6 +268,9 @@ constexpr bool enable_context_switch = NAMED_CT_ARG("ENABLE_CONTEXT_SWITCH") != 
 constexpr bool enable_interrupts = NAMED_CT_ARG("ENABLE_INTERRUPTS") != 0;
 constexpr size_t sender_txq_id = NAMED_CT_ARG("SENDER_TXQ_ID");
 constexpr size_t receiver_txq_id = NAMED_CT_ARG("RECEIVER_TXQ_ID");
+// L1 address of the in-router clock-sync hook block (fabric_router_sync_hook.hpp); carved by the
+// EDM builder next to the status words, so it can never collide with channel state.
+constexpr size_t sync_blk_addr = NAMED_CT_ARG("SYNC_BLK_ADDR");
 constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 
 constexpr size_t iterations_between_ctx_switch_and_teardown_checks =

@@ -2326,6 +2326,16 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
         const uint64_t resp_interval = std::min<uint64_t>(init_interval / 4, 1u << 17);  // <= ~97 us poll
         write_cfg(e.resp, false, resp_interval, e.init.blk_addr);
         write_cfg(e.init, true, init_interval, e.resp.blk_addr);
+        // Readback: proves the config bytes are IN L1 at the discovered address (a wrong address or
+        // a swallowed PCIe write shows up here, not as a silent dead link).
+        uint32_t rb[8] = {0};
+        cluster.read_core(rb, sizeof(rb), tt_cxy_pair(e.init.chip, e.init.virt), e.init.blk_addr);
+        log_info(
+            tt::LogMetal,
+            "[perf-debug profiler] FSYNC cfg readback init chip {} @0x{:x}: magic 0x{:x} flags 0x{:x} "
+            "interval {} n {} waits {}/{} peer 0x{:x}",
+            e.init.chip, e.init.blk_addr, rb[0], rb[1],
+            (static_cast<uint64_t>(rb[3]) << 32) | rb[2], rb[4], rb[5], rb[6], rb[7]);
         st->end_by_core[FabricSyncState::core_key(e.init.chip, e.init.virt.x, e.init.virt.y)] = {
             static_cast<size_t>(&e - st->edges.data()), 0};
         st->end_by_core[FabricSyncState::core_key(e.resp.chip, e.resp.virt.x, e.resp.virt.y)] = {
@@ -2341,10 +2351,11 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
 
     // ---- the aggregator thread ----
     const auto& ctx = receiver_->capture_context();
-    st->th = std::thread([this, st, &ctx]() {
+    st->th = std::thread([this, st, &ctx, &cluster, scratch_addr]() {
         std::vector<perf_debug::PerfDebugSyncSample> batch;
         uint64_t last_log_solved = 0;
         auto last_pub = std::chrono::steady_clock::now();
+        auto last_dbg = std::chrono::steady_clock::now();
         while (!st->stop.load(std::memory_order_relaxed)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             {
@@ -2463,6 +2474,39 @@ void PerfDebugProfiler::start_fabric_sync(const std::shared_ptr<distributed::Mes
             if (now_tp - last_pub > std::chrono::milliseconds(40)) {
                 last_pub = now_tp;
                 publish_fabric_sync_corrections();
+            }
+            // live device-side breadcrumbs: scratch stat + poll-state words on both ends
+            if (now_tp - last_dbg > std::chrono::seconds(2)) {
+                last_dbg = now_tp;
+                for (const auto& e : st->edges) {
+                    if (e.init.blk_addr == 0) {
+                        continue;
+                    }
+                    uint32_t si[4] = {0}, sr[4] = {0};
+                    cluster.read_core(si, sizeof(si), tt_cxy_pair(e.init.chip, e.init.virt), scratch_addr);
+                    cluster.read_core(sr, sizeof(sr), tt_cxy_pair(e.resp.chip, e.resp.virt), scratch_addr);
+                    // SPSC control vector of the initiator eth core: lane heads (words 0..1) and
+                    // tails (words 24..25) -- says whether the producer writes where the drain reads.
+                    uint32_t cv[26] = {0};
+                    uint64_t eth_prof = 0;
+                    try {
+                        eth_prof = MetalContext::instance().hal().get_dev_addr(
+                            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
+                        cluster.read_core(cv, sizeof(cv), tt_cxy_pair(e.init.chip, e.init.virt), eth_prof);
+                    } catch (const std::exception&) {
+                    }
+                    // both ends message-slot view: ping.tag / echo.tag
+                    uint32_t bi[20] = {0}, br[20] = {0};
+                    cluster.read_core(bi, sizeof(bi), tt_cxy_pair(e.init.chip, e.init.virt), e.init.blk_addr);
+                    cluster.read_core(br, sizeof(br), tt_cxy_pair(e.resp.chip, e.resp.virt), e.resp.blk_addr);
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] FSYNC DBG {}->{}: init stat 0x{:x} poll 0x{:x} | resp stat "
+                        "0x{:x} poll 0x{:x} | sink {} | init cv h {}/{} t {}/{} | init ping/echo 0x{:x}/0x{:x} "
+                        "resp 0x{:x}/0x{:x} resp_magic 0x{:x}",
+                        e.init.chip, e.resp.chip, si[2], si[3], sr[2], sr[3], st->sink_samples,
+                        cv[0], cv[1], cv[24], cv[25], bi[11], bi[15], br[11], br[15], br[0]);
+                }
             }
             // periodic per-link line
             uint64_t solved = 0;
@@ -3954,6 +3998,16 @@ bool PerfDebugProfiler::boot_device(
             ctx.core_of_xy[coords[idx]] = idx;
             cluster.write_core(
                 zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, eth_virt[k]), eth_prof_l1);
+            // SPSC_CORE_XY, which on a WORKER the BRISC FW rewrites at every launch (after this
+            // zeroing). An eth core gets no launches while a resident router runs, so the identity
+            // must come from here -- without it every eth span frame decodes as unknown-core and is
+            // discarded wholesale.
+            const uint32_t xy = (vy << 16) | vx;
+            cluster.write_core(
+                &xy,
+                sizeof(xy),
+                tt_cxy_pair(device_id, eth_virt[k]),
+                eth_prof_l1 + kernel_profiler::SPSC_CORE_XY * 4u);
             ctx.core_virt[idx] = {vx, vy};
         }
         ctx.nl = static_cast<uint32_t>(coords.size()) * kNRisc;

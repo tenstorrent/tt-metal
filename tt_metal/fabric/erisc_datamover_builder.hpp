@@ -269,6 +269,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_local_sync_address = 0;
     std::size_t edm_local_tensix_sync_address = 0;
     std::size_t edm_status_address = 0;
+    // In-router clock-sync hook block (fabric_router_sync_hook.hpp): host-written config + eth
+    // message slots. Carved from this walk because it must be NoC/eth-addressable L1.
+    std::size_t sync_blk_address = 0;
     std::size_t notify_worker_of_read_counter_update_src_address = 0;
 
     // Performance telemetry buffer address (16B aligned)

@@ -27,6 +27,7 @@ namespace tt::tt_fabric::router_sync {
 constexpr uint32_t kScratchMagicWord = 0;  // kDiscMagic, written LAST by the hook at kernel start
 constexpr uint32_t kScratchBlkWord = 1;    // L1 address of the hook's Blk (kernel .bss)
 constexpr uint32_t kScratchStatWord = 2;   // (completed rounds << 8) | (failed rounds & 0xFF), live
+constexpr uint32_t kScratchDbgWord = 3;    // (poll state << 28) | deadline-expiry count, live
 constexpr uint32_t kDiscMagic = 0xFA5CD15Cu;
 
 // ---- host-written config ------------------------------------------------------------------------
@@ -64,6 +65,7 @@ struct Blk {
 };
 constexpr uint32_t kPingOff = 32;
 constexpr uint32_t kEchoOff = 48;
+constexpr uint32_t kTxOff = 64;
 static_assert(sizeof(Blk) == 80, "Blk layout is shared with the host config writer");
 
 // ---- message tags -------------------------------------------------------------------------------
