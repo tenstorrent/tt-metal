@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr auto scaler_bits = get_arg(args::scaler_bits);
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -41,6 +42,12 @@ void kernel_main() {
                                                                        : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
+
+    // A full chunk's reads go out behind a single barrier instead of one barrier per tile, which
+    // would expose the whole read latency on every tile. The host sizes the input CB at two batches
+    // of tiles_per_batch, so a multi-tile reserve is only contiguous while the chunk is exactly that
+    // batch: a row_chunk the host did not predict (the SFPU path shortens it) stays per-tile.
+    constexpr bool batch_reads = row_chunk == tiles_per_batch;
 
     Noc noc;
     // dfb::in0 is the reduce input pipe: this kernel fills it, the compute kernel drains it.
@@ -75,15 +82,31 @@ void kernel_main() {
         uint32_t reset_curr_id = curr_id;
         uint32_t reset_w = w;
         uint32_t reset_col_start = col_start_tile_id;
+        // The tail chunk is shorter than a batch, so it keeps the per-tile path.
+        const bool batch_chunk = batch_reads && (chunk_end - i) == row_chunk;
 
         for (uint32_t j = 0; j < Ht; ++j) {
             w = reset_w;
             col_start_tile_id = reset_col_start;
+            if (batch_chunk) {
+                dfb_in0.reserve_back(row_chunk);
+            }
+            uint32_t slot = 0;
             for (uint32_t k = i; k < chunk_end; ++k) {
-                dfb_in0.reserve_back(onetile);
-                noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
-                noc.async_read_barrier();
-                dfb_in0.push_back(onetile);
+                if (batch_chunk) {
+                    noc.async_read(
+                        tensor_accessor,
+                        dfb_in0,
+                        tile_bytes,
+                        {.page_id = curr_id},
+                        {.offset_bytes = slot * tile_bytes});
+                    ++slot;
+                } else {
+                    dfb_in0.reserve_back(onetile);
+                    noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                    dfb_in0.push_back(onetile);
+                }
 
                 ++w;
 
@@ -95,6 +118,10 @@ void kernel_main() {
                     ++curr_id;
                     ++col_start_tile_id;
                 }
+            }
+            if (batch_chunk) {
+                noc.async_read_barrier();
+                dfb_in0.push_back(row_chunk);
             }
             curr_id = reset_curr_id + (j + 1) * Wt;  // stride in H
         }

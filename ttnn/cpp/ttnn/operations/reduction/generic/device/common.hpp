@@ -33,6 +33,23 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 
 namespace ttnn::prim {
 
+// Tiles the universal reduce reader fetches per NoC barrier. One read in flight leaves the whole
+// read latency exposed on every tile, which costs 12-16% on a read-bound reduce; 8 per barrier is
+// 2-3% slower than 4, so 4 is the peak.
+inline constexpr uint32_t kReduceReaderTilesPerBatch = 4;
+
+// Reader batch for a kernel whose smallest core streams min_tiles_per_core tiles: a core with fewer
+// tiles than a batch never reaches the batched loop, so the whole program reads unbatched instead of
+// leaving that core on a path the batch size does not fit. 1 is unbatched.
+inline uint32_t reduce_reader_batch(uint32_t min_tiles_per_core) {
+    return min_tiles_per_core < kReduceReaderTilesPerBatch ? 1u : kReduceReaderTilesPerBatch;
+}
+
+// Input CB depth for that batch: two batches, so the reader fills one while compute drains the other,
+// and a whole number of them, since the CB write pointer only wraps at fifo_limit and a reserved
+// batch straddling the end would overrun it.
+inline uint32_t reduce_reader_input_cb_tiles(uint32_t tiles_per_batch) { return 2 * tiles_per_batch; }
+
 // Identity element for the given reduction math op: -inf for MAX, +inf for MIN, 0 otherwise.
 // Used by the dense RM paths to pad partial chunks without disturbing the result.
 inline float get_reduce_pad_value(tt::tt_metal::ReduceOpMath reduce_math) {

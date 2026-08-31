@@ -151,6 +151,13 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
 
+    // The column reader issues a whole chunk of columns behind one barrier, so batching needs a core
+    // that owns a full chunk.
+    const uint32_t min_cols_per_core = num_cols_per_core_group_2 == 0
+                                           ? num_cols_per_core_group_1
+                                           : std::min(num_cols_per_core_group_1, num_cols_per_core_group_2);
+    const uint32_t reader_tiles_per_batch = min_cols_per_core < chunk_size ? 1u : chunk_size;
+
     ProgramSpec spec;
     spec.name = rm_path ? "reduce_multi_core_h_dense_rm"
                         : (use_width_sharding ? "reduce_multi_core_h_width_sharded" : "reduce_multi_core_h");
@@ -216,7 +223,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .borrowed_from = INPUT_TENSOR,
         });
     } else {
-        uint32_t num_input_tiles = use_fpu_negate ? chunk_size : 2;
+        uint32_t num_input_tiles = use_fpu_negate ? chunk_size : reduce_reader_input_cb_tiles(reader_tiles_per_batch);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN_DFB,
             .entry_size = src0_single_tile_size,
@@ -452,6 +459,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             {"scaler_bits", scaler_bits},
             {"use_welford", 0u},
             {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
+            {"tiles_per_batch", reader_tiles_per_batch},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT

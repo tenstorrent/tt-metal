@@ -103,7 +103,9 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     spec.name = "reduce_single_core_hw";
 
     // ---- Dataflow buffers ----
-    constexpr uint32_t num_input_tiles = 2;
+    // One core streams the whole tensor here, so only a tensor smaller than a batch turns it off.
+    const uint32_t reader_tiles_per_batch = reduce_reader_batch(num_tensor_tiles);
+    const uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN_DFB,
         .entry_size = src0_single_tile_size,
@@ -170,7 +172,8 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
                 },
             },
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_TENSOR, .accessor_name = "src"}},
-        .compile_time_args = {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}},
+        .compile_time_args =
+            {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}, {"tiles_per_batch", reader_tiles_per_batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
     });

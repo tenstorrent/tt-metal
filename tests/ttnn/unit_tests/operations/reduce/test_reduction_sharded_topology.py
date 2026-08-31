@@ -229,6 +229,52 @@ def test_reduce_h_width_sharded_mixed_l1_dram(device, op_name, dram_side):
     )
 
 
+@pytest.mark.parametrize("op_name", ["sum", "max"])
+@pytest.mark.parametrize("dram_side", ["neither", "input", "output", "both"])
+def test_reduce_w_height_sharded_mixed_l1_dram(device, op_name, dram_side):
+    """W-reduce twin of the H-reduce gate check above, on a geometry whose shards tile the tensor
+    exactly so the height-sharded fast path is eligible. That path aliases both shards as circular
+    buffers, which only L1 can back, so any DRAM side has to fall through to the generic reader."""
+    torch.manual_seed(0)
+    ttnn_op, torch_op = REDUCE_OPS[op_name]
+
+    tensor_shape = (1, 1, 256, 256)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    input_spec = ttnn.ShardSpec(shard_grid, (32, 256), ttnn.ShardOrientation.ROW_MAJOR)
+    output_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+
+    # The DRAM cases must differ from the L1 control in buffer type alone, so the rest of the fast
+    # path's terms stay satisfied here: equal shard heights, and shard_Ht * num_cores == NC * Ht
+    # (in rows rather than tiles).
+    assert input_spec.shape[0] == output_spec.shape[0]
+    assert input_spec.shape[0] * shard_grid.num_cores() == tensor_shape[1] * tensor_shape[2]
+
+    def config(spec, buffer_type):
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, spec)
+
+    input_buffer = ttnn.BufferType.DRAM if dram_side in ("input", "both") else ttnn.BufferType.L1
+    output_buffer = ttnn.BufferType.DRAM if dram_side in ("output", "both") else ttnn.BufferType.L1
+
+    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    torch_output_tensor = torch_op(torch_input_tensor, -1, True)
+
+    interleaved_input = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.interleaved_to_sharded(interleaved_input, config(input_spec, input_buffer))
+
+    output_tensor = ttnn_op(input_tensor, dim=-1, keepdim=True, memory_config=config(output_spec, output_buffer))
+
+    assert output_tensor.memory_config().buffer_type == output_buffer
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        ttnn.to_torch(output_tensor),
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.01,
+    )
+
+
 @pytest.mark.parametrize("op_name", list(REDUCE_OPS.keys()))
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
 def test_reduce_dram_sharded_dtypes(device, op_name, dtype):
