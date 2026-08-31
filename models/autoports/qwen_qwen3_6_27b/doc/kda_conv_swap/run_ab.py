@@ -21,6 +21,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[5]
 PREFILL_HARNESS = REPO / "models/autoports/qwen_qwen3_6_27b/tests/linear_attention_synthetic_pcc.py"
 DECODE_HARNESS = REPO / "models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py"
+MULTICHIP_HARNESS = REPO / "models/autoports/qwen_qwen3_6_27b/tests/multichip_traced_decode.py"
 ARMS = ("linear_final", "linear_kda_conv")
 
 # One prefill of this harness dispatches ~1.4k programs.  The device profiler
@@ -117,7 +118,7 @@ def profile(candidate, artifact, sequence, iterations, phase):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=("prefill", "decode"), default="prefill")
+    parser.add_argument("--phase", choices=("prefill", "decode", "multichip_decode"), default="prefill")
     parser.add_argument("--sequence", type=int, default=128)
     parser.add_argument("--iterations", type=int, default=1)
     parser.add_argument("--out", type=Path, default=None)

@@ -323,6 +323,7 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.local_linear_key_heads, decoder.local_linear_value_heads = 4, 12
         decoder.local_linear_key_width, decoder.local_linear_value_width = 512, 1536
         decoder._configure_multichip_compute()
+        decoder._configure_multichip_kda()
         decoder._warm_collectives()
         decoder._row_collective_mode = "all_reduce"
         decoder._multichip_candidate = multichip_candidate
@@ -390,7 +391,15 @@ class MultichipDecoder(OptimizedDecoder):
             )
             for r in range(4)
         ]
-        weights["conv"] = _shard(torch.cat(conv_chunks, -2), -2, mesh_device=mesh_device)
+        rearranged_conv = torch.cat(conv_chunks, -2)
+        weights["conv"] = _shard(rearranged_conv, -2, mesh_device=mesh_device)
+        # The fused KDA conv takes the four depthwise taps as separate
+        # per-channel tensors. Derive them from the same per-rank rearrangement
+        # as the weight so the sharding matches without re-deriving anything.
+        for tap in range(rearranged_conv.shape[-1]):
+            weights[f"conv_tap{tap}"] = _shard(
+                rearranged_conv[..., tap].reshape(1, 1, -1).contiguous(), -1, mesh_device=mesh_device
+            )
         weights["dt_bias"] = _shard(
             host("linear_attn.dt_bias", dtype=torch.float32).reshape(1, 1, 1, vh),
             -1,
@@ -478,6 +487,82 @@ class MultichipDecoder(OptimizedDecoder):
     # left, so the mark stays high -- measured, it stays at 1,329,664 B across
     # repeated width-5120 calls. Costs one program at setup.
     _COLLECTIVE_WARMUP_WIDTH = 512
+
+    def _configure_multichip_kda(self):
+        """Prepare the fused KDA decode conv, and re-lay the conv state for it.
+
+        Per device the widths are Q/K/V = 512/512/1536 with a 2560-wide conv,
+        all tile-aligned, and K*B is 128 at batch 32, so the same user-major
+        packing the single-chip path uses applies unchanged. As there, the state
+        is stored *as* the window rather than beside it, so prefill and any
+        external writer are seen with no sync step.
+        """
+        kernel = int(self.hf_config.linear_conv_kernel_dim)
+        self.linear_kda_decode_ready = (
+            self.layer_kind == "linear_attention"
+            and bool(self.policy.linear_kda_conv)
+            and (kernel * self.batch) % ttnn.TILE_SIZE == 0
+        )
+        if not self.linear_kda_decode_ready:
+            return
+
+        conv_width = self.caches["conv"].shape[-2]
+        self.linear_kda_taps = tuple(self.weights[f"conv_tap{tap}"] for tap in range(kernel))
+        self.linear_kda_history = _replicate(
+            torch.zeros(1, kernel - 1, conv_width, dtype=torch.bfloat16),
+            mesh_device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        select = torch.zeros(1, self.batch, kernel * self.batch, dtype=torch.bfloat16)
+        for row in range(self.batch):
+            select[0, row, kernel * row + kernel - 1] = 1.0
+        self.linear_kda_select = _replicate(select, mesh_device=self.mesh_device)
+        # HiFi4 with FP32 accumulation keeps the one-hot select exactly
+        # value-preserving rather than merely close.
+        self.linear_kda_select_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        # The fused conv kernel does not accumulate through L1, so it rejects
+        # the packer_l1_acc the projection configs carry.
+        self.linear_kda_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=self.policy.linear_input_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        self.linear_kda_decode_program_config = ttnn.QkvCausalConv1dSiluProgramConfig(
+            channel_chunk_size=self.policy.linear_kda_conv_decode_channel_chunk,
+        )
+        legacy_state = self.caches["conv"]
+        self.caches["conv"] = _replicate(
+            torch.zeros(self.batch, kernel, conv_width, dtype=torch.bfloat16),
+            mesh_device=self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        ttnn.deallocate(legacy_state)
+
+    def _linear_kda_borrow_legacy_conv_state(self):
+        """Run an inherited composite conv against the re-laid conv state."""
+        window = self.caches["conv"]
+        kernel = window.shape[1]
+        legacy = ttnn.permute(ttnn.to_layout(window, ttnn.TILE_LAYOUT), (0, 2, 1))
+        self.caches["conv"] = ttnn.reshape(legacy, (1, self.batch, window.shape[-1], kernel))
+        return window
+
+    def _linear_kda_restore_window_conv_state(self, window):
+        legacy = self.caches["conv"]
+        kernel = window.shape[1]
+        advanced = ttnn.permute(legacy, (0, 1, 3, 2))
+        advanced = ttnn.to_layout(ttnn.reshape(advanced, (self.batch, kernel, -1)), ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy(advanced, window)
+        ttnn.deallocate(advanced)
+        ttnn.deallocate(legacy)
+        self.caches["conv"] = window
 
     def _warm_collectives(self):
         """Fix the run's L1 low-water mark at the top of L1, not mid-heap."""
@@ -725,24 +810,13 @@ class MultichipDecoder(OptimizedDecoder):
         beta = beta_padded[..., :value_heads]
         decay = decay_padded[..., :value_heads]
 
-        mixed = ttnn.permute(mixed, (0, 2, 3, 1))
-        next_conv_state = ttnn.concat(
-            [self.caches["conv"][..., 1:], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        mixed = ttnn.silu(ttnn.sum(ttnn.multiply(next_conv_state, self.weights["conv"]), dim=-1, keepdim=True))
+        # The conv helper masks the conv state itself; the recurrent state below
+        # is masked here against the same flags.
         active_mask = getattr(self, "_active_mask", None)
-        if active_mask is not None:
-            conv_mask = ttnn.reshape(active_mask, (1, self.batch, 1, 1))
-            next_conv_state = ttnn.add(
-                ttnn.multiply(next_conv_state, conv_mask),
-                ttnn.multiply(self.caches["conv"], ttnn.add(ttnn.multiply(conv_mask, -1.0), 1.0)),
-            )
-        ttnn.copy(next_conv_state, self.caches["conv"])
-        mixed = ttnn.permute(mixed, (0, 3, 1, 2))
-
-        query = ttnn.reshape(mixed[..., :key_width], (self.batch, 1, key_heads, key_dim))
-        key = ttnn.reshape(mixed[..., key_width : 2 * key_width], (self.batch, 1, key_heads, key_dim))
-        value = ttnn.reshape(mixed[..., 2 * key_width :], (self.batch, 1, value_heads, value_dim))
+        query, key, value = self._linear_causal_conv_decode(mixed, key_width, value_width)
+        query = ttnn.reshape(query, (self.batch, 1, key_heads, key_dim))
+        key = ttnn.reshape(key, (self.batch, 1, key_heads, key_dim))
+        value = ttnn.reshape(value, (self.batch, 1, value_heads, value_dim))
         query = ttnn.repeat_interleave(ttnn.permute(query, (0, 2, 1, 3)), 3, dim=1)
         key = ttnn.repeat_interleave(ttnn.permute(key, (0, 2, 1, 3)), 3, dim=1)
         value = ttnn.permute(value, (0, 2, 1, 3))
@@ -794,8 +868,99 @@ class MultichipDecoder(OptimizedDecoder):
             in0_block_w=3,
         )
 
+    def _linear_causal_conv_decode(self, mixed, key_width, value_width):
+        """One decode step of the local-head stateful causal convolution.
+
+        The composite and the fused path share one contract: the convolution
+        reads the *unmasked* advanced state, and only what is stored is blended
+        against ``_active_mask``. Inactive rows therefore keep their old state
+        while still producing (discarded) outputs, exactly as before.
+        """
+        active_mask = getattr(self, "_active_mask", None)
+        if not getattr(self, "linear_kda_decode_ready", False):
+            state = self.caches["conv"]
+            mixed = ttnn.permute(mixed, (0, 2, 3, 1))
+            next_conv_state = ttnn.concat([state[..., 1:], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            mixed = ttnn.silu(ttnn.sum(ttnn.multiply(next_conv_state, self.weights["conv"]), dim=-1, keepdim=True))
+            if active_mask is not None:
+                conv_mask = ttnn.reshape(active_mask, (1, self.batch, 1, 1))
+                next_conv_state = ttnn.add(
+                    ttnn.multiply(next_conv_state, conv_mask),
+                    ttnn.multiply(state, ttnn.add(ttnn.multiply(conv_mask, -1.0), 1.0)),
+                )
+            ttnn.copy(next_conv_state, state)
+            mixed = ttnn.permute(mixed, (0, 3, 1, 2))
+            return (
+                mixed[..., :key_width],
+                mixed[..., key_width : 2 * key_width],
+                mixed[..., 2 * key_width :],
+            )
+
+        window = self.caches["conv"]
+        kernel = window.shape[1]
+        # Shift every user's window down one row and land the new token last.
+        # The op reads this advanced window directly, so masking can be applied
+        # to the stored state afterwards without changing what the conv saw.
+        token = ttnn.to_layout(ttnn.reshape(mixed, (self.batch, 1, -1)), ttnn.ROW_MAJOR_LAYOUT)
+        shifted = ttnn.slice(window, (0, 1, 0), (self.batch, kernel, window.shape[-1]))
+        advanced = ttnn.concat([shifted, token], dim=1)
+        ttnn.deallocate(shifted)
+        ttnn.deallocate(token)
+
+        sequence = ttnn.reshape(advanced, (1, kernel * self.batch, -1))
+        query, key, value = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            sequence,
+            self.linear_kda_history,
+            *self.linear_kda_taps,
+            key_width,
+            key_width,
+            value_width,
+            program_config=self.linear_kda_decode_program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.linear_kda_compute_kernel_config,
+        )
+        if sequence.buffer_address() != advanced.buffer_address():
+            ttnn.deallocate(sequence)
+
+        if active_mask is not None:
+            conv_mask = ttnn.reshape(active_mask, (self.batch, 1, 1))
+            blended = ttnn.add(
+                ttnn.multiply(advanced, conv_mask),
+                ttnn.multiply(window, ttnn.add(ttnn.multiply(conv_mask, -1.0), 1.0)),
+            )
+            ttnn.copy(blended, window)
+            ttnn.deallocate(blended)
+        else:
+            ttnn.copy(advanced, window)
+        ttnn.deallocate(advanced)
+
+        def select(packed):
+            picked = ttnn.matmul(
+                self.linear_kda_select,
+                packed,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.linear_kda_select_compute_kernel_config,
+            )
+            ttnn.deallocate(packed)
+            return picked
+
+        return select(query), select(key), select(value)
+
     def _linear_attention_prefill_chunk(self, hidden_states):
-        """Local-head version of the optimized logarithmic affine scan."""
+        """Local-head version of the optimized logarithmic affine scan.
+
+        The conv state may be stored as the fused path's user-major window; the
+        scan below indexes it as [1, B, C, K], so convert around the call.
+        """
+        if getattr(self, "linear_kda_decode_ready", False):
+            window = self._linear_kda_borrow_legacy_conv_state()
+            try:
+                return self._linear_attention_prefill_chunk_impl(hidden_states)
+            finally:
+                self._linear_kda_restore_window_conv_state(window)
+        return self._linear_attention_prefill_chunk_impl(hidden_states)
+
+    def _linear_attention_prefill_chunk_impl(self, hidden_states):
         key_heads, value_heads, key_dim, value_dim = 4, 12, 128, 128
         key_width, value_width = 512, 1536
         sequence = hidden_states.shape[2]

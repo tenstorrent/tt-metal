@@ -31,6 +31,42 @@ are linear-attention, and the autoport's own
 | Dispatched ops per step | 87 | 76 | -11 |
 | PCC vs the HF layer, step 1 / step 2 | 0.9999677 / 0.9999912 | 0.9999674 / 0.9999909 | — |
 
+### Multichip decode, TP4, batch 32, traced
+
+The shipped path: four Blackhole p300c devices, `MeshShape(1,4)`, `FABRIC_1D_RING`,
+12 value heads per device. Same knob, same one-field policy difference.
+
+| | control (`linear_final`) | candidate (`linear_kda_conv`) | delta |
+|---|---:|---:|---:|
+| TP4 trace replay, median | 4.3335 ms | 2.3691 ms | **-1.9644 ms (1.83x)** |
+| single-chip baseline in the same run | 15.8556 ms | 8.2056 ms | (1.93x, matches the single-chip result) |
+| PCC vs that baseline | 1.0 | 1.0 | — |
+
+Per-device the widths are Q/K/V = 512/512/1536 with a 2560-wide conv, all
+tile-aligned, and `K*B` is 128 at batch 32, so the user-major packing carries
+over unchanged. As on single chip, the state is stored *as* the window rather
+than beside it.
+
+The one addition is `_active_mask`. The composite computes the convolution from
+the **unmasked** advanced state and blends only what it stores, so inactive rows
+keep their old state while still producing (discarded) outputs. The fused path
+preserves that exactly: the op reads the advanced window, and the mask is
+applied to the stored state afterwards.
+
+Full-attention layers have no conv cache, so the setup is a no-op for them.
+
+**No op-level table for this arm.** The device profiler captures only 1 of the 4
+devices during a multi-device *trace replay* on this base — the raw
+`ops_perf_results` CSV contains device 3 alone, with single-chip op shapes
+(`b={1536}`, full-width `32 x 5120 x 17408` MLP) and no CCL ops, i.e. the
+signposted window picked up the harness's single-chip baseline instead. The same
+capture on a *non-traced* multichip run returns all four devices, and the
+autoport's own recorded artifact
+(`doc/multichip_decoder/artifacts/tracy/linear_b32_dram_sharded/decode_perf_report.csv`)
+has devices 0-3, `b={384}` and CCL ops from this same command — so traced
+multichip profiling did work before. Recorded, not diagnosed. The trace-replay
+median above is the metric the autoport's own multichip evidence uses.
+
 ### Prefill, batch 1, sequence 128 (four 32-token chunks)
 
 | | control | candidate | delta |
@@ -183,6 +219,9 @@ composite path and the HF layer.
 | prefill batch 1, sequence 128 | 0.9999953 | 0.9999950 | 0.9999997 |
 | prefill batch 32, sequence 128 (fallback conversion) | 0.9999953 | 0.9999953 | **1.0** |
 | prefill batch 1, sequence 33 (ragged tail fallback) | 0.9999954 | 0.9999952 | 0.9999997 |
+| **TP4** decode batch 32, 4 steps (worst step) | 0.9999970 | 0.9999967 | 0.9999997 |
+| **TP4** decode batch 32 with `active_mask`, 4 steps (worst step) | 0.9999661 | 0.9999662 | 0.9999998 |
+| **TP4** prefill batch 32, sequence 128 (state conversion) | 0.9999896 | 0.9999896 | **1.0** |
 
 Multiple sequential decode steps matter here: a single step cannot distinguish
 a correct window from one that never advances.
@@ -206,10 +245,10 @@ cache dtype.
   second 1:1 swap for the `rms_norm` + `multiply(out, silu(z))` pair, but it
   gates with `sigmoid(gate)` while this model gates with `silu(z)`. Not the
   same function, so not applicable.
-- Synthetic weights, one layer, single chip. This is a per-layer op-level
-  result, not a full-model or multichip claim. The 48x scaling to a full-model
-  decode estimate is arithmetic, not measured.
-- `multichip_decoder.py` has its own copy of both conv blocks and is untouched.
+- Synthetic weights, one layer. These are per-layer results; the 48x scaling to
+  a full-model decode estimate would be arithmetic, not measured.
+- Multichip decode needs `B` a multiple of 8 as well; at batch 1 `K*B` is 4 and
+  the composite path is kept (measured unchanged at 0.7929 ms).
 
 ## Reproducing
 
@@ -221,6 +260,12 @@ python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/run_ab.py --phase pre
 # correctness with a real four-tap kernel
 python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/check_conv_taps.py --mode decode --batch 32 --steps 4
 python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/check_conv_taps.py --mode prefill --batch 32 --sequence 128
+python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/check_conv_taps.py --mode decode --batch 32 --steps 4 --multichip
+python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/check_conv_taps.py --mode decode --batch 32 --steps 4 --multichip --active-mask
+
+# TP4 A/B (wall-clock trace replay; run each arm and compare)
+python models/autoports/qwen_qwen3_6_27b/tests/multichip_traced_decode.py --kind linear --batch 32 --steps 4 \
+    --candidate linear_kda_conv --baseline-candidate linear_kda_conv
 
 # the channel_chunk_size sweeps
 python models/autoports/qwen_qwen3_6_27b/doc/kda_conv_swap/sweep_channel_chunk.py --sequence 32

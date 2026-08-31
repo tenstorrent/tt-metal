@@ -19,6 +19,7 @@ from transformers import AutoConfig, DynamicCache
 import ttnn
 from models.autoports.qwen_qwen3_6_27b.tests.linear_attention_synthetic_pcc import LAYER, _hf_layer, _state
 from models.autoports.qwen_qwen3_6_27b.tt.functional_decoder import MODEL_ID, _to_device
+from models.autoports.qwen_qwen3_6_27b.tt.multichip_decoder import TARGET_FABRIC, MultichipDecoder
 from models.autoports.qwen_qwen3_6_27b.tt.optimized_decoder import OptimizedDecoder
 from models.common.utility_functions import comp_pcc
 
@@ -34,8 +35,9 @@ def dense_state(config, seed=4242):
     return state
 
 
-def build(mesh, config, state, candidate, batch, max_context):
-    return OptimizedDecoder.from_state_dict(
+def build(mesh, config, state, candidate, batch, max_context, multichip=False):
+    cls = MultichipDecoder if multichip else OptimizedDecoder
+    return cls.from_state_dict(
         state,
         hf_config=config,
         layer_idx=LAYER,
@@ -47,8 +49,8 @@ def build(mesh, config, state, candidate, batch, max_context):
     )
 
 
-def tt_decode_steps(mesh, config, state, candidate, tokens, batch):
-    decoder = build(mesh, config, state, candidate, batch, 64)
+def tt_decode_steps(mesh, config, state, candidate, tokens, batch, multichip=False, active_mask=None):
+    decoder = build(mesh, config, state, candidate, batch, 64, multichip)
     page_table = _to_device(
         torch.arange(batch, dtype=torch.int32).reshape(batch, 1),
         mesh_device=mesh,
@@ -63,18 +65,24 @@ def tt_decode_steps(mesh, config, state, candidate, tokens, batch):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
         )
+        kwargs = {}
+        if active_mask is not None:
+            kwargs["active_mask"] = _to_device(
+                active_mask.reshape(1, 1, 1, batch), mesh_device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
         out = decoder.decode_forward(
             hidden_states=_to_device(token.reshape(1, 1, batch, -1), mesh_device=mesh),
             page_table=page_table,
             current_positions=positions,
+            **kwargs,
         )
         ttnn.synchronize_device(mesh)
         outputs.append(ttnn.to_torch(ttnn.get_device_tensors(out)[0]).squeeze(0).float())
     return outputs
 
 
-def tt_prefill(mesh, config, state, candidate, hidden, batch):
-    decoder = build(mesh, config, state, candidate, batch, max(64, hidden.shape[1]))
+def tt_prefill(mesh, config, state, candidate, hidden, batch, multichip=False):
+    decoder = build(mesh, config, state, candidate, batch, max(64, hidden.shape[1]), multichip)
     page_table = _to_device(
         torch.arange(batch, dtype=torch.int32).reshape(batch, 1),
         mesh_device=mesh,
@@ -103,6 +111,8 @@ def main():
     parser.add_argument("--steps", type=int, default=6)
     parser.add_argument("--sequence", type=int, default=128)
     parser.add_argument("--bar", type=float, default=0.995)
+    parser.add_argument("--multichip", action="store_true", help="run the TP4 path instead of single chip")
+    parser.add_argument("--active-mask", action="store_true", help="deactivate every other batch row")
     args = parser.parse_args()
 
     ttnn.CONFIG.throw_exception_on_fallback = True
@@ -111,7 +121,11 @@ def main():
     state = dense_state(config)
     hf_layer = _hf_layer(config, state)
 
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
+    if args.multichip:
+        ttnn.set_fabric_config(TARGET_FABRIC)
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=0)
+    else:
+        mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), trace_region_size=0)
     failures = []
     try:
         if args.mode == "decode":
@@ -126,8 +140,13 @@ def main():
                             token, position_embeddings=(None, None), attention_mask=None, past_key_values=cache
                         ).float()
                     )
+            mask = None
+            if args.active_mask:
+                mask = torch.zeros(batch, dtype=torch.bfloat16)
+                mask[::2] = 1.0
             runs = {
-                c: tt_decode_steps(mesh, config, state, c, tokens, batch) for c in ("linear_final", "linear_kda_conv")
+                c: tt_decode_steps(mesh, config, state, c, tokens, batch, args.multichip, mask)
+                for c in ("linear_final", "linear_kda_conv")
             }
             for step in range(args.steps):
                 ref = reference[step]
@@ -150,7 +169,10 @@ def main():
                     attention_mask=None,
                     past_key_values=DynamicCache(config=config),
                 ).float()
-            outs = {c: tt_prefill(mesh, config, state, c, hidden, batch) for c in ("linear_final", "linear_kda_conv")}
+            outs = {
+                c: tt_prefill(mesh, config, state, c, hidden, batch, args.multichip)
+                for c in ("linear_final", "linear_kda_conv")
+            }
             pcc_c = comp_pcc(reference, outs["linear_final"], args.bar)
             pcc_f = comp_pcc(reference, outs["linear_kda_conv"], args.bar)
             pcc_cf = comp_pcc(outs["linear_final"], outs["linear_kda_conv"], args.bar)
@@ -161,6 +183,8 @@ def main():
                 failures.append(f"prefill: fused vs HF {pcc_f[1]}")
     finally:
         ttnn.close_mesh_device(mesh)
+        if args.multichip:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
     if failures:
         raise SystemExit("DENSE_TAPS FAILED:\n  " + "\n  ".join(failures))

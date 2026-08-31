@@ -213,7 +213,22 @@ Both fixed and recorded in `doc/kda_conv_swap/README.md`:
   while already deriving `dtype` from the destination, so a row-major cache
   could not be restored. It now takes both from the destination.
 
-### C5. Eager batch-32 decode fails in the shared synthetic harness — not diagnosed
+### C5. Traced multichip runs profile only one of four devices — not diagnosed
+
+Under `python -m tracy -r -p`, a multi-device **trace replay** yields an
+`ops_perf_results` CSV containing device 3 alone, with single-chip op shapes and
+no CCL ops — so the signposted window picks up the harness's single-chip
+baseline instead of the TP4 replay. The same capture on a *non-traced* multichip
+run returns all four devices, and the autoport's own recorded artifact
+(`doc/multichip_decoder/artifacts/tracy/linear_b32_dram_sharded/decode_perf_report.csv`)
+has devices 0-3, `b={384}` and CCL ops from this exact command.
+
+So traced multichip profiling worked before and does not now. Listed here rather
+than under B because no cause was identified — unlike B, I did not chase it.
+It blocks op-level attribution on the TP4 path; wall-clock trace-replay medians,
+which is what the autoport's multichip evidence uses, are unaffected.
+
+### C6. Eager batch-32 decode fails in the shared synthetic harness — not diagnosed
 
 ```
 linear_attention_synthetic_pcc.py --mode decode --optimized --batch 32
@@ -240,7 +255,8 @@ alone is 347 MB per arm.
 ## Open work
 
 1. Report the semaphore fallback upstream (see B).
-2. Diagnose or dismiss C5.
+2. Diagnose C5 — it blocks op-level perf work on the TP4 path.
+3. Diagnose or dismiss C6.
 
 ## Note for anyone triaging the MLP down projection
 

@@ -104,7 +104,12 @@ def main():
             baseline_decode()
             ttnn.synchronize_device(one)
             for name in cache_names:
-                copy_host(initial[name], baseline.caches[name], dtype=baseline.caches[name].dtype)
+                copy_host(
+                    initial[name],
+                    baseline.caches[name],
+                    dtype=baseline.caches[name].dtype,
+                    layout=baseline.caches[name].layout,
+                )
             ttnn.synchronize_device(one)
         baseline_trace_id = ttnn.begin_trace_capture(one, cq_id=0)
         baseline_trace_output = baseline_decode()
@@ -114,7 +119,12 @@ def main():
         # Capture records the commands; replay token zero to seed the cache and
         # validate the capture-position result before timed autoregressive steps.
         for name in cache_names:
-            copy_host(initial[name], baseline.caches[name], dtype=baseline.caches[name].dtype)
+            copy_host(
+                initial[name],
+                baseline.caches[name],
+                dtype=baseline.caches[name].dtype,
+                layout=baseline.caches[name].layout,
+            )
         copy_host(tokens[0].reshape(1, 1, args.batch, 5120), x)
         copy_host(torch.zeros(args.batch, dtype=torch.uint32), pos, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.synchronize_device(one)
@@ -167,7 +177,12 @@ def main():
         ttnn.synchronize_device(mesh)
         memory_snapshots["after_first_warm"] = dram_snapshot(mesh)
         for name in cache_names:
-            copy_host(initial[name], decoder.caches[name], dtype=decoder.caches[name].dtype)
+            copy_host(
+                initial[name],
+                decoder.caches[name],
+                dtype=decoder.caches[name].dtype,
+                layout=decoder.caches[name].layout,
+            )
         # Re-run the exact path immediately before capture. Some TTNN program
         # signatures depend on transient allocation state, so an earlier first
         # compile can leave a cold variant at the capture boundary.
@@ -176,7 +191,12 @@ def main():
         ttnn.synchronize_device(mesh)
         memory_snapshots["after_second_warm"] = dram_snapshot(mesh)
         for name in cache_names:
-            copy_host(initial[name], decoder.caches[name], dtype=decoder.caches[name].dtype)
+            copy_host(
+                initial[name],
+                decoder.caches[name],
+                dtype=decoder.caches[name].dtype,
+                layout=decoder.caches[name].layout,
+            )
         # Mesh host writes are asynchronous and must finish before capture.
         ttnn.synchronize_device(mesh)
         if args.forbid_program_cache_misses:
@@ -187,7 +207,12 @@ def main():
         trace_ended = True
         memory_snapshots["after_capture"] = dram_snapshot(mesh)
         for name in cache_names:
-            copy_host(initial[name], decoder.caches[name], dtype=decoder.caches[name].dtype)
+            copy_host(
+                initial[name],
+                decoder.caches[name],
+                dtype=decoder.caches[name].dtype,
+                layout=decoder.caches[name].layout,
+            )
         copy_host(tokens[0].reshape(1, 1, args.batch, 5120), x)
         copy_host(torch.zeros(args.batch, dtype=torch.uint32), pos, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.synchronize_device(mesh)
@@ -221,7 +246,12 @@ def main():
         # Rewind mutable state and replay the same token/position stream.  This
         # stresses trace determinism as well as stateful cache reset semantics.
         for name in cache_names:
-            copy_host(initial[name], decoder.caches[name], dtype=decoder.caches[name].dtype)
+            copy_host(
+                initial[name],
+                decoder.caches[name],
+                dtype=decoder.caches[name].dtype,
+                layout=decoder.caches[name].layout,
+            )
         deterministic_pcc = []
         for step in range(args.steps):
             copy_host(tokens[step].reshape(1, 1, args.batch, 5120), x)
