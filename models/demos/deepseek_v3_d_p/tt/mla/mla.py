@@ -1736,11 +1736,15 @@ class ttMLA:
             # behavior, where sparse_sdpa still needs a batch-1 cache. For a multi-slot cache this
             # slice creates owned transient storage that the caller releases; for a single-slot cache
             # it is a no-op alias of the persistent cache and must not be released by the caller.
-            gathered = ttnn.slice(
-                storage,
-                [slot_lo, 0, 0, 0],
-                [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
-            )
+            if storage.shape[0] == 1:
+                gathered = storage
+            else:
+                gathered = ttnn.slice(
+                    storage,
+                    [slot_lo, 0, 0, 0],
+                    [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
         else:
             # Block-cyclic storage is meaningful only in complete SP slabs. The new AG writes each
             # rank's active local prefix into its fixed worst-case slot, retaining the allocation and
