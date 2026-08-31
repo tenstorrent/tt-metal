@@ -96,7 +96,7 @@
     bh_p100:
       timeout: 60
     bh_p150b_civ2:
-      timeout: 35
+      timeout: 40
   owner_id: U080FKG7KEU # Utku Aydonat
   team: ttnn
   category: experimental

@@ -4,23 +4,39 @@
 
 #include "pad_rm_sharded_width_only_program_factory.hpp"
 
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 using namespace tt::constants;
 
 namespace ttnn::prim {
 using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
-ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
+namespace {
+// Names are prefixed per factory: all seven pad factories land in one unity-build
+// translation unit, where every anonymous namespace is merged into a single scope.
+const KernelSpecName SH_W_READER{"reader"};
+const KernelSpecName SH_W_WRITER{"writer"};
+const DFBSpecName SH_W_IN_SHARD{"in_shard"};
+const DFBSpecName SH_W_OUT_SHARD{"out_shard"};
+const DFBSpecName SH_W_PAD{"pad"};
+const TensorParamName SH_W_INPUT{"input"};
+const TensorParamName SH_W_OUTPUT{"output"};
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts PadRmShardedWidthOnlyProgramFactory::create_program_artifacts(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     Tensor& output = tensor_return_value;
+    const auto& input_mesh_tensor = input_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output.mesh_tensor();
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& input_tensor_start = operation_attributes.input_tensor_start;
@@ -49,61 +65,43 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
     const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     auto all_cores_padded = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    tt::DataFormat input_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat output_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat pad_val_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    Buffer* input_buffer = input_tensor.buffer();
-    Buffer* output_buffer = output.buffer();
+    // Input shard DFB — borrows the input buffer's L1 memory; the framework re-points it from the
+    // input TensorArgument on every dispatch. The reader only takes its base pointer (a raw peek,
+    // no FIFO ops), so the reader is its sole toucher and binds both endpoints (self-loop).
+    // The entry count is clamped to the sticks the tensor actually holds: an input whose shard
+    // spec is taller than the whole tensor would otherwise fail spec validation against the
+    // borrowed tensor's packed size. The count is inert on device — the reader never runs FIFO
+    // ops on this DFB — so the clamp only affects validation.
+    const uint32_t num_input_sticks = static_cast<uint32_t>(input_tensor.logical_shape().volume() / W);
+    DataflowBufferSpec in_shard_dfb{
+        .unique_id = SH_W_IN_SHARD,
+        .entry_size = unpadded_stick_bytes,
+        .num_entries = std::min(shard_height_unpadded, num_input_sticks),
+        .data_format_metadata = input_dfb_data_format,
+        .borrowed_from = SH_W_INPUT,
+    };
 
-    ProgramDescriptor desc;
+    // Output shard DFB — borrows the output buffer's L1 memory. A real FIFO here: the writer
+    // produces padded sticks, the reader consumes them to overwrite the data region.
+    DataflowBufferSpec out_shard_dfb{
+        .unique_id = SH_W_OUT_SHARD,
+        .entry_size = padded_stick_bytes,
+        .num_entries = shard_height_padded,
+        .data_format_metadata = output_dfb_data_format,
+        .borrowed_from = SH_W_OUTPUT,
+    };
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_shard_cb_index = tt::CBIndex::c_0;
-    {
-        // Sharded input CB — globally allocated to the input buffer; framework
-        // patches the CB address on cache hits via cb.buffer.
-        CBDescriptor cb_input;
-        cb_input.total_size = shard_height_unpadded * unpadded_stick_bytes;
-        cb_input.core_ranges = total_cores;
-        cb_input.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(input_shard_cb_index),
-            .data_format = input_cb_data_format,
-            .page_size = unpadded_stick_bytes,
-        });
-        cb_input.buffer = input_buffer;
-        desc.cbs.push_back(std::move(cb_input));
-    }
-
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_shard_cb_index = tt::CBIndex::c_16;
-    {
-        // Sharded output CB — globally allocated to the output buffer.
-        CBDescriptor cb_output;
-        cb_output.total_size = shard_height_padded * padded_stick_bytes;
-        cb_output.core_ranges = total_cores;
-        cb_output.format_descriptors.push_back(CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_shard_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = padded_stick_bytes,
-        });
-        cb_output.buffer = output_buffer;
-        desc.cbs.push_back(std::move(cb_output));
-    }
-
-    // construct const buffer with the pad_value
-    tt::DataFormat pad_val_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t pad_val_cb_index = tt::CBIndex::c_1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = padded_stick_bytes,
-        .core_ranges = total_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(pad_val_cb_index),
-            .data_format = pad_val_cb_data_format,
-            .page_size = padded_stick_bytes,
-        }}},
-    });
+    // Const buffer holding one stick of the pad value. Writer-only, no FIFO ops — self-loop.
+    DataflowBufferSpec pad_dfb{
+        .unique_id = SH_W_PAD,
+        .entry_size = padded_stick_bytes,
+        .num_entries = 1,
+        .data_format_metadata = pad_val_dfb_data_format,
+    };
 
     // W front-pad offset: input_tensor_start is [N, C, H, W];
     uint32_t W_padding_front_bytes = input_tensor_start[3] * input_tensor.element_size();
@@ -131,55 +129,105 @@ ProgramDescriptor PadRmShardedWidthOnlyProgramFactory::create_descriptor(
         unpadded_stick_bytes,
         l1_alignment_bytes);  // round unpadded_stick bytes to a multiple of l1_alignment_bytes
 
-    std::vector<uint32_t> reader_ct_args = {
-        unpadded_stick_bytes,
-        padded_stick_bytes,
-        shard_height_unpadded,
-        shard_height_padded,
-        W_padding_front_bytes,
-        input_shard_cb_index,
-        output_shard_cb_index,
-        unpadded_stick_step,
-        padded_stick_step};
+    KernelSpec reader{
+        .unique_id = SH_W_READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/"
+            "reader_pad_dims_rm_sharded_stickwise.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = SH_W_IN_SHARD,
+                    .accessor_name = "in_shard",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SH_W_IN_SHARD,
+                    .accessor_name = "in_shard",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SH_W_OUT_SHARD,
+                    .accessor_name = "out_shard",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .compile_time_args =
+            {
+                {"unpadded_stick_bytes", unpadded_stick_bytes},
+                {"unpadded_shard_height", shard_height_unpadded},
+                {"W_front_pad_bytes", W_padding_front_bytes},
+                {"unpadded_stick_step", unpadded_stick_step},
+                {"padded_stick_step", padded_stick_step},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    std::vector<uint32_t> writer_ct_args = {
-        padded_stick_bytes,
-        shard_height_padded,
-        padding_value_as_u32,
-        output.element_size(),
-        output_shard_cb_index,
-        pad_val_cb_index,
-        padded_stick_step};
+    KernelSpec writer{
+        .unique_id = SH_W_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/"
+            "writer_pad_dims_rm_sharded_stickwise.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = SH_W_OUT_SHARD,
+                    .accessor_name = "out_shard",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SH_W_PAD,
+                    .accessor_name = "pad",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = SH_W_PAD,
+                    .accessor_name = "pad",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .compile_time_args =
+            {
+                {"padded_stick_bytes", padded_stick_bytes},
+                {"padded_shard_height", shard_height_padded},
+                {"padding_value_as_u32", padding_value_as_u32},
+                {"padding_value_num_bytes", static_cast<uint32_t>(output.element_size())},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+    };
 
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded_stickwise.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores_padded;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // Neither sharded kernel takes runtime args: every per-core value is pinned by the hashed
+    // shapes and shard specs, and the two shard base addresses ride the borrowed DFBs.
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded_stickwise.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores_padded;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    ProgramSpec spec{
+        .name = "pad_rm_sharded_width_only",
+        .kernels = {std::move(reader), std::move(writer)},
+        .dataflow_buffers = {std::move(in_shard_dfb), std::move(out_shard_dfb), std::move(pad_dfb)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = SH_W_INPUT, .spec = input_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = SH_W_OUTPUT, .spec = output_mesh_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {SH_W_READER, SH_W_WRITER},
+                    .target_nodes = all_cores_padded,
+                },
+            },
+    };
 
-    // Sharded readers/writers don't consume per-core runtime args (legacy code
-    // called SetRuntimeArgs(..., {}) with empty arg lists).  CB addresses are
-    // patched via cb.buffer on cache hits.  Mirror the legacy behavior by
-    // emitting an empty rtarg list per active core so the kernel reserves slots.
-    for (const auto& core : ordered_cores_with_data) {
-        reader_desc.emplace_runtime_args(core, KernelDescriptor::RTArgList{});
-        writer_desc.emplace_runtime_args(core, KernelDescriptor::RTArgList{});
-    }
+    ProgramRunArgs run_args;
+    run_args.tensor_args = {
+        {SH_W_INPUT, TensorArgument{input_mesh_tensor}},
+        {SH_W_OUTPUT, TensorArgument{output_mesh_tensor}},
+    };
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim

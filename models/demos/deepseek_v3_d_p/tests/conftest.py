@@ -108,6 +108,19 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
 ]
 
 
+def pytest_addoption(parser):
+    try:
+        parser.addoption(
+            "--wrapper-invocation",
+            action="store_true",
+            default=False,
+            help="Set by wrapper tests on the child pytest they spawn: every uncollect_if trim "
+            "is bypassed, so the wrapper's -k filter fully owns the selection.",
+        )
+    except ValueError:
+        pass
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(
@@ -157,9 +170,13 @@ def pytest_collection_modifyitems(config, items):
     """
     is_ci_env = os.getenv("CI") == "true"
     is_ci_v2_env = "TT_GH_CI_INFRA" in os.environ
-    items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
-
     on_ci = is_ci_env or is_ci_v2_env
+
+    # A wrapper's child pytest owns its own selection through -k; trimming it here would
+    # hide exactly the cases the wrapper exists to measure.
+    if not config.getoption("--wrapper-invocation"):
+        items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
+
     torus_xy_certified = os.getenv("PREFILL_TORUS_XY_CERTIFIED") == "1"
     torus_xy_fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     ring_or_torus_fabrics = {
@@ -170,7 +187,7 @@ def pytest_collection_modifyitems(config, items):
 
     CT = ttnn.cluster.ClusterType
     FC = ttnn.FabricConfig
-    DEFAULT_ALLOWED_FABRICS = frozenset({FC.DISABLED, FC.FABRIC_2D})
+    DEFAULT_ALLOWED_FABRICS = frozenset({FC.DISABLED, FC.FABRIC_1D, FC.FABRIC_2D})
     # DISABLED is listed only on shapes that already own fabric-irrelevant diagnostics
     # (currently single-chip and the P300 1x2 masked-bincount row). Do not expand it into
     # communicating-test matrices merely to make this table visually symmetric.
@@ -181,18 +198,18 @@ def pytest_collection_modifyitems(config, items):
             (1, 2): [FC.DISABLED, FC.FABRIC_2D],
         },  # 2 chips
         CT.P300_X2: {  # 4-chip QuietBox
-            (4, 1): [FC.FABRIC_2D_TORUS_Y],
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (2, 2): [FC.FABRIC_2D],
             (1, 4): [FC.FABRIC_2D_TORUS_X],
         },
         CT.P150_X8: {
-            (8, 1): [FC.FABRIC_2D_TORUS_Y],
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (4, 2): [FC.FABRIC_2D],
             (2, 4): [FC.FABRIC_2D],
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.T3K: {
-            (8, 1): [FC.FABRIC_2D_TORUS_Y],
+            (8, 1): [FC.FABRIC_1D, FC.FABRIC_2D_TORUS_Y],
             (4, 2): [FC.FABRIC_2D],
             (2, 4): [FC.FABRIC_2D],
             (1, 8): [FC.FABRIC_2D_TORUS_X],
@@ -200,27 +217,27 @@ def pytest_collection_modifyitems(config, items):
         CT.BLACKHOLE_GALAXY: {
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
             (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
-            (4, 8): [FC.FABRIC_2D],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
         },
         CT.GALAXY: {
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
             (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
-            (4, 8): [FC.FABRIC_2D],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
         },
         CT.TG: {
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
-            (8, 4): [FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
+            (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
             (4, 4): [FC.FABRIC_2D_TORUS_X, FC.FABRIC_2D_TORUS_Y, FC.FABRIC_2D_TORUS_XY],
-            (4, 8): [FC.FABRIC_2D],
+            (4, 8): [FC.FABRIC_1D, FC.FABRIC_2D],
             (2, 16): [FC.FABRIC_2D],
             (1, 32): [FC.FABRIC_2D],
         },
@@ -292,7 +309,9 @@ def pytest_collection_modifyitems(config, items):
             if mesh_shape in allowed_fabric_dct.keys():
                 allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
 
-        if requested_fabric_cfg not in allowed_fabric_cfgs:
+        # A case with no device_params fabric never opens a fabric, so it cannot request an
+        # unfeasible mesh/fabric combination — only device-count matching below applies to it.
+        if requested_fabric_cfg is not None and requested_fabric_cfg not in allowed_fabric_cfgs:
             item.add_marker(
                 pytest.mark.skip(
                     reason="requested combination of fabric config and mesh, unfeasible on the given hardware"

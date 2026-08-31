@@ -18,12 +18,12 @@ namespace {
 using ::testing::Eq;
 using ::testing::Pointwise;
 
-TEST(HostBufferTest, Empty) {
+TEST(HostBufferTest, CPU_Empty) {
     HostBuffer buffer;
     EXPECT_TRUE(buffer.view_bytes().empty());
 }
 
-TEST(HostBufferTest, BasicOwned) {
+TEST(HostBufferTest, CPU_BasicOwned) {
     HostBuffer buffer(std::vector<int>{1, 2, 3});
 
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
@@ -34,7 +34,7 @@ TEST(HostBufferTest, BasicOwned) {
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
 }
 
-TEST(HostBufferTest, BasicBorrowed) {
+TEST(HostBufferTest, CPU_BasicBorrowed) {
     int num_increments = 0;
     int num_decrements = 0;
     std::vector<int> vec = {1, 2, 3};
@@ -51,12 +51,12 @@ TEST(HostBufferTest, BasicBorrowed) {
     EXPECT_THAT(buffer.view_as<int>(), Pointwise(Eq(), {1, 5, 3}));
 }
 
-TEST(HostBufferTest, IncorrectCast) {
+TEST(HostBufferTest, CPU_IncorrectCast) {
     HostBuffer buffer(std::vector<int>{1, 2, 3});
     EXPECT_ANY_THROW({ buffer.view_as<float>(); });
 }
 
-TEST(HostBufferTest, ShallowCopy) {
+TEST(HostBufferTest, CPU_ShallowCopy) {
     HostBuffer buffer(std::vector<int>{1, 2, 3});
     HostBuffer copy = buffer;
 

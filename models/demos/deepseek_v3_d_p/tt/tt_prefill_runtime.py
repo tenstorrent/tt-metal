@@ -20,6 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, allocate_dflash_kv_cache
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 
@@ -31,7 +32,7 @@ class TtPrefillRuntimeConfig:
     mesh_shape: tuple = (32, 4)
     # Chunked prefill streams tokens in chunks of `chunk_size`, with `num_users` independent cache
     # slots (user-major batch). The full cache holds num_users * num_layers slots of max_seq_len each.
-    chunk_size: int = 5 * 1024
+    chunk_size: int = PREFILL_CHUNK_TOKENS
     num_users: int = 2
     sp_axis: int = 0
     tp_axis: int = 1
@@ -823,6 +824,18 @@ class TtPrefillRuntime:
                     "layer-acks within a chunk. Drafter KV will not be migrated or PCC-checked."
                 )
 
+        # Dense row -> global layer map, so config 1 is published on the layer axis (see the builder).
+        index_layer_ids = None
+        if kv_caches.index is not None and getattr(self.hf_config, "indexer_types", None):
+            from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
+
+            # The merged table spans EVERY stage, so the map covers the model's layers, not this rank's slice.
+            total_layers = merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers
+            index_layer_ids = [
+                layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
+            ]
+
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
             kvpe_cache=kv_caches.kvpe,
@@ -839,6 +852,7 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=stage_layouts,
+            index_layer_ids=index_layer_ids,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
