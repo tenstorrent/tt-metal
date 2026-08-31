@@ -115,7 +115,9 @@ concept HasSpecRuntimeArgsOverride = requires {
 };
 }  // namespace detail
 
-// Base spec factory: cache hit refreshes only tensor bindings.
+// Base spec factory: cache hit refreshes only tensor bindings. create_program_artifacts takes
+// (attrs, tensor_args, tensor_return_value), optionally + a MeshCoordinate to vary per device;
+// declare exactly one of the two, since an overload set defeats the check below.
 template <typename T>
 concept ProgramSpecFactoryConcept =
     requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&

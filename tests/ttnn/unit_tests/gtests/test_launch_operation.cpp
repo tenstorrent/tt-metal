@@ -146,6 +146,35 @@ struct CustomProgramSpecFactory {
     }
 };
 
+// Per-coordinate variants of both flavors: create_program_artifacts takes the MeshCoordinate, so the
+// adapter calls it once per coordinate and each call may return its own spec and run args.
+struct PerCoordProgramSpecFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+};
+
+struct PerCoordCustomProgramSpecFactory {
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+        return ttnn::device_operation::ProgramArtifacts{};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        Tensor& /*tensor_return_value*/,
+        const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/ = std::nullopt) {
+        return {};
+    }
+};
+
 // Minimal device operation supplying just the typedefs the adapter inherits.
 struct ProgramSpecMinimalOp {
     using operation_attributes_t = OperationAttributes;
@@ -167,6 +196,22 @@ static_assert(!ttnn::device_operation::ProgramFactoryConcept<CustomProgramSpecFa
 static_assert(!ttnn::device_operation::MeshWorkloadFactoryConcept<CustomProgramSpecFactory>);
 static_assert(!ttnn::device_operation::ProgramDescriptorFactoryConcept<CustomProgramSpecFactory>);
 
+// Taking the coordinate doesn't change which flavor a factory is.
+static_assert(ttnn::device_operation::ProgramSpecFactoryConcept<PerCoordProgramSpecFactory>);
+static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<PerCoordProgramSpecFactory>);
+static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<PerCoordCustomProgramSpecFactory>);
+static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<PerCoordCustomProgramSpecFactory>);
+
+template <typename Factory>
+using SpecAdapter =
+    device_operation::MeshDeviceOperationAdapter<ProgramSpecMinimalOp>::ProgramSpecMeshWorkloadFactoryAdapter<Factory>;
+
+// The mesh-wide vs per-coordinate build path is picked by this predicate; pin both directions.
+static_assert(SpecAdapter<PerCoordProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
+static_assert(SpecAdapter<PerCoordCustomProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
+static_assert(!SpecAdapter<ProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
+static_assert(!SpecAdapter<CustomProgramSpecFactory>::create_program_artifacts_uses_mesh_dispatch_coordinate());
+
 // Compile-coverage: taking the adapter methods' addresses ODR-uses them, forcing
 // the (otherwise un-instantiated) bodies to compile. Never dispatched.
 TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
@@ -180,6 +225,13 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
         ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<CustomProgramSpecFactory>;
     [[maybe_unused]] auto ccreate = &CustomAdapter::create_mesh_workload;
     [[maybe_unused]] auto capply = &CustomAdapter::apply_descriptor;
+
+    // The per-coordinate build path is a separate if-constexpr branch; instantiate it too.
+    [[maybe_unused]] auto pcreate = &SpecAdapter<PerCoordProgramSpecFactory>::create_mesh_workload;
+    using PerCoordCustomAdapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<PerCoordCustomProgramSpecFactory>;
+    [[maybe_unused]] auto pccreate = &PerCoordCustomAdapter::create_mesh_workload;
+    [[maybe_unused]] auto pcapply = &PerCoordCustomAdapter::apply_descriptor;
     SUCCEED();
 }
 

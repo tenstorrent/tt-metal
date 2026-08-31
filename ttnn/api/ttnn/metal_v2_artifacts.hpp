@@ -19,8 +19,8 @@ namespace ttnn::device_operation {
 // create_program_artifacts method; the framework adapter maps that same spec
 // onto tensor_coords via experimental::MakeMeshWorkloadFromSpecs.
 //
-// A future MeshWorkloadSpecFactoryConcept will return a different (multi-program)
-// artifact type for ops whose programs vary across the mesh.
+// Ops whose programs vary across the mesh return one of these per coordinate, from
+// the create_program_artifacts overload taking a MeshCoordinate.
 struct ProgramArtifacts {
     tt::tt_metal::experimental::ProgramSpec spec;
     tt::tt_metal::experimental::ProgramRunArgs run_params;
