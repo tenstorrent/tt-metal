@@ -34,12 +34,6 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
     ),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=[True, False],
-    # Dest-addressed DI is a plain-DI-only variant (see _llk_math_matmul_init_).
-    enable_dest_direct_addressing=lambda enable_direct_indexing, register_format_hint: (
-        [False, True]
-        if (enable_direct_indexing and register_format_hint is None)
-        else [False]
-    ),
     transpose=[Transpose.No],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -55,7 +49,6 @@ def test_perf_matmul_quasar(
     implied_math_format,
     register_format_hint,
     enable_direct_indexing,
-    enable_dest_direct_addressing,
     transpose,
     run_types,
     loop_factor,
@@ -70,7 +63,6 @@ def test_perf_matmul_quasar(
         implied_math_format=implied_math_format,
         register_format_hint=register_format_hint,
         enable_direct_indexing=enable_direct_indexing,
-        enable_dest_direct_addressing=enable_dest_direct_addressing,
         transpose=transpose,
         run_types=run_types,
         loop_factor=loop_factor,

@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
     ENABLE_2X_FORMAT,
-    ENABLE_DEST_DIRECT_ADDRESSING,
     ENABLE_DIRECT_INDEXING,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
@@ -153,13 +152,6 @@ _ARCH = get_chip_architecture()
     implied_math_format=lambda format: matmul_implied_math_formats(format),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=[False, True],
-    # Dest-addressed DI is implemented for the plain (non-2x) DI stream only, so it is crossed
-    # neither with the non-DI path nor with the MxFp4_2x register formats.
-    enable_dest_direct_addressing=lambda enable_direct_indexing, register_format_hint: (
-        [False, True]
-        if (enable_direct_indexing and register_format_hint is None)
-        else [False]
-    ),
     transpose=[Transpose.No],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -174,7 +166,6 @@ def test_matmul(
     implied_math_format,
     register_format_hint,
     enable_direct_indexing,
-    enable_dest_direct_addressing,
     transpose,
     run_types,
     loop_factor,
@@ -300,7 +291,6 @@ def test_matmul(
             in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
         ),
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
-        ENABLE_DEST_DIRECT_ADDRESSING(enable_dest_direct_addressing),
         DEST_SYNC(dest_sync_mode),
         UNPACK_TRANS_FACES(transpose),
     ]

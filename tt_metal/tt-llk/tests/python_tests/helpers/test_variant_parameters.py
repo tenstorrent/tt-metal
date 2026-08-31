@@ -489,14 +489,6 @@ class ENABLE_DIRECT_INDEXING(TemplateParameter):
 
 
 @dataclass
-class ENABLE_DEST_DIRECT_ADDRESSING(TemplateParameter):
-    enable_dest_direct_addressing: bool = False
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool ENABLE_DEST_DIRECT_ADDRESSING = {str(self.enable_dest_direct_addressing).lower()};"
-
-
-@dataclass
 class UNPACKER_ENGINE_SEL(TemplateParameter):
     unpacker_engine_sel: UnpackerEngine = UnpackerEngine.UnpA
 
