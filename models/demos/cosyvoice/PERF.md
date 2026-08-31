@@ -225,17 +225,22 @@ captured prefix and stepped for every token.
 | first-audio gain | **`1.19×`** | **`1.17×`** | — |
 | cost of interleaving, on the total | `1.36×` | `1.41×` | — |
 
-**The n300 column is empty because the interleaved schedule hangs Wormhole**, not
-because it was not tried. Running the flow decoder and the vocoder against a live
-decode trace wedges the board — log frozen, JIT cache flat, board needing a reset —
-while both 32 GB Blackhole boards run the identical code over identical geometries
-without complaint. Shrinking the test's trace region from 384 MB to 64 MB (it captures
-one trace, not the in-place path's 65) did not change it. §10 records it; the test
-skips there with that reason rather than hanging the rest of the run.
+**The n300 column is empty because *this test* still hangs Wormhole** — not because
+the interleaved schedule does. The distinction matters and is recent: the shipped path,
+`CosyVoiceTTNN.synthesize_streaming`, **does** run on n300, and
+`test_device_streaming_generates_the_same_tokens_as_batch` exercises it there and
+passes. What has no Wormhole timing is this head-to-head measurement.
 
-**Chunked synthesis is unaffected on Wormhole.** The content gate,
-`test_device_streamed_matches_non_streamed`, runs on n300 and passes. What Wormhole
-loses is the interleaved *schedule*, not streaming.
+The test wedges the board — log frozen, JIT cache flat, needing a reset — where both
+Blackhole boards run the identical code over identical geometries. Ruled out: the trace
+region size, the warm-before-capture ordering, and the `StreamState` fix that cured the
+corruption described in §10. The untested lead is that this test holds one decode trace
+live across four passes while `synthesize_streaming` captures and releases per call.
+It skips on Wormhole with that reason rather than hanging the rest of the run; §10 and
+`docs/VALIDATION.md` carry the detail.
+
+**Chunked synthesis is unaffected on Wormhole**, and always was: the content gate,
+`test_device_streamed_matches_non_streamed`, runs on n300 and passes.
 
 Both directions are reported because either alone misleads. Interleaving makes the
 *total* worse — one device, one command queue, no overlap of compute, and a chunk's
@@ -367,8 +372,10 @@ risky: `COSYVOICE_FF2_GRID`, and `COSYVOICE_KV_INPLACE` on Blackhole.
 
 ## 10. Known limitations
 
-Three, all reproducible, none smoothed over. `docs/VALIDATION.md` carries the same list
-against the requirements they touch.
+Four, all reproducible, none smoothed over. `docs/VALIDATION.md` carries the same list
+against the requirements they touch. A fifth — corrupt audio from the interleaved
+schedule — was diagnosed and fixed rather than listed; item 3 keeps the account,
+because the fix is a constraint on anyone extending that path.
 
 1. **`RTF < 0.2` is not reachable on this decomposition** — §3.4. Bounded below by the
    Euler count and by the decode step's weight traffic, not by tuning.
@@ -377,27 +384,34 @@ against the requirements they touch.
    `release_caches()` does not free. It is why `demo/demo.py` opens a fresh device per
    utterance, and it is what blocks end-to-end *batched synthesis* (batched decode
    itself is fine — §4). Not root-caused.
-3. **Allocating device buffers while a trace is live can hang the board.** TTNN warns
-   about it — *"Allocating device buffers is unsafe due to the existence of an active
-   trace"* — and the consequence on this model is a wedged device needing a reset. It
-   shapes the whole interleaved design, in three ways:
+3. **Device buffers allocated while a trace is live get corrupted, and can hang the
+   board.** TTNN warns about it — *"Allocating device buffers is unsafe due to the
+   existence of an active trace"* — and this port has now been bitten by both halves.
 
-   * the flow decoder and the vocoder must be warmed **before** the AR decode trace is
-     captured. Doing it the other way round hangs Blackhole too;
-     `CosyVoiceTTNN.synthesize_streaming` and `tests/perf/test_streaming_perf.py` both
-     warm first for this reason;
-   * even warmed, **Wormhole n300 still hangs** and Blackhole does not (§5). Not the
-     trace region — right-sizing it from 384 MB to 64 MB changed nothing;
-   * the first-audio measurement is at one utterance length rather than swept, because
-     a second length adds live geometries and reproduces the hang (§5).
+   **The corruption is fixed.** Interleaved synthesis returned audio peaking at 72
+   against a batch path peaking at 0.001; per-chunk comparison against a no-trace
+   reference showed chunk 0 clean (waveform PCC `0.99999994`) and chunk 1 with a
+   *bit-identical mel* (PCC `1.0`) but waveform PCC `0.011` — which localises it to
+   the state carried across the seam rather than to either stage. `StreamState` now
+   parks those four tensors on the host between chunks. `docs/VALIDATION.md` has the
+   full account; the same fix also stopped `synthesize_streaming` hanging n300.
 
-   Not root-caused. It is plausibly the same underlying problem as (2) — both are
-   about device state accumulating across geometries — but that is a guess and is
-   labelled as one.
+   **The hang is not fully fixed.** `test_device_streaming_first_audio_latency` still
+   wedges n300 and is skipped there (§5). Ruled out: trace region size,
+   warm-before-capture ordering, and the fix above. Not root-caused.
 
-`CosyVoiceTTNN.synthesize_streaming` additionally has an **open audio defect** — correct
-tokens, correct schedule, wrong amplitude. It is pinned by a test so it cannot drift;
-`docs/VALIDATION.md` has the full account.
+   It also constrains the design: the flow decoder and vocoder must be warmed *before*
+   the AR decode trace is captured — doing it the other way round hangs Blackhole too —
+   and the first-audio measurement is at one utterance length rather than swept,
+   because a second length reproduces the hang.
+
+4. **An n300/Blackhole streaming amplitude difference on one synthetic case**, found
+   while diagnosing the above and not yet explained. Which figure is wrong is not
+   established; the gated content comparison passes on n300.
+   `docs/VALIDATION.md` records what has been ruled out.
+
+Items 2 and 3's hang share a shape — device state accumulating across geometries or
+across a trace — and may share a cause. That is a guess, and is labelled as one.
 
 ---
 
