@@ -49,7 +49,7 @@ from loguru import logger
 from safetensors.torch import load_file
 
 from ...layers.lora import LoRAMixin
-from .promote import promote_to_lora
+from ...lora.promote import promote_to_lora
 
 _STRIP_PREFIXES = ("model.diffusion_model.", "diffusion_model.", "transformer.", "model.")
 _LOW_RANK_RE = re.compile(r"^(?P<base>.*)\.lora_(?P<slot>A|B|down|up)(?:\.[^.]+)?\.weight$")
