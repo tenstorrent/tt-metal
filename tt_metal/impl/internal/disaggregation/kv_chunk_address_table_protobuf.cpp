@@ -5,7 +5,9 @@
 #include "tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -43,11 +45,12 @@ constexpr uint64_t kEntryWireEstimate = 48;
 // so the getenv cost is irrelevant.
 uint64_t dual_write_max_bytes() {
     if (const char* env = std::getenv("KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES")) {
-        try {
-            return std::stoull(env);
-        } catch (const std::exception&) {
-            // fall through to the default
+        uint64_t value = 0;
+        const char* end = env + std::strlen(env);
+        if (std::from_chars(env, end, value).ec == std::errc{}) {
+            return value;
         }
+        // unparsable: fall through to the default
     }
     return kDefaultDualWriteMaxBytes;
 }
@@ -556,7 +559,7 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
             // strided_maps is keyed by TABLE config id (sorted-name order); i is the wire
             // index — resolve through the name before checking.
             if (idx_to_compression[i] == ChunkCompression::kStridedRows &&
-                !strided_maps.count(table.config_id_of(idx_to_name[i]))) {
+                !strided_maps.contains(table.config_id_of(idx_to_name[i]))) {
                 // …unless every row is legitimately unset: our exporter only tags configs whose
                 // rows all compress, and an all-unset config exports UNROLLED, so this is corrupt.
                 throw std::runtime_error(
