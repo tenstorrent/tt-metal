@@ -16,7 +16,8 @@
 #include <string>
 #include <vector>
 
-// UMD: re-exports tt_xy_pair, aliased as CoreCoord in this header.
+// UMD: re-exports tt::umd::CoreCoord, aliased as CoreCoord in this header.
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace ttsl::json {
@@ -28,7 +29,7 @@ struct to_json_t;
 
 namespace tt::tt_metal {
 
-using CoreCoord = tt_xy_pair;
+using CoreCoord = ::tt::umd::CoreCoord;
 
 class CoreRangeSet;
 
@@ -273,12 +274,7 @@ struct fmt::formatter<tt::tt_metal::CoreRange> {
     auto format(const tt::tt_metal::CoreRange& core_range, format_context& ctx) const -> format_context::iterator;
 };
 
-template <>
-struct fmt::formatter<tt::tt_metal::CoreCoord> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const -> format_context::iterator;
-};
+// fmt::formatter<CoreCoord> is provided by UMD (umd/device/types/core_coordinates.hpp).
 
 namespace std {
 

@@ -118,7 +118,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t issue_queue_size = is_mock ? 0x10000 : device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
+            *program_, CoreCoord(logical_core_.x, logical_core_.y), my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
@@ -136,7 +136,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base(cq_id_);
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+            tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
         static_config_.ringbuffer_size = my_dispatch_constants.ringbuffer_size();
 
         // prefetch_d only
@@ -161,7 +161,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         }
         static_config_.dispatch_s_buffer_base = dispatch_s_buffer_base;
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
+            *program_, CoreCoord(logical_core_.x, logical_core_.y), my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
         static_config_.dispatch_s_buffer_size = my_dispatch_constants.dispatch_s_buffer_size();
         static_config_.dispatch_s_cb_log_page_size = DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     } else if (static_config_.is_h_variant.value()) {
@@ -197,11 +197,11 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_upstream_cb_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+            tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
 
         // Workaround for now. Need downstream to initialize my semaphore. Can't defer creating semaphore yet
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
+            *program_, CoreCoord(logical_core_.x, logical_core_.y), my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 
         // PREFETCH_H has no DISPATCH_S
@@ -211,7 +211,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_cb_log_page_size = 0;
     } else if (static_config_.is_d_variant.value()) {
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
+            *program_, CoreCoord(logical_core_.x, logical_core_.y), my_dispatch_constants.dispatch_buffer_pages(), GetCoreType());
 
         static_config_.pcie_base = 0;
         static_config_.pcie_size = 0;
@@ -231,12 +231,12 @@ void PrefetchKernel::GenerateStaticConfigs() {
                                          (~(pcie_alignment - 1));
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+            tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
         static_config_.ringbuffer_size = my_dispatch_constants.ringbuffer_size();
 
         static_config_.cmddat_q_pages = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_upstream_cb_sem_id =
-            tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+            tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
 
         uint32_t dispatch_s_buffer_base = 0xff;
@@ -255,7 +255,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
         }
         static_config_.dispatch_s_buffer_base = dispatch_s_buffer_base;
         static_config_.my_dispatch_s_cb_sem_id = tt::tt_metal::CreateSemaphore(
-            *program_, logical_core_, my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
+            *program_, CoreCoord(logical_core_.x, logical_core_.y), my_dispatch_constants.dispatch_s_buffer_pages(), GetCoreType());
         static_config_.dispatch_s_buffer_size = my_dispatch_constants.dispatch_s_buffer_size();
         static_config_.dispatch_s_cb_log_page_size = get_dispatch_query_manager_ref().dispatch_s_enabled()
                                                          ? DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE

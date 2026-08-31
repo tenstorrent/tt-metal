@@ -45,8 +45,10 @@ public:
             const auto& soc_desc = cluster.get_soc_desc(chip_id_src);
             // Build a mapping of (eth_core --> eth_chan)
             for (auto eth_chan = 0; eth_chan < soc_desc.get_num_eth_channels(); eth_chan++) {
-                auto eth_physical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::NOC0);
-                eth_core_to_channel_lookup_.emplace(std::make_tuple(chip_id_src, eth_physical_core), eth_chan);
+                const tt::umd::CoreCoord eth_physical_core =
+                    soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::NOC0);
+                eth_core_to_channel_lookup_.emplace(
+                    std::make_tuple(chip_id_src, CoreCoord{eth_physical_core.x, eth_physical_core.y}), eth_chan);
             }
         }
     }

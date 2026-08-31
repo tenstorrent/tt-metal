@@ -391,7 +391,7 @@ int main(int argc, char** argv) {
     auto grid_size = mesh_device->compute_with_storage_grid_size();
     for (auto i = 0; i < grid_size.x; i++) {
         for (auto j = 0; j < grid_size.y; j++) {
-            worker_logical_cores.push_back(CoreCoord({i, j}));
+            worker_logical_cores.push_back(CoreCoord(i, j));
         }
     }
 

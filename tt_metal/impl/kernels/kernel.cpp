@@ -156,7 +156,7 @@ Kernel::Kernel(
     tensor_binding_handles_(tensor_binding_handles),
     crta_layout_(crta_layout),
 
-    core_with_max_runtime_args_({0, 0}),
+    core_with_max_runtime_args_(0, 0),
     defines_(defines),
     watcher_assert_enabled_(
         tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_watcher_enabled() &&
@@ -170,7 +170,7 @@ Kernel::Kernel(
         auto end = core_range.end_coord;
         for (auto x = start.x; x <= end.x; x++) {
             for (auto y = start.y; y <= end.y; y++) {
-                CoreCoord logical_core({x, y});
+                CoreCoord logical_core(x, y);
                 this->logical_cores_.insert(logical_core);
                 max_x = std::max(max_x, x);
                 max_y = std::max(max_y, y);

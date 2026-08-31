@@ -654,13 +654,6 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b)
 
 }  // namespace tt::tt_metal
 
-auto fmt::formatter<tt::tt_metal::CoreCoord>::format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const
-    -> format_context::iterator {
-    std::stringstream ss;
-    ss << core_coord.str();
-    return fmt::format_to(ctx.out(), "{}", ss.str());
-}
-
 auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
     -> format_context::iterator {
     std::stringstream ss;

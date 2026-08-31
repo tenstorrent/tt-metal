@@ -110,7 +110,7 @@ ProgramState init_program() {
     tt::tt_metal::distributed::MeshCoordinateRange device_range =
         tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape());
     // This program uses only a single Tensix core at [0, 0].
-    tt::tt_metal::CoreCoord core({0, 0});
+    tt::tt_metal::CoreCoord core(0, 0);
     // Create a program object. A program is a collection of kernels that are executed on the device.
     // Kernels will be specified later.
     Program program = CreateProgram();

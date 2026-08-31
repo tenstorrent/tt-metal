@@ -125,7 +125,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         const uint32_t core_grid_calculated_columns_number = Ht % compute_with_storage_grid_size.x;
 
         if (core_grid_calculated_rows_number == 0 && core_grid_calculated_columns_number == 0) {
-            core_range = CoreRangeSet(CoreCoord({0, 0}));
+            core_range = CoreRangeSet(CoreCoord(0, 0));
         } else if (core_grid_calculated_rows_number == 0) {
             core_range = CoreRangeSet(CoreRange({0, 0}, {core_grid_calculated_columns_number - 1, 0}));
         } else {
@@ -724,7 +724,7 @@ CoreRangeSet compute_cross_core_range(
             all_core_utilization_count % compute_with_storage_grid_size.x;
 
         if (core_grid_calculated_rows_number == 0 && core_grid_calculated_columns_number == 0) {
-            core_range = CoreRangeSet(CoreCoord({0, 0}));
+            core_range = CoreRangeSet(CoreCoord(0, 0));
         } else if (core_grid_calculated_rows_number == 0) {
             core_range = CoreRangeSet(CoreRange({0, 0}, {core_grid_calculated_columns_number - 1, 0}));
         } else {
@@ -1483,7 +1483,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowMultiCore::c
         const uint32_t core_grid_calculated_columns_number = total_work_units % compute_with_storage_grid_size.x;
 
         if (core_grid_calculated_rows_number == 0 && core_grid_calculated_columns_number == 0) {
-            core_range = CoreRangeSet(CoreCoord({0, 0}));
+            core_range = CoreRangeSet(CoreCoord(0, 0));
         } else if (core_grid_calculated_rows_number == 0) {
             core_range = CoreRangeSet(CoreRange({0, 0}, {core_grid_calculated_columns_number - 1, 0}));
         } else {

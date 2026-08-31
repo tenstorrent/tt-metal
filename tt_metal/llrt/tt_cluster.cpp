@@ -1128,8 +1128,9 @@ std::unordered_map<ChipId, std::vector<tt::tt_metal::CoreCoord>> Cluster::get_et
             for (const auto& channel_pair :
                  this->get_cluster_desc()->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
                 EthernetChannel local_chip_chan = std::get<0>(channel_pair);
-                active_ethernet_cores.emplace_back(
-                    get_soc_desc(chip_id).get_eth_core_for_channel(local_chip_chan, CoordSystem::LOGICAL));
+                const tt::umd::CoreCoord eth_core =
+                    get_soc_desc(chip_id).get_eth_core_for_channel(local_chip_chan, CoordSystem::LOGICAL);
+                active_ethernet_cores.emplace_back(eth_core.x, eth_core.y);
             }
             connected_chips.insert({other_chip_id, active_ethernet_cores});
         } else {
@@ -1232,7 +1233,9 @@ void Cluster::initialize_ethernet_cores_router_mode() {
             // Mark all remaining ethernet cores as idle to be used by fabric
             const auto& soc_desc = get_soc_desc(chip_id);
             for (const auto& eth_channel : get_cluster_desc()->get_active_eth_channels(chip_id)) {
-                auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                const tt::umd::CoreCoord umd_eth_core =
+                    soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                const tt::tt_metal::CoreCoord eth_core{umd_eth_core.x, umd_eth_core.y};
                 // Chip ID is guaranteed to be present in device_eth_routing_info_, since it was populated above
                 auto& routing_info = this->device_eth_routing_info_[chip_id];
                 if (!routing_info.contains(eth_core)) {
@@ -1409,9 +1412,11 @@ std::tuple<ChipId, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_core
         std::get<1>(eth_core).str());
     auto connected_eth_core =
         this->get_cluster_desc()->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
+    const tt::umd::CoreCoord connected_logical_core =
+        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL);
     return std::make_tuple(
         std::get<0>(connected_eth_core),
-        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
+        tt::tt_metal::CoreCoord{connected_logical_core.x, connected_logical_core.y});
 }
 
 // TODO: unify uint64_t with ChipUID
@@ -1435,9 +1440,11 @@ std::tuple<uint64_t, tt::tt_metal::CoreCoord> Cluster::get_connected_ethernet_co
         local_eth_core.str());
 
     const auto& connected_eth_core = ethernet_connections_to_remote_cluster.at(local_chip_id).at(eth_chan);
+    const tt::umd::CoreCoord connected_logical_core =
+        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL);
     return std::make_tuple(
         std::get<0>(connected_eth_core),
-        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
+        tt::tt_metal::CoreCoord{connected_logical_core.x, connected_logical_core.y});
 }
 
 std::vector<tt::tt_metal::CoreCoord> Cluster::get_ethernet_sockets(ChipId local_chip, ChipId remote_chip) const {

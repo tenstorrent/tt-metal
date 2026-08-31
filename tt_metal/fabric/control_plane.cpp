@@ -2275,7 +2275,9 @@ std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_co
         const auto& freq_retrain_eth_cores = cluster.get_eth_cores_with_frequent_retraining(chip_id);
         const auto& eth_routing_info = cluster.get_eth_routing_info(chip_id);
         for (const auto& eth_channel : logical_active_eth_channels) {
-            tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+            const tt::umd::CoreCoord umd_eth_core =
+                soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+            const tt::tt_metal::CoreCoord eth_core{umd_eth_core.x, umd_eth_core.y};
             const auto& routing_info = eth_routing_info.at(eth_core);
             if (routing_info == EthRouterMode::FABRIC_ROUTER && skip_reserved_cores) {
                 continue;
@@ -2300,8 +2302,9 @@ std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_co
             }
             for (const auto& eth_channel : channels_to_skip) {
                 if (!logical_active_eth_channels.contains(eth_channel)) {
-                    tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                    active_ethernet_cores.insert(eth_core);
+                    const tt::umd::CoreCoord umd_eth_core =
+                        soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                    active_ethernet_cores.insert({umd_eth_core.x, umd_eth_core.y});
                 }
             }
         }
@@ -2854,7 +2857,8 @@ std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(exit_node_fabric_node_id);
         const auto& soc_desc = this->cluster_.get().get_soc_desc(physical_chip_id);
-        auto eth_core = soc_desc.get_eth_core_for_channel(src_eth_chan, CoordSystem::LOGICAL);
+        const tt::umd::CoreCoord umd_eth_core = soc_desc.get_eth_core_for_channel(src_eth_chan, CoordSystem::LOGICAL);
+        const tt::tt_metal::CoreCoord eth_core{umd_eth_core.x, umd_eth_core.y};
         if (!this->cluster_.get().is_ethernet_link_up(physical_chip_id, eth_core)) {
             continue;
         }

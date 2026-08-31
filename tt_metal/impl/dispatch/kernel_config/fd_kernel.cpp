@@ -331,9 +331,9 @@ KernelHandle FDKernel::configure_kernel_variant(
 }
 
 void FDKernel::create_edm_connection_sems(FDKernelEdmConnectionAttributes& attributes) {
-    attributes.worker_flow_control_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-    attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
-    attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    attributes.worker_flow_control_sem = tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
+    attributes.worker_buffer_index_sem = tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
+    attributes.worker_teardown_sem = tt::tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
 }
 
 void FDKernel::SetRuntimeArgs() {

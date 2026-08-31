@@ -248,7 +248,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Get SOC descriptor for eth core lookup
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    auto eth_logical_core = soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
+    const tt::umd::CoreCoord umd_eth_logical_core =
+        soc_desc.get_eth_core_for_channel(location.eth_chan, CoordSystem::LOGICAL);
+    const tt::tt_metal::CoreCoord eth_logical_core{umd_eth_logical_core.x, umd_eth_logical_core.y};
 
     // Determine tensix config
     auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
@@ -948,7 +950,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto device_id = control_plane.get_physical_chip_id_from_fabric_node_id(local_node_);
     const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
     const auto eth_chan = location_.eth_chan;
-    auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+    const tt::umd::CoreCoord umd_eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+    const tt::tt_metal::CoreCoord eth_logical_core{umd_eth_logical_core.x, umd_eth_logical_core.y};
 
     // Configure for host signal wait
     erisc_builder_->set_wait_for_host_signal(true);

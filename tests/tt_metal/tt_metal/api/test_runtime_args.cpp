@@ -400,7 +400,7 @@ void verify_results(
             for (auto& core_range : kernel->logical_coreranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord logical_core({x, y});
+                        CoreCoord logical_core(x, y);
                         auto rt_args = kernel->common_runtime_args();
                         EXPECT_EQ(rt_args, common_rt_args) << "(common rta)";
                         verify_core_rt_args(

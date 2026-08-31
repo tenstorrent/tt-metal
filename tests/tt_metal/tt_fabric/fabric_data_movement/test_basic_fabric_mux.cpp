@@ -454,7 +454,7 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     auto grid_size = devices[0]->compute_with_storage_grid_size();
     for (auto i = 0; i < grid_size.x; i++) {
         for (auto j = 0; j < grid_size.y; j++) {
-            worker_logical_cores.push_back(tt::tt_metal::CoreCoord({i, j}));
+            worker_logical_cores.push_back(tt::tt_metal::CoreCoord(i, j));
         }
     }
 

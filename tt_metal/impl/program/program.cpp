@@ -1066,7 +1066,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         if (not hal.get_supports_cbs(programmable_core_type_index)) {
                             continue;
                         }
-                        auto core = CoreCoord({x, y});
+                        auto core = CoreCoord(x, y);
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
                             uint64_t used_cbs = local_val->second.to_ullong();
@@ -2164,7 +2164,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         for (const CoreRange& core_range : ranges) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                    CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
+                    CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord(x, y), core_type);
                     dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
                 }
             }

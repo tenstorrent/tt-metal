@@ -132,7 +132,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
-        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
 
         static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = command_queue_start_addr;
@@ -185,7 +185,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
-        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
 
         static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = command_queue_start_addr;
@@ -218,7 +218,7 @@ void DispatchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_cb_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
         static_config_.dispatch_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.dispatch_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
-        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+        static_config_.my_dispatch_cb_sem_id = tt_metal::CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
 
         static_config_.dispatch_cb_blocks = DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         static_config_.command_queue_base_addr = 0;  // These are unused for DISPATCH_D
@@ -227,7 +227,7 @@ void DispatchKernel::GenerateStaticConfigs() {
 
         static_config_.prefetch_h_max_credits = my_dispatch_constants.prefetch_d_buffer_pages();
         static_config_.my_downstream_cb_sem_id = tt_metal::CreateSemaphore(
-            *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
+            *program_, CoreCoord(logical_core_.x, logical_core_.y), my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
 
         static_config_.packed_write_max_unicast_sub_cmds =
             device_->compute_with_storage_grid_size().x * device_->compute_with_storage_grid_size().y;

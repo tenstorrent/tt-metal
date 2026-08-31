@@ -1626,10 +1626,11 @@ void DeviceProfiler::readRiscProfilerResults(
 
     // translate worker core virtual coord to phys coordinates
     const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
-    // disable linting here; slicing is __intended__
-    // NOLINTBEGIN
-    const CoreCoord phys_coord = soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::NOC0);
-    // NOLINTEND
+    // Drop UMD's core_type/coord_system tags: they take part in CoreCoord's ==/</hash, and
+    // device_markers_per_core_risc_map is keyed by untagged Metal coords.
+    const tt::umd::CoreCoord umd_phys_coord =
+        soc_desc.translate_coord_to(worker_core, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+    const CoreCoord phys_coord{umd_phys_coord.x, umd_phys_coord.y};
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
         return (metadata.has_value()) ? metadata->get_op_name(device_id, runtime_id) : "";

@@ -18,7 +18,7 @@ RotateHalfProgramFactory::cached_program_t RotateHalfProgramFactory::create(
 
     Program program{};
 
-    const CoreCoord core({0, 0});
+    const CoreCoord core(0, 0);
     CoreRange core_range(core, core);
 
     Tensor& output = tensor_return_value;

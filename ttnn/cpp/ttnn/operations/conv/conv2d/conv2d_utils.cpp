@@ -215,7 +215,7 @@ ParallelConfig determine_parallel_config(
 
         uint32_t cores_x = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
         uint32_t cores_y = block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
-        CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
+        CoreRange core_range = CoreRange(CoreCoord(0, 0), CoreCoord(cores_x - 1, cores_y - 1));
         grid = CoreRangeSet({core_range});
     } else if (shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t input_channels_ntiles = tt::div_up(input_channels, effective_tile_width);
@@ -260,7 +260,7 @@ ParallelConfig determine_output_parallel_config(
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_nhw : num_cores_c;
             const uint32_t cores_y =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? num_cores_c : num_cores_nhw;
-            CoreRange core_range = CoreRange(CoreCoord({0, 0}), CoreCoord({cores_x - 1, cores_y - 1}));
+            CoreRange core_range = CoreRange(CoreCoord(0, 0), CoreCoord(cores_x - 1, cores_y - 1));
             output_parallel_config.grid = CoreRangeSet({core_range});
         }
     }

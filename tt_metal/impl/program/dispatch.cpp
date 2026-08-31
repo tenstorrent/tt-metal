@@ -1279,7 +1279,7 @@ public:
             for (const CoreRange& core_range : ranges) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                        CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord({x, y}), core_type);
+                        CoreCoord virtual_coord = device->virtual_core_from_logical_core(CoreCoord(x, y), core_type);
                         dst_noc_unicast_info.push_back(std::make_pair(virtual_coord, /*num_mcast_dests=*/0));
                     }
                 }
@@ -2265,7 +2265,7 @@ public:
                     for (const CoreRange& core_range : kernel_group->core_ranges.ranges()) {
                         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                                CoreCoord logical_coord({x, y});
+                                CoreCoord logical_coord(x, y);
                                 CoreCoord virtual_coord = device->virtual_core_from_logical_core(
                                     logical_coord, kernel_group->get_core_type());
                                 auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);

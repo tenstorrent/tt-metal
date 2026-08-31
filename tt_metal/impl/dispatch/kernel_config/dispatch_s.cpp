@@ -142,9 +142,9 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.cb_log_page_size = DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
     static_config_.cb_size = my_dispatch_constants.dispatch_s_buffer_size();
     // used by dispatch_s to sync with prefetch
-    static_config_.my_dispatch_cb_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    static_config_.my_dispatch_cb_sem_id = CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
     // used by dispatch_d to signal that its shutdown handoff is ready
-    static_config_.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
+    static_config_.dispatch_d_shutdown_sem_id = CreateSemaphore(*program_, CoreCoord(logical_core_.x, logical_core_.y), 0, GetCoreType());
     static_config_.dispatch_s_sync_sem_base_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_S_SYNC_SEM, cq_id_);
     // used by dispatch_d to signal that dispatch_s can send go signal

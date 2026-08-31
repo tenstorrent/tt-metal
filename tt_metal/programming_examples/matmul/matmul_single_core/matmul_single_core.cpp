@@ -71,7 +71,7 @@ void matmul_single_core(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
     // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
-    CoreCoord core({0, 0});
+    CoreCoord core(0, 0);
 
     // Calcaulate the number of tiles for each dimension.
     uint32_t Mt = M / TILE_HEIGHT;
