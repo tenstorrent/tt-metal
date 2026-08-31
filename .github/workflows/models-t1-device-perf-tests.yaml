@@ -15,6 +15,7 @@ on:
           - all
           - llama3.1-8b
           - deepseek-v3-tg
+          - kimi-k3-kda
           - sdxl
           - resnet50
       sku:
@@ -35,6 +36,7 @@ on:
           - "bh_p300 (P300)"
           - "bh_quietbox_2 (BH QB2)"
           - "bh_galaxy (BH Galaxy)"
+          - "bh_loudbox (BH LoudBox)"
       platform:
         required: false
         type: choice
@@ -75,7 +77,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_p150b_civ2,bh_p300,bh_quietbox_2,bh_galaxy,bh_loudbox"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT

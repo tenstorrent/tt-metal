@@ -396,6 +396,28 @@
 
 # ===== Kimi-K3-2.8T ====================================================================================
 
+- name: "(Kimi-K3-2.8T) KDA layer-1 real-weight accuracy SP8xTP4"
+  fabric_profile: torus_xy
+  cmd: |
+    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      test -f "$KIMI_K3_CKPT/config.json" || { echo "missing pinned Kimi-K3 config: $KIMI_K3_CKPT/config.json" >&2; exit 1; }
+      test -f "$KIMI_K3_CKPT/model.safetensors.index.json" || { echo "missing pinned Kimi-K3 safetensor index: $KIMI_K3_CKPT/model.safetensors.index.json" >&2; exit 1; }
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/model/test_real_weights.py -k "SP8xTP4" -vvv --tb=short
+    '
+  test_type: k3_kda
+  test_tags: [kimi_k3, kda]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 6
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  sp_config: sc1
+
 - name: "(Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k"
   fabric_profile: torus_xy
   cmd: |
