@@ -323,6 +323,7 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.local_linear_key_heads, decoder.local_linear_value_heads = 4, 12
         decoder.local_linear_key_width, decoder.local_linear_value_width = 512, 1536
         decoder._configure_multichip_compute()
+        decoder._warm_collectives()
         decoder._row_collective_mode = "all_reduce"
         decoder._multichip_candidate = multichip_candidate
         decoder.ccl_token_mixer_dtype = ccl_token_mixer_dtype
@@ -445,6 +446,37 @@ class MultichipDecoder(OptimizedDecoder):
         self.decode_sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=0
         )
+
+    # A collective's first call in a process fixes an L1 low-water mark for the
+    # whole run.  ttnn.all_reduce passes no persistent semaphores, so each call
+    # creates fresh global semaphores; they are allocated below that call's own
+    # transient working set and, being persistent, stay stranded there once it
+    # is freed.  Later calls add more semaphores but never lower the mark, so
+    # whatever the first collective cost is what every later program has to fit
+    # under.  Measured on a (1,4) Blackhole mesh, largest contiguous L1 after the
+    # first all_reduce:
+    #
+    #     first call width      32 -> 1,461,120 B     (composite path)
+    #                          512 -> 1,329,664 B
+    #                         5120 ->   805,376 B     (the real residual width)
+    #
+    # 805,376 B is not enough for this layer: the decode MLP down projection's
+    # static circular buffers alone reach 811,776 B, and the prefill norm needs
+    # more still.  Running one minimal collective here, while L1 is empty,
+    # establishes the mark at the top instead and costs one program at setup.
+    _COLLECTIVE_WARMUP_WIDTH = 512
+
+    def _warm_collectives(self):
+        """Fix the run's L1 low-water mark at the top of L1, not mid-heap."""
+        warm = _replicate(
+            torch.zeros(1, 1, ttnn.TILE_SIZE, self._COLLECTIVE_WARMUP_WIDTH, dtype=torch.bfloat16),
+            mesh_device=self.mesh_device,
+        )
+        # all_reduce is reduce-scatter plus all-gather, so this materializes the
+        # semaphores for both collectives the layer uses.
+        ttnn.deallocate(self._all_reduce(warm))
+        ttnn.deallocate(warm)
+        ttnn.synchronize_device(self.mesh_device)
 
     def _all_reduce(self, tensor, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         return ttnn.all_reduce(
