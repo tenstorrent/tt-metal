@@ -25,6 +25,14 @@ struct WelfordReduceDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        // Re-applies the hash-excluded scalar and correction, and every buffer address, on a hit.
+        static void override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
     };
 
     using program_factory_t = std::variant<WelfordReduceProgramFactory>;
@@ -33,6 +41,11 @@ struct WelfordReduceDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    // `scalar` and `correction` are excluded: they reach the kernels as runtime args, so every
+    // value shares one program (#54180).
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(

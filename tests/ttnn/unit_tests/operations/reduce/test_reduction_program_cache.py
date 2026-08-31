@@ -525,3 +525,89 @@ def test_reduce_hw_negative_scalar(device, isolate_program_cache, op, shape):
             frobenius_threshold=0.02,
             check_pcc=False,
         )
+
+
+# =============================================================================
+# Welford (std/var): scalar and Bessel correction are runtime args too (#54180)
+# =============================================================================
+
+TORCH_WELFORD = {"std": torch.std, "var": torch.var}
+TTNN_WELFORD = {"std": ttnn.std, "var": ttnn.var}
+
+
+@pytest.mark.parametrize("op", ["std", "var"])
+@pytest.mark.parametrize("dim", [-1, -2, None])
+def test_welford_cache_reuse_across_scalars(device, isolate_program_cache, op, dim):
+    """Distinct scalar values share one cache entry for std/var.
+
+    The Welford reduction runs unscaled and the scalar is applied afterwards, shaped by the
+    statistic: var(s*x) = s^2 var(x), std(s*x) = |s| std(x). That transform is derived on the host,
+    so a cache hit has to re-apply it; a stale value would be wrong by a factor of the scalar.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(scalar):
+        result = ttnn.to_torch(TTNN_WELFORD[op](ttnn_input, dim=dim, scalar=scalar, correction=False))
+        expected = TORCH_WELFORD[op](scalar * torch_input, dim=dim, correction=0)
+        assert_numeric_metrics(
+            expected.reshape(result.shape),
+            result,
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.3,
+            frobenius_threshold=0.02,
+            check_pcc=(dim is not None),
+        )
+
+    with device.cache_entries_counter.measure():
+        run(SCALARS[0])
+    baseline = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        for scalar in SCALARS[1:]:
+            run(scalar)
+
+    assert device.cache_entries_counter.total == baseline, (
+        f"{len(SCALARS)} scalar values cost {device.cache_entries_counter.total} cache entries; "
+        f"one scalar costs {baseline}. A scalar value is still reaching the Welford program hash."
+    )
+
+
+@pytest.mark.parametrize("op", ["std", "var"])
+@pytest.mark.parametrize("dim", [-1, -2, None])
+def test_welford_cache_reuse_across_correction(device, isolate_program_cache, op, dim):
+    """Both Bessel correction settings share one cache entry, and each result is correct.
+
+    correction picks the divisor (N vs N-1), which the kernels now read at runtime, so it must not
+    fork the program. Reduction length is 64, comfortably above the 2-element minimum.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.float32)
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def run(correction):
+        result = ttnn.to_torch(TTNN_WELFORD[op](ttnn_input, dim=dim, correction=correction))
+        expected = TORCH_WELFORD[op](torch_input, dim=dim, correction=1 if correction else 0)
+        assert_numeric_metrics(
+            expected.reshape(result.shape),
+            result,
+            pcc_threshold=0.999,
+            rtol=0.02,
+            atol=0.3,
+            frobenius_threshold=0.02,
+            check_pcc=(dim is not None),
+        )
+
+    with device.cache_entries_counter.measure():
+        run(False)
+    baseline = device.cache_entries_counter.total
+
+    with device.cache_entries_counter.measure():
+        run(True)
+
+    assert device.cache_entries_counter.total == baseline, (
+        f"both correction settings cost {device.cache_entries_counter.total} cache entries; "
+        f"one costs {baseline}. correction is still reaching the Welford program hash."
+    )

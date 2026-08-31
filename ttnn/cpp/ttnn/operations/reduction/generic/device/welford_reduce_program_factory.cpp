@@ -15,6 +15,39 @@
 
 namespace ttnn::prim {
 
+namespace {
+// desc.kernels push order at the bottom of create_descriptor. The group-2 compute kernel exists
+// only when the work split leaves a second core group.
+enum : uint32_t { kWelfordReaderIdx = 0, kWelfordWriterIdx = 1, kWelfordComputeG1Idx = 2, kWelfordComputeG2Idx = 3 };
+
+// The scalar is applied to the reduced result, so it is shaped by the statistic first:
+// var(s*x) = s^2 var(x), std(s*x) = |s| std(x). Shared so the two callers cannot drift.
+uint32_t welford_post_mul_bits(const WelfordReduceDeviceOperation::operation_attributes_t& attrs) {
+    const bool is_std = attrs.math_op == tt::tt_metal::ReduceOpMath::STD;
+    return std::bit_cast<uint32_t>(is_std ? std::abs(attrs.scalar) : attrs.scalar * attrs.scalar);
+}
+
+// True when the work split leaves a second core group, i.e. create_descriptor pushed
+// kWelfordComputeG2Idx. create_descriptor derives num_work_units the same way, below.
+bool welford_has_second_compute_group(
+    const WelfordReduceDeviceOperation::operation_attributes_t& attrs, const tt::tt_metal::MeshTensor& input) {
+    const auto& padded_shape = input.padded_shape();
+    const uint32_t W_padded = padded_shape[-1];
+    const uint32_t H_padded = padded_shape[-2];
+    const uint32_t NC = input.physical_volume() / (H_padded * W_padded);
+    const uint32_t Wt = W_padded / input.tensor_spec().tile().get_width();
+    const uint32_t Ht = H_padded / input.tensor_spec().tile().get_height();
+    const uint32_t num_work_units = attrs.reduce_dim == tt::tt_metal::ReduceOpDim::W    ? (NC * Ht)
+                                    : attrs.reduce_dim == tt::tt_metal::ReduceOpDim::HW ? (NC / attrs.reduce_batch_size)
+                                                                                        : (NC * Wt);
+    const auto split = attrs.sub_core_grids.has_value()
+                           ? tt::tt_metal::split_work_to_cores(*attrs.sub_core_grids, num_work_units)
+                           : tt::tt_metal::split_work_to_cores(
+                                 input.mutable_device().compute_with_storage_grid_size(), num_work_units);
+    return !std::get<3>(split).ranges().empty();
+}
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_arg,
@@ -231,17 +264,11 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         });
     }
 
-    // Post-reduction scaling: the reduction always runs unscaled (the precise
-    // UnpackToDestFp32 path), and the user scalar is applied to the small-magnitude result via
-    // SFPU mul_unary_tile inside the compute kernel, gated by the WELFORD_POST_MUL define.
-    // Pre-scaling the input (the old do_scale path) read cb_in via the FPU SrcA operand at TF32
-    // precision and collapsed large-offset inputs to a constant before the multiply. The
-    // post-multiplier follows var(s*x)=s^2 var(x) and std(s*x)=|s| std(x):
-    //   var: scalar^2   std: |scalar|.
-    const bool use_post_mul = (operation_attributes.scalar != 1.0f);
-    const float post_mul_scaler =
-        is_std ? std::abs(operation_attributes.scalar) : operation_attributes.scalar * operation_attributes.scalar;
-    const uint32_t post_mul_scaler_bits = std::bit_cast<uint32_t>(post_mul_scaler);
+    // Post-reduction scaling: the reduction runs unscaled on the precise UnpackToDestFp32 path and
+    // the user scalar is applied to the small-magnitude result via SFPU mul_unary_tile. Scaling the
+    // input instead would read cb_in through the FPU SrcA operand at TF32 precision and collapse
+    // large-offset inputs to a constant.
+    const uint32_t post_mul_scaler_bits = welford_post_mul_bits(operation_attributes);
 
     // cb_partial (c_21): HW-reduce only -- holds per-column mean+var tile pairs
     // from the compute kernel, consumed by the writer kernel.
@@ -290,13 +317,6 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
     reduce_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
-    // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
-    // compute kernel (see post_mul_scaler above). Only the compute kernel reads this; the
-    // reader/writer ignore it.
-    if (use_post_mul) {
-        reduce_defines["WELFORD_POST_MUL"] = "1";
-    }
-
     // welford_fp32_input gates the transpose re-init / welford PreserveStats recovery in the
     // W-reduce compute kernel's wt-inner loop, needed because transpose_tile's UnpackToDestFp32
     // path clobbers the welford SFPU replay buffer on FP32 input. H- and HW-reduce kernels read
@@ -309,10 +329,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
 
     // --- Reader kernel ---
-    // The readers are shared with the generic reduce factories, which take the scaler as common
-    // runtime arg 0 (#54180). Welford hashes its own scalar, so a cache hit implies the same
-    // value and this arg needs no cache-hit patching.
-    uint32_t scaler_bits = std::bit_cast<uint32_t>(operation_attributes.scalar);
+    // The shared readers fill the scaler CB, but no Welford compute kernel reads it: the reduction
+    // runs unscaled and the scalar is applied by the post-multiply. Pass the identity.
+    const uint32_t scaler_bits = std::bit_cast<uint32_t>(1.0f);
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
@@ -355,22 +374,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     writer_desc.config = WriterConfigDescriptor{};
 
     if (reduce_hw) {
-        if (operation_attributes.correction) {
-            TT_FATAL(
-                H * W * reduce_batch_size >= 2,
-                "Bessel's correction requires at least 2 elements across all reduction dimensions, got {}",
-                H * W * reduce_batch_size);
-        }
-
         // HW-reduce: custom writer that combines partial stats and constructs output tile.
         std::vector<uint32_t> writer_compile_time_args = {
-            Wt,
-            W,
-            tile_width,
-            H,
-            static_cast<uint32_t>(operation_attributes.correction),
-            reduce_batch_size,
-            static_cast<uint32_t>(narrow_scratch_to_bf16)};
+            Wt, W, tile_width, H, reduce_batch_size, static_cast<uint32_t>(narrow_scratch_to_bf16)};
         TensorAccessorArgs(output).append_to(writer_compile_time_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -391,34 +397,23 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     std::string compute_kernel;
 
     if (reduce_hw) {
-        // HW-reduce compile args: {Ht, H, tile_height, Wt, post_mul_scaler_bits, reduce_batch_size, is_std}
+        // HW-reduce compile args: {Ht, H, tile_height, Wt, reduce_batch_size, is_std}
         compute_compile_args = {
             Ht,
             H,
             tile_height,
             Wt,
-            post_mul_scaler_bits,
             reduce_batch_size,
             static_cast<uint32_t>(is_std),
         };
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
     } else {
-        if (operation_attributes.correction) {
-            uint32_t reduce_size = reduce_w ? W : H;
-            TT_FATAL(
-                reduce_size >= 2,
-                "Bessel's correction requires at least 2 elements along the reduction dimension, got {}",
-                reduce_size);
-        }
-
-        // W-reduce compile args: {Wt, W, tile_width, post_mul_scaler_bits, correction, is_std}
-        // H-reduce compile args: {Ht, H, tile_height, post_mul_scaler_bits, correction, is_std}
+        // W-reduce compile args: {Wt, W, tile_width, is_std}
+        // H-reduce compile args: {Ht, H, tile_height, is_std}
         compute_compile_args = {
             reduce_w ? Wt : Ht,
             reduce_w ? W : H,
             reduce_w ? tile_width : tile_height,
-            post_mul_scaler_bits,
-            static_cast<uint32_t>(operation_attributes.correction),
             static_cast<uint32_t>(is_std),
         };
         compute_kernel = reduce_w
@@ -593,7 +588,24 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         }
     }
 
+    // Common runtime args (same on every core): compute takes the post-multiplier at 0 and, on the
+    // W/H kernels, the correction flag at 1; the HW writer takes the correction flag at 0.
+    const uint32_t correction_bits = static_cast<uint32_t>(operation_attributes.correction);
+    auto emplace_compute_common = [&](KernelDescriptor& d) {
+        if (reduce_hw) {
+            d.emplace_common_runtime_args({post_mul_scaler_bits});
+        } else {
+            d.emplace_common_runtime_args({post_mul_scaler_bits, correction_bits});
+        }
+    };
     reader_desc.emplace_common_runtime_args({scaler_bits});
+    emplace_compute_common(compute_desc_g1);
+    if (compute_desc_g2.has_value()) {
+        emplace_compute_common(*compute_desc_g2);
+    }
+    if (reduce_hw) {
+        writer_desc.emplace_common_runtime_args({correction_bits});
+    }
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
@@ -603,6 +615,41 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
 
     return desc;
+}
+
+void WelfordReduceDeviceOperation::WelfordReduceProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Only the hash-excluded scalar and correction and the buffer addresses vary per dispatch;
+    // per-core work counts derive from the hashed shape and grid, so a hit already holds them.
+    const auto& input = tensor_args.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
+    const bool reduce_hw = operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW;
+
+    const uint32_t post_mul_scaler_bits = welford_post_mul_bits(operation_attributes);
+    const uint32_t correction_bits = static_cast<uint32_t>(operation_attributes.correction);
+    auto patch_compute_common = [&](uint32_t kernel_idx) {
+        auto& args = tt::tt_metal::GetCommonRuntimeArgs(program, kernel_idx);
+        args[0] = post_mul_scaler_bits;
+        if (!reduce_hw) {
+            args[1] = correction_bits;
+        }
+    };
+    patch_compute_common(kWelfordComputeG1Idx);
+    if (welford_has_second_compute_group(operation_attributes, input)) {
+        patch_compute_common(kWelfordComputeG2Idx);
+    }
+    if (reduce_hw) {
+        // Only the HW writer applies Bessel's correction; the W/H paths use the generic tile writer.
+        tt::tt_metal::GetCommonRuntimeArgs(program, kWelfordWriterIdx)[0] = correction_bits;
+    }
+
+    patch_cached_arg_on_all_cores(program, kWelfordReaderIdx, 0, input.mesh_buffer().get_reference_buffer()->address());
+    patch_cached_arg_on_all_cores(
+        program, kWelfordWriterIdx, 0, output.mesh_buffer().get_reference_buffer()->address());
 }
 
 }  // namespace ttnn::prim
