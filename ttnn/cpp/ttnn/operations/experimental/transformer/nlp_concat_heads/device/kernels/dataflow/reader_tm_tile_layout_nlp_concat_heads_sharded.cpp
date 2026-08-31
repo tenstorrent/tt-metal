@@ -23,7 +23,6 @@ void kernel_main() {
     constexpr uint32_t head_dim_size_bytes = get_arg(args::head_dim_size_bytes);
     constexpr uint32_t out_row_size_bytes =
         get_arg(args::out_row_size_bytes);  // total nheads per core * in0_w_tiles * single_tile_size_bytes
-    constexpr uint32_t block_size = get_arg(args::block_size);  // total nheads per core * in0_HtWt
 
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_out0(dfb::out0);

@@ -101,7 +101,6 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsProgramFactory::create_pr
             {"in0_h_tiles", in0_h_tiles},
             {"head_dim_size_bytes", in0_w_tiles * single_tile_size},
             {"out_row_size_bytes", num_blocks_per_core_group_1 * in0_w_tiles * single_tile_size},
-            {"block_size", num_blocks_per_core_group_1 * in0_HtWt},
         };
         // Both DFBs borrow resident shards and are only raw-peeked by the two instances
         // (sync-free), so the PRODUCER/CONSUMER labels are assigned purely to satisfy the

@@ -41,7 +41,9 @@ every green above ran with live legality checks. The scaffold is excluded from t
     tile offsets / counts.
   - *Sharded:* two instances of the converted sharded kernel
     (`reader_tm_tile_layout_nlp_concat_heads_sharded.cpp`) over one grid with Reader/Writer
-    configs; borrowed (tensor-backed) `in0` / `out0` DFBs bound 1P+1C; geometry as CTAs; no RTAs.
+    configs; borrowed (tensor-backed) `in0` / `out0` DFBs bound 1P+1C; geometry as CTAs; per-instance
+    RTAs (`nheads`, `start_read_offset_bytes`, `start_write_offset_bytes`) split the per-core heads
+    across the two DM RISCs (same values on every core of an instance, differing between instances).
 - **Dispatch kinds:** all-constant geometry → CTAs; buffer/tensor identity → accessor bindings
   (`TensorAccessorArgs` eliminated); per-core-varying offsets → RTAs. No CRTAs, no varargs, no
   `allow_instance_multi_binding`.
@@ -50,14 +52,15 @@ every green above ran with live legality checks. The scaffold is excluded from t
 
 ## Handoff points
 
-- **Latent broken config gets loud (ops team).** Legacy validation permits sharded-input +
+- **Latent broken config gets loud (ops team).** Legacy validation permitted sharded-input +
   interleaved-output, but `create_descriptor` then took the sharded branch while creating no
   CB 16 — both kernel instances touched an unconfigured CB and nothing ever wrote the output
   (pre-existing latent bug; audit "Misc anomalies"). The port mirrors the host conditional
   faithfully (the `out0` DFB is declared only under `out_sharded`), so in that config the
-  sharded kernel's `dfb::out0` token is not generated and the config now fails loudly at kernel
-  JIT instead of silently producing garbage. No *intended* config changes behavior. The ops team
-  should either forbid the config in `validate_on_program_cache_miss` or implement it.
+  sharded kernel's `dfb::out0` token is not generated and the config would fail loudly at kernel
+  JIT instead of silently producing garbage. RESOLVED during PR review: the combination is now
+  rejected in `validate_on_program_cache_miss` ("Sharded input requires a sharded output memory
+  config"), with a rejection regression test in `test_sharded.py`.
 
 ## Successes
 
