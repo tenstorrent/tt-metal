@@ -78,6 +78,11 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
+      run-models-sanity-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run model sanity tests (WH Galaxy)"
       enable-watcher:
         required: false
         type: boolean
@@ -187,6 +192,11 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
+      run-models-sanity-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run model sanity tests (WH Galaxy)"
       enable-watcher:
         required: false
         default: false
@@ -211,7 +221,7 @@ on:
     branches: ["main"]
   schedule:
     # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
-    - cron: "0 */4 * * *"
+    - cron: "0 */2 * * *"
 
 permissions:
   actions: read
@@ -517,6 +527,20 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
+  # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
+  # main and the scheduled runs leave this leg out: `inputs` is null on those events.
+  models-sanity-tests:
+    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) == 'true' }}
+    needs: [build-artifact, generate-sku-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/models-sanity-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      ref: ${{ inputs.ref || github.sha }}
+      summary-scope: ${{ inputs.platform }}
+
   # ── AI run summary ────────────────────────────────────────────────
   # Aggregates the per-leg ai-job-summary artifacts from the sanity impls this
   # workflow invokes (galaxy-sanity-impl is driven by galaxy-sanity.yaml and is
@@ -542,16 +566,17 @@ jobs:
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
-    # always(): a cancelled run still reports on the legs that finished. A
-    # cancelled child contributes no expected-jobs, so its unfinished legs are
-    # not stubbed as infra failures.
+      - models-sanity-tests
+    # Reports on a run that failed — the case the summary exists for — but not
+    # on one that was cancelled: an aborted run has no outcome to summarize, and
+    # asking for one spends an LLM call to say it stopped early.
     #
     # A caller that invokes this workflow twice per run (sanity-tests-debug)
     # passes false, so the two reports don't collide on the artifact name.
     # The github.workflow arm covers this workflow's own push/schedule triggers,
     # where the `inputs` context is empty and the default above never applies;
     # it is the caller's workflow name for a workflow_call, so it is false there.
-    if: ${{ always() && (inputs.publish-run-summary || github.workflow == 'Sanity tests') }}
+    if: ${{ !cancelled() && (inputs.publish-run-summary || github.workflow == 'Sanity tests') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

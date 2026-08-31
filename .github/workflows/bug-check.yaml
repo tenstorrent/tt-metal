@@ -136,6 +136,10 @@ jobs:
 
     steps:
       - name: Post running notice
+        # Automatic (pull_request-triggered) runs skip this: an "I'm running" ack
+        # with no findings yet is noise. Manual /bug-check comment runs keep it as
+        # confirmation the command was received.
+        if: github.event_name == 'issue_comment'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
@@ -194,6 +198,7 @@ jobs:
           PR_NUMBER: ${{ needs.parse-comment.outputs.pr-number }}
           SUBCOMMAND: ${{ needs.parse-comment.outputs.subcommand }}
           RULE_ID: ${{ needs.parse-comment.outputs.rule-id }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           cmd=(python .github/bug_checker/run_bug_checker.py)
           cmd+=(--pr "$PR_NUMBER")
@@ -203,6 +208,13 @@ jobs:
           fi
           if [ "$SUBCOMMAND" = "run" ] || [ "$SUBCOMMAND" = "check-rule" ]; then
             cmd+=(--sarif .github/bug-checker-results.sarif)
+          fi
+          # Automatic (pull_request-triggered) runs shouldn't post a comment when
+          # there's nothing to report — that's noise without signal. Manual
+          # /bug-check comment runs keep posting "no issues found" etc. as
+          # confirmation the command ran.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            cmd+=(--quiet-if-clean)
           fi
           cmd+=(--post-comments --verbose)
           "${cmd[@]}"

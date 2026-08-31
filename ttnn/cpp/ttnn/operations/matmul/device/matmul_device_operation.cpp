@@ -626,6 +626,16 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 }
                 validate_matmul_nonzero_block_dims(
                     config_name, program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
+                if constexpr (std::is_same_v<
+                                  ProgramConfigType,
+                                  operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+                    TT_FATAL(
+                        program_config.num_workers_per_dram_bank == 1 ||
+                            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                        "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
+                        config_name);
+                }
             }
         },
         chosen_program_config);
@@ -1101,27 +1111,28 @@ void validate_dram_sender_global_cb_mcast_in0_geometry(
         program_config.out_block_w,
         program_config.per_core_N);
 
-    // The receiver-contiguous weight ↔ matmul cross-checks (DRAM NdShardSpec, one full-K × per_core_N
-    // shard per receiver, num_shards == receiver_count, K % in0_block_w == 0, per_core_N == per-receiver
-    // N, stream_in1 == false) are owned by the shared prefetcher helper. Call it rather than re-deriving
-    // them here, so the recv-contig contract lives in one place.
+    // The weight ↔ matmul cross-checks (per-receiver shard geometry, K % in0_block_w == 0, per_core_N ==
+    // per-receiver N, stream_in1 == false) are owned by the shared prefetcher helper, which dispatches on
+    // the weight's detected DRAM layout — receiver-contiguous NdShardSpec or legacy K-row-major
+    // WIDTH_SHARDED. Call it rather than re-deriving them here, so each layout's contract lives in one
+    // place.
     ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(program_config, input_tensor_b, gcb);
 
-    // GCB-window guards specific to this op: the mcast reader streams K-blocks through a two-page
-    // remote-CB window, so the GCB must be an exact multiple of the in1 K-block page and hold >= 2 pages.
+    // GCB-window guard specific to this op: the mcast reader streams K-blocks through a remote-CB
+    // window, so the GCB has to hold at least a double buffer of them. The window itself is floored to
+    // whole pages when the CB is created, so a size that is not an exact multiple is fine — the leftover
+    // bytes are simply unused.
     const uint32_t in1_block_size_bytes =
         program_config.in0_block_w * program_config.per_core_N *
         in1_tile.get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_b.dtype()));
+    const uint32_t resident_blocks = gcb.size() / in1_block_size_bytes;
     TT_FATAL(
-        gcb.size() % in1_block_size_bytes == 0,
-        "mcast_in0 global_cb size {} must be a multiple of its in1 K-block page size {}",
+        resident_blocks >= 2,
+        "mcast_in0 global_cb requires a two-page streaming window: size {} holds {} whole in1 K-block pages of {} B, "
+        "need at least 2",
         gcb.size(),
+        resident_blocks,
         in1_block_size_bytes);
-    TT_FATAL(
-        gcb.size() >= 2 * in1_block_size_bytes,
-        "mcast_in0 global_cb requires a two-page streaming window: size {} must be at least {}",
-        gcb.size(),
-        2 * in1_block_size_bytes);
 }
 
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated
@@ -2567,7 +2578,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                          ProgramConfigType,
                                          operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                     const auto M =
-                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/true);
+                        operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
                     const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                     uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;

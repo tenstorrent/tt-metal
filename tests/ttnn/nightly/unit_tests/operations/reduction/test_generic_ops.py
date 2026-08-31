@@ -161,6 +161,3 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
-
-
-# Test that generic reduction ops work correctly with N-dimensional sharding.
