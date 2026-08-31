@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
+import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
@@ -72,6 +73,14 @@ def _protocol(key_dim: int, value_dim: int) -> tuple[_FakeTensor, ...]:
         _FakeTensor((1, 1, key_dim, 1)),
         _FakeTensor((1, 1, 32, 32)),
     )
+
+
+def test_tensor_volume_includes_tile_padding() -> None:
+    logical_shape = (3, 17, 17)
+    tensor = ttnn.Tensor(torch.zeros(logical_shape), ttnn.bfloat16).pad_to_tile(0.0)
+
+    assert tensor.volume() == 3 * 32 * 32
+    assert tensor.volume() != math.prod(logical_shape)
 
 
 def test_sigmoid_gated_rms_norm_work_golden() -> None:

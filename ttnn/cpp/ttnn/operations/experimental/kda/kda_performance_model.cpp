@@ -22,8 +22,7 @@ constexpr Wide WIDE_MAX = ~Wide{0};
 constexpr Wide PROFILER_INT_MAX = std::numeric_limits<int>::max();
 // Matrix capacity: tech_reports/matrix_engine/matrix_engine.md.
 constexpr uint64_t MATRIX_FLOPS_PER_CORE_CYCLE = 4096;
-// Aggregate Blackhole DRAM capability:
-// https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/ideal_performance.md
+// Blackhole ceiling used by the canonical operation model: ttnn/core/operation.cpp.
 constexpr uint64_t DRAM_BYTES_PER_NS = 512;
 
 Wide checked_sum(std::string_view operation, std::string_view quantity, std::initializer_list<Wide> terms) {

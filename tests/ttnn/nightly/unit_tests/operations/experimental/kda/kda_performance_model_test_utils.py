@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 CHUNK_SIZE = 32
 MATRIX_FLOPS_PER_CORE_CYCLE = 4096
+# Blackhole ceiling used by the canonical operation model: ttnn/core/operation.cpp.
 DRAM_BYTES_PER_NS = 512
 
 
