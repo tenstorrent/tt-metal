@@ -1,0 +1,4 @@
+{
+  "arch": "Qwen3_5ForConditionalGeneration",
+  "main_class": "models.autoports.qwen_qwen3_6_27b.tt.generator_vllm:Qwen36ForCausalLM"
+}
