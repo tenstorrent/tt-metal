@@ -2295,3 +2295,108 @@ The feed now owns those fields on any chip with `journal_active`.
 - Under a CCL-only workload F/S sit near 1%, which is plausible (fabric collectives are
   NOC and DRAM work, not FPU math: DRAM read 33 GB/s per chip, 12% of 288) but is not the
   same thing as having been validated against a known-utilization kernel.
+
+## 5w. CALIBRATED: FPU and DRAM are true, SFPU is a DUPLICATE of FPU -- 2026-08-31
+
+Everything before this measured whether the monitor crashed, perturbed a workload, or
+stayed fresh. None of it measured whether the NUMBER is true. Under a CCL workload F and S
+read ~1%, which is plausible -- fabric collectives are NOC and DRAM movement, not FPU math
+-- but plausible is not measured, and "FPU and SFPU were almost 0" is not answerable
+without a reference.
+
+### Method: sweep a known duty cycle, avoid needing a peak constant
+
+`scripts/calib_duty.py` runs back-to-back 2048x2048 bf16 matmuls for a fraction d of each
+40 s phase and idles the rest, with a device sync so the idle is real, sweeping d over
+{0, 25, 50, 75, 100}%. The independent variable is the HOST-MEASURED busy fraction, not the
+target, so overshoot in `time.sleep` does not matter. Then:
+
+    monitor_reading(d) must be LINEAR in d, through the origin.
+
+Linearity and a zero intercept are both peak-free, which is the point: a wrong peak
+constant makes a correct counter look broken and vice versa. The slope then calibrates the
+reading, and only afterwards is its value compared against a published peak.
+
+`scripts/shm_probe.py` samples every SHM file at 10 Hz in a separate process (the monitor
+must never be in-process with what it measures); `scripts/calib_report.py` joins the two
+after the fact, because the phase file only exists once the workload has exited.
+
+### Consistency: the stalls are gone
+
+    chip                       n   max age  mean age  stalls>1s  aiclk=0
+    tt_device_0_util        2114     0.10s     0.05s          0        0
+    ... identical for 1-6 ...
+    tt_device_7_util        2114     0.10s     0.05s          0        0
+
+16,912 samples, 8 chips, zero stalls, zero AICLK dropouts -- chip 7 included, which was the
+chip reported as stalling. This is the host-drain path (no aggregator in this run).
+
+### FPU: linear, and absolutely right
+
+     host busy |   0     1     2     3     4     5     6     7
+         0.0%  | 0.00  0.00  0.00  0.00  0.00  0.00  0.00  0.00
+         8.7%  | 1.16  0.69  0.93  1.26  1.23  1.12  1.32  1.07
+        19.2%  | 3.77  3.38  3.58  3.80  4.54  3.72  4.08  4.06
+        40.0%  | 9.58  8.85 10.23  9.83 10.87  9.76 10.30 10.12
+        99.7%  |21.59 20.35 21.94 22.53 22.48 22.17 21.81 22.54
+
+    slope 0.210-0.231, intercept -0.40..+0.12, R^2 0.990-0.996 on all eight chips.
+
+Perfectly linear with a zero intercept. The slope is not a defect: at 99.7% host-busy the
+FPU is issuing ~22% of cycles, and an INDEPENDENT path confirms that is the truth --
+
+     host%   iters   ach.TFLOP/s/chip   monitor F%   implied bf16 peak
+      19.2   12036             5.17         3.87              133.7
+      40.0   25430            10.92         9.94              109.9
+      99.7   64220            27.58        21.93              125.8
+
+27.58 TFLOP/s achieved at full load divided by the monitor's 21.93% implies a bf16 peak of
+125.8 TFLOP/s per ASIC, which is the right order for Wormhole b0. The implied peak is
+roughly constant across duties (the 8.7% phase reads 181, where the signal is weakest and
+host timing noise dominates), which is what a true duty-cycle fraction looks like. So the
+FPU reading is trustworthy in absolute terms, and the near-zero readings under CCL were
+CORRECT -- collectives really do almost no FPU math.
+
+A hypothesis worth recording as DISPROVEN: I expected the chip average to be diluted by
+inactive cores (an earlier sample showed `F:nz=14` of 64). At full duty all 64 cores are
+nonzero and the average over active cores equals the chip average, 21.9%. Not dilution.
+
+### SFPU: INVALID -- it is a copy of the FPU signal
+
+The workload runs NO SFPU ops (`--sfpu` not passed; `ttnn.exp` never called). SFPU must
+therefore read ~0. It does not:
+
+     host busy |     0     1     2     3     4     5     6     7
+         8.7%  |  1.47  1.47  1.47  1.47  1.47  1.47  1.47  1.47
+        19.2%  |  3.85  3.85  3.85  3.85  3.85  3.85  3.85  3.84
+        99.7%  | 21.54 21.32 21.50 21.19 21.35 20.68 20.18 20.12
+
+It tracks the duty cycle at almost exactly the FPU's magnitude, and at the low phases it is
+identical to three decimal places across all eight chips -- which is not a physical
+measurement. FPU and SFPU share one counter block (counter_sel 0 = FPU, 1 = SFPU), so the
+defect is in that selection or in the attribution of the result: the same count is landing
+in both fields. Until this is fixed the SFPU axis must not be trusted or shown.
+
+### DRAM: exact
+
+     host%   iters  expect GB/s   monitor GB/s   ratio
+      8.7    4648          2.9            2.9    1.00
+     19.2   12036          7.6            7.6    1.00
+     40.0   25430         16.0           16.0    1.00
+     99.7   64220         40.4           40.5    1.00
+
+Against the bytes a 2048 matmul must move (2 reads + 1 write, 25.2 MB), the NIU counters
+agree to 1.00 at all four load levels. Nothing to fix.
+
+### What is validated, and what is not
+
+  - FPU%: linear, zero intercept, absolutely correct. TRUSTED.
+  - DRAM GB/s: exact at four load levels. TRUSTED.
+  - Publish freshness: 0 stalls in 16,912 samples across 8 chips. TRUSTED.
+  - SFPU%: reads the FPU signal. BROKEN, do not display.
+  - CCL/fabric: coexistence measured (5u/5v, 2.9% slowdown), but the monitor exposes no
+    ethernet-link metric, so there is nothing to calibrate against the fabric goldens in
+    tests/tt_metal/tt_fabric/test_infra/golden/. The fabric axis is absent, not wrong.
+  - All of the above is the HOST-DRAIN path. The on-chip aggregator path has not been put
+    through this ramp, and it is the path with the different arithmetic (busy/wall deltas
+    folded on-chip). It needs the same treatment before the aggregator numbers are trusted.
