@@ -429,7 +429,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
         auto& trace_node = trace_nodes_.back();
-        bool use_prefetcher_cache = mesh_workload.impl().max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
+        bool use_prefetcher_cache =
+            mesh_workload.impl().get_finalized_metadata().max_program_kernels_sizeB <= this->prefetcher_cache_sizeB_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
                 device_range,
@@ -498,7 +499,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         chip_ids_in_workload.reserve(mesh_device_->get_devices().size());
     }
 
-    auto max_program_kernels_sizeB = mesh_workload.impl().max_program_kernels_sizeB_;
+    auto max_program_kernels_sizeB = mesh_workload.impl().get_finalized_metadata().max_program_kernels_sizeB;
     bool use_prefetcher_cache = mesh_workload.impl().use_prefetcher_cache_;
     if (use_prefetcher_cache) {
         bool is_cached;
