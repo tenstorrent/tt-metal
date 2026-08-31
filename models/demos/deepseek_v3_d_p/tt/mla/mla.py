@@ -669,7 +669,7 @@ class ttMLA:
         "wkv_b2": ("kv_lora_rank", "v_head_dim"),
     }
 
-    def _cfg_matches(self, cfg: dict) -> bool:
+    def _cfg_matches(self, cfg: dict, kt: int | None = None) -> bool:
         """Do this tuned config's declared gating tags match this live ttMLA?
 
         Tags are declared in mla_config.py; only the match is resolved here, because it depends on this
@@ -698,9 +698,18 @@ class ttMLA:
         cap = cfg.get("dense_head_cap_non_dsa")
         if cap is not None and self.num_heads > cap and not self._is_dsa_family:
             return False
+        # K. The table is keyed on (weight_name, seq_len_local), so one slot is shared by variants
+        # with different K. A tiling whose in0_block_w does not divide this model's per-device Kt
+        # cannot run here at all -- the matmul dies with "Kt (32) must be divisible by in0_block_w
+        # (14)" -- so reject it like any other tag and let a later candidate, e.g. one tuned for this
+        # variant, be chosen. kt is None on the SDPA path, which has no weight to size against.
+        if kt is not None:
+            in0_block_w = getattr(cfg.get("program_config"), "in0_block_w", None)
+            if in0_block_w is not None and kt % in0_block_w != 0:
+                return False
         return True
 
-    def _select_cfg(self, entry) -> dict | None:
+    def _select_cfg(self, entry, weight_name: str | None = None) -> dict | None:
         """Pick the first tuned config whose tags match, from a single dict or a list of candidates.
 
         A slot holds several candidates when variants share a seq_len (Kimi-K2.6 at 64 heads and K3 at
@@ -710,60 +719,24 @@ class ttMLA:
         if entry is None:
             return None
         candidates = entry if isinstance(entry, (list, tuple)) else (entry,)
-        return next((cfg for cfg in candidates if self._cfg_matches(cfg)), None)
+        kt = self._weight_kt(weight_name) if weight_name is not None else None
+        return next((cfg for cfg in candidates if self._cfg_matches(cfg, kt)), None)
 
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Resolve the tuned matmul config for this weight/seq_len, applying the gating tags.
         Returns None when no tuned config applies (caller falls back to defaults)."""
         if not is_blackhole():
             return None
-        cfg = self._select_cfg(self.mm_configs[weight_name].get(seq_len_local))
-        if cfg is not None and not self._cfg_fits_weight(cfg, weight_name):
-            return None
-        return cfg
+        return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local), weight_name)
 
-    def _cfg_fits_weight(self, cfg: dict, weight_name: str) -> bool:
-        """Reject a tuned config whose in0_block_w does not divide THIS weight's Kt.
+    def _weight_kt(self, weight_name: str) -> int | None:
+        """This model's per-device K for one weight, in tiles, or None if the weight is absent.
 
-        The tuned table is keyed on (weight_name, seq_len_local) only -- nothing about the variant's
-        dimensions -- so a config tuned for one model is silently applied to another with a different
-        K. That is fatal when the block width does not divide: Mistral Small 4 at seq_len_local 3200
-        (= 25600/8, i.e. the 25k production ISL) picks up a config with in0_block_w=14, which suits
-        DeepSeek's Kt of 56 (hidden 7168 / tp 4 / 32) but not Mistral's 32, and the matmul asserts:
-
-            TT_FATAL: MatmulMultiCoreReuseMultiCastProgramConfig: Kt (32) must be divisible by
-                      in0_block_w (14)
-
-        Falling back to the default program config keeps such a model running (untuned, so possibly
-        slower) instead of dying. Note the crash is the LUCKY case: where the block width happens to
-        divide, another model's tuning is applied silently and nobody finds out. The real fix is to
-        key the table on the variant or on the actual (K, N); this is the guard until then.
+        Weights are [K, N] and ``mapper_tp0`` shards K across the TP axis, so ``shape[-2]`` is
+        already the per-device extent the matmul program consumes.
         """
-        pc = cfg.get("program_config")
-        in0_block_w = getattr(pc, "in0_block_w", None)
         weight = getattr(self, f"{weight_name}_weight", None)
-        if in0_block_w is None or weight is None:
-            return True  # nothing to check against; keep the tuned config
-        # Weights are [K, N]; only the K dim participates in the in0 block tiling.
-        kt = weight.shape[-2] // ttnn.TILE_SIZE
-        if kt % in0_block_w == 0:
-            return True
-        # Once per distinct mismatch, not once per resolution: the forward path resolves a config
-        # for every projection, layer and chunk (q_b_proj twice -- activation memory, then matmul),
-        # so an unguarded warning here is thousands of identical lines per request.
-        warned = getattr(self, "_cfg_fit_warned", None)
-        if warned is None:
-            warned = set()
-            setattr(self, "_cfg_fit_warned", warned)
-        mismatch = (weight_name, in0_block_w, kt)
-        if mismatch not in warned:
-            warned.add(mismatch)
-            logger.warning(
-                f"[ttMLA] tuned matmul config for '{weight_name}' has in0_block_w={in0_block_w}, which does "
-                f"not divide this model's Kt={kt} — falling back to the default program config. The tuned "
-                f"table is keyed on (weight, seq_len) only, so it is another variant's tuning."
-            )
-        return False
+        return None if weight is None else weight.shape[-2] // ttnn.TILE_SIZE
 
     def _get_act_mem_config(self, weight_name: str, seq_len_local: int) -> ttnn.MemoryConfig:
         """Memory config for the activation (in0) feeding this weight's matmul, as tuned in the mm
