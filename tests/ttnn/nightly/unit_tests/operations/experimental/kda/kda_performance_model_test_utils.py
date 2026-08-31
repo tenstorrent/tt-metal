@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -15,8 +16,6 @@ from loguru import logger
 CHUNK_SIZE = 32
 MATRIX_FLOPS_PER_CORE_CYCLE = 4096
 DRAM_BYTES_PER_NS = 512
-_UINT64_MAX = (1 << 64) - 1
-_UINT128_MAX = (1 << 128) - 1
 _PROFILER_INT_MAX = (1 << 31) - 1
 
 
@@ -56,146 +55,177 @@ class KdaUtilization:
     roofline_utilization_pct: float
 
 
-def _checked_sum(*terms: int | None) -> int | None:
-    if any(term is None or term < 0 for term in terms):
-        return None
-    result = sum(term for term in terms if term is not None)
-    return result if result <= _UINT128_MAX else None
+def _sum_nonnegative(*terms: int) -> int:
+    assert all(isinstance(term, int) and term >= 0 for term in terms), "terms must be non-negative integers"
+    return sum(terms)
 
 
-def _checked_product(*factors: int | None) -> int | None:
-    result = 1
-    for factor in factors:
-        if factor is None or factor < 0 or (result and factor > _UINT128_MAX // result):
-            return None
-        result *= factor
-    return result
+def _product_nonnegative(*factors: int) -> int:
+    assert all(isinstance(factor, int) and factor >= 0 for factor in factors), "factors must be non-negative integers"
+    return math.prod(factors)
 
 
-def _make_work(operation: str, *values: int | None) -> KdaWork | None:
-    if any(value is None or value > _UINT64_MAX for value in values):
-        logger.warning(f"KDA {operation} performance-model work overflowed; returning a zero estimate")
-        return None
+def _make_work(*values: int) -> KdaWork:
+    assert all(value >= 0 for value in values), "work values must be non-negative"
     return KdaWork(*values)
 
 
-def sigmoid_gated_rms_norm_work(batch: int, num_heads: int, sequence: int, value_dim: int) -> KdaWork | None:
-    rows = _checked_product(batch, num_heads, sequence)
-    elements = _checked_product(rows, value_dim)
+def sigmoid_gated_rms_norm_work(batch: int, num_heads: int, sequence: int, value_dim: int) -> KdaWork:
+    rows = _product_nonnegative(batch, num_heads, sequence)
+    elements = _product_nonnegative(rows, value_dim)
     return _make_work(
-        "sigmoid_gated_rms_norm",
         0,
-        _checked_product(4, elements),
+        _product_nonnegative(4, elements),
         rows,
         elements,
-        _checked_sum(rows, elements),
+        _sum_nonnegative(rows, elements),
     )
 
 
-def qkv_causal_conv1d_silu_work(batch: int, sequence: int, q_width: int, k_width: int, v_width: int) -> KdaWork | None:
-    elements = _checked_product(batch, sequence, _checked_sum(q_width, k_width, v_width))
+def qkv_causal_conv1d_silu_work(batch: int, sequence: int, q_width: int, k_width: int, v_width: int) -> KdaWork:
+    elements = _product_nonnegative(batch, sequence, _sum_nonnegative(q_width, k_width, v_width))
     return _make_work(
-        "qkv_causal_conv1d_silu",
         0,
-        _checked_product(4, elements),
-        _checked_product(3, elements),
+        _product_nonnegative(4, elements),
+        _product_nonnegative(3, elements),
         0,
         elements,
     )
 
 
-def reduce_affine_transforms_work(
-    batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int
-) -> KdaWork | None:
-    compositions = _checked_product(batch_heads, max(0, groups_per_head - 1))
-    key_squared = _checked_product(key_dim, key_dim)
-    dense_per_composition = _checked_sum(
-        _checked_product(2, key_squared, key_dim),
-        _checked_product(2, key_squared, value_dim),
+def reduce_affine_transforms_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork:
+    assert groups_per_head >= 0, "groups_per_head must be non-negative"
+    compositions = _product_nonnegative(batch_heads, max(0, groups_per_head - 1))
+    key_squared = _product_nonnegative(key_dim, key_dim)
+    dense_per_composition = _sum_nonnegative(
+        _product_nonnegative(2, key_squared, key_dim),
+        _product_nonnegative(2, key_squared, value_dim),
     )
     return _make_work(
-        "reduce_affine_transforms",
-        _checked_product(compositions, dense_per_composition),
+        _product_nonnegative(compositions, dense_per_composition),
         0,
-        _checked_product(compositions, key_dim, value_dim),
+        _product_nonnegative(compositions, key_dim, value_dim),
         0,
         0,
     )
 
 
-def affine_exclusive_scan_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork | None:
-    transitions = _checked_product(batch_heads, max(0, groups_per_head - 1))
+def affine_exclusive_scan_work(batch_heads: int, groups_per_head: int, key_dim: int, value_dim: int) -> KdaWork:
+    assert groups_per_head >= 0, "groups_per_head must be non-negative"
+    transitions = _product_nonnegative(batch_heads, max(0, groups_per_head - 1))
     return _make_work(
-        "affine_exclusive_scan",
-        _checked_product(transitions, 2, key_dim, key_dim, value_dim),
+        _product_nonnegative(transitions, 2, key_dim, key_dim, value_dim),
         0,
-        _checked_product(transitions, key_dim, value_dim),
+        _product_nonnegative(transitions, key_dim, value_dim),
         0,
         0,
     )
 
 
-def prepare_chunk_recurrence_work(num_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork | None:
-    instances = _checked_product(num_heads, num_chunks)
+def prepare_chunk_recurrence_work(num_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
+    instances = _product_nonnegative(num_heads, num_chunks)
     inverse_flops = CHUNK_SIZE * (CHUNK_SIZE - 1) * (CHUNK_SIZE + 1) // 3
     return _make_work(
-        "prepare_chunk_recurrence",
-        _checked_product(instances, _checked_sum(_checked_product(4, CHUNK_SIZE, CHUNK_SIZE, key_dim), inverse_flops)),
-        _checked_product(
-            instances,
-            _checked_sum(_checked_product(10, CHUNK_SIZE, key_dim), _checked_product(CHUNK_SIZE, value_dim)),
+        _product_nonnegative(
+            instances, _sum_nonnegative(_product_nonnegative(4, CHUNK_SIZE, CHUNK_SIZE, key_dim), inverse_flops)
         ),
-        _checked_product(
+        _product_nonnegative(
             instances,
-            _checked_sum(
+            _sum_nonnegative(
+                _product_nonnegative(10, CHUNK_SIZE, key_dim), _product_nonnegative(CHUNK_SIZE, value_dim)
+            ),
+        ),
+        _product_nonnegative(
+            instances,
+            _sum_nonnegative(
                 2 * CHUNK_SIZE,
                 (CHUNK_SIZE - 1) * key_dim,
                 CHUNK_SIZE * key_dim,
                 CHUNK_SIZE * CHUNK_SIZE,
             ),
         ),
-        _checked_product(instances, 2, CHUNK_SIZE, key_dim),
-        _checked_product(instances, _checked_sum(2 * CHUNK_SIZE, 3 * CHUNK_SIZE * key_dim, key_dim)),
+        _product_nonnegative(instances, 2, CHUNK_SIZE, key_dim),
+        _product_nonnegative(instances, _sum_nonnegative(2 * CHUNK_SIZE, 3 * CHUNK_SIZE * key_dim, key_dim)),
     )
 
 
-def recurrent_chunk_scan_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork | None:
-    instances = _checked_product(batch_heads, num_chunks)
+def recurrent_chunk_scan_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
+    instances = _product_nonnegative(batch_heads, num_chunks)
     return _make_work(
-        "recurrent_chunk_scan",
-        _checked_product(
+        _product_nonnegative(
             instances,
-            _checked_sum(
-                _checked_product(6, CHUNK_SIZE, key_dim, value_dim),
-                _checked_product(4, CHUNK_SIZE, CHUNK_SIZE, value_dim),
+            _sum_nonnegative(
+                _product_nonnegative(6, CHUNK_SIZE, key_dim, value_dim),
+                _product_nonnegative(4, CHUNK_SIZE, CHUNK_SIZE, value_dim),
             ),
         ),
-        _checked_product(instances, key_dim, value_dim),
-        _checked_product(instances, _checked_sum(2 * CHUNK_SIZE * value_dim, key_dim * value_dim)),
+        _product_nonnegative(instances, key_dim, value_dim),
+        _product_nonnegative(instances, _sum_nonnegative(2 * CHUNK_SIZE * value_dim, key_dim * value_dim)),
         0,
         0,
     )
 
 
-def summarize_chunk_recurrence_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork | None:
-    instances = _checked_product(batch_heads, num_chunks)
+def summarize_chunk_recurrence_work(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> KdaWork:
+    instances = _product_nonnegative(batch_heads, num_chunks)
     return _make_work(
-        "summarize_chunk_recurrence",
-        _checked_product(
+        _product_nonnegative(
             instances,
-            _checked_sum(
-                _checked_product(8, CHUNK_SIZE, key_dim, value_dim),
-                _checked_product(4, CHUNK_SIZE, CHUNK_SIZE, value_dim),
+            _sum_nonnegative(
+                _product_nonnegative(8, CHUNK_SIZE, key_dim, value_dim),
+                _product_nonnegative(4, CHUNK_SIZE, CHUNK_SIZE, value_dim),
             ),
         ),
-        _checked_product(instances, 2, key_dim, value_dim),
-        _checked_sum(
-            _checked_product(instances, _checked_sum(2 * CHUNK_SIZE * value_dim, 2 * key_dim * value_dim)),
-            _checked_product(batch_heads, key_dim, value_dim),
+        _product_nonnegative(instances, 2, key_dim, value_dim),
+        _sum_nonnegative(
+            _product_nonnegative(instances, _sum_nonnegative(2 * CHUNK_SIZE * value_dim, 2 * key_dim * value_dim)),
+            _product_nonnegative(batch_heads, key_dim, value_dim),
         ),
         0,
         0,
     )
+
+
+def profile_realtime_program(device: Any, run_fn: Any) -> tuple[Any, dict[str, Any]]:
+    """Profile one KDA program while retaining the device clock used by its record."""
+    import ttnn
+
+    profile_record = None
+    dropped = 0
+
+    def collect_records(batch: Any) -> None:
+        nonlocal dropped, profile_record
+        dropped += int(batch.dropped)
+        for record in batch.records:
+            if profile_record is not None:
+                return
+            start_timestamp = int(record.start_timestamp)
+            end_timestamp = int(record.end_timestamp)
+            frequency = float(record.frequency)
+            if frequency > 0 and end_timestamp > start_timestamp:
+                profile_record = {
+                    "runtime_id": int(record.runtime_id),
+                    "chip_id": int(record.chip_id),
+                    "duration_ns": (end_timestamp - start_timestamp) / frequency,
+                    "frequency_ghz": frequency,
+                    "kernel_sources": tuple(str(source) for source in record.kernel_sources),
+                }
+
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
+    try:
+        result = run_fn()
+        ttnn.synchronize_device(device)
+        deadline = time.monotonic() + 1.0
+        while profile_record is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+
+    if dropped:
+        raise RuntimeError(f"Real-time profiler dropped {dropped} record(s)")
+    if profile_record is None:
+        raise RuntimeError("Real-time profiler returned no valid KDA program record")
+    return result, profile_record
 
 
 def clock_mhz_from_frequency_ghz(frequency_ghz: float) -> int:
@@ -221,10 +251,7 @@ def tensor_traffic(tensor: Any) -> KdaTensorTraffic | None:
     if tensor.storage_type() != ttnn.StorageType.DEVICE or not tensor.is_allocated():
         logger.warning("KDA performance model expected an allocated device tensor; returning a zero estimate")
         return None
-    physical_bytes = _checked_product(int(tensor.volume()), int(tensor.element_size()))
-    if physical_bytes is None or physical_bytes > _UINT64_MAX:
-        logger.warning("KDA performance-model physical byte count overflowed; returning a zero estimate")
-        return None
+    physical_bytes = _product_nonnegative(int(tensor.volume()), int(tensor.element_size()))
     return KdaTensorTraffic(
         buffer_address=int(tensor.buffer_address()),
         physical_bytes=physical_bytes,
@@ -256,21 +283,15 @@ def estimate(
         logger.warning("KDA performance model received invalid cores, clock, or fidelity; returning a zero estimate")
         return fallback
 
-    cycle_numerator = _checked_sum(
-        _checked_product(work.dense_flops, fidelity_factor),
-        _checked_product(32, work.multiply_results, fidelity_factor),
-        _checked_product(32, work.add_results),
-        _checked_product(16, work.reduction_input_elements, fidelity_factor),
+    cycle_numerator = _sum_nonnegative(
+        _product_nonnegative(work.dense_flops, fidelity_factor),
+        _product_nonnegative(32, work.multiply_results, fidelity_factor),
+        _product_nonnegative(32, work.add_results),
+        _product_nonnegative(16, work.reduction_input_elements, fidelity_factor),
     )
-    cycle_denominator = _checked_product(MATRIX_FLOPS_PER_CORE_CYCLE, core_count)
-    if cycle_numerator is None or cycle_denominator is None:
-        logger.warning("KDA performance-model cycle arithmetic overflowed; returning a zero estimate")
-        return fallback
+    cycle_denominator = _product_nonnegative(MATRIX_FLOPS_PER_CORE_CYCLE, core_count)
     ideal_fpu_cycles = _ceil_div(cycle_numerator, cycle_denominator)
-    fpu_time_numerator = _checked_product(ideal_fpu_cycles, 1000)
-    if fpu_time_numerator is None:
-        logger.warning("KDA performance-model time arithmetic overflowed; returning a zero estimate")
-        return fallback
+    fpu_time_numerator = _product_nonnegative(ideal_fpu_cycles, 1000)
     ideal_fpu_ns = _ceil_div(fpu_time_numerator, clock_mhz)
 
     input_bytes = [0] * len(inputs)
@@ -281,35 +302,24 @@ def estimate(
     for index, traffic in enumerate(inputs):
         if traffic.is_dram:
             if traffic.physical_bytes > _PROFILER_INT_MAX:
-                logger.warning("KDA performance-model input bytes do not fit profiler fields; returning zero")
-                return fallback
+                raise OverflowError("KDA performance-model input bytes do not fit profiler fields")
             input_bytes[index] = traffic.physical_bytes
             if traffic.buffer_address not in input_addresses:
                 input_addresses.add(traffic.buffer_address)
-                total = _checked_sum(mandatory_dram_bytes, traffic.physical_bytes)
-                if total is None:
-                    logger.warning("KDA performance-model DRAM input bytes overflowed; returning a zero estimate")
-                    return fallback
-                mandatory_dram_bytes = total
+                mandatory_dram_bytes = _sum_nonnegative(mandatory_dram_bytes, traffic.physical_bytes)
     for index, traffic in enumerate(outputs):
         if traffic.is_dram:
             if traffic.physical_bytes > _PROFILER_INT_MAX:
-                logger.warning("KDA performance-model output bytes do not fit profiler fields; returning zero")
-                return fallback
+                raise OverflowError("KDA performance-model output bytes do not fit profiler fields")
             output_bytes[index] = traffic.physical_bytes
             if traffic.buffer_address not in output_addresses:
                 output_addresses.add(traffic.buffer_address)
-                total = _checked_sum(mandatory_dram_bytes, traffic.physical_bytes)
-                if total is None:
-                    logger.warning("KDA performance-model DRAM output bytes overflowed; returning a zero estimate")
-                    return fallback
-                mandatory_dram_bytes = total
+                mandatory_dram_bytes = _sum_nonnegative(mandatory_dram_bytes, traffic.physical_bytes)
 
     ideal_dram_ns = _ceil_div(mandatory_dram_bytes, DRAM_BYTES_PER_NS)
     ideal_ns = max(ideal_fpu_ns, ideal_dram_ns)
     if max(ideal_fpu_cycles, ideal_fpu_ns, ideal_dram_ns, ideal_ns) > _PROFILER_INT_MAX:
-        logger.warning("KDA performance-model estimate does not fit profiler fields; returning a zero estimate")
-        return fallback
+        raise OverflowError("KDA performance-model estimate does not fit profiler fields")
     return KdaEstimate(
         valid=True,
         ideal_fpu_cycles=ideal_fpu_cycles,

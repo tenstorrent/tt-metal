@@ -7,6 +7,7 @@ import time
 
 from loguru import logger
 
+
 DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS = 1.0
 
 # collect_all: records are delivered asynchronously from the RT profiler receiver thread, and
@@ -47,7 +48,6 @@ def profile_realtime_program(
                     "runtime_id": int(record.runtime_id),
                     "chip_id": int(record.chip_id),
                     "duration_ns": (end_timestamp - start_timestamp) / frequency,
-                    "frequency_ghz": frequency,
                     "kernel_sources": tuple(str(source) for source in record.kernel_sources),
                 }
             )

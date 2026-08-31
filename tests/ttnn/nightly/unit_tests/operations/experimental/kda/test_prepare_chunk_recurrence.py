@@ -15,10 +15,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     estimate_for_tensors,
+    profile_realtime_program,
     prepare_chunk_recurrence_work,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -363,7 +363,6 @@ def test_prepare_chunk_recurrence_production_performance(device: ttnn.Device) ->
     assert len(outputs) == 7
     assert tuple(outputs[0].shape) == (case.num_heads, case.num_chunks, CHUNK_SIZE, case.value_dim)
     work = prepare_chunk_recurrence_work(case.num_heads, case.num_chunks, case.key_dim, case.value_dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         inputs,

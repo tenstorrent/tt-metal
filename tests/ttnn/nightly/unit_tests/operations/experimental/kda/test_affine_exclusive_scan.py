@@ -15,9 +15,9 @@ from models.common.utility_functions import run_for_blackhole, skip_with_llk_ass
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     affine_exclusive_scan_work,
     estimate_for_tensors,
+    profile_realtime_program,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -437,7 +437,6 @@ def test_affine_exclusive_scan_production_performance(device: ttnn.Device, case:
     assert output.dtype == ttnn.float32
     assert_accurate(expected, ttnn.to_torch(output), name=f"{case.case_id} production output", pcc_threshold=0.999)
     work = affine_exclusive_scan_work(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         device_inputs,

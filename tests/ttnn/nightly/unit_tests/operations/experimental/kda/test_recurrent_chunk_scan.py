@@ -15,10 +15,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     estimate_for_tensors,
+    profile_realtime_program,
     recurrent_chunk_scan_work,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     BF16_ALLOWED,
     CHUNK_SIZE,
@@ -317,7 +317,6 @@ def test_recurrent_chunk_scan_regression_performance(device: ttnn.Device) -> Non
         case.value_dim,
     )
     work = recurrent_chunk_scan_work(case.batch_heads, case.num_chunks, case.key_dim, case.value_dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         (*inputs, state),
@@ -373,7 +372,6 @@ def test_recurrent_chunk_scan_production_performance(device: ttnn.Device) -> Non
     )
     assert outputs[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG
     work = recurrent_chunk_scan_work(case.batch_heads, case.num_chunks, case.key_dim, case.value_dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         (*inputs, state),

@@ -15,10 +15,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     estimate_for_tensors,
+    profile_realtime_program,
     reduce_affine_transforms_work,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -414,7 +414,6 @@ def test_reduce_affine_transforms_production_performance(device: ttnn.Device) ->
     for name, golden, output in zip(("A", "B"), expected, outputs, strict=True):
         assert_accurate(golden, ttnn.to_torch(output), name=f"production reduced {name}", pcc_threshold=0.999)
     work = reduce_affine_transforms_work(case.batch_heads, case.groups_per_head, case.key_dim, case.value_dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         (a_tt, b_tt),

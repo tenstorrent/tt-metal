@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_m
     clock_mhz_from_frequency_ghz,
     estimate,
     estimate_for_tensors,
+    profile_realtime_program,
     math_fidelity_factor,
     prepare_chunk_recurrence_work,
     qkv_causal_conv1d_silu_work,
@@ -24,7 +26,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_m
     tensor_traffic,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
 def test_all_mathematical_work_closed_forms() -> None:
@@ -74,7 +75,7 @@ def test_all_mathematical_work_closed_forms() -> None:
     )
 
 
-def test_production_large_exact_and_overflow_work() -> None:
+def test_production_large_exact_and_unbounded_work() -> None:
     rows = 1 * 48 * 1280
     elements = rows * 128
     assert sigmoid_gated_rms_norm_work(1, 48, 1280, 128) == KdaWork(
@@ -87,7 +88,6 @@ def test_production_large_exact_and_overflow_work() -> None:
     heads, chunks, key, value, chunk = 12, 160, 128, 128, 32
     instances = heads * chunks
     production = prepare_chunk_recurrence_work(heads, chunks, key, value)
-    assert production is not None
     assert production.dense_flops == instances * (4 * chunk**2 * key + chunk * (chunk - 1) * (chunk + 1) // 3)
     assert production.omitted_sfpu_results == instances * (2 * chunk + 3 * chunk * key + key)
 
@@ -98,7 +98,33 @@ def test_production_large_exact_and_overflow_work() -> None:
         reduction_input_elements=1 << 53,
         omitted_sfpu_results=1 << 54,
     )
-    assert prepare_chunk_recurrence_work(1 << 62, 1 << 62, 0, 1) is None
+    huge_instances = 1 << 124
+    huge = prepare_chunk_recurrence_work(1 << 62, 1 << 62, 0, 1)
+    assert huge == KdaWork(
+        dense_flops=huge_instances * (32 * 31 * 33 // 3),
+        multiply_results=huge_instances * 32,
+        add_results=huge_instances * (2 * 32 + 32**2),
+        omitted_sfpu_results=huge_instances * (2 * 32),
+    )
+
+
+@pytest.mark.parametrize(
+    ("work_fn", "args"),
+    [
+        (sigmoid_gated_rms_norm_work, (-1, 1, 1, 1)),
+        (qkv_causal_conv1d_silu_work, (1, 1, -1, 1, 1)),
+        (reduce_affine_transforms_work, (1, -1, 1, 1)),
+        (affine_exclusive_scan_work, (1, -1, 1, 1)),
+        (prepare_chunk_recurrence_work, (1, 1, -1, 1)),
+        (recurrent_chunk_scan_work, (1, 1, -1, 1)),
+        (summarize_chunk_recurrence_work, (1, 1, -1, 1)),
+    ],
+)
+def test_mathematical_work_requires_nonnegative_dimensions(
+    work_fn, args: tuple[int, ...], expect_error: Callable
+) -> None:
+    with expect_error(AssertionError, "must be non-negative"):
+        work_fn(*args)
 
 
 def test_single_group_has_no_composition_or_transition_work() -> None:
@@ -146,6 +172,12 @@ def test_dram_traffic_sums_deduplicates_aliases_and_rounds_decimal_bandwidth() -
     assert result.ideal_ns == 4
     assert result.input_bytes == (513, 513, 0, 511)
     assert result.output_bytes == (513, 0)
+
+
+def test_profiler_field_overflow_raises(expect_error: Callable) -> None:
+    oversized = KdaTensorTraffic(0x1000, 1 << 31, True)
+    with expect_error(OverflowError, "input bytes"):
+        estimate(KdaWork(), (oversized,), (), core_count=117, clock_mhz=1350, fidelity_factor=2)
 
 
 def test_l1_only_and_invalid_fallbacks_preserve_slots() -> None:

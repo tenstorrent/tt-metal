@@ -15,10 +15,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     estimate_for_tensors,
+    profile_realtime_program,
     summarize_chunk_recurrence_work,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     BF16_ALLOWED,
     PROTOCOL_NAMES,
@@ -298,7 +298,6 @@ def test_summarize_chunk_recurrence_regression_performance(device: ttnn.Device) 
     duration_ns = perf_record["duration_ns"]
     assert tuple(outputs[0].shape) == (case.batch_heads, case.dim, case.dim)
     work = summarize_chunk_recurrence_work(case.batch_heads, case.num_chunks, case.dim, case.dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         inputs,
@@ -345,7 +344,6 @@ def test_summarize_chunk_recurrence_production_performance(device: ttnn.Device) 
     assert tuple(outputs[0].shape) == (case.batch_heads, case.dim, case.dim)
     assert outputs[0].memory_config() == output_memory
     work = summarize_chunk_recurrence_work(case.batch_heads, case.num_chunks, case.dim, case.dim)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         inputs,

@@ -16,10 +16,10 @@ from models.common.utility_functions import run_for_blackhole, skip_with_llk_ass
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     estimate_for_tensors,
+    profile_realtime_program,
     sigmoid_gated_rms_norm_work,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -353,7 +353,6 @@ def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case
         case.num_heads * _PRODUCTION_VALUE_DIM,
     )
     work = sigmoid_gated_rms_norm_work(_PRODUCTION_BATCH, case.num_heads, case.sequence, _PRODUCTION_VALUE_DIM)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         (input_tt, gate_tt, weight_tt),

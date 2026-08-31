@@ -16,10 +16,10 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.kda_performance_model_test_utils import (
     estimate_for_tensors,
+    profile_realtime_program,
     qkv_causal_conv1d_silu_work,
     utilization,
 )
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -363,7 +363,6 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
     duration_ns = perf_record["duration_ns"]
     assert tuple(tuple(output.shape) for output in outputs) == tuple((1, _SEQUENCE, width) for width in case.widths)
     work = qkv_causal_conv1d_silu_work(1, _SEQUENCE, *case.widths)
-    assert work is not None
     estimate = estimate_for_tensors(
         work,
         (input_tt, history_tt, *taps_tt),
