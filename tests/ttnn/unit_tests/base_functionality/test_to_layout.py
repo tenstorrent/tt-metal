@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 from loguru import logger
 import pytest
 from models.common.utility_functions import nearest_32
@@ -172,6 +174,69 @@ def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_equal(torch_input_tensor, output_tensor)
+
+
+def _make_l1_noise_tensor(device, num_tiles):
+    # Small L1-resident tensor used purely to perturb live L1 occupancy
+    # around the untilize-codegen dispatch below, per the #54968 investigation
+    # (suspected divergence between the L1 sample taken at program-cache hash
+    # time and the two later samples taken inside the program factory).
+    shape = (1, 1, 32, 32 * num_tiles)
+    torch_tensor = torch.zeros(shape, dtype=torch.bfloat16)
+    return ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def test_to_layout_wide_tensor_stress_54968(device):
+    # Throwaway CI repro for https://github.com/tenstorrent/tt-metal/issues/54968.
+    # Loops the failing test_to_layout_wide_tensor[shape=(1,1,32,131072)] case
+    # back-to-back on one device/program-cache, interleaving small L1 allocations
+    # on alternating iterations to widen the window between the codegen
+    # program-cache hash's L1 sample and the program factory's own later samples
+    # (see PR #50178 / #53399). Not intended to land on main.
+    shape = (1, 1, 32, 128 * 1024)
+    max_wall_seconds = 480
+    max_iterations = 1000
+    failures = []
+
+    start = time.monotonic()
+    iteration = 0
+    while iteration < max_iterations and (time.monotonic() - start) < max_wall_seconds:
+        iteration += 1
+        torch.manual_seed(iteration)
+        torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+        input_tensor = ttnn.from_torch(torch_input_tensor)
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        input_tensor = ttnn.to_device(input_tensor, device)
+
+        noise = None
+        if iteration % 2 == 0:
+            noise = _make_l1_noise_tensor(device, num_tiles=(iteration % 7) + 1)
+
+        output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+        if noise is not None:
+            ttnn.deallocate(noise)
+
+        output_tensor = ttnn.from_device(output_tensor)
+        output_tensor = ttnn.to_torch(output_tensor)
+
+        try:
+            assert_equal(torch_input_tensor, output_tensor)
+        except AssertionError as e:
+            failures.append((iteration, str(e)))
+            logger.error(f"[54968-repro] MISMATCH on iteration {iteration}: {e}")
+
+        if iteration % 25 == 0:
+            elapsed = time.monotonic() - start
+            logger.info(f"[54968-repro] iteration {iteration}, elapsed {elapsed:.1f}s, failures so far: {len(failures)}")
+
+    elapsed = time.monotonic() - start
+    logger.info(f"[54968-repro] done: {iteration} iterations in {elapsed:.1f}s, {len(failures)} failures")
+    assert not failures, (
+        f"Reproduced #54968: {len(failures)} mismatches out of {iteration} iterations. "
+        f"First: iteration {failures[0][0]}: {failures[0][1]}"
+    )
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
