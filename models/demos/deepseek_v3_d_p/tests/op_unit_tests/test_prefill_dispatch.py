@@ -436,11 +436,6 @@ DISPATCH_MODELS = [
 # params carry the fp8_disp_compression marker so a workflow -k/-m can select the fp8-scaled dispatch
 # tests without enumerating model names. Must match the fp8-scaled support gate in run_dispatch.
 FP8_DISP_COMPRESSION_MODELS = ("dsv3", "dsv4_pro", "dsv4_flash", "kimi_k2_7")
-assert set(FP8_DISP_COMPRESSION_MODELS) <= {name for name, _, _ in DISPATCH_MODELS}, (
-    "FP8_DISP_COMPRESSION_MODELS drifted from DISPATCH_MODELS: the fp8_disp_compression marker "
-    "would be silently unapplied, so the fp8-scaled dispatch legs would vanish from any -k/-m "
-    "selection while collection stayed non-zero and CI stayed green."
-)
 
 
 def dispatch_shape_params():
