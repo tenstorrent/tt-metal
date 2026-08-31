@@ -302,6 +302,42 @@ TEST_F(PerCoreAllocationTest, RangeLockstepMemoryConfigReachesShardingArgs) {
         << "range lockstep set on the MemoryConfig did not reach the buffer's sharding args";
 }
 
+// The mesh path and the direct path learn about per-core allocations through different
+// mechanisms: a mesh allocator gathers them from the device allocators it was handed, while a
+// device allocator has them in its own dependency graph. Narrowing only the first would make the
+// same BufferShardingArgs behave as range lockstep through a mesh and as default lockstep through
+// a device, so the dependency subtraction is scoped too. This exercises that second path.
+TEST_F(PerCoreAllocationTest, RangeLockstepScopesDependenciesOnDirectBufferCreate) {
+    auto* device = this->devices_[0]->get_devices()[0];
+    ASSERT_GE(device->compute_with_storage_grid_size().x, 2u);
+    const CoreCoord hogged_core(0, 0);
+    const CoreCoord free_core(1, 0);
+
+    const auto stats = device->allocator()->get_statistics(BufferType::L1);
+    const DeviceAddr alloc_size = (stats.largest_free_block_bytes * 6 / 10) / PAGE_SIZE * PAGE_SIZE;
+    ASSERT_GT(alloc_size, stats.largest_free_block_bytes / 2)
+        << "sized under half of L1; both allocations would fit even without scoping";
+
+    auto single_core_args = [](const CoreCoord& core) {
+        return BufferShardingArgs(
+            ShardSpecBuffer(CoreRangeSet(core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED);
+    };
+
+    auto hog_args = single_core_args(hogged_core);
+    per_core::set_per_core_allocation(hog_args, true);
+    auto hog = Buffer::create(device, alloc_size, alloc_size, BufferType::L1, hog_args);
+    ASSERT_TRUE(per_core::is_per_core_allocation(*hog));
+
+    auto scoped_args = single_core_args(free_core);
+    range_lockstep::set_range_lockstep_allocation(scoped_args, true);
+    std::shared_ptr<Buffer> scoped;
+    ASSERT_NO_THROW(scoped = Buffer::create(device, alloc_size, alloc_size, BufferType::L1, scoped_args))
+        << "range lockstep on " << free_core.str() << " was blocked by a per-core allocation on " << hogged_core.str()
+        << "; the dependency subtraction is not being scoped on the direct path";
+    EXPECT_TRUE(scoped->is_allocated());
+}
+
 TEST_F(PerCoreAllocationTest, RangeLockstepSurvivesNdShardSpecConversion) {
     // TensorSpec rebuilds the MemoryConfig from named fields when it converts an nd shard spec to
     // a legacy one, and a rebuild drops the experimental flags unless they are explicitly restored.

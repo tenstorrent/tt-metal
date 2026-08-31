@@ -187,6 +187,29 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // buffer may instead be scanned against just the cores it occupies.
             //
             // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
+            std::vector<CoreCoord> cores_to_scan;
+            const bool scope_to_own_cores =
+                experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
+            // A distribution spec reserves L1 on its cores_with_data(), which is what
+            // Buffer::num_cores() reports for it; shard_spec_ is not set on that path.
+            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
+                scope_to_own_cores && distribution_spec.has_value()) {
+                cores_to_scan = distribution_spec->cores_with_data();
+            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
+                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
+                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
+            }
+
+            // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
+            // anything. set_range_lockstep_allocation() requires one of the two specs and Buffer
+            // carries both through, so this cannot fire, but that invariant now lives in another
+            // file and this is where it is relied on.
+            TT_FATAL(
+                !scope_to_own_cores || !cores_to_scan.empty(),
+                "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
+                "distribution spec naming the cores it occupies");
+
             std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
             if (!hybrid_device_allocators_.empty()) {
                 using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
@@ -194,29 +217,6 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                     auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
                     additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
                 };
-
-                std::vector<CoreCoord> cores_to_scan;
-                const bool scope_to_own_cores =
-                    experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
-                // A distribution spec reserves L1 on its cores_with_data(), which is what
-                // Buffer::num_cores() reports for it; shard_spec_ is not set on that path.
-                if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                    scope_to_own_cores && distribution_spec.has_value()) {
-                    cores_to_scan = distribution_spec->cores_with_data();
-                } else if (scope_to_own_cores && buffer->has_shard_spec()) {
-                    const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-                    bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                    cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
-                }
-
-                // Scanning nothing is not a safe fallback -- it would place the buffer without
-                // avoiding anything. set_range_lockstep_allocation() requires one of the two specs
-                // and Buffer carries both through, so this cannot fire, but that invariant now
-                // lives in another file and this is where it is relied on.
-                TT_FATAL(
-                    !scope_to_own_cores || !cores_to_scan.empty(),
-                    "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
-                    "distribution spec naming the cores it occupies");
 
                 for (auto* dev_alloc : hybrid_device_allocators_) {
                     if (!scope_to_own_cores) {
@@ -245,6 +245,22 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                     }
                 }
             }
+            // The scan above only covers device allocators reachable from a mesh allocator. This
+            // allocator's own per-core allocators are subtracted separately, through the dependency
+            // graph, and that path is the only one a direct Buffer::create takes. Narrow it the same
+            // way, or the same request would be range lockstep through a mesh and full lockstep
+            // through a device.
+            std::optional<std::unordered_set<uint32_t>> scoped_dependent_allocators;
+            if (scope_to_own_cores) {
+                scoped_dependent_allocators.emplace();
+                for (const auto& core : cores_to_scan) {
+                    if (!this->has_bank(BufferType::L1, core)) {
+                        continue;
+                    }
+                    scoped_dependent_allocators->insert(
+                        logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0) + 1);
+                }
+            }
             address = l1_manager_->allocate_buffer(
                 size,
                 page_size,
@@ -252,7 +268,8 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 config_->compute_grid,
                 num_cores,
                 BankManager::AllocatorDependencies::AllocatorID{0},
-                additional_ranges);
+                additional_ranges,
+                scoped_dependent_allocators);
             break;
         }
         case BufferType::L1_SMALL: {
