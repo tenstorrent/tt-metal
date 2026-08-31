@@ -24,6 +24,8 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <optional>
 
 // --clkprobe only: reads a tile debug register straight over NoC, which is not a public-API operation.
 #include <chrono>
@@ -272,6 +274,10 @@ int main(int argc, char** argv) {
                                 // device 0. The workload is already a MeshWorkload over the mesh own
                                 // shape, so this alone fans it out to every device -- which is what makes
                                 // the capture exercise the cross-device wall-clock sync.
+    uint32_t fabric_mode = 0;   // --fabric 4 = FABRIC_2D before mesh open: the zones workload then runs
+                                // WITH resident routers (and, when the profiler env asks for it, with the
+                                // in-router clock sync feeding the corrections the capture is scored by)
+    uint32_t fabric_planes = 0;  // --planes N: num_routing_planes (0 = default = claim everything)
     uint32_t empty_mode = 0;    // --empty 1: unrolled EMPTY zones + stats consumer -> profiler self-overhead
                                 // --empty 2: same, plus ONE extra wall-clock read pair per zone BODY -- the
                                 //            duration delta vs --empty 1 prices read_wall_clock itself
@@ -295,7 +301,20 @@ int main(int argc, char** argv) {
             emit_markers = v;
         } else if (a == "--all-devices") {
             all_devices = v;
+        } else if (a == "--fabric") {
+            fabric_mode = v;
+        } else if (a == "--planes") {
+            fabric_planes = v;
         }
+    }
+    if (fabric_mode != 0) {
+        printf("[zones] enabling fabric: FabricConfig=%u, planes=%u (0=default)\n", fabric_mode, fabric_planes);
+        std::optional<uint8_t> planes_opt =
+            fabric_planes != 0 ? std::optional<uint8_t>((uint8_t)fabric_planes) : std::nullopt;
+        tt::tt_fabric::SetFabricConfig(
+            (tt::tt_fabric::FabricConfig)fabric_mode,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            planes_opt);
     }
 
     // --empty: register the overhead stats consumer BEFORE device bring-up, so the profiler attaches
