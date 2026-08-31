@@ -397,9 +397,14 @@ cause is now established and whose remedy is known but does not yet land cleanly
    n300 — but it hangs `test_streaming_perf` on Blackhole, so it is not in the tree.
    `docs/VALIDATION.md` has the full account and what else was tried.
 
-   **The hang is not fully fixed.** `test_device_streaming_first_audio_latency` still
-   wedges n300 and is skipped there (§5). Ruled out: trace region size,
-   warm-before-capture ordering, and the fix above. Not root-caused.
+   **The separate n300 hang is now root-caused, and it is upstream of the port.**
+   `test_device_streaming_first_audio_latency` wedges n300 and is skipped there (§5)
+   because re-seeding a trace's persistent buffers *after that trace has executed*
+   hangs Wormhole. The test captures once and re-seeds per pass, so passes 2-4 hit it.
+   It reproduces in four calls with no flow decoder, no vocoder and no allocation under
+   a live trace, and Blackhole runs the same sequence in under a second.
+   `docs/VALIDATION.md` has the reproduction and what was ruled out along the way
+   (trace region size, warm-before-capture ordering, and the fix above).
 
    It also constrains the design: the flow decoder and vocoder must be warmed *before*
    the AR decode trace is captured — doing it the other way round hangs Blackhole too —

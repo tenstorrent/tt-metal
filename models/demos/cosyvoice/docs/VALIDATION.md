@@ -238,23 +238,46 @@ itself gated by `test_device_streaming_generates_the_same_tokens_as_batch` — w
 asserts identical tokens and that chunks are emitted *during* generation, both of which
 hold. What is not yet deliverable is correct audio out of the interleaved path.
 
-### `test_streaming_perf` still hangs on Wormhole — open
+### `test_streaming_perf` hangs on Wormhole — a TTNN defect, not a port defect
 
-The fix above did not cure everything. `tests/perf/test_streaming_perf.py::test_device_
-streaming_first_audio_latency` still wedges n300: log frozen, JIT cache flat, CPU
-pegged, board needing a reset. Both Blackhole boards run it. It is skipped on Wormhole
-with that reason attached rather than left to hang, because a wedged board costs every
-later test in the run.
+`tests/perf/test_streaming_perf.py::test_device_streaming_first_audio_latency` wedges
+n300: log frozen, JIT cache flat, CPU pegged, board needing a reset. Both Blackhole
+boards run it. It is skipped on Wormhole with that reason attached rather than left to
+hang, because a wedged board costs every later test in the run.
 
-Ruled out: the trace region size (384 MB → 64 MB changed nothing — it captures one
-trace, not the in-place path's 65); the warm-before-capture ordering, which is what
-made it stable on Blackhole; and the `StreamState` fix above.
+**The cause is now isolated, and it is upstream.** Re-seeding a trace's persistent
+buffers *after that trace has executed* hangs Wormhole. The minimal reproduction is
+four calls with no flow decoder, no vocoder, no streaming and no allocation under a
+live trace:
 
-The untested lead is lifetime: this test holds one `TracedDecodeStep` live across four
-passes and runs the flow decoder and vocoder under it repeatedly, where
-`synthesize_streaming` captures and releases per call. **That is a hypothesis, not a
-diagnosis.** What is measured is that the shipped path runs on n300 and this test does
-not.
+```python
+step = TracedDecodeStep(dec, max_len).capture()
+step.seed(caches)                    # ttnn.copy into buffers that predate the capture
+for i, token in enumerate(generated):
+    step.step(...)                   # execute_trace x164
+step.seed(caches)                    # the same copy again -> hangs on Wormhole
+```
+
+That is precisely what this test does — it captures once and, as its own comment says,
+re-seeds per pass, so passes 2-4 seed after the trace has executed. Blackhole runs the
+same sequence in under a second, which is why only n300 is skipped.
+
+Two details matter for anyone reproducing it. The hang needs the trace to have
+**executed**, not merely to exist: earlier arms that called `capture()` and `seed()`
+without `step()` all survive. And it depends on **how the device was opened** —
+`ttnn.CreateDevice`, which is what the repository's `device` fixture uses, hangs;
+`ttnn.open_mesh_device(MeshShape(1, 1))` on the same chip does not, though it then
+hangs at teardown instead, on every board tried.
+
+So this is not a lifetime problem, which an earlier revision of this document proposed
+as an untested lead: it is not that the trace stays live too long or that the flow
+decoder and vocoder run underneath it. The reproduction strips both of those out and
+still hangs. `synthesize_streaming` escapes it by capturing and releasing per call,
+which is why the shipped path runs on n300 and this test does not.
+
+Ruled out along the way: the trace region size (384 MB → 64 MB changed nothing — it
+captures one trace, not the in-place path's 65); the warm-before-capture ordering,
+which is what made it stable on Blackhole; and the `StreamState` fix above.
 
 ### An n300/Blackhole amplitude difference on a synthetic case — open
 
