@@ -301,27 +301,52 @@ def select_chip_type():
             print("Invalid choice. Please enter 1, 2, 3, or 4.")
 
 
+# protoc >= 3.15 supports proto3 optional natively; the system apt package is
+# typically too old, so we fetch a known-good binary from the GitHub release.
+_PROTOC_VERSION = "28.3"
+_PROTOC_URL = (
+    f"https://github.com/protocolbuffers/protobuf/releases/download/"
+    f"v{_PROTOC_VERSION}/protoc-{_PROTOC_VERSION}-linux-x86_64.zip"
+)
+
+
+def _ensure_protoc_in_venv(venv_path):
+    """Download a modern protoc binary into the venv if not already present."""
+    import zipfile
+    import tempfile
+
+    protoc_bin = os.path.join(venv_path, "bin", "protoc")
+    if os.path.exists(protoc_bin):
+        print("✓ protoc already present in venv")
+        return
+
+    print(f"\nDownloading protoc {_PROTOC_VERSION} from GitHub...")
+    request = urllib.request.Request(_PROTOC_URL, headers={"User-Agent": _USER_AGENT})
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = os.path.join(tmpdir, "protoc.zip")
+        try:
+            with urllib.request.urlopen(request) as resp, open(zip_path, "wb") as f:
+                shutil.copyfileobj(resp, f)
+        except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+            print(f"\nERROR: Failed to download protoc: {exc}")
+            sys.exit(1)
+
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extract("bin/protoc", tmpdir)
+            extracted = os.path.join(tmpdir, "bin", "protoc")
+            os.chmod(extracted, 0o755)
+            shutil.copy2(extracted, protoc_bin)
+
+    print(f"✓ protoc {_PROTOC_VERSION} installed into venv")
+
+
 def setup_harvesting_tools(venv_path):
     """Install tools needed for harvesting configuration."""
     print("\n" + "=" * 80)
     print("STEP 5: Installing harvesting tools")
     print("=" * 80)
 
-    # Check if protoc is installed
-    print("\nChecking for protobuf compiler (protoc)...")
-    try:
-        subprocess.run(["which", "protoc"], check=True, capture_output=True)
-        print("✓ protoc is already installed")
-    except subprocess.CalledProcessError:
-        print("protoc not found. Installing protobuf-compiler...")
-        try:
-            run_command("sudo apt-get update && sudo apt-get install -y protobuf-compiler")
-            print("✓ protobuf-compiler installed successfully")
-        except subprocess.CalledProcessError:
-            print("\nERROR: Failed to install protobuf-compiler")
-            print("Please install it manually with:")
-            print("  sudo apt-get install -y protobuf-compiler")
-            sys.exit(1)
+    _ensure_protoc_in_venv(venv_path)
 
     pip_path = f"{venv_path}/bin/pip"
 
