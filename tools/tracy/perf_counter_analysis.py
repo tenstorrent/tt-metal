@@ -1785,10 +1785,14 @@ def compute_device_only_metrics(
             safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"),
             axis=1,
         )
-    eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
-        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
-        axis=1,
-    )
+    # AVAILABLE_MATH is a TDMA_PACK counter and MATH_INSTRN_AVAILABLE a TDMA_UNPACK one, so a
+    # capture that took unpack without pack has no numerator and safe_complement's .get(key, 0)
+    # would report a flat 100%. Same guard as the sibling metric above.
+    if "value_AVAILABLE_MATH" in eff_pivot.columns and eff_pivot["value_AVAILABLE_MATH"].sum() > 0:
+        eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
+            safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"),
+            axis=1,
+        )
 
     # Per-thread total instruction issue rates (per cycle, not %).
     eff_pivot["T0 Instrn Issue Rate"] = eff_pivot.apply(
