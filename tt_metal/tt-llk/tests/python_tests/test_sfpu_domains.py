@@ -33,7 +33,6 @@ from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
     Operand,
     _is_negative_zero,
-    boundary_probes,
     edge_pair_values,
     edge_values,
     extremes_safe,
@@ -551,16 +550,12 @@ def test_every_sweepable_op_is_classified_for_cat_f():
 
     The last of the four totality checks, and the one that took two tranches: the first was
     hand-picked as the ops that cannot overflow, the second measured the remaining 74 and split
-    55 / 19. Scoped to what a sweep can reach, because an op with no sweep is a different
-    problem from an undecided one -- the ledger says so in its own cell and this check would
-    otherwise conflate them.
+    55 / 19. Scoped to what a sweep can reach, because an op with no sweep to be enrolled into
+    is a different problem from an undecided one.
     """
+    import test_eltwise_binary_sfpu as binary
     import test_eltwise_unary_sfpu as unary
-    from helpers.sfpu_domains import (
-        _EXTREMES_NOT_READY,
-        EXTREMES_READY_OPS,
-        suite_coverage_from_tests,
-    )
+    from helpers.sfpu_domains import _EXTREMES_NOT_READY, EXTREMES_READY_OPS
 
     # The saturation ops are covered by their own sweep rather than by EXTREMES_READY_OPS --
     # cat F has two halves, and a check that knew only about the enrolment half would demand a
@@ -569,7 +564,8 @@ def test_every_sweepable_op_is_classified_for_cat_f():
     classified = (
         set(EXTREMES_READY_OPS)
         | set(_EXTREMES_NOT_READY)
-        | suite_coverage_from_tests().saturation
+        | set(unary._SATURATION_PROBES)
+        | set(binary._BINARY_SATURATION_PAIRS)
     )
     unclassified = sorted(op.name for op in candidates - classified)
     assert not unclassified, (
@@ -578,28 +574,6 @@ def test_every_sweepable_op_is_classified_for_cat_f():
     )
     for op, reason in _EXTREMES_NOT_READY.items():
         assert len(reason) > 20, f"{op.name}'s cat-F reason is too short to be a claim"
-
-
-def test_no_class_has_anything_unrecorded():
-    """Every cell is covered, not applicable, or explained -- none is undecided.
-
-    The point the four totality checks add up to. `unrecorded` was the honest state for most of
-    this table not long ago; it is now empty, which means every (op, class) pair has had a
-    decision taken and written down. A new op, or a new sweep, can put cells back into it --
-    that is what this is here to catch, and the fix is a verdict rather than a floor bump.
-    """
-    from helpers.sfpu_domains import UNRECORDED, EdgeClass, coverage_counts
-
-    counts = coverage_counts(_ledger())
-    undecided = {
-        edge_class.name: counts[edge_class][UNRECORDED]
-        for edge_class in EdgeClass
-        if counts[edge_class][UNRECORDED]
-    }
-    assert not undecided, (
-        f"these classes have undecided cells: {undecided}. Every (op, class) pair needs a "
-        "verdict -- covered, not applicable, or a recorded reason."
-    )
 
 
 def test_every_unary_op_is_classified_for_cat_b():
@@ -780,128 +754,6 @@ def test_ternary_golden_substitutes_an_infinity_only_where_the_pack_narrows():
             )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# The coverage ledger
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _ledger():
-    from helpers.sfpu_domains import coverage_ledger, suite_coverage_from_tests
-
-    return coverage_ledger(suite_coverage_from_tests())
-
-
-def test_coverage_ledger_is_total():
-    """Every op has an entry for every class, and every entry says something.
-
-    The gate the ledger exists to be: an op with no entry -- a newly registered one, say --
-    fails here, at collection, in every lane, with no hardware. And an entry that is neither
-    COVERED nor UNRECORDED has to be a *reason*, not a placeholder, since a short string in
-    that position is how "nobody got to it" comes to read as "considered and excluded".
-    """
-    from helpers.sfpu_domains import COVERED, UNRECORDED, EdgeClass
-
-    ledger = _ledger()
-    assert ledger, "the ledger is empty, so every assertion below is vacuous"
-    for op, cells in ledger.items():
-        missing = [c.name for c in EdgeClass if c not in cells]
-        assert not missing, f"{op.name} has no entry for {missing}"
-        for edge_class, value in cells.items():
-            if value in (COVERED, UNRECORDED):
-                continue
-            assert len(value) > 20, (
-                f"{op.name} / {edge_class.name}: {value!r} is too short to be a reason "
-                "for not driving the class"
-            )
-
-
-def test_coverage_ledger_never_claims_more_than_the_machinery_delivers():
-    """A COVERED cell must correspond to something the stimulus machinery actually emits.
-
-    This is the whole difference between a derived ledger and a hand-maintained matrix, so it
-    is checked rather than commented: for the classes this module owns, re-derive the answer
-    independently of coverage_ledger() and require the two to agree.
-    """
-    from helpers.sfpu_domains import (
-        BINARY_SPECIALS_READY_OPS,
-        COVERED,
-        EXTREMES_READY_OPS,
-        SPECIALS_READY_OPS,
-        TERNARY_SPECIALS_READY_OPS,
-        EdgeClass,
-        op_edge_points,
-        suite_coverage_from_tests,
-    )
-
-    ready = (
-        set(SPECIALS_READY_OPS)
-        | set(BINARY_SPECIALS_READY_OPS)
-        | set(TERNARY_SPECIALS_READY_OPS)
-    )
-    suite = suite_coverage_from_tests()
-    for op, cells in _ledger().items():
-        if cells[EdgeClass.A] == COVERED:
-            assert (
-                op in ops_with_singularity()
-            ), f"{op.name} has no registered singularity"
-        if cells[EdgeClass.B] == COVERED:
-            assert (
-                op in ready or op in suite.specials_derived
-            ), f"{op.name} is in no *_SPECIALS_READY_OPS and has no derived-operand variant"
-        if cells[EdgeClass.D] == COVERED:
-            assert op_edge_points(op) or any(
-                op_edge_points(op, operand) for operand in Operand
-            ), f"{op.name} has no registered knee"
-        if cells[EdgeClass.G] == COVERED:
-            assert any(
-                _is_negative_zero(v)
-                for operand in Operand
-                for v in boundary_probes(op, operand, DataFormat.Float32)
-            ), f"{op.name} is marked covered for cat G but emits no -0.0 probe"
-        if cells[EdgeClass.F] == COVERED:
-            assert (
-                op in EXTREMES_READY_OPS or op in suite.saturation
-            ), f"{op.name} is neither enrolled for cat F nor driven by a saturation sweep"
-
-
-# The ratchet. Floors rather than exact counts: a class getting *more* coverage must not need a
-# test edit, and losing some must not pass silently. Every number here was produced by
-# `python -m helpers.sfpu_domains --report` at the time the class was last worked on, so raising
-# one is the natural last step of enrolling an op.
-#
-# Cat G's floor moved off zero once boundary_probes() started emitting a -0.0 for the ops with a
-# zero pole. The count is exactly those ops, so an op joins by registering a zero singularity
-# rather than by a test edit -- which is the reason this is a floor and not an exact count.
-_COVERAGE_FLOORS = {
-    "A": 23,
-    "B": 88,
-    "C": 24,
-    "D": 59,
-    "E": 5,
-    "F": 78,
-    "G": 17,
-}
-
-
-def test_coverage_does_not_regress():
-    """Per class, at least as many ops are covered as the last time it was measured."""
-    from helpers.sfpu_domains import EdgeClass, coverage_counts
-
-    counts = coverage_counts(_ledger())
-    shortfalls = {
-        edge_class.name: (
-            counts[edge_class]["covered"],
-            _COVERAGE_FLOORS[edge_class.name],
-        )
-        for edge_class in EdgeClass
-        if counts[edge_class]["covered"] < _COVERAGE_FLOORS[edge_class.name]
-    }
-    assert not shortfalls, (
-        "coverage went backwards (class: got, floor): "
-        f"{shortfalls}. Either an op lost its enrolment or a table entry was dropped."
-    )
-
-
 @pytest.mark.parametrize(
     "op,operand",
     [
@@ -963,68 +815,83 @@ def test_signed_zero_probe_survives_the_dedup():
     assert signs == {1.0, -1.0}, kept
 
 
-def test_the_suites_partition_their_ops_by_format():
-    """No op is driven on both an integer and a float format.
+# ─────────────────────────────────────────────────────────────────────────────
+# The coverage ratchet
+# ─────────────────────────────────────────────────────────────────────────────
 
-    The ledger reaches the integer-only set by subtracting float_driven from integer_driven,
-    which is only a sound derivation while the two are disjoint. They are today -- 27 ops on the
-    integer side, none of them in a float sweep -- and an op driven on both would silently be
-    classified integer-only, losing its cat-B and cat-F verdicts to a "not applicable" that is
-    not true of it. Asserted rather than commented, because the subtraction looks correct either
-    way.
+# Floors, not exact counts: gaining coverage must not need a test edit, losing it must not pass
+# silently. A, B, D, F and G come from sfpu_domains' own tables; C, E and the saturation half of
+# cat F are lists in the suites, so they are floored here against those lists directly -- which
+# also catches the rename that would otherwise empty one of them without a failure.
+#
+# Raising a floor is the last step of enrolling an op. `python -m helpers.sfpu_domains` prints
+# the five it derives.
+_COVERAGE_FLOORS = {
+    "A": 23,
+    "B": 92,
+    "D": 66,
+    "F": 69,
+    "G": 17,
+}
+_SUITE_FLOORS = {
+    "C integer extremes": 30,
+    "E operand parameters": 7,
+    "F saturation sweeps": 9,
+}
+
+
+def _suite_coverage_counts():
+    """The three classes whose delivery machinery lives in the test modules, not in helpers."""
+    import test_eltwise_binary_sfpu as binary
+    import test_eltwise_unary_sfpu as unary
+    import test_sfpu_ternary as ternary
+
+    return {
+        "C integer extremes": len(
+            set(binary._INT_EXTREME_OPS)
+            | set(binary._SHIFT_EDGE_OPS)
+            | set(binary._UINT32_BINARY_OPS)
+            | set(unary._INT_UNARY_OPS)
+        ),
+        "E operand parameters": len(
+            set(unary._UNARY_SHIFT_OPS)
+            | set(binary._SHIFT_EDGE_OPS)
+            | set(ternary._SCALAR_OPS)
+        ),
+        "F saturation sweeps": len(
+            set(unary._SATURATION_PROBES) | set(binary._BINARY_SATURATION_PAIRS)
+        ),
+    }
+
+
+def test_coverage_does_not_regress():
+    """Per class, at least as many ops are driven at it as the last time it was measured.
+
+    The one thing the sweeps cannot do for themselves: coverage loss here is silent. Drop an op
+    from an enrolment table and no test fails -- the sweep collects fewer variants and the run is
+    green. Measured, removing three ops from the cat-F enrolment took 24 device variants out of
+    the unary sweep without a single failure.
     """
-    from helpers.sfpu_domains import suite_coverage_from_tests
+    from helpers.sfpu_domains import coverage_counts
 
-    suite = suite_coverage_from_tests()
-    both = sorted(op.name for op in suite.integer_driven & suite.float_driven)
-    assert not both, (
-        f"these ops are driven on both an integer and a float format: {both}. The ledger's "
-        "integer-only derivation (integer_driven - float_driven) would drop their cat-B and "
-        "cat-F verdicts — give them a real verdict instead of letting the subtraction guess."
+    counts = {**coverage_counts(), **_suite_coverage_counts()}
+    floors = {**_COVERAGE_FLOORS, **_SUITE_FLOORS}
+    shortfalls = {
+        name: (counts[name], floor)
+        for name, floor in floors.items()
+        if counts[name] < floor
+    }
+    assert not shortfalls, (
+        "coverage went backwards (class: got, floor): "
+        f"{shortfalls}. Either an op lost its enrolment or a table entry was dropped."
     )
-    assert suite.integer_driven - suite.float_driven, (
-        "no integer-only ops at all, which means float_driven has swallowed the integer side "
-        "and cat B/cat F are about to read 'unrecorded' for every one of them again"
-    )
-
-
-def test_integer_only_cells_are_integer_only_ops():
-    """A cat-B or cat-F 'not applicable' must be an op with no float form.
-
-    The converse of test_coverage_ledger_never_claims_more_than_the_machinery_delivers: that
-    test stops the ledger claiming coverage it does not have, this one stops it excusing a class
-    it *should* have. Marking a float op integer-only would retire a real gap without anyone
-    driving anything.
-    """
-    from helpers.sfpu_domains import (
-        _CAT_B_INTEGER_ONLY,
-        _CAT_F_INTEGER_ONLY,
-        EdgeClass,
-        suite_coverage_from_tests,
-    )
-
-    suite = suite_coverage_from_tests()
-    integer_only = suite.integer_driven - suite.float_driven
-    for op, cells in _ledger().items():
-        for edge_class, excuse in (
-            (EdgeClass.B, _CAT_B_INTEGER_ONLY),
-            (EdgeClass.F, _CAT_F_INTEGER_ONLY),
-        ):
-            if cells[edge_class] == excuse:
-                assert op in integer_only, (
-                    f"{op.name} is excused from {edge_class.name} as integer-only, but a suite "
-                    "drives it on a float format"
-                )
 
 
 def test_shift_ops_really_do_drive_the_integer_extremes():
     """The shift sweeps are counted for cat C, so their value list has to contain an extreme.
 
-    This is the cell the ledger used to get wrong -- it read 'unrecorded' for three ops that
-    were being driven at INT32_MAX all along, because SuiteCoverage was built from
-    _INT_EXTREME_OPS and the shift sweeps are not in it. Counting them is only honest while the
-    values are still there, so the claim is checked against the list rather than against the
-    memory of having checked it.
+    Counting them is only honest while the values are still there, so the claim is checked
+    against the list rather than against the memory of having checked it.
     """
     import test_eltwise_binary_sfpu as binary
     from helpers.sfpu_domains import integer_specials
@@ -1033,49 +900,11 @@ def test_shift_ops_really_do_drive_the_integer_extremes():
     driven = set(binary._SHIFT_EDGE_VALUES)
     assert extremes & driven, (
         "_SHIFT_EDGE_VALUES no longer contains an int32 extreme, so the shift ops must come "
-        "back out of SuiteCoverage.integer_extremes"
+        "out of the cat-C count"
     )
     # INT32_MAX specifically: INT32_MIN is filtered per-op (sign-magnitude Dst cannot hold it)
     # and has its own xfail, so it is present in the list but never actually driven.
     assert 2**31 - 1 in driven
-
-
-def test_suite_coverage_is_resolved_from_the_suites():
-    """SuiteCoverage's fields must be non-empty, or the ledger under-reports in silence.
-
-    The three facts the ledger cannot derive come from the test modules by import. A rename on
-    the test side would make one of those lookups yield an empty set, and every op would quietly
-    become "not applicable" for that class -- coverage vanishing without a single failure.
-    """
-    from helpers.sfpu_domains import suite_coverage_from_tests
-
-    suite = suite_coverage_from_tests()
-    for field in (
-        "integer_extremes",
-        "integer_driven",
-        "operand_parameters",
-        "integer_extremes_excluded",
-        "specials_derived",
-        "extremes_sweepable",
-        "saturation",
-        "float_driven",
-        "extra_ops",
-    ):
-        assert getattr(suite, field), (
-            f"SuiteCoverage.{field} resolved empty -- the suite it is read from has probably "
-            "been renamed, and the ledger is now under-reporting that class"
-        )
-
-
-def test_coverage_report_renders():
-    """The report is the point of the ledger, so it has to actually render."""
-    from helpers.sfpu_domains import EdgeClass, format_coverage_report
-
-    report = format_coverage_report(_ledger())
-    for edge_class in EdgeClass:
-        assert edge_class.name in report
-        assert edge_class.value in report
-    assert "unrecorded" in report
 
 
 def test_every_int_binary_op_drives_zero_or_records_why_not():
