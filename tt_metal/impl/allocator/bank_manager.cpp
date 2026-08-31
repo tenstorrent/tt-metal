@@ -553,8 +553,8 @@ uint64_t BankManager::allocate_buffer(
             false,
             "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
             "per bank), bank size is {} B (allocated: {} B, free: {} B, largest free block: {} B). After subtracting "
-            "{} dependency and {} additional occupied range(s), {} B remained placeable across {} window(s), largest "
-            "{} B",
+            "{} dependency range(s) and {} additional occupied range(s), {} B remained placeable across {} window(s), "
+            "largest {} B",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
