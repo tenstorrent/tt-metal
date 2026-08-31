@@ -237,7 +237,9 @@ bool try_apply_registry_parameters(
         return true;
     } catch (...) {
         parameters.program_config.reset();
-        parameters.compute_kernel_config = std::move(caller_compute_kernel_config);
+        // ComputeKernelConfig is six scalars: trivially copyable, so a move here
+        // is a copy wearing a costume. clang-tidy performance-move-const-arg.
+        parameters.compute_kernel_config = caller_compute_kernel_config;
         circuit_break_domain(call_semantics.domain);
         return false;
     }
