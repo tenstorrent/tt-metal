@@ -15,11 +15,10 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
 
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 18> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
-     {PerfCounterType::MATH_FIDELITY_STALL, 2},
-     {PerfCounterType::MATH_INSTRN_STARTED, 3},
+      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
      {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
@@ -27,10 +26,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     {PerfCounterType::MATH_INSTRN_HF_4_CYCLE, 256},
-     {PerfCounterType::MATH_INSTRN_HF_2_CYCLE, 257},
-     {PerfCounterType::MATH_INSTRN_HF_1_CYCLE, 258},
-     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
+        {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 260},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 261},
      {PerfCounterType::SRCA_WRITE_ACTUAL, 262},
