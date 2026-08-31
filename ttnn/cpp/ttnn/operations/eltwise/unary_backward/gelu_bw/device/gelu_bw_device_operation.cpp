@@ -50,7 +50,7 @@ void GeluBwDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         output_datatype == input_tensor.dtype(),
-        "GELU operation requires input and output data types to match. Input data type: {}, Output data type: {}",
+        "GELU_BW operation requires input and output data types to match. Input data type: {}, Output data type: {}",
         static_cast<int>(input_tensor.dtype()),
         static_cast<int>(output_datatype));
 
